@@ -136,7 +136,9 @@ Document mode (``--doc``)
 
 Parity: every manifest id is a row; every row that names a function has a manifest
 entry, whatever its verdict; a row that names no function is crate-level, its verdict
-is ``leave``, and its reason cites ``crates/<crate>/benches/``, which must not exist;
+is ``leave``, and its reason cites ``crates/<crate>/benches/``, which must not exist
+unless the member is unpublished and every bench in it maps only to sites of other
+members (a conformance crate timing the hot paths of the crate it tests);
 the generated cells equal the measured counts (``--write-doc`` regenerates them).
 Coverage: every workspace member has a row; every bench file has a row naming only
 known site ids; every roster site below is in the ``covers`` cell of a row that names a
@@ -1479,18 +1481,22 @@ class DocWorld:
     member_dirs: dict  # package name -> relative crate dir
     bench_files: tuple[str, ...]  # crates/<crate>/benches/<file>.rs
     bench_dirs: frozenset  # relative crate dirs that have a benches/ directory
+    unpublished: frozenset = frozenset()  # package names with `publish = false`
 
 
 def workspace_world() -> DocWorld:
     root = tomllib.loads((REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8"))
-    members, dirs = [], {}
+    members, dirs, unpublished = [], {}, set()
     for rel in root["workspace"]["members"]:
-        name = tomllib.loads((REPO_ROOT / rel / "Cargo.toml").read_text(encoding="utf-8"))["package"]["name"]
+        package = tomllib.loads((REPO_ROOT / rel / "Cargo.toml").read_text(encoding="utf-8"))["package"]
+        name = package["name"]
         members.append(name)
         dirs[name] = rel
+        if package.get("publish") is False:
+            unpublished.add(name)
     benches = sorted(str(p.relative_to(REPO_ROOT)) for p in REPO_ROOT.glob("crates/*/benches/*.rs"))
     bench_dirs = frozenset(rel for rel in dirs.values() if (REPO_ROOT / rel / "benches").is_dir())
-    return DocWorld(tuple(members), dirs, tuple(benches), bench_dirs)
+    return DocWorld(tuple(members), dirs, tuple(benches), bench_dirs, frozenset(unpublished))
 
 
 def doc_checks(doc: str, manifest: Manifest, cells: dict, world: DocWorld, configs=CONFIG_NAMES, compare=True) -> list[str]:
@@ -1507,6 +1513,31 @@ def doc_checks(doc: str, manifest: Manifest, cells: dict, world: DocWorld, confi
         return problems
     col = {name: header.index(name) for name in (*SITE_COLUMNS, *CONFIG_NAMES)}
     ids = manifest.ids()
+    site_crate = {_plain(row[col["id"]]): _plain(row[col["crate"]]) for row in rows}
+    bheader, brows, _ = parse_table(doc, BENCHES_BEGIN, BENCHES_END)
+    if "bench" not in bheader or "sites" not in bheader:
+        problems.append("the bench table needs `bench` and `sites` columns")
+        return problems
+    bcol, scol = bheader.index("bench"), bheader.index("sites")
+    mapped: dict[str, list[str]] = {}
+    for brow in brows:
+        bench = _plain(brow[bcol])
+        mapped[bench] = [_plain(s) for s in brow[scol].split(",") if _plain(s) not in EMPTY_CELL]
+
+    def measures_only_other_members(crate: str, crate_dir: str) -> bool:
+        """An unpublished harness member whose every bench maps to sites that
+        belong to other members: its benches time those members' hot paths,
+        and it has none of its own."""
+        benches = [bench for bench in world.bench_files if bench.startswith(f"{crate_dir}/benches/")]
+        return (
+            crate in world.unpublished
+            and bool(benches)
+            and all(
+                mapped.get(bench) and all(site_crate.get(sid, crate) != crate for sid in mapped[bench])
+                for bench in benches
+            )
+        )
+
     row_ids: dict[str, list[str]] = {}
     for row in rows:
         rid = _plain(row[col["id"]])
@@ -1535,7 +1566,7 @@ def doc_checks(doc: str, manifest: Manifest, cells: dict, world: DocWorld, confi
                 problems.append(f"crate-level row `{rid}` must be `leave`, not `{verdict}`")
             if cite not in row[col["reason"]]:
                 problems.append(f"crate-level row `{rid}` must cite that `{cite}` does not exist")
-            if crate_dir in world.bench_dirs:
+            if crate_dir in world.bench_dirs and not measures_only_other_members(crate, crate_dir):
                 problems.append(
                     f"crate-level row `{rid}`: `{cite}` exists, so `{crate}` has a hot path to "
                     f"measure -- give it a function row with a manifest entry"
@@ -1555,15 +1586,6 @@ def doc_checks(doc: str, manifest: Manifest, cells: dict, world: DocWorld, confi
         if member not in covered_crates:
             problems.append(f"workspace member `{member}` has no site row")
     # (b) bench coverage
-    bheader, brows, _ = parse_table(doc, BENCHES_BEGIN, BENCHES_END)
-    if "bench" not in bheader or "sites" not in bheader:
-        problems.append("the bench table needs `bench` and `sites` columns")
-        return problems
-    bcol, scol = bheader.index("bench"), bheader.index("sites")
-    mapped: dict[str, list[str]] = {}
-    for row in brows:
-        bench = _plain(row[bcol])
-        mapped[bench] = [_plain(s) for s in row[scol].split(",") if _plain(s) not in EMPTY_CELL]
     for bench in world.bench_files:
         if bench not in mapped:
             problems.append(f"bench `{bench}` has no row in the bench table")
@@ -2114,6 +2136,31 @@ def self_test() -> int:
         f"| `demo-cli` | `demo-cli` | — | — | leave | no hot path; `crates/demo-cli/benches/` does not exist | {dash} |\n"
     )
     expect(not doc_checks(_fixture_doc(rows=function_row_instead), manifest, cells, _FIXTURE_WORLD), "the same crate given a function row with an entry must pass")
+    harness_world = DocWorld(
+        members=("demo-core", "demo-cli", "demo-harness"),
+        member_dirs={"demo-core": "crates/demo-core", "demo-cli": "crates/demo-cli", "demo-harness": "crates/demo-harness"},
+        bench_files=("crates/demo-core/benches/dot.rs", "crates/demo-harness/benches/timing.rs"),
+        bench_dirs=frozenset({"crates/demo-core", "crates/demo-harness"}),
+        unpublished=frozenset({"demo-harness"}),
+    )
+    harness_rows = function_row_instead + (
+        f"| `demo-harness.crate` | `demo-harness` | — | — | leave | a conformance harness; `crates/demo-harness/benches/` times `demo-core`'s sites | {dash} |\n"
+    )
+    harness_benches = "| `crates/demo-core/benches/dot.rs` | demo.dot |\n| `crates/demo-harness/benches/timing.rs` | demo.dot |\n"
+    expect(
+        not doc_checks(_fixture_doc(rows=harness_rows, benches=harness_benches), manifest, cells, harness_world),
+        "an unpublished harness whose benches time only other members' sites may have a crate-level row",
+    )
+    published_harness = dataclasses.replace(harness_world, unpublished=frozenset())
+    expect(
+        any("exists, so" in p for p in doc_checks(_fixture_doc(rows=harness_rows, benches=harness_benches), manifest, cells, published_harness)),
+        "the same crate-level row for a published member with benches/ must fail",
+    )
+    own_site_rows = harness_rows.replace("| `demo.dot` | `demo-core` |", "| `demo.dot` | `demo-harness` |")
+    expect(
+        any("exists, so" in p for p in doc_checks(_fixture_doc(rows=own_site_rows, benches=harness_benches), manifest, cells, harness_world)),
+        "an unpublished member whose bench times one of its own sites must give it a function row",
+    )
     uncited = f"| `demo.dot` | `demo-core` | `kernel::dot` | {covers} | leave | r | {vals} |\n| `demo-cli` | `demo-cli` | — | — | leave | no hot path | {dash} |\n"
     expect(any("must cite" in p for p in doc_checks(_fixture_doc(rows=uncited), manifest, cells, _FIXTURE_WORLD)), "an exempt row that cites no benches/ must fail")
     missing_crate = f"| `demo.dot` | `demo-core` | `kernel::dot` | {covers} | leave | r | {vals} |\n"

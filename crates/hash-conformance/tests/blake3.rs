@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Frozen public-API oracle answers, replayed with unrelated update boundaries.
+use purrdf_hash::Backend as _;
 use purrdf_hash::blake3::{Backend, Hasher, hash};
+use purrdf_hash::dispatch::{assert_required_available, host_advertises};
 use purrdf_hash::hex::Lower;
 use purrdf_testkit::vectors::VectorFile;
 
@@ -23,23 +25,26 @@ fn required_backends_are_available() {
     #[cfg(target_arch = "x86_64")]
     assert!(Backend::Sse2.is_available());
 
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Ok(required) = std::env::var("PURRDF_REQUIRE_BLAKE3_PATHS") {
-        for name in required.split(',') {
-            let backend = match name {
-                "portable" => Backend::Portable,
-                "sse2" => Backend::Sse2,
-                "ssse3" => Backend::Ssse3,
-                "avx2" => Backend::Avx2,
-                "avx512" => Backend::Avx512,
-                "neon" => Backend::Neon,
-                other => panic!("unknown required BLAKE3 path: {other}"),
-            };
-            assert!(
-                backend.is_available(),
-                "required BLAKE3 path is absent: {name}"
-            );
-        }
+    assert_required_available("blake3", expected_here);
+}
+
+/// Whether this host is expected to run a BLAKE3 path: its architecture, and
+/// the processor features it advertises independently of the detection under
+/// test.
+fn expected_here(backend: Backend) -> bool {
+    let x86_64 = cfg!(target_arch = "x86_64");
+    match backend {
+        Backend::Portable => true,
+        Backend::Sse2 => x86_64 || (cfg!(target_arch = "x86") && host_advertises(&["sse2"])),
+        Backend::Ssse3 => x86_64 && host_advertises(&["ssse3"]),
+        Backend::Avx2 => x86_64 && host_advertises(&["avx2"]),
+        Backend::Avx512 => x86_64 && host_advertises(&["avx512f", "avx512vl"]),
+        Backend::Neon => cfg!(all(
+            target_arch = "aarch64",
+            target_feature = "neon",
+            target_endian = "little"
+        )),
+        Backend::Wasm128 => cfg!(all(target_arch = "wasm32", target_feature = "simd128")),
     }
 }
 
@@ -57,7 +62,7 @@ fn frozen_answers_match() {
         })
         .expect("default dispatch matches independent answers");
     assert_eq!(count, 8214);
-    for backend in Backend::ALL.into_iter().filter(|b| b.is_available()) {
+    for backend in Backend::all_available() {
         let count = file
             .replay(1, |fields| {
                 let len: usize = fields[0].parse().expect("length");
@@ -84,12 +89,7 @@ fn streaming_answers_match() {
 fn replay_stream<const BUFFER: usize>() {
     let data = corpus();
     let file = VectorFile::parse(VECTORS).expect("frozen vector integrity");
-    for backend in core::iter::once(None).chain(
-        Backend::ALL
-            .into_iter()
-            .filter(|b| b.is_available())
-            .map(Some),
-    ) {
+    for backend in core::iter::once(None).chain(Backend::all_available().map(Some)) {
         let mut h = backend.map_or_else(purrdf_hash::blake3::Streaming::<BUFFER>::new, |b| {
             b.streaming::<BUFFER>().expect("available path")
         });
@@ -166,7 +166,7 @@ fn random_inputs_cover_irregular_trees_and_alignment() {
                 expected,
                 "default dispatch, len={len}, seed={seed:x}"
             );
-            for backend in Backend::ALL.into_iter().filter(|b| b.is_available()) {
+            for backend in Backend::all_available() {
                 assert_eq!(
                     backend.hash(data).expect("available path"),
                     expected,
@@ -229,7 +229,7 @@ fn streaming_boundary_answers() {
             "1dabe216be2578830263b049de1639f39f05a4da616b9b78c7a5e4e41662fd1f",
         ),
     ];
-    for backend in Backend::ALL.into_iter().filter(|b| b.is_available()) {
+    for backend in Backend::all_available() {
         for (len, expected) in cases {
             let mut stream = backend.hasher().expect("available path");
             for part in data[..len].chunks(63) {

@@ -108,10 +108,10 @@ entry_points = [
 ]
 spec = "the frozen FixedHasher self-vectors: a fixed compile-time key schedule, build-specific and never persisted"
 vectors = [
-    "crates/hash/tests/vectors/fixed_hasher_aes_vectors.txt",
-    "crates/hash/tests/vectors/fixed_hasher_portable_vectors.txt",
+    "crates/hash-conformance/tests/vectors/fixed_hasher_aes_vectors.txt",
+    "crates/hash-conformance/tests/vectors/fixed_hasher_portable_vectors.txt",
 ]
-bench = ["purrdf-hash:hasher"]
+bench = ["purrdf-hash-conformance:hasher"]
 sites = ["hash.fixed-compress"]
 replaces_external = ["ahash", "foldhash"]
 enforced = true
@@ -145,8 +145,8 @@ home = "purrdf_hash::blake3::hash"
 entry_points = ["purrdf_hash::blake3::Streaming", "purrdf_hash::blake3::Hash"]
 spec = "the BLAKE3 specification (O'Connor, Aumasson, Neves, Wilcox-O'Hearn), unkeyed hash mode"
 vectors = [
-    "crates/hash/tests/vectors/blake3_differential_vectors.txt",
-    "crates/hash/tests/vectors/blake3_random_vectors.txt",
+    "crates/hash-conformance/tests/vectors/blake3_differential_vectors.txt",
+    "crates/hash-conformance/tests/vectors/blake3_random_vectors.txt",
 ]
 bench = ["purrdf-hash:digests"]
 sites = ["blake3.hash-many-dispatch", "blake3.single-block"]
@@ -164,7 +164,7 @@ summary = "MD5 message digest, one-shot and streaming"
 home = "purrdf_hash::md5::Md5"
 entry_points = []
 spec = "RFC 1321"
-vectors = ["crates/hash/tests/vectors/md5_differential_vectors.txt"]
+vectors = ["crates/hash-conformance/tests/vectors/md5_differential_vectors.txt"]
 bench = ["purrdf-hash:digests"]
 sites = []
 replaces_external = ["md-5"]
@@ -181,7 +181,7 @@ summary = "SHA-1 message digest, one-shot and streaming, with the x86 SHA and Ar
 home = "purrdf_hash::sha1::Sha1"
 entry_points = []
 spec = "FIPS 180-4 section 6.1"
-vectors = ["crates/hash/tests/vectors/sha1_differential_vectors.txt"]
+vectors = ["crates/hash-conformance/tests/vectors/sha1_differential_vectors.txt"]
 bench = ["purrdf-hash:digests"]
 sites = ["hash.sha1-block"]
 replaces_external = ["sha1"]
@@ -199,10 +199,10 @@ home = "purrdf_hash::sha3::Sha3"
 entry_points = ["purrdf_hash::sha3::keccak_f1600"]
 spec = "FIPS 202"
 vectors = [
-    "crates/hash/tests/vectors/sha3_224_differential_vectors.txt",
-    "crates/hash/tests/vectors/sha3_256_differential_vectors.txt",
-    "crates/hash/tests/vectors/sha3_384_differential_vectors.txt",
-    "crates/hash/tests/vectors/sha3_512_differential_vectors.txt",
+    "crates/hash-conformance/tests/vectors/sha3_224_differential_vectors.txt",
+    "crates/hash-conformance/tests/vectors/sha3_256_differential_vectors.txt",
+    "crates/hash-conformance/tests/vectors/sha3_384_differential_vectors.txt",
+    "crates/hash-conformance/tests/vectors/sha3_512_differential_vectors.txt",
 ]
 bench = ["purrdf-hash:digests"]
 sites = []
@@ -220,7 +220,7 @@ summary = "CRC-32/ISO-HDLC with the pclmulqdq and Armv8 CRC32 instruction paths"
 home = "purrdf_hash::crc32::Crc32"
 entry_points = []
 spec = "CRC-32/ISO-HDLC (ISO 3309, ITU-T V.42): reflected polynomial 0x04C11DB7, initial and final XOR 0xFFFFFFFF"
-vectors = ["crates/hash/tests/vectors/crc32_differential_vectors.txt"]
+vectors = ["crates/hash-conformance/tests/vectors/crc32_differential_vectors.txt"]
 bench = ["purrdf-hash:digests"]
 sites = ["hash.crc32-update"]
 replaces_external = ["crc32fast"]

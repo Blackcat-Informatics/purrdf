@@ -22,8 +22,8 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 ))]
 use purrdf_hash::backend::AesFixedHasher;
 use purrdf_hash::backend::PortableFixedHasher;
+use purrdf_hash_conformance::iri_corpus;
 use purrdf_testkit::rng::Xoshiro256;
-use purrdf_testkit::vectors::{VectorFile, decode_str};
 
 /// `count` byte keys whose lengths cycle through `lengths`.
 fn byte_keys(lengths: core::ops::RangeInclusive<usize>, count: usize, seed: u64) -> Vec<Vec<u8>> {
@@ -34,15 +34,6 @@ fn byte_keys(lengths: core::ops::RangeInclusive<usize>, count: usize, seed: u64)
             let len = lengths[index % lengths.len()];
             (0..len).map(|_| rng.next_u64() as u8).collect()
         })
-        .collect()
-}
-
-fn corpus() -> Vec<String> {
-    let file = VectorFile::parse(include_str!("../tests/vectors/corpus_iris.txt"))
-        .expect("the IRI corpus parses");
-    file.records()
-        .iter()
-        .map(|record| decode_str(record.fields[1]).expect("an encoded IRI"))
         .collect()
 }
 
@@ -59,7 +50,7 @@ fn bench_path<H: Hasher + Default>(c: &mut Criterion, path: &str, terminal: fn(u
         .map(|i| format!("http://example.org/i/{i:05}"))
         .collect();
     assert!(short_iris.iter().all(|iri| iri.len() == 26));
-    let iris = corpus();
+    let iris = iri_corpus();
 
     let mut group = c.benchmark_group("fixed-hasher");
 

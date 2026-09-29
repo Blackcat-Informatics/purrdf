@@ -54,11 +54,12 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-retrieval` (`crates/retrieval`) | Composition layer over the ranked producers: plan → compile → execute → fuse, with a canonical BLAKE3 plan identity and an exact, content-addressed fusion law; producers, strata and weights are caller-supplied |
 | `purrdf-validate` (`crates/validate`) | Shared string boundary every language binding routes through |
 | `purrdf-json` (`crates/json`) | Ordered JSON byte-cover codec with queryable occurrences, strict reconstruction and caller-selected profile; sole runtime dependency is `purrdf-core` |
-| `purrdf-hash` (`crates/hash`) | Native, zero-dependency hashing: BLAKE3-256, MD5 (RFC 1321), SHA-1 (FIPS 180-4), SHA3-224/256/384/512 (FIPS 202) and CRC-32 (ISO-HDLC), streaming and one-shot; SHA-1 and CRC-32 run on the x86 SHA/`pclmulqdq` and Armv8 SHA1/CRC32 instructions when detected at run time, the portable source otherwise; the SPARQL hash built-ins, OpenPGP fingerprints and derivation identities compute through it. Also `fixed::FixedHasher`, the workspace's fixed-key table hasher: folded multiplies, or an AES accumulator on a build whose target enables AES (compile-time only, never run-time detection; wasm32 and 32-bit targets use the portable function), each function pinned by frozen self-vectors |
+| `purrdf-hash` (`crates/hash`) | Native, zero-dependency hashing: BLAKE3-256, MD5 (RFC 1321), SHA-1 (FIPS 180-4), SHA3-224/256/384/512 (FIPS 202) and CRC-32 (ISO-HDLC), streaming and one-shot; SHA-1 and CRC-32 run on the x86 SHA/`pclmulqdq` and Armv8 SHA1/CRC32 instructions when detected at run time, the portable source otherwise; the SPARQL hash built-ins, OpenPGP fingerprints and derivation identities compute through it. Also `fixed::FixedHasher`, the workspace's fixed-key table hasher: folded multiplies, or an AES accumulator on a build whose target enables AES (compile-time only, never run-time detection; wasm32 and 32-bit targets use the portable function), each function pinned by frozen self-vectors. The workspace root: zero dependencies, and every crate may depend on it; it also holds the small specified kernels shared across the workspace (`fnv`, FNV-1a 64-bit; `mix`, SplitMix64) and the `Backend` trait every family of named execution paths implements (`selected`, `is_available`, `all_available`, `name`), with the one `PURRDF_REQUIRE_SIMD_PATHS` check in `dispatch` |
 | `purrdf-deflate` (`crates/deflate`) | Native DEFLATE (RFC 1951) and gzip (RFC 1952): a push-based streaming decoder that decodes every gzip member, verifies each trailer and refuses trailing garbage and output past a caller's limit, and a deterministic encoder (gzip `MTIME` 0, `XFL` 0, `OS` 255; the same bytes on every path and however the input is chunked); match copies, match-length compares and window hashing run on SSE2/AVX2, NEON or wasm simd128, portable code otherwise; sole runtime dependency is `purrdf-hash` (the CRC-32) |
 | `purrdf-jsonschema` (`crates/jsonschema`) | Native JSON Schema validation for drafts 2020-12, 2019-09 and 07, each schema resource in its own dialect: every vocabulary, `$dynamicRef`, `$recursiveRef`, `unevaluated*`, `$vocabulary`, the flag/basic/detailed output formats, exact decimal numbers, and ECMA-262 `/u` patterns using `regex` for regular expressions and a bounded explicit-stack matcher for lookaround, backreferences and scoped modifiers; `Schema::is_valid`/`evaluate` return typed errors on resource exhaustion; depends on `serde_json`, `regex`, `purrdf-iri` and `purrdf-hash` only |
 | `purrdf-markdown` (`crates/markdown`) | Structural Markdown-to-RDF 1.2 slicer under a shipped specification: a typed stand-off model over verbatim byte spans, projected to claims; sole runtime dependency is `purrdf-core` |
-| `purrdf-iri`, `purrdf-xsd`, `purrdf-events`, `purrdf-hash` | Zero-dependency foundations |
+| `purrdf-hash` | The zero-dependency root |
+| `purrdf-iri`, `purrdf-xsd`, `purrdf-events` | Zero-dependency foundations |
 | `purrdf-deflate` | Leaf over `purrdf-hash` alone |
 | `purrdf-cdt` (`crates/cdt`) | SPARQL composite datatypes (SEP-0009 `cdt:List`/`cdt:Map`): closed leaf over `purrdf-iri` + `purrdf-xsd` only |
 | `purrdf-stack` (`crates/stack`) | How much stack the thread has left (native OS limit, read via target-gated `libc`/`windows-sys` declarations with no C toolchain needed; wasm32 shadow stack against an installable floor) and the margin the SPARQL evaluator refuses at |
@@ -69,6 +70,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-bench` (`crates/bench`) | Benchmark tooling: the scale-corpus generator (`publish = false`) |
 | `purrdf-testkit` (`crates/testkit`) | Shared test support: byte-exact goldens (`assert_golden!`), temporary paths under the target directory (`temp_dir!`, `temp_file!`, `for_unit_test`), self-hashing frozen differential vectors, the libtest-compatible `harness = false` runner, and the property harness (`prop_test!`: choice-sequence shrinking, regex string generators, stateful model testing, a deterministic seed per property); depends on no `purrdf-*` crate (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
 | `wasm-link` (`crates/wasm-link`) | The wasm package's post-link step: links the suspend, run and poison guarantees into the optimized module (`publish = false`, host tool) |
+| `purrdf-hash-conformance` (`crates/hash-conformance`) | The frozen-vector suites of `purrdf-hash` (digest differentials, BLAKE3 streaming boundaries, base16 rendering, the table hasher's self-vectors and quality) and the table hasher's latency bench, on testkit's runner natively and on wasm32; separate from `purrdf-hash` because testkit depends on it (`publish = false`) |
 | `helper-census` (`crates/helper-census`) | The structural helper census: normalises every shipping function body (local names renamed, literals abstracted) and reports isomorphic bodies, repeated thin forwarders, constants by value and hex-digit tables against `helpers-ledger.toml` (`publish = false`, host tool) |
 
 ## 2. Hard constraints (violating these fails CI or review)
@@ -277,11 +279,11 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 Tag-driven trusted publishing: `rust-v*` → crates.io (29 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
-is single-sourced in `[workspace.package]`. Ten members never reach
-crates.io: `purrdf-capi`, `purrdf-sparql-conformance`, `purrdf-cli`,
-`purrdf-envelope-probe`, `purrdf-bench`, `purrdf-alloc-probe`,
-`purrdf-testkit`, `wasm-link`, `helper-census`, and `purrdf-python` (PyPI via
-maturin instead).
+is single-sourced in `[workspace.package]`. Eleven members never reach
+crates.io: `purrdf-capi`, `purrdf-sparql-conformance`,
+`purrdf-hash-conformance`, `purrdf-cli`, `purrdf-envelope-probe`,
+`purrdf-bench`, `purrdf-alloc-probe`, `purrdf-testkit`, `wasm-link`,
+`helper-census`, and `purrdf-python` (PyPI via maturin instead).
 `purrdf-alloc-probe` and `purrdf-testkit` are dev-dependencies of published
 crates, so their root `[workspace.dependencies]` entries are path-only with
 **no `version`** — cargo then strips them from the packaged manifest, which is

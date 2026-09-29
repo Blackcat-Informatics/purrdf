@@ -10,7 +10,9 @@
 //! cases run natively under `cargo test` and on `wasm32-unknown-unknown` in
 //! Node (`make wasm-test`), baseline and `+simd128`.
 
+use purrdf_hash::Backend as _;
 use purrdf_hash::backend::HexBackend;
+use purrdf_hash::dispatch::{assert_required_available, host_advertises};
 use purrdf_hash::hex::Lower;
 use purrdf_testkit::rng::Xoshiro256;
 
@@ -29,7 +31,7 @@ fn rfc4648_base16_vectors() {
     for (input, expected) in vectors {
         let expected = expected.to_ascii_lowercase();
         assert_eq!(Lower(input.as_bytes()).to_string(), expected, "{input:?}");
-        for backend in available() {
+        for backend in HexBackend::all_available() {
             let mut out = vec![0u8; 2 * input.len()];
             backend
                 .encode(input.as_bytes(), &mut out)
@@ -87,7 +89,7 @@ fn formatter_options_match_str() {
 /// the exactly-sized neighbour it accepts.
 fn encode_refuses_a_missized_output() {
     let data = input(40, 3);
-    for backend in available() {
+    for backend in HexBackend::all_available() {
         let mut exact = vec![0u8; 80];
         assert_eq!(backend.encode(&data, &mut exact), Some(()));
         assert_eq!(exact, portable(&data).as_bytes());
@@ -105,7 +107,7 @@ fn every_path_matches_portable() {
     let source = input(256 + 16, 0x5eed);
     let mut out_buffer = vec![0u8; 2 * 256 + 16];
     let mut ran = Vec::new();
-    for backend in available() {
+    for backend in HexBackend::all_available() {
         for len in 0..=256 {
             for in_offset in 0..16 {
                 let data = &source[in_offset..in_offset + len];
@@ -143,10 +145,31 @@ fn every_path_matches_portable() {
     assert_eq!(HexBackend::selected(), HexBackend::Aarch64Neon);
 }
 
-fn available() -> impl Iterator<Item = HexBackend> {
-    HexBackend::ALL
-        .into_iter()
-        .filter(|backend| backend.is_available())
+/// Whether this host is expected to run a base16 path: its architecture and
+/// build, and the processor features it advertises independently of the
+/// detection under test.
+fn expected_here(backend: HexBackend) -> bool {
+    match backend {
+        HexBackend::Portable => true,
+        HexBackend::X86Ssse3 => cfg!(target_arch = "x86_64") && host_advertises(&["ssse3"]),
+        HexBackend::Aarch64Neon => cfg!(target_arch = "aarch64"),
+        HexBackend::Wasm32Simd128 => cfg!(all(target_arch = "wasm32", target_feature = "simd128")),
+    }
+}
+
+/// Every base16 path `PURRDF_REQUIRE_SIMD_PATHS` requires is available, and a
+/// required vector path is the one [`Lower`] renders through.
+fn required_paths_are_available_and_selected() {
+    for backend in assert_required_available("hex", expected_here) {
+        if backend != HexBackend::Portable {
+            assert_eq!(
+                HexBackend::selected(),
+                backend,
+                "hex:{} is required but not selected",
+                backend.name()
+            );
+        }
+    }
 }
 
 /// The reference rendering, independent of the crate's encoder.
@@ -175,4 +198,5 @@ purrdf_testkit::harness_main!(
     formatter_options_match_str,
     encode_refuses_a_missized_output,
     every_path_matches_portable,
+    required_paths_are_available_and_selected,
 );

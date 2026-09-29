@@ -317,7 +317,7 @@ bench-prepared-reuse: ## Measure cold/warm preparation and prepared execution on
 	cargo bench --locked --profile release -p purrdf-sparql-eval --bench prepared_reuse -- $(BENCH_ARGS)
 
 bench: ## Run criterion benchmarks (report-only; never a gate).
-	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-hash -p purrdf-deflate -p purrdf-jsonschema
+	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-hash -p purrdf-hash-conformance -p purrdf-deflate -p purrdf-jsonschema
 
 # HOW A LANE KNOB REACHES ITS SCRIPT: as environment bytes, unparsed.
 #
@@ -432,7 +432,7 @@ miri: ## Check SmallVec storage and BLAKE3 streaming under Miri (own lane, NOT p
 	cargo miri test -p purrdf-core small --target i686-unknown-linux-gnu
 	@# Bounded streaming vectors cover buffer/tree boundaries and snapshots.
 	@# The scalar rotation uses Rust under Miri; native lowering is checked separately.
-	MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --locked -p purrdf-hash --test blake3 streaming_boundary_answers
+	MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --locked -p purrdf-hash-conformance --test blake3 streaming_boundary_answers
 
 # CI runs the matrix split across runners through CONFORMANCE_ARGS: one
 # `--shard NAME --emit-results FILE` per shard, then one `--from-results DIR` that
@@ -681,7 +681,7 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# compiles the cross-target test targets to wasm32 and runs them in Node, against the same
 	@# pinned expectations the native `cargo test` run asserts. Ordered JSON also
 	@# crosses the same production RDF codecs against a pinned byte corpus.
-	@# purrdf-hash replays its frozen digest vectors there, so the portable MD5,
+	@# purrdf-hash-conformance replays purrdf-hash's frozen digest vectors there, so the portable MD5,
 	@# SHA-1, SHA-3 and CRC-32 paths wasm32 runs answer as every native path does.
 	@# BLAKE3 replays its full streaming corpus on baseline and SIMD128 builds.
 	@# Base16 tests also run on the baseline and +simd128 builds, so the
@@ -778,15 +778,15 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 			-p purrdf-shapes --test product_wasm \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-hash --test digest_differential --test hex --test blake3 \
+			-p purrdf-hash-conformance --test digest_differential --test hex --test blake3 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-hash --test fixed_hasher \
+			-p purrdf-hash-conformance --test fixed_hasher \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-hash --test hex --test blake3 \
+			-p purrdf-hash-conformance --test hex --test blake3 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-core --test csv_scan_wasm \

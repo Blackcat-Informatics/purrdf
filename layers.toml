@@ -79,7 +79,7 @@ deps = [
 [[crate]]
 name = "purrdf-testkit"
 deps = [
-    { name = "purrdf-hash", pending = true },
+    "purrdf-hash",
     { name = "purrdf-lex", pending = true },
 ]
 
@@ -111,11 +111,7 @@ deps = [
 
 [[crate]]
 name = "purrdf-hash-conformance"
-pending = true
-deps = [
-    { name = "purrdf-hash", pending = true },
-    { name = "purrdf-testkit", pending = true },
-]
+deps = ["purrdf-hash", "purrdf-testkit"]
 
 [[crate]]
 name = "purrdf-jsonschema"

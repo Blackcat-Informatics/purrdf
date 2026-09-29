@@ -1,0 +1,67 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-hash-conformance"
+description = "The frozen-vector conformance suites of purrdf-hash: digest differentials, BLAKE3 streaming boundaries, base16 rendering and the fixed-key table hasher's self-vectors and quality, replayed natively and on wasm32-unknown-unknown, plus the table hasher's latency bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# The crate under test. It has zero runtime dependencies and uses none of the
+# test support below, which is why its vector suites live here: testkit itself
+# depends on it, and a dev-dependency back onto testkit would close a cycle.
+purrdf-hash = { workspace = true }
+# The frozen vector format, the deterministic input stream the vectors are
+# drawn from, and the libtest-compatible `harness = false` runner every target
+# below runs on, natively and on wasm32-unknown-unknown alike.
+purrdf-testkit = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# The fixed-key table hasher's latency baselines. DEV-DEPENDENCY ONLY, and
+# native-only: `make wasm-test` builds this crate's wasm32 test targets, cargo
+# builds every declared dev-dependency for them, and criterion is not
+# wasm32-clean.
+criterion = { workspace = true }
+
+[[bench]]
+name = "hasher"
+harness = false
+
+# The frozen-vector replay of MD5, SHA-1, SHA-3 and CRC-32 over every path the
+# host runs. Every target below runs on purrdf_testkit's `harness = false`
+# runner, so the same named cases run natively under `cargo test` and on
+# wasm32-unknown-unknown in Node under scripts/wasm-test-runner.sh
+# (`make wasm-test`).
+[[test]]
+name = "digest_differential"
+harness = false
+
+# Base16 rendering: RFC 4648 vectors and every encoding path against the
+# portable one, so `make wasm-test` executes the wasm32 `simd128` kernel as
+# well as the portable path.
+[[test]]
+name = "hex"
+harness = false
+
+# The portable table hasher's frozen answers, which wasm32 computes from 32-bit
+# halves, and its statistical quality, measured natively.
+[[test]]
+name = "fixed_hasher"
+harness = false
+
+# Streaming tree boundaries replay the same frozen answers on native and wasm.
+[[test]]
+name = "blake3"
+harness = false

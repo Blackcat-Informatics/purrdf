@@ -5,7 +5,8 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 # Provenance of `purrdf-hash`
 
-Everything under `src/`, `tests/*.rs` and `benches/` is first-party. The
+Everything under `src/`, `tests/*.rs` and `benches/`, and under
+`crates/hash-conformance/` (this crate's frozen-vector suites), is first-party. The
 initial implementations were written from the specifications below without
 consulting third-party implementations. Subsequent source consultation for
 performance analysis is recorded by algorithm below; no third-party code
@@ -45,7 +46,7 @@ was copied or ported.
   third-party non-cryptographic hash implementation was consulted during
   the initial design. The design, the key schedule and the measured decision
   to ship an AES path are recorded in
-  `src/fixed.rs`, `src/fixed/*.rs` and `benches/hasher.rs`.
+  `src/fixed.rs`, `src/fixed/*.rs` and `crates/hash-conformance/benches/hasher.rs`.
   The terminal tagged-slice operation was added for PurRDF's primary IRI
   index. Its own avalanche, sparse-key, corpus and distribution tests cover
   both the portable and AES functions; it is not a content identity.
@@ -114,7 +115,7 @@ these answers, which must never be changed to match the implementation.
   0-bit and 1600-bit messages.
 - CRC-32: the check value above.
 
-## Frozen differential vectors (`tests/vectors/*_differential_vectors.txt`)
+## Frozen differential vectors (`crates/hash-conformance/tests/vectors/*_differential_vectors.txt`)
 
 Seven files, 14,097 records each, recording what third-party crates answered
 over a deterministic input set while they were dependencies of this
@@ -135,7 +136,7 @@ file's header states its input recipe (the little-endian `u64` stream of
 file and this crate is a defect in this crate; the files are never edited to
 match it.
 
-## Fixed-hasher self-vectors (`tests/vectors/fixed_hasher_*_vectors.txt`)
+## Fixed-hasher self-vectors (`crates/hash-conformance/tests/vectors/fixed_hasher_*_vectors.txt`)
 
 These two files record what this crate's own portable and AES table-hash
 functions answered when they were written. Their `oracle` header names
@@ -143,8 +144,8 @@ purrdf-hash itself. No third-party output is involved, and a replay proves
 stability across targets and edits rather than correctness.
 They include streaming `Hasher` operations and the terminal tagged-slice
 operation used by the RDF interner.
-`tests/fixed_hasher.rs` writes them when `PURRDF_RECORD_FIXED_HASHER=1` is
+`crates/hash-conformance/tests/fixed_hasher.rs` writes them when `PURRDF_RECORD_FIXED_HASHER=1` is
 set.
 
-`tests/vectors/corpus_iris.txt` holds input keys only: the 1,000 most
+`crates/hash-conformance/tests/vectors/corpus_iris.txt` holds input keys only: the 1,000 most
 frequent IRIs of the repository's RDF test corpora.

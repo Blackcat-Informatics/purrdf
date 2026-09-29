@@ -17,6 +17,7 @@ members = [
     "crates/geo",
     "crates/gts",
     "crates/hash",
+    "crates/hash-conformance",
     "crates/helper-census",
     "crates/hnsw",
     "crates/iri",
@@ -98,8 +99,10 @@ purrdf-sparql-results = { path = "crates/sparql-results", version = "2.0.2" }
 # DEV-ONLY test support (`publish = false`): goldens, temporary paths under the
 # target directory, frozen differential vectors and the `harness = false`
 # runner. PATH-ONLY with NO `version`, for the reason given for
-# `purrdf-alloc-probe` above. It depends on no `purrdf-*` crate, so any member's
-# tests may use it without closing a cycle.
+# `purrdf-alloc-probe` above. Its one first-party dependency is `purrdf-hash`,
+# the zero-dependency root, whose frozen-vector suites live in the unpublished
+# `purrdf-hash-conformance` rather than in its own tests, so any member's tests
+# may use it without closing a cycle.
 purrdf-testkit = { path = "crates/testkit" }
 purrdf-stack = { path = "crates/stack", version = "2.0.2" }
 purrdf-text = { path = "crates/text", version = "2.0.2" }

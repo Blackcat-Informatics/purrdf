@@ -109,6 +109,7 @@ jobs:
           cargo bench -p purrdf-sparql-algebra --bench tokenize --no-run --locked
           cargo bench -p purrdf-sparql-results --no-run --locked
           cargo bench -p purrdf-hash --no-run --locked
+          cargo bench -p purrdf-hash-conformance --no-run --locked
           cargo bench -p purrdf-deflate --no-run --locked
 
       - name: Run native criterion suites
@@ -128,6 +129,7 @@ jobs:
           cargo bench -p purrdf-sparql-algebra --bench tokenize --locked
           cargo bench -p purrdf-sparql-results --locked
           cargo bench -p purrdf-hash --locked
+          cargo bench -p purrdf-hash-conformance --locked
           cargo bench -p purrdf-deflate --locked
 
       - name: Run Python compat harness

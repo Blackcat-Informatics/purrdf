@@ -831,7 +831,7 @@ jobs:
         env:
           PURRDF_REQUIRE_HASH_PATHS: portable,aarch64-sha1,aarch64-crc32
           PURRDF_REQUIRE_BLAKE3_PATHS: portable,neon
-        run: cargo test --locked -p purrdf-hash
+        run: cargo test --locked -p purrdf-hash -p purrdf-hash-conformance
 
       - name: Run the AES-round FixedHasher path on Arm
         # The fixed-key table hasher's AES function exists only in builds whose
@@ -839,7 +839,7 @@ jobs:
         # AArch64, against its own frozen vectors.
         env:
           RUSTFLAGS: "-C target-feature=+aes"
-        run: cargo test --locked -p purrdf-hash --test fixed_hasher
+        run: cargo test --locked -p purrdf-hash-conformance --test fixed_hasher
 
       - name: Run the DEFLATE NEON kernels against the portable ones on aarch64
         # purrdf-deflate's match copy, match-length compare and window hashing
@@ -914,7 +914,7 @@ jobs:
         env:
           PURRDF_REQUIRE_DISPATCH_PATHS: portable
         run: |
-          PURRDF_REQUIRE_BLAKE3_PATHS=portable,sse2 cargo test --locked --target i686-unknown-linux-gnu -p purrdf-hash --test blake3
+          PURRDF_REQUIRE_BLAKE3_PATHS=portable,sse2 cargo test --locked --target i686-unknown-linux-gnu -p purrdf-hash-conformance --test blake3
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-core --lib distance
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval --lib knn
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval \
@@ -939,7 +939,7 @@ jobs:
         env:
           PURRDF_REQUIRE_DISPATCH_PATHS: portable
         run: |
-          PURRDF_REQUIRE_BLAKE3_PATHS=portable cargo test --locked --target i586-unknown-linux-gnu -p purrdf-hash --test blake3
+          PURRDF_REQUIRE_BLAKE3_PATHS=portable cargo test --locked --target i586-unknown-linux-gnu -p purrdf-hash-conformance --test blake3
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-xsd --lib
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-core --lib distance
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-core --lib ir::embedding
@@ -1032,7 +1032,7 @@ jobs:
           # shellcheck disable=SC2086
           case "$PART" in
           suites)
-            PURRDF_REQUIRE_BLAKE3_PATHS=portable cargo test --locked --target "$target" -p purrdf-hash --test blake3
+            PURRDF_REQUIRE_BLAKE3_PATHS=portable cargo test --locked --target "$target" -p purrdf-hash-conformance --test blake3
             cargo test --locked --target "$target" -p purrdf-core --lib distance
             cargo test --locked --target "$target" -p purrdf-sparql-eval --lib knn
             cargo test --locked --target "$target" -p purrdf-sparql-eval \
@@ -1086,7 +1086,7 @@ jobs:
 
       - name: Build BLAKE3, distance, kNN and HNSW test binaries
         run: |
-          cargo test --locked --no-run -p purrdf-hash --test blake3
+          cargo test --locked --no-run -p purrdf-hash-conformance --test blake3
           cargo test --locked --no-run -p purrdf-core --lib
           cargo test --locked --no-run -p purrdf-sparql-eval --lib \
             --test knn_wasm_determinism --test knn_wasm_reassociated
@@ -1098,7 +1098,7 @@ jobs:
           PURRDF_REQUIRE_DISPATCH_PATHS: portable,avx2,sse2,avx2+fma,avx512f
           PURRDF_REQUIRE_BLAKE3_PATHS: portable,sse2,ssse3,avx2,avx512
         run: |
-          cargo test --locked -p purrdf-hash --test blake3
+          cargo test --locked -p purrdf-hash-conformance --test blake3
           cargo test --locked -p purrdf-core --lib distance
           cargo test --locked -p purrdf-sparql-eval --lib knn
           cargo test --locked -p purrdf-sparql-eval \

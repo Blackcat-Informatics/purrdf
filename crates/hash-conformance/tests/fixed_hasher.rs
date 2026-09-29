@@ -7,7 +7,7 @@
 //! # Vectors
 //!
 //! `tests/vectors/fixed_hasher_portable_vectors.txt` and
-//! `tests/vectors/fixed_hasher_aes_vectors.txt` record what this crate's own
+//! `tests/vectors/fixed_hasher_aes_vectors.txt` record what purrdf-hash's own
 //! portable and AES functions answered when they were written. The oracle is
 //! purrdf-hash itself, so a replay proves stability (across targets,
 //! compilers and later edits), not correctness. The portable file replays
@@ -15,7 +15,7 @@
 //! where the folded multiply is built from 32-bit halves. The AES file replays
 //! on builds whose target enables AES. The records drive `Hasher` methods
 //! directly, never the standard library's `Hash` impls, whose byte streams
-//! are not this crate's to freeze.
+//! are not purrdf-hash's to freeze.
 //!
 //! To re-record after a deliberate change of function, run this target with
 //! `PURRDF_RECORD_FIXED_HASHER=1`. The portable file can be recorded from any
@@ -45,6 +45,7 @@ use core::hash::{BuildHasher, Hash, Hasher};
 use purrdf_hash::backend::AesFixedHasher;
 use purrdf_hash::backend::{FIXED_HASHER_PATH, PortableFixedHasher};
 use purrdf_hash::fixed::{FixedHasher, FixedState};
+use purrdf_hash_conformance::iri_corpus;
 use purrdf_testkit::rng::Xoshiro256;
 use purrdf_testkit::vectors::{VectorFile, decode_str, encode_str};
 
@@ -60,16 +61,6 @@ fn stream(length: usize, seed: u64) -> Vec<u8> {
     }
     bytes.truncate(length);
     bytes
-}
-
-/// The repository IRI corpus.
-fn corpus() -> Vec<String> {
-    let file = VectorFile::parse(include_str!("vectors/corpus_iris.txt"))
-        .unwrap_or_else(|error| panic!("corpus_iris.txt: {error}"));
-    file.records()
-        .iter()
-        .map(|record| decode_str(record.fields[1]).expect("an encoded IRI"))
-        .collect()
 }
 
 fn one<H: Hasher + Default>(feed: impl FnOnce(&mut H)) -> u64 {
@@ -218,7 +209,7 @@ fn vector_inputs() -> Vec<Vec<String>> {
             hex(seed.into()),
         ]);
     }
-    for iri in corpus() {
+    for iri in iri_corpus() {
         records.push(vec!["text".to_owned(), encode_str(&iri)]);
     }
     for _ in 0..256 {
@@ -478,7 +469,7 @@ mod quality {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{Hasher, Xoshiro256, corpus, one};
+    use super::{Hasher, Xoshiro256, iri_corpus, one};
 
     /// Samples per avalanche cell.
     const SAMPLES: usize = 1 << 20;
@@ -797,7 +788,7 @@ mod quality {
             .collect();
         assert_distinct(&format!("{path} terminal tags and lengths"), cross_length);
 
-        let iris = corpus();
+        let iris = iri_corpus();
         let hashes: Vec<u64> = iris.iter().map(|iri| hash(0, iri.as_bytes())).collect();
         assert_distinct(&format!("{path} terminal corpus IRIs"), hashes.clone());
         assert_uniform(&format!("{path} terminal corpus IRIs"), &hashes, 7);
@@ -860,7 +851,7 @@ mod quality {
     }
 
     pub(super) fn uniform_over_iris_and_integers<H: Hasher + Default>(path: &str) {
-        let iris = corpus();
+        let iris = iri_corpus();
         let hashes: Vec<u64> = iris
             .iter()
             .map(|iri| one::<H>(|h| h.write(iri.as_bytes())))
