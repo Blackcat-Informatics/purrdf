@@ -79,7 +79,7 @@ fn query_selector_yields_mixed_conformance() {
     // to_result_json is stable and valid JSON.
     let json = result.to_result_json();
     assert_eq!(json, result.to_result_json());
-    let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    let parsed = purrdf_lex::json::read(&json).expect("valid JSON");
     let rows = parsed.as_array().expect("array");
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["status"], "nonconformant");

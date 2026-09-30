@@ -19,6 +19,7 @@ pub mod diagnostics;
 pub mod dsl_stats_emit;
 pub mod error;
 pub mod fix_deps;
+mod json_form;
 pub mod list_functions;
 pub mod mapping_support;
 pub mod ownership;

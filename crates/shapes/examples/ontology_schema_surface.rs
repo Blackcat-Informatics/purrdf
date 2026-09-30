@@ -32,7 +32,7 @@ fn generated_definition_block<'a>(source: &'a str, start: &str, next: &str) -> O
 }
 
 fn definition_keys(schema: &str) -> Result<BTreeSet<String>, Box<dyn Error>> {
-    let document: serde_json::Value = serde_json::from_str(schema)?;
+    let document = purrdf_lex::json::read(schema)?;
     let definitions = document["$defs"]
         .as_object()
         .ok_or("compiled schema has no $defs object")?;
@@ -167,7 +167,8 @@ ex:resentMessageId a owl:DatatypeProperty ;
             .ok_or("Pydantic EmailMessage definition is missing")?;
     let reaches_every_carrier = linkml.document.as_value()["classes"]["EmailMessage"]["attributes"]
         ["ex:resentMessageId"]
-        .is_object()
+        .as_object()
+        .is_some()
         && email_declaration.contains("ex:resentMessageId")
         && email_fields.contains_key("ex:resentMessageId")
         && email_model.contains("alias=\"ex:resentMessageId\"");

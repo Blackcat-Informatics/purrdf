@@ -16,14 +16,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
+use crate::json_model::{Object, ToJson, Value, ValueKind};
 use ::purrdf::loss::LossLedger;
 use purrdf_iri::terminals;
-use serde::{
-    Serialize,
-    de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor},
-};
-use serde_json::{Map, Number, Value};
-use serde_yaml::Value as YamlValue;
 
 use crate::json_schema::CompiledSchema;
 use crate::schema_import::{ImportedShapes, SchemaImportConfig};
@@ -52,8 +47,7 @@ const RESERVED_JSONLD_SLOTS: &[&str] = &[
 ];
 
 /// Policy for a JSON property that cannot be used directly as a LinkML slot name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SanitizePolicy {
     /// Emit a deterministic NCName-safe slot and report the mapping.
     Rename,
@@ -64,8 +58,7 @@ pub enum SanitizePolicy {
 }
 
 /// Semantic effect of a LinkML slot-name policy decision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LinkmlSlotDisposition {
     /// Only the LinkML attribute spelling changes; RDF identity is preserved.
     IdentityPreserved,
@@ -76,8 +69,7 @@ pub enum LinkmlSlotDisposition {
 }
 
 /// Deterministic reason contributing to a slot rename or diagnostic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LinkmlSlotReason {
     /// The source local part contains a character outside LinkML's NCName grammar.
     InvalidCharacter,
@@ -96,7 +88,7 @@ pub enum LinkmlSlotReason {
 }
 
 /// One deterministic source-slot to emitted-LinkML rename record.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkmlSlotRename {
     /// Source `$defs` key, or the inline-class JSON Pointer.
     pub source_class: String,
@@ -131,7 +123,7 @@ impl LinkmlSlotRename {
 }
 
 /// One located slot omitted by [`SanitizePolicy::Skip`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkmlSlotDiagnostic {
     /// Source `$defs` key, or the inline-class JSON Pointer.
     pub source_class: String,
@@ -153,6 +145,106 @@ pub struct LinkmlSlotDiagnostic {
     pub reasons: Vec<LinkmlSlotReason>,
     /// Stable human-readable policy result.
     pub detail: String,
+}
+
+impl SanitizePolicy {
+    /// The policy's kebab-case name (`rename`, `skip`, `fail`).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Rename => "rename",
+            Self::Skip => "skip",
+            Self::Fail => "fail",
+        }
+    }
+}
+
+impl LinkmlSlotDisposition {
+    /// The disposition's kebab-case name (`identity-preserved`, ...).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::IdentityPreserved => "identity-preserved",
+            Self::IdentityRehomed => "identity-rehomed",
+            Self::Skipped => "skipped",
+        }
+    }
+}
+
+impl LinkmlSlotReason {
+    /// The reason's kebab-case name (`invalid-character`, ...).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidCharacter => "invalid-character",
+            Self::InvalidInitialCharacter => "invalid-initial-character",
+            Self::UnmatchedNamespace => "unmatched-namespace",
+            Self::CallerRehome => "caller-rehome",
+            Self::BareName => "bare-name",
+            Self::LengthBound => "length-bound",
+            Self::Collision => "collision",
+        }
+    }
+}
+
+impl ToJson for SanitizePolicy {
+    fn to_json(&self) -> Value {
+        Value::from(self.as_str())
+    }
+}
+
+impl ToJson for LinkmlSlotDisposition {
+    fn to_json(&self) -> Value {
+        Value::from(self.as_str())
+    }
+}
+
+impl ToJson for LinkmlSlotReason {
+    fn to_json(&self) -> Value {
+        Value::from(self.as_str())
+    }
+}
+
+impl LinkmlSlotRename {
+    /// The record as JSON: its fields as members, in declaration order, the
+    /// enumerations by their kebab-case names and an absent URI as `null`.
+    #[must_use]
+    pub fn to_json(&self) -> Value {
+        Value::from(
+            Object::new()
+                .with("source_class", &self.source_class)
+                .with("emitted_class", &self.emitted_class)
+                .with("source_path", &self.source_path)
+                .with("source_name", &self.source_name)
+                .with("old_slot_uri", self.old_slot_uri.as_deref())
+                .with("new_slot_name", &self.new_slot_name)
+                .with("emitted_slot_uri", &self.emitted_slot_uri)
+                .with("disposition", self.disposition.to_json())
+                .with("reasons", self.reasons.to_json()),
+        )
+    }
+}
+
+impl LinkmlSlotDiagnostic {
+    /// The diagnostic as JSON: its fields as members, in declaration order,
+    /// the enumerations by their kebab-case names and an absent value as
+    /// `null`.
+    #[must_use]
+    pub fn to_json(&self) -> Value {
+        Value::from(
+            Object::new()
+                .with("source_class", &self.source_class)
+                .with("emitted_class", &self.emitted_class)
+                .with("source_path", &self.source_path)
+                .with("source_name", &self.source_name)
+                .with("old_slot_uri", self.old_slot_uri.as_deref())
+                .with("new_slot_name", self.new_slot_name.as_deref())
+                .with("emitted_slot_uri", self.emitted_slot_uri.as_deref())
+                .with("disposition", self.disposition.to_json())
+                .with("reasons", self.reasons.to_json())
+                .with("detail", &self.detail),
+        )
+    }
 }
 
 /// Caller-owned identity and vocabulary configuration for LinkML emission.
@@ -336,11 +428,16 @@ pub struct LinkmlDocument {
 impl LinkmlDocument {
     /// Validate a JSON-compatible LinkML 1.11 value tree.
     ///
+    /// The document is held with every mapping's keys in name order, the
+    /// order canonical YAML writes them in.
+    ///
     /// # Errors
     ///
-    /// Returns LinkmlError when the fixed dialect envelope is malformed.
-    pub fn from_value(value: Value) -> Result<Self, LinkmlError> {
+    /// Returns LinkmlError when the fixed dialect envelope is malformed, or a
+    /// mapping repeats a key (YAML 1.2 §3.2.1.1: mapping keys are unique).
+    pub fn from_value(mut value: Value) -> Result<Self, LinkmlError> {
         validate_document(&value)?;
+        value.sort_keys();
         Ok(Self { value })
     }
 
@@ -429,14 +526,16 @@ pub fn parse_linkml(input: &str) -> Result<LinkmlDocument, LinkmlError> {
         )));
     }
 
-    let yaml_value: YamlValue = serde_yaml::from_str(input)
-        .map_err(|error| LinkmlError::new(format!("invalid LinkML YAML: {error}")))?;
-    let mut nodes = 0;
-    validate_yaml_value(&yaml_value, 0, &mut nodes, "$")?;
-
-    let strict_value: StrictValue = serde_yaml::from_str(input)
-        .map_err(|error| LinkmlError::new(format!("invalid LinkML YAML: {error}")))?;
-    LinkmlDocument::from_value(strict_value.into_json())
+    let value = purrdf_lex::yaml::read_with(
+        input,
+        purrdf_lex::yaml::Limits {
+            max_depth: MAX_LINKML_YAML_DEPTH,
+            max_nodes: u64::try_from(MAX_LINKML_YAML_NODES).unwrap_or(u64::MAX),
+            aliases: true,
+        },
+    )
+    .map_err(|error| LinkmlError::new(format!("invalid LinkML YAML: {error}")))?;
+    LinkmlDocument::from_value(value)
 }
 
 /// Serialize one validated LinkML document to canonical sorted block YAML.
@@ -447,13 +546,12 @@ pub fn parse_linkml(input: &str) -> Result<LinkmlDocument, LinkmlError> {
 /// serialization fails.
 pub fn write_linkml(document: &LinkmlDocument) -> Result<String, LinkmlError> {
     validate_document(document.as_value())?;
-    let serialized = serde_yaml::to_string(&purrdf::json_value::Binary64(document.as_value()))
-        .map_err(|error| LinkmlError::new(format!("cannot serialize LinkML YAML: {error}")))?;
+    let serialized = purrdf_lex::yaml::write(document.as_value());
     let mut canonical = serialized.trim_end_matches('\n').to_owned();
     canonical.push('\n');
     if parse_linkml(&canonical)? != *document {
         return Err(LinkmlError::new(
-            "LinkML numbers would lose precision or lexical identity in YAML",
+            "LinkML document does not read back identically from its canonical YAML",
         ));
     }
     Ok(canonical)
@@ -615,6 +713,11 @@ fn validate_json_value(
             Ok(())
         }
         Value::Object(values) => {
+            if let Some(key) = values.first_duplicate() {
+                return Err(LinkmlError::new(format!(
+                    "LinkML mapping at {path} repeats the key {key:?}"
+                )));
+            }
             for (key, child) in values {
                 if key.len() > MAX_LINKML_STRING_BYTES {
                     return Err(LinkmlError::new(format!(
@@ -645,7 +748,7 @@ fn validate_prefixes(prefixes: &BTreeMap<String, String>) -> Result<(), LinkmlEr
     Ok(())
 }
 
-fn validate_document_prefixes(prefixes: &Map<String, Value>) -> Result<(), LinkmlError> {
+fn validate_document_prefixes(prefixes: &Object) -> Result<(), LinkmlError> {
     if prefixes.is_empty() {
         return Err(LinkmlError::new("LinkML prefixes cannot be empty"));
     }
@@ -691,7 +794,7 @@ fn validate_document_prefixes(prefixes: &Map<String, Value>) -> Result<(), Linkm
     Ok(())
 }
 
-fn required_string<'a>(object: &'a Map<String, Value>, key: &str) -> Result<&'a str, LinkmlError> {
+fn required_string<'a>(object: &'a Object, key: &str) -> Result<&'a str, LinkmlError> {
     object
         .get(key)
         .and_then(Value::as_str)
@@ -732,178 +835,10 @@ pub(super) fn is_reserved_jsonld_slot(value: &str) -> bool {
     RESERVED_JSONLD_SLOTS.binary_search(&value).is_ok()
 }
 
-fn validate_yaml_value(
-    value: &YamlValue,
-    depth: usize,
-    nodes: &mut usize,
-    path: &str,
-) -> Result<(), LinkmlError> {
-    if depth > MAX_LINKML_YAML_DEPTH {
-        return Err(LinkmlError::new(format!(
-            "LinkML YAML at {path} exceeds depth {MAX_LINKML_YAML_DEPTH}"
-        )));
-    }
-    *nodes = nodes
-        .checked_add(1)
-        .ok_or_else(|| LinkmlError::new("LinkML YAML node count overflow"))?;
-    if *nodes > MAX_LINKML_YAML_NODES {
-        return Err(LinkmlError::new(format!(
-            "LinkML YAML exceeds {MAX_LINKML_YAML_NODES} nodes"
-        )));
-    }
-
-    match value {
-        YamlValue::Sequence(values) => {
-            for (index, child) in values.iter().enumerate() {
-                validate_yaml_value(child, depth + 1, nodes, &format!("{path}/{index}"))?;
-            }
-        }
-        YamlValue::Mapping(values) => {
-            for (key, child) in values {
-                let key = key.as_str().ok_or_else(|| {
-                    LinkmlError::new(format!(
-                        "LinkML YAML mapping at {path} has a non-string key"
-                    ))
-                })?;
-                validate_yaml_value(child, depth + 1, nodes, &format!("{path}/{key}"))?;
-            }
-        }
-        YamlValue::Number(number) => {
-            if number.as_i64().is_none()
-                && number.as_u64().is_none()
-                && !number.as_f64().is_some_and(f64::is_finite)
-            {
-                return Err(LinkmlError::new(format!(
-                    "LinkML YAML number at {path} is not finite"
-                )));
-            }
-        }
-        YamlValue::Tagged(_) => {
-            return Err(LinkmlError::new(format!(
-                "LinkML YAML tag at {path} is not JSON-compatible"
-            )));
-        }
-        YamlValue::Null | YamlValue::Bool(_) | YamlValue::String(_) => {}
-    }
-    Ok(())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum StrictValue {
-    Null,
-    Bool(bool),
-    Number(Number),
-    String(String),
-    Sequence(Vec<Self>),
-    Mapping(BTreeMap<String, Self>),
-}
-
-impl StrictValue {
-    fn into_json(self) -> Value {
-        match self {
-            Self::Null => Value::Null,
-            Self::Bool(value) => Value::Bool(value),
-            Self::Number(value) => Value::Number(value),
-            Self::String(value) => Value::String(value),
-            Self::Sequence(values) => {
-                Value::Array(values.into_iter().map(Self::into_json).collect())
-            }
-            Self::Mapping(values) => Value::Object(
-                values
-                    .into_iter()
-                    .map(|(key, value)| (key, value.into_json()))
-                    .collect(),
-            ),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for StrictValue {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(StrictValueVisitor)
-    }
-}
-
-struct StrictValueVisitor;
-
-impl<'de> Visitor<'de> for StrictValueVisitor {
-    type Value = StrictValue;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a finite JSON-compatible YAML value")
-    }
-
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(StrictValue::Null)
-    }
-
-    fn visit_none<E>(self) -> Result<Self::Value, E> {
-        Ok(StrictValue::Null)
-    }
-
-    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
-        Ok(StrictValue::Bool(value))
-    }
-
-    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
-        Ok(StrictValue::Number(Number::from(value)))
-    }
-
-    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
-        Ok(StrictValue::Number(Number::from(value)))
-    }
-
-    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Number::from_f64(value)
-            .map(StrictValue::Number)
-            .ok_or_else(|| E::custom("non-finite YAML number is not JSON-compatible"))
-    }
-
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
-        Ok(StrictValue::String(value.to_owned()))
-    }
-
-    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
-        Ok(StrictValue::String(value))
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let mut values = Vec::with_capacity(sequence.size_hint().unwrap_or(0).min(1_024));
-        while let Some(value) = sequence.next_element()? {
-            values.push(value);
-        }
-        Ok(StrictValue::Sequence(values))
-    }
-
-    fn visit_map<A>(self, mut mapping: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let mut values = BTreeMap::new();
-        while let Some((key, value)) = mapping.next_entry::<String, StrictValue>()? {
-            if values.insert(key.clone(), value).is_some() {
-                return Err(<A::Error as de::Error>::custom(format!(
-                    "duplicate YAML mapping key {key:?}"
-                )));
-            }
-        }
-        Ok(StrictValue::Mapping(values))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::json_model::json;
 
     #[test]
     fn an_ncname_is_exactly_the_production_and_not_a_unicode_property() {
@@ -1153,7 +1088,7 @@ classes:
     }
 
     #[test]
-    fn yaml_writer_preserves_marker_keys_and_refuses_numeric_loss() {
+    fn yaml_writer_preserves_marker_keys_and_number_lexemes() {
         let mut value = valid_value();
         value["x-extension"] = json!({"$serde_json::private::Number": "123", "n": 0.25});
         let document = LinkmlDocument::from_value(value.clone()).expect("document");
@@ -1161,11 +1096,53 @@ classes:
             parse_linkml(&write_linkml(&document).expect("write")).expect("read"),
             document
         );
-        for lexical in ["18446744073709551617", "0.123456789012345678901", "1e400"] {
-            value["x-extension"]["n"] = serde_json::from_str(lexical).expect("exact number");
+        // Numbers are written as their lexemes, so one beyond u64, one with
+        // more digits than binary64 holds and one beyond the binary64 range
+        // all read back exactly.
+        for lexical in [
+            "18446744073709551617",
+            "0.123456789012345678901",
+            "1e400",
+            "1.50",
+        ] {
+            value["x-extension"]["n"] = purrdf_lex::json::read(lexical).expect("exact number");
             let document = LinkmlDocument::from_value(value.clone()).expect("document");
-            assert!(write_linkml(&document).is_err(), "{lexical}");
+            let yaml = write_linkml(&document).expect(lexical);
+            assert!(yaml.contains(&format!("n: {lexical}\n")), "{yaml}");
+            assert_eq!(parse_linkml(&yaml).expect("read"), document, "{lexical}");
         }
+    }
+
+    #[test]
+    fn programmatic_documents_refuse_a_repeated_key_and_accept_distinct_keys() {
+        let mut value = valid_value();
+        value["x-extension"] = Value::from(Object::new().with("a", 1).with("b", 2));
+        assert!(LinkmlDocument::from_value(value.clone()).is_ok());
+        let mut repeated = Object::new().with("a", 1);
+        repeated.push("a", 2);
+        value["x-extension"] = Value::from(repeated);
+        assert!(
+            LinkmlDocument::from_value(value)
+                .expect_err("repeated key")
+                .to_string()
+                .contains("repeats the key \"a\"")
+        );
+    }
+
+    #[test]
+    fn parser_accepts_distinct_keys_beside_the_refused_repeat() {
+        let distinct = r"
+id: https://example.org/schema
+name: First
+title: Second
+metamodel_version: 1.11.0
+prefixes:
+  ex: https://example.org/
+  linkml: https://example.org/linkml/
+default_prefix: ex
+";
+        let document = parse_linkml(distinct).expect("distinct keys");
+        assert_eq!(document.as_value()["title"], "Second");
     }
 
     #[test]
@@ -1184,7 +1161,7 @@ default_prefix: ex
             parse_linkml(duplicate)
                 .unwrap_err()
                 .to_string()
-                .contains("duplicate")
+                .contains("repeats a key")
         );
 
         let tagged = r"
@@ -1201,7 +1178,7 @@ x-value: !caller tagged
             parse_linkml(tagged)
                 .unwrap_err()
                 .to_string()
-                .contains("tag")
+                .contains("a tag other than a core-schema tag")
         );
 
         let non_string_key = r"
@@ -1219,7 +1196,7 @@ x-value:
             parse_linkml(non_string_key)
                 .unwrap_err()
                 .to_string()
-                .contains("non-string key")
+                .contains("a mapping key must be a string")
         );
 
         let non_finite = r"
@@ -1236,7 +1213,7 @@ x-value: .nan
             parse_linkml(non_finite)
                 .unwrap_err()
                 .to_string()
-                .contains("not finite")
+                .contains("infinite or NaN")
         );
     }
 

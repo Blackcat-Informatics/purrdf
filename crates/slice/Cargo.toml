@@ -61,8 +61,6 @@ purrdf-hash = { workspace = true }
 # so the S0.9 layering gate is unaffected.
 regex = { workspace = true }
 rayon = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 
 [dev-dependencies]
 # Temporary slice trees under the target directory, for the tests and the bench.

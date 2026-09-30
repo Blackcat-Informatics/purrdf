@@ -8,6 +8,16 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::sync::OnceLock;
 
+#[allow(
+    dead_code,
+    unused_imports,
+    unused_macros,
+    reason = "each target uses part of the crate's shared JSON model"
+)]
+#[path = "../src/json_model.rs"]
+mod json_model;
+#[path = "support/json_text.rs"]
+mod json_text;
 #[path = "support/shacl_lists.rs"]
 mod shacl_lists;
 #[path = "support/shacl_temporal.rs"]
@@ -15,14 +25,14 @@ mod shacl_temporal;
 #[path = "support/shacl_value_shapes.rs"]
 mod shacl_value_shapes;
 
+use json_model::{ToJson, Value, json};
+use json_text::read_sorted;
 use purrdf::loss::{LossLedger, check_ledger_complete, check_ledger_sound};
 use purrdf_shapes::json_schema::{CompiledSchema, Namespaces};
 use purrdf_shapes::{
     GRAPHQL_DIALECT, GRAPHQL_NAME_MAP_PATH, GRAPHQL_SCHEMA_PATH, GraphqlConfig, GraphqlPackage,
     SchemaDatatypeMap, SchemaImportConfig, emit_graphql, import_graphql_package,
 };
-use serde::Serialize;
-use serde_json::{Value, json};
 
 const CLOSED_PROFILE: [&str; 23] = [
     "additional-properties-validation-narrowed",
@@ -51,15 +61,13 @@ const CLOSED_PROFILE: [&str; 23] = [
 ];
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 struct ExpectedLoss {
     code: String,
     location: String,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 struct Probe {
     label: String,
     definition: String,
@@ -68,23 +76,19 @@ struct Probe {
     graphql_value: Value,
     source_valid: bool,
     used_codec: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
     expected_loss: Option<ExpectedLoss>,
     /// For a valid source value, the output type and the value a resolver
     /// returns for it, which GraphQL.js must serialize unchanged.
-    #[serde(skip_serializing_if = "Option::is_none")]
     output: Option<OutputProbe>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 struct OutputProbe {
     graphql_type: String,
     graphql_value: Value,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 struct Fixture {
     sdl: String,
     fallback_scalar: String,
@@ -94,9 +98,55 @@ struct Fixture {
     probes: Vec<Probe>,
 }
 
-fn compiled(schema: &Value) -> Result<CompiledSchema, serde_json::Error> {
+impl ToJson for ExpectedLoss {
+    fn to_json(&self) -> Value {
+        json!({ "code": self.code, "location": self.location })
+    }
+}
+
+impl ToJson for Probe {
+    fn to_json(&self) -> Value {
+        let mut probe = json!({
+            "label": self.label,
+            "definition": self.definition,
+            "graphqlType": self.graphql_type,
+            "sourceValue": self.source_value,
+            "graphqlValue": self.graphql_value,
+            "sourceValid": self.source_valid,
+            "usedCodec": self.used_codec,
+        });
+        if let Some(expected_loss) = &self.expected_loss {
+            json_model::set_member(&mut probe, "expectedLoss", expected_loss.to_json());
+        }
+        if let Some(output) = &self.output {
+            json_model::set_member(&mut probe, "output", output.to_json());
+        }
+        probe
+    }
+}
+
+impl ToJson for OutputProbe {
+    fn to_json(&self) -> Value {
+        json!({ "graphqlType": self.graphql_type, "graphqlValue": self.graphql_value })
+    }
+}
+
+impl ToJson for Fixture {
+    fn to_json(&self) -> Value {
+        json!({
+            "sdl": self.sdl,
+            "fallbackScalar": self.fallback_scalar,
+            "nameMap": self.name_map,
+            "nameMapArtifact": self.name_map_artifact,
+            "losses": self.losses,
+            "probes": self.probes,
+        })
+    }
+}
+
+fn compiled(schema: &Value) -> Result<CompiledSchema, purrdf_lex::json::Error> {
     Ok(CompiledSchema {
-        schema_json: format!("{}\n", serde_json::to_string_pretty(schema)?),
+        schema_json: format!("{}\n", json_model::write_pretty(schema)),
         openapi_json: "{}\n".to_owned(),
         losses: LossLedger::new(),
     })
@@ -145,7 +195,7 @@ fn reverse_evidence(
         return Err("GraphQL reverse shapes are not byte-deterministic".into());
     }
     Ok(json!({
-        "losses": serde_json::from_str::<Value>(&imported.losses.render_json())?,
+        "losses": read_sorted(&imported.losses.render_json())?,
         "shapeIds": imported
             .shapes
             .node_shapes
@@ -307,7 +357,7 @@ fn metaschemas() -> &'static purrdf_jsonschema::Metaschemas {
             purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
                 .iter()
                 .map(|&(uri, text)| {
-                    let document: Value = serde_json::from_str(text).expect("meta-schema JSON");
+                    let document = purrdf_lex::json::read(text).expect("meta-schema JSON");
                     (uri, document)
                 }),
         )
@@ -439,9 +489,13 @@ fn fixture(package: &GraphqlPackage, probes: Vec<Probe>) -> Result<Fixture, Box<
     Ok(Fixture {
         sdl: artifact(package, GRAPHQL_SCHEMA_PATH)?,
         fallback_scalar: "JsonCarrier".to_owned(),
-        name_map: serde_json::to_value(&package.names)?,
+        name_map: {
+            let mut names = package.names.to_json();
+            names.sort_keys();
+            names
+        },
         name_map_artifact: artifact(package, GRAPHQL_NAME_MAP_PATH)?,
-        losses: serde_json::from_str(&package.losses.render_json())?,
+        losses: read_sorted(&package.losses.render_json())?,
         probes,
     })
 }
@@ -847,13 +901,13 @@ const LIST_DIVERGENCES: [(&str, &str, &str); 4] = [
 /// verdicts; a probe diverges only where [`LIST_DIVERGENCES`] locates it.
 fn lists_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error>> {
     let compiled = shacl_lists::compiled()?;
-    let schema: Value = serde_json::from_str(&compiled.schema_json)?;
+    let schema: Value = read_sorted(&compiled.schema_json)?;
     let package = emit_graphql(&compiled, config)?;
     check_ledger_sound(&package.losses, "json-schema", GRAPHQL_DIALECT)?;
     // The verified reverse import restores the list components exactly: the
     // imported shapes compile back to the same Holder definition.
     let imported = import_graphql_package(&package, &import_config()?)?;
-    let restored: Value = serde_json::from_str(
+    let restored: Value = read_sorted(
         &purrdf_shapes::json_schema::compile(&imported.shapes, &shacl_lists::namespaces()?)?
             .schema_json,
     )?;
@@ -892,7 +946,7 @@ fn lists_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error>> {
 /// non-conforming probe diverges at its property's delegated negation.
 fn temporal_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error>> {
     let compiled = shacl_temporal::compiled()?;
-    let schema: Value = serde_json::from_str(&compiled.schema_json)?;
+    let schema: Value = read_sorted(&compiled.schema_json)?;
     let package = emit_graphql(&compiled, config)?;
     check_ledger_sound(&package.losses, "json-schema", GRAPHQL_DIALECT)?;
     let mut probes = Vec::new();
@@ -927,7 +981,7 @@ fn temporal_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error>> {
 /// scalar, and every conforming one is accepted.
 fn value_shapes_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error>> {
     let compiled = shacl_value_shapes::compiled()?;
-    let schema: Value = serde_json::from_str(&compiled.schema_json)?;
+    let schema: Value = read_sorted(&compiled.schema_json)?;
     let package = emit_graphql(&compiled, config)?;
     check_ledger_sound(&package.losses, "json-schema", GRAPHQL_DIALECT)?;
     let mut probes = Vec::new();
@@ -980,7 +1034,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         "value_shapes": value_shapes_fixture(&config)?,
         "reverse": reverse_evidence(&exact_package, &import_config()?)?,
     });
-    println!("{}", serde_json::to_string(&output)?);
+    // Every object is written with its members in name order.
+    let mut output = output;
+    output.sort_keys();
+    println!("{}", json_model::write_compact(&output));
     Ok(())
 }
 

@@ -1507,8 +1507,7 @@ fn a_datatype_list_projects_to_json_schema_any_of() {
     )
     .expect("namespaces");
     let compiled = purrdf_shapes::json_schema::compile(&shapes, &ns).expect("the schema compiles");
-    let schema: serde_json::Value =
-        serde_json::from_str(&compiled.schema_json).expect("the schema is JSON");
+    let schema = purrdf_lex::json::read(&compiled.schema_json).expect("the schema is JSON");
     let text = schema.to_string();
     assert!(
         text.contains("\"anyOf\""),

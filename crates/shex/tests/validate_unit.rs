@@ -207,7 +207,10 @@ fn pattern_facet_xsd_dialect_through_shexj() {
     // A ShExJ schema whose single shape applies one PATTERN (+ flags) facet.
     let schema_json = |pattern: &str, flags: Option<&str>| {
         let flags = match flags {
-            Some(f) => format!(r#", "flags": {}"#, serde_json::to_string(f).expect("json")),
+            Some(f) => format!(
+                r#", "flags": {}"#,
+                purrdf_lex::json::write_compact(&purrdf_lex::json::Value::from(f))
+            ),
             None => String::new(),
         };
         format!(
@@ -226,7 +229,7 @@ fn pattern_facet_xsd_dialect_through_shexj() {
                 }}
               }}]
             }}"#,
-            serde_json::to_string(pattern).expect("json")
+            purrdf_lex::json::write_compact(&purrdf_lex::json::Value::from(pattern))
         )
     };
     let matches = |pattern: &str, flags: Option<&str>, value: &str| {

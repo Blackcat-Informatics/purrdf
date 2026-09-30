@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::{Map, Value};
+use crate::json_model::{Object, Value};
 
 use super::{
     PydanticClassConfig, PydanticError, PydanticPackageTopology, reference_key,
@@ -51,7 +51,7 @@ pub(super) struct RoutedPackagePlan {
 
 impl RoutedPackagePlan {
     pub(super) fn compile(
-        definitions: &Map<String, Value>,
+        definitions: &Object,
         names: &BTreeMap<String, String>,
         topology: &PydanticPackageTopology,
         package_name: &str,
@@ -355,21 +355,21 @@ fn collect_references(
         references.insert(key);
     }
     for keyword in schema_map_keywords() {
-        if let Some(children) = object.get(*keyword).and_then(Value::as_object) {
+        if let Some(children) = object.get(keyword).and_then(Value::as_object) {
             for child in children.values() {
                 collect_references(child, references)?;
             }
         }
     }
     for keyword in schema_array_keywords() {
-        if let Some(children) = object.get(*keyword).and_then(Value::as_array) {
+        if let Some(children) = object.get(keyword).and_then(Value::as_array) {
             for child in children {
                 collect_references(child, references)?;
             }
         }
     }
     for keyword in schema_single_keywords() {
-        if let Some(child) = object.get(*keyword) {
+        if let Some(child) = object.get(keyword) {
             collect_references(child, references)?;
         }
     }
@@ -379,8 +379,8 @@ fn collect_references(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_model::json;
     use crate::{PydanticClassConfig, PydanticModuleConfig};
-    use serde_json::json;
 
     fn topology() -> PydanticPackageTopology {
         PydanticPackageTopology::new(
@@ -403,7 +403,7 @@ mod tests {
         .expect("topology")
     }
 
-    fn definitions() -> Map<String, Value> {
+    fn definitions() -> Object {
         json!({
             "Person": {
                 "type": "object",

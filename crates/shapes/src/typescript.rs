@@ -29,9 +29,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Write as _};
 
+use crate::json_model::{Number, NumberKind, Object, Value, ValueKind};
 use ::purrdf::RdfLocation;
 use ::purrdf::loss::{LossEntry, LossLedger};
-use serde_json::{Map, Value};
 
 use crate::json_schema::CompiledSchema;
 use crate::schema_catalog::{
@@ -356,9 +356,7 @@ pub fn import_typescript_package(
         .map_err(|error| TypeScriptError::new(format!("TypeScript package import: {error}")))
 }
 
-fn validate_unguarded_reference_cycles(
-    definitions: &Map<String, Value>,
-) -> Result<(), TypeScriptError> {
+fn validate_unguarded_reference_cycles(definitions: &Object) -> Result<(), TypeScriptError> {
     let graph = definitions
         .iter()
         .map(|(key, definition)| {
@@ -518,7 +516,7 @@ enum JsonKind {
 
 struct Renderer<'a> {
     names: &'a BTreeMap<String, String>,
-    definitions: &'a Map<String, Value>,
+    definitions: &'a Object,
     ledger: LossLedger,
     recorded_losses: BTreeSet<(String, String)>,
     /// Whether a declaration uses the `JsonDistinct` helper.
@@ -526,7 +524,7 @@ struct Renderer<'a> {
 }
 
 impl<'a> Renderer<'a> {
-    fn new(names: &'a BTreeMap<String, String>, definitions: &'a Map<String, Value>) -> Self {
+    fn new(names: &'a BTreeMap<String, String>, definitions: &'a Object) -> Self {
         Self {
             names,
             definitions,
@@ -539,7 +537,7 @@ impl<'a> Renderer<'a> {
     fn render_document(
         &mut self,
         config: &TypeScriptConfig,
-        definitions: &Map<String, Value>,
+        definitions: &Object,
     ) -> Result<String, TypeScriptError> {
         let mut output = String::new();
         let header = format!(
@@ -665,7 +663,7 @@ impl<'a> Renderer<'a> {
 
     fn render_carrier_relation(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         path: &str,
         depth: usize,
     ) -> Result<Option<String>, TypeScriptError> {
@@ -700,12 +698,12 @@ impl<'a> Renderer<'a> {
 
     fn render_object(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         path: &str,
         depth: usize,
     ) -> Result<String, TypeScriptError> {
         ensure_depth(depth, path)?;
-        let empty = Map::new();
+        let empty = Object::new();
         let properties = object
             .get("properties")
             .and_then(Value::as_object)
@@ -786,8 +784,8 @@ impl<'a> Renderer<'a> {
 
     fn render_required_only_property(
         &mut self,
-        object: &Map<String, Value>,
-        patterns: &Map<String, Value>,
+        object: &Object,
+        patterns: &Object,
         path: &str,
         depth: usize,
     ) -> Result<String, TypeScriptError> {
@@ -818,7 +816,7 @@ impl<'a> Renderer<'a> {
 
     fn render_array(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         path: &str,
         depth: usize,
     ) -> Result<String, TypeScriptError> {
@@ -879,7 +877,7 @@ impl<'a> Renderer<'a> {
     /// many JSON scalars.
     fn distinct_bounds(
         &self,
-        object: &Map<String, Value>,
+        object: &Object,
         path: &str,
     ) -> Result<Option<DistinctBounds>, TypeScriptError> {
         if object.get("uniqueItems") != Some(&Value::Bool(true)) {
@@ -990,7 +988,7 @@ impl<'a> Renderer<'a> {
             let properties = object
                 .get("properties")
                 .and_then(Value::as_object)
-                .map_or(0, Map::len);
+                .map_or(0, Object::len);
             let required = required_names(object, path)?.len();
             if matches!(object.get("additionalProperties"), Some(Value::Bool(false)))
                 && properties + required > 0
@@ -1167,7 +1165,7 @@ impl<'a> Renderer<'a> {
             if *keyword == "$defs" {
                 continue;
             }
-            if let Some(children) = object.get(*keyword).and_then(Value::as_object) {
+            if let Some(children) = object.get(keyword).and_then(Value::as_object) {
                 for (key, child) in children {
                     self.audit_schema(
                         child,
@@ -1178,7 +1176,7 @@ impl<'a> Renderer<'a> {
             }
         }
         for keyword in schema_array_keywords() {
-            if let Some(children) = object.get(*keyword).and_then(Value::as_array) {
+            if let Some(children) = object.get(keyword).and_then(Value::as_array) {
                 for (index, child) in children.iter().enumerate() {
                     self.audit_schema(child, &format!("{path}/{keyword}/{index}"), depth + 1)?;
                 }
@@ -1188,7 +1186,7 @@ impl<'a> Renderer<'a> {
             if matches!(*keyword, "if" | "then" | "else") && !has_active_conditional {
                 continue;
             }
-            if let Some(child) = object.get(*keyword) {
+            if let Some(child) = object.get(keyword) {
                 self.audit_schema(child, &format!("{path}/{keyword}"), depth + 1)?;
             }
         }
@@ -1253,9 +1251,7 @@ impl<'a> Renderer<'a> {
     }
 }
 
-fn definition_names(
-    definitions: &Map<String, Value>,
-) -> Result<BTreeMap<String, String>, TypeScriptError> {
+fn definition_names(definitions: &Object) -> Result<BTreeMap<String, String>, TypeScriptError> {
     let mut names = BTreeMap::new();
     let mut reverse = BTreeMap::<String, String>::new();
     for key in definitions.keys() {
@@ -1276,7 +1272,7 @@ fn definition_names(
     Ok(names)
 }
 
-fn validate_keyword_values(object: &Map<String, Value>, path: &str) -> Result<(), TypeScriptError> {
+fn validate_keyword_values(object: &Object, path: &str) -> Result<(), TypeScriptError> {
     let _ = declared_kinds(object, path)?;
     if let Some(value) = object.get("enum") {
         let values = value
@@ -1284,9 +1280,7 @@ fn validate_keyword_values(object: &Map<String, Value>, path: &str) -> Result<()
             .ok_or_else(|| TypeScriptError::new(format!("{path}/enum must be an array")))?;
         let mut seen = BTreeSet::new();
         for (index, value) in values.iter().enumerate() {
-            let key = serde_json::to_string(value).map_err(|error| {
-                TypeScriptError::new(format!("cannot inspect {path}/enum/{index}: {error}"))
-            })?;
+            let key = crate::json_model::write_compact(value);
             if !seen.insert(key) {
                 return Err(TypeScriptError::new(format!(
                     "{path}/enum repeats value at index {index}"
@@ -1395,7 +1389,7 @@ fn validate_keyword_values(object: &Map<String, Value>, path: &str) -> Result<()
 }
 
 fn declared_kinds(
-    object: &Map<String, Value>,
+    object: &Object,
     path: &str,
 ) -> Result<(BTreeSet<JsonKind>, bool, bool), TypeScriptError> {
     let mut kinds = BTreeSet::new();
@@ -1478,10 +1472,7 @@ fn declared_kinds(
     Ok((kinds, has_integer, has_number))
 }
 
-fn required_names(
-    object: &Map<String, Value>,
-    path: &str,
-) -> Result<BTreeSet<String>, TypeScriptError> {
+fn required_names(object: &Object, path: &str) -> Result<BTreeSet<String>, TypeScriptError> {
     let Some(value) = object.get("required") else {
         return Ok(BTreeSet::new());
     };
@@ -1502,22 +1493,14 @@ fn required_names(
     Ok(required)
 }
 
-fn array_bound(
-    object: &Map<String, Value>,
-    keyword: &str,
-    path: &str,
-) -> Result<Option<u64>, TypeScriptError> {
+fn array_bound(object: &Object, keyword: &str, path: &str) -> Result<Option<u64>, TypeScriptError> {
     object
         .contains_key(keyword)
         .then(|| nonnegative_bound(object, keyword, path))
         .transpose()
 }
 
-fn nonnegative_bound(
-    object: &Map<String, Value>,
-    keyword: &str,
-    path: &str,
-) -> Result<u64, TypeScriptError> {
+fn nonnegative_bound(object: &Object, keyword: &str, path: &str) -> Result<u64, TypeScriptError> {
     let value = object
         .get(keyword)
         .expect("nonnegative_bound is called only for a present keyword");
@@ -1528,7 +1511,7 @@ fn nonnegative_bound(
     if let Some(value) = value.as_u64() {
         return Ok(value.min(saturated));
     }
-    if let Some(value) = value.as_f64()
+    if let Some(value) = value.as_finite_f64()
         && value >= 0.0
         && value.fract() == 0.0
     {
@@ -1562,7 +1545,7 @@ const NUMERIC_KEYWORDS: [&str; 5] = [
 /// the numeric keywords judge decidably, so the declaration states them by
 /// leaving out the numbers that fail (an infinite number set has no subtype of
 /// `number` denoting an interval or residue class).
-fn numeric_keywords_decided(object: &Map<String, Value>) -> bool {
+fn numeric_keywords_decided(object: &Object) -> bool {
     let values: Vec<&Value> = if let Some(value) = object.get("const") {
         vec![value]
     } else if let Some(values) = object.get("enum").and_then(Value::as_array) {
@@ -1577,7 +1560,7 @@ fn numeric_keywords_decided(object: &Map<String, Value>) -> bool {
 
 /// Whether a literal meets every numeric keyword of `object`; a non-number
 /// meets them all. `None` when a comparison is not exact in binary64.
-fn literal_meets_numeric_keywords(object: &Map<String, Value>, value: &Value) -> Option<bool> {
+fn literal_meets_numeric_keywords(object: &Object, value: &Value) -> Option<bool> {
     let Value::Number(number) = value else {
         return Some(true);
     };
@@ -1608,7 +1591,7 @@ fn literal_meets_numeric_keywords(object: &Map<String, Value>, value: &Value) ->
     Some(holds)
 }
 
-fn exact_integer(number: &serde_json::Number) -> Option<i128> {
+fn exact_integer(number: &Number) -> Option<i128> {
     number
         .as_i64()
         .map(i128::from)
@@ -1618,10 +1601,7 @@ fn exact_integer(number: &serde_json::Number) -> Option<i128> {
 /// The exact order of two JSON numbers: integers compare exactly, and a
 /// binary64 value against an integer only where that integer is exact in
 /// binary64.
-fn compare_numbers(
-    left: &serde_json::Number,
-    right: &serde_json::Number,
-) -> Option<std::cmp::Ordering> {
+fn compare_numbers(left: &Number, right: &Number) -> Option<std::cmp::Ordering> {
     const EXACT: i128 = 1 << 53;
     match (exact_integer(left), exact_integer(right)) {
         (Some(left), Some(right)) => Some(left.cmp(&right)),
@@ -1631,12 +1611,12 @@ fn compare_numbers(
             {
                 return None;
             }
-            left.as_f64()?.partial_cmp(&right.as_f64()?)
+            left.as_finite_f64()?.partial_cmp(&right.as_finite_f64()?)
         }
     }
 }
 
-fn integer_exceeds_typescript_exact_range(number: &serde_json::Number) -> bool {
+fn integer_exceeds_typescript_exact_range(number: &Number) -> bool {
     const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
     if let Some(value) = number.as_i64() {
         !(-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&value)
@@ -1877,10 +1857,7 @@ export type JsonDistinct<P extends readonly unknown[], R, U = never> =\n\
 /// The JSON scalars a schema admits when they are finitely many: a `const` or
 /// `enum` of scalars, or `boolean`/`null` types; `None` otherwise. Values are
 /// keyed by their canonical JSON, the equality `uniqueItems` compares by.
-fn finite_scalar_domain(
-    schema: &Value,
-    definitions: &Map<String, Value>,
-) -> Option<BTreeSet<String>> {
+fn finite_scalar_domain(schema: &Value, definitions: &Object) -> Option<BTreeSet<String>> {
     let mut current = schema;
     let mut seen = BTreeSet::new();
     loop {
@@ -1891,8 +1868,7 @@ fn finite_scalar_domain(
         };
         let scalar = |value: &Value| {
             (!value.is_array() && !value.is_object())
-                .then(|| serde_json::to_string(value).ok())
-                .flatten()
+                .then(|| crate::json_model::write_compact(value))
         };
         if let Some(value) = object.get("const") {
             return scalar(value).map(|value| BTreeSet::from([value]));
@@ -1966,7 +1942,7 @@ fn join_intersection(expressions: Vec<String>) -> String {
     }
 }
 
-fn has_object_shape(object: &Map<String, Value>) -> bool {
+fn has_object_shape(object: &Object) -> bool {
     [
         "properties",
         "required",
@@ -1974,13 +1950,13 @@ fn has_object_shape(object: &Map<String, Value>) -> bool {
         "additionalProperties",
     ]
     .iter()
-    .any(|keyword| object.contains_key(*keyword))
+    .any(|keyword| object.contains_key(keyword))
 }
 
-fn has_array_shape(object: &Map<String, Value>) -> bool {
+fn has_array_shape(object: &Object) -> bool {
     ["items", "prefixItems", "minItems", "maxItems"]
         .iter()
-        .any(|keyword| object.contains_key(*keyword))
+        .any(|keyword| object.contains_key(keyword))
 }
 
 fn known_schema_keyword(keyword: &str) -> bool {
@@ -2126,7 +2102,7 @@ fn ensure_depth(depth: usize, path: &str) -> Result<(), TypeScriptError> {
 }
 
 fn json_string(value: &str) -> String {
-    serde_json::to_string(value).expect("serializing a Rust string to JSON cannot fail")
+    crate::json_model::json_string(value)
 }
 
 fn typescript_type_name(raw: &str, fallback: &str) -> String {
@@ -2274,19 +2250,16 @@ fn finish_text(mut text: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_model::{Map, json};
     use crate::json_schema::Namespaces;
     use crate::schema_import::SchemaDatatypeMap;
     use ::purrdf::loss::{check_ledger_complete, check_ledger_sound};
-    use serde_json::json;
 
     use purrdf_xsd::datatype::XSD_NS as XSD;
 
     fn compiled(schema: &Value) -> CompiledSchema {
         CompiledSchema {
-            schema_json: format!(
-                "{}\n",
-                serde_json::to_string_pretty(schema).expect("fixture serializes")
-            ),
+            schema_json: format!("{}\n", crate::json_model::write_pretty(schema)),
             openapi_json: "{}\n".to_owned(),
             losses: LossLedger::new(),
         }
@@ -2777,7 +2750,8 @@ mod tests {
             };
             definitions.insert(format!("Node{index}"), definition);
         }
-        validate_unguarded_reference_cycles(&definitions).expect("long alias chain is acyclic");
+        validate_unguarded_reference_cycles(&definitions.into_iter().collect())
+            .expect("long alias chain is acyclic");
     }
 
     #[test]

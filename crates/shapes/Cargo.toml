@@ -55,17 +55,12 @@ purrdf-hash = { workspace = true }
 # facets (W3C core/node/minInclusive-002/-003 — timezone-aware partial order;
 # indeterminate comparisons are violations).
 purrdf-xsd = { workspace = true }
-# JSON Schema / OpenAPI emitter. NO `preserve_order` feature: we rely on
-# serde_json's default BTreeMap-backed Map so object keys serialize sorted for
-# deterministic, byte-stable output.
-serde_json = { workspace = true }
-# Canonical LinkML 1.11 YAML codec. Both dependencies are always-on: the
-# reader/writer is one production behavior on native and wasm targets.
-serde = { workspace = true }
-serde_yaml = { workspace = true }
 # The one RDF 1.2 term spelling (`term_syntax`) and literal-body escaper
 # (`literal_escape`): the canonical display form of a term, and so the engine's
-# deterministic sort key, is written through them. Zero-dependency lexical layer.
+# deterministic sort key, is written through them. Also the one JSON reader,
+# value and writer (`json`) every schema emitter builds on, and the one YAML
+# codec (`yaml`) the canonical LinkML 1.11 reader and writer use.
+# Zero-dependency lexical layer.
 purrdf-lex = { workspace = true }
 # Validate caller-supplied schema and prefix IRIs with the workspace's
 # zero-dependency RFC 3987 implementation.

@@ -12,10 +12,10 @@
 use std::error::Error;
 use std::fmt::Write as _;
 
+use purrdf_lex::json::Value;
 use purrdf_shapes::engine::{parse_shapes, validate_dataset_with_shapes_graph};
 use purrdf_shapes::json_schema::{CompiledSchema, Namespaces, compile};
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
-use serde_json::Value;
 
 const PREFIXES: &str = r"
     @prefix sh:  <http://www.w3.org/ns/shacl#> .
@@ -86,7 +86,7 @@ pub(crate) struct Case {
 pub(crate) fn cases() -> Result<Vec<Case>, Box<dyn Error>> {
     let shapes = parse_shapes(&format!("{PREFIXES}{SHAPES}"), None)?;
     let namespaces = namespaces()?;
-    let schema: Value = serde_json::from_str(&compiled()?.schema_json)?;
+    let schema = purrdf_lex::json::read(&compiled()?.schema_json)?;
     let location = "mem:///value-shapes.schema.json";
     let mut registry = purrdf_jsonschema::Registry::with_metaschemas(metaschemas());
     registry.add_resource(location, schema)?;
@@ -135,7 +135,7 @@ fn metaschemas() -> &'static purrdf_jsonschema::Metaschemas {
             purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
                 .iter()
                 .map(|&(uri, text)| {
-                    let document: Value = serde_json::from_str(text).expect("meta-schema JSON");
+                    let document = purrdf_lex::json::read(text).expect("meta-schema JSON");
                     (uri, document)
                 }),
         )

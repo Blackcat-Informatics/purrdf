@@ -6,6 +6,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 
+#[allow(
+    dead_code,
+    unused_imports,
+    unused_macros,
+    reason = "each target uses part of the crate's shared JSON model"
+)]
+#[path = "../src/json_model.rs"]
+mod json_model;
+#[path = "support/json_text.rs"]
+mod json_text;
 #[path = "support/shacl_lists.rs"]
 mod shacl_lists;
 #[path = "support/shacl_temporal.rs"]
@@ -13,6 +23,8 @@ mod shacl_temporal;
 #[path = "support/shacl_value_shapes.rs"]
 mod shacl_value_shapes;
 
+use json_model::{Value, json};
+use json_text::read_sorted;
 use purrdf::loss::{LossLedger, check_ledger_sound};
 use purrdf_shapes::json_schema::{CompiledSchema, Namespaces};
 use purrdf_shapes::{
@@ -20,7 +32,6 @@ use purrdf_shapes::{
     PydanticPackageTopology, PydanticVersionStamp, SchemaDatatypeMap, SchemaImportConfig,
     emit_pydantic, import_pydantic_package,
 };
-use serde_json::{Value, json};
 
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 
@@ -58,7 +69,7 @@ fn reverse_evidence(
         return Err("Pydantic reverse shapes are not byte-deterministic".into());
     }
     Ok(json!({
-        "losses": serde_json::from_str::<Value>(&imported.losses.render_json())?,
+        "losses": read_sorted(&imported.losses.render_json())?,
         "shape_ids": imported
             .shapes
             .node_shapes
@@ -232,7 +243,7 @@ fn lists_fixture() -> Result<Value, Box<dyn Error>> {
     Ok(json!({
         "artifacts": artifacts,
         "model_paths": package.model_paths,
-        "losses": serde_json::from_str::<Value>(&package.losses.render_json())?,
+        "losses": read_sorted(&package.losses.render_json())?,
         "probes": probes,
     }))
 }
@@ -263,7 +274,7 @@ fn value_shapes_fixture() -> Result<Value, Box<dyn Error>> {
     Ok(json!({
         "artifacts": artifacts,
         "model_paths": package.model_paths,
-        "losses": serde_json::from_str::<Value>(&package.losses.render_json())?,
+        "losses": read_sorted(&package.losses.render_json())?,
         "probes": probes,
     }))
 }
@@ -294,7 +305,7 @@ fn temporal_fixture() -> Result<Value, Box<dyn Error>> {
     Ok(json!({
         "artifacts": artifacts,
         "model_paths": package.model_paths,
-        "losses": serde_json::from_str::<Value>(&package.losses.render_json())?,
+        "losses": read_sorted(&package.losses.render_json())?,
         "probes": probes,
     }))
 }
@@ -394,7 +405,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     });
     let compiled = CompiledSchema {
-        schema_json: format!("{}\n", serde_json::to_string_pretty(&schema)?),
+        schema_json: format!("{}\n", json_model::write_pretty(&schema)),
         openapi_json: "{}\n".to_owned(),
         losses: LossLedger::new(),
     };
@@ -423,7 +434,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }),
     );
     let routed_compiled = CompiledSchema {
-        schema_json: format!("{}\n", serde_json::to_string_pretty(&routed_schema)?),
+        schema_json: format!("{}\n", json_model::write_pretty(&routed_schema)),
         openapi_json: "{}\n".to_owned(),
         losses: LossLedger::new(),
     };
@@ -441,7 +452,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .remove("Empty");
     let reverse_package = emit_pydantic(
         &CompiledSchema {
-            schema_json: format!("{}\n", serde_json::to_string_pretty(&reverse_schema)?),
+            schema_json: format!("{}\n", json_model::write_pretty(&reverse_schema)),
             openapi_json: "{}\n".to_owned(),
             losses: LossLedger::new(),
         },
@@ -455,10 +466,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .remove("Empty");
     let routed_reverse_package = emit_pydantic(
         &CompiledSchema {
-            schema_json: format!(
-                "{}\n",
-                serde_json::to_string_pretty(&routed_reverse_schema)?
-            ),
+            schema_json: format!("{}\n", json_model::write_pretty(&routed_reverse_schema)),
             openapi_json: "{}\n".to_owned(),
             losses: LossLedger::new(),
         },
@@ -533,6 +541,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         "schema": schema,
         "version_oracle": version_oracle(),
     });
-    println!("{}", serde_json::to_string(&output)?);
+    // Every object is written with its members in name order.
+    let mut output = output;
+    output.sort_keys();
+    println!("{}", json_model::write_compact(&output));
     Ok(())
 }

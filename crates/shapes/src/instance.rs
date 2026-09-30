@@ -57,8 +57,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::json_model::{Map, Value, json};
 use ::purrdf::{DatasetView as _, FastMap, FastSet, GraphMatch, RdfDataset, TermId, TermRef};
-use serde_json::{Map, Value, json};
 
 use crate::data::{GraphFilter, native_quads, quads_for_pattern_ids, resolve_id};
 use crate::json_schema::Namespaces;
@@ -110,7 +110,7 @@ fn project_graph_data(data: &RdfDataset, ns: &Namespaces) -> Value {
     }
 
     json!({
-        "@context": Value::Object(ns.context_object()),
+        "@context": crate::json_model::object(ns.context_object()),
         "@graph": Value::Array(nodes),
     })
 }
@@ -134,7 +134,7 @@ fn project_subject_data(
 ) -> Value {
     if !subject.is_subject() {
         // Literals (and quoted triples) are never node subjects.
-        return Value::Object(Map::new());
+        return crate::json_model::object(Map::new());
     }
 
     // Gather predicate → [objects], grouping by compacted predicate key.
@@ -194,7 +194,7 @@ fn project_subject_data(
         obj.insert(key, v);
     }
 
-    Value::Object(obj)
+    crate::json_model::object(obj)
 }
 
 /// Project an object term of the default graph: the `@list` object when it is
@@ -231,7 +231,7 @@ fn project_list_or_value(
         if member && let Term::BlankNode(label) = term {
             list.insert("@index".to_owned(), Value::String(format!("_:{label}")));
         }
-        return Value::Object(list);
+        return crate::json_model::object(list);
     }
     project_value(term, ns)
 }
@@ -268,7 +268,7 @@ fn project_term(term: &Term, ns: &Namespaces) -> Value {
                         Value::String(direction.as_str().to_owned()),
                     );
                 }
-                return Value::Object(object);
+                return crate::json_model::object(object);
             }
             let dt_iri = lit.datatype_str();
             // Plain string / langString without a tag → bare string.
@@ -288,9 +288,9 @@ fn project_term(term: &Term, ns: &Namespaces) -> Value {
         // or a named node. (Statement-layer reifiers are projected via
         // `@annotation`, not as plain object values.)
         Term::Triple(triple) => {
-            let subject = match project_term(&triple.subject, ns) {
-                Value::Object(mut reference) => reference.remove("@id").unwrap_or(Value::Null),
-                other => other,
+            let subject = match crate::json_model::into_object(project_term(&triple.subject, ns)) {
+                Ok(mut reference) => reference.remove("@id").unwrap_or(Value::Null),
+                Err(other) => other,
             };
             let mut embedded = Map::new();
             embedded.insert("@id".to_owned(), subject);
@@ -298,7 +298,7 @@ fn project_term(term: &Term, ns: &Namespaces) -> Value {
                 ns.compact_iri(triple.predicate.as_str()),
                 project_term(&triple.object, ns),
             );
-            json!({ "@id": Value::Object(embedded) })
+            json!({ "@id": crate::json_model::object(embedded) })
         }
     }
 }
@@ -505,6 +505,7 @@ impl ListIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_model::ValueKind;
 
     fn load(ttl: &str) -> std::sync::Arc<RdfDataset> {
         crate::text_ingest::parse_turtle_to_dataset(ttl, None).expect("Turtle parse")
@@ -833,8 +834,8 @@ mod tests {
             meta:bob a meta:Person ; meta:name "Bob" .
         "#
         );
-        let a = serde_json::to_string_pretty(&project_graph(&load(&ttl), &fixture_ns())).unwrap();
-        let b = serde_json::to_string_pretty(&project_graph(&load(&ttl), &fixture_ns())).unwrap();
+        let a = crate::json_model::write_pretty(&project_graph(&load(&ttl), &fixture_ns()));
+        let b = crate::json_model::write_pretty(&project_graph(&load(&ttl), &fixture_ns()));
         assert_eq!(a, b, "projection must be byte-stable");
     }
 }

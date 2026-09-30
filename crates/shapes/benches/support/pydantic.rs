@@ -5,13 +5,13 @@
 
 use std::collections::BTreeMap;
 
+use crate::json_model::{Object as Map, Value, json};
 use purrdf::loss::LossLedger;
 use purrdf_shapes::json_schema::CompiledSchema;
 use purrdf_shapes::{
     PydanticClassConfig, PydanticConfig, PydanticModuleConfig, PydanticPackage,
     PydanticPackageTopology, PydanticVersionStamp, emit_pydantic,
 };
-use serde_json::{Map, Value, json};
 
 pub(crate) const SIZES: [usize; 3] = [32, 1_024, 16_384];
 pub(crate) const MAXIMUM_DEFINITIONS: usize = 65_536;
@@ -163,13 +163,13 @@ fn compiled_schema(definitions: usize) -> CompiledSchema {
     compiled(defs)
 }
 
-fn compiled(defs: Map<String, Value>) -> CompiledSchema {
+fn compiled(defs: Map) -> CompiledSchema {
     let schema = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$defs": Value::Object(defs),
     });
     CompiledSchema {
-        schema_json: serde_json::to_string(&schema).expect("benchmark schema serializes"),
+        schema_json: crate::json_model::write_compact(&schema),
         openapi_json: "{}\n".to_owned(),
         losses: LossLedger::new(),
     }
@@ -215,7 +215,7 @@ fn high_fanout_definition(definitions: usize) -> Value {
                 json!({ "$ref": format!("#/$defs/{target}") }),
             )
         })
-        .collect::<Map<_, _>>();
+        .collect::<Map>();
     json!({
         "type": "object",
         "additionalProperties": false,

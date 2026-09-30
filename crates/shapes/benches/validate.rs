@@ -116,6 +116,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Once};
 use std::time::{Duration, Instant};
 
+use json_model::{Object as Map, Value, json};
 use purrdf::loss::LossLedger;
 use purrdf::{DatasetView, GraphMatch, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, WholeProcessWindow};
@@ -133,7 +134,15 @@ use purrdf_shapes::{
     import_json_schema, import_linkml,
 };
 use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main, black_box};
-use serde_json::{Map, Value, json};
+
+#[allow(
+    dead_code,
+    unused_imports,
+    unused_macros,
+    reason = "each target uses part of the crate's shared JSON model"
+)]
+#[path = "../src/json_model.rs"]
+mod json_model;
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -1711,11 +1720,10 @@ fn schema_import_fixture() -> String {
             }),
         );
     }
-    serde_json::to_string(&json!({
+    json_model::write_compact(&json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$defs": definitions
     }))
-    .expect("benchmark schema serializes")
 }
 
 fn linkml_import_fixture(config: &SchemaImportConfig) -> LinkmlDocument {
@@ -1878,10 +1886,7 @@ fn linkml_emit_fixture(
         }
     });
     let compiled = CompiledSchema {
-        schema_json: format!(
-            "{}\n",
-            serde_json::to_string_pretty(&schema).expect("benchmark schema serializes")
-        ),
+        schema_json: format!("{}\n", json_model::write_pretty(&schema)),
         openapi_json: "{}\n".to_owned(),
         losses: LossLedger::new(),
     };

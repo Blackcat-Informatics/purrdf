@@ -367,8 +367,7 @@ fn run_shape_map_entry(entry: &Entry, caches: &mut Caches) -> Result<(), String>
     let map_url = entry.map_url.as_deref().expect("map url");
     let map_text =
         fs::read_to_string(url_to_path(map_url)).map_err(|e| format!("read map: {e}"))?;
-    let map_json: serde_json::Value =
-        serde_json::from_str(&map_text).map_err(|e| format!("map JSON: {e}"))?;
+    let map_json = purrdf_lex::json::read(&map_text).map_err(|e| format!("map JSON: {e}"))?;
     let mut associations = Vec::new();
     for pair in map_json.as_array().ok_or("map JSON is not an array")? {
         let node = pair["node"].as_str().ok_or("map node")?;
@@ -386,8 +385,8 @@ fn run_shape_map_entry(entry: &Entry, caches: &mut Caches) -> Result<(), String>
         .ok_or("shape-map entry without mf:result")?;
     let result_text =
         fs::read_to_string(url_to_path(result_url)).map_err(|e| format!("read result: {e}"))?;
-    let result_json: serde_json::Value =
-        serde_json::from_str(&result_text).map_err(|e| format!("result JSON: {e}"))?;
+    let result_json =
+        purrdf_lex::json::read(&result_text).map_err(|e| format!("result JSON: {e}"))?;
     for (index, (node, selector)) in associations.iter().enumerate() {
         let node_key = match node {
             TermValue::Iri(iri) => iri.clone(),
@@ -397,7 +396,7 @@ fn run_shape_map_entry(entry: &Entry, caches: &mut Caches) -> Result<(), String>
         let ShapeSelector::Label(shape_key) = selector else {
             return Err("START in a map entry".to_owned());
         };
-        let expected = result_json[&node_key]
+        let expected = result_json[node_key.as_str()]
             .as_array()
             .and_then(|rows| {
                 rows.iter()
