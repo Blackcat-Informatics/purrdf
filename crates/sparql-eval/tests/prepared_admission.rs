@@ -388,16 +388,10 @@ fn parsed_and_compiler_preparation_preserve_flat_operator_boundary_acceptance() 
                 .is_err()
         );
     }
-    let answered = std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(512 * 1024 * 1024)
-            .spawn_scoped(scope, || {
-                NativeSparqlEngine::new().query_prepared(&data, &text, &[], QueryOptions::EMPTY)
-            })
-            .expect("spawn")
-            .join()
-            .expect("the large thread returned")
+    let answered = purrdf_stack::on_stack_scoped(512 * 1024 * 1024, || {
+        NativeSparqlEngine::new().query_prepared(&data, &text, &[], QueryOptions::EMPTY)
     })
+    .expect("the large stack runs the evaluation")
     .expect("the spine evaluates where the stack holds it");
     assert!(
         matches!(answered, SparqlResult::Boolean(true)),

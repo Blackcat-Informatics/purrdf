@@ -15,8 +15,12 @@
 //! * [`splitmix64_step`] is self-composed. The caller feeds each output back
 //!   in as the next state, so the state is the fully mixed value.
 //!
-//! Every function is `const`, total and target-independent: wrapping integer
-//! arithmetic only, so a value is the same on every target, wasm32 included.
+//! [`signed_unit`] and its stream forms map a draw onto a binary64 value in
+//! `[-1, 1)`, the form a deterministic vector corpus is generated in.
+//!
+//! Every function is total and target-independent: the integer functions are
+//! `const` wrapping arithmetic, and the `[-1, 1)` mapping is exact binary64
+//! arithmetic, so a value is the same on every target, wasm32 included.
 //! Nothing here is cryptographically secure; it is a seed expander, a
 //! deterministic test-input stream and a strong 64-bit finaliser.
 
@@ -55,11 +59,70 @@ pub const fn splitmix64_step(state: u64) -> u64 {
     splitmix64_finalize(state.wrapping_add(GOLDEN_GAMMA))
 }
 
+/// The value in `[-1, 1)` a 64-bit draw `bits` maps to: its top 53 bits as a
+/// fraction of 2^53, doubled and shifted down by one. Every step is exact in
+/// binary64 (`mul_add` is one correctly rounded operation on every target,
+/// wasm32 included, and the result is representable), so the value is the same
+/// everywhere.
+#[must_use]
+pub fn signed_unit(bits: u64) -> f64 {
+    ((bits >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0)
+}
+
+/// [`signed_unit`] of `bits`, with the one draw that maps to exactly `0.0`
+/// (top 53 bits equal to 2^52) replaced by `substitute`.
+///
+/// For fixtures whose coordinates must never be zero — a vector with a zero
+/// component can have a zero norm, which a norm-dividing distance refuses —
+/// while every other draw keeps its value.
+#[must_use]
+pub fn signed_unit_nonzero(bits: u64, substitute: f64) -> f64 {
+    let value = signed_unit(bits);
+    if value == 0.0 { substitute } else { value }
+}
+
+/// One value in `[-1, 1)` from the [`splitmix64_next`] counter stream: the
+/// [`signed_unit`] of the next output.
+#[must_use]
+pub fn signed_unit_next(state: &mut u64) -> f64 {
+    signed_unit(splitmix64_next(state))
+}
+
+/// [`signed_unit_next`], with an exact `0.0` replaced by `substitute`; see
+/// [`signed_unit_nonzero`].
+#[must_use]
+pub fn signed_unit_next_nonzero(state: &mut u64, substitute: f64) -> f64 {
+    signed_unit_nonzero(splitmix64_next(state), substitute)
+}
+
+/// One value in `[-1, 1)` from the self-composed [`splitmix64_step`] stream:
+/// `state` becomes the next step, and the value is its [`signed_unit`].
+///
+/// A different stream from [`signed_unit_next`]'s for the same seed; the HNSW
+/// fixtures and their pinned digests are built on this one.
+#[must_use]
+pub fn signed_unit_step(state: &mut u64) -> f64 {
+    *state = splitmix64_step(*state);
+    signed_unit(*state)
+}
+
+/// [`signed_unit_step`], with an exact `0.0` replaced by `substitute`; see
+/// [`signed_unit_nonzero`].
+#[must_use]
+pub fn signed_unit_step_nonzero(state: &mut u64, substitute: f64) -> f64 {
+    *state = splitmix64_step(*state);
+    signed_unit_nonzero(*state, substitute)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
-    use super::{GOLDEN_GAMMA, splitmix64_finalize, splitmix64_next, splitmix64_step};
+    use super::{
+        GOLDEN_GAMMA, signed_unit, signed_unit_next, signed_unit_next_nonzero, signed_unit_nonzero,
+        signed_unit_step, signed_unit_step_nonzero, splitmix64_finalize, splitmix64_next,
+        splitmix64_step,
+    };
     use crate::fixed::FixedState;
 
     /// The first sixteen outputs of the published generator from seed 0 and
@@ -183,5 +246,73 @@ mod tests {
         assert_eq!(splitmix64_finalize(0), 0);
         const FINALIZED_AT_COMPILE_TIME: u64 = splitmix64_finalize(0x9E37_79B9_7F4A_7C15);
         assert_eq!(FINALIZED_AT_COMPILE_TIME, 0xE220_A839_7B1D_CDAF);
+    }
+
+    #[test]
+    fn signed_unit_maps_the_top_53_bits_onto_minus_one_to_one() {
+        assert_eq!(signed_unit(0).to_bits(), (-1.0_f64).to_bits());
+        assert_eq!(
+            signed_unit(0x7FF).to_bits(),
+            (-1.0_f64).to_bits(),
+            "low 11 bits ignored"
+        );
+        assert_eq!(signed_unit(1 << 63).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(signed_unit(u64::MAX), 1.0 - 2.0 / (1_u64 << 53) as f64);
+        assert_eq!(signed_unit(1 << 62), -0.5);
+    }
+
+    #[test]
+    fn the_zero_draw_alone_takes_the_substitute() {
+        assert_eq!(signed_unit_nonzero(1 << 63, 0.25), 0.25);
+        assert_eq!(signed_unit_nonzero(1 << 63, 0.125), 0.125);
+        // The neighbouring draws either side of zero keep their own values.
+        let above = (1 << 63) + (1 << 11);
+        let below = (1 << 63) - (1 << 11);
+        assert_eq!(signed_unit_nonzero(above, 0.25), signed_unit(above));
+        assert_eq!(signed_unit_nonzero(below, 0.25), signed_unit(below));
+        assert!(signed_unit(above) > 0.0 && signed_unit(below) < 0.0);
+    }
+
+    #[test]
+    fn the_nonzero_streams_match_their_plain_streams_away_from_zero() {
+        let (mut plain, mut nonzero) = (0x00C0_FFEE_u64, 0x00C0_FFEE_u64);
+        for _ in 0..1_000 {
+            assert_eq!(
+                signed_unit_next(&mut plain).to_bits(),
+                signed_unit_next_nonzero(&mut nonzero, 0.25).to_bits()
+            );
+        }
+        let (mut plain, mut nonzero) = (0x5EED_u64, 0x5EED_u64);
+        for _ in 0..1_000 {
+            assert_eq!(
+                signed_unit_step(&mut plain).to_bits(),
+                signed_unit_step_nonzero(&mut nonzero, 0.125).to_bits()
+            );
+        }
+    }
+
+    /// The self-composed stream from the HNSW determinism fixture's seed, and
+    /// from seed 0, whose first step is the first counter-stream output.
+    #[test]
+    fn signed_unit_step_matches_the_pinned_reference_outputs() {
+        let mut state = 0x5EED_F00D_7E57_0001_u64;
+        let observed: Vec<u64> = (0..4)
+            .map(|_| signed_unit_step(&mut state).to_bits())
+            .collect();
+        assert_eq!(
+            observed,
+            [
+                0xBFE3_2F3E_089E_410C,
+                0x3FD1_35DC_EFD8_9F24,
+                0xBFE8_5639_5966_F3E8,
+                0xBFE3_5941_0F7C_4B20,
+            ]
+        );
+        let mut state = 0;
+        assert_eq!(
+            signed_unit_step(&mut state).to_bits(),
+            0x3FE8_882A_0E5E_C772
+        );
+        assert_eq!(state, 0xE220_A839_7B1D_CDAF);
     }
 }

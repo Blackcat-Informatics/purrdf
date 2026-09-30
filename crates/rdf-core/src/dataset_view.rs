@@ -30,22 +30,6 @@ mod sealed {
     impl Sealed for crate::ir::MutableDataset {}
 }
 
-/// The distinct objects of `(subject, predicate, ?)` in `graph`, counted up to
-/// two. A statement asserted in several named graphs is one object.
-fn sole_object<V: DatasetView + ?Sized>(
-    view: &V,
-    subject: V::Id,
-    predicate: Option<V::Id>,
-    graph: GraphMatch<V::Id>,
-) -> SoleObject<V::Id> {
-    predicate.map_or(SoleObject::None, |predicate| {
-        SoleObject::of(
-            view.quads_for_pattern(Some(subject), Some(predicate), None, graph)
-                .map(|quad| quad.o),
-        )
-    })
-}
-
 /// Why [`DatasetView::term_value`] could not resolve an id to a value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TermLookupError {
@@ -550,6 +534,47 @@ pub trait DatasetView {
         objects
     }
 
+    /// The distinct objects of `(?, predicate, ?)` in `graph`, ascending by
+    /// id: every value a predicate takes, whatever its subject.
+    ///
+    /// The subject-free twin of [`objects`](Self::objects), with the same set
+    /// reading — a value stated by several subjects, or in several named
+    /// graphs, is one value. It answers SHACL's `sh:targetObjectsOf` and any
+    /// other "range of a predicate" question.
+    fn objects_of_predicate(
+        &self,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+    ) -> Vec<Self::Id> {
+        let mut objects: Vec<Self::Id> = self
+            .quads_for_pattern(None, Some(predicate), None, graph)
+            .map(|q| q.o)
+            .collect();
+        objects.sort_unstable();
+        objects.dedup();
+        objects
+    }
+
+    /// How many distinct objects `(subject, predicate, ?)` has in `graph`,
+    /// counted up to two, without allocating: the one question the strict list
+    /// walker ([`RdfListWalk`](crate::collections::RdfListWalk)) asks of each
+    /// cell. `predicate` is `None` when this view does not intern it, so no
+    /// statement can use it. A statement asserted in several named graphs is
+    /// one object.
+    fn sole_object(
+        &self,
+        subject: Self::Id,
+        predicate: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+    ) -> SoleObject<Self::Id> {
+        predicate.map_or(SoleObject::None, |predicate| {
+            SoleObject::of(
+                self.quads_for_pattern(Some(subject), Some(predicate), None, graph)
+                    .map(|quad| quad.o),
+            )
+        })
+    }
+
     /// The members of the RDF Collection headed by `head` in `graph`, in list
     /// order — the one strict walker.
     ///
@@ -583,8 +608,8 @@ pub trait DatasetView {
         walk_rdf_list(
             head,
             nil,
-            |cell| sole_object(self, cell, first, graph),
-            |cell| sole_object(self, cell, rest, graph),
+            |cell| self.sole_object(cell, first, graph),
+            |cell| self.sole_object(cell, rest, graph),
         )
     }
 
@@ -1276,6 +1301,37 @@ mod tests {
             GraphMatch::<TermId>::Default.matches(None) && !GraphMatch::Default.matches(Some(g))
         );
         assert!(GraphMatch::Named(g).matches(Some(g)) && !GraphMatch::Named(g).matches(None));
+    }
+
+    /// Every value a predicate takes, once, ascending by id: a value stated by
+    /// two subjects and in two graphs is one value, and another predicate's
+    /// values and a graph outside the scope are not reached.
+    #[test]
+    fn objects_of_predicate_is_the_distinct_range_in_scope() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s1, s2, p, q) = (
+            iri(&mut b, "s1"),
+            iri(&mut b, "s2"),
+            iri(&mut b, "p"),
+            iri(&mut b, "q"),
+        );
+        let (o1, o2, o3, g) = (
+            iri(&mut b, "o1"),
+            iri(&mut b, "o2"),
+            iri(&mut b, "o3"),
+            iri(&mut b, "g"),
+        );
+        b.push_quad(s1, p, o2, None);
+        b.push_quad(s2, p, o2, Some(g));
+        b.push_quad(s2, p, o1, None);
+        b.push_quad(s1, q, o3, None);
+        let ds = b.freeze().expect("freeze");
+        let mut expected = vec![o1, o2];
+        expected.sort_unstable();
+        assert_eq!(ds.objects_of_predicate(p, GraphMatch::Any), expected);
+        assert_eq!(ds.objects_of_predicate(p, GraphMatch::Named(g)), vec![o2]);
+        assert_eq!(ds.objects_of_predicate(q, GraphMatch::Default), vec![o3]);
+        assert_eq!(ds.objects_of_predicate(o1, GraphMatch::Any), Vec::new());
     }
 
     #[test]

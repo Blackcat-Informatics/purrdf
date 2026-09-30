@@ -200,23 +200,185 @@ impl<Id: Copy + Eq> SoleObject<Id> {
     }
 }
 
-/// The members of the RDF Collection headed by `head`, in list order, over any
-/// edge source — the strict walker behind
-/// [`DatasetView::rdf_list_strict`](crate::DatasetView::rdf_list_strict).
+/// Where a strict walk of an RDF Collection stopped, without the members: the
+/// allocation-free counterpart of [`ListError`], yielded by [`RdfListWalk`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ListFault<Id> {
+    /// What was broken.
+    pub kind: ListErrorKind,
+    /// The cell (or `rdf:nil`) where the walk stopped.
+    pub node: Id,
+    /// How many of the members already yielded make up the list read before
+    /// the walk stopped — [`ListError::members`]' length. It is every yielded
+    /// member except for [`ListErrorKind::Cycle`], where the walk yields the
+    /// members of the cycle's first cells a second time before it can tell it
+    /// has come round, and only the first `members` are distinct cells.
+    pub members: usize,
+}
+
+/// The strict walker of an RDF Collection over any edge source, as an iterator
+/// that allocates nothing: each item is the next member, in list order, and a
+/// malformed collection ends the walk with one [`ListFault`] item.
+///
+/// This is the one walker every reader of a collection shares, so there is one
+/// definition of a well-formed list (RDF 1.2 Semantics §D.3, SHACL 1.2 Core
+/// §1.4): exactly one `rdf:first` and one `rdf:rest` per cell, a chain reaching
+/// `rdf:nil` without revisiting a cell, and `rdf:nil` carrying neither edge.
+/// [`walk_rdf_list`] and [`DatasetView::rdf_list_strict`](crate::DatasetView::rdf_list_strict)
+/// collect it; a reader that must not allocate — a constraint evaluated once per
+/// value node, say — counts or consumes it in place, and may stop early.
 ///
 /// `first(cell)` and `rest(cell)` answer how many distinct `rdf:first` and
 /// `rdf:rest` objects `cell` has, and `nil` is `rdf:nil`'s identifier (`None`
 /// when the source holds no such term, so no chain can end). A source that is
-/// not a single [`GraphMatch`](crate::GraphMatch) — a merge of graphs, or a
-/// buffer of statements minted during a query — asks the same question here, so
-/// every reader of a collection shares one definition of a well-formed list
-/// (RDF 1.2 Semantics §D.3, SHACL 1.2 Core §1.4): exactly one `rdf:first` and
-/// one `rdf:rest` per cell, a chain reaching `rdf:nil` without revisiting a
-/// cell, and `rdf:nil` carrying neither edge.
+/// not a single [`GraphMatch`](crate::GraphMatch) — a merge of graphs, an index
+/// of its own, or a buffer of statements minted during a query — answers the
+/// same two questions.
 ///
 /// The cycle check allocates nothing: Brent's algorithm keeps one saved cell
 /// and compares each step against it, so a cycle is found within twice the
 /// walked length and a well-formed list costs no lookup beyond its own edges.
+///
+/// A member is yielded as soon as its cell's `rdf:first` is read and its
+/// `rdf:rest` is known; a cell whose `rdf:rest` is missing or ambiguous still
+/// yields its member before the fault, as [`ListError::members`] records it.
+pub struct RdfListWalk<Id, F, R> {
+    head: Id,
+    nil: Option<Id>,
+    first: F,
+    rest: R,
+    /// The cell to read next; `None` once the walk has ended.
+    cell: Option<Id>,
+    /// A fault found after the member it follows was yielded.
+    pending: Option<ListFault<Id>>,
+    /// Brent: `saved` is compared against every cell; it jumps forward to the
+    /// current cell whenever `steps` reaches `power`, which doubles.
+    saved: Id,
+    power: usize,
+    steps: usize,
+    /// Members yielded so far.
+    yielded: usize,
+}
+
+impl<Id: std::fmt::Debug, F, R> std::fmt::Debug for RdfListWalk<Id, F, R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RdfListWalk")
+            .field("head", &self.head)
+            .field("cell", &self.cell)
+            .field("yielded", &self.yielded)
+            .field("pending", &self.pending)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<Id, F, R> RdfListWalk<Id, F, R>
+where
+    Id: Copy + Eq,
+    F: FnMut(Id) -> SoleObject<Id>,
+    R: FnMut(Id) -> SoleObject<Id>,
+{
+    /// Walk the collection headed by `head` (`rdf:nil` for the empty list).
+    pub const fn new(head: Id, nil: Option<Id>, first: F, rest: R) -> Self {
+        Self {
+            head,
+            nil,
+            first,
+            rest,
+            cell: Some(head),
+            pending: None,
+            saved: head,
+            power: 1,
+            steps: 0,
+            yielded: 0,
+        }
+    }
+
+    fn fault(&mut self, kind: ListErrorKind, node: Id, members: usize) -> ListFault<Id> {
+        self.cell = None;
+        ListFault {
+            kind,
+            node,
+            members,
+        }
+    }
+}
+
+impl<Id, F, R> Iterator for RdfListWalk<Id, F, R>
+where
+    Id: Copy + Eq,
+    F: FnMut(Id) -> SoleObject<Id>,
+    R: FnMut(Id) -> SoleObject<Id>,
+{
+    type Item = Result<Id, ListFault<Id>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(fault) = self.pending.take() {
+            return Some(Err(fault));
+        }
+        let cell = self.cell?;
+        if Some(cell) == self.nil {
+            self.cell = None;
+            if (self.first)(cell) != SoleObject::None || (self.rest)(cell) != SoleObject::None {
+                return Some(Err(ListFault {
+                    kind: ListErrorKind::NonEmptyNil,
+                    node: cell,
+                    members: self.yielded,
+                }));
+            }
+            return None;
+        }
+        let member = match (self.first)(cell) {
+            SoleObject::None => {
+                return Some(Err(self.fault(
+                    ListErrorKind::MissingFirst,
+                    cell,
+                    self.yielded,
+                )));
+            }
+            SoleObject::Many => {
+                return Some(Err(self.fault(
+                    ListErrorKind::MultipleFirst,
+                    cell,
+                    self.yielded,
+                )));
+            }
+            SoleObject::One(member) => member,
+        };
+        self.yielded += 1;
+        let next = match (self.rest)(cell) {
+            SoleObject::None => {
+                self.pending = Some(self.fault(ListErrorKind::MissingRest, cell, self.yielded));
+                return Some(Ok(member));
+            }
+            SoleObject::Many => {
+                self.pending = Some(self.fault(ListErrorKind::MultipleRest, cell, self.yielded));
+                return Some(Ok(member));
+            }
+            SoleObject::One(next) => next,
+        };
+        self.steps += 1;
+        if next == self.saved {
+            // `steps` is now the cycle's length: find where it starts (two
+            // cursors `steps` apart meet at the first repeated cell) and count
+            // each distinct cell's member once.
+            let (prefix, entry) = cycle_start(self.head, self.steps, &mut self.rest);
+            let distinct = prefix + self.steps;
+            self.pending = Some(self.fault(ListErrorKind::Cycle, entry, distinct));
+            return Some(Ok(member));
+        }
+        if self.steps == self.power {
+            self.saved = next;
+            self.power *= 2;
+            self.steps = 0;
+        }
+        self.cell = Some(next);
+        Some(Ok(member))
+    }
+}
+
+/// The members of the RDF Collection headed by `head`, in list order, over any
+/// edge source: [`RdfListWalk`] collected, the strict walker behind
+/// [`DatasetView::rdf_list_strict`](crate::DatasetView::rdf_list_strict).
 ///
 /// # Errors
 ///
@@ -224,54 +386,24 @@ impl<Id: Copy + Eq> SoleObject<Id> {
 pub fn walk_rdf_list<Id: Copy + Eq>(
     head: Id,
     nil: Option<Id>,
-    mut first: impl FnMut(Id) -> SoleObject<Id>,
-    mut rest: impl FnMut(Id) -> SoleObject<Id>,
+    first: impl FnMut(Id) -> SoleObject<Id>,
+    rest: impl FnMut(Id) -> SoleObject<Id>,
 ) -> Result<Vec<Id>, ListError<Id>> {
     let mut members = Vec::new();
-    let fail = |kind, members, node| {
-        Err(ListError {
-            kind,
-            members,
-            node,
-        })
-    };
-    // Brent: `saved` is compared against every cell; it jumps forward to the
-    // current cell whenever `steps` reaches `power`, which doubles.
-    let (mut saved, mut power, mut steps) = (head, 1_usize, 0_usize);
-    let mut cell = head;
-    loop {
-        if Some(cell) == nil {
-            if first(cell) != SoleObject::None || rest(cell) != SoleObject::None {
-                return fail(ListErrorKind::NonEmptyNil, members, cell);
+    for item in RdfListWalk::new(head, nil, first, rest) {
+        match item {
+            Ok(member) => members.push(member),
+            Err(fault) => {
+                members.truncate(fault.members);
+                return Err(ListError {
+                    kind: fault.kind,
+                    members,
+                    node: fault.node,
+                });
             }
-            return Ok(members);
         }
-        match first(cell) {
-            SoleObject::None => return fail(ListErrorKind::MissingFirst, members, cell),
-            SoleObject::Many => return fail(ListErrorKind::MultipleFirst, members, cell),
-            SoleObject::One(member) => members.push(member),
-        }
-        let next = match rest(cell) {
-            SoleObject::None => return fail(ListErrorKind::MissingRest, members, cell),
-            SoleObject::Many => return fail(ListErrorKind::MultipleRest, members, cell),
-            SoleObject::One(next) => next,
-        };
-        steps += 1;
-        if next == saved {
-            // `steps` is now the cycle's length: find where it starts (two
-            // cursors `steps` apart meet at the first repeated cell) and keep
-            // each distinct cell's member once.
-            let (prefix, entry) = cycle_start(head, steps, &mut rest);
-            members.truncate(prefix + steps);
-            return fail(ListErrorKind::Cycle, members, entry);
-        }
-        if steps == power {
-            saved = next;
-            power *= 2;
-            steps = 0;
-        }
-        cell = next;
     }
+    Ok(members)
 }
 
 /// Where a cycle of length `length` on the `rdf:rest` chain from `head`
@@ -397,6 +529,70 @@ where
         current = next;
     }
     head
+}
+
+/// How a well-formed list cell is referenced, as [`convertible_list_cells`]
+/// asks it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListCellUse<Id> {
+    /// The cell's one reference is the `rdf:rest` of the cell `Id`: the walk
+    /// back towards the head continues there.
+    RestOf(Id),
+    /// The cell's one reference is under any other predicate: the cell is the
+    /// head of the `@list` that reference's value becomes.
+    Head,
+}
+
+/// The cells of the RDF lists a JSON-LD serialization writes as `@list`
+/// values — JSON-LD 1.1 Processing Algorithms and API §8.4.2 (Serialize RDF as
+/// JSON-LD), step 6.4 — so the cells it does not write as node objects.
+///
+/// For each usage of `rdf:nil` as the `rdf:rest` of a cell (`tails`, the
+/// subjects of `(?, rdf:rest, rdf:nil)` in the graph being serialized), the
+/// algorithm walks back towards the list's head while the cell "represents a
+/// well-formed list node", and the cells it passes become the `@list` of the
+/// value that referenced the last of them. `well_formed(cell)` is that test in
+/// the caller's data model: `None` unless `cell` is a blank node, referenced
+/// exactly once, with exactly one `rdf:first` and one `rdf:rest` and nothing
+/// else; otherwise how that one reference is made. A cell referenced as the
+/// `rdf:rest` of another cell continues the walk there; any other reference
+/// ends it with the cell as the head. A cell already converted ends a walk too,
+/// so a caller's oracle that is not a function of the graph cannot loop.
+///
+/// This is the one implementation of that walk: the JSON-LD serializer and
+/// every other projection that writes lists as JSON-LD `@list` values share
+/// the step's reading, including where it keeps a partial list (a well-formed
+/// suffix whose head's predecessor is not a well-formed cell).
+///
+/// ```
+/// use purrdf_core::collections::{ListCellUse, convertible_list_cells};
+///
+/// // s p c0 . c0 rest c1 . c1 rest nil — both cells well formed.
+/// let cells = convertible_list_cells(["c1"], |cell| match cell {
+///     "c1" => Some(ListCellUse::RestOf("c0")),
+///     "c0" => Some(ListCellUse::Head),
+///     _ => None,
+/// });
+/// assert!(cells.contains("c0") && cells.contains("c1"));
+/// ```
+pub fn convertible_list_cells<Id: Copy + Eq + std::hash::Hash>(
+    tails: impl IntoIterator<Item = Id>,
+    mut well_formed: impl FnMut(Id) -> Option<ListCellUse<Id>>,
+) -> crate::FastSet<Id> {
+    let mut cells = crate::FastSet::default();
+    for tail in tails {
+        let mut node = tail;
+        while !cells.contains(&node)
+            && let Some(usage) = well_formed(node)
+        {
+            cells.insert(node);
+            match usage {
+                ListCellUse::RestOf(previous) => node = previous,
+                ListCellUse::Head => break,
+            }
+        }
+    }
+    cells
 }
 
 #[cfg(test)]
@@ -1066,5 +1262,122 @@ mod tests {
         assert_eq!(SoleObject::of([3, 4, 3]), SoleObject::Many);
         assert_eq!(SoleObject::None.and(1).and(1), SoleObject::One(1));
         assert_eq!(SoleObject::One(1).and(2).and(1), SoleObject::Many);
+    }
+
+    /// A walk from `rdf:nil`'s usage converts every well-formed cell back to
+    /// the head.
+    #[test]
+    fn convertible_list_cells_walk_back_to_the_head() {
+        let cells = convertible_list_cells([2_u32], |cell| match cell {
+            2 => Some(ListCellUse::RestOf(1)),
+            1 => Some(ListCellUse::RestOf(0)),
+            0 => Some(ListCellUse::Head),
+            _ => None,
+        });
+        let mut sorted: Vec<u32> = cells.into_iter().collect();
+        sorted.sort_unstable();
+        assert_eq!(sorted, [0, 1, 2]);
+    }
+
+    /// A cell that is not well formed ends the walk, and the well-formed suffix
+    /// after it still converts: it becomes the `@list` of that cell's
+    /// `rdf:rest`.
+    #[test]
+    fn convertible_list_cells_keep_a_well_formed_suffix() {
+        let cells = convertible_list_cells([2_u32], |cell| match cell {
+            2 => Some(ListCellUse::RestOf(1)),
+            // Cell 1 carries a third statement, or is referenced twice.
+            _ => None,
+        });
+        assert_eq!(cells.into_iter().collect::<Vec<_>>(), [2]);
+    }
+
+    /// No tail, no list; a tail that is not itself well formed converts nothing.
+    #[test]
+    fn convertible_list_cells_need_a_well_formed_tail() {
+        assert!(
+            convertible_list_cells(std::iter::empty::<u32>(), |_| Some(ListCellUse::Head))
+                .is_empty()
+        );
+        assert!(convertible_list_cells([7_u32], |_| None).is_empty());
+    }
+
+    /// An oracle that reports a cycle cannot loop: a converted cell ends the
+    /// walk.
+    #[test]
+    fn convertible_list_cells_stop_at_a_converted_cell() {
+        let cells = convertible_list_cells([0_u32, 1], |cell| Some(ListCellUse::RestOf(1 - cell)));
+        assert_eq!(cells.len(), 2);
+    }
+
+    /// The iterator yields each member before a fault on its own cell's
+    /// `rdf:rest`, and counts the distinct members of a cycle.
+    #[test]
+    fn rdf_list_walk_yields_members_then_one_fault() {
+        let edges = |cell: u32| match cell {
+            0 => (SoleObject::One(10), SoleObject::One(1)),
+            1 => (SoleObject::One(11), SoleObject::One(0)),
+            _ => (SoleObject::None, SoleObject::None),
+        };
+        let (members, faults): (Vec<_>, Vec<_>) =
+            RdfListWalk::new(0_u32, Some(99), |c| edges(c).0, |c| edges(c).1)
+                .partition(Result::is_ok);
+        assert_eq!(faults.len(), 1);
+        let fault = faults[0].unwrap_err();
+        assert_eq!(fault.kind, ListErrorKind::Cycle);
+        assert_eq!(fault.node, 0);
+        assert_eq!(fault.members, 2);
+        let members: Vec<u32> = members.into_iter().map(Result::unwrap).collect();
+        assert_eq!(&members[..2], [10, 11]);
+
+        let no_rest = |cell: u32| {
+            if cell == 0 {
+                SoleObject::One(10)
+            } else {
+                SoleObject::None
+            }
+        };
+        let items: Vec<_> =
+            RdfListWalk::new(0_u32, Some(99), no_rest, |_| SoleObject::None).collect();
+        assert_eq!(
+            items,
+            [
+                Ok(10),
+                Err(ListFault {
+                    kind: ListErrorKind::MissingRest,
+                    node: 0,
+                    members: 1
+                })
+            ]
+        );
+    }
+
+    /// Counting a well-formed list through the iterator allocates nothing and
+    /// agrees with the collected walk; it can also stop early.
+    #[test]
+    fn rdf_list_walk_counts_without_collecting() {
+        let first = |cell: u32| {
+            if cell < 3 {
+                SoleObject::One(cell + 100)
+            } else {
+                SoleObject::None
+            }
+        };
+        let rest = |cell: u32| {
+            if cell < 3 {
+                SoleObject::One(cell + 1)
+            } else {
+                SoleObject::None
+            }
+        };
+        let count = RdfListWalk::new(0_u32, Some(3), first, rest)
+            .try_fold(0_usize, |n, item| item.map(|_| n + 1));
+        assert_eq!(count, Ok(3));
+        assert_eq!(
+            walk_rdf_list(0_u32, Some(3), first, rest),
+            Ok(vec![100, 101, 102])
+        );
+        let mut walk = RdfListWalk::new(0_u32, Some(3), first, rest);
+        assert_eq!(walk.next(), Some(Ok(100)));
     }
 }

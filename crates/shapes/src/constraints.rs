@@ -12,8 +12,9 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::sync::OnceLock;
 
-use ::purrdf::{FastMap, FastSet, IdSet, RdfTextDirection, TermId, TermRef};
+use ::purrdf::{FastMap, FastSet, GraphMatch, IdSet, RdfTextDirection, TermId, TermRef};
 use purrdf_core::SmallVec;
+use purrdf_core::collections::{ListFault, RdfListWalk};
 
 use crate::data::{GraphFilter, ShaclData, native_quads, quads_for_pattern_ids, resolve_id};
 use crate::engine::FocusNode;
@@ -3577,10 +3578,40 @@ struct ShaclList {
     head: Option<TermId>,
     /// The number of members.
     len: usize,
-    /// `rdf:first`, which every non-empty list's cells carry.
+    /// `rdf:first`, `rdf:rest` and `rdf:nil` as this data graph interns them.
+    vocab: ListIds,
+}
+
+/// The list vocabulary's ids in one data graph; `None` where it is not interned.
+#[derive(Clone, Copy)]
+struct ListIds {
     first: Option<TermId>,
-    /// `rdf:rest`, likewise.
     rest: Option<TermId>,
+    nil: Option<TermId>,
+}
+
+impl ListIds {
+    fn of(ds: &impl ShaclRead) -> Self {
+        Self {
+            first: ds.term_id_by_iri(rdf::FIRST),
+            rest: ds.term_id_by_iri(rdf::REST),
+            nil: ds.term_id_by_iri(rdf::NIL),
+        }
+    }
+
+    /// The strict walk of the list headed by `head`, over every graph.
+    fn walk<D: ShaclRead>(
+        self,
+        ds: &D,
+        head: TermId,
+    ) -> impl Iterator<Item = Result<TermId, ListFault<TermId>>> + '_ {
+        RdfListWalk::new(
+            head,
+            self.nil,
+            move |cell| ds.sole_object(cell, self.first, GraphMatch::Any),
+            move |cell| ds.sole_object(cell, self.rest, GraphMatch::Any),
+        )
+    }
 }
 
 impl ShaclList {
@@ -3591,111 +3622,43 @@ impl ShaclList {
     /// rdf:first or rdf:rest), or has exactly one value for the property rdf:first
     /// in G and exactly one value for the property rdf:rest in G that is also a
     /// SHACL list in G, and the list does not have itself as a value of the
-    /// property path rdf:rest+ in G."
+    /// property path rdf:rest+ in G." That is the strict walker's definition of
+    /// a well-formed list ([`RdfListWalk`]); a cell is an IRI or a blank node
+    /// because nothing else is the subject of a statement.
     ///
-    /// Every clause is checked in id space and WITHOUT allocating, because the
-    /// list components run once per value node on the change path: a cycle is
-    /// found by Floyd's two-pointer walk (the fast pointer checks every cell's
-    /// shape as it reaches it first), not by a visited set. A value node that is
-    /// not interned is the subject of no quad, so it is a list only as `rdf:nil`.
+    /// The walk is counted in place WITHOUT allocating, because the list
+    /// components run once per value node on the change path. A value node that
+    /// is not interned is the subject of no quad, so it is a list only as
+    /// `rdf:nil`.
     fn of(ds: &impl ShaclRead, value: &ValueNode) -> Option<Self> {
-        let first = ds.term_id_by_iri(rdf::FIRST);
-        let rest = ds.term_id_by_iri(rdf::REST);
-        let nil = ds.term_id_by_iri(rdf::NIL);
+        let vocab = ListIds::of(ds);
         let Some(head) = value.as_id(ds) else {
             let empty = Self {
                 head: None,
                 len: 0,
-                first,
-                rest,
+                vocab,
             };
             return matches!(value, ValueNode::Foreign(Term::NamedNode(n)) if n.as_str() == rdf::NIL)
                 .then_some(empty);
         };
-        // One well-formed step from `cell`: `Ok(None)` at `rdf:nil`,
-        // `Ok(Some(next))` from a proper cell, `Err(())` for anything else.
-        let step = |cell: TermId| -> Result<Option<TermId>, ()> {
-            let head_value = single_object(ds, cell, first)?;
-            let tail = single_object(ds, cell, rest)?;
-            if Some(cell) == nil {
-                return if head_value.is_none() && tail.is_none() {
-                    Ok(None)
-                } else {
-                    Err(())
-                };
-            }
-            if !matches!(ds.resolve(cell), TermRef::Iri(_) | TermRef::Blank { .. }) {
-                return Err(());
-            }
-            match (head_value, tail) {
-                (Some(_), Some(next)) => Ok(Some(next)),
-                _ => Err(()),
-            }
-        };
-        let mut len = 0usize;
-        let mut slow = head;
-        let mut fast = head;
-        // The fast pointer advances two cells per round; every cell is first
-        // reached — and so checked — by it. The slow pointer trails it one cell
-        // per round, over cells the fast pointer has already checked.
-        while let Some(next) = step(fast).ok()? {
-            len += 1;
-            let Some(after) = step(next).ok()? else {
-                break;
-            };
-            len += 1;
-            fast = after;
-            slow = step(slow).ok().flatten()?;
-            if slow == fast {
-                return None;
-            }
-        }
+        let len = vocab
+            .walk(ds, head)
+            .try_fold(0_usize, |len, member| member.map(|_| len + 1))
+            .ok()?;
         Some(Self {
             head: Some(head),
             len,
-            first,
-            rest,
+            vocab,
         })
     }
 
     /// The members, in list order. The structure was checked by [`Self::of`], so
     /// this walk cannot fail; it allocates nothing.
     fn members<D: ShaclRead>(self, ds: &D) -> impl Iterator<Item = TermId> + '_ {
-        let mut cell = self.head;
-        (0..self.len).filter_map(move |_| {
-            let here = cell?;
-            let member = single_object(ds, here, self.first).ok().flatten()?;
-            cell = single_object(ds, here, self.rest).ok().flatten();
-            Some(member)
-        })
+        self.head
+            .into_iter()
+            .flat_map(move |head| self.vocab.walk(ds, head).map_while(Result::ok))
     }
-}
-
-/// The single distinct object of `(subject, predicate, ?)`: `Ok(None)` when there
-/// is none, `Err(())` when there are two. A statement asserted in several named
-/// graphs is still one value.
-fn single_object(
-    ds: &impl ShaclRead,
-    subject: TermId,
-    predicate: Option<TermId>,
-) -> Result<Option<TermId>, ()> {
-    let Some(predicate) = predicate else {
-        return Ok(None);
-    };
-    let mut found: Option<TermId> = None;
-    for quad in quads_for_pattern_ids(
-        ds,
-        Some(subject),
-        Some(predicate),
-        None,
-        GraphFilter::AnyGraph,
-    ) {
-        match found {
-            Some(existing) if existing != quad.o => return Err(()),
-            _ => found = Some(quad.o),
-        }
-    }
-    Ok(found)
 }
 
 /// Check that a `Term` satisfies `sh:nodeKind`.

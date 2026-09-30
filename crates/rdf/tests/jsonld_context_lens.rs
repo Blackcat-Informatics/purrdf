@@ -718,6 +718,44 @@ fn list_coercion_and_shared_list_identity_are_preserved() {
     assert!(datasets_isomorphic(&dataset, &reparsed));
 }
 
+/// JSON-LD 1.1 §8.4.2 step 6.4 walks back from `rdf:nil` and stops at the
+/// first cell that is not a well-formed list node — here a head referenced
+/// twice — so that cell stays a node and the well-formed suffix after it is
+/// the `@list` value of its `rdf:rest`.
+#[test]
+fn a_well_formed_list_suffix_folds_behind_a_shared_head() {
+    let source = concat!(
+        "<https://example.org/s> <https://example.org/items> _:head .\n",
+        "<https://example.org/t> <https://example.org/items> _:head .\n",
+        "_:head <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> \"one\" .\n",
+        "_:head <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:tail .\n",
+        "_:tail <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> \"two\" .\n",
+        "_:tail <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .\n",
+    );
+    let context = json!({
+        "ex": {"@id": "https://example.org/", "@prefix": true},
+        "items": {"@id": "ex:items", "@container": "@list"}
+    });
+    let (dataset, compacted) = serialize_with_context(source, &context);
+    let value = read_output(&compacted);
+    let head = value["@graph"]
+        .as_array()
+        .expect("graph nodes")
+        .iter()
+        .find(|node| {
+            node.get("http://www.w3.org/1999/02/22-rdf-syntax-ns#first")
+                .is_some()
+        })
+        .unwrap_or_else(|| panic!("the shared head stays a node: {compacted}"));
+    assert_eq!(
+        head["http://www.w3.org/1999/02/22-rdf-syntax-ns#rest"]["@list"],
+        json!([{"@value": "two"}]),
+        "{compacted}"
+    );
+    let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand folded suffix");
+    assert!(datasets_isomorphic(&dataset, &reparsed));
+}
+
 #[test]
 fn graph_names_are_not_folded_as_list_heads() {
     let source = concat!(

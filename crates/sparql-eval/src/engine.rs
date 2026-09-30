@@ -7043,21 +7043,10 @@ mod tests {
             // plan is built and dropped here, where its drop fits.
             let tall = PreparedQuery::rewritten(nested(10_000), QueryOptions::EMPTY)
                 .expect("ten thousand nested levels prepare on a large stack");
-            let refused = std::thread::scope(|scope| {
-                std::thread::Builder::new()
-                    .stack_size(256 * 1024)
-                    .spawn_scoped(scope, || {
-                        NativeSparqlEngine::new().query_prepared(
-                            &social(),
-                            &tall,
-                            &[],
-                            QueryOptions::EMPTY,
-                        )
-                    })
-                    .expect("spawn")
-                    .join()
-                    .expect("the small thread returned rather than aborting")
+            let refused = purrdf_stack::on_stack_scoped(256 * 1024, || {
+                NativeSparqlEngine::new().query_prepared(&social(), &tall, &[], QueryOptions::EMPTY)
             })
+            .expect("the small stack runs the evaluation")
             .expect_err("a plan too tall for the evaluating thread's stack is refused");
             assert_eq!(
                 refused.code,

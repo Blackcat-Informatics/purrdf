@@ -59,6 +59,7 @@ use std::collections::BTreeMap;
 
 use crate::json_model::{Map, Value, json};
 use ::purrdf::{DatasetView as _, FastMap, FastSet, GraphMatch, RdfDataset, TermId, TermRef};
+use purrdf_core::collections::{ListCellUse, convertible_list_cells};
 
 use crate::data::{GraphFilter, native_quads, quads_for_pattern_ids, resolve_id};
 use crate::json_schema::Namespaces;
@@ -352,7 +353,9 @@ pub(crate) fn is_canonical_integer(lexical: &str) -> bool {
 /// both of which have as value an array consisting of a single element, and
 /// node has no other entries" — and the walk stops at the first cell that is
 /// not, or whose usage is not an `rdf:rest`; the cells it passed become the
-/// `@list` of the value that referenced the last of them.
+/// `@list` of the value that referenced the last of them. The walk is the
+/// shared [`convertible_list_cells`]; this index supplies the step's
+/// well-formedness test over the default graph.
 ///
 /// Two readings are fixed here, both keeping a triple the algorithm would
 /// otherwise lose. The algorithm tolerates "an optional @type entry whose value
@@ -439,7 +442,7 @@ impl ListIndex {
         // A well-formed list node: blank, referenced once from the default
         // graph, and the subject of exactly one `rdf:first` and one `rdf:rest`
         // there and of nothing else.
-        let well_formed = |cell: TermId| -> Option<(TermId, TermId)> {
+        let well_formed = |cell: TermId| -> Option<ListCellUse<TermId>> {
             if !is_blank(cell) {
                 return None;
             }
@@ -459,21 +462,13 @@ impl ListIndex {
                     return None;
                 }
             }
-            (firsts == 1 && rests == 1).then_some((subject, predicate))
+            (firsts == 1 && rests == 1).then_some(if predicate == rest {
+                ListCellUse::RestOf(subject)
+            } else {
+                ListCellUse::Head
+            })
         };
-        let mut cells: FastSet<TermId> = FastSet::default();
-        for tail in tails {
-            let mut node = tail;
-            while !cells.contains(&node)
-                && let Some((subject, predicate)) = well_formed(node)
-            {
-                cells.insert(node);
-                if predicate != rest {
-                    break;
-                }
-                node = subject;
-            }
-        }
+        let cells = convertible_list_cells(tails, well_formed);
         Self { cells }
     }
 

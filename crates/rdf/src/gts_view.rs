@@ -17,6 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
+use purrdf_core::collections::{SoleObject, walk_rdf_list};
 use purrdf_gts::model::{BlobEntry, Graph, Quad, Term, TermKind, Triple3, language_tag_refusal};
 use purrdf_iri::PrefixMap;
 use purrdf_iri::langtag::identity_fold;
@@ -536,24 +537,46 @@ impl GtsFoldView {
             .is_some_and(|rows| rows.contains(&(p_tid, o_tid)))
     }
 
-    /// Walk an RDF Collection (`rdf:first`/`rdf:rest`) from its head node and
-    /// return the member term ids in order. The walk stops at `rdf:nil` and is
-    /// cycle-safe (a revisited node terminates the walk).
+    /// The members, in order, of the RDF Collection headed by `head_tid` within
+    /// the scope, read by the strict walker
+    /// ([`walk_rdf_list`](purrdf_core::collections::walk_rdf_list)) every
+    /// reader of a collection shares.
+    ///
+    /// A well-formed list yields all its members. A malformed one yields the
+    /// members read before the walk stopped ([`ListError::members`](purrdf_core::ListError)):
+    /// a cycle ends at the revisited cell, and a cell with no or several
+    /// `rdf:first`, or no or several `rdf:rest`, ends the list there rather
+    /// than having one of its values picked. A head that is `rdf:nil`, or no
+    /// list at all, yields nothing.
     pub fn rdf_list(&self, head_tid: usize, scope: Option<&str>) -> Vec<usize> {
-        let nil = self.tid_of_iri(RDF_NIL);
-        let mut out = Vec::new();
-        let mut seen = BTreeSet::new();
-        let mut current = Some(head_tid);
-        while let Some(tid) = current {
-            if Some(tid) == nil || !seen.insert(tid) {
-                break;
-            }
-            if let Some(first) = self.value(tid, RDF_FIRST, scope) {
-                out.push(first);
-            }
-            current = self.value(tid, RDF_REST, scope);
-        }
-        out
+        let Some(key) = self.scope_key(scope) else {
+            return Vec::new();
+        };
+        let (first, rest) = (self.tid_of_iri(RDF_FIRST), self.tid_of_iri(RDF_REST));
+        walk_rdf_list(
+            head_tid,
+            self.tid_of_iri(RDF_NIL),
+            |cell| self.sole_object(cell, first, key),
+            |cell| self.sole_object(cell, rest, key),
+        )
+        .unwrap_or_else(|error| error.members)
+    }
+
+    /// How many distinct objects `(s_tid, p_tid, ?o)` has within the scope,
+    /// counted up to two without allocating.
+    fn sole_object(&self, s_tid: usize, p_tid: Option<usize>, key: ScopeKey) -> SoleObject<usize> {
+        let Some(p_tid) = p_tid else {
+            return SoleObject::None;
+        };
+        SoleObject::of(
+            self.spo
+                .get(&key)
+                .and_then(|idx| idx.get(&s_tid))
+                .into_iter()
+                .flatten()
+                .filter(|&&(p, _)| p == p_tid)
+                .map(|&(_, o)| o),
+        )
     }
 
     /// The purrdf-gts 0.9.11 reifier rows `(reifier_id, (s,p,o), graph?)`. purrdf's
@@ -1193,6 +1216,57 @@ mod tests {
         assert_eq!(view.rdf_list(head, None), vec![cat, dog]);
         assert_eq!(view.reifiers(), &[(16, (0, 1, 2), None)]);
         assert_eq!(view.annotations(), &[(16, 17, 18, None)]);
+    }
+
+    /// A view over `quads` among the terms `cat`, `dog`, `_:l1`, `_:l2`,
+    /// `rdf:first`, `rdf:rest`, `rdf:nil` (ids 0 to 6).
+    fn list_view(quads: &[(usize, usize, usize, Option<usize>)]) -> GtsFoldView {
+        let mut writer = Writer::new("dist");
+        writer.add_terms(&[
+            iri(&(EX.to_string() + "cat")),
+            iri(&(EX.to_string() + "dog")),
+            bnode("l1"),
+            bnode("l2"),
+            iri(RDF_FIRST),
+            iri(RDF_REST),
+            iri(RDF_NIL),
+        ]);
+        writer.add_quads(quads);
+        GtsFoldView::new(purrdf_gts::reader::read(&writer.to_bytes(), true, None))
+            .expect("the fixture graph's terms terminate")
+    }
+
+    /// The strict walk ends a malformed list where it breaks: at a cycle, at a
+    /// cell with two `rdf:first` values (neither is picked), and at a cell with
+    /// none; a well-formed neighbour reads whole.
+    #[test]
+    fn rdf_list_stops_where_the_collection_is_malformed() {
+        let whole = list_view(&[
+            (2, 4, 0, None),
+            (2, 5, 3, None),
+            (3, 4, 1, None),
+            (3, 5, 6, None),
+        ]);
+        assert_eq!(whole.rdf_list(2, None), vec![0, 1]);
+        let cycle = list_view(&[
+            (2, 4, 0, None),
+            (2, 5, 3, None),
+            (3, 4, 1, None),
+            (3, 5, 2, None),
+        ]);
+        assert_eq!(cycle.rdf_list(2, None), vec![0, 1]);
+        let ambiguous = list_view(&[
+            (2, 4, 0, None),
+            (2, 5, 3, None),
+            (3, 4, 0, None),
+            (3, 4, 1, None),
+            (3, 5, 6, None),
+        ]);
+        assert_eq!(ambiguous.rdf_list(2, None), vec![0]);
+        let missing = list_view(&[(2, 4, 0, None), (2, 5, 3, None), (3, 5, 6, None)]);
+        assert_eq!(missing.rdf_list(2, None), vec![0]);
+        assert_eq!(whole.rdf_list(6, None), Vec::<usize>::new());
+        assert_eq!(whole.rdf_list(0, None), Vec::<usize>::new());
     }
 
     #[test]
