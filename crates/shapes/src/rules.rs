@@ -1757,14 +1757,7 @@ fn focus_tag(focus: &Term) -> String {
     let rendered = focus.to_string();
     let mut tag = String::with_capacity(rendered.len() * 3 + 2);
     tag.push('f');
-    for byte in rendered.bytes() {
-        if byte.is_ascii_alphanumeric() {
-            tag.push(char::from(byte));
-        } else {
-            tag.push('-');
-            purrdf_hash::hex::encode_into(&[byte], &mut tag);
-        }
-    }
+    purrdf_core::ir::skolem::escape_label_bytes_into(rendered.as_bytes(), &mut tag);
     tag.push('_');
     tag
 }

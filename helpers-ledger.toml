@@ -1332,6 +1332,23 @@ constants = []
 fingerprints = []
 names = ['^(shortest_rule_path|shortest_dependency_path)$']
 
+[[job]]
+id = "blank-label-hex-escape"
+summary = "Escaping bytes into the blank-label alphabet: ASCII-alphanumerics pass, every other byte becomes `-` plus two lowercase hex digits (genid segments and minted-blank tags)"
+home = "purrdf_core::ir::skolem::escape_label_bytes_into"
+entry_points = []
+spec = "the injective `-xx` escape decoded by purrdf_core::ir::skolem's strict lowercase genid decoder (RDF 1.2 skolemization)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["body:a7d79d50415357e5"]
+names = []
+
 [[distinct]]
 members = [
     "purrdf_core::distance::build_identity::compiler_text",

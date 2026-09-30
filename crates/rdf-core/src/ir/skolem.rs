@@ -228,6 +228,25 @@ fn genid_prefix(authority: &str) -> Result<String, SkolemError> {
     Ok(format!("{authority}{GENID_WELL_KNOWN_PATH}"))
 }
 
+/// Append `bytes` to `out` in the blank-label escape alphabet: every ASCII-alphanumeric
+/// byte passes through, every other byte becomes `-` plus two lowercase hex digits.
+///
+/// This is the workspace's one implementation of the `-xx` escape (the genid path
+/// segment here and the rule engine's minted-blank tags in `purrdf-shapes` both use it).
+/// The encoding is injective because `-` itself is escaped (`-2d`), so each `-` in the
+/// output opens a fixed-width escape; the output matches `[A-Za-z0-9-]*` and is undone by
+/// the strict lowercase decoder behind [`deskolemize`].
+pub fn escape_label_bytes_into(bytes: &[u8], out: &mut String) {
+    for &byte in bytes {
+        if byte.is_ascii_alphanumeric() {
+            out.push(char::from(byte));
+        } else {
+            out.push('-');
+            purrdf_hash::hex::encode_into(&[byte], out);
+        }
+    }
+}
+
 /// Encode a blank node's `(label, scope)` as the canonical genid path segment
 /// (see the module documentation for the grammar and the injectivity argument).
 fn encode_blank(label: &str, scope: BlankScope) -> String {
@@ -235,18 +254,7 @@ fn encode_blank(label: &str, scope: BlankScope) -> String {
     out.push('s');
     let _ = write!(out, "{}", scope.ordinal());
     out.push('-');
-    for &byte in label.as_bytes() {
-        if byte.is_ascii_alphanumeric() {
-            out.push(char::from(byte));
-        } else {
-            out.push('-');
-            let mut digits = [0u8; 2];
-            out.push_str(
-                purrdf_hash::hex::encode_to_slice(&[byte], &mut digits)
-                    .expect("one byte renders in two digits"),
-            );
-        }
-    }
+    escape_label_bytes_into(label.as_bytes(), &mut out);
     out
 }
 
@@ -1071,6 +1079,19 @@ mod tests {
             let decoded = decode_blank(&encoded).expect("every encoding decodes");
             assert_eq!(decoded, (label.to_owned(), scope), "via {encoded:?}");
         }
+    }
+
+    #[test]
+    fn escape_label_bytes_golden_and_round_trip() {
+        let mut out = String::new();
+        escape_label_bytes_into("f_<http://ex.org/a b>\u{e9}-Z9".as_bytes(), &mut out);
+        assert_eq!(out, "f-5f-3chttp-3a-2f-2fex-2eorg-2fa-20b-3e-c3-a9-2dZ9");
+        let (decoded, scope) = decode_blank(&format!("s0-{out}")).expect("decodes");
+        assert_eq!(decoded, "f_<http://ex.org/a b>\u{e9}-Z9");
+        assert_eq!(scope, BlankScope::DEFAULT);
+        let mut appended = String::from("keep");
+        escape_label_bytes_into(b"", &mut appended);
+        assert_eq!(appended, "keep");
     }
 
     #[test]

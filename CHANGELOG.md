@@ -302,6 +302,11 @@ under Changed and Fixed where a longer account helps.
 
 ### Added
 
+- **core:** `purrdf_core::ir::skolem::escape_label_bytes_into`, the one `-xx`
+  blank-label escape (ASCII-alphanumerics pass, every other byte becomes `-`
+  plus two lowercase hex digits). The genid path segment and the SHACL rule
+  engine's minted-blank tags (`purrdf-shapes`) both call it; their output is
+  byte-identical to before. Ledger job `blank-label-hex-escape`.
 - **ed25519:** `purrdf-ed25519`, a new published, wasm32-clean crate and the
   workspace's one Ed25519 (RFC 8032): `SigningKey` (key expansion from a
   32-byte seed, deterministic `sign`, secrets overwritten on drop),
