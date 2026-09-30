@@ -219,6 +219,7 @@ impl Decimal {
 
 /// The byte after the number that starts at `at`, or the offset and name of the
 /// first byte the grammar refuses.
+#[inline]
 pub(crate) fn number_end(bytes: &[u8], at: usize) -> Result<usize, Error> {
     let digit = |at: usize| bytes.get(at).is_some_and(u8::is_ascii_digit);
     let digits = |mut at: usize| {

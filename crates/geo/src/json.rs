@@ -26,8 +26,9 @@
 //! RFC 8259 §4 permits an object to repeat a member name and says nothing about
 //! which occurrence wins. A [`purrdf_lex::json::Object`] keeps every member in
 //! document order, [`purrdf_lex::json::Object::get`] states the first-match rule,
-//! and [`count`] lets a consumer notice the ambiguity and refuse it (which
-//! [`crate::geojson`] does for the members that decide a geometry).
+//! and [`count`] lets a consumer notice the ambiguity and refuse it.
+//! [`crate::geojson`] refuses it for the members that decide a geometry,
+//! counting them as it streams the literal.
 //!
 //! # Nesting is bounded by memory alone
 //!
@@ -48,8 +49,9 @@ use crate::error::GeoError;
 pub use purrdf_lex::json::Value as JsonValue;
 
 /// This crate's reading policy: every [`Limits::DEFAULT`] bound, and no cap on
-/// nesting (see the module documentation).
-const LIMITS: Limits = Limits::with_depth(usize::MAX);
+/// nesting (see the module documentation). [`crate::geojson`]'s streaming
+/// reader reads under it too.
+pub(crate) const LIMITS: Limits = Limits::with_depth(usize::MAX);
 
 /// Parse `text` as a single RFC 8259 JSON document.
 ///
@@ -61,16 +63,20 @@ const LIMITS: Limits = Limits::with_depth(usize::MAX);
 /// or object, a trailing comma, an unescaped control character in a string, an
 /// unpaired UTF-16 surrogate, or content after the top-level value.
 pub fn parse(text: &str) -> Result<JsonValue, GeoError> {
-    json::read_with(text, LIMITS).map_err(|error| {
-        let found = match text
-            .get(error.offset()..)
-            .and_then(|rest| rest.chars().next())
-        {
-            Some(character) => format!("`{character}`"),
-            None => "the end of the text".to_owned(),
-        };
-        GeoError::literal(format!("{error}, found {found}"))
-    })
+    json::read_with(text, LIMITS).map_err(|error| refusal(text, error))
+}
+
+/// A refusal of `text` by the JSON reader, as a [`GeoError::Literal`] naming
+/// the byte offset, what was expected there and what was found.
+pub(crate) fn refusal(text: &str, error: json::Error) -> GeoError {
+    let found = match text
+        .get(error.offset()..)
+        .and_then(|rest| rest.chars().next())
+    {
+        Some(character) => format!("`{character}`"),
+        None => "the end of the text".to_owned(),
+    };
+    GeoError::literal(format!("{error}, found {found}"))
 }
 
 /// Render a value as compact JSON, deterministically: members in the object's

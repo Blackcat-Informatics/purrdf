@@ -5,10 +5,13 @@
 //!
 //! Every PurRDF component that reads or writes a JSON document does it here:
 //! the reader is the pull [`Reader`], every other reading entry point
-//! ([`read`], [`Reader::read_value`], [`Reader::skip_value`],
-//! [`occurrences`]) is a loop over its events, and every writer
-//! ([`write_compact`], [`write_pretty`], [`write`](fn@write)) is one loop over a
-//! [`Value`]. A JSON grammar decision — which bytes are whitespace, where a
+//! ([`read`], [`Reader::read_value`], [`Reader::check_value`],
+//! [`Reader::skip_value`], [`occurrences`]) is a loop over its events, and a
+//! decoder that builds its own structures straight from those events —
+//! [`Reader::peek_kind`] to choose, [`Reader::check_value`] to pass over what
+//! it does not want — accepts and refuses exactly what the tree reader does.
+//! Every writer ([`write_compact`], [`write_pretty`], [`write`](fn@write)) is
+//! one loop over a [`Value`]. A JSON grammar decision — which bytes are whitespace, where a
 //! string ends, what a number may spell — is therefore made once, and every
 //! reader in the workspace accepts exactly the same documents.
 //!

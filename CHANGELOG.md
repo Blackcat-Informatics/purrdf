@@ -431,6 +431,20 @@ under Changed and Fixed where a longer account helps.
   `ToJson`, `JsonKey`, `Within`, `json_string_enum!` and `DecodeError`, which
   carries the RFC 6901 pointer of the offending value. No reader, writer,
   drop, clone, comparison or `Debug` walk recurses on the machine stack.
+- **lex, sparql-results, geo:** the pull reader is enough to decode from:
+  `json::Reader::check_value` holds a value to everything `read_value` does
+  (escapes decoded, the string bound, repeated names) without building it, and
+  on every JSONTestSuite document gives `read_value`'s verdict and error, and
+  `Reader::peek_kind` names the value at the cursor from its first byte. A
+  string token records whether it holds an escape as it is scanned, so
+  `Str::has_escapes` is a field and `Str::decode` borrows an escape-free body
+  without reading it again. The SPARQL-results JSON `SELECT` readers
+  (`from_json`, `from_json_bounded`) and the GeoJSON literal reader decode from
+  the events — rows, terms and exact positions built directly, no JSON tree —
+  and refuse exactly what the tree readers did, with the same message:
+  400,000 mutated SRJ documents and 300,000 mutated GeoJSON literals, compared
+  against the tree readers, never diverged. The tree-walking GeoJSON reader is
+  kept in the tests, as the reference the streaming one is compared against.
 - **lex:** `json::Number::decimal` (the canonical exact value: sign, significant
   digits, a base-ten exponent that is a machine word until it leaves `i64` and
   its digits after), `Value::same_text` and `Number::same_text`, and
@@ -2647,11 +2661,23 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   one-shot hex render is 0.337 [0.316, 0.347] at 64 B, 0.409 at 4 KiB and 0.583
   [0.567, 0.588] at 1 MiB against the core encoder it replaced. Pack dictionary
   encoding, which runs the shared first-mismatch kernel per record, is unchanged
-  at 0.994 [0.980, 1.026]. The shared JSON reader is slower than the two
-  hand-written readers it replaced: SPARQL-results JSON read of a 10,000-row
-  document 1.329 [1.238, 1.420] (13.9 ms to 17.6 ms), a 1 MB GeoJSON
-  FeatureCollection parse 1.815 [1.770, 1.985] (5.0 ms to 9.1 ms), its re-render
-  1.159, and a large GeoJSON literal 1.219; pack dictionary decode is 1.181
+  at 0.994 [0.980, 1.026]. The shared JSON reader first measured slower than
+  the two hand-written readers it replaced — SPARQL-results JSON read of a
+  10,000-row document 1.329 [1.238, 1.420], a 1 MB GeoJSON FeatureCollection
+  parse 1.815 [1.770, 1.985], a large GeoJSON literal 1.219 — because every
+  reader built a whole `Value` tree and crossed whitespace with a chunked scan
+  per token. The SRJ `SELECT` readers and the GeoJSON literal reader now build
+  their rows and positions straight from the pull reader's events, and the
+  tree reader writes each value once, where it stays. Measured again as 24
+  ABBA pairs at load 3.9-8.3, by a standalone driver calling the same public
+  entry points in both trees: `from_json` is 0.650 [0.633, 0.671] of main on
+  the clean document (11.5 ms to 7.5 ms) and 0.582 [0.575, 0.588] on the
+  escaping one (15.7 ms to 9.1 ms), `from_json_bounded` 0.719 [0.710, 0.726]
+  and 0.668 [0.658, 0.676], the FeatureCollection tree parse 0.917 [0.907,
+  0.921] (3.04 ms to 2.79 ms) and the literal 0.810 [0.784, 0.823] (15.5 ms to
+  12.4 ms, most of it now exact decimal parsing). The re-render, the writer's
+  and untouched here, measured 1.159.
+  Pack dictionary decode is 1.181
   [1.151, 1.212] (IRI validation is 36% of its time), and `hex::Lower` `Display`
   at 64 B is 1.129 [1.107, 1.179] while larger sizes are faster. The benches are
   `sparql_results_json_read`, `geojson_json`/`geojson_literal`,

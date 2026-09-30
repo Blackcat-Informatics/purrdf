@@ -469,26 +469,41 @@ impl Value {
 // ── Drop, Clone, PartialEq over work lists ─────────────────────────────────
 
 impl Drop for Value {
+    /// Every container below this one is moved onto a heap work list and
+    /// emptied there, so no drop recurses a level per nesting level. A
+    /// scalar child is never moved: it drops where it lies, with the vector
+    /// that holds it.
     fn drop(&mut self) {
+        /// Move each child of `value` that itself has children onto `work`,
+        /// leaving `null` in its place.
+        fn take_containers(value: &mut Value, work: &mut Vec<Value>) {
+            match value {
+                Value::Array(items) => {
+                    for item in items {
+                        if item.has_children() {
+                            work.push(mem::take(item));
+                        }
+                    }
+                }
+                Value::Object(object) => {
+                    for (_, member) in &mut object.members {
+                        if member.has_children() {
+                            work.push(mem::take(member));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         if !self.has_children() {
             return;
         }
         let mut work: Vec<Self> = Vec::new();
-        let take = |value: &mut Self, work: &mut Vec<Self>| match value {
-            Self::Array(items) => work.extend(items.drain(..).filter(Self::has_children)),
-            Self::Object(object) => work.extend(
-                object
-                    .members
-                    .drain(..)
-                    .map(|(_, member)| member)
-                    .filter(Self::has_children),
-            ),
-            _ => {}
-        };
-        take(self, &mut work);
+        take_containers(self, &mut work);
         while let Some(mut value) = work.pop() {
-            take(&mut value, &mut work);
-            // `value` now owns no value, so its own drop returns at once.
+            take_containers(&mut value, &mut work);
+            // `value` now holds no container, so the drop it runs is this
+            // one's early return, and its scalars drop with its vector.
         }
     }
 }

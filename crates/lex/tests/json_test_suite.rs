@@ -22,7 +22,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use purrdf_lex::json::{self, ErrorKind, Limits, Value};
+use purrdf_lex::json::{self, ErrorKind, Limits, Reader, Value};
 use purrdf_testkit::paths::workspace_root;
 
 fn corpus() -> PathBuf {
@@ -58,6 +58,18 @@ fn read_small_stack(bytes: &Arc<Vec<u8>>, limits: Limits) -> Result<Value, json:
         .expect("the reader completes on a small stack")
 }
 
+/// Check `bytes` on a 256 KiB stack with [`Reader::check_value`]: the verdict a
+/// streaming decoder takes over a value it does not build.
+fn check_small_stack(bytes: &Arc<Vec<u8>>, limits: Limits) -> Result<(), json::Error> {
+    let bytes = Arc::clone(bytes);
+    purrdf_stack::on_stack(256 * 1024, move || {
+        let mut reader = Reader::from_slice(&bytes, limits)?;
+        reader.check_value()?;
+        reader.finish()
+    })
+    .expect("the check completes on a small stack")
+}
+
 #[test]
 fn the_vendored_corpus_has_the_pinned_census() {
     assert_eq!(with_prefix("y_").len(), 95);
@@ -82,6 +94,27 @@ fn every_n_document_is_refused_at_the_default_and_at_an_unbounded_depth() {
             assert!(
                 read_small_stack(&bytes, limits).is_err(),
                 "{name} must be refused (limits {limits:?})"
+            );
+        }
+    }
+}
+
+/// On every document of the corpus, checking a value without building it
+/// accepts exactly what reading it accepts, and refuses the rest with the same
+/// error at the same byte — under the default bounds, with the depth cap
+/// lifted, and with repeated member names refused.
+#[test]
+fn checking_a_value_gives_the_verdict_reading_it_gives_on_every_document() {
+    let unique = Limits {
+        unique_members: true,
+        ..Limits::DEFAULT
+    };
+    for (name, bytes) in documents() {
+        for limits in [Limits::DEFAULT, Limits::with_depth(usize::MAX), unique] {
+            assert_eq!(
+                check_small_stack(&bytes, limits),
+                read_small_stack(&bytes, limits).map(drop),
+                "{name} (limits {limits:?})"
             );
         }
     }

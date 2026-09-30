@@ -34,9 +34,10 @@
 //!
 //! # Exactness
 //!
-//! Coordinates are read through [`crate::json`], which keeps every number as its
-//! source lexeme, and decided by [`crate::exact::Rat::parse_decimal`], which is
-//! integer arithmetic end to end. No coordinate passes through an `f64` on the
+//! Coordinates are read from the events of the workspace's JSON reader
+//! ([`purrdf_lex::json::Reader`], under [`crate::json`]'s reading policy), which
+//! hands every number over as its source lexeme, and decided by
+//! [`crate::exact::Rat::parse_decimal`], which is integer arithmetic end to end. No coordinate passes through an `f64` on the
 //! way in, so `1.5`, `1.50` and `15e-1` produce the identical [`Geometry`] and a
 //! forty-significant-digit ordinate survives intact.
 //!
@@ -81,7 +82,10 @@ use crate::geom::{
     Rings,
 };
 use crate::json::{self, JsonValue};
-use purrdf_lex::json::Number;
+use core::mem;
+use purrdf_lex::json::{Event, Kind, Number, Reader};
+use std::borrow::Cow;
+use std::ops::Range;
 
 // ---------------------------------------------------------------------------
 // Reading
@@ -121,8 +125,22 @@ pub fn parse(lexical: &str, crs: &Crs) -> Result<GeometryLiteral, GeoError> {
     Ok(GeometryLiteral::new(crs.clone(), geometry_of(lexical)?))
 }
 
+/// A streaming step of the reader: the outer error is a JSON refusal, which
+/// outranks every shape refusal and ends the read at once; the inner one is a
+/// shape refusal the step recorded after reading its whole value.
+type Step<T> = Result<Result<T, GeoError>, purrdf_lex::json::Error>;
+
 /// The geometry a lexical form denotes, before a coordinate reference system is
 /// attached to it.
+///
+/// The literal is read from the JSON reader's events in one pass: positions go
+/// straight into the exact geometry model, and no JSON tree is built. It refuses
+/// exactly what a reader that built the tree first and then judged it would
+/// refuse: malformed JSON anywhere, trailing content included, outranks every
+/// shape refusal, and among shape refusals the first one a depth-first walk of
+/// the tree meets wins — an object's own members before its collection's
+/// members, the members in written order. So each object is read to its close
+/// before it is judged, and a shape refusal found inside it waits there.
 fn geometry_of(lexical: &str) -> Result<Geometry, GeoError> {
     // RFC 8259 §2 `ws = *( %x20 / %x09 / %x0A / %x0D )`, byte-tested and so
     // exact over UTF-8 (no member is above 0x7F, and no byte of a multi-byte
@@ -137,8 +155,10 @@ fn geometry_of(lexical: &str) -> Result<Geometry, GeoError> {
             GeometryKind::GeometryCollection,
         ));
     }
-    let value = json::parse(lexical)?;
-    let pending = read_object(&value)?;
+    let mut reader = Reader::new(lexical, json::LIMITS);
+    let pending = read_literal(&mut reader)
+        .and_then(|read| reader.finish().map(|()| read))
+        .map_err(|error| json::refusal(lexical, error))??;
     let dim = pending.dim.unwrap_or(CoordDim::Xy);
     pending.into_geometry(dim).map_err(|error| {
         GeoError::literal(format!(
@@ -148,15 +168,655 @@ fn geometry_of(lexical: &str) -> Result<Geometry, GeoError> {
     })
 }
 
-/// A geometry read out of the JSON tree but not yet given a dimension.
+/// A Geometry object open in the reader: the members that decide it, as far as
+/// they have been read. Every other member is checked and passed over.
+struct OpenObject<'a> {
+    /// How many `type` members, and the first.
+    types: usize,
+    kind: Option<TypeMember<'a>>,
+    /// How many `coordinates` members, and the first.
+    coordinates: usize,
+    coords: Option<Coordinates>,
+    /// How many `geometries` members, and the first.
+    geometries: usize,
+    members: Option<Members>,
+    /// Whether the reader is inside the first `geometries` array.
+    in_members: bool,
+}
+
+/// A `type` member: the name it holds, or the kind of value it is instead.
+enum TypeMember<'a> {
+    Name(Cow<'a, str>),
+    Other(&'static str),
+}
+
+/// The first `coordinates` member of an object.
+enum Coordinates {
+    /// `null`.
+    Null,
+    /// Read into the body its object's `type`, already seen, names.
+    Read(Result<(Box<GeometryBody>, Option<CoordDim>), GeoError>),
+    /// Checked where it stood, its object's `type` not yet known: its span,
+    /// read once the object has closed.
+    Unread(Range<usize>),
+}
+
+/// The first `geometries` member of an object.
+enum Members {
+    /// `null`.
+    Null,
+    /// Not an array: the kind of value it is.
+    Other(&'static str),
+    /// An array, whose elements are read as Geometry objects whatever the
+    /// object's `type` turns out to be (only a `GeometryCollection` has
+    /// members, and any other type refuses a `geometries` member): the
+    /// dimension each member fixed, in written order, and the first member's
+    /// refusal.
+    Read {
+        dims: Vec<Option<CoordDim>>,
+        refusal: Option<GeoError>,
+    },
+}
+
+impl OpenObject<'_> {
+    const fn new() -> Self {
+        Self {
+            types: 0,
+            kind: None,
+            coordinates: 0,
+            coords: None,
+            geometries: 0,
+            members: None,
+            in_members: false,
+        }
+    }
+
+    /// The object, closed: the dimension its positions fixed, with its node
+    /// pushed onto `nodes`, or its refusal. `text` is the document, which an
+    /// [`Coordinates::Unread`] span indexes.
+    fn judge(self, text: &str, nodes: &mut Vec<PendingNode>) -> Step<Option<CoordDim>> {
+        let type_name = match (self.types, self.kind) {
+            (1, Some(TypeMember::Name(name))) => name,
+            (1, Some(TypeMember::Other(kind))) => {
+                return Ok(Err(GeoError::literal(format!(
+                    "the `type` member of a GeoJSON Geometry object is a string, but this one is \
+                     {kind}"
+                ))));
+            }
+            (0, _) => {
+                return Ok(Err(GeoError::literal(
+                    "a GeoJSON Geometry object has a `type` member naming its geometry type; this \
+                     object has none",
+                )));
+            }
+            (repeats, _) => {
+                return Ok(Err(GeoError::literal(format!(
+                    "this GeoJSON object has {repeats} `type` members, so it names no single \
+                     geometry type; RFC 8259 permits the repetition but resolving it by position \
+                     would be a silent choice"
+                ))));
+            }
+        };
+        let type_name = &*type_name;
+        match type_name {
+            "Feature" | "FeatureCollection" => Ok(Err(GeoError::literal(format!(
+                "a geo:geoJSONLiteral is a GeoJSON Geometry object and `{type_name}` is not one of \
+                 them: GeoSPARQL 1.1 Requirement 25 admits only {GEOMETRY_TYPES}. Write the \
+                 geometry itself as the literal rather than the {type_name} that wraps it"
+            )))),
+            "Point" | "MultiPoint" | "LineString" | "MultiLineString" | "Polygon"
+            | "MultiPolygon" => {
+                if self.geometries > 0 {
+                    return Ok(Err(foreign_shape_member(
+                        "geometries",
+                        type_name,
+                        "coordinates",
+                    )));
+                }
+                let read = match (self.coordinates, self.coords) {
+                    (1, Some(Coordinates::Null)) => Err(null_member("coordinates", type_name)),
+                    (1, Some(Coordinates::Read(read))) => read,
+                    (1, Some(Coordinates::Unread(span))) => {
+                        read_coordinates(&mut Reader::new(&text[span], json::LIMITS), type_name)?
+                    }
+                    (count, _) => Err(member_count("coordinates", type_name, count)),
+                };
+                Ok(read.map(|(body, dim)| {
+                    nodes.push(PendingNode::Body(body));
+                    dim
+                }))
+            }
+            "GeometryCollection" => {
+                if self.coordinates > 0 {
+                    return Ok(Err(foreign_shape_member(
+                        "coordinates",
+                        type_name,
+                        "geometries",
+                    )));
+                }
+                Ok(match (self.geometries, self.members) {
+                    (1, Some(Members::Null)) => Err(null_member("geometries", type_name)),
+                    (1, Some(Members::Other(kind))) => Err(not_an_array(
+                        "the `geometries` of a GeoJSON GeometryCollection",
+                        kind,
+                    )),
+                    (
+                        1,
+                        Some(Members::Read {
+                            refusal: Some(refusal),
+                            ..
+                        }),
+                    ) => Err(refusal),
+                    (
+                        1,
+                        Some(Members::Read {
+                            dims,
+                            refusal: None,
+                        }),
+                    ) => unified_dim(&dims)
+                        .inspect(|_| nodes.push(PendingNode::Collection(dims.len()))),
+                    (count, _) => Err(member_count("geometries", type_name, count)),
+                })
+            }
+            other => Ok(Err(GeoError::literal(format!(
+                "`{other}` is not a GeoJSON geometry type; RFC 7946 defines {GEOMETRY_TYPES}"
+            )))),
+        }
+    }
+}
+
+/// Read the literal's one Geometry object, with every collection it nests.
+///
+/// Iterative: the open objects live on a heap stack, and the loop alternates
+/// between reading the innermost object's members, reading its collection's
+/// next member, and handing a closed object to the collection that holds it.
+/// Nesting therefore costs heap and never stack, so a literal is read however
+/// deep it nests. A member of a collection that has already been refused is
+/// checked and not read.
+fn read_literal(reader: &mut Reader<'_>) -> Step<Pending> {
+    let mut nodes: Vec<PendingNode> = Vec::new();
+    let mut open: Vec<OpenObject<'_>> = Vec::new();
+    let mut closed = open_object(reader, &mut open)?;
+    loop {
+        if let Some(outcome) = closed.take() {
+            let Some(parent) = open.last_mut() else {
+                return Ok(outcome.map(|dim| Pending { dim, nodes }));
+            };
+            let Some(Members::Read { dims, refusal }) = &mut parent.members else {
+                unreachable!("a closed object is the literal or a collection's member");
+            };
+            match outcome {
+                Ok(dim) => dims.push(dim),
+                Err(error) => *refusal = Some(error),
+            }
+        }
+        let top = open.last_mut().expect("an object is open");
+        if top.in_members {
+            if !reader.next_item()? {
+                top.in_members = false;
+            } else if matches!(
+                top.members,
+                Some(Members::Read {
+                    refusal: Some(_),
+                    ..
+                })
+            ) {
+                reader.check_value()?;
+            } else {
+                closed = open_object(reader, &mut open)?;
+            }
+            continue;
+        }
+        let Some(key) = reader.next_key()? else {
+            let object = open.pop().expect("an object is open");
+            closed = Some(object.judge(reader.text(), &mut nodes)?);
+            continue;
+        };
+        match &*key.decode()? {
+            "type" => {
+                top.types += 1;
+                if top.types == 1 {
+                    top.kind = Some(read_type_member(reader)?);
+                } else {
+                    reader.check_value()?;
+                }
+            }
+            "coordinates" => {
+                top.coordinates += 1;
+                if top.coordinates == 1 {
+                    top.coords = Some(coordinates_member(reader, top.kind.as_ref())?);
+                } else {
+                    reader.check_value()?;
+                }
+            }
+            "geometries" => {
+                top.geometries += 1;
+                if top.geometries > 1 {
+                    reader.check_value()?;
+                    continue;
+                }
+                top.members = Some(match reader.peek_kind() {
+                    Some(Kind::Null) => {
+                        reader.next_event()?;
+                        Members::Null
+                    }
+                    Some(Kind::Array) => {
+                        reader.next_event()?;
+                        top.in_members = true;
+                        Members::Read {
+                            dims: Vec::new(),
+                            refusal: None,
+                        }
+                    }
+                    kind => {
+                        reader.check_value()?;
+                        Members::Other(kind_name(kind))
+                    }
+                });
+            }
+            _ => {
+                reader.check_value()?;
+            }
+        }
+    }
+}
+
+/// A Geometry object at the cursor: opened onto `open` (`None`), or, when the
+/// value is not an object, checked and refused.
+fn open_object<'a>(
+    reader: &mut Reader<'a>,
+    open: &mut Vec<OpenObject<'a>>,
+) -> Result<Option<Result<Option<CoordDim>, GeoError>>, purrdf_lex::json::Error> {
+    let kind = reader.peek_kind();
+    if kind == Some(Kind::Object) {
+        reader.next_event()?;
+        open.push(OpenObject::new());
+        return Ok(None);
+    }
+    reader.check_value()?;
+    Ok(Some(Err(GeoError::literal(format!(
+        "a geo:geoJSONLiteral is an RFC 7946 Geometry object, but this is {}",
+        kind_name(kind)
+    )))))
+}
+
+/// A `type` member's value, the cursor on it.
+fn read_type_member<'a>(
+    reader: &mut Reader<'a>,
+) -> Result<TypeMember<'a>, purrdf_lex::json::Error> {
+    let kind = reader.peek_kind();
+    if kind == Some(Kind::String) {
+        let Event::String(name) = reader.next_event()? else {
+            unreachable!("a string begins at the cursor");
+        };
+        return Ok(TypeMember::Name(name.decode()?));
+    }
+    reader.check_value()?;
+    Ok(TypeMember::Other(kind_name(kind)))
+}
+
+/// A `coordinates` member's value, the cursor on it: read into its geometry's
+/// body when the object's first `type` has named a type with coordinates, and
+/// checked for later otherwise.
+fn coordinates_member(
+    reader: &mut Reader<'_>,
+    kind: Option<&TypeMember<'_>>,
+) -> Result<Coordinates, purrdf_lex::json::Error> {
+    if reader.peek_kind() == Some(Kind::Null) {
+        reader.next_event()?;
+        return Ok(Coordinates::Null);
+    }
+    match kind {
+        Some(TypeMember::Name(name)) if has_coordinates(name) => {
+            Ok(Coordinates::Read(read_coordinates(reader, name)?))
+        }
+        _ => Ok(Coordinates::Unread(reader.check_value()?)),
+    }
+}
+
+/// Whether `type_name` is one of the six types that carry `coordinates`.
+fn has_coordinates(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "Point" | "MultiPoint" | "LineString" | "MultiLineString" | "Polygon" | "MultiPolygon"
+    )
+}
+
+/// The name of a value's kind, for diagnostics, from its first byte.
+const fn kind_name(kind: Option<Kind>) -> &'static str {
+    match kind {
+        Some(Kind::Null) => "null",
+        Some(Kind::True | Kind::False) => "a boolean",
+        Some(Kind::Number) => "a number",
+        Some(Kind::String) => "a string",
+        Some(Kind::Array) => "an array",
+        Some(Kind::Object) => "an object",
+        // The reader refuses such a byte before the name could be reported.
+        None => "not a JSON value",
+    }
+}
+
+/// `geometries` on a coordinate type, or `coordinates` on a collection.
+///
+/// Both names are defined by RFC 7946 and each belongs to exactly one family,
+/// so an object carrying the other family's member states two incompatible
+/// things about itself: a contradiction rather than a foreign member.
+/// Genuinely foreign members (`bbox`, `title`, anything else) are ignored,
+/// which is the neighbouring case the tests prove.
+fn foreign_shape_member(wrong: &str, type_name: &str, right: &str) -> GeoError {
+    GeoError::literal(format!(
+        "this GeoJSON {type_name} carries a `{wrong}` member, which RFC 7946 defines for the \
+         other family of geometry types; a {type_name} states its shape in `{right}`, and an \
+         object claiming both is a contradiction rather than a Geometry object with a foreign \
+         member"
+    ))
+}
+
+/// A shape member (`coordinates`, or `geometries` for a collection) that is
+/// `null`: RFC 7946 gives `null` no meaning there, and an empty geometry is
+/// written `[]`.
+fn null_member(name: &str, type_name: &str) -> GeoError {
+    GeoError::literal(format!(
+        "the `{name}` member of this GeoJSON {type_name} is null; RFC 7946 gives null no meaning \
+         there, and an empty geometry is written `\"{name}\":[]`"
+    ))
+}
+
+/// A shape member absent (`count` is `0`) or repeated: a geometry with no
+/// coordinates is not a geometry, and two `coordinates` arrays denote two
+/// different geometries.
+fn member_count(name: &str, type_name: &str, count: usize) -> GeoError {
+    if count == 0 {
+        return GeoError::literal(format!(
+            "a GeoJSON {type_name} has a `{name}` member; this one has none, and RFC 7946 defines \
+             the geometry entirely by it"
+        ));
+    }
+    GeoError::literal(format!(
+        "this GeoJSON {type_name} has {count} `{name}` members, which denote different \
+         geometries; the literal is ambiguous and is refused rather than resolved by position"
+    ))
+}
+
+/// `what` is not an array, but a value of kind `kind`.
+fn not_an_array(what: &str, kind: &str) -> GeoError {
+    GeoError::literal(format!(
+        "{what} is a JSON array in RFC 7946, but this is {kind}"
+    ))
+}
+
+/// Open the array at the cursor; or, when the value is not one, check it and
+/// refuse it as `what`.
+fn open_array(reader: &mut Reader<'_>, what: &str) -> Step<()> {
+    let kind = reader.peek_kind();
+    if kind == Some(Kind::Array) {
+        reader.next_event()?;
+        return Ok(Ok(()));
+    }
+    reader.check_value()?;
+    Ok(Err(not_an_array(what, kind_name(kind))))
+}
+
+/// Read the elements of the open array to its close, each with `element`,
+/// into `items`; after the first refusal the rest are checked and not read.
+fn array_items<'a, T>(
+    reader: &mut Reader<'a>,
+    items: &mut Vec<T>,
+    mut element: impl FnMut(&mut Reader<'a>) -> Step<T>,
+) -> Step<()> {
+    let mut refusal = None;
+    while reader.next_item()? {
+        if refusal.is_some() {
+            reader.check_value()?;
+            continue;
+        }
+        match element(reader)? {
+            Ok(item) => items.push(item),
+            Err(error) => refusal = Some(error),
+        }
+    }
+    Ok(refusal.map_or(Ok(()), Err))
+}
+
+/// The `coordinates` value of a `type_name` geometry, the cursor on it: the
+/// body and the dimension its positions fixed, `None` when it has none.
+fn read_coordinates(
+    reader: &mut Reader<'_>,
+    type_name: &str,
+) -> Step<(Box<GeometryBody>, Option<CoordDim>)> {
+    let mut dim = None;
+    let body = match type_name {
+        "Point" => point(reader, &mut dim)?,
+        "MultiPoint" => {
+            let mut points = Vec::new();
+            nested(
+                reader,
+                "the `coordinates` of a GeoJSON MultiPoint",
+                &mut points,
+                |reader| {
+                    // Every member of a GeoJSON MultiPoint is a real position:
+                    // there is no way to write an empty member, so none is `None`.
+                    Ok(position(reader, &mut dim)?.map(Some))
+                },
+            )?
+            .map(|()| GeometryBody::MultiPoint(points))
+        }
+        "LineString" => positions(
+            reader,
+            "the `coordinates` of a GeoJSON LineString",
+            &mut dim,
+        )?
+        .map(GeometryBody::LineString),
+        "MultiLineString" => {
+            let mut lines = Vec::new();
+            nested(
+                reader,
+                "the `coordinates` of a GeoJSON MultiLineString",
+                &mut lines,
+                |reader| {
+                    positions(
+                        reader,
+                        "a member LineString of a GeoJSON MultiLineString",
+                        &mut dim,
+                    )
+                },
+            )?
+            .map(|()| GeometryBody::MultiLineString(lines))
+        }
+        "Polygon" => rings(reader, "the `coordinates` of a GeoJSON Polygon", &mut dim)?
+            .map(GeometryBody::Polygon),
+        "MultiPolygon" => {
+            let mut polygons = Vec::new();
+            nested(
+                reader,
+                "the `coordinates` of a GeoJSON MultiPolygon",
+                &mut polygons,
+                |reader| {
+                    rings(
+                        reader,
+                        "a member Polygon of a GeoJSON MultiPolygon",
+                        &mut dim,
+                    )
+                },
+            )?
+            .map(|()| GeometryBody::MultiPolygon(polygons))
+        }
+        // Only the six coordinate types reach here.
+        other => {
+            reader.check_value()?;
+            Err(GeoError::literal(format!(
+                "`{other}` is not a GeoJSON geometry type with coordinates"
+            )))
+        }
+    };
+    Ok(body.map(|body| (Box::new(body), dim)))
+}
+
+/// An array at the cursor, refused as `what` when it is not one, whose
+/// elements `element` reads into `items`.
+fn nested<'a, T>(
+    reader: &mut Reader<'a>,
+    what: &str,
+    items: &mut Vec<T>,
+    element: impl FnMut(&mut Reader<'a>) -> Step<T>,
+) -> Step<()> {
+    if let Err(refusal) = open_array(reader, what)? {
+        return Ok(Err(refusal));
+    }
+    array_items(reader, items, element)
+}
+
+/// A Point's `coordinates`: `[]` is the empty point; otherwise the array is
+/// its position.
+fn point(reader: &mut Reader<'_>, dim: &mut Option<CoordDim>) -> Step<GeometryBody> {
+    if let Err(refusal) = open_array(reader, "the `coordinates` of a GeoJSON Point")? {
+        return Ok(Err(refusal));
+    }
+    // RFC 7946 has no empty position, but an empty `coordinates` array is how
+    // an empty geometry of each type is written.
+    if !reader.next_item()? {
+        return Ok(Ok(GeometryBody::Point(None)));
+    }
+    Ok(position_items(reader, dim, true)?.map(|coord| GeometryBody::Point(Some(coord))))
+}
+
+/// A linear ring sequence at the cursor, refused as `what` when it is not an
+/// array. The "at least four positions" and "last repeats the first" checks
+/// are `Geometry::new`'s; duplicating them here would be a second place for
+/// them to drift.
+fn rings(reader: &mut Reader<'_>, what: &str, dim: &mut Option<CoordDim>) -> Step<Rings> {
+    let mut rings = Rings::new();
+    Ok(nested(reader, what, &mut rings, |reader| {
+        positions(reader, "a GeoJSON linear ring", dim)
+    })?
+    .map(|()| rings))
+}
+
+/// A position sequence at the cursor, refused as `what` when it is not an
+/// array.
+fn positions(reader: &mut Reader<'_>, what: &str, dim: &mut Option<CoordDim>) -> Step<CoordSeq> {
+    let mut coords = CoordSeq::new();
+    Ok(nested(reader, what, &mut coords, |reader| position(reader, dim))?.map(|()| coords))
+}
+
+/// One RFC 7946 position at the cursor: `[longitude, latitude]` or
+/// `[longitude, latitude, altitude]`, and nothing else.
+fn position(reader: &mut Reader<'_>, dim: &mut Option<CoordDim>) -> Step<Coord> {
+    if let Err(refusal) = open_array(reader, "a GeoJSON position")? {
+        return Ok(Err(refusal));
+    }
+    position_items(reader, dim, false)
+}
+
+/// The elements of an open position array, read to its close (`first` when
+/// the reader already stands on the first element): each ordinate straight
+/// from its number's lexeme into the exact model. The length is judged before
+/// any ordinate, and the dimension before any ordinate too, as the elements'
+/// count decides both.
+fn position_items(reader: &mut Reader<'_>, dim: &mut Option<CoordDim>, first: bool) -> Step<Coord> {
+    /// An element among the first three: a number's lexeme, or the kind of
+    /// value it is instead.
+    #[derive(Clone, Copy)]
+    enum Ordinate<'t> {
+        Number(&'t str),
+        Other(&'static str),
+    }
+    let mut ordinates = [Ordinate::Other("null"); 3];
+    let mut count = 0_usize;
+    let mut first = first;
+    while mem::take(&mut first) || reader.next_item()? {
+        if let Some(slot) = ordinates.get_mut(count) {
+            let kind = reader.peek_kind();
+            *slot = if kind == Some(Kind::Number) {
+                let Event::Number { lexeme, .. } = reader.next_event()? else {
+                    unreachable!("a number begins at the cursor");
+                };
+                Ordinate::Number(lexeme)
+            } else {
+                reader.check_value()?;
+                Ordinate::Other(kind_name(kind))
+            };
+        } else {
+            reader.check_value()?;
+        }
+        count += 1;
+    }
+    let here = match count {
+        2 => CoordDim::Xy,
+        3 => CoordDim::Xyz,
+        few @ (0 | 1) => {
+            return Ok(Err(GeoError::literal(format!(
+                "a GeoJSON position is an array of two or three numbers (longitude, latitude and \
+                 an optional altitude); this one has {few}"
+            ))));
+        }
+        many => {
+            return Ok(Err(GeoError::literal(format!(
+                "a GeoJSON position has at most three numbers; RFC 7946 §3.1.1 says \
+                 \"Implementations SHOULD NOT extend positions beyond three elements\", so a \
+                 position of {many} elements is refused rather than silently truncated. The RFC \
+                 gives the extra elements no meaning and GeoJSON has no measure ordinate for them \
+                 to become, so ignoring them would discard a number without saying so; an \
+                 extension that used a fourth element would need its own datatype"
+            ))));
+        }
+    };
+    match *dim {
+        None => *dim = Some(here),
+        Some(fixed) if fixed == here => {}
+        Some(fixed) => {
+            return Ok(Err(GeoError::literal(format!(
+                "this GeoJSON geometry mixes {}-element and {}-element positions; the geometry \
+                 model carries one coordinate dimension for a whole geometry, so a geometry whose \
+                 positions disagree about it has no dimension to report to \
+                 `geof:coordinateDimension`. RFC 7946 does not itself forbid the mixture — this \
+                 is purrdf-geo's model refusing rather than silently dropping or inventing an \
+                 altitude",
+                fixed.ordinates(),
+                here.ordinates()
+            ))));
+        }
+    }
+    let ordinate = |ordinate: Ordinate<'_>| match ordinate {
+        Ordinate::Number(lexeme) => read_ordinate(lexeme),
+        Ordinate::Other(kind) => Err(GeoError::literal(format!(
+            "an ordinate of a GeoJSON position is a number, but this one is {kind}"
+        ))),
+    };
+    let coord = (|| {
+        let x = ordinate(ordinates[0])?;
+        let y = ordinate(ordinates[1])?;
+        let z = if here.has_z() {
+            Some(ordinate(ordinates[2])?)
+        } else {
+            None
+        };
+        Ok(Coord::new(x, y, z, None))
+    })();
+    Ok(coord)
+}
+
+/// One ordinate, decided exactly from the JSON number's own text.
+fn read_ordinate(lexeme: &str) -> Result<Rat, GeoError> {
+    // `Rat::parse_decimal` reads the digits, never an `f64`; it refuses only an
+    // exponent so large that the power of ten could not be built.
+    Rat::parse_decimal(lexeme).ok_or_else(|| {
+        GeoError::literal(format!(
+            "the ordinate `{lexeme}` is a valid JSON number but its exponent is past the exact \
+             decimal reader's cap, so it names no value this crate can hold"
+        ))
+    })
+}
+
+/// A geometry read out of the literal but not yet given a dimension.
 ///
 /// The dimension of a geometry is decided by the positions inside it, and a
 /// geometry with no positions decides nothing — `{"type":"Point","coordinates":[]}`
 /// is as much an `XYZ` point as an `XY` one. A `GeometryCollection` therefore
 /// cannot be built member by member: an empty member has to adopt whatever
 /// dimension its *siblings* fix, or a collection of one empty point and one 3D
-/// point would be refused for a disagreement that does not exist. So the tree is
-/// read first, the dimension is unified across it, and only then is it
+/// point would be refused for a disagreement that does not exist. So the geometry
+/// tree is read first, the dimension is unified across it, and only then is it
 /// materialized.
 ///
 /// The tree is kept flat, as its nodes in post-order — every member before the
@@ -210,207 +870,6 @@ impl Pending {
 const GEOMETRY_TYPES: &str = "`Point`, `MultiPoint`, `LineString`, `MultiLineString`, `Polygon`, `MultiPolygon` or \
      `GeometryCollection`";
 
-/// A `GeometryCollection` whose `geometries` are being read.
-struct OpenCollection<'a> {
-    /// The members still to read, in written order.
-    rest: core::slice::Iter<'a, JsonValue>,
-    /// The dimension each member read so far fixed, in written order.
-    dims: Vec<Option<CoordDim>>,
-}
-
-/// Read one Geometry object, with every collection it nests.
-///
-/// Iterative: the open collections live in an explicit heap stack, and the loop
-/// alternates between reading the next object and closing the collections a
-/// finished member completes. Nesting therefore costs heap and never stack, so a
-/// literal is read however deep it nests, and a refusal anywhere inside it is the
-/// refusal the same object would raise at the top level. A collection's members
-/// are read in written order, and its dimension is unified once its last member is
-/// read, before anything after it.
-fn read_object(value: &JsonValue) -> Result<Pending, GeoError> {
-    let mut nodes: Vec<PendingNode> = Vec::new();
-    let mut open: Vec<OpenCollection<'_>> = Vec::new();
-    let mut next = value;
-    loop {
-        let mut finished = match read_node(next)? {
-            Node::Body { dim, body } => {
-                nodes.push(PendingNode::Body(body));
-                dim
-            }
-            Node::Collection(items) => {
-                let mut rest = items.iter();
-                match rest.next() {
-                    Some(first) => {
-                        open.push(OpenCollection {
-                            rest,
-                            dims: Vec::with_capacity(items.len()),
-                        });
-                        next = first;
-                        continue;
-                    }
-                    None => {
-                        nodes.push(PendingNode::Collection(0));
-                        None
-                    }
-                }
-            }
-        };
-        // A finished geometry is the result, or a member of the innermost open
-        // collection: its dimension is recorded, and either the collection continues
-        // with the next member or it closes and is itself the finished geometry one
-        // level up.
-        loop {
-            let Some(top) = open.last_mut() else {
-                return Ok(Pending {
-                    dim: finished,
-                    nodes,
-                });
-            };
-            top.dims.push(finished);
-            if let Some(item) = top.rest.next() {
-                next = item;
-                break;
-            }
-            let OpenCollection { dims, .. } =
-                open.pop().expect("the collection just read is still open");
-            finished = unified_dim(&dims)?;
-            nodes.push(PendingNode::Collection(dims.len()));
-        }
-    }
-}
-
-/// What one Geometry object is: a complete body, or a collection whose members are
-/// still to be read.
-enum Node<'a> {
-    Body {
-        dim: Option<CoordDim>,
-        body: Box<GeometryBody>,
-    },
-    Collection(&'a [JsonValue]),
-}
-
-/// Read one Geometry object without descending into a collection's members.
-fn read_node(value: &JsonValue) -> Result<Node<'_>, GeoError> {
-    if !matches!(value, JsonValue::Object(_)) {
-        return Err(GeoError::literal(format!(
-            "a geo:geoJSONLiteral is an RFC 7946 Geometry object, but this is {}",
-            json::kind_name(value)
-        )));
-    }
-    let type_name = read_type(value)?;
-    match type_name {
-        "Feature" | "FeatureCollection" => Err(GeoError::literal(format!(
-            "a geo:geoJSONLiteral is a GeoJSON Geometry object and `{type_name}` is not one of \
-             them: GeoSPARQL 1.1 Requirement 25 admits only {GEOMETRY_TYPES}. Write the geometry \
-             itself as the literal rather than the {type_name} that wraps it"
-        ))),
-        "Point" | "MultiPoint" | "LineString" | "MultiLineString" | "Polygon" | "MultiPolygon" => {
-            reject_foreign_shape_member(value, "geometries", type_name, "coordinates")?;
-            let coordinates = decisive_member(value, "coordinates", type_name)?;
-            let mut dim = None;
-            let body = read_coordinates(type_name, coordinates, &mut dim)?;
-            Ok(Node::Body {
-                dim,
-                body: Box::new(body),
-            })
-        }
-        "GeometryCollection" => {
-            reject_foreign_shape_member(value, "coordinates", type_name, "geometries")?;
-            let geometries = decisive_member(value, "geometries", type_name)?;
-            let items = expect_array(
-                geometries,
-                "the `geometries` of a GeoJSON GeometryCollection",
-            )?;
-            Ok(Node::Collection(items))
-        }
-        other => Err(GeoError::literal(format!(
-            "`{other}` is not a GeoJSON geometry type; RFC 7946 defines {GEOMETRY_TYPES}"
-        ))),
-    }
-}
-
-/// The `type` member, which every Geometry object has exactly one of and which is
-/// always a string.
-fn read_type(object: &JsonValue) -> Result<&str, GeoError> {
-    match json::count(object, "type") {
-        0 => Err(GeoError::literal(
-            "a GeoJSON Geometry object has a `type` member naming its geometry type; this object \
-             has none",
-        )),
-        1 => match object.get("type") {
-            Some(JsonValue::String(name)) => Ok(name.as_str()),
-            Some(other) => Err(GeoError::literal(format!(
-                "the `type` member of a GeoJSON Geometry object is a string, but this one is {}",
-                json::kind_name(other)
-            ))),
-            // Unreachable: `count` just said there is one.
-            None => Err(GeoError::literal("a GeoJSON Geometry object has no `type`")),
-        },
-        repeats => Err(GeoError::literal(format!(
-            "this GeoJSON object has {repeats} `type` members, so it names no single geometry \
-             type; RFC 8259 permits the repetition but resolving it by position would be a \
-             silent choice"
-        ))),
-    }
-}
-
-/// The single member that carries a geometry's shape (`coordinates`, or
-/// `geometries` for a collection).
-///
-/// Absent, `null` and repeated are all refusals: a geometry with no coordinates
-/// is not a geometry, RFC 7946 gives `null` no meaning here (an empty geometry is
-/// written `[]`), and two `coordinates` arrays denote two different geometries.
-fn decisive_member<'a>(
-    object: &'a JsonValue,
-    name: &str,
-    type_name: &str,
-) -> Result<&'a JsonValue, GeoError> {
-    match json::count(object, name) {
-        0 => Err(GeoError::literal(format!(
-            "a GeoJSON {type_name} has a `{name}` member; this one has none, and RFC 7946 defines \
-             the geometry entirely by it"
-        ))),
-        1 => match object.get(name) {
-            Some(JsonValue::Null) => Err(GeoError::literal(format!(
-                "the `{name}` member of this GeoJSON {type_name} is null; RFC 7946 gives null no \
-                 meaning there, and an empty geometry is written `\"{name}\":[]`"
-            ))),
-            Some(member) => Ok(member),
-            None => Err(GeoError::literal(format!(
-                "a GeoJSON {type_name} has no `{name}` member"
-            ))),
-        },
-        repeats => Err(GeoError::literal(format!(
-            "this GeoJSON {type_name} has {repeats} `{name}` members, which denote different \
-             geometries; the literal is ambiguous and is refused rather than resolved by position"
-        ))),
-    }
-}
-
-/// Refuse the shape member that belongs to the *other* family of types.
-///
-/// `geometries` on a `Point`, or `coordinates` on a `GeometryCollection`, is a
-/// contradiction rather than a foreign member: both names are defined by RFC 7946
-/// and each belongs to exactly one family, so an object carrying both states two
-/// incompatible things about itself. Genuinely foreign members (`bbox`, `title`,
-/// anything else) are ignored, which is the neighbouring case the tests prove.
-fn reject_foreign_shape_member(
-    object: &JsonValue,
-    wrong: &str,
-    type_name: &str,
-    right: &str,
-) -> Result<(), GeoError> {
-    if json::count(object, wrong) == 0 {
-        return Ok(());
-    }
-    Err(GeoError::literal(format!(
-        "this GeoJSON {type_name} carries a `{wrong}` member, which RFC 7946 defines for the \
-         other family of geometry types; a {type_name} states its shape in `{right}`, and an \
-         object claiming both is a contradiction rather than a Geometry object with a foreign \
-         member"
-    )))
-}
-
 /// The one dimension every member of a collection shares, given the dimension each
 /// member fixed in written order, or `None` when no member has any position at all.
 fn unified_dim(dims: &[Option<CoordDim>]) -> Result<Option<CoordDim>, GeoError> {
@@ -435,184 +894,6 @@ fn unified_dim(dims: &[Option<CoordDim>]) -> Result<Option<CoordDim>, GeoError> 
         }
     }
     Ok(unified)
-}
-
-fn read_coordinates(
-    type_name: &str,
-    coordinates: &JsonValue,
-    dim: &mut Option<CoordDim>,
-) -> Result<GeometryBody, GeoError> {
-    match type_name {
-        "Point" => {
-            let items = expect_array(coordinates, "the `coordinates` of a GeoJSON Point")?;
-            if items.is_empty() {
-                // RFC 7946 has no empty position, but an empty `coordinates`
-                // array is how an empty geometry of each type is written.
-                Ok(GeometryBody::Point(None))
-            } else {
-                Ok(GeometryBody::Point(Some(read_position(coordinates, dim)?)))
-            }
-        }
-        "MultiPoint" => {
-            let items = expect_array(coordinates, "the `coordinates` of a GeoJSON MultiPoint")?;
-            let mut points = Vec::with_capacity(items.len());
-            for item in items {
-                // Every member of a GeoJSON MultiPoint is a real position:
-                // there is no way to write an empty member, so none is `None`.
-                points.push(Some(read_position(item, dim)?));
-            }
-            Ok(GeometryBody::MultiPoint(points))
-        }
-        "LineString" => Ok(GeometryBody::LineString(read_positions(
-            coordinates,
-            "the `coordinates` of a GeoJSON LineString",
-            dim,
-        )?)),
-        "MultiLineString" => {
-            let items = expect_array(
-                coordinates,
-                "the `coordinates` of a GeoJSON MultiLineString",
-            )?;
-            let mut lines = Vec::with_capacity(items.len());
-            for item in items {
-                lines.push(read_positions(
-                    item,
-                    "a member LineString of a GeoJSON MultiLineString",
-                    dim,
-                )?);
-            }
-            Ok(GeometryBody::MultiLineString(lines))
-        }
-        "Polygon" => Ok(GeometryBody::Polygon(read_rings(
-            coordinates,
-            "the `coordinates` of a GeoJSON Polygon",
-            dim,
-        )?)),
-        "MultiPolygon" => {
-            let items = expect_array(coordinates, "the `coordinates` of a GeoJSON MultiPolygon")?;
-            let mut polygons = Vec::with_capacity(items.len());
-            for item in items {
-                polygons.push(read_rings(
-                    item,
-                    "a member Polygon of a GeoJSON MultiPolygon",
-                    dim,
-                )?);
-            }
-            Ok(GeometryBody::MultiPolygon(polygons))
-        }
-        // `read_object` has already narrowed the type name to this set.
-        other => Err(GeoError::literal(format!(
-            "`{other}` is not a GeoJSON geometry type with coordinates"
-        ))),
-    }
-}
-
-fn read_rings(
-    value: &JsonValue,
-    what: &str,
-    dim: &mut Option<CoordDim>,
-) -> Result<Rings, GeoError> {
-    let items = expect_array(value, what)?;
-    let mut rings = Rings::with_capacity(items.len());
-    for item in items {
-        // The "at least four positions" and "last repeats the first" checks are
-        // `Geometry::new`'s; duplicating them here would be a second place for
-        // them to drift.
-        rings.push(read_positions(item, "a GeoJSON linear ring", dim)?);
-    }
-    Ok(rings)
-}
-
-fn read_positions(
-    value: &JsonValue,
-    what: &str,
-    dim: &mut Option<CoordDim>,
-) -> Result<CoordSeq, GeoError> {
-    let items = expect_array(value, what)?;
-    let mut coords = CoordSeq::with_capacity(items.len());
-    for item in items {
-        coords.push(read_position(item, dim)?);
-    }
-    Ok(coords)
-}
-
-/// One RFC 7946 position: `[longitude, latitude]` or `[longitude, latitude,
-/// altitude]`, and nothing else.
-fn read_position(value: &JsonValue, dim: &mut Option<CoordDim>) -> Result<Coord, GeoError> {
-    let items = expect_array(value, "a GeoJSON position")?;
-    let here = match items.len() {
-        2 => CoordDim::Xy,
-        3 => CoordDim::Xyz,
-        few @ (0 | 1) => {
-            return Err(GeoError::literal(format!(
-                "a GeoJSON position is an array of two or three numbers (longitude, latitude and \
-                 an optional altitude); this one has {few}"
-            )));
-        }
-        many => {
-            return Err(GeoError::literal(format!(
-                "a GeoJSON position has at most three numbers; RFC 7946 §3.1.1 says \
-                 \"Implementations SHOULD NOT extend positions beyond three elements\", so a \
-                 position of {many} elements is refused rather than silently truncated. The RFC \
-                 gives the extra elements no meaning and GeoJSON has no measure ordinate for them \
-                 to become, so ignoring them would discard a number without saying so; an \
-                 extension that used a fourth element would need its own datatype"
-            )));
-        }
-    };
-    match *dim {
-        None => *dim = Some(here),
-        Some(fixed) if fixed == here => {}
-        Some(fixed) => {
-            return Err(GeoError::literal(format!(
-                "this GeoJSON geometry mixes {}-element and {}-element positions; the geometry \
-                 model carries one coordinate dimension for a whole geometry, so a geometry whose \
-                 positions disagree about it has no dimension to report to \
-                 `geof:coordinateDimension`. RFC 7946 does not itself forbid the mixture — this \
-                 is purrdf-geo's model refusing rather than silently dropping or inventing an \
-                 altitude",
-                fixed.ordinates(),
-                here.ordinates()
-            )));
-        }
-    }
-    let x = read_ordinate(&items[0])?;
-    let y = read_ordinate(&items[1])?;
-    let z = if here.has_z() {
-        Some(read_ordinate(&items[2])?)
-    } else {
-        None
-    };
-    Ok(Coord::new(x, y, z, None))
-}
-
-/// One ordinate, decided exactly from the JSON number's own text.
-fn read_ordinate(value: &JsonValue) -> Result<Rat, GeoError> {
-    let JsonValue::Number(number) = value else {
-        return Err(GeoError::literal(format!(
-            "an ordinate of a GeoJSON position is a number, but this one is {}",
-            json::kind_name(value)
-        )));
-    };
-    // `Rat::parse_decimal` reads the digits, never an `f64`; it refuses only an
-    // exponent so large that the power of ten could not be built.
-    let lexeme = number.lexeme();
-    Rat::parse_decimal(lexeme).ok_or_else(|| {
-        GeoError::literal(format!(
-            "the ordinate `{lexeme}` is a valid JSON number but its exponent is past the exact \
-             decimal reader's cap, so it names no value this crate can hold"
-        ))
-    })
-}
-
-fn expect_array<'a>(value: &'a JsonValue, what: &str) -> Result<&'a [JsonValue], GeoError> {
-    match value {
-        JsonValue::Array(items) => Ok(items.as_slice()),
-        other => Err(GeoError::literal(format!(
-            "{what} is a JSON array in RFC 7946, but this is {}",
-            json::kind_name(other)
-        ))),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1701,16 +1982,336 @@ mod tests {
 #[cfg(test)]
 mod nesting_tests {
     use super::{
-        Node, body_value, collection_value, geometry_of, geometry_value, read_node, unified_dim,
+        GEOMETRY_TYPES, body_value, collection_value, geometry_of, geometry_value, unified_dim,
         write_bare,
     };
     use crate::error::GeoError;
     use crate::exact::Rat;
     use crate::geom::arbitrary::{self, Lcg};
-    use crate::geom::{Coord, CoordDim, CoordSeq, Geometry, GeometryBody, GeometryKind};
+    use crate::geom::{Coord, CoordDim, CoordSeq, Geometry, GeometryBody, GeometryKind, Rings};
     use crate::json::{self, JsonValue};
 
     const SCALE: u32 = 12;
+
+    // ---- the tree reader the reference reads with -------------------------
+    //
+    // The reader over a built JSON tree that the streaming reader replaced:
+    // every Geometry object judged from its whole member list, the order of
+    // its refusals stated by the order of the checks. The streaming reader
+    // must meet the same refusal first on every input, which is what the
+    // generated-literal comparison below holds it to.
+
+    /// What one Geometry object is: a complete body, or a collection whose members are
+    /// still to be read.
+    enum Node<'a> {
+        Body {
+            dim: Option<CoordDim>,
+            body: Box<GeometryBody>,
+        },
+        Collection(&'a [JsonValue]),
+    }
+
+    /// Read one Geometry object without descending into a collection's members.
+    fn read_node(value: &JsonValue) -> Result<Node<'_>, GeoError> {
+        if !matches!(value, JsonValue::Object(_)) {
+            return Err(GeoError::literal(format!(
+                "a geo:geoJSONLiteral is an RFC 7946 Geometry object, but this is {}",
+                json::kind_name(value)
+            )));
+        }
+        let type_name = read_type(value)?;
+        match type_name {
+            "Feature" | "FeatureCollection" => Err(GeoError::literal(format!(
+                "a geo:geoJSONLiteral is a GeoJSON Geometry object and `{type_name}` is not one of \
+                 them: GeoSPARQL 1.1 Requirement 25 admits only {GEOMETRY_TYPES}. Write the geometry \
+                 itself as the literal rather than the {type_name} that wraps it"
+            ))),
+            "Point" | "MultiPoint" | "LineString" | "MultiLineString" | "Polygon"
+            | "MultiPolygon" => {
+                reject_foreign_shape_member(value, "geometries", type_name, "coordinates")?;
+                let coordinates = decisive_member(value, "coordinates", type_name)?;
+                let mut dim = None;
+                let body = read_coordinates(type_name, coordinates, &mut dim)?;
+                Ok(Node::Body {
+                    dim,
+                    body: Box::new(body),
+                })
+            }
+            "GeometryCollection" => {
+                reject_foreign_shape_member(value, "coordinates", type_name, "geometries")?;
+                let geometries = decisive_member(value, "geometries", type_name)?;
+                let items = expect_array(
+                    geometries,
+                    "the `geometries` of a GeoJSON GeometryCollection",
+                )?;
+                Ok(Node::Collection(items))
+            }
+            other => Err(GeoError::literal(format!(
+                "`{other}` is not a GeoJSON geometry type; RFC 7946 defines {GEOMETRY_TYPES}"
+            ))),
+        }
+    }
+
+    /// The `type` member, which every Geometry object has exactly one of and which is
+    /// always a string.
+    fn read_type(object: &JsonValue) -> Result<&str, GeoError> {
+        match json::count(object, "type") {
+            0 => Err(GeoError::literal(
+                "a GeoJSON Geometry object has a `type` member naming its geometry type; this object \
+                 has none",
+            )),
+            1 => match object.get("type") {
+                Some(JsonValue::String(name)) => Ok(name.as_str()),
+                Some(other) => Err(GeoError::literal(format!(
+                    "the `type` member of a GeoJSON Geometry object is a string, but this one is {}",
+                    json::kind_name(other)
+                ))),
+                // Unreachable: `count` just said there is one.
+                None => Err(GeoError::literal("a GeoJSON Geometry object has no `type`")),
+            },
+            repeats => Err(GeoError::literal(format!(
+                "this GeoJSON object has {repeats} `type` members, so it names no single geometry \
+                 type; RFC 8259 permits the repetition but resolving it by position would be a \
+                 silent choice"
+            ))),
+        }
+    }
+
+    /// The single member that carries a geometry's shape (`coordinates`, or
+    /// `geometries` for a collection).
+    ///
+    /// Absent, `null` and repeated are all refusals: a geometry with no coordinates
+    /// is not a geometry, RFC 7946 gives `null` no meaning here (an empty geometry is
+    /// written `[]`), and two `coordinates` arrays denote two different geometries.
+    fn decisive_member<'a>(
+        object: &'a JsonValue,
+        name: &str,
+        type_name: &str,
+    ) -> Result<&'a JsonValue, GeoError> {
+        match json::count(object, name) {
+            0 => Err(GeoError::literal(format!(
+                "a GeoJSON {type_name} has a `{name}` member; this one has none, and RFC 7946 defines \
+                 the geometry entirely by it"
+            ))),
+            1 => match object.get(name) {
+                Some(JsonValue::Null) => Err(GeoError::literal(format!(
+                    "the `{name}` member of this GeoJSON {type_name} is null; RFC 7946 gives null no \
+                     meaning there, and an empty geometry is written `\"{name}\":[]`"
+                ))),
+                Some(member) => Ok(member),
+                None => Err(GeoError::literal(format!(
+                    "a GeoJSON {type_name} has no `{name}` member"
+                ))),
+            },
+            repeats => Err(GeoError::literal(format!(
+                "this GeoJSON {type_name} has {repeats} `{name}` members, which denote different \
+                 geometries; the literal is ambiguous and is refused rather than resolved by position"
+            ))),
+        }
+    }
+
+    /// Refuse the shape member that belongs to the *other* family of types.
+    ///
+    /// `geometries` on a `Point`, or `coordinates` on a `GeometryCollection`, is a
+    /// contradiction rather than a foreign member: both names are defined by RFC 7946
+    /// and each belongs to exactly one family, so an object carrying both states two
+    /// incompatible things about itself. Genuinely foreign members (`bbox`, `title`,
+    /// anything else) are ignored, which is the neighbouring case the tests prove.
+    fn reject_foreign_shape_member(
+        object: &JsonValue,
+        wrong: &str,
+        type_name: &str,
+        right: &str,
+    ) -> Result<(), GeoError> {
+        if json::count(object, wrong) == 0 {
+            return Ok(());
+        }
+        Err(GeoError::literal(format!(
+            "this GeoJSON {type_name} carries a `{wrong}` member, which RFC 7946 defines for the \
+             other family of geometry types; a {type_name} states its shape in `{right}`, and an \
+             object claiming both is a contradiction rather than a Geometry object with a foreign \
+             member"
+        )))
+    }
+
+    fn read_coordinates(
+        type_name: &str,
+        coordinates: &JsonValue,
+        dim: &mut Option<CoordDim>,
+    ) -> Result<GeometryBody, GeoError> {
+        match type_name {
+            "Point" => {
+                let items = expect_array(coordinates, "the `coordinates` of a GeoJSON Point")?;
+                if items.is_empty() {
+                    // RFC 7946 has no empty position, but an empty `coordinates`
+                    // array is how an empty geometry of each type is written.
+                    Ok(GeometryBody::Point(None))
+                } else {
+                    Ok(GeometryBody::Point(Some(read_position(coordinates, dim)?)))
+                }
+            }
+            "MultiPoint" => {
+                let items = expect_array(coordinates, "the `coordinates` of a GeoJSON MultiPoint")?;
+                let mut points = Vec::with_capacity(items.len());
+                for item in items {
+                    // Every member of a GeoJSON MultiPoint is a real position:
+                    // there is no way to write an empty member, so none is `None`.
+                    points.push(Some(read_position(item, dim)?));
+                }
+                Ok(GeometryBody::MultiPoint(points))
+            }
+            "LineString" => Ok(GeometryBody::LineString(read_positions(
+                coordinates,
+                "the `coordinates` of a GeoJSON LineString",
+                dim,
+            )?)),
+            "MultiLineString" => {
+                let items = expect_array(
+                    coordinates,
+                    "the `coordinates` of a GeoJSON MultiLineString",
+                )?;
+                let mut lines = Vec::with_capacity(items.len());
+                for item in items {
+                    lines.push(read_positions(
+                        item,
+                        "a member LineString of a GeoJSON MultiLineString",
+                        dim,
+                    )?);
+                }
+                Ok(GeometryBody::MultiLineString(lines))
+            }
+            "Polygon" => Ok(GeometryBody::Polygon(read_rings(
+                coordinates,
+                "the `coordinates` of a GeoJSON Polygon",
+                dim,
+            )?)),
+            "MultiPolygon" => {
+                let items =
+                    expect_array(coordinates, "the `coordinates` of a GeoJSON MultiPolygon")?;
+                let mut polygons = Vec::with_capacity(items.len());
+                for item in items {
+                    polygons.push(read_rings(
+                        item,
+                        "a member Polygon of a GeoJSON MultiPolygon",
+                        dim,
+                    )?);
+                }
+                Ok(GeometryBody::MultiPolygon(polygons))
+            }
+            // `read_object` has already narrowed the type name to this set.
+            other => Err(GeoError::literal(format!(
+                "`{other}` is not a GeoJSON geometry type with coordinates"
+            ))),
+        }
+    }
+
+    fn read_rings(
+        value: &JsonValue,
+        what: &str,
+        dim: &mut Option<CoordDim>,
+    ) -> Result<Rings, GeoError> {
+        let items = expect_array(value, what)?;
+        let mut rings = Rings::with_capacity(items.len());
+        for item in items {
+            // The "at least four positions" and "last repeats the first" checks are
+            // `Geometry::new`'s; duplicating them here would be a second place for
+            // them to drift.
+            rings.push(read_positions(item, "a GeoJSON linear ring", dim)?);
+        }
+        Ok(rings)
+    }
+
+    fn read_positions(
+        value: &JsonValue,
+        what: &str,
+        dim: &mut Option<CoordDim>,
+    ) -> Result<CoordSeq, GeoError> {
+        let items = expect_array(value, what)?;
+        let mut coords = CoordSeq::with_capacity(items.len());
+        for item in items {
+            coords.push(read_position(item, dim)?);
+        }
+        Ok(coords)
+    }
+
+    /// One RFC 7946 position: `[longitude, latitude]` or `[longitude, latitude,
+    /// altitude]`, and nothing else.
+    fn read_position(value: &JsonValue, dim: &mut Option<CoordDim>) -> Result<Coord, GeoError> {
+        let items = expect_array(value, "a GeoJSON position")?;
+        let here = match items.len() {
+            2 => CoordDim::Xy,
+            3 => CoordDim::Xyz,
+            few @ (0 | 1) => {
+                return Err(GeoError::literal(format!(
+                    "a GeoJSON position is an array of two or three numbers (longitude, latitude and \
+                     an optional altitude); this one has {few}"
+                )));
+            }
+            many => {
+                return Err(GeoError::literal(format!(
+                    "a GeoJSON position has at most three numbers; RFC 7946 §3.1.1 says \
+                     \"Implementations SHOULD NOT extend positions beyond three elements\", so a \
+                     position of {many} elements is refused rather than silently truncated. The RFC \
+                     gives the extra elements no meaning and GeoJSON has no measure ordinate for them \
+                     to become, so ignoring them would discard a number without saying so; an \
+                     extension that used a fourth element would need its own datatype"
+                )));
+            }
+        };
+        match *dim {
+            None => *dim = Some(here),
+            Some(fixed) if fixed == here => {}
+            Some(fixed) => {
+                return Err(GeoError::literal(format!(
+                    "this GeoJSON geometry mixes {}-element and {}-element positions; the geometry \
+                     model carries one coordinate dimension for a whole geometry, so a geometry whose \
+                     positions disagree about it has no dimension to report to \
+                     `geof:coordinateDimension`. RFC 7946 does not itself forbid the mixture — this \
+                     is purrdf-geo's model refusing rather than silently dropping or inventing an \
+                     altitude",
+                    fixed.ordinates(),
+                    here.ordinates()
+                )));
+            }
+        }
+        let x = read_ordinate(&items[0])?;
+        let y = read_ordinate(&items[1])?;
+        let z = if here.has_z() {
+            Some(read_ordinate(&items[2])?)
+        } else {
+            None
+        };
+        Ok(Coord::new(x, y, z, None))
+    }
+
+    /// One ordinate, decided exactly from the JSON number's own text.
+    fn read_ordinate(value: &JsonValue) -> Result<Rat, GeoError> {
+        let JsonValue::Number(number) = value else {
+            return Err(GeoError::literal(format!(
+                "an ordinate of a GeoJSON position is a number, but this one is {}",
+                json::kind_name(value)
+            )));
+        };
+        // `Rat::parse_decimal` reads the digits, never an `f64`; it refuses only an
+        // exponent so large that the power of ten could not be built.
+        let lexeme = number.lexeme();
+        Rat::parse_decimal(lexeme).ok_or_else(|| {
+            GeoError::literal(format!(
+                "the ordinate `{lexeme}` is a valid JSON number but its exponent is past the exact \
+                 decimal reader's cap, so it names no value this crate can hold"
+            ))
+        })
+    }
+
+    fn expect_array<'a>(value: &'a JsonValue, what: &str) -> Result<&'a [JsonValue], GeoError> {
+        match value {
+            JsonValue::Array(items) => Ok(items.as_slice()),
+            other => Err(GeoError::literal(format!(
+                "{what} is a JSON array in RFC 7946, but this is {}",
+                json::kind_name(other)
+            ))),
+        }
+    }
 
     // ---- the recursive references -----------------------------------------
 

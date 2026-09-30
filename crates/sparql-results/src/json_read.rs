@@ -11,27 +11,43 @@
 //!
 //! # Wasm discipline
 //!
-//! The JSON grammar is the workspace's one reader, [`purrdf_lex::json`]: the
-//! tree readers build its [`Value`], and the bounded reader drives its pull
-//! [`Reader`] so a skipped member is syntax-checked without being built. No
-//! `std::io`, so the crate stays wasm-clean.
+//! The JSON grammar is the workspace's one reader, [`purrdf_lex::json`]. The
+//! `SELECT` readers drive its pull [`Reader`] and build each binding row
+//! straight from its events: no JSON tree is built, a string without an escape
+//! is borrowed from the document until it becomes a term, and a member the
+//! reader does not want is checked without being built. The `ASK` and
+//! provenance readers, whose documents are a handful of members, read the tree.
+//! No `std::io`, so the crate stays wasm-clean.
+//!
+//! # Refusals
+//!
+//! [`from_json`] refuses exactly what a reader that first built the whole
+//! tree and then judged its shape would refuse, with the same message: a
+//! document that is not JSON is refused as JSON at its first defect, wherever
+//! a shape refusal sits before it, and among shape refusals the first in the
+//! order the tree would meet them wins — the `boolean` member, then `head`,
+//! its `vars`, `results`, its `bindings`, then the rows in order, each row's
+//! cells in `head.vars` order, and each binding's members in the order the
+//! decoder consults them. The streaming decoder therefore records a shape
+//! refusal, checks the rest of what it is reading, and reports the refusal
+//! only once nothing that outranks it can follow.
 //!
 //! # Nesting depth
 //!
-//! Every walk over input nesting — reading a JSON value, skipping one, dropping a
-//! read value, and decoding an RDF 1.2 triple-term binding — runs over an
-//! explicit heap stack rather than the machine stack, and the reader sets no
-//! container-depth cap. A document nested to any
-//! depth is therefore parsed (or refused for a syntax or shape error) with a
-//! machine-stack footprint independent of that depth, which is what keeps a remote
-//! `SERVICE` endpoint's deeply nested answer from overflowing the stack.
+//! Every walk over input nesting — reading a JSON value, skipping one, and
+//! decoding an RDF 1.2 triple-term binding — runs over an explicit heap stack
+//! rather than the machine stack, and the reader sets no container-depth cap.
+//! A document nested to any depth is therefore parsed (or refused for a syntax
+//! or shape error) with a machine-stack footprint independent of that depth,
+//! which is what keeps a remote `SERVICE` endpoint's deeply nested answer from
+//! overflowing the stack.
 
 use std::borrow::Cow;
+use std::ops::Range;
 
 use purrdf_core::TermBox;
 use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
-use purrdf_lex::json::{self, Event, Limits, Object, Reader, Value};
-use purrdf_lex::terminals::skip_ws;
+use purrdf_lex::json::{self, Event, Kind, Limits, Reader, Value};
 
 use crate::error::Error;
 use crate::model::{ProvenanceNamespace, ResultProvenance, SolutionProvenance};
@@ -44,6 +60,15 @@ use purrdf_core::vocab::language_datatype_iri;
 type BindingRow = Vec<Option<TermValue>>;
 type BoundedRows = (Vec<BindingRow>, bool);
 type BoundedRowsResult = Result<BoundedRows, Error>;
+
+/// What a streaming step decoded, or the shape refusal it recorded: the inner
+/// result of a [`Step`].
+type Shaped<T> = Result<T, Error>;
+
+/// A streaming step: the outer error is a JSON refusal, which outranks every
+/// shape refusal and ends the read at once; the inner one is a shape refusal
+/// the step recorded after reading its whole value.
+type Step<T> = Result<Shaped<T>, Error>;
 
 /// A decoded `SELECT` result set: ordered variable names plus dense rows. A
 /// `None` cell is an unbound (absent) binding for that variable in that row.
@@ -98,46 +123,8 @@ pub struct BoundedParsedSolutions {
 /// (`boolean`) document (use [`from_json_boolean`]), or a binding object whose
 /// `type`/`value` shape is invalid.
 pub fn from_json(bytes: &[u8]) -> Result<ParsedSolutions, Error> {
-    let doc = read_document(bytes)?;
-    let obj = doc
-        .as_object()
-        .ok_or_else(|| fmt("top level is not an object"))?;
-    if obj.get("boolean").is_some() {
-        return Err(fmt(
-            "expected SELECT results, got an ASK (boolean) document",
-        ));
-    }
-    let head = obj
-        .get("head")
-        .and_then(Value::as_object)
-        .ok_or_else(|| fmt("missing `head` object"))?;
-    let variables = match head.get("vars") {
-        Some(Value::Array(items)) => items
-            .iter()
-            .map(|v| {
-                v.as_str()
-                    .map(str::to_owned)
-                    .ok_or_else(|| fmt("`head.vars` entry is not a string"))
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-        // A results doc with no `vars` is degenerate but valid (zero columns).
-        _ => Vec::new(),
-    };
-
-    let results = obj
-        .get("results")
-        .and_then(Value::as_object)
-        .ok_or_else(|| fmt("missing `results` object"))?;
-    let bindings = match results.get("bindings") {
-        Some(Value::Array(items)) => items.as_slice(),
-        _ => return Err(fmt("missing `results.bindings` array")),
-    };
-
-    let rows = bindings
-        .iter()
-        .map(|binding| decode_row(binding, &variables))
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(ParsedSolutions { variables, rows })
+    let mut reader = Reader::from_slice(bytes, LIMITS).map_err(syntax)?;
+    select_document(&mut reader)?
 }
 
 /// Parse a SPARQL Results JSON `SELECT` document without materializing more than
@@ -338,163 +325,513 @@ pub fn provenance_from_json(
     })
 }
 
-/// Decode one SPARQL-JSON binding object into a [`TermValue`].
+/// A `SELECT` document, read to its end: its solutions, or the shape refusal
+/// that outranks every other one it holds.
+///
+/// `head` may follow `results`. When it does, the `bindings` array is checked
+/// where it stands and its span kept, and its rows are decoded once `head.vars`
+/// is known.
+fn select_document(reader: &mut Reader<'_>) -> Step<ParsedSolutions> {
+    if reader.peek_kind() != Some(Kind::Object) {
+        reader.check_value().map_err(syntax)?;
+        reader.finish().map_err(syntax)?;
+        return Ok(Err(fmt("top level is not an object")));
+    }
+    reader.next_event().map_err(syntax)?;
+    let mut scratch = RowScratch::default();
+    let mut boolean = false;
+    let mut head: Option<Shaped<Vec<String>>> = None;
+    let mut results: Option<Shaped<Bindings>> = None;
+    while let Some(key) = next_key(reader)? {
+        match &*key {
+            "boolean" => {
+                boolean = true;
+                reader.check_value().map_err(syntax)?;
+            }
+            "head" if head.is_none() => head = Some(read_head(reader)?),
+            "results" if results.is_none() => {
+                // Rows are worth decoding only for a document that can still
+                // be a `SELECT` whose variables are known.
+                let variables = match &head {
+                    Some(Ok(variables)) if !boolean => Some(variables.as_slice()),
+                    _ => None,
+                };
+                results = Some(read_results(reader, variables, &mut scratch)?);
+            }
+            _ => {
+                reader.check_value().map_err(syntax)?;
+            }
+        }
+    }
+    reader.finish().map_err(syntax)?;
+    if boolean {
+        return Ok(Err(fmt(
+            "expected SELECT results, got an ASK (boolean) document",
+        )));
+    }
+    let variables = match head {
+        Some(Ok(variables)) => variables,
+        Some(Err(refusal)) => return Ok(Err(refusal)),
+        None => return Ok(Err(fmt("missing `head` object"))),
+    };
+    let rows = match results {
+        None => return Ok(Err(fmt("missing `results` object"))),
+        Some(Err(refusal)) => return Ok(Err(refusal)),
+        Some(Ok(Bindings::Decoded(rows))) => rows,
+        Some(Ok(Bindings::Unread(span))) => {
+            let mut rows = Reader::new(&reader.text()[span], LIMITS);
+            binding_rows(&mut rows, &variables, &mut scratch)?
+        }
+    };
+    Ok(rows.map(|rows| ParsedSolutions { variables, rows }))
+}
+
+/// The `results.bindings` array as [`select_document`] found it.
+enum Bindings {
+    /// Decoded where it stood: its rows, or its first row's refusal.
+    Decoded(Shaped<Vec<BindingRow>>),
+    /// Checked where it stood, before `head.vars` was known: its span.
+    Unread(Range<usize>),
+}
+
+/// A `head` value: its `vars`, or the refusal it earns.
+fn read_head(reader: &mut Reader<'_>) -> Step<Vec<String>> {
+    if reader.peek_kind() != Some(Kind::Object) {
+        reader.check_value().map_err(syntax)?;
+        return Ok(Err(fmt("missing `head` object")));
+    }
+    reader.next_event().map_err(syntax)?;
+    let mut variables: Option<Shaped<Vec<String>>> = None;
+    while let Some(key) = next_key(reader)? {
+        if key == "vars" && variables.is_none() && reader.peek_kind() == Some(Kind::Array) {
+            variables = Some(string_items(reader, "`head.vars` entry is not a string")?);
+        } else {
+            if key == "vars" && variables.is_none() {
+                // A results doc with no `vars` array is degenerate but valid
+                // (zero columns).
+                variables = Some(Ok(Vec::new()));
+            }
+            reader.check_value().map_err(syntax)?;
+        }
+    }
+    Ok(variables.unwrap_or_else(|| Ok(Vec::new())))
+}
+
+/// A string-only array: its strings, or `item_error` at its first other item.
+fn string_items(reader: &mut Reader<'_>, item_error: &str) -> Step<Vec<String>> {
+    reader.next_event().map_err(syntax)?;
+    let mut items = Ok(Vec::new());
+    while reader.next_item().map_err(syntax)? {
+        match (&mut items, reader.peek_kind()) {
+            (Ok(strings), Some(Kind::String)) => {
+                let Event::String(item) = reader.next_event().map_err(syntax)? else {
+                    unreachable!("a string begins at the cursor");
+                };
+                strings.push(item.decode().map_err(syntax)?.into_owned());
+            }
+            (found, _) => {
+                if found.is_ok() {
+                    *found = Err(fmt(item_error));
+                }
+                reader.check_value().map_err(syntax)?;
+            }
+        }
+    }
+    Ok(items)
+}
+
+/// A `results` value: its `bindings` array, decoded when `variables` are
+/// known and checked otherwise, or the refusal it earns.
+fn read_results<'a>(
+    reader: &mut Reader<'a>,
+    variables: Option<&[String]>,
+    scratch: &mut RowScratch<'a>,
+) -> Step<Bindings> {
+    if reader.peek_kind() != Some(Kind::Object) {
+        reader.check_value().map_err(syntax)?;
+        return Ok(Err(fmt("missing `results` object")));
+    }
+    reader.next_event().map_err(syntax)?;
+    let mut bindings: Option<Shaped<Bindings>> = None;
+    while let Some(key) = next_key(reader)? {
+        if key != "bindings" || bindings.is_some() {
+            reader.check_value().map_err(syntax)?;
+            continue;
+        }
+        bindings = Some(if reader.peek_kind() != Some(Kind::Array) {
+            reader.check_value().map_err(syntax)?;
+            Err(fmt("missing `results.bindings` array"))
+        } else if let Some(variables) = variables {
+            Ok(Bindings::Decoded(binding_rows(reader, variables, scratch)?))
+        } else {
+            Ok(Bindings::Unread(reader.check_value().map_err(syntax)?))
+        });
+    }
+    Ok(bindings.unwrap_or_else(|| Err(fmt("missing `results.bindings` array"))))
+}
+
+/// A `bindings` array, the cursor on its `[`: every row, or the first row's
+/// refusal once the rest of the array is checked.
+fn binding_rows<'a>(
+    reader: &mut Reader<'a>,
+    variables: &[String],
+    scratch: &mut RowScratch<'a>,
+) -> Step<Vec<BindingRow>> {
+    reader.next_event().map_err(syntax)?;
+    let mut rows = Vec::new();
+    while reader.next_item().map_err(syntax)? {
+        match binding_row(reader, variables, scratch)? {
+            Ok(row) => rows.push(row),
+            Err(refusal) => {
+                while reader.next_item().map_err(syntax)? {
+                    reader.check_value().map_err(syntax)?;
+                }
+                return Ok(Err(refusal));
+            }
+        }
+    }
+    Ok(Ok(rows))
+}
+
+/// Buffers one row decode reuses from the last: the open binding objects and
+/// which variables the row has bound.
+#[derive(Default)]
+struct RowScratch<'a> {
+    open: Vec<Open<'a>>,
+    bound: Vec<bool>,
+}
+
+/// One `results.bindings` entry, the cursor on it: a dense row over
+/// `variables`, or the refusal of the cell of the earliest variable that has
+/// one.
+///
+/// A cell is the FIRST member named after its variable; a later member of the
+/// same name, like every member no variable names, is checked and not decoded.
+fn binding_row<'a>(
+    reader: &mut Reader<'a>,
+    variables: &[String],
+    scratch: &mut RowScratch<'a>,
+) -> Step<BindingRow> {
+    if reader.peek_kind() != Some(Kind::Object) {
+        reader.check_value().map_err(syntax)?;
+        return Ok(Err(fmt("`results.bindings` entry is not an object")));
+    }
+    reader.next_event().map_err(syntax)?;
+    let mut row = vec![None; variables.len()];
+    scratch.bound.clear();
+    scratch.bound.resize(variables.len(), false);
+    // The refusal of the earliest variable whose cell has one.
+    let mut refusal: Option<(usize, Error)> = None;
+    while let Some(key) = next_key(reader)? {
+        let Some(index) = variables.iter().position(|variable| *variable == *key) else {
+            reader.check_value().map_err(syntax)?;
+            continue;
+        };
+        if scratch.bound[index] {
+            reader.check_value().map_err(syntax)?;
+            continue;
+        }
+        let cell = binding(reader, &mut scratch.open)?;
+        // `head.vars` may name a variable twice; each of its columns reads
+        // this cell.
+        for (column, variable) in variables.iter().enumerate().skip(index) {
+            if *variable == *key {
+                scratch.bound[column] = true;
+                row[column] = cell.as_ref().ok().cloned();
+            }
+        }
+        match cell {
+            Err(error)
+                if refusal
+                    .as_ref()
+                    .is_none_or(|(earliest, _)| index < *earliest) =>
+            {
+                refusal = Some((index, error));
+            }
+            _ => {}
+        }
+    }
+    Ok(match refusal {
+        Some((_, error)) => Err(error),
+        None => Ok(row),
+    })
+}
+
+/// A binding object or a triple term's `value` object, open and being read.
+enum Open<'a> {
+    Binding(Box<BindingFields<'a>>),
+    Triple(Box<TripleParts>),
+}
+
+/// The members of a binding object that decide its term: the FIRST member of
+/// each name, `None` when it has none.
+#[derive(Default)]
+struct BindingFields<'a> {
+    kind: Option<Member<'a>>,
+    value: Option<BindingValue<'a>>,
+    language: Option<Member<'a>>,
+    its_dir: Option<Member<'a>>,
+    dir: Option<Member<'a>>,
+    datatype: Option<Member<'a>>,
+}
+
+/// A binding object's member whose value is a string when it is well formed.
+enum Member<'a> {
+    /// The string.
+    String(Cow<'a, str>),
+    /// A value of another kind.
+    Other,
+}
+
+impl<'a> Member<'a> {
+    /// The string, when the member holds one.
+    fn text(member: Option<Self>) -> Option<Cow<'a, str>> {
+        match member {
+            Some(Self::String(text)) => Some(text),
+            Some(Self::Other) | None => None,
+        }
+    }
+}
+
+/// A binding object's `value` member.
+enum BindingValue<'a> {
+    /// A string: an IRI, a label or a lexical form.
+    String(Cow<'a, str>),
+    /// An object, read as a triple term's components whatever the binding's
+    /// `type` turns out to be; only a `triple` binding consults them.
+    Triple(Box<TripleParts>),
+    /// Anything else.
+    Other,
+}
+
+/// A triple term's components: the FIRST `subject`, `predicate` and `object`
+/// member, each decoded or refused, and the one being read.
+#[derive(Default)]
+struct TripleParts {
+    subject: Option<Shaped<TermValue>>,
+    predicate: Option<Shaped<TermValue>>,
+    object: Option<Shaped<TermValue>>,
+    reading: Option<Component>,
+}
+
+/// A triple term's component.
+#[derive(Clone, Copy)]
+enum Component {
+    Subject,
+    Predicate,
+    Object,
+}
+
+impl TripleParts {
+    fn slot(&mut self, component: Component) -> &mut Option<Shaped<TermValue>> {
+        match component {
+            Component::Subject => &mut self.subject,
+            Component::Predicate => &mut self.predicate,
+            Component::Object => &mut self.object,
+        }
+    }
+
+    /// The triple term, or the refusal a decoder descending into `subject`,
+    /// `predicate` and `object` in that order meets first; the predicate is
+    /// held to be an IRI once its object has been decoded.
+    fn finish(self) -> Shaped<TermValue> {
+        let s = self.subject.ok_or_else(|| fmt("triple has no subject"))??;
+        let p = self
+            .predicate
+            .ok_or_else(|| fmt("triple has no predicate"))??;
+        let o = self.object.ok_or_else(|| fmt("triple has no object"))??;
+        if !matches!(p, TermValue::Iri(_)) {
+            return Err(fmt("triple-term predicate is not an IRI"));
+        }
+        Ok(TermValue::Triple {
+            s: TermBox::new(s),
+            p: TermBox::new(p),
+            o: TermBox::new(o),
+        })
+    }
+}
+
+impl BindingFields<'_> {
+    /// The term the binding object denotes, or its refusal.
+    fn finish(self) -> Shaped<TermValue> {
+        let Some(kind) = Member::text(self.kind) else {
+            return Err(fmt("binding has no string `type`"));
+        };
+        let value = |value: Option<BindingValue<'_>>| match value {
+            Some(BindingValue::String(value)) => Ok(value.into_owned()),
+            _ => Err(fmt("binding has no string `value`")),
+        };
+        match &*kind {
+            "uri" => Ok(TermValue::Iri(value(self.value)?)),
+            "bnode" => Ok(TermValue::Blank {
+                label: value(self.value)?,
+                scope: BlankScope::DEFAULT,
+            }),
+            "literal" | "typed-literal" => {
+                let lexical_form = value(self.value)?;
+                let language = Member::text(self.language);
+                // A tag arriving in a DOCUMENT is parsed input, held to the
+                // same grammar as every other parsed tag in the workspace.
+                // Refusing here is what stops a federated `SERVICE` response
+                // from laundering an unserializable tag through this reader and
+                // back out a writer.
+                if let Some(detail) = language
+                    .as_deref()
+                    .and_then(crate::error::language_tag_refusal)
+                {
+                    return Err(fmt(&detail));
+                }
+                // `its:dir` (the ITS — Internationalization Tag Set — namespace
+                // convention) is the spelling the SPARQL 1.2 Query Results
+                // specification uses for RDF 1.2 base direction — see
+                // [`crate::json`]'s module docs for the fixture evidence. The
+                // bare `dir` spelling is tolerated too, for interop with
+                // producers that predate the SPARQL 1.2 spelling; a present
+                // `its:dir` decides even when it is not a string.
+                let direction = match Member::text(self.its_dir.or(self.dir)) {
+                    Some(token) => Some(
+                        RdfTextDirection::from_str_token(&token)
+                            .ok_or_else(|| fmt(&format!("unknown base direction `{token}`")))?,
+                    ),
+                    None => None,
+                };
+                let datatype = resolve_datatype(
+                    Member::text(self.datatype).as_deref(),
+                    language.is_some(),
+                    direction.is_some(),
+                );
+                Ok(TermValue::Literal {
+                    lexical_form,
+                    datatype,
+                    language: language.map(Cow::into_owned),
+                    direction,
+                })
+            }
+            "triple" => match self.value {
+                Some(BindingValue::Triple(parts)) => parts.finish(),
+                _ => Err(fmt("triple binding has no object `value`")),
+            },
+            other => Err(fmt(&format!("unknown binding type `{other}`"))),
+        }
+    }
+}
+
+/// A member's value, the cursor on it: the string it holds, or
+/// [`Member::Other`] once a value of another kind has been checked.
+fn string_member<'a>(reader: &mut Reader<'a>) -> Result<Member<'a>, Error> {
+    if reader.peek_kind() == Some(Kind::String) {
+        let Event::String(text) = reader.next_event().map_err(syntax)? else {
+            unreachable!("a string begins at the cursor");
+        };
+        return text.decode().map(Member::String).map_err(syntax);
+    }
+    reader.check_value().map_err(syntax)?;
+    Ok(Member::Other)
+}
+
+/// One SPARQL-JSON binding object, the cursor on it: its [`TermValue`], or its
+/// refusal once the whole value has been read.
 ///
 /// An RDF 1.2 triple term nests further binding objects under its `subject`,
-/// `predicate` and `object` members to any depth. They are decoded over an explicit
-/// heap stack of partly decoded triple terms, so the machine stack used does not
-/// grow with the nesting depth. Components are decoded in the order `subject`,
-/// `predicate`, `object`, and a triple term's predicate is checked to be an IRI only
-/// after its object has been decoded, so the first error reported for a malformed
-/// document is the one a depth-first descent in that order meets first.
-fn decode_binding(value: &Value) -> Result<TermValue, Error> {
-    let mut open: Vec<OpenTriple<'_>> = Vec::new();
-    let mut next = value;
+/// `predicate` and `object` members to any depth. They are read over `open`, a
+/// heap stack of the binding and component objects being read, so the machine
+/// stack used does not grow with the nesting depth. A binding's members may
+/// come in any order, so each object is read whole before it is judged: a
+/// `value` object is read as a triple term's components before the `type` that
+/// says whether it is one may have been seen.
+fn binding<'a>(reader: &mut Reader<'a>, open: &mut Vec<Open<'a>>) -> Step<TermValue> {
+    open.clear();
+    if reader.peek_kind() != Some(Kind::Object) {
+        reader.check_value().map_err(syntax)?;
+        return Ok(Err(fmt("binding is not an object")));
+    }
+    reader.next_event().map_err(syntax)?;
+    open.push(Open::Binding(Box::default()));
     loop {
-        let mut term = match decode_binding_node(next)? {
-            BindingNode::Term(term) => term,
-            BindingNode::Triple(inner) => {
-                next = inner
-                    .get("subject")
-                    .ok_or_else(|| fmt("triple has no subject"))?;
-                open.push(OpenTriple {
-                    inner,
-                    subject: None,
-                    predicate: None,
-                });
-                continue;
+        let Some(key) = next_key(reader)? else {
+            // The innermost object is complete: hand it to the one enclosing
+            // it, or it is the binding.
+            match open.pop().expect("an object is open") {
+                Open::Binding(fields) => {
+                    let term = fields.finish();
+                    match open.last_mut() {
+                        None => return Ok(term),
+                        Some(Open::Triple(parts)) => {
+                            let component = parts.reading.take().expect("a component was open");
+                            *parts.slot(component) = Some(term);
+                        }
+                        Some(Open::Binding(_)) => {
+                            unreachable!("a binding object opens only in a triple term's component")
+                        }
+                    }
+                }
+                Open::Triple(parts) => match open.last_mut() {
+                    Some(Open::Binding(fields)) => fields.value = Some(BindingValue::Triple(parts)),
+                    _ => unreachable!("a component object opens only as a binding's value"),
+                },
             }
+            continue;
         };
-        // Hand the finished term to the innermost open triple term; every triple term
-        // it completes is handed on to the one enclosing it in turn.
-        loop {
-            let Some(triple) = open.last_mut() else {
-                return Ok(term);
-            };
-            if triple.subject.is_none() {
-                triple.subject = Some(term);
-                next = triple
-                    .inner
-                    .get("predicate")
-                    .ok_or_else(|| fmt("triple has no predicate"))?;
-                break;
+        match open.last_mut().expect("an object is open") {
+            Open::Binding(fields) => {
+                let slot = match &*key {
+                    "type" => &mut fields.kind,
+                    "xml:lang" => &mut fields.language,
+                    "its:dir" => &mut fields.its_dir,
+                    "dir" => &mut fields.dir,
+                    "datatype" => &mut fields.datatype,
+                    "value" if fields.value.is_none() => {
+                        fields.value = Some(match reader.peek_kind() {
+                            Some(Kind::Object) => {
+                                reader.next_event().map_err(syntax)?;
+                                open.push(Open::Triple(Box::default()));
+                                continue;
+                            }
+                            Some(Kind::String) => match string_member(reader)? {
+                                Member::String(text) => BindingValue::String(text),
+                                Member::Other => unreachable!("a string begins at the cursor"),
+                            },
+                            _ => {
+                                reader.check_value().map_err(syntax)?;
+                                BindingValue::Other
+                            }
+                        });
+                        continue;
+                    }
+                    _ => {
+                        reader.check_value().map_err(syntax)?;
+                        continue;
+                    }
+                };
+                if slot.is_some() {
+                    reader.check_value().map_err(syntax)?;
+                } else {
+                    *slot = Some(string_member(reader)?);
+                }
             }
-            if triple.predicate.is_none() {
-                triple.predicate = Some(term);
-                next = triple
-                    .inner
-                    .get("object")
-                    .ok_or_else(|| fmt("triple has no object"))?;
-                break;
+            Open::Triple(parts) => {
+                let component = match &*key {
+                    "subject" => Component::Subject,
+                    "predicate" => Component::Predicate,
+                    "object" => Component::Object,
+                    _ => {
+                        reader.check_value().map_err(syntax)?;
+                        continue;
+                    }
+                };
+                if parts.slot(component).is_some() {
+                    reader.check_value().map_err(syntax)?;
+                } else if reader.peek_kind() == Some(Kind::Object) {
+                    reader.next_event().map_err(syntax)?;
+                    parts.reading = Some(component);
+                    open.push(Open::Binding(Box::default()));
+                } else {
+                    reader.check_value().map_err(syntax)?;
+                    *parts.slot(component) = Some(Err(fmt("binding is not an object")));
+                }
             }
-            let innermost = open.pop();
-            let OpenTriple {
-                subject, predicate, ..
-            } = innermost.expect("the innermost open triple term was just read");
-            let (Some(s), Some(p)) = (subject, predicate) else {
-                unreachable!(
-                    "an open triple term holding its object holds its subject and predicate"
-                );
-            };
-            if !matches!(p, TermValue::Iri(_)) {
-                return Err(fmt("triple-term predicate is not an IRI"));
-            }
-            term = TermValue::Triple {
-                s: TermBox::new(s),
-                p: TermBox::new(p),
-                o: TermBox::new(term),
-            };
         }
     }
-}
-
-/// A triple-term binding whose components are still being decoded: its `value`
-/// object and the components decoded so far, in `subject`, `predicate` order.
-struct OpenTriple<'a> {
-    inner: &'a Object,
-    subject: Option<TermValue>,
-    predicate: Option<TermValue>,
-}
-
-/// One binding object read at a single level: a finished term, or the `value`
-/// object of a triple term whose components remain to be decoded.
-enum BindingNode<'a> {
-    Term(TermValue),
-    Triple(&'a Object),
-}
-
-/// Decode the binding object `value` down to, but not into, the components of a
-/// triple term.
-fn decode_binding_node(value: &Value) -> Result<BindingNode<'_>, Error> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| fmt("binding is not an object"))?;
-    let ty = obj
-        .get("type")
-        .and_then(Value::as_str)
-        .ok_or_else(|| fmt("binding has no string `type`"))?;
-    match ty {
-        "uri" => {
-            let v = binding_value(obj)?;
-            Ok(BindingNode::Term(TermValue::Iri(v.to_owned())))
-        }
-        "bnode" => {
-            let v = binding_value(obj)?;
-            Ok(BindingNode::Term(TermValue::Blank {
-                label: v.to_owned(),
-                scope: BlankScope::DEFAULT,
-            }))
-        }
-        "literal" | "typed-literal" => {
-            let v = binding_value(obj)?;
-            let language = obj.get("xml:lang").and_then(Value::as_str);
-            // A tag arriving in a DOCUMENT is parsed input, held to the same
-            // grammar as every other parsed tag in the workspace. Refusing here
-            // is what stops a federated `SERVICE` response from laundering an
-            // unserializable tag through this reader and back out a writer.
-            if let Some(detail) = language.and_then(crate::error::language_tag_refusal) {
-                return Err(fmt(&detail));
-            }
-            // `its:dir` (the ITS — Internationalization Tag Set — namespace
-            // convention) is the spelling the SPARQL 1.2 Query Results
-            // specification uses for RDF 1.2 base direction — see
-            // [`crate::json`]'s module docs for the fixture evidence. The bare
-            // `dir` spelling is tolerated too, for interop with producers that
-            // predate the SPARQL 1.2 spelling.
-            let direction = match obj
-                .get("its:dir")
-                .or_else(|| obj.get("dir"))
-                .and_then(Value::as_str)
-            {
-                Some(token) => Some(
-                    RdfTextDirection::from_str_token(token)
-                        .ok_or_else(|| fmt(&format!("unknown base direction `{token}`")))?,
-                ),
-                None => None,
-            };
-            let datatype = obj.get("datatype").and_then(Value::as_str);
-            let datatype = resolve_datatype(datatype, language.is_some(), direction.is_some());
-            Ok(BindingNode::Term(TermValue::Literal {
-                lexical_form: v.to_owned(),
-                datatype,
-                language: language.map(str::to_owned),
-                direction,
-            }))
-        }
-        "triple" => obj
-            .get("value")
-            .and_then(Value::as_object)
-            .map(BindingNode::Triple)
-            .ok_or_else(|| fmt("triple binding has no object `value`")),
-        other => Err(fmt(&format!("unknown binding type `{other}`"))),
-    }
-}
-
-/// Read the required string `value` field of a binding object.
-fn binding_value(obj: &Object) -> Result<&str, Error> {
-    obj.get("value")
-        .and_then(Value::as_str)
-        .ok_or_else(|| fmt("binding has no string `value`"))
 }
 
 /// Resolve a literal's datatype: an explicit `datatype` wins; otherwise a
@@ -509,7 +846,6 @@ fn resolve_datatype(datatype: Option<&str>, has_lang: bool, has_dir: bool) -> St
 }
 
 /// Build a `Format` error.
-/// Build a `Format` error.
 fn fmt(msg: &str) -> Error {
     Error::Format(format!("SPARQL-JSON: {msg}"))
 }
@@ -520,28 +856,14 @@ fn syntax(error: json::Error) -> Error {
 }
 
 /// The reader's bounds: no container-depth cap. Every walk over the document —
-/// the reader's own, the tree's drop, [`decode_binding`] — runs over a heap
-/// stack, so nesting costs memory proportional to the input and never machine
-/// stack, and a triple term may nest as deep as the endpoint wrote it.
+/// the reader's own, the tree's drop, [`binding`] — runs over a heap stack, so
+/// nesting costs memory proportional to the input and never machine stack, and
+/// a triple term may nest as deep as the endpoint wrote it.
 const LIMITS: Limits = Limits::with_depth(usize::MAX);
 
 /// The whole document as a JSON tree.
 fn read_document(bytes: &[u8]) -> Result<Value, Error> {
     json::read_slice(bytes, LIMITS).map_err(syntax)
-}
-
-/// Decode one `results.bindings` entry into a dense row over `variables`.
-fn decode_row(binding: &Value, variables: &[String]) -> Result<BindingRow, Error> {
-    let row_obj = binding
-        .as_object()
-        .ok_or_else(|| fmt("`results.bindings` entry is not an object"))?;
-    let mut row = vec![None; variables.len()];
-    for (index, variable) in variables.iter().enumerate() {
-        if let Some(cell) = row_obj.get(variable) {
-            row[index] = Some(decode_binding(cell)?);
-        }
-    }
-    Ok(row)
 }
 
 /// Read the next value, requiring it to open an object; `message` otherwise.
@@ -569,18 +891,12 @@ fn next_key<'a>(reader: &mut Reader<'a>) -> Result<Option<Cow<'a, str>>, Error> 
         .transpose()
 }
 
-/// Whether the next value, past insignificant whitespace, starts with `byte`.
-fn next_starts_with(reader: &Reader<'_>, byte: u8) -> bool {
-    let text = reader.text().as_bytes();
-    text.get(skip_ws(text, reader.offset())) == Some(&byte)
-}
-
 /// Decode the first `vars` array in a `head` object, skipping other fields.
 fn head_variables(reader: &mut Reader<'_>) -> Result<Vec<String>, Error> {
     open_object(reader, "missing `head` object")?;
     let mut variables = None;
     while let Some(key) = next_key(reader)? {
-        if key == "vars" && variables.is_none() && next_starts_with(reader, b'[') {
+        if key == "vars" && variables.is_none() && reader.peek_kind() == Some(Kind::Array) {
             variables = Some(string_array(reader, "`head.vars` entry is not a string")?);
         } else {
             reader.skip_value().map_err(syntax)?;
@@ -630,10 +946,10 @@ fn bounded_binding_array(
     open_array(reader, "missing `results.bindings` array")?;
     let mut rows = Vec::new();
     let mut truncated = false;
+    let mut scratch = RowScratch::default();
     while reader.next_item().map_err(syntax)? {
         if row_limit.is_none_or(|limit| rows.len() < limit) {
-            let binding = reader.read_value().map_err(syntax)?;
-            rows.push(decode_row(&binding, variables)?);
+            rows.push(binding_row(reader, variables, &mut scratch)??);
         } else {
             truncated = true;
             reader.skip_value().map_err(syntax)?;

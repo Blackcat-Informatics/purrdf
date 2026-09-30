@@ -13,7 +13,17 @@ use super::number::number_end;
 use super::{Error, ErrorKind, Number, Object, Value};
 use crate::json_escape::{self, JsonEscapeErrorKind};
 use crate::scan::find_first_json_string_special;
-use crate::terminals::skip_ws;
+use crate::terminals::{is_json_string_forbidden_byte, is_ws, skip_ws};
+
+/// The clean run, in bytes, a string body is scanned a byte at a time before
+/// the chunked scan ([`find_first_json_string_special`]) takes over: a member
+/// name or a short value ends inside it, and the chunked scan's setup costs
+/// more than the bytes it would save there.
+const SHORT_RUN: usize = 16;
+
+/// The whitespace run, in bytes, past which [`Reader`] hands the rest of the
+/// run to the chunked scan: one scan chunk.
+const WS_RUN: usize = 16;
 
 /// The resource bounds of one read.
 ///
@@ -103,10 +113,15 @@ impl Kind {
 }
 
 /// A string token: its body as written (escapes undecoded) and where it is.
+///
+/// The reader records whether the body holds an escape while it scans it, so
+/// [`Str::has_escapes`] is a field read and [`Str::decode`] of a body without
+/// one borrows it without looking at its bytes again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Str<'a> {
     raw: &'a str,
     at: usize,
+    escaped: bool,
 }
 
 impl<'a> Str<'a> {
@@ -121,8 +136,8 @@ impl<'a> Str<'a> {
     }
 
     /// Whether the body holds an escape.
-    pub fn has_escapes(&self) -> bool {
-        self.raw.as_bytes().contains(&b'\\')
+    pub const fn has_escapes(&self) -> bool {
+        self.escaped
     }
 
     /// The body with every escape decoded, borrowed when it holds none.
@@ -134,6 +149,9 @@ impl<'a> Str<'a> {
     ///
     /// [`ErrorKind::Escape`] at the escape's byte in the document.
     pub fn decode(&self) -> Result<Cow<'a, str>, Error> {
+        if !self.escaped {
+            return Ok(Cow::Borrowed(self.raw));
+        }
         json_escape::unescape(self.raw)
             .map_err(|error| Error::new(ErrorKind::Escape(error.kind), self.at + error.offset))
     }
@@ -274,9 +292,35 @@ impl<'a> Reader<'a> {
         self.text.as_bytes().get(self.pos).copied()
     }
 
-    // RFC 8259 §2 lists four whitespace bytes, never a Unicode property.
+    /// Cross the whitespace at the cursor. RFC 8259 §2 lists four whitespace
+    /// bytes ([`is_ws`]), never a Unicode property.
+    ///
+    /// Between two tokens there is usually no whitespace at all, or a byte or
+    /// two of it, so the run is crossed here a byte at a time and the chunked
+    /// scan ([`skip_ws`]) takes over only once the run is [`WS_RUN`] bytes long:
+    /// a pretty-printer's indentation. Calling the chunked scan for every token
+    /// was measured to cost an eighth of a compact read.
+    #[allow(
+        clippy::inline_always,
+        reason = "crossed before every token: the zero- and one-byte runs must cost a compare \
+                  in the caller, not a call"
+    )]
+    #[inline(always)]
     fn skip_whitespace(&mut self) {
-        self.pos = skip_ws(self.text.as_bytes(), self.pos);
+        let bytes = self.text.as_bytes();
+        let mut pos = self.pos;
+        while let Some(&byte) = bytes.get(pos) {
+            if !is_ws(byte) {
+                self.pos = pos;
+                return;
+            }
+            pos += 1;
+            if pos - self.pos == WS_RUN {
+                self.pos = skip_ws(bytes, pos);
+                return;
+            }
+        }
+        self.pos = pos;
     }
 
     /// The expectation after a value completes.
@@ -291,7 +335,21 @@ impl<'a> Reader<'a> {
     /// # Errors
     ///
     /// [`Error`] at the first byte the grammar or a [`Limits`] bound refuses.
+    #[inline]
     pub fn next_event(&mut self) -> Result<Event<'a>, Error> {
+        self.step()
+    }
+
+    /// [`Reader::next_event`], inlined into the loops of this module that
+    /// build or check a value, so the event it returns never passes through
+    /// memory.
+    #[allow(
+        clippy::inline_always,
+        reason = "the tree and check loops are one event loop each; the step must be inlined \
+                  into them so the event stays in registers"
+    )]
+    #[inline(always)]
+    fn step(&mut self) -> Result<Event<'a>, Error> {
         loop {
             self.skip_whitespace();
             match self.expect {
@@ -343,6 +401,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Close the innermost container at the cursor's `]` or `}`.
+    #[inline]
     fn close(&mut self, object: bool) -> Event<'a> {
         let at = self.pos;
         self.pos += 1;
@@ -356,6 +415,11 @@ impl<'a> Reader<'a> {
     }
 
     /// The value at the cursor: a scalar whole, or a container opened.
+    #[allow(
+        clippy::inline_always,
+        reason = "one arm of the event step, inlined into it with the step"
+    )]
+    #[inline(always)]
     fn value(&mut self) -> Result<Event<'a>, Error> {
         if self.values >= self.limits.max_values {
             return Err(self.error(ErrorKind::Values {
@@ -409,6 +473,11 @@ impl<'a> Reader<'a> {
     }
 
     /// A member name and the `:` after it.
+    #[allow(
+        clippy::inline_always,
+        reason = "one arm of the event step, inlined into it with the step"
+    )]
+    #[inline(always)]
     fn key(&mut self) -> Result<Event<'a>, Error> {
         if self.peek() != Some(b'"') {
             return Err(self.error(ErrorKind::Expected("a `\"`-quoted member name")));
@@ -439,17 +508,30 @@ impl<'a> Reader<'a> {
     /// checked and escapes undecoded.
     ///
     /// Each clean run — everything up to the next `"`, `\` or C0 control, which
-    /// RFC 8259 §7 calls `unescaped` — is crossed by one chunked scan of exactly
-    /// that class; only the byte it stops at takes the per-byte grammar. The
+    /// RFC 8259 §7 calls `unescaped` — is crossed by a test of exactly that
+    /// class: a byte at a time for the first [`SHORT_RUN`] bytes, then one
+    /// chunked scan; only the byte it stops at takes the per-byte grammar. The
     /// text is a `&str`, so a run needs no UTF-8 check, and the class holds only
     /// ASCII bytes, so the scan always stops on a `char` boundary.
     fn string(&mut self) -> Result<Str<'a>, Error> {
         let bytes = self.text.as_bytes();
         self.pos += 1;
         let start = self.pos;
+        let mut escaped = false;
         loop {
             let rest = &bytes[self.pos..];
-            self.pos += find_first_json_string_special(rest).unwrap_or(rest.len());
+            self.pos += match rest
+                .iter()
+                .take(SHORT_RUN)
+                .position(|&byte| is_json_string_forbidden_byte(byte))
+            {
+                Some(run) => run,
+                None if rest.len() <= SHORT_RUN => rest.len(),
+                None => {
+                    let long = &rest[SHORT_RUN..];
+                    SHORT_RUN + find_first_json_string_special(long).unwrap_or(long.len())
+                }
+            };
             match self.peek() {
                 None => {
                     return Err(self.error(ErrorKind::Expected("the `\"` that closes a string")));
@@ -457,11 +539,19 @@ impl<'a> Reader<'a> {
                 Some(b'"') => {
                     let raw = &self.text[start..self.pos];
                     self.pos += 1;
-                    return Ok(Str { raw, at: start });
+                    return Ok(Str {
+                        raw,
+                        at: start,
+                        escaped,
+                    });
                 }
                 Some(b'\\') => match bytes.get(self.pos + 1) {
-                    Some(b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't') => self.pos += 2,
+                    Some(b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't') => {
+                        escaped = true;
+                        self.pos += 2;
+                    }
                     Some(b'u') => {
+                        escaped = true;
                         let digits = self.pos + 2;
                         json_escape::code_unit(&bytes[digits..]).map_err(|error| {
                             Error::new(ErrorKind::Escape(error.kind), digits + error.offset)
@@ -478,6 +568,43 @@ impl<'a> Reader<'a> {
                 // The scan stops only at `"`, `\` and the C0 controls.
                 Some(_) => return Err(self.error(ErrorKind::RawControl)),
             }
+        }
+    }
+
+    /// The kind of the value that begins at the cursor, without reading it:
+    /// `None` where no value begins (the reader's next step refuses that byte,
+    /// or closes a container, or the document has ended).
+    ///
+    /// Asked where a value is expected — after a member name from
+    /// [`Reader::next_key`], after [`Reader::next_item`] has returned `true`,
+    /// or before the document's value — this is what lets a streaming decoder
+    /// take a value it wants whole and hand one it does not to
+    /// [`Reader::check_value`] or [`Reader::skip_value`]. It reads only the
+    /// value's first byte: a `t` is [`Kind::True`] before the reader has
+    /// checked that `true` follows.
+    ///
+    /// ```rust
+    /// use purrdf_lex::json::{Kind, Limits, Reader};
+    ///
+    /// let mut reader = Reader::new(r#"{"a": [1], "b": "x"}"#, Limits::DEFAULT);
+    /// reader.begin_object().unwrap();
+    /// reader.next_key().unwrap();
+    /// assert_eq!(reader.peek_kind(), Some(Kind::Array));
+    /// reader.check_value().unwrap();
+    /// reader.next_key().unwrap();
+    /// assert_eq!(reader.peek_kind(), Some(Kind::String));
+    /// ```
+    pub fn peek_kind(&mut self) -> Option<Kind> {
+        self.skip_whitespace();
+        match self.peek()? {
+            b'{' => Some(Kind::Object),
+            b'[' => Some(Kind::Array),
+            b'"' => Some(Kind::String),
+            b't' => Some(Kind::True),
+            b'f' => Some(Kind::False),
+            b'n' => Some(Kind::Null),
+            b'-' | b'0'..=b'9' => Some(Kind::Number),
+            _ => None,
         }
     }
 
@@ -567,7 +694,10 @@ impl<'a> Reader<'a> {
     /// Syntax-check the next value without building it: its byte span.
     ///
     /// Strings are scanned but not decoded, so the string bound and
-    /// [`Limits::unique_members`] do not apply here; depth and value bounds do.
+    /// [`Limits::unique_members`] do not apply here, nor is an unpaired
+    /// surrogate escape refused; depth and value bounds do.
+    /// [`Reader::check_value`] is the skip that gives [`Reader::read_value`]'s
+    /// verdict.
     ///
     /// # Errors
     ///
@@ -595,80 +725,179 @@ impl<'a> Reader<'a> {
 
     /// Build the next value, however deep, over a heap stack.
     ///
+    /// The values of every open array wait on one shared stack, and the members
+    /// of every open object on another; a container's close moves its own
+    /// suffix of that stack into a vector of exactly its length. A container
+    /// therefore costs one allocation, not the doubling series a vector grown
+    /// element by element pays, and a two-number position is one allocation of
+    /// two values.
+    ///
     /// # Errors
     ///
     /// [`Error`] at a grammar refusal, an unpaired surrogate, or a [`Limits`]
     /// bound.
     pub fn read_value(&mut self) -> Result<Value, Error> {
-        enum Open {
-            Array(Vec<Value>),
-            Object {
-                members: Object,
-                name: Option<String>,
-                seen: Option<HashSet<String, FixedState>>,
-            },
+        /// An open container: where its elements or members begin on the
+        /// shared stack, and which kind it is.
+        #[derive(Clone, Copy)]
+        struct Open {
+            base: usize,
+            object: bool,
         }
         let mut open: Vec<Open> = Vec::new();
+        let mut items: Vec<Value> = Vec::new();
+        let mut members: Vec<(String, Value)> = Vec::new();
+        // The name of each open object's member whose value is being read.
+        let mut names: Vec<String> = Vec::new();
+        // Each open object's names so far, when repeats are refused.
+        let mut seen: Vec<HashSet<String, FixedState>> = Vec::new();
+        // A finished value goes to the innermost open container, or is the
+        // result. The slot is reserved before the value is built, and the
+        // value is built by the closure that fills it, so the value is written
+        // once, in place: a value built on the stack and then copied in was
+        // measured to stall on store forwarding, since it is written field by
+        // field and read back whole.
+        macro_rules! finish {
+            ($value:expr) => {
+                match open.last() {
+                    None => return Ok($value),
+                    Some(Open { object: false, .. }) => {
+                        items.extend(core::iter::once_with(|| $value));
+                    }
+                    Some(Open { object: true, .. }) => {
+                        let name = names.pop().expect("a member's value follows its name");
+                        members.extend(core::iter::once_with(|| (name, $value)));
+                    }
+                }
+            };
+        }
         loop {
-            let event = self.next_event()?;
-            let value = match event {
+            match self.step()? {
                 Event::BeginObject { .. } => {
-                    open.push(Open::Object {
-                        members: Object::new(),
-                        name: None,
-                        seen: self
-                            .limits
-                            .unique_members
-                            .then(|| HashSet::with_hasher(FixedState::new())),
+                    open.push(Open {
+                        base: members.len(),
+                        object: true,
                     });
-                    continue;
+                    if self.limits.unique_members {
+                        seen.push(HashSet::with_hasher(FixedState::new()));
+                    }
                 }
-                Event::BeginArray { .. } => {
-                    open.push(Open::Array(Vec::new()));
-                    continue;
-                }
+                Event::BeginArray { .. } => open.push(Open {
+                    base: items.len(),
+                    object: false,
+                }),
                 Event::Key(raw) => {
-                    let decoded = self.decoded(raw)?;
-                    let Some(Open::Object { name, seen, .. }) = open.last_mut() else {
-                        unreachable!("a member name is read only inside an object");
-                    };
-                    if let Some(seen) = seen
+                    let decoded = self.decoded(raw)?.into_owned();
+                    if let Some(seen) = seen.last_mut()
                         && !seen.insert(decoded.clone())
                     {
                         return Err(Error::new(ErrorKind::DuplicateMember, raw.at - 1));
                     }
-                    *name = Some(decoded);
-                    continue;
+                    names.push(decoded);
                 }
-                Event::String(raw) => Value::String(self.decoded(raw)?),
+                Event::String(raw) => {
+                    let text = self.decoded(raw)?.into_owned();
+                    finish!(Value::String(text));
+                }
                 Event::Number { lexeme, .. } => {
-                    Value::Number(Number::from_valid(lexeme.to_owned()))
+                    finish!(Value::Number(Number::from_valid(lexeme.to_owned())));
                 }
-                Event::Bool { value, .. } => Value::Bool(value),
-                Event::Null { .. } => Value::Null,
-                Event::EndArray { .. } => match open.pop() {
-                    Some(Open::Array(items)) => Value::Array(items),
-                    _ => unreachable!("`]` closes the array the reader opened"),
-                },
-                Event::EndObject { .. } => match open.pop() {
-                    Some(Open::Object { members, .. }) => Value::Object(members),
-                    _ => unreachable!("`}}` closes the object the reader opened"),
-                },
+                Event::Bool { value, .. } => finish!(Value::Bool(value)),
+                Event::Null { .. } => finish!(Value::Null),
+                Event::EndArray { .. } => {
+                    let Some(Open { base, .. }) = open.pop() else {
+                        unreachable!("`]` closes the array the reader opened");
+                    };
+                    let array = items.split_off(base);
+                    finish!(Value::Array(array));
+                }
+                Event::EndObject { .. } => {
+                    let Some(Open { base, .. }) = open.pop() else {
+                        unreachable!("`}}` closes the object the reader opened");
+                    };
+                    if self.limits.unique_members {
+                        seen.pop();
+                    }
+                    let object = members.split_off(base);
+                    finish!(Value::Object(Object::from(object)));
+                }
                 Event::End => return Err(self.error(ErrorKind::Expected("a JSON value"))),
-            };
-            match open.last_mut() {
-                None => return Ok(value),
-                Some(Open::Array(items)) => items.push(value),
-                Some(Open::Object { members, name, .. }) => members.push(
-                    name.take().expect("a member's value follows its name"),
-                    value,
-                ),
             }
         }
     }
 
-    /// A string or member name, decoded and held to the string bound.
-    fn decoded(&self, raw: Str<'a>) -> Result<String, Error> {
+    /// Check the next value exactly as [`Reader::read_value`] would, without
+    /// building it: its byte span.
+    ///
+    /// Every string and member name is decoded and held to
+    /// [`Limits::max_string_bytes`], and [`Limits::unique_members`] is
+    /// enforced, so a value this accepts is one [`Reader::read_value`] reads
+    /// and a value it refuses is refused with the same [`Error`]. A string
+    /// without an escape is not looked at again: the scan that found its end
+    /// already knows it has nothing to decode. This is the skip a streaming
+    /// decoder that owes its caller the tree reader's verdict takes over the
+    /// members it does not want; [`Reader::skip_value`] is the cheaper
+    /// syntax-only skip.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] at a grammar refusal, an unpaired surrogate, or a [`Limits`]
+    /// bound.
+    pub fn check_value(&mut self) -> Result<Range<usize>, Error> {
+        self.skip_whitespace();
+        let start = self.pos;
+        self.check(start)?;
+        Ok(start..self.pos)
+    }
+
+    /// The loop behind [`Reader::check_value`], for the value that starts at
+    /// `start`.
+    fn check(&mut self, start: usize) -> Result<(), Error> {
+        // One entry per container open inside the value: the names its
+        // members have used, when repeats are refused.
+        let mut open: Vec<Option<HashSet<String, FixedState>>> = Vec::new();
+        loop {
+            match self.step()? {
+                Event::BeginObject { .. } => open.push(
+                    self.limits
+                        .unique_members
+                        .then(|| HashSet::with_hasher(FixedState::new())),
+                ),
+                Event::BeginArray { .. } => open.push(None),
+                Event::EndObject { .. } | Event::EndArray { .. } => {
+                    if open.pop().is_none() {
+                        // The cursor was not on a value: a container closes.
+                        return Err(Error::new(ErrorKind::Expected("a JSON value"), start));
+                    }
+                }
+                Event::Key(raw) => {
+                    let Some(names) = open.last_mut() else {
+                        // The cursor was between an object's members.
+                        return Err(Error::new(ErrorKind::Expected("a JSON value"), start));
+                    };
+                    let decoded = self.decoded(raw)?;
+                    if let Some(names) = names
+                        && !names.insert(decoded.into_owned())
+                    {
+                        return Err(Error::new(ErrorKind::DuplicateMember, raw.at - 1));
+                    }
+                    continue;
+                }
+                Event::String(raw) => {
+                    self.decoded(raw)?;
+                }
+                Event::Number { .. } | Event::Bool { .. } | Event::Null { .. } => {}
+                Event::End => return Err(Error::new(ErrorKind::Expected("a JSON value"), start)),
+            }
+            if open.is_empty() {
+                return Ok(());
+            }
+        }
+    }
+
+    /// A string or member name, decoded (borrowed when it holds no escape)
+    /// and held to the string bound.
+    fn decoded(&self, raw: Str<'a>) -> Result<Cow<'a, str>, Error> {
         let decoded = raw.decode()?;
         if decoded.len() > self.limits.max_string_bytes {
             return Err(Error::new(
@@ -678,7 +907,7 @@ impl<'a> Reader<'a> {
                 raw.at,
             ));
         }
-        Ok(decoded.into_owned())
+        Ok(decoded)
     }
 
     /// Require the document to be complete: only whitespace after the

@@ -14,10 +14,10 @@
 //! * `geojson_json/parse` and `geojson_json/write` read and re-render a roughly
 //!   1 MB `FeatureCollection` (polygons with fractional coordinates, plus
 //!   properties holding clean and escape-bearing strings) through
-//!   `purrdf_geo::json`, the tree every GeoJSON entry point goes through.
+//!   `purrdf_geo::json`, the JSON tree.
 //! * `geojson_literal/parse` reads one large `MultiPolygon` GeoJSON literal into
-//!   the exact geometry model, so the JSON reader and the coordinate ingest are
-//!   measured together.
+//!   the exact geometry model straight from the JSON reader's events, so the
+//!   reader and the coordinate ingest are measured together.
 //!
 //! The corpus is generated deterministically from the constants below with the
 //! workspace's SplitMix64 (`purrdf_testkit::rng`).

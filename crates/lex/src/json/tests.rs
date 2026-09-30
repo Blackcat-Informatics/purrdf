@@ -580,6 +580,124 @@ fn a_streaming_decoder_builds_a_prefix_and_skips_the_rest() {
     assert!(Reader::new("[1]", Limits::DEFAULT).begin_object().is_err());
 }
 
+/// `check_value` holds a value to everything `read_value` does — a string's
+/// escapes are decoded, the string bound and repeated names apply — where
+/// `skip_value` checks syntax only; each refusal has a neighbour both accept.
+#[test]
+fn checking_a_value_refuses_what_reading_it_refuses_and_skipping_it_does_not() {
+    let unique = Limits {
+        unique_members: true,
+        ..Limits::DEFAULT
+    };
+    let short = Limits {
+        max_string_bytes: 3,
+        ..Limits::DEFAULT
+    };
+    for (text, neighbour, limits) in [
+        (r#"["\ud800"]"#, r#"["\ud83d\ude00"]"#, Limits::DEFAULT),
+        (r#"{"\udc00":1}"#, r#"{"\u00e9":1}"#, Limits::DEFAULT),
+        (r#"{"a":1,"a":2}"#, r#"{"a":1,"b":2}"#, unique),
+        (
+            r#"[{"a":{"b":1,"\u0062":2}}]"#,
+            r#"[{"a":{"b":1}},{"a":{"b":2}}]"#,
+            unique,
+        ),
+        (r#"["abcd"]"#, r#"["a\u0062c"]"#, short),
+    ] {
+        let read_error = Reader::new(text, limits).read_value().unwrap_err();
+        assert_eq!(
+            Reader::new(text, limits).check_value(),
+            Err(read_error),
+            "{text}"
+        );
+        assert!(Reader::new(text, limits).skip_value().is_ok(), "{text}");
+        let span = Reader::new(neighbour, limits).check_value().unwrap();
+        assert_eq!(span, 0..neighbour.len(), "{neighbour}");
+        assert!(
+            Reader::new(neighbour, limits).read_value().is_ok(),
+            "{neighbour}"
+        );
+    }
+    // The span is the value's, and the reader stands after it.
+    let text = r#"{"a": [1, "\n"] , "b": null}"#;
+    let mut reader = Reader::new(text, Limits::DEFAULT);
+    reader.begin_object().unwrap();
+    reader.next_key().unwrap();
+    let span = reader.check_value().unwrap();
+    assert_eq!(&text[span], r#"[1, "\n"]"#);
+    assert_eq!(reader.next_key().unwrap().map(|name| name.raw()), Some("b"));
+    // Misuse between members, or at a close, is a typed error.
+    let mut between = Reader::new(r#"{"a":1}"#, Limits::DEFAULT);
+    between.begin_object().unwrap();
+    assert!(between.check_value().is_err());
+    let mut close = Reader::new("[]", Limits::DEFAULT);
+    close.begin_array().unwrap();
+    assert!(close.check_value().is_err());
+}
+
+/// `peek_kind` names the value at the cursor from its first byte and reads
+/// nothing; where no value begins it answers `None`.
+#[test]
+fn peek_kind_names_the_value_at_the_cursor_without_reading_it() {
+    let text = r#"[ {}, [], "s", 1, -1, true, false, null ]"#;
+    let mut reader = Reader::new(text, Limits::DEFAULT);
+    reader.begin_array().unwrap();
+    let mut kinds = Vec::new();
+    while reader.next_item().unwrap() {
+        let at = reader.offset();
+        let kind = reader.peek_kind();
+        assert!(reader.offset() >= at, "only whitespace is crossed");
+        kinds.push(kind);
+        reader.check_value().unwrap();
+    }
+    assert_eq!(
+        kinds,
+        [
+            Some(Kind::Object),
+            Some(Kind::Array),
+            Some(Kind::String),
+            Some(Kind::Number),
+            Some(Kind::Number),
+            Some(Kind::True),
+            Some(Kind::False),
+            Some(Kind::Null),
+        ]
+    );
+    reader.finish().unwrap();
+    assert_eq!(Reader::new(" ]", Limits::DEFAULT).peek_kind(), None);
+    assert_eq!(Reader::new("", Limits::DEFAULT).peek_kind(), None);
+    assert_eq!(Reader::new("+1", Limits::DEFAULT).peek_kind(), None);
+}
+
+/// A string token knows whether it holds an escape, and one that does not
+/// decodes to its own bytes, borrowed.
+#[test]
+fn a_string_without_an_escape_decodes_borrowed() {
+    let text = r#"["plain café", "tab\there", "\u0041"]"#;
+    let mut reader = Reader::new(text, Limits::DEFAULT);
+    reader.begin_array().unwrap();
+    let mut seen = Vec::new();
+    while reader.next_item().unwrap() {
+        let Event::String(body) = reader.next_event().unwrap() else {
+            panic!("a string");
+        };
+        let decoded = body.decode().unwrap();
+        seen.push((
+            body.has_escapes(),
+            matches!(decoded, std::borrow::Cow::Borrowed(_)),
+            decoded.into_owned(),
+        ));
+    }
+    assert_eq!(
+        seen,
+        [
+            (false, true, "plain café".to_owned()),
+            (true, false, "tab\there".to_owned()),
+            (true, false, "A".to_owned()),
+        ]
+    );
+}
+
 #[test]
 fn occurrences_cover_spans_parents_ordinals_and_sizes() {
     let text = r#"{"a":[1,"x"],"a":{},"\n":false}"#;
