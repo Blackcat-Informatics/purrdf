@@ -11,8 +11,8 @@ use ::purrdf::RdfTextDirection;
 use ::purrdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_loss_ledger};
 
 use super::{
-    LinkmlDocument, LinkmlError, LinkmlPackage, LinkmlSlotDiagnostic, LinkmlSlotDisposition,
-    LinkmlSlotRename, is_linkml_identifier, parse_linkml, projection, write_linkml,
+    LinkmlDocument, LinkmlError, LinkmlPackage, LinkmlSlotDisposition, is_linkml_identifier,
+    parse_linkml, projection, required_string, write_linkml,
 };
 use crate::schema_import::{ImportedShapes, SchemaImportConfig, import_schema_value_from};
 use crate::term::Term;
@@ -195,7 +195,14 @@ fn verify_slot_reports(package: &LinkmlPackage) -> Result<(), LinkmlError> {
                 rename.source_path
             )));
         }
-        let class = verify_report_context(package, rename, root)?;
+        let class = verify_source_context(
+            package,
+            &rename.source_class,
+            &rename.emitted_class,
+            &rename.source_path,
+            &rename.source_name,
+            root,
+        )?;
         let attribute = class
             .get("attributes")
             .and_then(Value::as_object)
@@ -272,7 +279,14 @@ fn verify_slot_reports(package: &LinkmlPackage) -> Result<(), LinkmlError> {
                 diagnostic.source_path
             )));
         }
-        let class = verify_diagnostic_context(package, diagnostic, root)?;
+        let class = verify_source_context(
+            package,
+            &diagnostic.source_class,
+            &diagnostic.emitted_class,
+            &diagnostic.source_path,
+            &diagnostic.source_name,
+            root,
+        )?;
         if diagnostic.disposition != LinkmlSlotDisposition::Skipped
             || diagnostic.new_slot_name.is_some()
             || diagnostic.emitted_slot_uri.is_some()
@@ -362,36 +376,6 @@ where
         }
     }
     Ok(())
-}
-
-fn verify_report_context<'a>(
-    package: &LinkmlPackage,
-    rename: &LinkmlSlotRename,
-    root: &'a Object,
-) -> Result<&'a Object, LinkmlError> {
-    verify_source_context(
-        package,
-        &rename.source_class,
-        &rename.emitted_class,
-        &rename.source_path,
-        &rename.source_name,
-        root,
-    )
-}
-
-fn verify_diagnostic_context<'a>(
-    package: &LinkmlPackage,
-    diagnostic: &LinkmlSlotDiagnostic,
-    root: &'a Object,
-) -> Result<&'a Object, LinkmlError> {
-    verify_source_context(
-        package,
-        &diagnostic.source_class,
-        &diagnostic.emitted_class,
-        &diagnostic.source_path,
-        &diagnostic.source_name,
-        root,
-    )
 }
 
 fn verify_source_context<'a>(
@@ -2062,13 +2046,6 @@ fn validate_absolute(value: &str, path: &str) -> Result<String, LinkmlError> {
             "{path} forms invalid IRI {value:?}: {error}"
         ))),
     }
-}
-
-fn required_string<'a>(object: &'a Object, key: &str, path: &str) -> Result<&'a str, LinkmlError> {
-    object
-        .get(key)
-        .and_then(Value::as_str)
-        .ok_or_else(|| LinkmlError::new(format!("{path} must be a string")))
 }
 
 fn required_bool(object: &Object, key: &str, path: &str) -> Result<bool, LinkmlError> {

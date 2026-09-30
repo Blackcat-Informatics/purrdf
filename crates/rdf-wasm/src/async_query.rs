@@ -663,14 +663,6 @@ impl AsyncEffect {
     }
 }
 
-/// Flatten `(name, value)` pairs into `[name, value, name, value, …]`.
-fn flatten_headers(headers: &[(String, String)]) -> Vec<String> {
-    headers
-        .iter()
-        .flat_map(|(name, value)| [name.clone(), value.clone()])
-        .collect()
-}
-
 #[wasm_bindgen]
 impl AsyncEffect {
     /// The sequence number every delivery for this effect must name.
@@ -772,8 +764,10 @@ impl AsyncEffect {
     /// not be merged. Empty when no catalog is configured.
     pub fn headers(&self) -> Vec<String> {
         match &self.payload {
-            EffectPayload::Service { effect, .. } => flatten_headers(&effect.headers),
-            EffectPayload::Load(effect) => flatten_headers(&effect.headers),
+            EffectPayload::Service { effect, .. } => {
+                crate::protocol::flatten_pairs(&effect.headers)
+            }
+            EffectPayload::Load(effect) => crate::protocol::flatten_pairs(&effect.headers),
             EffectPayload::Yield | EffectPayload::AwaitExchange { .. } => Vec::new(),
         }
     }

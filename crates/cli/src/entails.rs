@@ -119,7 +119,7 @@ use purrdf_validate::regime::{
     verify_entailment_to_string,
 };
 
-use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget, ReportTarget};
+use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget, ReportTarget, refuse_document_flags};
 use crate::error::CliError;
 use crate::format;
 use crate::report;
@@ -200,7 +200,27 @@ pub(crate) fn run(
     ledger_target: &LedgerTarget,
     report_target: &ReportTarget,
 ) -> Result<(), CliError> {
-    refuse_document_flags(ledger_target, options.jsonld_options)?;
+    // Refuse the two global document flags, which name outputs this command does not produce.
+    //
+    // `--loss-ledger` records what a CONVERSION dropped. This command converts nothing for the
+    // operator: it reads documents, decides a question and writes a verdict. Its own crossing
+    // into the boundary's N-Quads is lossless by construction and a realized drop is REFUSED
+    // (see [`read_as_nquads`]) rather than recorded, so there is no ledger — and a flag that
+    // silently wrote an empty one would be the no-op this repository refuses.
+    //
+    // `--jsonld-options` configures a JSON-LD/YAML-LD serializer. The answer is a line-oriented
+    // verdict in the boundary's own grammar, not RDF, so no serializer runs and the option has
+    // nothing to configure.
+    refuse_document_flags(
+        ledger_target,
+        options.jsonld_options,
+        "--loss-ledger records what a conversion dropped, and `entails` converts nothing \
+             for you: it decides a question and writes a verdict. The documents it reads cross \
+             into the boundary's N-Quads losslessly or the run is refused, so there is no \
+             ledger to surface",
+        "--jsonld-options configures a JSON-LD/YAML-LD serializer, and `entails` runs \
+             none: its answer is a line-oriented verdict, not RDF",
+    )?;
     let question = question(options)?;
     refuse_two_stdins(options, question)?;
     refuse_unconsumable_base(options, question)?;
@@ -252,7 +272,7 @@ pub(crate) fn run(
             .map_err(CliError::Runtime)?
         }
         Question::Pattern { path } => {
-            let pattern = read_verbatim(path, "--pattern")?;
+            let pattern = source::read_text(path, "--pattern")?;
             certain_answers_to_string(
                 regime,
                 &premise,
@@ -292,40 +312,6 @@ fn question<'a>(options: &EntailsOptions<'a>) -> Result<Question<'a>, CliError> 
                 .to_owned(),
         )),
     }
-}
-
-/// Refuse the two global document flags, which name outputs this command does not produce.
-///
-/// `--loss-ledger` records what a CONVERSION dropped. This command converts nothing for the
-/// operator: it reads documents, decides a question and writes a verdict. Its own crossing
-/// into the boundary's N-Quads is lossless by construction and a realized drop is REFUSED
-/// (see [`read_as_nquads`]) rather than recorded, so there is no ledger — and a flag that
-/// silently wrote an empty one would be the no-op this repository refuses.
-///
-/// `--jsonld-options` configures a JSON-LD/YAML-LD serializer. The answer is a line-oriented
-/// verdict in the boundary's own grammar, not RDF, so no serializer runs and the option has
-/// nothing to configure.
-fn refuse_document_flags(
-    ledger_target: &LedgerTarget,
-    jsonld_options: Option<&JsonLdSerializeOptions>,
-) -> Result<(), CliError> {
-    if !matches!(ledger_target, LedgerTarget::Silent) {
-        return Err(CliError::Usage(
-            "--loss-ledger records what a conversion dropped, and `entails` converts nothing \
-             for you: it decides a question and writes a verdict. The documents it reads cross \
-             into the boundary's N-Quads losslessly or the run is refused, so there is no \
-             ledger to surface"
-                .to_owned(),
-        ));
-    }
-    if jsonld_options.is_some() {
-        return Err(CliError::Usage(
-            "--jsonld-options configures a JSON-LD/YAML-LD serializer, and `entails` runs \
-             none: its answer is a line-oriented verdict, not RDF"
-                .to_owned(),
-        ));
-    }
-    Ok(())
 }
 
 /// Refuse a command line that reads standard input twice.
@@ -506,16 +492,4 @@ fn read_as_nquads(
             "{what} {path}: N-Quads output is not UTF-8: {error}"
         ))
     })
-}
-
-/// Read `path` (or stdin) as text, with no format resolution.
-///
-/// The `--pattern` reader. A basic graph pattern is N-Triples with `?name` / `$name` in term
-/// positions, which is not an RDF document and which no RDF parser accepts — so there is
-/// nothing to resolve a format for, and the bytes go to the boundary's own pattern parser
-/// exactly as written.
-fn read_verbatim(path: &str, what: &str) -> Result<String, CliError> {
-    let bytes = source::read_bytes(path)?;
-    String::from_utf8(bytes)
-        .map_err(|error| CliError::Runtime(format!("{what} {path}: not UTF-8 text: {error}")))
 }

@@ -3,10 +3,7 @@
 
 //! Parameter declarations and distinct constraint instances.
 
-use super::{
-    Component, Parameter, is_reserved_parameter_name, is_valid_varname, objects_of,
-    sparql_local_name,
-};
+use super::{Component, Parameter, is_reserved_parameter_name, is_valid_varname, objects_of};
 use crate::model::{sh, xsd};
 use crate::term::{Term, sort_terms_canonical};
 
@@ -88,7 +85,7 @@ pub(super) fn parse_parameter(
             ),
         ));
     };
-    let name = sparql_local_name(path.as_str());
+    let name = purrdf_iri::local_name(path.as_str()).to_owned();
     if !is_valid_varname(&name) {
         return Err((
             if is_reserved_parameter_name(&name) {

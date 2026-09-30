@@ -7,6 +7,7 @@ use std::ffi::{CString, c_char};
 
 use purrdf_core::TermValue;
 
+use crate::handles::free_handle;
 use crate::status::PurrdfStatus;
 use crate::term::{PurrdfTermView, render_value};
 
@@ -47,11 +48,6 @@ impl PurrdfRowCursor {
             current: None,
             next: 0,
         }
-    }
-
-    /// Heap-allocate as a handle pointer.
-    pub(crate) fn into_raw(self) -> *mut Self {
-        Box::into_raw(Box::new(self))
     }
 }
 
@@ -176,11 +172,5 @@ pub unsafe extern "C" fn purrdf_rowcursor_term(
 /// `rc` must be null or a live row cursor not already freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_rowcursor_free(rc: *mut PurrdfRowCursor) {
-    unsafe {
-        ffi_guard!((), {
-            if !rc.is_null() {
-                drop(Box::from_raw(rc));
-            }
-        });
-    }
+    unsafe { free_handle::<PurrdfRowCursor>(rc) }
 }

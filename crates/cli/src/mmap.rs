@@ -14,7 +14,6 @@
 //! cost of one `mmap` and one `munmap`.
 
 use std::ffi::CStr;
-use std::fmt;
 use std::fs::File;
 use std::io;
 use std::ops::Deref;
@@ -25,6 +24,7 @@ use std::ptr::NonNull;
 ///
 /// Dereferences to the file's bytes. A zero-length file yields an empty slice
 /// without any mapping being made (the kernel refuses zero-length mappings).
+#[derive(Debug)]
 pub struct Mmap {
     /// Start of the mapping; dangling (and never dereferenced) when `len == 0`.
     ptr: NonNull<u8>,
@@ -122,15 +122,6 @@ impl Drop for Mmap {
         unsafe {
             libc::munmap(self.ptr.as_ptr().cast::<libc::c_void>(), self.len);
         }
-    }
-}
-
-impl fmt::Debug for Mmap {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Mmap")
-            .field("ptr", &self.ptr)
-            .field("len", &self.len)
-            .finish()
     }
 }
 

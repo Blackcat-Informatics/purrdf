@@ -65,7 +65,7 @@
 //! rather than merely compiled.
 
 use std::rc::Rc;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use purrdf::{GovernedEntailment, JsonLdSerializeOptions, SerializeGraph, serialize_dataset};
@@ -74,9 +74,9 @@ use purrdf_core::{SparqlRequest, SparqlResult};
 use purrdf_sparql_eval::protocol::FailureCode;
 use purrdf_sparql_eval::{
     AggregateRegistry, BudgetExhausted, CancellationFlag, GovernedOutcome, GovernedUpdateOutcome,
-    GovernorEvidence as EvidenceValue, NativeSparqlEngine, PartialAnswers as PartialValue,
-    QueryGovernors, ResourceDimension, StopCause, StopSignal, TrippedGovernor as TrippedValue,
-    WallDeadline,
+    GovernorEvidence as EvidenceValue, HostStopWatch, NativeSparqlEngine,
+    PartialAnswers as PartialValue, QueryGovernors, ResourceDimension, StopSignal,
+    TrippedGovernor as TrippedValue, WallDeadline,
 };
 use purrdf_sparql_results::{
     ResultProvenance, SparqlResultsFormat, serialize as serialize_results,
@@ -436,66 +436,6 @@ impl CancellationToken {
     }
 }
 
-/// The composed [`StopSignal`] every governed wasm call runs under.
-///
-/// Two sources, one signal, because `QueryGovernors::with_stop_signal` takes one and
-/// composing them is the host's job: the caller's [`CancellationToken`], when one was
-/// supplied, and the caller's wall deadline, when one was.
-///
-/// # Latching
-///
-/// The trait's contract is that a fired signal stays fired, so the resolved cause is
-/// written once into a `OnceLock` and every later poll returns it without consulting a
-/// source again. A simultaneous fire resolves the way the kernel ranks it — a cancellation
-/// (an explicit decision) ahead of a deadline (an elapsed measurement).
-#[derive(Debug)]
-struct WasmStopWatch {
-    /// The resolved cause, written once. See the latching note above.
-    latched: OnceLock<StopCause>,
-    /// The caller's cancellation bit, when one was supplied.
-    cancel: Option<CancellationFlag>,
-    /// The caller's wall deadline, when one was supplied. This is the wasm clock read.
-    deadline: Option<WallDeadline>,
-}
-
-impl WasmStopWatch {
-    /// A watch over the caller's `deadline_ms` budget and `cancel` token, if any.
-    fn new(deadline_ms: Option<u64>, cancel: Option<&CancellationToken>) -> Self {
-        Self {
-            latched: OnceLock::new(),
-            cancel: cancel.map(|token| token.flag.clone()),
-            deadline: deadline_ms.map(|ms| WallDeadline::after(Duration::from_millis(ms))),
-        }
-    }
-
-    /// Whether this watch has anything at all to watch.
-    const fn is_armed(&self) -> bool {
-        self.cancel.is_some() || self.deadline.is_some()
-    }
-
-    /// Poll every source once and resolve a simultaneous fire by the kernel's precedence.
-    fn observe(&self) -> Option<StopCause> {
-        if self
-            .cancel
-            .as_ref()
-            .is_some_and(CancellationFlag::is_cancelled)
-        {
-            return Some(StopCause::Cancelled);
-        }
-        self.deadline.as_ref().and_then(StopSignal::poll)
-    }
-}
-
-impl StopSignal for WasmStopWatch {
-    fn poll(&self) -> Option<StopCause> {
-        if let Some(&cause) = self.latched.get() {
-            return Some(cause);
-        }
-        let cause = self.observe()?;
-        Some(*self.latched.get_or_init(|| cause))
-    }
-}
-
 /// The ceilings one governed call carries, after decoding and before they are engaged.
 ///
 /// `None` in a slot means the caller declined that ceiling — never zero, which is a
@@ -547,7 +487,7 @@ impl GovernorArgs {
         })
     }
 
-    /// The caller's wall-clock budget, for a stop signal that is not a [`WasmStopWatch`]
+    /// The caller's wall-clock budget, for a stop signal that is not a [`HostStopWatch`]
     /// to arm itself from.
     pub(crate) const fn deadline_ms(&self) -> Option<u64> {
         self.deadline_ms
@@ -570,7 +510,7 @@ impl GovernorArgs {
     /// [`purrdf_validate::governors::from_parts`].
     ///
     /// The one construction path for a query's ceilings: the synchronous lane attaches its
-    /// [`WasmStopWatch`] to it, and the asynchronous lane attaches its own watch instead.
+    /// [`HostStopWatch`] to it, and the asynchronous lane attaches its own watch instead.
     /// See [`Self::stop_watch`] for why the base is `METERED`.
     ///
     /// # Errors
@@ -591,7 +531,7 @@ impl GovernorArgs {
     }
 
     /// The stop signal a synchronous governed call runs under: the caller's wall deadline
-    /// and cancellation token composed into one [`WasmStopWatch`], or `None` when the
+    /// and cancellation token composed into one [`HostStopWatch`], or `None` when the
     /// caller supplied neither.
     ///
     /// # Why a governed call's base is `METERED` rather than `UNBOUNDED`
@@ -611,10 +551,12 @@ impl GovernorArgs {
         self,
         cancel: Option<&CancellationToken>,
     ) -> Option<Arc<dyn StopSignal>> {
-        let watch = WasmStopWatch::new(self.deadline_ms, cancel);
-        watch
-            .is_armed()
-            .then(|| Arc::new(watch) as Arc<dyn StopSignal>)
+        HostStopWatch::new(
+            cancel.map(|token| token.flag.clone()),
+            self.deadline_ms
+                .map(|ms| WallDeadline::after(Duration::from_millis(ms))),
+        )
+        .into_signal()
     }
 }
 

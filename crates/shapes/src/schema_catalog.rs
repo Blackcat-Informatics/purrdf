@@ -307,6 +307,97 @@ fn validate_schema(
     Ok(())
 }
 
+/// Whether `keyword` is a JSON Schema 2020-12 annotation-only keyword: a core
+/// identifier or comment (`$schema`, `$id`, `$anchor`, `$dynamicAnchor`,
+/// `$vocabulary`, `$comment`), a Meta-Data vocabulary keyword (2020-12 Validation
+/// §9), or an `x-` extension. None of them constrains an instance, so a projection
+/// may skip them without changing what a schema accepts.
+pub(crate) fn is_annotation_keyword(keyword: &str) -> bool {
+    keyword.starts_with("x-")
+        || matches!(
+            keyword,
+            "$schema"
+                | "$id"
+                | "$anchor"
+                | "$dynamicAnchor"
+                | "$vocabulary"
+                | "$comment"
+                | "title"
+                | "description"
+                | "default"
+                | "examples"
+                | "deprecated"
+                | "readOnly"
+                | "writeOnly"
+        )
+}
+
+/// Whether `keyword` is an assertion or applicator keyword of JSON Schema 2020-12
+/// (Core §10, Validation §6–§8) or the `additionalItems` its predecessors used. A
+/// key that is neither this nor [`is_annotation_keyword`] is an assertion a
+/// schema-language projection cannot see, and must refuse rather than drop.
+pub(crate) fn known_schema_keyword(keyword: &str) -> bool {
+    matches!(
+        keyword,
+        "$ref"
+            | "$defs"
+            | "type"
+            | "enum"
+            | "const"
+            | "allOf"
+            | "anyOf"
+            | "oneOf"
+            | "not"
+            | "if"
+            | "then"
+            | "else"
+            | "properties"
+            | "required"
+            | "patternProperties"
+            | "additionalProperties"
+            | "dependentRequired"
+            | "dependentSchemas"
+            | "propertyNames"
+            | "minProperties"
+            | "maxProperties"
+            | "items"
+            | "prefixItems"
+            | "additionalItems"
+            | "contains"
+            | "minContains"
+            | "maxContains"
+            | "uniqueItems"
+            | "minItems"
+            | "maxItems"
+            | "unevaluatedItems"
+            | "unevaluatedProperties"
+            | "minimum"
+            | "maximum"
+            | "exclusiveMinimum"
+            | "exclusiveMaximum"
+            | "multipleOf"
+            | "minLength"
+            | "maxLength"
+            | "pattern"
+            | "format"
+            | "contentEncoding"
+            | "contentMediaType"
+            | "contentSchema"
+    )
+}
+
+/// Normalise an emitted source text's tail to exactly one newline, the single
+/// convention every schema-language projection's output follows.
+pub(crate) fn finish_text(mut text: String) -> String {
+    while text.ends_with("\n\n") {
+        text.pop();
+    }
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

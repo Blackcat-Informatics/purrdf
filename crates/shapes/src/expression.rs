@@ -677,7 +677,7 @@ impl ArgKey {
     pub fn variable_name(&self) -> String {
         match self {
             Self::Index(index) => format!("arg{index}"),
-            Self::Named(iri) => crate::shapes::local_name(iri).to_owned(),
+            Self::Named(iri) => purrdf_iri::local_name(iri).to_owned(),
         }
     }
 }

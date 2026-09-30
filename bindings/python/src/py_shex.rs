@@ -58,8 +58,10 @@ fn parse_schema(schema: &str, format: &str, base: Option<&str>) -> Result<Schema
     }
 }
 
-/// Map the Python-surface data format name onto the native codec's media type.
-fn data_media_type(format: &str) -> Result<&'static str, String> {
+/// Map the Python-surface data format name (`turtle`, `ntriples`, `nquads`) onto
+/// the native codec's media type, refusing any other name. The one mapping every
+/// binding that accepts a data-graph `format` string uses.
+pub(crate) fn data_media_type(format: &str) -> Result<&'static str, String> {
     match format {
         "turtle" => Ok(NativeRdfFormat::Turtle.media_type()),
         "ntriples" => Ok(NativeRdfFormat::NTriples.media_type()),

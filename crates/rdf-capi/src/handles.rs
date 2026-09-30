@@ -25,11 +25,6 @@ const _: fn() = || {
 };
 
 impl PurrdfDataset {
-    /// Wrap a frozen dataset as a heap-owned handle pointer.
-    pub(crate) fn into_raw(dataset: Arc<RdfDataset>) -> *mut Self {
-        Box::into_raw(Box::new(Self(dataset)))
-    }
-
     /// Borrow the inner `Arc` from a non-null handle pointer (used where an
     /// owned clone of the `Arc` is needed, e.g. pinning a cursor).
     ///
@@ -48,19 +43,38 @@ impl PurrdfDataset {
     }
 }
 
+/// Move `value` to the heap and hand its ownership across the ABI as an opaque
+/// handle pointer. Every handle libpurrdf returns is minted here, so every handle
+/// is a `Box` allocation that [`free_handle`] can reclaim with the matching layout.
+pub(crate) fn into_handle<T>(value: T) -> *mut T {
+    Box::into_raw(Box::new(value))
+}
+
+/// Reclaim and drop a handle minted by [`into_handle`]; a null pointer is a no-op.
+///
+/// The single destructor behind every `purrdf_*_free` entry point: each handle is a
+/// `Box<T>` allocation, so releasing one is the same `Box::from_raw` for every `T`. A
+/// panic in `T`'s destructor is caught here rather than unwinding into C.
+///
+/// # Safety
+/// `handle` must be null or a pointer returned by [`into_handle`] for this `T` and
+/// not already freed.
+pub(crate) unsafe fn free_handle<T>(handle: *mut T) {
+    ffi_guard!((), {
+        if !handle.is_null() {
+            // SAFETY: the caller's contract — a live `into_handle` allocation of `T`.
+            drop(unsafe { Box::from_raw(handle) });
+        }
+    });
+}
+
 /// Release a dataset handle. No-op on null.
 ///
 /// # Safety
 /// `dataset` must be null or a live dataset handle not already freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_dataset_free(dataset: *mut PurrdfDataset) {
-    unsafe {
-        ffi_guard!((), {
-            if !dataset.is_null() {
-                drop(Box::from_raw(dataset));
-            }
-        });
-    }
+    unsafe { free_handle::<PurrdfDataset>(dataset) }
 }
 
 /// Write the number of quads in the dataset to `*out`.

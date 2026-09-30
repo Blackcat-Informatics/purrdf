@@ -114,6 +114,7 @@ mod nested_lateral_gate;
 #[cfg(test)]
 mod op_count;
 pub(crate) mod parallel;
+pub use parallel::chunk_len_for_threads;
 #[cfg(test)]
 mod parallel_determinism_gate;
 mod path;
@@ -196,8 +197,8 @@ pub use governed::{
 pub use governor::{
     CHARGE_SCHEDULE, CancellationFlag, ChargePoint, GOVERNOR_CORPUS_DIGEST,
     GOVERNOR_PROFILE_DIGEST, GOVERNOR_PROFILE_ID, GOVERNOR_PROFILE_VERSION, GovernorState,
-    ItemCharge, NodeCharges, NonMonotoneBarrier, PlanEstimate, ProfileIdentity, QueryExplanation,
-    QueryGovernors, STOP_POLL_FUEL, StopSignal, WallDeadline, resolve_precedence,
+    HostStopWatch, ItemCharge, NodeCharges, NonMonotoneBarrier, PlanEstimate, ProfileIdentity,
+    QueryExplanation, QueryGovernors, STOP_POLL_FUEL, StopSignal, WallDeadline, resolve_precedence,
 };
 // The interned query egress: a result visited inside its own evaluation, so a
 // caller that reads two columns of a wide row does not pay for the other twenty.

@@ -11,6 +11,7 @@ use std::ffi::{CString, c_char};
 
 use purrdf_core::RdfDiagnostic;
 
+use crate::handles::{free_handle, into_handle};
 use crate::status::PurrdfStatus;
 
 /// An owned error: a status code plus a NUL-terminated message, and — for the one
@@ -141,7 +142,7 @@ pub(crate) fn store_error(out: *mut *mut PurrdfError, err: PurrdfError) {
     // SAFETY: `out` is non-null and, per the ABI contract, points to a writable
     // `*mut PurrdfError` out-param.
     unsafe {
-        *out = Box::into_raw(Box::new(err));
+        *out = into_handle(err);
     }
 }
 
@@ -187,13 +188,7 @@ pub unsafe extern "C" fn purrdf_error_message(err: *const PurrdfError) -> *const
 /// already freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_error_free(err: *mut PurrdfError) {
-    unsafe {
-        ffi_guard!((), {
-            if !err.is_null() {
-                drop(Box::from_raw(err));
-            }
-        });
-    }
+    unsafe { free_handle::<PurrdfError>(err) }
 }
 
 #[cfg(test)]
@@ -210,7 +205,7 @@ mod tests {
     #[test]
     fn accessors_round_trip() {
         let err = PurrdfError::new(PurrdfStatus::QueryError, "boom");
-        let boxed = Box::into_raw(Box::new(err));
+        let boxed = into_handle(err);
         unsafe {
             assert_eq!(purrdf_error_code(boxed), PurrdfStatus::QueryError as i32);
             let msg = std::ffi::CStr::from_ptr(purrdf_error_message(boxed));

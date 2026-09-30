@@ -615,11 +615,14 @@ fn validate_document(value: &Value) -> Result<(), LinkmlError> {
         .as_object()
         .ok_or_else(|| LinkmlError::new("LinkML document root must be a mapping"))?;
 
-    let schema_id = required_string(root, "id")?;
+    let schema_id = required_string(root, "id", "LinkML id")?;
     validate_absolute_iri("LinkML document id", schema_id)?;
-    validate_identifier("LinkML document name", required_string(root, "name")?)?;
+    validate_identifier(
+        "LinkML document name",
+        required_string(root, "name", "LinkML name")?,
+    )?;
 
-    let metamodel_version = required_string(root, "metamodel_version")?;
+    let metamodel_version = required_string(root, "metamodel_version", "LinkML metamodel_version")?;
     if metamodel_version != LINKML_METAMODEL_VERSION {
         return Err(LinkmlError::new(format!(
             "LinkML metamodel_version must be {LINKML_METAMODEL_VERSION:?}, got {metamodel_version:?}"
@@ -643,7 +646,7 @@ fn validate_document(value: &Value) -> Result<(), LinkmlError> {
         .ok_or_else(|| LinkmlError::new("LinkML prefixes must be a mapping"))?;
     validate_document_prefixes(prefixes)?;
 
-    let default_prefix = required_string(root, "default_prefix")?;
+    let default_prefix = required_string(root, "default_prefix", "LinkML default_prefix")?;
     validate_identifier("LinkML document default_prefix", default_prefix)?;
     if !prefixes.contains_key(default_prefix) {
         return Err(LinkmlError::new(format!(
@@ -794,11 +797,13 @@ fn validate_document_prefixes(prefixes: &Object) -> Result<(), LinkmlError> {
     Ok(())
 }
 
-fn required_string<'a>(object: &'a Object, key: &str) -> Result<&'a str, LinkmlError> {
+/// The string member `key` of `object`, or a refusal naming `path` — the one
+/// "required string" reader of every LinkML document surface.
+fn required_string<'a>(object: &'a Object, key: &str, path: &str) -> Result<&'a str, LinkmlError> {
     object
         .get(key)
         .and_then(Value::as_str)
-        .ok_or_else(|| LinkmlError::new(format!("LinkML {key} must be a string")))
+        .ok_or_else(|| LinkmlError::new(format!("{path} must be a string")))
 }
 
 fn validate_absolute_iri(label: &str, value: &str) -> Result<(), LinkmlError> {

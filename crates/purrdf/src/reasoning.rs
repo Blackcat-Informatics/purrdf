@@ -80,6 +80,28 @@ pub enum QueryEntailment<'a> {
     Rif(&'a RuleSet),
 }
 
+impl<'a> QueryEntailment<'a> {
+    /// The query plan for `regime`, with `rules` as the RIF rule set.
+    ///
+    /// The one mapping from a resolved [`Regime`] to its query plan, total over the seven
+    /// regimes: every host that resolves a regime (the owned [`QueryEntailmentPlan`], a
+    /// command line) borrows its plan through here, so no two hosts can map one regime to
+    /// two plans. `rules` is read only for [`Regime::Rif`], the one regime whose calculus
+    /// is the caller's rather than a specification's.
+    #[must_use]
+    pub const fn for_regime(regime: Regime, rules: &'a RuleSet) -> Self {
+        match regime {
+            Regime::Simple => Self::Simple,
+            Regime::Rdf => Self::Rdf,
+            Regime::Rdfs => Self::Rdfs,
+            Regime::OwlRl => Self::OwlRl,
+            Regime::D => Self::D,
+            Regime::OwlDirect => Self::OwlDirect,
+            Regime::Rif => Self::Rif(rules),
+        }
+    }
+}
+
 /// Owned, host-neutral configuration for one entailment-aware SPARQL query.
 ///
 /// Language bindings receive a regime spelling plus a string program rather than a
@@ -115,15 +137,7 @@ impl QueryEntailmentPlan {
     /// Borrow this owned configuration in the native query orchestrator's form.
     #[must_use]
     pub const fn entailment(&self) -> QueryEntailment<'_> {
-        match self.regime {
-            Regime::Simple => QueryEntailment::Simple,
-            Regime::Rdf => QueryEntailment::Rdf,
-            Regime::Rdfs => QueryEntailment::Rdfs,
-            Regime::OwlRl => QueryEntailment::OwlRl,
-            Regime::D => QueryEntailment::D,
-            Regime::OwlDirect => QueryEntailment::OwlDirect,
-            Regime::Rif => QueryEntailment::Rif(&self.rules),
-        }
+        QueryEntailment::for_regime(self.regime, &self.rules)
     }
 
     /// The resolved native regime.
@@ -1905,6 +1919,24 @@ mod tests {
 
     use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
     use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASS;
+
+    #[test]
+    fn every_regime_maps_to_its_own_query_plan_and_only_rif_reads_the_rules() {
+        let rules = RuleSet::new();
+        let plan = |regime| QueryEntailment::for_regime(regime, &rules);
+        assert!(matches!(plan(Regime::Simple), QueryEntailment::Simple));
+        assert!(matches!(plan(Regime::Rdf), QueryEntailment::Rdf));
+        assert!(matches!(plan(Regime::Rdfs), QueryEntailment::Rdfs));
+        assert!(matches!(plan(Regime::OwlRl), QueryEntailment::OwlRl));
+        assert!(matches!(plan(Regime::D), QueryEntailment::D));
+        assert!(matches!(
+            plan(Regime::OwlDirect),
+            QueryEntailment::OwlDirect
+        ));
+        assert!(
+            matches!(plan(Regime::Rif), QueryEntailment::Rif(lent) if std::ptr::eq(lent, &raw const rules))
+        );
+    }
 
     /// A caller can walk from the wrapper to the failure it wraps.
     ///

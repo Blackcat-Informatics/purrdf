@@ -29,13 +29,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Write as _};
 
-use crate::json_model::{Number, NumberKind, Object, Value, ValueKind};
+use crate::json_model::{Number, NumberKind, Object, Value, ValueKind, json_string};
 use ::purrdf::RdfLocation;
 use ::purrdf::loss::{LossEntry, LossLedger};
 
 use crate::json_schema::CompiledSchema;
 use crate::schema_catalog::{
-    CompiledSchemaCatalog, definition_path, pointer_escape, reference_key, schema_array_keywords,
+    CompiledSchemaCatalog, definition_path, finish_text, is_annotation_keyword,
+    known_schema_keyword, pointer_escape, reference_key, schema_array_keywords,
     schema_map_keywords, schema_single_keywords,
 };
 use crate::schema_import::{ImportedShapes, SchemaImportConfig, import_json_schema_from};
@@ -1959,76 +1960,6 @@ fn has_array_shape(object: &Object) -> bool {
         .any(|keyword| object.contains_key(keyword))
 }
 
-fn known_schema_keyword(keyword: &str) -> bool {
-    matches!(
-        keyword,
-        "$ref"
-            | "$defs"
-            | "type"
-            | "enum"
-            | "const"
-            | "allOf"
-            | "anyOf"
-            | "oneOf"
-            | "not"
-            | "if"
-            | "then"
-            | "else"
-            | "properties"
-            | "required"
-            | "patternProperties"
-            | "additionalProperties"
-            | "dependentRequired"
-            | "dependentSchemas"
-            | "propertyNames"
-            | "minProperties"
-            | "maxProperties"
-            | "items"
-            | "prefixItems"
-            | "additionalItems"
-            | "contains"
-            | "minContains"
-            | "maxContains"
-            | "uniqueItems"
-            | "minItems"
-            | "maxItems"
-            | "unevaluatedItems"
-            | "unevaluatedProperties"
-            | "minimum"
-            | "maximum"
-            | "exclusiveMinimum"
-            | "exclusiveMaximum"
-            | "multipleOf"
-            | "minLength"
-            | "maxLength"
-            | "pattern"
-            | "format"
-            | "contentEncoding"
-            | "contentMediaType"
-            | "contentSchema"
-    )
-}
-
-fn is_annotation_keyword(keyword: &str) -> bool {
-    keyword.starts_with("x-")
-        || matches!(
-            keyword,
-            "$schema"
-                | "$id"
-                | "$anchor"
-                | "$dynamicAnchor"
-                | "$vocabulary"
-                | "$comment"
-                | "title"
-                | "description"
-                | "default"
-                | "examples"
-                | "deprecated"
-                | "readOnly"
-                | "writeOnly"
-        )
-}
-
 fn schema_doc(schema: &Value) -> Result<Option<&str>, TypeScriptError> {
     let Some(object) = schema.as_object() else {
         return Ok(None);
@@ -2099,10 +2030,6 @@ fn ensure_depth(depth: usize, path: &str) -> Result<(), TypeScriptError> {
     } else {
         Ok(())
     }
-}
-
-fn json_string(value: &str) -> String {
-    crate::json_model::json_string(value)
 }
 
 fn typescript_type_name(raw: &str, fallback: &str) -> String {
@@ -2235,16 +2162,6 @@ fn is_package_name(value: &str) -> bool {
     } else {
         !value.contains('/') && valid_part(value)
     }
-}
-
-fn finish_text(mut text: String) -> String {
-    while text.ends_with("\n\n") {
-        text.pop();
-    }
-    if !text.ends_with('\n') {
-        text.push('\n');
-    }
-    text
 }
 
 #[cfg(test)]

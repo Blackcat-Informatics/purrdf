@@ -37,7 +37,7 @@ use purrdf::shapes::{Inference, RuleOptions, engine, lint};
 use purrdf_rdf::{JsonLdSerializeOptions, SourceFormat};
 use purrdf_validate::ExprSelector;
 
-use crate::cli::{CliRdfFormat, LedgerTarget, ReportTarget};
+use crate::cli::{CliRdfFormat, LedgerTarget, ReportTarget, refuse_document_flags};
 use crate::error::CliError;
 use crate::shapes_source::{
     read_shapes_document, resolve_shapes_graph, shapes_error, shapes_imports,
@@ -330,7 +330,7 @@ fn run_srl_check(
     level: srl::CheckLevel,
     ledger_target: &LedgerTarget,
 ) -> Result<(), CliError> {
-    refuse_document_flags("rules --check", ledger_target, options.jsonld_options)?;
+    refuse_text_report_flags("rules --check", ledger_target, options.jsonld_options)?;
     // clap makes `--check` require `--srl`; reported rather than unwrapped, because an
     // unreachable panic in a CLI is a crash report.
     let Some(path) = options.srl else {
@@ -476,7 +476,7 @@ pub(crate) fn run_node_expr(
     ledger_target: &LedgerTarget,
     jsonld_options: Option<&JsonLdSerializeOptions>,
 ) -> Result<(), CliError> {
-    refuse_document_flags("node-expr", ledger_target, jsonld_options)?;
+    refuse_text_report_flags("node-expr", ledger_target, jsonld_options)?;
     refuse_two_stdins(&[
         ("IN", Some(options.input)),
         ("--shapes", Some(options.shapes)),
@@ -614,7 +614,7 @@ pub(crate) fn run_lint(
     ledger_target: &LedgerTarget,
     jsonld_options: Option<&JsonLdSerializeOptions>,
 ) -> Result<(), CliError> {
-    refuse_document_flags("shapes lint", ledger_target, jsonld_options)?;
+    refuse_text_report_flags("shapes lint", ledger_target, jsonld_options)?;
     let format = format::resolve(options.from, options.input)?;
     let base = match format {
         SourceFormat::Native(native) => {
@@ -660,22 +660,21 @@ pub(crate) fn run_lint(
 
 /// Refuse the two global document flags, which name an RDF serialization a text-report
 /// command does not run: an unrefused one would be accepted and silently do nothing.
-fn refuse_document_flags(
+fn refuse_text_report_flags(
     command: &str,
     ledger_target: &LedgerTarget,
     jsonld_options: Option<&JsonLdSerializeOptions>,
 ) -> Result<(), CliError> {
-    if ledger_target.is_requested() {
-        return Err(CliError::Usage(format!(
+    refuse_document_flags(
+        ledger_target,
+        jsonld_options,
+        &format!(
             "--loss-ledger records what an RDF serialization dropped, and `{command}` runs none: \
              its answer is line-oriented text. There is no ledger to surface"
-        )));
-    }
-    if jsonld_options.is_some() {
-        return Err(CliError::Usage(format!(
+        ),
+        &format!(
             "--jsonld-options configures a JSON-LD/YAML-LD serializer, and `{command}` runs \
              none: its answer is line-oriented text, not JSON-LD"
-        )));
-    }
-    Ok(())
+        ),
+    )
 }

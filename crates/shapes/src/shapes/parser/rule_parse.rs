@@ -702,7 +702,7 @@ impl Parser<'_> {
                     format!("sh:optional on parameter {declaration} must be an xsd:boolean")
                 })?,
             };
-            let variable = crate::components::sparql_local_name(path.as_str());
+            let variable = purrdf_iri::local_name(path.as_str()).to_owned();
             if RESERVED_VARIABLES.contains(&variable.as_str()) {
                 return Err(format!(
                     "parameter {declaration} of SPARQL rule template {template} names the \

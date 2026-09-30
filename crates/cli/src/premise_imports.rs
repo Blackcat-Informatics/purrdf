@@ -37,7 +37,7 @@ use purrdf_rdf::SourceFormat;
 use purrdf_validate::regime::MaterializeLimits;
 
 use crate::cli::{CliRdfFormat, ReportTarget};
-use crate::error::CliError;
+use crate::error::{CliError, argv_iri_refusal};
 use crate::format;
 use crate::report;
 use crate::source;
@@ -71,7 +71,7 @@ pub(crate) fn split_import(spec: &str) -> Option<(&str, &str)> {
 /// here would turn `foo` into some absolute IRI that still matches nothing. The half is
 /// therefore required to be absolute, through the shared [`BaseScope`] with NO base in
 /// scope: an absolute value is carried lexical-verbatim, and anything else is refused
-/// against the command line by [`import_iri_refusal`], naming the flag, the pair and the
+/// against the command line by [`argv_iri_refusal`](crate::error::argv_iri_refusal), naming the flag, the pair and the
 /// offending half.
 pub(crate) fn parse_pairs(specs: &[String]) -> Result<Vec<(String, &str)>, CliError> {
     // No base, deliberately: see the section above. `BaseScope` is still the seam, so the
@@ -92,34 +92,25 @@ pub(crate) fn parse_pairs(specs: &[String]) -> Result<Vec<(String, &str)>, CliEr
                  names what the premise imports, and the path names the document that is it"
             )));
         }
-        let absolute = scope
-            .resolve(iri)
-            .map_err(|error| import_iri_refusal(spec, iri, &error))?;
+        let absolute = scope.resolve(iri).map_err(|error| {
+            argv_iri_refusal(
+                &format!("--import {spec}"),
+                &error,
+                "iri-relative-no-base",
+                &format!(
+                    "the ontology-IRI half `{iri}` is a relative IRI reference, and it is \
+                         matched against the premise's `owl:imports` objects, which are \
+                         absolute. It can therefore resolve no import at all. This is a \
+                         command-line value, so no `@base` in any document reaches it and none \
+                         is guessed for it: write the half as the absolute IRI the premise's \
+                         `owl:imports` names"
+                ),
+                &format!("the ontology-IRI half `{iri}` is not a usable IRI: "),
+            )
+        })?;
         resolved.push((absolute.as_str().to_owned(), path));
     }
     Ok(resolved)
-}
-
-/// The refusal for an `--import` whose own ontology-IRI half denotes no ontology.
-///
-/// It names the FLAG, the pair as written and the offending half, and carries the shared
-/// [`purrdf_iri::IriError::diagnostic_code`]. It does NOT carry the library's remedy for a
-/// missing base: that one names `@base` and `xml:base`, which are document directives, and
-/// this value is argv text that no document reaches.
-fn import_iri_refusal(spec: &str, iri: &str, error: &purrdf_iri::IriError) -> CliError {
-    let code = error.diagnostic_code();
-    if code == "iri-relative-no-base" {
-        return CliError::Usage(format!(
-            "--import {spec}: {code}: the ontology-IRI half `{iri}` is a relative IRI reference, \
-             and it is matched against the premise's `owl:imports` objects, which are absolute. \
-             It can therefore resolve no import at all. This is a command-line value, so no \
-             `@base` in any document reaches it and none is guessed for it: write the half as \
-             the absolute IRI the premise's `owl:imports` names"
-        ));
-    }
-    CliError::Usage(format!(
-        "--import {spec}: {code}: the ontology-IRI half `{iri}` is not a usable IRI: {error}"
-    ))
 }
 
 /// The IRI a premise document was read FROM — the base it parsed under, which is its

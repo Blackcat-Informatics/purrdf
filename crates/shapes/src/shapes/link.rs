@@ -68,6 +68,7 @@ use purrdf_sparql_eval::{Arity, ExprFnCall, UserFunctionRegistry};
 
 use crate::expression::{CustomFnKind, CustomFunction, FnCall, NodeExpr, ShapeArg};
 use crate::product::ast::MAX_DEPTH;
+use crate::product::error::malformed;
 use crate::product::{ProductDimension, ShapesProductError};
 use crate::rules::{Rule, RuleBody};
 use crate::shapes::parser::functions::{
@@ -90,12 +91,7 @@ pub(crate) type ShapeIndex = Arc<OnceLock<FastMap<Term, Shape>>>;
 // Refusals
 // ---------------------------------------------------------------------------
 
-/// Refuse: the linked model's structure is wrong.
-fn malformed(message: impl Into<String>) -> ShapesProductError {
-    ShapesProductError::new(ProductDimension::Malformed, message)
-}
-
-/// Refuse: the model nests past [`MAX_DEPTH`], so verifying it would risk the
+/// Refuse: the model nests past [`MAX_DEPTH`], so walking it would risk the
 /// native stack.
 fn depth_limit() -> ShapesProductError {
     ShapesProductError::new(
@@ -103,7 +99,7 @@ fn depth_limit() -> ShapesProductError {
         format!(
             "this shapes model nests shapes, constraints or node expressions more than \
              {MAX_DEPTH} levels deep; flatten the shapes graph, because the ceiling is what stops \
-             linking from exhausting the native stack — an abort no caller could have handled"
+             a walk over it from exhausting the native stack — an abort no caller could have handled"
         ),
     )
 }
@@ -397,74 +393,84 @@ pub(crate) fn register_expression_bodied_functions(
 }
 
 // ---------------------------------------------------------------------------
-// The topology walk
+// The model walk
 // ---------------------------------------------------------------------------
 
-/// A walk over the linked model that proves every shape-index handle it reaches is
-/// the ONE handle the graph shares.
+/// The one traversal of a shapes model's positions that can carry a shape-index
+/// handle or reach a custom-function declaration.
 ///
-/// It visits exactly the model positions that can carry a handle or lead to one, and
-/// every `match` over the model is WILDCARD-FREE, so a new `Constraint` or
-/// `NodeExpr` arm that could reach a handle cannot be added without deciding whether
-/// the walk has to see it — the same discipline `product::ast`'s walks use, for the
-/// same reason.
-struct ShapeIndexWalk<'a> {
-    /// The single handle every reachable site must be [`Arc::ptr_eq`] to.
-    index: &'a ShapeIndex,
-    /// The live walk depth, bounded exactly as encoding is.
-    depth: u32,
-    /// Declarations already walked, by handle identity. A body may call its own
-    /// function, so this is what makes the cyclic value graph terminate.
-    seen_fns: Vec<Arc<CustomFunction>>,
-}
+/// Two passes need exactly this traversal: linking, which proves every shape-index
+/// handle it reaches is the graph's one handle, and the product codec, which
+/// collects every custom-function declaration a shapes graph can call. They differ
+/// only in what they do AT a declaration and AT a handle, so those are the two
+/// hooks; the traversal itself exists once, so a model position one pass visits
+/// cannot be missed by the other.
+///
+/// Every `match` over the model is WILDCARD-FREE, so a new `Constraint`, `Target`
+/// or `NodeExpr` arm that could reach a handle or a declaration cannot be added
+/// without deciding whether the walk has to see it. Each shape, constraint and node
+/// expression opens one nesting level, bounded by [`MAX_DEPTH`], because the walk
+/// recurses on the native stack.
+pub(crate) trait ModelWalk {
+    /// The live nesting depth the walk bounds.
+    fn depth(&mut self) -> &mut u32;
 
-impl ShapeIndexWalk<'_> {
-    /// Open one level of the walk.
+    /// Record `func`; `true` when its body has not been walked yet and must be now.
+    /// Recording happens BEFORE the body is walked: a self-recursive body is legal,
+    /// and this is what makes walking it terminate.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the pass refuses about the declaration.
+    fn first_declaration(&mut self, func: &Arc<CustomFunction>)
+    -> Result<bool, ShapesProductError>;
+
+    /// Inspect one shape-index handle.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the pass refuses about the handle.
+    fn shape_index(&mut self, found: &ShapeIndex) -> Result<(), ShapesProductError>;
+
+    /// Open one nesting level, refusing past [`MAX_DEPTH`].
+    ///
+    /// # Errors
+    ///
+    /// [`ProductDimension::DepthLimit`] past [`MAX_DEPTH`].
     fn enter(&mut self) -> Result<(), ShapesProductError> {
-        if self.depth >= MAX_DEPTH {
+        let depth = self.depth();
+        if *depth >= MAX_DEPTH {
             return Err(depth_limit());
         }
-        self.depth += 1;
+        *depth += 1;
         Ok(())
     }
 
-    /// Close one level of the walk.
+    /// Close one nesting level.
     fn leave(&mut self) {
-        self.depth -= 1;
+        *self.depth() -= 1;
     }
 
-    /// Check one shape-index handle against the graph's single index.
-    fn handle(&self, found: &ShapeIndex) -> Result<(), ShapesProductError> {
-        if Arc::ptr_eq(found, self.index) {
-            return Ok(());
-        }
-        Err(malformed(
-            "this shapes model carries a sh:nodeByExpression shape index that is NOT the one \
-             handle the graph shares; build the model so every sh:nodeByExpression constraint and \
-             every computed shape argument clones the SAME Arc, because a per-site handle \
-             type-checks, allocates one index per constraint instead of one per graph, and leaves \
-             every clone permanently empty — the constraint would then resolve no shape at all \
-             while the shapes graph loaded green and reported nothing",
-        ))
-    }
-
-    /// Walk a declaration and, once, its body.
+    /// Walk a declaration and, the first time it is seen, its body.
+    ///
+    /// # Errors
+    ///
+    /// A hook's refusal, or the depth ceiling.
     fn declare(&mut self, func: &Arc<CustomFunction>) -> Result<(), ShapesProductError> {
-        if self.seen_fns.iter().any(|seen| Arc::ptr_eq(seen, func)) {
-            return Ok(());
-        }
-        // Recorded BEFORE the body is walked: a self-recursive body is legal, and
-        // this is what makes walking it terminate.
-        self.seen_fns.push(Arc::clone(func));
-        if let Some(body) = func.body.get() {
+        if self.first_declaration(func)?
+            && let Some(body) = func.body.get()
+        {
             self.node_expr(body)?;
         }
         Ok(())
     }
 
-    /// Walk the target declarations that can reach a handle: a structured
-    /// `sh:targetNode` is a node expression, and a `sh:targetWhere` is a shape.
-    /// Wildcard-free for the reason the constraint walk is.
+    /// Walk the target declarations that can reach a node expression: a
+    /// structured `sh:targetNode` is one, and a `sh:targetWhere` is a shape.
+    ///
+    /// # Errors
+    ///
+    /// A hook's refusal, or the depth ceiling.
     fn targets(&mut self, targets: &[Target]) -> Result<(), ShapesProductError> {
         for target in targets {
             match target {
@@ -482,6 +488,10 @@ impl ShapeIndexWalk<'_> {
     }
 
     /// Walk a node shape.
+    ///
+    /// # Errors
+    ///
+    /// A hook's refusal, or the depth ceiling.
     fn shape(&mut self, shape: &Shape) -> Result<(), ShapesProductError> {
         self.enter()?;
         self.targets(&shape.targets)?;
@@ -499,6 +509,10 @@ impl ShapeIndexWalk<'_> {
     }
 
     /// Walk a rule: its node expressions and its condition shapes.
+    ///
+    /// # Errors
+    ///
+    /// A hook's refusal, or the depth ceiling.
     fn rule(&mut self, rule: &Rule) -> Result<(), ShapesProductError> {
         match &rule.body {
             RuleBody::Triple {
@@ -522,6 +536,10 @@ impl ShapeIndexWalk<'_> {
     }
 
     /// Walk a property shape.
+    ///
+    /// # Errors
+    ///
+    /// A hook's refusal, or the depth ceiling.
     fn property_shape(&mut self, shape: &PropertyShape) -> Result<(), ShapesProductError> {
         self.enter()?;
         for expr in shape.values.iter().chain(&shape.default_value) {
@@ -540,8 +558,12 @@ impl ShapeIndexWalk<'_> {
         Ok(())
     }
 
-    /// Walk a constraint. This is the site `Constraint::NodeByExpression` carries a
-    /// handle at.
+    /// Walk a constraint. `Constraint::NodeByExpression` is one of the two sites
+    /// that carry a shape-index handle.
+    ///
+    /// # Errors
+    ///
+    /// A hook's refusal, or the depth ceiling.
     fn constraint(&mut self, constraint: &Constraint) -> Result<(), ShapesProductError> {
         self.enter()?;
         match constraint {
@@ -596,7 +618,7 @@ impl ShapeIndexWalk<'_> {
             }
             Constraint::Expression { expr, .. } => self.node_expr(expr)?,
             Constraint::NodeByExpression { expr, shapes, .. } => {
-                self.handle(shapes)?;
+                self.shape_index(shapes)?;
                 self.node_expr(expr)?;
             }
         }
@@ -604,19 +626,27 @@ impl ShapeIndexWalk<'_> {
         Ok(())
     }
 
-    /// Walk the shape argument of `shnex:conformsToShape`. This is the second site
-    /// that carries a handle.
+    /// Walk the shape argument of `shnex:conformsToShape`, the second site that
+    /// carries a shape-index handle.
+    ///
+    /// # Errors
+    ///
+    /// A hook's refusal, or the depth ceiling.
     fn shape_arg(&mut self, arg: &ShapeArg) -> Result<(), ShapesProductError> {
         match arg {
             ShapeArg::Named(shape) => self.shape(shape),
             ShapeArg::Computed { expr, shapes } => {
-                self.handle(shapes)?;
+                self.shape_index(shapes)?;
                 self.node_expr(expr)
             }
         }
     }
 
     /// Walk a node expression.
+    ///
+    /// # Errors
+    ///
+    /// A hook's refusal, or the depth ceiling.
     fn node_expr(&mut self, expr: &NodeExpr) -> Result<(), ShapesProductError> {
         self.enter()?;
         match expr {
@@ -691,6 +721,49 @@ impl ShapeIndexWalk<'_> {
         }
         self.leave();
         Ok(())
+    }
+}
+
+/// The linking pass's [`ModelWalk`]: proves every shape-index handle it reaches is
+/// the ONE handle the graph shares.
+struct ShapeIndexWalk<'a> {
+    /// The single handle every reachable site must be [`Arc::ptr_eq`] to.
+    index: &'a ShapeIndex,
+    /// The live walk depth.
+    depth: u32,
+    /// Declarations already walked, by handle identity. A body may call its own
+    /// function, so this is what makes the cyclic value graph terminate.
+    seen_fns: Vec<Arc<CustomFunction>>,
+}
+
+impl ModelWalk for ShapeIndexWalk<'_> {
+    fn depth(&mut self) -> &mut u32 {
+        &mut self.depth
+    }
+
+    fn first_declaration(
+        &mut self,
+        func: &Arc<CustomFunction>,
+    ) -> Result<bool, ShapesProductError> {
+        if self.seen_fns.iter().any(|seen| Arc::ptr_eq(seen, func)) {
+            return Ok(false);
+        }
+        self.seen_fns.push(Arc::clone(func));
+        Ok(true)
+    }
+
+    fn shape_index(&mut self, found: &ShapeIndex) -> Result<(), ShapesProductError> {
+        if Arc::ptr_eq(found, self.index) {
+            return Ok(());
+        }
+        Err(malformed(
+            "this shapes model carries a sh:nodeByExpression shape index that is NOT the one \
+             handle the graph shares; build the model so every sh:nodeByExpression constraint and \
+             every computed shape argument clones the SAME Arc, because a per-site handle \
+             type-checks, allocates one index per constraint instead of one per graph, and leaves \
+             every clone permanently empty — the constraint would then resolve no shape at all \
+             while the shapes graph loaded green and reported nothing",
+        ))
     }
 }
 

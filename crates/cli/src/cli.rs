@@ -90,10 +90,12 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 use purrdf_entail::Regime;
 use purrdf_rdf::{
-    LiftProfile, NativeRdfFormat, ProjectionProfile, SourceFormat, TransportEncoding,
+    JsonLdSerializeOptions, LiftProfile, NativeRdfFormat, ProjectionProfile, SourceFormat,
+    TransportEncoding,
 };
 use purrdf_sparql_results::SparqlResultsFormat;
 
+use crate::error::CliError;
 use crate::source::TransportPolicy;
 
 /// Validate a `--base` value at the ARGUMENT boundary.
@@ -232,6 +234,29 @@ impl LedgerTarget {
     pub(crate) const fn is_requested(&self) -> bool {
         !matches!(self, Self::Silent)
     }
+}
+
+/// Refuse the two GLOBAL document flags on a command that runs no RDF serializer.
+///
+/// `--loss-ledger` records what a serialization dropped and `--jsonld-options` configures
+/// a JSON-LD/YAML-LD serializer. clap accepts both on every subcommand, so on a command
+/// that serializes no RDF an unrefused one would be accepted and silently do nothing,
+/// the no-op this toolkit refuses everywhere else. Each command supplies the prose that
+/// says why the flag has nothing to act on there (`ledger_refusal`, `jsonld_refusal`);
+/// the refusal itself, a usage error (exit 2) checked ledger first, is this one body.
+pub(crate) fn refuse_document_flags(
+    ledger_target: &LedgerTarget,
+    jsonld_options: Option<&JsonLdSerializeOptions>,
+    ledger_refusal: &str,
+    jsonld_refusal: &str,
+) -> Result<(), CliError> {
+    if ledger_target.is_requested() {
+        return Err(CliError::Usage(ledger_refusal.to_owned()));
+    }
+    if jsonld_options.is_some() {
+        return Err(CliError::Usage(jsonld_refusal.to_owned()));
+    }
+    Ok(())
 }
 
 /// Where (if anywhere) the reasoning report should be surfaced — the decoded form of the
@@ -2428,5 +2453,28 @@ impl CliRegime {
             Self::Rif => Regime::Rif,
             Self::D => Regime::D,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_requested_document_flag_is_refused_and_absent_ones_pass() {
+        let refuse = |ledger: &LedgerTarget, jsonld: Option<&JsonLdSerializeOptions>| {
+            refuse_document_flags(ledger, jsonld, "no ledger here", "no JSON-LD here")
+                .map_err(|error| error.to_string())
+        };
+        assert_eq!(refuse(&LedgerTarget::Silent, None), Ok(()));
+        assert_eq!(
+            refuse(&LedgerTarget::Stderr, None),
+            Err("no ledger here".to_owned())
+        );
+        let options = JsonLdSerializeOptions::expanded();
+        assert_eq!(
+            refuse(&LedgerTarget::Silent, Some(&options)),
+            Err("no JSON-LD here".to_owned())
+        );
     }
 }

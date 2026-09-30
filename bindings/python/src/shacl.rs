@@ -1221,7 +1221,7 @@ impl PyPreparedShapes {
     ) -> PyResult<PyChangeValidation> {
         // Taken under the GIL (it borrows the store), then owned — so the expansion
         // and the validation below run detached with nothing py-bound in hand.
-        let snapshot = Arc::new(store.borrow().change_snapshot()?);
+        let snapshot = Arc::new(store.as_super().borrow().change_snapshot()?);
         let prepared = &self.inner;
         // The binding refuses a mutated graph whose `sh:shapesGraph` links this
         // preparation, built before the graph existed, does not hold — typed, and raised

@@ -374,7 +374,7 @@ fn write_provenance<W: TextOut + ?Sized>(
     out.push_str("    <");
     out.push_str(prefix);
     out.push_str(":queryForm>");
-    out.push_str(query_form(result));
+    out.push_str(result.query_form());
     out.push_str("</");
     out.push_str(prefix);
     out.push_str(":queryForm>\n");
@@ -435,16 +435,6 @@ fn output_size_hint(result: &SparqlResult) -> usize {
                 .saturating_mul(48),
         ),
         SparqlResult::Graph(_) | SparqlResult::Boolean(_) => SKELETON,
-    }
-}
-
-/// The `queryForm` discriminator emitted in provenance. The `Graph` arm is
-/// unreachable here (CONSTRUCT hard-fails earlier) but is named exhaustively.
-fn query_form(result: &SparqlResult) -> &'static str {
-    match result {
-        SparqlResult::Solutions { .. } => "select",
-        SparqlResult::Boolean(_) => "ask",
-        SparqlResult::Graph(_) => "construct",
     }
 }
 

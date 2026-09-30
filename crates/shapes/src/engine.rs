@@ -362,6 +362,22 @@ impl BoundShapes {
     }
 }
 
+/// File `term` under its dataset identity when `dataset` interns it, else under
+/// the term itself: the one split every target set keeps, so a membership test
+/// never materializes an interned node and a foreign one is still found.
+fn insert_resolved(
+    dataset: &impl ShaclRead,
+    term: Term,
+    ids: &mut IdSet,
+    foreign: &mut FastSet<Term>,
+) {
+    if let Some(id) = resolve_id(dataset, &term) {
+        ids.insert(id);
+    } else {
+        foreign.insert(term);
+    }
+}
+
 impl PreparedTargets {
     /// Resolve one shape's declared targets against an already-bound dataset.
     ///
@@ -480,20 +496,24 @@ impl PreparedTargets {
         Ok(prepared)
     }
 
+    /// Record an explicit target node.
     fn insert_explicit(&mut self, dataset: &impl ShaclRead, term: Term) {
-        if let Some(id) = resolve_id(dataset, &term) {
-            self.explicit_ids.insert(id);
-        } else {
-            self.explicit_foreign.insert(term);
-        }
+        insert_resolved(
+            dataset,
+            term,
+            &mut self.explicit_ids,
+            &mut self.explicit_foreign,
+        );
     }
 
+    /// Record a node a SHACL-SPARQL `sh:ask` target's SELECT enumerated.
     fn insert_enumerated(&mut self, dataset: &impl ShaclRead, term: Term) {
-        if let Some(id) = resolve_id(dataset, &term) {
-            self.enumerated_ids.insert(id);
-        } else {
-            self.enumerated_foreign.insert(term);
-        }
+        insert_resolved(
+            dataset,
+            term,
+            &mut self.enumerated_ids,
+            &mut self.enumerated_foreign,
+        );
     }
 
     /// Whether this shape's targets contain `focus` — **the definition** of

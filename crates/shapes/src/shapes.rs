@@ -2203,9 +2203,11 @@ impl<'s> Parser<'s> {
         }
     }
 
-    /// Whether `node` is the EMPTY node expression: a blank node that is the
-    /// subject of no triple (SHACL 1.2 Node Expressions §4.1.1).
-    pub(crate) fn is_empty_expression(&self, node: &Term) -> bool {
+    /// Whether `node` is a bare blank node: one that is the subject of no triple of
+    /// the shapes graph — the Turtle `[]`. As a node expression that is the EMPTY
+    /// expression (SHACL 1.2 Node Expressions §4.1.1); as a shape reference it is the
+    /// shape with no constraints.
+    pub(crate) fn is_bare_blank_node(&self, node: &Term) -> bool {
         matches!(node, Term::BlankNode(_))
             && native_quads(self.data, Some(node), None, None, GraphFilter::AnyGraph).is_empty()
     }
@@ -2329,7 +2331,7 @@ impl<'s> Parser<'s> {
         crate::term::sort_terms_canonical(&mut tn);
         for t in tn {
             match &t {
-                Term::BlankNode(_) if self.is_empty_expression(&t) => {}
+                Term::BlankNode(_) if self.is_bare_blank_node(&t) => {}
                 Term::BlankNode(_) => {
                     let saved_shape = self.current_shape.replace(id.clone());
                     let expr = self.parse_node_expr(&t);
@@ -2817,7 +2819,7 @@ impl<'s> Parser<'s> {
         }
         let expr = match &node {
             Term::NamedNode(_) | Term::Literal(_) | Term::Triple(_) => NodeExpr::Constant(node),
-            Term::BlankNode(_) if self.is_empty_expression(&node) => NodeExpr::Empty,
+            Term::BlankNode(_) if self.is_bare_blank_node(&node) => NodeExpr::Empty,
             Term::BlankNode(_) => {
                 let saved_shape = self.current_shape.replace(ps_node.clone());
                 let parsed = self.parse_node_expr(&node);
@@ -3078,13 +3080,6 @@ fn annotate_property_edge(mut ps: PropertyShape, annotated: Annotated) -> Option
             Some(ps)
         }
     }
-}
-
-/// The local name of an IRI ([`purrdf_iri::local_name`]). Used to derive a
-/// `sh:SPARQLFunction` parameter's pre-bound SPARQL variable name from its predicate
-/// IRI (SHACL-AF §5.1).
-pub(crate) fn local_name(iri: &str) -> &str {
-    purrdf_iri::local_name(iri)
 }
 
 /// Parse an `xsd:integer` literal into a `u64`; `None` for any other term.

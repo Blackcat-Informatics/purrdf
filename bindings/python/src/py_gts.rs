@@ -249,8 +249,8 @@ fn parse_rdf_dataset(
 
 // ── Module-level functions ────────────────────────────────────────────────────
 
-/// The pure-Rust parse → snapshot-build → emit core `gts_from_quads` /
-/// `gts_from_rdf12_bytes` share; runs inside [`Python::detach`] (GIL released).
+/// The pure-Rust parse → snapshot-build → emit core of `gts_from_quads` (also
+/// exported as `gts_from_rdf12_bytes`); runs inside [`Python::detach`] (GIL released).
 fn snapshot_gts_bytes(
     data: &[u8],
     format: PyRdfFormat,
@@ -279,30 +279,18 @@ fn snapshot_gts_bytes(
     .map_err(PyValueError::new_err)
 }
 
-/// Produce a GTS snapshot from a serialized RDF 1.1 base graph (Turtle/N-Quads
-/// bytes, parsed leniently). Mirrors `gts_producer.gts_from_graph`. `transform`
-/// defaults to `["zstd"]` when `None`.
+/// Produce a GTS snapshot from serialized RDF bytes (Turtle/N-Quads, parsed
+/// natively into the RDF 1.2 IR, statement layer included). `transform` defaults
+/// to `["zstd"]` when `None`.
+///
+/// Exported under two names: `gts_from_quads` (the base-graph producer,
+/// `gts_producer.gts_from_graph`) and `gts_from_rdf12_bytes` (the statement-layer
+/// artifact producer, `gts_producer.gts_from_rdf12`). They are one function, because
+/// the native parse already carries the RDF 1.2 statement layer, so a base graph and
+/// a statement-layer artifact take the same path to the same snapshot.
 #[pyfunction]
 #[pyo3(signature = (data, *, format, profile="dist", transform=None, base=None))]
 fn gts_from_quads(
-    py: Python<'_>,
-    data: &Bound<'_, PyBytes>,
-    format: PyRdfFormat,
-    profile: &str,
-    transform: Option<Vec<String>>,
-    base: Option<String>,
-) -> PyResult<Py<PyBytes>> {
-    let raw = data.as_bytes();
-    let bytes =
-        py.detach(move || snapshot_gts_bytes(raw, format, profile, transform, base.as_deref()))?;
-    Ok(PyBytes::new(py, &bytes).unbind())
-}
-
-/// Produce a GTS snapshot from an RDF 1.2 statement-layer artifact's bytes
-/// (parsed natively as Turtle/N-Quads). Mirrors `gts_producer.gts_from_rdf12`.
-#[pyfunction]
-#[pyo3(signature = (data, *, format, profile="dist", transform=None, base=None))]
-fn gts_from_rdf12_bytes(
     py: Python<'_>,
     data: &Bound<'_, PyBytes>,
     format: PyRdfFormat,
@@ -1025,8 +1013,9 @@ fn rdf_format(format: PyRdfFormat) -> NativeRdfFormat {
 
 /// Register the native GTS producer surface on the `purrdf` module.
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(gts_from_quads, m)?)?;
-    m.add_function(wrap_pyfunction!(gts_from_rdf12_bytes, m)?)?;
+    let gts_from_quads = wrap_pyfunction!(gts_from_quads, m)?;
+    m.add("gts_from_rdf12_bytes", &gts_from_quads)?;
+    m.add_function(gts_from_quads)?;
     m.add_function(wrap_pyfunction!(compile_gts_native, m)?)?;
     m.add_function(wrap_pyfunction!(compile_gts_with_report, m)?)?;
     m.add_function(wrap_pyfunction!(gts_ingest_report, m)?)?;

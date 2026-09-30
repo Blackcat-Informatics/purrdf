@@ -24,6 +24,7 @@ use purrdf_core::{BlankScope, RdfDataset, TermId, TermRef, TermValue, emit_term}
 use crate::buffer::PurrdfBuffer;
 use crate::error::PurrdfError;
 use crate::handles::PurrdfDataset;
+use crate::handles::into_handle;
 use crate::status::PurrdfStatus;
 
 /// The kind tag of a [`PurrdfTermView`].
@@ -459,7 +460,7 @@ pub unsafe extern "C" fn purrdf_term_to_ntriples(
                 }
                 None => emit_term(&view_to_rdf_term(view)?),
             };
-            *out_buffer = PurrdfBuffer::into_raw(token.into_bytes());
+            *out_buffer = into_handle(PurrdfBuffer(token.into_bytes()));
             Ok(PurrdfStatus::Ok)
         })
     }

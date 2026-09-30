@@ -173,7 +173,7 @@ fn parse_one(
             // sh:annotationProperty as the variable name." A local name that is not a
             // SPARQL variable name determines no variable, and then only the defaults
             // apply ("If a variable name could be determined, …").
-            let local = crate::components::sparql_local_name(property.as_str());
+            let local = purrdf_iri::local_name(property.as_str()).to_owned();
             purrdf_sparql_algebra::lexer::is_varname(&local).then_some(local)
         }
         [Term::Literal(name)]

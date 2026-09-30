@@ -7,54 +7,43 @@
 //! This adapter keeps Python on that COW surface; query / update run on the native
 //! `NativeSparqlEngine` over a frozen snapshot.
 
-use super::env::extension_env;
-use std::sync::Arc;
-
 use purrdf_core::ir::MutableDataset;
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyCapsule, PyDict};
+use pyo3::types::PyBytes;
 
-use super::io::{
-    PyRdfFormat, PySerializeLoss, dataset_from_quads_verbatim, dump_quads_with_loss,
-    parse_quads_and_prefixes, read_input,
-};
-use super::query::{
-    EngineConfig, GovernorArgs, PyCancellationToken, PyEntailmentQueryOutcome, PyQueryOutcome,
-    PyUpdateOutcome, build_aggregates, build_engine, build_relations, collect_relations,
-    engine_parser_options, materialize_entailment_outcome, materialize_outcome,
-    materialize_results, materialize_update_outcome, registry_over, run_governed,
-};
-use super::store::PyQuadIter;
+use super::io::{PyRdfFormat, dataset_from_quads_verbatim, parse_quads_and_prefixes, read_input};
+use super::quad_store::PyQuadStore;
 use super::term::{
-    PyQuad, PyVariable, extract_graph_name, extract_term, rdf_quad_to_values,
-    rdf_quad_to_values_scoped, rdf_term_to_value, values_to_rdf_quad,
+    PyQuad, extract_graph_name, extract_term, rdf_quad_to_values, rdf_quad_to_values_scoped,
+    rdf_term_to_value, values_to_rdf_quad,
 };
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
 use crate::py_store::iri_value_error;
 use crate::{
-    BlankScope, ClosureRelations, DatasetMut, EntailmentClosure, GraphMatchValue,
-    QueryEntailmentPlan, RdfDataset, RdfDatasetBuilder, RdfQuad, SerializeGraph, SerializeOptions,
-    SparqlRequest, StatementLayer, TermValue, query_with_entailment_closure_governed,
-    serialize_dataset_with,
+    BlankScope, DatasetMut, GraphMatchValue, RdfQuad, SerializeGraph, SerializeOptions,
+    StatementLayer, TermValue, serialize_dataset_with,
 };
 
 /// A COW mutable RDF dataset over the native `purrdf-core` IR.
-#[pyclass(name = "MutableDataset")]
+///
+/// The query, UPDATE, iteration and validation-capsule surface is the
+/// [`PyQuadStore`] base class's, shared with `Store`.
+#[pyclass(name = "MutableDataset", extends = PyQuadStore)]
 #[derive(Debug)]
 pub struct PyMutableDataset {
-    inner: MutableDataset,
     next_blank_scope: u32,
 }
 
 #[pymethods]
 impl PyMutableDataset {
     #[new]
-    fn new() -> PyResult<Self> {
-        Ok(Self {
-            inner: empty_mutable()?,
-            next_blank_scope: 1,
-        })
+    fn new() -> PyResult<PyClassInitializer<Self>> {
+        Ok(
+            PyClassInitializer::from(PyQuadStore::empty()?).add_subclass(Self {
+                next_blank_scope: 1,
+            }),
+        )
     }
 
     /// Load RDF into the mutable dataset.
@@ -62,7 +51,7 @@ impl PyMutableDataset {
     /// Returns the document's prefix map exactly as `Store.load` does.
     #[pyo3(signature = (input=None, format=None, *, path=None, base=None))]
     fn load(
-        &mut self,
+        mut slf: PyRefMut<'_, Self>,
         py: Python<'_>,
         input: Option<&Bound<'_, PyAny>>,
         format: Option<PyRdfFormat>,
@@ -71,8 +60,8 @@ impl PyMutableDataset {
     ) -> PyResult<Vec<(String, String)>> {
         let format = format.ok_or_else(|| PyValueError::new_err("load: format is required"))?;
         let data = read_input(input, path)?;
-        let blank_scope = self.allocate_blank_scope();
-        let inner = &mut self.inner;
+        let blank_scope = slf.allocate_blank_scope();
+        let inner = &mut slf.as_super().inner;
         // Parse + insert run detached (GIL released); only plain Rust data is touched.
         py.detach(move || {
             let base_ref = base.as_deref();
@@ -94,26 +83,34 @@ impl PyMutableDataset {
     /// surface is handed terms, never a document, so no base is in scope to resolve
     /// one against and none is invented; the message leads with the shared
     /// `iri-relative-no-base` diagnostic code.
-    fn add(&mut self, quad: &PyQuad) -> PyResult<bool> {
-        self.inner
+    fn add(mut slf: PyRefMut<'_, Self>, quad: &PyQuad) -> PyResult<bool> {
+        slf.as_super()
+            .inner
             .insert(rdf_quad_to_values(&quad.inner))
             .map_err(|e| iri_value_error(&e))
     }
 
     /// Remove a single quad. Returns whether the effective set changed.
-    fn remove(&mut self, quad: &PyQuad) -> PyResult<bool> {
-        Ok(self.inner.remove(&rdf_quad_to_values(&quad.inner)))
+    fn remove(mut slf: PyRefMut<'_, Self>, quad: &PyQuad) -> PyResult<bool> {
+        Ok(slf
+            .as_super()
+            .inner
+            .remove(&rdf_quad_to_values(&quad.inner)))
     }
 
     /// Return whether the exact quad is effective.
-    fn contains(&self, quad: &PyQuad) -> PyResult<bool> {
-        Ok(self.inner.contains(&rdf_quad_to_values(&quad.inner)))
+    fn contains(slf: &Bound<'_, Self>, quad: &PyQuad) -> PyResult<bool> {
+        Ok(slf
+            .as_super()
+            .borrow()
+            .inner
+            .contains(&rdf_quad_to_values(&quad.inner)))
     }
 
     /// Effective quads matching a value pattern.
     #[pyo3(signature = (subject=None, predicate=None, object=None, graph_name=None, *, any_graph=false))]
     fn quads_for_pattern(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         subject: Option<&Bound<'_, PyAny>>,
         predicate: Option<&Bound<'_, PyAny>>,
@@ -125,7 +122,8 @@ impl PyMutableDataset {
         let p = optional_term(predicate)?;
         let o = optional_term(object)?;
         let g_value = optional_graph_value(graph_name)?;
-        let inner = &self.inner;
+        let guard = slf.as_super().borrow();
+        let inner = &guard.inner;
         // The pattern scan over the effective set runs detached (GIL released);
         // the matched quads are wrapped into Python objects after reacquiring.
         let quads: Vec<RdfQuad> = py.detach(|| {
@@ -167,7 +165,7 @@ impl PyMutableDataset {
         reason = "Python dump names graph selection, the document base, and JSON-LD configuration explicitly"
     )]
     fn dump(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         output: Option<&Bound<'_, PyAny>>,
         format: Option<PyRdfFormat>,
@@ -195,16 +193,13 @@ impl PyMutableDataset {
             } else {
                 None
             };
-        let inner = &self.inner;
+        let guard = slf.as_super().borrow();
+        let store: &PyQuadStore = &guard;
         // Materialize the effective set into the IR verbatim, then serialize through
         // the native codec — literal lexical forms are preserved. Both steps
         // run detached (GIL released).
         let buf: Vec<u8> = py.detach(move || {
-            let quads: Vec<RdfQuad> = inner
-                .quads_for_pattern(None, None, None, GraphMatchValue::Any)
-                .iter()
-                .map(values_to_rdf_quad)
-                .collect();
+            let quads = store.collect_all_quads();
             let dataset = dataset_from_quads_verbatim(&quads).map_err(PyValueError::new_err)?;
             let selection = match (&graph_filter, explicit_from_graph) {
                 (Some(name), _) => SerializeGraph::Named(name),
@@ -238,595 +233,15 @@ impl PyMutableDataset {
         }
     }
 
-    /// Dump the WHOLE effective dataset in `format`, with the realized loss attached.
-    ///
-    /// The counting twin of [`dump`](Self::dump) — same bytes, plus the three
-    /// independent loss counts a `SerializeLoss` carries — and the same entry point
-    /// `Store.dump_with_loss`, the wasm `Dataset.serializeWithLoss` and the C ABI's
-    /// `purrdf_serialize` count out-params expose on their hosts. See
-    /// `Store.dump_with_loss` for why it takes neither a graph selection nor JSON-LD
-    /// configuration.
-    #[pyo3(signature = (format))]
-    fn dump_with_loss(&self, py: Python<'_>, format: PyRdfFormat) -> PyResult<PySerializeLoss> {
-        let native = format.to_native();
-        let inner = &self.inner;
-        py.detach(|| {
-            let quads: Vec<RdfQuad> = inner
-                .quads_for_pattern(None, None, None, GraphMatchValue::Any)
-                .iter()
-                .map(values_to_rdf_quad)
-                .collect();
-            dump_quads_with_loss(&quads, native)
-                .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))
-        })
-    }
-
-    /// Run a SPARQL query over the effective dataset.
-    ///
-    /// The engine-configuration and relation keywords are exactly those of
-    /// `Store.query`: `extension_namespaces` / `property_fn_namespaces` declare
-    /// prefix recognition, `standpoint_predicates` is the `(according_to, sharpens)`
-    /// table `heldIn` requires, and `relations` / `relations_from_graph` / `path_relations` register
-    /// host relations for this call.
-    ///
-    /// `aggregate_namespace` behaves exactly as on `Store.query` (see
-    /// [`build_aggregates`](super::query::build_aggregates)).
-    #[pyo3(signature = (
-        query,
-        *,
-        substitutions=None,
-        extension_namespaces=None,
-        property_fn_namespaces=None,
-        standpoint_predicates=None,
-        relations=None,
-        relations_from_graph=None,
-        path_relations=None,
-        aggregate_namespace=None,
-    ))]
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "each engine-configuration axis is named explicitly at the call site"
-    )]
-    fn query(
-        &self,
-        py: Python<'_>,
-        query: &str,
-        substitutions: Option<&Bound<'_, PyDict>>,
-        extension_namespaces: Option<Vec<String>>,
-        property_fn_namespaces: Option<Vec<String>>,
-        standpoint_predicates: Option<(String, String)>,
-        relations: Option<&Bound<'_, PyDict>>,
-        relations_from_graph: Option<&Bound<'_, PyDict>>,
-        path_relations: Option<&Bound<'_, PyDict>>,
-        aggregate_namespace: Option<String>,
-    ) -> PyResult<Py<PyAny>> {
-        let subs = collect_substitutions(substitutions)?;
-        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
-        let config = EngineConfig {
-            extension_namespaces,
-            property_fn_namespaces,
-            standpoint_predicates,
-        };
-        let inner = &self.inner;
-        // Snapshot + engine build + evaluation run detached (GIL released);
-        // results are materialized into Python objects after reacquiring.
-        let result = py.detach(move || {
-            let dataset = inner
-                .freeze()
-                .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
-            let registry = build_relations(specs, &dataset)?;
-            let aggregates = build_aggregates(aggregate_namespace);
-            let parser_options = engine_parser_options(&config);
-            let engine = build_engine(config);
-            engine
-                .query_with_options_view(
-                    &*dataset,
-                    SparqlRequest {
-                        query,
-                        base_iri: None,
-                        substitutions: &subs,
-                    },
-                    purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                        parser_options,
-                        registry.as_ref(),
-                        aggregates.as_ref(),
-                    )?),
-                )
-                .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))
-        })?;
-        materialize_results(py, result)
-    }
-
-    /// Run a SPARQL query under caller-supplied execution governors, returning a
-    /// `QueryOutcome`. The keywords, the outcome, and the Ctrl-C interaction are exactly
-    /// those of `Store.query_governed`.
-    #[pyo3(signature = (
-        query,
-        *,
-        substitutions=None,
-        extension_namespaces=None,
-        property_fn_namespaces=None,
-        standpoint_predicates=None,
-        relations=None,
-        relations_from_graph=None,
-        path_relations=None,
-        aggregate_namespace=None,
-        fuel=None,
-        deadline_ms=None,
-        max_answers=None,
-        max_intermediate_cells=None,
-        max_scratch_bytes=None,
-        max_remote_requests=None,
-        cancel=None,
-    ))]
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "each governed dimension is named explicitly at the call site; a bag \
-                  argument would make an unset ceiling and a misspelt one look alike"
-    )]
-    fn query_governed(
-        &self,
-        py: Python<'_>,
-        query: &str,
-        substitutions: Option<&Bound<'_, PyDict>>,
-        extension_namespaces: Option<Vec<String>>,
-        property_fn_namespaces: Option<Vec<String>>,
-        standpoint_predicates: Option<(String, String)>,
-        relations: Option<&Bound<'_, PyDict>>,
-        relations_from_graph: Option<&Bound<'_, PyDict>>,
-        path_relations: Option<&Bound<'_, PyDict>>,
-        aggregate_namespace: Option<String>,
-        fuel: Option<u64>,
-        deadline_ms: Option<u64>,
-        max_answers: Option<u64>,
-        max_intermediate_cells: Option<u64>,
-        max_scratch_bytes: Option<u64>,
-        max_remote_requests: Option<u64>,
-        cancel: Option<&PyCancellationToken>,
-    ) -> PyResult<Py<PyQueryOutcome>> {
-        let subs = collect_substitutions(substitutions)?;
-        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
-        let config = EngineConfig {
-            extension_namespaces,
-            property_fn_namespaces,
-            standpoint_predicates,
-        };
-        let args = GovernorArgs {
-            fuel,
-            deadline_ms,
-            max_answers,
-            max_intermediate_cells,
-            max_scratch_bytes,
-            max_remote_requests,
-        };
-        let inner = &self.inner;
-        // Snapshot + engine build + governed evaluation run detached (GIL released), so
-        // the thread holding `cancel` keeps running while this one is in the engine.
-        let outcome = run_governed(py, args, cancel, move |governors| {
-            let dataset = inner
-                .freeze()
-                .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
-            let registry = build_relations(specs, &dataset)?;
-            let aggregates = build_aggregates(aggregate_namespace);
-            let parser_options = engine_parser_options(&config);
-            let engine = build_engine(config);
-            engine
-                .query_governed(
-                    &dataset,
-                    SparqlRequest {
-                        query,
-                        base_iri: None,
-                        substitutions: &subs,
-                    },
-                    purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                        parser_options,
-                        registry.as_ref(),
-                        aggregates.as_ref(),
-                    )?),
-                    governors,
-                )
-                .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))
-        })?;
-        materialize_outcome(py, outcome)
-    }
-
-    /// Governed entailment-aware query, with the same two-phase carrier as `Store`.
-    ///
-    /// `aggregate_namespace` behaves exactly as on `Store.query_entailment_governed`.
-    ///
-    /// `property_fn_namespaces` / `relations` / `relations_from_graph` / `path_relations` behave exactly as on
-    /// `Store.query_entailment_governed`: a registered relation is reachable from the closure
-    /// query exactly as it is from an ordinary one. `relations_from_graph` reads its table —
-    /// and `path_relations` snapshots its edges — from the CLOSURE the regime materializes,
-    /// exactly as `Store.query_entailment_governed` does, including the one `owl-direct`
-    /// pairing [`purrdf::ClosureRelations`] refuses.
-    ///
-    /// `imports` and `premise_iris` are `Store.query_entailment_governed`'s: the closure is
-    /// materialized over the dataset's `owl:imports` closure, and an import the table does
-    /// not resolve raises `ValueError` by name. `max_stored_facts` and `max_join_steps` are
-    /// the closure's evaluation limits, as on `Store.query_entailment_governed`.
-    #[pyo3(signature = (
-        query,
-        entailment,
-        *,
-        program="",
-        imports=None,
-        premise_iris=None,
-        max_stored_facts=None,
-        max_join_steps=None,
-        substitutions=None,
-        extension_namespaces=None,
-        property_fn_namespaces=None,
-        standpoint_predicates=None,
-        relations=None,
-        relations_from_graph=None,
-        path_relations=None,
-        aggregate_namespace=None,
-        fuel=None,
-        deadline_ms=None,
-        max_answers=None,
-        max_intermediate_cells=None,
-        max_scratch_bytes=None,
-        max_remote_requests=None,
-        cancel=None,
-    ))]
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the regime plus each governed dimension is named explicitly at the host boundary"
-    )]
-    fn query_entailment_governed(
-        &self,
-        py: Python<'_>,
-        query: &str,
-        entailment: &str,
-        program: &str,
-        imports: Option<Vec<(String, String)>>,
-        premise_iris: Option<Vec<String>>,
-        max_stored_facts: Option<u64>,
-        max_join_steps: Option<u64>,
-        substitutions: Option<&Bound<'_, PyDict>>,
-        extension_namespaces: Option<Vec<String>>,
-        property_fn_namespaces: Option<Vec<String>>,
-        standpoint_predicates: Option<(String, String)>,
-        relations: Option<&Bound<'_, PyDict>>,
-        relations_from_graph: Option<&Bound<'_, PyDict>>,
-        path_relations: Option<&Bound<'_, PyDict>>,
-        aggregate_namespace: Option<String>,
-        fuel: Option<u64>,
-        deadline_ms: Option<u64>,
-        max_answers: Option<u64>,
-        max_intermediate_cells: Option<u64>,
-        max_scratch_bytes: Option<u64>,
-        max_remote_requests: Option<u64>,
-        cancel: Option<&PyCancellationToken>,
-    ) -> PyResult<Py<PyEntailmentQueryOutcome>> {
-        let subs = collect_substitutions(substitutions)?;
-        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
-        let plan =
-            QueryEntailmentPlan::parse(entailment, program).map_err(PyValueError::new_err)?;
-        // The store's `owl:imports` table, parsed by the shared boundary before any closure
-        // work. Absent is EMPTY — "imports nothing" — so a store that does import a document
-        // is refused by name rather than closed without it.
-        let imports = crate::py_entail::entailment_import_map(imports, premise_iris)?;
-        let limits = purrdf_validate::MaterializeLimits {
-            max_stored_facts,
-            max_join_steps,
-            host: purrdf_validate::RegimeHost::Python,
-        };
-        let args = GovernorArgs {
-            fuel,
-            deadline_ms,
-            max_answers,
-            max_intermediate_cells,
-            max_scratch_bytes,
-            max_remote_requests,
-        };
-        let inner = &self.inner;
-        let config = EngineConfig {
-            extension_namespaces,
-            property_fn_namespaces,
-            standpoint_predicates,
-        };
-        let outcome = run_governed(py, args, cancel, move |governors| {
-            let dataset = inner
-                .freeze()
-                .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
-            // Two registries, and only the second one answers. This one is what the query
-            // is PARSED against — a registered predicate becomes a call node only if its
-            // registry was in scope when the query was read — and it is built over the
-            // store's own snapshot. The one below is built over the CLOSURE the regime
-            // materializes, which is the dataset the query is evaluated over, so a
-            // `path_relations` traversal and a `relations_from_graph` table both read the
-            // same data every other pattern in the query does. Before this pairing existed
-            // they read the pre-closure store and returned a SHORT bag with no diagnostic.
-            let registry = build_relations(specs.clone(), &dataset)?;
-            let rebuild = |closure: &RdfDataset| {
-                registry_over(specs.clone(), closure).map_err(purrdf_sparql_eval::EvalError::data)
-            };
-            let relations = if specs.is_empty() {
-                ClosureRelations::NONE
-            } else {
-                ClosureRelations::rebuilt_by(&rebuild)
-            };
-            let parser_options = engine_parser_options(&config);
-            let engine = build_engine(config);
-            let aggregates = build_aggregates(aggregate_namespace);
-            query_with_entailment_closure_governed(
-                &engine,
-                &dataset,
-                SparqlRequest {
-                    query,
-                    base_iri: None,
-                    substitutions: &subs,
-                },
-                &EntailmentClosure::new(plan.entailment(), &imports)
-                    .with_limits(limits.eval_options()),
-                purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                    parser_options,
-                    registry.as_ref(),
-                    aggregates.as_ref(),
-                )?),
-                &relations,
-                governors,
-            )
-            .map_err(|error| match error {
-                // Rendered by the shared boundary, so a passed evaluation limit names this
-                // method's keyword rather than a Rust type a Python caller cannot reach.
-                crate::ReasoningError::Entailment(error) => PyValueError::new_err(format!(
-                    "entailment query failed: {}",
-                    purrdf_validate::render_entail_error_in(
-                        entailment,
-                        &error,
-                        purrdf_validate::RegimeHost::Python,
-                        purrdf_validate::RegimeService::Query,
-                    )
-                )),
-                other => PyValueError::new_err(format!("entailment query failed: {other}")),
-            })
-        })?;
-        materialize_entailment_outcome(py, outcome)
-    }
-
-    /// Run a SPARQL UPDATE under caller-supplied execution governors, returning an
-    /// `UpdateOutcome`. The keywords — governors, engine configuration, and the
-    /// `relations` / `relations_from_graph` / `path_relations` tables — and the all-or-nothing guarantee
-    /// are exactly those of `Store.update_governed`.
-    #[pyo3(signature = (
-        update,
-        *,
-        extension_namespaces=None,
-        property_fn_namespaces=None,
-        standpoint_predicates=None,
-        relations=None,
-        relations_from_graph=None,
-        path_relations=None,
-        aggregate_namespace=None,
-        fuel=None,
-        deadline_ms=None,
-        max_intermediate_cells=None,
-        max_scratch_bytes=None,
-        max_remote_requests=None,
-        cancel=None,
-    ))]
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "each governed dimension is named explicitly at the call site; a bag \
-                  argument would make an unset ceiling and a misspelt one look alike"
-    )]
-    fn update_governed(
-        &mut self,
-        py: Python<'_>,
-        update: &str,
-        extension_namespaces: Option<Vec<String>>,
-        property_fn_namespaces: Option<Vec<String>>,
-        standpoint_predicates: Option<(String, String)>,
-        relations: Option<&Bound<'_, PyDict>>,
-        relations_from_graph: Option<&Bound<'_, PyDict>>,
-        path_relations: Option<&Bound<'_, PyDict>>,
-        aggregate_namespace: Option<String>,
-        fuel: Option<u64>,
-        deadline_ms: Option<u64>,
-        max_intermediate_cells: Option<u64>,
-        max_scratch_bytes: Option<u64>,
-        max_remote_requests: Option<u64>,
-        cancel: Option<&PyCancellationToken>,
-    ) -> PyResult<Py<PyUpdateOutcome>> {
-        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
-        let config = EngineConfig {
-            extension_namespaces,
-            property_fn_namespaces,
-            standpoint_predicates,
-        };
-        let args = GovernorArgs {
-            fuel,
-            deadline_ms,
-            max_answers: None,
-            max_intermediate_cells,
-            max_scratch_bytes,
-            max_remote_requests,
-        };
-        let inner = &self.inner;
-        // Snapshot + governed evaluation run detached (GIL released).
-        let (outcome, dataset) = run_governed(py, args, cancel, move |governors| {
-            let mut dataset = inner
-                .freeze()
-                .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
-            let registry = build_relations(specs, &dataset)?;
-            let aggregates = build_aggregates(aggregate_namespace);
-            let parser_options = engine_parser_options(&config);
-            let outcome = build_engine(config)
-                .update_governed(
-                    &mut dataset,
-                    SparqlRequest {
-                        query: update,
-                        base_iri: None,
-                        substitutions: &[],
-                    },
-                    purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                        parser_options,
-                        registry.as_ref(),
-                        aggregates.as_ref(),
-                    )?),
-                    governors,
-                )
-                .map_err(|e| PyValueError::new_err(format!("update evaluation error: {e}")))?;
-            Ok((outcome, dataset))
-        })?;
-        // Adopted only on the applied path: a tripped request published nothing, so the
-        // COW base it started from is still the one this dataset must keep.
-        if outcome.is_applied() {
-            self.inner = MutableDataset::new(dataset);
-        }
-        materialize_update_outcome(py, &outcome)
-    }
-
-    /// Run a SPARQL UPDATE (COW-atomic: a failed update leaves the set unchanged).
-    /// The engine-configuration and relation keywords configure the engine exactly
-    /// as on [`query`](Self::query); a `relations_from_graph` table is read — and a
-    /// `path_relations` traversal is snapshotted — from the PRE-update state, the state
-    /// the `WHERE` clause matches.
-    #[pyo3(signature = (
-        update,
-        *,
-        extension_namespaces=None,
-        property_fn_namespaces=None,
-        standpoint_predicates=None,
-        relations=None,
-        relations_from_graph=None,
-        path_relations=None,
-        aggregate_namespace=None,
-    ))]
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "each engine-configuration axis is named explicitly at the call site"
-    )]
-    fn update(
-        &mut self,
-        py: Python<'_>,
-        update: &str,
-        extension_namespaces: Option<Vec<String>>,
-        property_fn_namespaces: Option<Vec<String>>,
-        standpoint_predicates: Option<(String, String)>,
-        relations: Option<&Bound<'_, PyDict>>,
-        relations_from_graph: Option<&Bound<'_, PyDict>>,
-        path_relations: Option<&Bound<'_, PyDict>>,
-        aggregate_namespace: Option<String>,
-    ) -> PyResult<()> {
-        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
-        let config = EngineConfig {
-            extension_namespaces,
-            property_fn_namespaces,
-            standpoint_predicates,
-        };
-        // Snapshot + evaluation run detached (GIL released); the fresh frozen
-        // base is adopted after reacquiring.
-        let inner = &self.inner;
-        let dataset = py.detach(move || {
-            let mut dataset = inner
-                .freeze()
-                .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
-            let registry = build_relations(specs, &dataset)?;
-            let aggregates = build_aggregates(aggregate_namespace);
-            let parser_options = engine_parser_options(&config);
-            let engine = build_engine(config);
-            engine
-                .update_with_options(
-                    &mut dataset,
-                    SparqlRequest {
-                        query: update,
-                        base_iri: None,
-                        substitutions: &[],
-                    },
-                    purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                        parser_options,
-                        registry.as_ref(),
-                        aggregates.as_ref(),
-                    )?),
-                )
-                .map_err(|e| PyValueError::new_err(format!("update evaluation error: {e}")))?;
-            Ok::<_, PyErr>(dataset)
-        })?;
-        self.inner = MutableDataset::new(dataset);
-        Ok(())
-    }
-
     /// Compact the effective set into a fresh frozen base.
-    fn compact(&mut self, py: Python<'_>) -> PyResult<()> {
+    fn compact(mut slf: PyRefMut<'_, Self>, py: Python<'_>) -> PyResult<()> {
         // The COW freeze can be a real copy — run it detached (GIL released).
-        let inner = &self.inner;
+        let store: &mut PyQuadStore = slf.as_super();
         let frozen = py
-            .detach(|| inner.freeze())
+            .detach(|| store.inner.freeze())
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        self.inner = MutableDataset::new(frozen);
+        store.inner = MutableDataset::new(frozen);
         Ok(())
-    }
-
-    fn __len__(&self) -> usize {
-        self.inner
-            .quads_for_pattern(None, None, None, GraphMatchValue::Any)
-            .len()
-    }
-
-    fn __iter__(&self, py: Python<'_>) -> PyResult<Py<PyQuadIter>> {
-        let quads = self
-            .inner
-            .quads_for_pattern(None, None, None, GraphMatchValue::Any)
-            .iter()
-            .map(values_to_rdf_quad)
-            .collect();
-        Py::new(py, PyQuadIter { quads, pos: 0 })
-    }
-
-    /// Internal protocol: a capsule exposing a frozen `Arc<RdfDataset>` snapshot of
-    /// this dataset by address, consumed by `purrdf_shapes.Shapes.validate_store`.
-    /// Do not call from Python directly.
-    ///
-    /// The same capsule `Store` hands out, under the same name and with the same
-    /// pointee type, because it is the same question: validation wants a frozen
-    /// dataset, and this type already holds one behind its copy-on-write overlay.
-    /// `Shapes.validate_store` reaches its argument through this method by name,
-    /// so a type that owns a dataset and cannot answer it is a type validation
-    /// cannot see — a shape library would have to serialise this dataset to
-    /// N-Triples and parse it back to say anything about it, which is a full copy
-    /// and a round-trip through a syntax, to reach a dataset that was already
-    /// sitting here.
-    ///
-    /// The capsule's destructor owns the `Arc<RdfDataset>`, so the dataset lives
-    /// exactly as long as the capsule. The snapshot is taken now and is immutable,
-    /// so a later `add`/`remove`/`update` on this dataset leaves a consumer's
-    /// snapshot — and any report already produced from it — untouched.
-    ///
-    /// The leading underscore belongs to the PYTHON name and not the Rust one, for
-    /// the reason `Store`'s own capsule method spells out: it is a cross-package
-    /// protocol called by string, and Python spells "internal" with an underscore,
-    /// while an underscore-prefixed Rust item means "deliberately unused".
-    #[pyo3(name = "_store_capsule")]
-    fn store_capsule<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, PyCapsule>> {
-        let py = slf.py();
-        let guard = slf.borrow();
-        let inner = &guard.inner;
-        // The COW freeze can be a real copy on a mutated dataset — run it detached.
-        let snapshot: Arc<RdfDataset> = py.detach(|| {
-            inner
-                .freeze()
-                .map_err(|e| PyValueError::new_err(format!("dataset snapshot failed: {e}")))
-        })?;
-        drop(guard);
-        // Heap-box the Arc so its address is stable; the destructor reclaims the box
-        // (dropping the held Arc) when the capsule is collected.
-        let boxed: Box<Arc<RdfDataset>> = Box::new(snapshot);
-        let addr = (&raw const *boxed) as usize;
-        let keepalive = boxed;
-        // SAFETY: `addr` is the address of the `Arc<RdfDataset>` owned by `keepalive`,
-        // moved into the destructor closure; it stays live and at a stable address for
-        // the capsule's entire lifetime. The consumer reads the `Arc<RdfDataset>` at
-        // that address (cloning it to extend the lifetime as needed).
-        PyCapsule::new_with_value_and_destructor(
-            py,
-            addr,
-            c"purrdf-validation-dataset",
-            move |_addr, _ctx| drop(keepalive),
-        )
     }
 }
 
@@ -836,32 +251,6 @@ impl PyMutableDataset {
         self.next_blank_scope = self.next_blank_scope.checked_add(1).unwrap_or(1);
         scope
     }
-}
-
-fn empty_mutable() -> PyResult<MutableDataset> {
-    let base = RdfDatasetBuilder::new()
-        .freeze()
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(MutableDataset::new(base))
-}
-
-fn collect_substitutions(
-    substitutions: Option<&Bound<'_, PyDict>>,
-) -> PyResult<Vec<(String, TermValue)>> {
-    let Some(subs) = substitutions else {
-        return Ok(Vec::new());
-    };
-    let mut out = Vec::with_capacity(subs.len());
-    for (key, value) in subs.iter() {
-        let name = key
-            .cast::<PyVariable>()
-            .map_err(|_| PyTypeError::new_err("substitution keys must be Variable"))?
-            .get()
-            .inner
-            .clone();
-        out.push((name, rdf_term_to_value(&extract_term(&value)?)));
-    }
-    Ok(out)
 }
 
 fn optional_term(obj: Option<&Bound<'_, PyAny>>) -> PyResult<Option<TermValue>> {

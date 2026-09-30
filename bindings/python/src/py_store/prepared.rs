@@ -308,7 +308,7 @@ impl PyPreparedQuery {
         // held (a cheap borrow), then the heavy freeze work itself runs detached
         // inside `freeze_snapshot`.
         let dataset = {
-            let store = self.store.bind(py).borrow();
+            let store = self.store.bind(py).as_super().borrow();
             store.freeze_snapshot(py)?
         };
 

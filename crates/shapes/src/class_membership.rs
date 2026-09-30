@@ -484,37 +484,62 @@ pub(crate) fn thread_index_builds() -> usize {
     THREAD_INDEX_BUILDS.with(std::cell::Cell::get)
 }
 
-/// A cursor into one canonically sorted subject slice.
+/// A cursor into one canonically sorted `TermId` slice.
 #[derive(Debug, Clone, Copy)]
-struct SubjectCursor<'a> {
+struct SortedCursor<'a> {
     values: &'a [TermId],
     position: usize,
 }
 
-/// Merge the asserted subjects of every exact type below one superclass.
-#[derive(Debug)]
-struct MergedSubjects<'a> {
-    cursors: SmallVec<[SubjectCursor<'a>; 4]>,
-    directly_asserted: &'a [TermId],
+impl<'a> SortedCursor<'a> {
+    const fn new(values: &'a [TermId]) -> Self {
+        Self {
+            values,
+            position: 0,
+        }
+    }
 }
 
-impl<'a> MergedSubjects<'a> {
+/// The ascending, duplicate-free union of several sorted `TermId` slices, minus
+/// the sorted `directly_asserted` set.
+///
+/// The one k-way merge behind both derived views: the subjects entailed for a
+/// class (the asserted subjects of every exact type below it) and the types
+/// entailed for a subject (the proper ancestors of every type asserted for it).
+/// Both are "union the sorted slices, drop what is asserted directly", so the
+/// merge exists once and each view names only where its slices and its
+/// exclusions come from.
+#[derive(Debug)]
+struct MergedExcept<'a, D> {
+    cursors: SmallVec<[SortedCursor<'a>; 4]>,
+    directly_asserted: D,
+}
+
+/// Merge the asserted subjects of every exact type below one superclass.
+type MergedSubjects<'a> = MergedExcept<'a, &'a [TermId]>;
+
+/// Merge the proper ancestors of every exact type asserted for one subject.
+type MergedTypes<'a> = MergedExcept<'a, SmallVec<[TermId; 4]>>;
+
+impl<D: Default> MergedExcept<'_, D> {
     fn empty() -> Self {
         Self {
             cursors: SmallVec::new(),
-            directly_asserted: &[],
+            directly_asserted: D::default(),
         }
     }
+}
 
+impl<'a> MergedSubjects<'a> {
     fn new(index: &'a ClassMembershipIndex, class: TermId) -> Self {
-        let mut cursors = SmallVec::new();
-        for &source in index.source_class_indexes(class) {
-            let source = usize::try_from(source).expect("u32 class index fits usize");
-            cursors.push(SubjectCursor {
-                values: index.subjects(&index.typed_classes[source]),
-                position: 0,
-            });
-        }
+        let cursors = index
+            .source_class_indexes(class)
+            .iter()
+            .map(|&source| {
+                let source = usize::try_from(source).expect("u32 class index fits usize");
+                SortedCursor::new(index.subjects(&index.typed_classes[source]))
+            })
+            .collect();
         Self {
             cursors,
             directly_asserted: index.direct_subjects(class),
@@ -522,57 +547,11 @@ impl<'a> MergedSubjects<'a> {
     }
 }
 
-impl Iterator for MergedSubjects<'_> {
-    type Item = TermId;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let next = self
-                .cursors
-                .iter()
-                .filter_map(|cursor| cursor.values.get(cursor.position).copied())
-                .min()?;
-            for cursor in &mut self.cursors {
-                while cursor.values.get(cursor.position) == Some(&next) {
-                    cursor.position += 1;
-                }
-            }
-            if self.directly_asserted.binary_search(&next).is_err() {
-                return Some(next);
-            }
-        }
-    }
-}
-
-/// A cursor into one exact type's proper-ancestor slice.
-#[derive(Debug, Clone, Copy)]
-struct TypeCursor<'a> {
-    values: &'a [TermId],
-    position: usize,
-}
-
-/// Merge the proper ancestors of every exact type asserted for one subject.
-#[derive(Debug)]
-struct MergedTypes<'a> {
-    cursors: SmallVec<[TypeCursor<'a>; 4]>,
-    directly_asserted: SmallVec<[TermId; 4]>,
-}
-
 impl<'a> MergedTypes<'a> {
-    fn empty() -> Self {
-        Self {
-            cursors: SmallVec::new(),
-            directly_asserted: SmallVec::new(),
-        }
-    }
-
     fn new(index: &'a ClassMembershipIndex, directly_asserted: SmallVec<[TermId; 4]>) -> Self {
         let cursors = directly_asserted
             .iter()
-            .map(|&class| TypeCursor {
-                values: index.proper_ancestors(class),
-                position: 0,
-            })
+            .map(|&class| SortedCursor::new(index.proper_ancestors(class)))
             .collect();
         Self {
             cursors,
@@ -581,7 +560,7 @@ impl<'a> MergedTypes<'a> {
     }
 }
 
-impl Iterator for MergedTypes<'_> {
+impl<D: AsRef<[TermId]>> Iterator for MergedExcept<'_, D> {
     type Item = TermId;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -596,7 +575,12 @@ impl Iterator for MergedTypes<'_> {
                     cursor.position += 1;
                 }
             }
-            if self.directly_asserted.binary_search(&next).is_err() {
+            if self
+                .directly_asserted
+                .as_ref()
+                .binary_search(&next)
+                .is_err()
+            {
                 return Some(next);
             }
         }
