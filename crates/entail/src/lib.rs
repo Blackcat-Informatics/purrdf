@@ -174,7 +174,10 @@ pub use report::{
     Boundary, Completeness, Construct, InconsistencyWitness, InconsistentRun, ReasoningReport,
     TerminationCertificate, WitnessTriple,
 };
-pub use rif::{Atom, Fact, RifTerm, Rule, RuleSet, materialize_rif, materialize_rif_until};
+pub use rif::{
+    Atom, Fact, RifTerm, Rule, RuleSet, materialize_rif, materialize_rif_until,
+    materialize_rif_with,
+};
 pub use rif_xml::{ParsedRifDocument, RifImport, parse_rif_xml, resolve_rif_imports};
 pub use rules::{ParseRuleIdError, RuleId, extensions, implemented, rules};
 
@@ -872,7 +875,7 @@ pub fn materialize_with<D: DatasetView>(
                 .map(|(closure, report)| (closure, report.under(options)));
         }
         Materialization::Rif(rules) => {
-            return materialize_rif_until(ds, rules, stop)
+            return materialize_rif_with(ds, rules, options, stop)
                 .map(|(closure, report)| (closure, report.under(options)));
         }
     };

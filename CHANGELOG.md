@@ -1731,6 +1731,17 @@ under Changed and Fixed where a longer account helps.
 
 ### Changed
 
+- **entail:** `materialize_rif` and `materialize_rif_until` now run on
+  `purrdf_datalog::seminaive` instead of a private semi-naive loop: each RIF rule
+  becomes one default-graph clause per head atom, and the derived facts, their
+  emission order, the range-restriction refusal and the stop-signal behaviour are
+  unchanged (differentially checked against the old loop over 600 random rule
+  sets). Two consequences: the report's `join_steps` is now the engine's own
+  count, and a RIF run is under the engine's default stored-fact and join-step
+  limits, so a run past them is `EntailError::Evaluate` rather than unbounded;
+  the new `materialize_rif_with` (and `materialize_with` for `Materialization::Rif`)
+  takes an `EvalOptions` so a larger legitimate program can raise them. A
+  45,150-fact transitive closure still runs under the defaults.
 - **core, text:** `LossLedger::new`, `BitVec::new` and
   `PartitionFilter::unconstrained` are `const fn`; each type's `Default`
   returns that constructor (`purrdf_hash::default_from_new!`).

@@ -388,7 +388,7 @@ pub(crate) fn close<D: DatasetView>(
 /// ended the run, which is a fact about the caller rather than about the program or the
 /// data, so it keeps its own variant all the way out. Every other refusal is what
 /// [`EntailError::Evaluate`] has always meant.
-fn evaluate_error(error: EvalError) -> EntailError {
+pub(crate) fn evaluate_error(error: EvalError) -> EntailError {
     match error {
         EvalError::Stopped { .. } => EntailError::Stopped,
         other => EntailError::Evaluate(other),

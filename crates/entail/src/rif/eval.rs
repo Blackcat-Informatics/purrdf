@@ -3,15 +3,15 @@
 
 //! The RIF-Core forward-chaining ("bottom-up") rule evaluator.
 //!
-//! A definite Horn rule set is materialized to its least fixpoint by a
-//! deterministic semi-naive chase over interned `u32` triple ids. The seed fact set is the source
-//! dataset's default-graph triples plus the rule set's ground facts; each round
-//! fires every rule where at least one body atom can bind a *frontier* (newly
-//! derived) fact, joining the remaining atoms against the whole accumulated set.
-//! The next frontier is the round's genuinely-new triples; the chase halts when
-//! the frontier empties. Blank nodes are preserved by identity (interned by their
-//! `(label, scope)` value), never skolemized. Output is `original + derived`,
-//! frozen into a fresh dataset — fully deterministic.
+//! A definite Horn rule set is materialized to its least fixpoint by
+//! [`purrdf_datalog::seminaive`] — this module owns no fixpoint loop of its own. Each
+//! RIF rule is translated into `DlClause`s over the engine's quad-shaped relation store
+//! (one clause per head atom, every atom in the default graph, a frame `o[p->v]` being
+//! the triple `(o, p, v)`). The seed fact set is the source dataset's default-graph
+//! triples plus the rule set's ground facts. Blank nodes are preserved by identity
+//! (interned by their `(label, scope)` value, rendered to a scope-qualified surface),
+//! never skolemized. Output is `original + derived`, frozen into a fresh dataset in the
+//! order of the terms' first sighting — fully deterministic.
 //!
 //! # This lane reads the DEFAULT GRAPH, and says so
 //!
@@ -29,146 +29,42 @@ use std::sync::Arc;
 
 use purrdf_core::{DatasetView, FastMap, FastSet, RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_datalog::StopSignal;
-use purrdf_datalog::seminaive::BudgetReport;
+use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause};
+use purrdf_datalog::guard::NoGuards;
+use purrdf_datalog::seminaive::{BudgetReport, EvalOptions, compile, evaluate_guarded};
+use purrdf_datalog::store::RelationStore;
 
-use crate::engine::{copy_into, surface_of};
+use crate::engine::{copy_into, evaluate_error, surface_of};
 use crate::interner::{Interner, intern_into};
 use crate::report::{Boundary, Construct, ReasoningReport};
-use crate::rif::model::{Atom, RifTerm, RuleSet};
+use crate::rif::model::{Atom, RifTerm, Rule, RuleSet};
 use crate::{EntailError, Regime};
 
-/// One triple-pattern slot compiled against a rule's local variable table: a
-/// bound term id, or a variable's dense local index.
-#[derive(Clone, Copy)]
-enum Slot {
-    /// A ground term, pre-interned to its id.
-    Const(u32),
-    /// A variable, by its per-rule local index.
-    Var(usize),
-}
-
-/// A triple pattern compiled for matching.
-#[derive(Clone, Copy)]
-struct PatternAtom {
-    s: Slot,
-    p: Slot,
-    o: Slot,
-}
-
-/// A rule compiled against interned terms and a dense per-rule variable table.
-struct CompiledRule {
-    body: Vec<PatternAtom>,
-    head: Vec<PatternAtom>,
-    /// Number of distinct variables (the binding vector's length).
-    num_vars: usize,
-}
-
-/// A partial variable binding: `slot i` holds the term id bound to local var `i`,
-/// or `None` if still free.
-type Binding = Vec<Option<u32>>;
-
-/// Append-only fact rows plus one posting list per RDF position. Candidate order
-/// follows fact insertion order, so indexing changes work performed, not result
-/// determinism.
-#[derive(Default)]
-struct FactIndex {
-    facts: Vec<[u32; 3]>,
-    by_subject: FastMap<u32, Vec<usize>>,
-    by_predicate: FastMap<u32, Vec<usize>>,
-    by_object: FastMap<u32, Vec<usize>>,
-}
-
-impl FactIndex {
-    fn from_facts(facts: Vec<[u32; 3]>) -> Self {
-        let mut index = Self::default();
-        for fact in facts {
-            index.push(fact);
-        }
-        index
-    }
-
-    fn push(&mut self, fact: [u32; 3]) {
-        let ordinal = self.facts.len();
-        self.facts.push(fact);
-        self.by_subject.entry(fact[0]).or_default().push(ordinal);
-        self.by_predicate.entry(fact[1]).or_default().push(ordinal);
-        self.by_object.entry(fact[2]).or_default().push(ordinal);
-    }
-
-    fn is_empty(&self) -> bool {
-        self.facts.is_empty()
-    }
-
-    /// Drop all facts and postings while retaining allocated capacity, so the
-    /// next chase iteration's frontier can be rebuilt without reallocating.
-    fn clear(&mut self) {
-        self.facts.clear();
-        self.by_subject.clear();
-        self.by_predicate.clear();
-        self.by_object.clear();
-    }
-
-    /// The shortest posting list selected by constants and already-bound
-    /// variables. `None` means no slot is bound and the caller scans all facts.
-    fn candidate_ordinals(&self, atom: &PatternAtom, binding: &Binding) -> Option<&[usize]> {
-        let mut best: Option<&[usize]> = None;
-        for (slot, postings) in [
-            (atom.s, &self.by_subject),
-            (atom.p, &self.by_predicate),
-            (atom.o, &self.by_object),
-        ] {
-            let Some(value) = bound_value(slot, binding) else {
-                continue;
-            };
-            let candidate = postings.get(&value).map_or(&[][..], Vec::as_slice);
-            if best.is_none_or(|current| candidate.len() < current.len()) {
-                best = Some(candidate);
-            }
-        }
-        best
-    }
-
-    fn estimate(&self, atom: &PatternAtom, binding: &Binding) -> usize {
-        self.candidate_ordinals(atom, binding)
-            .map_or(self.facts.len(), <[usize]>::len)
-    }
-}
-
-#[derive(Default)]
-struct ChaseStats {
-    candidate_facts_examined: usize,
-}
-
-/// The evaluator's term table, plus the one occupancy figure the report must state.
-///
-/// A thin wrapper over [`Interner`] rather than a second interner: every id still comes
-/// from the same table in the same first-seen order, so nothing about the evaluation
-/// moves. What it adds is the byte tally
-/// [`BudgetReport::term_arena_bytes`] is defined as — interned term SURFACE bytes, under
-/// `purrdf-datalog`'s own definition of the coordinate, measured with the same
-/// [`surface_of`] rendering the chase lanes' store uses. Reporting a zero there would be a
-/// misreport rather than a modest one: this lane really does hold interned terms.
+/// The evaluator's term table: the shared [`Interner`] (whose dense first-seen ids fix the
+/// emission order of the answer) plus the surface each id is stored under in
+/// `purrdf-datalog`'s relation store and the reverse map that reads a derived surface back.
 ///
 /// The surface is rendered only when the id is NEW (ids are dense and assigned in
-/// first-seen order, so `id >= interned` is exactly the first-sighting test), so a repeated
-/// term costs a hash lookup and nothing else.
+/// first-seen order, so `id >= surfaces.len()` is exactly the first-sighting test), so a
+/// repeated term costs a hash lookup and nothing else.
 #[derive(Default)]
 struct Terms {
     /// The shared `TermValue → u32` table.
     interner: Interner,
-    /// How many ids have been handed out.
-    interned: u32,
-    /// Interned term surface bytes.
-    surface_bytes: usize,
+    /// The store surface of each id, by id.
+    surfaces: Vec<String>,
+    /// The id of each store surface.
+    by_surface: FastMap<String, u32>,
 }
 
 impl Terms {
-    /// Intern `value`, returning its dense id and tallying its surface on first sight.
+    /// Intern `value`, returning its dense id and recording its surface on first sight.
     fn intern(&mut self, value: TermValue) -> u32 {
         let id = self.interner.intern(value);
-        if id >= self.interned {
-            self.interned = id + 1;
-            self.surface_bytes += surface_of(self.interner.value(id)).len();
+        if id as usize >= self.surfaces.len() {
+            let surface = surface_of(self.interner.value(id));
+            self.by_surface.insert(surface.clone(), id);
+            self.surfaces.push(surface);
         }
         id
     }
@@ -176,6 +72,16 @@ impl Terms {
     /// The `TermValue` behind an id.
     fn value(&self, id: u32) -> &TermValue {
         self.interner.value(id)
+    }
+
+    /// The store surface of an id.
+    fn surface(&self, id: u32) -> &str {
+        &self.surfaces[id as usize]
+    }
+
+    /// The id a store surface was interned under.
+    fn id_of_surface(&self, surface: &str) -> Option<u32> {
+        self.by_surface.get(surface).copied()
     }
 }
 
@@ -246,6 +152,28 @@ pub fn materialize_rif_until<D: DatasetView>(
     rules: &RuleSet,
     stop: Option<&Arc<dyn StopSignal>>,
 ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+    materialize_rif_with(ds, rules, &EvalOptions::default(), stop)
+}
+
+/// [`materialize_rif_until`] under the caller's governors.
+///
+/// `options` carries the stored-fact and join-step limits of the semi-naive engine the
+/// fixpoint runs on ([`EvalOptions::with_max_stored_facts`],
+/// [`EvalOptions::with_max_join_steps`]), exactly as the chase lanes take them through
+/// [`materialize_with`](crate::materialize_with). A limit only ever REFUSES: a run inside
+/// the limits derives the same closure under every setting, and a run past one is
+/// [`EntailError::Evaluate`] naming the limit — never a truncated closure.
+///
+/// # Errors
+///
+/// [`EntailError::Evaluate`] if the run passes a limit, plus every error
+/// [`materialize_rif_until`] returns.
+pub fn materialize_rif_with<D: DatasetView>(
+    ds: &D,
+    rules: &RuleSet,
+    options: &EvalOptions,
+    stop: Option<&Arc<dyn StopSignal>>,
+) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
     // Refuse a run that was already stopped before interning source terms, ground facts,
     // or compiled rules. The round-level checks below remain the mid-fixpoint boundary.
     if stop.is_some_and(|signal| signal.stopped()) {
@@ -256,8 +184,8 @@ pub fn materialize_rif_until<D: DatasetView>(
     // Seed: the source dataset's default-graph triples, in dataset order. A quad outside
     // it is not a premise, and the boundary below is where the run says so.
     let mut named_graph = false;
-    let mut facts: FastSet<[u32; 3]> = FastSet::default();
-    let mut seed: Vec<[u32; 3]> = Vec::new();
+    let mut edb = RelationStore::new();
+    let mut original: FastSet<[u32; 3]> = FastSet::default();
     for q in ds.quads() {
         if q.g.is_some() {
             named_graph = true;
@@ -266,28 +194,35 @@ pub fn materialize_rif_until<D: DatasetView>(
         let s = terms.intern(ds.term_value(q.s)?);
         let p = terms.intern(ds.term_value(q.p)?);
         let o = terms.intern(ds.term_value(q.o)?);
-        push_fact(&mut facts, &mut seed, [s, p, o]);
+        seed_fact(&mut edb, &terms, [s, p, o]);
+        original.insert([s, p, o]);
     }
-    let original: FastSet<[u32; 3]> = facts.clone();
 
     // Seed: the rule set's ground facts (imported RDF + ground frames).
     for (s, p, o) in &rules.facts {
         let s = terms.intern(s.clone());
         let p = terms.intern(p.clone());
         let o = terms.intern(o.clone());
-        push_fact(&mut facts, &mut seed, [s, p, o]);
+        seed_fact(&mut edb, &terms, [s, p, o]);
     }
 
-    // Compile every rule against interned terms and a dense variable table.
-    let compiled: Vec<CompiledRule> = rules
-        .rules
-        .iter()
-        .map(|r| compile_rule(r, &mut terms))
-        .collect::<Result<Vec<_>, _>>()?;
+    // Translate every rule into engine clauses, interning constants as they are met.
+    let mut clauses: Vec<DlClause> = Vec::new();
+    for rule in &rules.rules {
+        clauses.extend(translate_rule(rule, &mut terms)?);
+    }
 
-    let Some(stats) = chase(&mut facts, seed, &compiled, stop) else {
-        return Err(EntailError::Stopped);
-    };
+    // The fixpoint is `purrdf-datalog`'s. The stop signal is polled at its round
+    // boundaries; `Stopped` out means there is no partial fixpoint to hand back.
+    let executable = compile(clauses).map_err(evaluate_error)?;
+    let evaluation = evaluate_guarded(
+        &executable,
+        edb,
+        &NoGuards,
+        options,
+        stop.map(|signal| &**signal),
+    )
+    .map_err(evaluate_error)?;
 
     // Emit: original quads (all graphs) + every seeded/derived fact that is not an
     // original default-graph triple, in a deterministic order.
@@ -296,10 +231,21 @@ pub fn materialize_rif_until<D: DatasetView>(
     // fact naming one of the input's blank nodes lands on the SAME term the copy carries —
     // `push_dataset` would have re-scoped the input and split the two apart.
     copy_into(&mut b, ds)?;
-    // Set iteration order is not stable across runs, so sort the accumulated
-    // facts by their interned term ids to get a deterministic (not insertion-order)
+    // Sort the model by its interned term ids to get the deterministic first-seen
     // emission order.
-    let mut ordered: Vec<[u32; 3]> = facts.iter().copied().collect();
+    let mut ordered: Vec<[u32; 3]> = evaluation
+        .facts()
+        .facts_sorted()
+        .iter()
+        .map(|fact| {
+            let id = |surface: &str| {
+                terms
+                    .id_of_surface(surface)
+                    .expect("the evaluator mints no terms, so every surface was interned")
+            };
+            [id(&fact.subject), id(&fact.predicate), id(&fact.object)]
+        })
+        .collect();
     ordered.sort_unstable();
     for t in ordered {
         if original.contains(&t) {
@@ -311,16 +257,14 @@ pub fn materialize_rif_until<D: DatasetView>(
         b.push_quad(s, p, o, None);
     }
     let closure = b.freeze().map_err(|e| EntailError::Build(e.to_string()))?;
-    Ok((closure, rif_report(named_graph, &facts, &terms, &stats)))
+    Ok((closure, rif_report(named_graph, evaluation.budget())))
 }
 
-/// Assemble the report for a RIF run that held `facts` and consumed `stats`.
-fn rif_report(
-    named_graph: bool,
-    facts: &FastSet<[u32; 3]>,
-    terms: &Terms,
-    stats: &ChaseStats,
-) -> ReasoningReport {
+/// Assemble the report for a RIF run whose fixpoint consumed `budget`.
+///
+/// The budget is the evaluator's own measurement — join steps, facts held at the fixpoint
+/// and interned term surface bytes — not a second tally kept beside it.
+fn rif_report(named_graph: bool, budget: BudgetReport) -> ReasoningReport {
     let boundaries: Vec<Boundary> = if named_graph {
         vec![Boundary::of(Construct::NamedGraph)]
     } else {
@@ -331,17 +275,13 @@ fn rif_report(
         // The rules are the caller's and carry no `RuleId` this crate declares.
         Vec::new(),
         boundaries,
-        BudgetReport::new(
-            u64::try_from(stats.candidate_facts_examined).expect("candidate count fits u64"),
-            facts.len(),
-            terms.surface_bytes,
-        ),
+        budget,
         // A definite Horn rule set has no `false` head: nothing in this lane can derive an
         // inconsistency, so `None` here is a statement about the fragment rather than an
         // unfilled field.
         None,
         // The evaluator mints no term — a head variable not bound by the body is refused at
-        // compile time — so there is no surrogate to withhold.
+        // translation time — so there is no surrogate to withhold.
         0,
         // …and a rule set that invents no term needs no termination proof: this lane's
         // fixpoint is bounded by the active domain, so there is no acyclicity analysis to
@@ -350,28 +290,27 @@ fn rif_report(
     )
 }
 
-/// Insert `t` into the accumulated set and, if new, the ordered frontier seed.
-fn push_fact(facts: &mut FastSet<[u32; 3]>, order: &mut Vec<[u32; 3]>, t: [u32; 3]) {
-    if facts.insert(t) {
-        order.push(t);
-    }
+/// Insert one interned triple into the seed relation store's default graph.
+fn seed_fact(edb: &mut RelationStore, terms: &Terms, [s, p, o]: [u32; 3]) {
+    let _ = edb.insert(
+        terms.surface(s),
+        terms.surface(p),
+        terms.surface(o),
+        RelationStore::DEFAULT_GRAPH,
+    );
 }
 
-/// Compile one rule: intern each atom's ground slots and assign each variable a
-/// dense local index (assigned in first-seen order across body then head).
+/// Translate one RIF rule into engine clauses, one per head atom (each sharing the body).
+///
+/// A rule with an empty body derives nothing — the pre-existing lane semantics, kept here
+/// rather than letting the engine fire a bodiless clause once — so it yields no clause.
 ///
 /// # Errors
 ///
 /// [`EntailError::Parse`] if the rule is not range-restricted (datalog safety):
 /// a head variable that never appears in the body has no binding source, so the
 /// rule is malformed rather than silently deriving an unbound term.
-fn compile_rule(
-    rule: &crate::rif::model::Rule,
-    terms: &mut Terms,
-) -> Result<CompiledRule, EntailError> {
-    // Range-restriction (safety) check up front: every head variable must be
-    // bound by some body atom. Walk the model terms directly so that valid-rule
-    // compilation below is byte-identical (same interned ids, same var indices).
+fn translate_rule(rule: &Rule, terms: &mut Terms) -> Result<Vec<DlClause>, EntailError> {
     let body_vars: FastSet<&str> = rule.body.iter().flat_map(atom_var_names).collect();
     for name in rule.head.iter().flat_map(atom_var_names) {
         if !body_vars.contains(name) {
@@ -381,23 +320,15 @@ fn compile_rule(
             )));
         }
     }
-
-    let mut vars: Vec<String> = Vec::new();
-    let body: Vec<PatternAtom> = rule
-        .body
-        .iter()
-        .map(|a| compile_atom(a, terms, &mut vars))
-        .collect();
-    let head: Vec<PatternAtom> = rule
-        .head
-        .iter()
-        .map(|a| compile_atom(a, terms, &mut vars))
-        .collect();
-    Ok(CompiledRule {
-        body,
-        head,
-        num_vars: vars.len(),
-    })
+    let body: Vec<ClauseAtom> = rule.body.iter().map(|a| clause_atom(a, terms)).collect();
+    let head: Vec<ClauseAtom> = rule.head.iter().map(|a| clause_atom(a, terms)).collect();
+    if body.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(head
+        .into_iter()
+        .map(|atom| DlClause::datalog(atom, body.clone()))
+        .collect())
 }
 
 /// The variable names appearing in an atom's three slots, in slot order.
@@ -410,271 +341,42 @@ fn atom_var_names(atom: &Atom) -> impl Iterator<Item = &str> {
         })
 }
 
-/// Compile one atom, interning constants and mapping variables to local indices.
-fn compile_atom(atom: &Atom, terms: &mut Terms, vars: &mut Vec<String>) -> PatternAtom {
-    PatternAtom {
-        s: compile_slot(&atom.s, terms, vars),
-        p: compile_slot(&atom.p, terms, vars),
-        o: compile_slot(&atom.o, terms, vars),
-    }
+/// One RIF triple pattern as a default-graph engine atom.
+fn clause_atom(atom: &Atom, terms: &mut Terms) -> ClauseAtom {
+    ClauseAtom::quad(
+        clause_term(&atom.s, terms),
+        clause_term(&atom.p, terms),
+        clause_term(&atom.o, terms),
+        ClauseTerm::DefaultGraph,
+    )
 }
 
-/// Compile one slot: a ground term interns to [`Slot::Const`]; a variable maps to
-/// its local index (allocated on first sight) as [`Slot::Var`].
-fn compile_slot(term: &RifTerm, terms: &mut Terms, vars: &mut Vec<String>) -> Slot {
+/// One RIF slot as an engine term. A constant is interned (fixing its emission order and
+/// its readable surface) and carried as its exact store surface: an IRI whose bracketed
+/// spelling is that surface as the IRI variant, every other term as a literal surface.
+fn clause_term(term: &RifTerm, terms: &mut Terms) -> ClauseTerm {
     match term {
-        RifTerm::Const(v) => Slot::Const(terms.intern(v.clone())),
-        RifTerm::Var(name) => {
-            let idx = vars.iter().position(|v| v == name).unwrap_or_else(|| {
-                vars.push(name.clone());
-                vars.len() - 1
-            });
-            Slot::Var(idx)
-        }
-    }
-}
-
-/// Semi-naive forward chase to the least fixpoint.
-fn chase(
-    facts: &mut FastSet<[u32; 3]>,
-    seed: Vec<[u32; 3]>,
-    rules: &[CompiledRule],
-    stop: Option<&Arc<dyn StopSignal>>,
-) -> Option<ChaseStats> {
-    let mut all = FactIndex::from_facts(seed.clone());
-    let mut delta = FactIndex::from_facts(seed);
-    let mut derived: Vec<[u32; 3]> = Vec::new();
-    let mut stats = ChaseStats::default();
-    while !delta.is_empty() {
-        // The caller's stop signal, polled BEFORE the round it would prevent — the same
-        // boundary `purrdf-datalog` takes it at. `None` out means stopped: there is no
-        // partial fixpoint to hand back, so there is no field to hand one back in.
-        if stop.is_some_and(|stop| stop.stopped()) {
-            return None;
-        }
-        derived.clear();
-        for rule in rules {
-            fire_rule(rule, &all, &delta, &mut derived, &mut stats);
-        }
-        delta.clear();
-        for &t in &derived {
-            if facts.insert(t) {
-                all.push(t);
-                delta.push(t);
-            }
-        }
-    }
-    Some(stats)
-}
-
-/// Fire one rule semi-naively: for each body position `pivot`, bind that atom only
-/// against the frontier `delta` and the remaining atoms against the whole `all`
-/// set, then instantiate the head. Firing from every pivot position catches a new
-/// fact wherever it lands in the body; the fixpoint deduplicates re-derivations.
-fn fire_rule(
-    rule: &CompiledRule,
-    all: &FactIndex,
-    delta: &FactIndex,
-    derived: &mut Vec<[u32; 3]>,
-    stats: &mut ChaseStats,
-) {
-    for pivot in 0..rule.body.len() {
-        let mut binding = vec![None; rule.num_vars];
-        let mut remaining: Vec<usize> = (0..rule.body.len()).filter(|&i| i != pivot).collect();
-        match delta.candidate_ordinals(&rule.body[pivot], &binding) {
-            Some(ordinals) => {
-                for &ordinal in ordinals {
-                    match_pivot(
-                        rule,
-                        pivot,
-                        delta.facts[ordinal],
-                        all,
-                        &mut remaining,
-                        &mut binding,
-                        derived,
-                        stats,
-                    );
+        RifTerm::Var(name) => ClauseTerm::var(name.clone()),
+        RifTerm::Const(value) => {
+            let id = terms.intern(value.clone());
+            let surface = terms.surface(id);
+            match value {
+                TermValue::Iri(iri)
+                    if surface.strip_prefix('<').and_then(|s| s.strip_suffix('>'))
+                        == Some(iri.as_str()) =>
+                {
+                    ClauseTerm::iri(iri.clone())
                 }
-            }
-            None => {
-                for &fact in &delta.facts {
-                    match_pivot(
-                        rule,
-                        pivot,
-                        fact,
-                        all,
-                        &mut remaining,
-                        &mut binding,
-                        derived,
-                        stats,
-                    );
-                }
+                _ => ClauseTerm::literal(surface.to_owned()),
             }
         }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn match_pivot(
-    rule: &CompiledRule,
-    pivot: usize,
-    fact: [u32; 3],
-    all: &FactIndex,
-    remaining: &mut Vec<usize>,
-    binding: &mut Binding,
-    derived: &mut Vec<[u32; 3]>,
-    stats: &mut ChaseStats,
-) {
-    stats.candidate_facts_examined += 1;
-    let mut changed = [0usize; 3];
-    let Some(changed_count) = match_atom(&rule.body[pivot], fact, binding, &mut changed) else {
-        return;
-    };
-    join_remaining(rule, all, remaining, binding, derived, stats);
-    rollback(binding, &changed[..changed_count]);
-}
-
-fn join_remaining(
-    rule: &CompiledRule,
-    all: &FactIndex,
-    remaining: &mut Vec<usize>,
-    binding: &mut Binding,
-    derived: &mut Vec<[u32; 3]>,
-    stats: &mut ChaseStats,
-) {
-    if remaining.is_empty() {
-        for head in &rule.head {
-            derived.push(instantiate(head, binding));
-        }
-        return;
-    }
-
-    let choice = remaining
-        .iter()
-        .enumerate()
-        .min_by_key(|(_, atom)| (all.estimate(&rule.body[**atom], binding), **atom))
-        .map(|(position, _)| position)
-        .expect("remaining atoms is non-empty");
-    let atom_index = remaining.swap_remove(choice);
-    let atom = &rule.body[atom_index];
-    match all.candidate_ordinals(atom, binding) {
-        Some(ordinals) => {
-            for &ordinal in ordinals {
-                match_join_candidate(
-                    rule,
-                    atom,
-                    all.facts[ordinal],
-                    all,
-                    remaining,
-                    binding,
-                    derived,
-                    stats,
-                );
-            }
-        }
-        None => {
-            for &fact in &all.facts {
-                match_join_candidate(rule, atom, fact, all, remaining, binding, derived, stats);
-            }
-        }
-    }
-    remaining.push(atom_index);
-}
-
-#[allow(clippy::too_many_arguments)]
-fn match_join_candidate(
-    rule: &CompiledRule,
-    atom: &PatternAtom,
-    fact: [u32; 3],
-    all: &FactIndex,
-    remaining: &mut Vec<usize>,
-    binding: &mut Binding,
-    derived: &mut Vec<[u32; 3]>,
-    stats: &mut ChaseStats,
-) {
-    stats.candidate_facts_examined += 1;
-    let mut changed = [0usize; 3];
-    if let Some(changed_count) = match_atom(atom, fact, binding, &mut changed) {
-        join_remaining(rule, all, remaining, binding, derived, stats);
-        rollback(binding, &changed[..changed_count]);
-    }
-}
-
-/// Try to bind `atom` against `fact`, recording newly-bound variable slots so the
-/// caller can restore the reusable binding after recursive descent.
-fn match_atom(
-    atom: &PatternAtom,
-    fact: [u32; 3],
-    binding: &mut Binding,
-    changed: &mut [usize; 3],
-) -> Option<usize> {
-    let mut changed_count = 0;
-    for (slot, value) in [(atom.s, fact[0]), (atom.p, fact[1]), (atom.o, fact[2])] {
-        if !bind_slot(slot, value, binding, changed, &mut changed_count) {
-            rollback(binding, &changed[..changed_count]);
-            return None;
-        }
-    }
-    Some(changed_count)
-}
-
-/// Unify one slot with a term id: a constant must equal it; a free variable binds
-/// to it; an already-bound variable must equal its binding.
-fn bind_slot(
-    slot: Slot,
-    value: u32,
-    binding: &mut Binding,
-    changed: &mut [usize; 3],
-    changed_count: &mut usize,
-) -> bool {
-    match slot {
-        Slot::Const(c) => c == value,
-        Slot::Var(i) => match binding[i] {
-            Some(existing) => existing == value,
-            None => {
-                binding[i] = Some(value);
-                changed[*changed_count] = i;
-                *changed_count += 1;
-                true
-            }
-        },
-    }
-}
-
-fn rollback(binding: &mut Binding, changed: &[usize]) {
-    for &index in changed {
-        binding[index] = None;
-    }
-}
-
-fn bound_value(slot: Slot, binding: &Binding) -> Option<u32> {
-    match slot {
-        Slot::Const(value) => Some(value),
-        Slot::Var(index) => binding[index],
-    }
-}
-
-/// Instantiate a head atom under a complete binding. Head variables are
-/// range-restricted — `compile_rule` rejects any head variable not bound by the
-/// body — so by construction every head variable is bound here.
-fn instantiate(atom: &PatternAtom, b: &Binding) -> [u32; 3] {
-    [resolve(atom.s, b), resolve(atom.p, b), resolve(atom.o, b)]
-}
-
-/// Resolve a head slot to a concrete term id under `b`. The `.expect(...)` is
-/// unreachable: `compile_rule`'s range-restriction check guarantees every head
-/// variable is body-bound, so its slot is set before the head is instantiated.
-fn resolve(slot: Slot, b: &Binding) -> u32 {
-    match slot {
-        Slot::Const(c) => c,
-        Slot::Var(i) => b[i].expect("range-restricted head variable is bound by the body"),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rif::model::{Atom, RifTerm, Rule};
+    use crate::rif::model::Fact;
     use purrdf_core::{RdfDatasetBuilder, TermValue};
 
     const EX: &str = "http://example.org/ns#";
@@ -892,62 +594,175 @@ mod tests {
     }
 
     #[test]
-    fn indexed_backtracking_avoids_cartesian_fact_scans() {
-        const COMMON: u32 = 10;
-        const RARE: u32 = 11;
-        const DERIVED: u32 = 12;
-
-        let mut seed: Vec<[u32; 3]> = (0..1_000).map(|n| [n, COMMON, n + 1]).collect();
-        seed.push([500, RARE, 2_000]);
-        let mut facts: FastSet<[u32; 3]> = seed.iter().copied().collect();
-        let rule = CompiledRule {
-            body: vec![
-                PatternAtom {
-                    s: Slot::Var(0),
-                    p: Slot::Const(COMMON),
-                    o: Slot::Var(1),
-                },
-                PatternAtom {
-                    s: Slot::Var(1),
-                    p: Slot::Const(RARE),
-                    o: Slot::Var(2),
-                },
-            ],
-            head: vec![PatternAtom {
-                s: Slot::Var(0),
-                p: Slot::Const(DERIVED),
-                o: Slot::Var(2),
+    fn indexed_joins_avoid_cartesian_fact_scans() {
+        // 1,000 `common` edges and one `rare` edge: a join that scanned the Cartesian
+        // product would enumerate a million candidates; the engine's index-driven plan
+        // inspects a small multiple of the fact count.
+        let mut facts: Vec<Fact> = (0..1_000)
+            .map(|n| {
+                (
+                    iri(&format!("n{n}")),
+                    iri("common"),
+                    iri(&format!("n{}", n + 1)),
+                )
+            })
+            .collect();
+        facts.push((iri("n500"), iri("rare"), iri("far")));
+        let rules = RuleSet {
+            facts,
+            rules: vec![Rule {
+                body: vec![
+                    atom(var("x"), con(iri("common")), var("y")),
+                    atom(var("y"), con(iri("rare")), var("z")),
+                ],
+                head: vec![atom(var("x"), con(iri("derived")), var("z"))],
             }],
-            num_vars: 3,
         };
-
-        let stats = chase(&mut facts, seed, &[rule], None).expect("no stop signal was named");
-        assert!(facts.contains(&[499, DERIVED, 2_000]));
+        let (out, report) = materialize_rif(&empty_ds(), &rules).expect("materialize");
+        assert!(has(&out, &iri("n499"), &iri("derived"), &iri("far")));
         assert!(
-            stats.candidate_facts_examined < 5_000,
-            "posting-list joins should inspect thousands, not the million-row Cartesian product: {}",
-            stats.candidate_facts_examined
+            report.budget().join_steps() < 5_000,
+            "indexed joins should inspect thousands, not the million-row Cartesian product: {}",
+            report.budget().join_steps()
         );
     }
 
     #[test]
-    fn failed_repeated_variable_match_rolls_back_binding() {
-        let atom = PatternAtom {
-            s: Slot::Var(0),
-            p: Slot::Const(7),
-            o: Slot::Var(0),
+    fn a_repeated_variable_binds_one_value() {
+        // `?x loves ?x` matches only the reflexive fact; the neighbouring non-reflexive
+        // fact must not fire the rule.
+        let rules = RuleSet {
+            facts: vec![
+                (iri("a"), iri("loves"), iri("a")),
+                (iri("b"), iri("loves"), iri("c")),
+            ],
+            rules: vec![Rule {
+                body: vec![atom(var("x"), con(iri("loves")), var("x"))],
+                head: vec![atom(var("x"), con(iri("narcissist")), con(iri("yes")))],
+            }],
         };
-        let mut binding = vec![None];
-        let mut changed = [0usize; 3];
+        let (out, _) = materialize_rif(&empty_ds(), &rules).expect("materialize");
+        assert!(has(&out, &iri("a"), &iri("narcissist"), &iri("yes")));
+        assert!(!has(&out, &iri("b"), &iri("narcissist"), &iri("yes")));
+        assert!(!has(&out, &iri("c"), &iri("narcissist"), &iri("yes")));
+    }
 
-        assert_eq!(
-            match_atom(&atom, [1, 7, 2], &mut binding, &mut changed),
-            None
+    #[test]
+    fn a_variable_predicate_and_a_recursive_rule_reach_the_fixpoint() {
+        // Transitive closure over a chain, plus a variable-predicate copy rule.
+        let rules = RuleSet {
+            facts: vec![
+                (iri("a"), iri("next"), iri("b")),
+                (iri("b"), iri("next"), iri("c")),
+                (iri("c"), iri("next"), iri("d")),
+            ],
+            rules: vec![
+                Rule {
+                    body: vec![
+                        atom(var("x"), con(iri("next")), var("y")),
+                        atom(var("y"), con(iri("reach")), var("z")),
+                    ],
+                    head: vec![atom(var("x"), con(iri("reach")), var("z"))],
+                },
+                Rule {
+                    body: vec![atom(var("x"), con(iri("next")), var("y"))],
+                    head: vec![atom(var("x"), con(iri("reach")), var("y"))],
+                },
+                Rule {
+                    body: vec![atom(var("x"), var("p"), var("y"))],
+                    head: vec![atom(var("y"), con(iri("seen")), var("p"))],
+                },
+            ],
+        };
+        let (out, _) = materialize_rif(&empty_ds(), &rules).expect("materialize");
+        assert!(has(&out, &iri("a"), &iri("reach"), &iri("d")));
+        assert!(has(&out, &iri("d"), &iri("seen"), &iri("next")));
+        assert!(has(&out, &iri("d"), &iri("seen"), &iri("reach")));
+    }
+
+    #[test]
+    fn a_bodiless_rule_derives_nothing() {
+        let rules = RuleSet {
+            facts: Vec::new(),
+            rules: vec![Rule {
+                body: Vec::new(),
+                head: vec![atom(con(iri("a")), con(iri("p")), con(iri("b")))],
+            }],
+        };
+        let (out, _) = materialize_rif(&empty_ds(), &rules).expect("materialize");
+        assert!(!has(&out, &iri("a"), &iri("p"), &iri("b")));
+    }
+
+    /// A chain of `n` edges closed transitively: `n(n+1)/2` `reach` facts.
+    fn chain_closure_rules(n: u32) -> RuleSet {
+        RuleSet {
+            facts: (0..n)
+                .map(|i| {
+                    (
+                        iri(&format!("n{i}")),
+                        iri("edge"),
+                        iri(&format!("n{}", i + 1)),
+                    )
+                })
+                .collect(),
+            rules: vec![
+                Rule {
+                    body: vec![atom(var("x"), con(iri("edge")), var("y"))],
+                    head: vec![atom(var("x"), con(iri("reach")), var("y"))],
+                },
+                Rule {
+                    body: vec![
+                        atom(var("x"), con(iri("reach")), var("y")),
+                        atom(var("y"), con(iri("edge")), var("z")),
+                    ],
+                    head: vec![atom(var("x"), con(iri("reach")), var("z"))],
+                },
+            ],
+        }
+    }
+
+    /// THE VALID NEIGHBOUR of the limit refusal: a legitimately large program still runs
+    /// under the DEFAULT limits. A 300-edge chain derives 300*301/2 = 45,150 `reach` facts.
+    #[test]
+    fn a_large_legitimate_closure_succeeds_under_the_default_limits() {
+        let n = 300;
+        let started = std::time::Instant::now();
+        let (out, report) = materialize_rif(&empty_ds(), &chain_closure_rules(n)).expect("closure");
+        let derived = out
+            .quads()
+            .filter(|q| out.term_value(q.p).unwrap() == iri("reach"))
+            .count();
+        eprintln!(
+            "rif chain n={n}: derived {derived} in {:?}",
+            started.elapsed()
         );
-        assert_eq!(binding, vec![None]);
-        assert_eq!(
-            match_atom(&atom, [3, 7, 3], &mut binding, &mut changed),
-            Some(1)
-        );
+        assert_eq!(derived, 45_150);
+        assert!(report.budget().stored_facts() >= 45_150 + 300);
+    }
+
+    /// THE INVALID CASE: a run past a limit is a typed `Evaluate` refusal naming the limit.
+    #[test]
+    fn a_run_past_a_limit_is_refused_and_a_raised_limit_admits_it() {
+        let rules = chain_closure_rules(300);
+        let tight = EvalOptions::default().with_max_stored_facts(1_000);
+        let err = materialize_rif_with(&empty_ds(), &rules, &tight, None)
+            .expect_err("45,150 facts exceed a 1,000-fact limit");
+        match err {
+            EntailError::Evaluate(inner) => {
+                let text = inner.to_string();
+                assert!(text.contains("stored"), "message names the limit: {text}");
+            }
+            other => panic!("expected Evaluate, got {other:?}"),
+        }
+        let steps = EvalOptions::default().with_max_join_steps(1_000);
+        assert!(matches!(
+            materialize_rif_with(&empty_ds(), &rules, &steps, None),
+            Err(EntailError::Evaluate(_))
+        ));
+        // The same program under a raised limit is admitted, with the same closure.
+        let raised = EvalOptions::default().with_max_stored_facts(1 << 24);
+        let (out, _) = materialize_rif_with(&empty_ds(), &rules, &raised, None).expect("raised");
+        let (baseline, _) = materialize_rif(&empty_ds(), &rules).expect("default");
+        assert_eq!(out.quads().count(), baseline.quads().count());
     }
 }

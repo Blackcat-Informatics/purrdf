@@ -1333,6 +1333,23 @@ fingerprints = []
 names = ['^(shortest_rule_path|shortest_dependency_path)$']
 
 [[job]]
+id = "rif-seminaive-fixpoint"
+summary = "The least-fixpoint evaluation of a definite Horn rule set: RIF-Core rules are translated to Datalog clauses and run on the one semi-naive engine, with no private delta loop"
+home = "purrdf_datalog::seminaive::evaluate_until"
+entry_points = []
+spec = "semi-naive bottom-up evaluation of definite Horn rules to the least model, one delta per round, under the engine's limits and stop signal"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(fire_rule|match_pivot|join_remaining|match_join_candidate|semi_naive_chase|seminaive_fixpoint)$']
+
+[[job]]
 id = "cli-shared-stdin"
 summary = "Refusing a command line in which two documents read standard input: one helper names every reader in one message"
 home = "purrdf_cli::argv_documents::refuse_shared_stdin"
