@@ -18,7 +18,7 @@
 #![cfg(all(target_arch = "x86", not(target_feature = "sse2")))]
 
 use purrdf_core::DistanceMetric;
-use purrdf_core::distance::{FloatEnvironmentError, FloatEnvironmentEvidence};
+use purrdf_core::distance::{FloatEnvironmentError, FloatEnvironmentEvidence, Reassociated};
 use purrdf_hnsw::{HnswError, HnswIndex, Params, Ranked, VectorMatrix};
 use purrdf_xsd::ieee::x87;
 

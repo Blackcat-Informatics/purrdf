@@ -30,7 +30,9 @@ mod purremb;
 use std::sync::Arc;
 
 use purrdf_core::DistanceMetric;
-use purrdf_core::distance::{Arithmetic, FloatEnvironmentError, FloatEnvironmentEvidence};
+use purrdf_core::distance::{
+    Arithmetic, FloatEnvironmentError, FloatEnvironmentEvidence, Reassociated,
+};
 use purrdf_hnsw::{HnswError, HnswIndex, Params, Ranked};
 use purrdf_sparql_eval::{
     EmbeddingKnnRelation, EmbeddingSpace, EvalError, KnnGuard, PfArgs, PfRow, PropertyFunction,
