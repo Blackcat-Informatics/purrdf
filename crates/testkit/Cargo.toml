@@ -50,8 +50,9 @@ name = "bench"
 harness = false
 
 [dependencies]
-# The one first-party dependency, and the only one layers.toml allows besides
-# the lexical kernels: `purrdf-hash`, the zero-dependency root, whose own tests
+# The one first-party dependency (layers.toml allows no other: `purrdf-lex`'s
+# tests run on this crate, so an edge to it would close a dev-dependency cycle):
+# `purrdf-hash`, the zero-dependency root, whose own tests
 # do not use this crate (its vector suites live in `purrdf-hash-conformance`),
 # so no member's tests close a cycle through it. It supplies the SplitMix64
 # function the deterministic stream is built on, and the FNV-1a hash that

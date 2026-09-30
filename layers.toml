@@ -69,7 +69,7 @@ external = []
 
 [[crate]]
 name = "purrdf-events"
-deps = [{ name = "purrdf-hash", pending = true }]
+deps = []
 external = []
 
 [[crate]]
@@ -93,10 +93,7 @@ external = []
 
 [[crate]]
 name = "purrdf-testkit"
-deps = [
-    "purrdf-hash",
-    { name = "purrdf-lex", pending = true },
-]
+deps = ["purrdf-hash"]
 # The string generators walk regex-syntax's IR; SHA-256 seals frozen vectors;
 # wasm-bindgen reaches Node's argv, env, console and clock on wasm32.
 external = ["regex-syntax", "sha2", "wasm-bindgen"]
