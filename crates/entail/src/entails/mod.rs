@@ -195,6 +195,12 @@ use crate::report::{InconsistentRun, ReasoningReport};
 use crate::{EntailError, Materialization, Regime, materialize_with};
 use purrdf_datalog::seminaive::EvalOptions;
 
+/// Whether `term` is the IRI `iri`: the one test the axiom readers apply to every
+/// predicate and class position they dispatch on.
+fn is(term: &TermValue, iri: &str) -> bool {
+    term.as_iri() == Some(iri)
+}
+
 pub mod answers;
 pub mod certificate;
 pub mod comprehension;

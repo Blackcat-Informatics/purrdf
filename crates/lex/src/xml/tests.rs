@@ -42,6 +42,26 @@ fn with_depth(depth: usize) -> Options {
 // ── The contract's paired refusals ─────────────────────────────────────────
 
 #[test]
+fn element_children_skip_text_comments_and_instructions_in_both_directions() {
+    let text = "<r>a<x/><!--c--><?pi d?>b<y><z/></y>c</r>";
+    let document = parse(text).expect("well-formed");
+    let root = document.root_element();
+    let names: Vec<&str> = root
+        .element_children()
+        .map(|child| child.tag_name().name())
+        .collect();
+    assert_eq!(names, ["x", "y"]);
+    let reversed: Vec<&str> = root
+        .element_children()
+        .rev()
+        .map(|child| child.tag_name().name())
+        .collect();
+    assert_eq!(reversed, ["y", "x"]);
+    let leaf = root.first_element_child().expect("x");
+    assert_eq!(leaf.element_children().count(), 0);
+}
+
+#[test]
 fn a_doctype_is_refused() {
     let text = "<!DOCTYPE r><r/>";
     assert_eq!(kind(parse(text)), XmlErrorKind::Doctype);

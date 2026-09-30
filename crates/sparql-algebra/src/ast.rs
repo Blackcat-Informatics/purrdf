@@ -47,6 +47,14 @@ pub struct NamedNode {
     iri: Arc<str>,
 }
 
+purrdf_lex::constructors! {
+    impl NamedNode {
+        /// Wrap an IRI without validation. Use only when the source is already known
+        /// to be a valid IRI (e.g. round-tripping an already-parsed node).
+        pub fn new_unchecked(iri) -> Self { .. };
+    }
+}
+
 impl NamedNode {
     /// Validate and wrap an absolute IRI. Returns [`ParseError::Iri`] if the
     /// string is not a valid RFC-3987 IRI, or if it is a relative reference
@@ -65,14 +73,6 @@ impl NamedNode {
             });
         }
         Ok(Self { iri: iri.into() })
-    }
-
-    /// Wrap an IRI without validation. Use only when the source is already known
-    /// to be a valid IRI (e.g. round-tripping an already-parsed node).
-    pub fn new_unchecked(iri: impl Into<String>) -> Self {
-        Self {
-            iri: iri.into().into(),
-        }
     }
 
     /// The IRI lexical form.
@@ -98,14 +98,14 @@ pub struct BlankNode {
     id: Arc<str>,
 }
 
-impl BlankNode {
-    /// Wrap a blank-node label (the part after `_:`).
-    pub fn new(id: impl Into<String>) -> Self {
-        Self {
-            id: id.into().into(),
-        }
+purrdf_lex::constructors! {
+    impl BlankNode {
+        /// Wrap a blank-node label (the part after `_:`).
+        pub fn new(id) -> Self { .. };
     }
+}
 
+impl BlankNode {
     /// The blank-node label (without `_:`).
     pub fn as_str(&self) -> &str {
         &self.id
@@ -140,14 +140,14 @@ pub struct Variable {
     name: Arc<str>,
 }
 
-impl Variable {
-    /// Wrap a variable name (the part after `?` or `$`).
-    pub fn new(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into().into(),
-        }
+purrdf_lex::constructors! {
+    impl Variable {
+        /// Wrap a variable name (the part after `?` or `$`).
+        pub fn new(name) -> Self { .. };
     }
+}
 
+impl Variable {
     /// The variable name (without the sigil).
     pub fn as_str(&self) -> &str {
         &self.name

@@ -3554,10 +3554,6 @@ mod term_walk_tests {
         deepest
     }
 
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
-    }
-
     // ── The tests ──────────────────────────────────────────────────────────────────
 
     /// The bound-slot test, the slot visit, the shape hash and — through the
@@ -3792,7 +3788,7 @@ mod term_walk_tests {
     /// against a term chain as deep — all on a thread with a 128 KiB stack.
     #[test]
     fn a_hundred_thousand_level_position_is_walked_on_a_128_kib_stack() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let chain = Chain::new(DEPTH);
             let leaf = TermId::from_index(0);
             let deep = deep_position(DEPTH, leaf);
@@ -3861,7 +3857,8 @@ mod term_walk_tests {
                 .expect("every constant is held");
             assert_eq!(nesting(&compiled), DEPTH);
             drop(compiled);
-        });
+        })
+        .expect("spawn");
     }
 }
 
@@ -4346,10 +4343,6 @@ mod survey_tests {
         (survey.orders.clone(), estimates)
     }
 
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
-    }
-
     // ── The tests ──────────────────────────────────────────────────────────────────
 
     /// The work-list survey records the same join orders in the same order, the same
@@ -4424,7 +4417,7 @@ mod survey_tests {
     /// 128 KiB thread, with the estimate count each shape has by construction.
     #[test]
     fn a_hundred_thousand_levels_are_surveyed_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let dataset = dataset();
             let active = ActiveDataset::store_default();
             let relations = relations();
@@ -4518,6 +4511,7 @@ mod survey_tests {
                 "a BGP per level"
             );
             drop(spine);
-        });
+        })
+        .expect("spawn");
     }
 }

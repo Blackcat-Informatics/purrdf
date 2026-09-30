@@ -314,12 +314,14 @@ pub struct OkfBundle {
     total_bytes: usize,
 }
 
-impl OkfBundle {
-    /// Construct an empty bundle.
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl OkfBundle {
+        /// Construct an empty bundle.
+        pub fn new() -> Self::default();
     }
+}
 
+impl OkfBundle {
     /// Construct a bundle from path/document pairs.
     ///
     /// # Errors

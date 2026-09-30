@@ -138,9 +138,3 @@ pub(crate) fn nest(mut geometry: Geometry, levels: usize) -> Geometry {
     }
     geometry
 }
-
-/// Run `work` on a thread with [`SMALL_STACK`] bytes of stack and wait for it; a
-/// walk that recursed once per level would abort the process instead of returning.
-pub(crate) fn on_small_stack(work: impl FnOnce() + Send + 'static) {
-    purrdf_stack::on_stack(SMALL_STACK, work).expect("the thread starts");
-}

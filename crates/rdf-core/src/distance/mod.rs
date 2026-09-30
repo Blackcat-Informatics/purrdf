@@ -484,11 +484,9 @@ impl std::error::Error for RecordedPathError {
     }
 }
 
-impl From<FloatEnvironmentError> for RecordedPathError {
-    fn from(error: FloatEnvironmentError) -> Self {
-        Self::FloatEnvironment(error)
-    }
-}
+purrdf_lex::variant_from!(RecordedPathError {
+    FloatEnvironment(FloatEnvironmentError),
+});
 
 /// A flat, row-major matrix of stored vectors, with the per-row norms a cosine kernel
 /// divides by.

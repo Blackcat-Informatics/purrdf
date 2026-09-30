@@ -60,12 +60,14 @@ impl Default for VerifyOptions {
     }
 }
 
-impl VerifyOptions {
-    /// Release-style defaults: embedded key lookup and signatures required.
-    pub fn strict() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl VerifyOptions {
+        /// Release-style defaults: embedded key lookup and signatures required.
+        pub fn strict() -> Self::default();
     }
+}
 
+impl VerifyOptions {
     /// Use an out-of-band trusted public key instead of embedded metadata.
     #[must_use]
     pub fn with_armored_key(mut self, armored: impl Into<String>) -> Self {

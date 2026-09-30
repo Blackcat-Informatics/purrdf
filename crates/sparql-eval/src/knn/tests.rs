@@ -22,7 +22,8 @@ use purrdf_core::{
 };
 
 use super::*;
-use crate::property_fn::{Completeness, OrderFidelity};
+use crate::property_fn::{Completeness, OrderFidelity, PfRow};
+use purrdf_xsd::datatype::XSD_DOUBLE;
 
 /// The fixture namespace. PurRDF mints no IRIs; these are the example vocabulary the
 /// repository's fixtures use.

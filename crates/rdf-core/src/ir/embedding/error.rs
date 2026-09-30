@@ -259,11 +259,9 @@ impl std::error::Error for EmbeddingError {
     }
 }
 
-impl From<crate::distance::FloatEnvironmentError> for EmbeddingError {
-    fn from(error: crate::distance::FloatEnvironmentError) -> Self {
-        Self::FloatEnvironment(error)
-    }
-}
+purrdf_lex::variant_from!(EmbeddingError {
+    FloatEnvironment(crate::distance::FloatEnvironmentError),
+});
 
 /// A PURREMB streaming-write failure.
 #[derive(Debug)]

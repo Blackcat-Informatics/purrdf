@@ -108,6 +108,14 @@ pub struct LossLedger {
     entries: Vec<LossEntry>,
 }
 
+purrdf_lex::constructors! {
+    impl LossLedger {
+        /// An empty **runtime** ledger, ready to accumulate losses via
+        /// [`Self::record`] as a conversion proceeds.
+        pub fn new() -> Self::default();
+    }
+}
+
 impl LossLedger {
     /// Build a **contract** ledger from static entries, sorting by `code` for
     /// determinism.
@@ -125,12 +133,6 @@ impl LossLedger {
             );
         }
         Self { entries }
-    }
-
-    /// An empty **runtime** ledger, ready to accumulate losses via
-    /// [`Self::record`] as a conversion proceeds.
-    pub fn new() -> Self {
-        Self::default()
     }
 
     /// Append a runtime loss entry.

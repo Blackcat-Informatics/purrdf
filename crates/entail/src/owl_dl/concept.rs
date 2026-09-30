@@ -302,10 +302,6 @@ pub(crate) struct ConceptTable {
     neg: Vec<Option<u32>>,
 }
 
-fn hash_concept(concept: &Concept) -> u64 {
-    purrdf_core::FastHasher::default().hash_one(concept)
-}
-
 impl ConceptTable {
     /// Intern `c` (normalized to NNF), returning its stable concept id.
     ///
@@ -318,7 +314,7 @@ impl ConceptTable {
 
     /// Intern an already-NNF concept (children recursed first).
     fn intern_nnf(&mut self, c: &Concept) -> u32 {
-        let hash = hash_concept(c);
+        let hash = purrdf_core::FastHasher::default().hash_one(c);
         if let Some(&id) = self
             .index
             .find(hash, |&id| self.concepts[id as usize] == *c)
@@ -351,8 +347,9 @@ impl ConceptTable {
         self.concepts.push(c.clone());
         self.decomp.push(decomp);
         self.neg.push(None);
-        self.index
-            .insert_unique(hash, id, |&id| hash_concept(&self.concepts[id as usize]));
+        self.index.insert_unique(hash, id, |&id| {
+            purrdf_core::FastHasher::default().hash_one(&self.concepts[id as usize])
+        });
         id
     }
 
@@ -372,7 +369,7 @@ impl ConceptTable {
     #[cfg(test)]
     pub(crate) fn find_id(&self, c: &Concept) -> Option<u32> {
         let c = c.clone().nnf();
-        let hash = hash_concept(&c);
+        let hash = purrdf_core::FastHasher::default().hash_one(&c);
         self.index
             .find(hash, |&id| self.concepts[id as usize] == c)
             .copied()

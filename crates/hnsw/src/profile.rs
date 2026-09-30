@@ -542,7 +542,10 @@ pub fn parse_parameters(bytes: &[u8]) -> Result<Params> {
 }
 
 /// A guard-profile failure, so every rejection reads as this profile's own.
-fn profile_error(description: impl Into<String>) -> HnswError {
+///
+/// The one constructor of [`HnswError::GuardProfile`]: the profile reader here
+/// and the guard's profile checks both refuse through it.
+pub(crate) fn profile_error(description: impl Into<String>) -> HnswError {
     HnswError::GuardProfile {
         description: description.into(),
     }

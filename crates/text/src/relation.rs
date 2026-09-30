@@ -77,6 +77,9 @@ const SEARCH_RANK: usize = 3;
 const SEARCH_LANG: usize = 4;
 /// [`TextSearchRelation`]'s `?matched` position.
 const SEARCH_MATCHED: usize = 5;
+/// [`TextSearchRelation`]'s call shape: `?doc` on the subject side, the needle and
+/// the four projections on the object side.
+const SEARCH_ARITY: PfArity = PfArity::new(1, 5);
 /// The general access pattern [`TextSearchRelation`] declares: the needle is the
 /// one position it cannot enumerate, and every other position is free.
 const SEARCH_MODE: &str = "fbffff";
@@ -102,6 +105,9 @@ const OCCURRENCE_TERM: usize = 1;
 const OCCURRENCE_LANG: usize = 2;
 /// [`TermOccurrenceRelation`]'s `?position` position.
 const OCCURRENCE_POSITION: usize = 3;
+/// [`TermOccurrenceRelation`]'s call shape: `?doc` on the subject side,
+/// `(term ?lang ?position)` on the object side.
+const OCCURRENCE_ARITY: PfArity = PfArity::new(1, 3);
 /// The one access pattern [`TermOccurrenceRelation`] declares.
 const OCCURRENCE_MODE: &str = "fbff";
 
@@ -1170,7 +1176,7 @@ impl PropertyFunction for TextSearchRelation {
     }
 
     fn arity(&self) -> PfArity {
-        PfArity::new(1, 5)
+        SEARCH_ARITY
     }
 
     /// Two modes, and the second one widens nothing.
@@ -1696,7 +1702,7 @@ impl PropertyFunction for TermOccurrenceRelation {
     }
 
     fn arity(&self) -> PfArity {
-        PfArity::new(1, 3)
+        OCCURRENCE_ARITY
     }
 
     fn modes(&self) -> &[BindingPattern] {

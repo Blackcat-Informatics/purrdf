@@ -313,11 +313,9 @@ impl fmt::Display for HnswError {
 
 impl std::error::Error for HnswError {}
 
-impl From<purrdf_core::distance::FloatEnvironmentError> for HnswError {
-    fn from(error: purrdf_core::distance::FloatEnvironmentError) -> Self {
-        Self::FloatEnvironment(error)
-    }
-}
+purrdf_lex::variant_from!(HnswError {
+    FloatEnvironment(purrdf_core::distance::FloatEnvironmentError),
+});
 
 impl From<purrdf_core::EmbeddingError> for HnswError {
     fn from(error: purrdf_core::EmbeddingError) -> Self {

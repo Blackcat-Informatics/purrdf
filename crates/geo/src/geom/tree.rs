@@ -517,7 +517,7 @@ mod tests {
         assert_eq!((ONE.len(), per_level), (50, 50));
         let expected_debug_len = ONE.len() + per_level * (depth - 1);
 
-        arbitrary::on_small_stack(move || {
+        purrdf_stack::on_stack(arbitrary::SMALL_STACK, move || {
             let mut geometry = empty();
             for _ in 1..depth {
                 geometry = nest(geometry);
@@ -550,6 +550,7 @@ mod tests {
             drop(pointed);
             drop(copy);
             drop(geometry);
-        });
+        })
+        .expect("the thread starts");
     }
 }

@@ -6101,10 +6101,6 @@ mod walk_tests {
         }
     }
 
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
-    }
-
     /// A quoted-triple pattern `depth` levels deep with `bottom` in its innermost
     /// object position, every other position an IRI.
     fn deep_term(depth: usize, bottom: TermPattern) -> TermPattern {
@@ -6273,30 +6269,33 @@ mod walk_tests {
     /// unified, counted and released on a 128 KiB stack.
     #[test]
     fn a_hundred_thousand_level_argument_is_compiled_and_matched_on_a_128_kib_thread() {
-        let (depth, ground, value_depth, unified, unobserved) = on_small_stack(|| {
-            let input = VarSchema::new();
-            let term = deep_term(DEPTH, TermPattern::Variable(Variable::new("x")));
-            let TermPattern::Triple(triple) = &term else {
-                unreachable!("the deep term is a triple")
-            };
-            let ground = triple_is_ground(triple);
-            let compiled = compile_with(std::slice::from_ref(&term), &input, compile_arg);
-            let args = compiled.args.expect("a variable at the bottom compiles");
-            let depth = arg_depth(&args[0]);
-            let mut seed = vec![Some(TermValue::iri(format!("{EX}x")))];
-            let value = arg_value(&args[0], &seed).expect("every slot is seeded");
-            let mut value_depth = 0;
-            let mut at = &value;
-            while let TermValue::Triple { o, .. } = at {
-                value_depth += 1;
-                at = o;
-            }
-            seed[0] = None;
-            let unified = unify_term(&args[0], &value, &mut seed)
-                && seed[0] == Some(TermValue::iri(format!("{EX}x")));
-            let unobserved = unobserved_positions(&args, &compiled.slot_cols, &compiled.slot_seed);
-            (depth, ground, value_depth, unified, unobserved)
-        });
+        let (depth, ground, value_depth, unified, unobserved) =
+            purrdf_stack::on_stack(SMALL_STACK, || {
+                let input = VarSchema::new();
+                let term = deep_term(DEPTH, TermPattern::Variable(Variable::new("x")));
+                let TermPattern::Triple(triple) = &term else {
+                    unreachable!("the deep term is a triple")
+                };
+                let ground = triple_is_ground(triple);
+                let compiled = compile_with(std::slice::from_ref(&term), &input, compile_arg);
+                let args = compiled.args.expect("a variable at the bottom compiles");
+                let depth = arg_depth(&args[0]);
+                let mut seed = vec![Some(TermValue::iri(format!("{EX}x")))];
+                let value = arg_value(&args[0], &seed).expect("every slot is seeded");
+                let mut value_depth = 0;
+                let mut at = &value;
+                while let TermValue::Triple { o, .. } = at {
+                    value_depth += 1;
+                    at = o;
+                }
+                seed[0] = None;
+                let unified = unify_term(&args[0], &value, &mut seed)
+                    && seed[0] == Some(TermValue::iri(format!("{EX}x")));
+                let unobserved =
+                    unobserved_positions(&args, &compiled.slot_cols, &compiled.slot_seed);
+                (depth, ground, value_depth, unified, unobserved)
+            })
+            .expect("spawn");
         assert_eq!(depth, DEPTH);
         assert!(
             !ground,
@@ -6311,7 +6310,7 @@ mod walk_tests {
     /// bottom is not.
     #[test]
     fn a_hundred_thousand_level_ground_term_is_recognised_on_a_128_kib_thread() {
-        let (ground, blank) = on_small_stack(|| {
+        let (ground, blank) = purrdf_stack::on_stack(SMALL_STACK, || {
             let ground = deep_term(DEPTH, TermPattern::NamedNode(iri(2)));
             let blank = deep_term(DEPTH, TermPattern::BlankNode(BlankNode::new("b")));
             let as_triple = |term: &TermPattern| match term {
@@ -6319,7 +6318,8 @@ mod walk_tests {
                 _ => unreachable!("the deep terms are triples"),
             };
             (as_triple(&ground), as_triple(&blank))
-        });
+        })
+        .expect("spawn");
         assert!(ground);
         assert!(!blank);
     }
@@ -6328,7 +6328,7 @@ mod walk_tests {
     /// recorded, after the predicate variables above it, on a 128 KiB stack.
     #[test]
     fn a_hundred_thousand_level_argument_s_variables_are_recorded_on_a_128_kib_thread() {
-        let names = on_small_stack(|| {
+        let names = purrdf_stack::on_stack(SMALL_STACK, || {
             let mut term = TermPattern::Variable(Variable::new("bottom"));
             for level in 0..DEPTH {
                 term = TermPattern::Triple(Child::new(TriplePattern {
@@ -6347,7 +6347,8 @@ mod walk_tests {
                 .iter()
                 .map(|(name, _)| name.as_str().to_owned())
                 .collect::<Vec<_>>()
-        });
+        })
+        .expect("spawn");
         assert_eq!(names, vec!["top", "bottom"]);
     }
 
@@ -6411,7 +6412,7 @@ mod walk_tests {
     /// predicate a hundred thousand negations deep is judged, on a 128 KiB stack.
     #[test]
     fn a_hundred_thousand_level_spine_and_predicate_are_read_on_a_128_kib_thread() {
-        let (atoms, embedded, admitted) = on_small_stack(|| {
+        let (atoms, embedded, admitted) = purrdf_stack::on_stack(SMALL_STACK, || {
             let mut spine = GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(Variable::new("s")),
@@ -6442,7 +6443,8 @@ mod walk_tests {
                 filter_reads_row_by_row(&embedded),
                 filter_reads_row_by_row(&admitted),
             )
-        });
+        })
+        .expect("spawn");
         assert_eq!(atoms, DEPTH + 1);
         assert_eq!(embedded, Err("embeds EXISTS"));
         assert_eq!(admitted, Ok(()));
@@ -6515,7 +6517,7 @@ mod walk_tests {
     /// them, on a 128 KiB stack.
     #[test]
     fn a_hundred_thousand_level_read_shape_is_walked_on_a_128_kib_thread() {
-        let (columns, operators, calls) = on_small_stack(|| {
+        let (columns, operators, calls) = purrdf_stack::on_stack(SMALL_STACK, || {
             let call = GraphPattern::PropertyFunction(PropertyFunctionCall {
                 iri: format!("{EX}rel"),
                 subject_args: vec![TermPattern::Variable(Variable::new("s"))],
@@ -6547,7 +6549,8 @@ mod walk_tests {
                 read.operators.len(),
                 walk.calls.len(),
             )
-        });
+        })
+        .expect("spawn");
         assert_eq!(columns, vec![("s".to_owned(), 1), ("o".to_owned(), 1)]);
         assert_eq!(operators, DEPTH);
         assert_eq!(calls, 1);

@@ -11,6 +11,54 @@ use crate::{
     ParseError, PropertyPathExpression, Query, Result, TermPattern, Variable,
 };
 
+/// A term position that may hold a triple term: the one shape the nesting count
+/// walks, shared by pattern terms and `VALUES` cells.
+trait TripleTermSlot: Sized {
+    /// The subject and object of the triple term this is, or `None` for a
+    /// non-triple term.
+    fn subject_and_object(&self) -> Option<(&Self, &Self)>;
+}
+
+/// The slot implementation for each term kind whose `Triple` variant holds a
+/// triple with `subject` and `object` of that same kind.
+macro_rules! triple_term_slot {
+    ($($term:ty),+) => {$(
+        impl TripleTermSlot for $term {
+            fn subject_and_object(&self) -> Option<(&Self, &Self)> {
+                match self {
+                    Self::Triple(triple) => Some((&triple.subject, &triple.object)),
+                    _ => None,
+                }
+            }
+        }
+    )+};
+}
+
+triple_term_slot!(TermPattern, GroundTerm);
+
+/// How many triple terms `root`'s longest chain holds, the outermost included.
+///
+/// The single nesting count for every term kind. Counted iteratively, following
+/// the object position in a loop and parking a subject only when it is itself a
+/// triple term, so it needs no more stack however deep the term nests and does
+/// not allocate unless a subject nests.
+fn triple_term_nesting<T: TripleTermSlot>(root: &T) -> usize {
+    let mut deepest = 0;
+    let mut pending: Vec<(&T, usize)> = Vec::new();
+    let mut next = Some((root, 0));
+    while let Some((term, above)) = next.take().or_else(|| pending.pop()) {
+        if let Some((subject, object)) = term.subject_and_object() {
+            let depth = above + 1;
+            deepest = deepest.max(depth);
+            if subject.subject_and_object().is_some() {
+                pending.push((subject, depth));
+            }
+            next = Some((object, depth));
+        }
+    }
+    deepest
+}
+
 impl TermPattern {
     /// How many triple terms this term's longest chain holds, the outermost included:
     /// `0` for an IRI, blank node, literal or variable, `1` for `<<( ?s ?p ?o )>>`, `2`
@@ -20,20 +68,7 @@ impl TermPattern {
     /// without allocating unless a triple term's subject is itself one.
     #[must_use]
     pub fn triple_term_nesting(&self) -> usize {
-        let mut deepest = 0;
-        let mut pending: Vec<(&Self, usize)> = Vec::new();
-        let mut next = Some((self, 0));
-        while let Some((term, above)) = next.take().or_else(|| pending.pop()) {
-            if let Self::Triple(triple) = term {
-                let depth = above + 1;
-                deepest = deepest.max(depth);
-                if matches!(triple.subject, Self::Triple(_)) {
-                    pending.push((&triple.subject, depth));
-                }
-                next = Some((&triple.object, depth));
-            }
-        }
-        deepest
+        triple_term_nesting(self)
     }
 }
 
@@ -42,20 +77,7 @@ impl GroundTerm {
     /// included; see [`TermPattern::triple_term_nesting`].
     #[must_use]
     pub fn triple_term_nesting(&self) -> usize {
-        let mut deepest = 0;
-        let mut pending: Vec<(&Self, usize)> = Vec::new();
-        let mut next = Some((self, 0));
-        while let Some((term, above)) = next.take().or_else(|| pending.pop()) {
-            if let Self::Triple(triple) = term {
-                let depth = above + 1;
-                deepest = deepest.max(depth);
-                if matches!(triple.subject, Self::Triple(_)) {
-                    pending.push((&triple.subject, depth));
-                }
-                next = Some((&triple.object, depth));
-            }
-        }
-        deepest
+        triple_term_nesting(self)
     }
 }
 
@@ -423,6 +445,56 @@ fn check_path(path: &PropertyPathExpression) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use crate::SparqlParser;
+    use crate::tree::Child;
+    use crate::{
+        GroundTerm, GroundTriple, NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
+    };
+
+    fn pattern_triple(subject: TermPattern, object: TermPattern) -> TermPattern {
+        TermPattern::Triple(Child::new(TriplePattern {
+            subject,
+            predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                "http://example.org/p",
+            )),
+            object,
+        }))
+    }
+
+    fn ground_triple(subject: GroundTerm, object: GroundTerm) -> GroundTerm {
+        GroundTerm::Triple(Child::new(GroundTriple {
+            subject,
+            predicate: NamedNode::new_unchecked("http://example.org/p"),
+            object,
+        }))
+    }
+
+    #[test]
+    fn pattern_nesting_counts_the_longest_chain_through_subject_or_object() {
+        let var = || TermPattern::Variable(Variable::new("x"));
+        assert_eq!(var().triple_term_nesting(), 0);
+        assert_eq!(pattern_triple(var(), var()).triple_term_nesting(), 1);
+        let object_deep = pattern_triple(var(), pattern_triple(var(), var()));
+        assert_eq!(object_deep.triple_term_nesting(), 2);
+        let subject_deep = pattern_triple(
+            pattern_triple(pattern_triple(var(), var()), var()),
+            pattern_triple(var(), var()),
+        );
+        assert_eq!(subject_deep.triple_term_nesting(), 3);
+    }
+
+    #[test]
+    fn ground_nesting_counts_the_longest_chain_through_subject_or_object() {
+        let iri = || GroundTerm::NamedNode(NamedNode::new_unchecked("http://example.org/a"));
+        assert_eq!(iri().triple_term_nesting(), 0);
+        assert_eq!(ground_triple(iri(), iri()).triple_term_nesting(), 1);
+        let subject_deep = ground_triple(ground_triple(ground_triple(iri(), iri()), iri()), iri());
+        assert_eq!(subject_deep.triple_term_nesting(), 3);
+        let mut chain = iri();
+        for _ in 0..10_000 {
+            chain = ground_triple(iri(), chain);
+        }
+        assert_eq!(chain.triple_term_nesting(), 10_000);
+    }
 
     /// Every extension-function call is listed, wherever the expression sits — a
     /// `FILTER`, a `BIND`, a projection, an aggregate's argument, and a `FILTER` inside

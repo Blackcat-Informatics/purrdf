@@ -561,8 +561,12 @@ pub(crate) struct PlanCache {
 }
 
 impl Clone for PlanCache {
+    /// An empty cache: the clone's nodes live at other addresses, so nothing kept
+    /// for the original's tree is valid for the clone's.
     fn clone(&self) -> Self {
-        Self::default()
+        Self {
+            kept: OnceLock::new(),
+        }
     }
 }
 

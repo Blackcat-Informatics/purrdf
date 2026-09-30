@@ -242,26 +242,7 @@ impl Digest {
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// Which graph's serializations an index is built over.
-///
-/// Deliberately in **value** space rather than [`GraphMatch`] space.
-/// `GraphMatch::Named` holds a dataset-local term id, which means something only
-/// inside the one dataset that minted it; a configuration is a statement the
-/// caller writes down once and may apply to several datasets, so it names a graph
-/// by its IRI. [`GeoIndex::from_dataset`] resolves the selector against the
-/// dataset in hand.
-///
-/// Deliberately exhaustive, like `GraphMatch`: a quad's graph is the default
-/// graph or exactly one named graph, so the three cases are closed.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum GraphSelector {
-    /// Read serializations from every graph, default and named alike.
-    Any,
-    /// Read serializations from the default graph only.
-    Default,
-    /// Read serializations from the one named graph this IRI identifies.
-    Named(TermValue),
-}
+pub use purrdf_core::GraphSelector;
 
 /// The caller's complete, dataset-independent statement of what to project out of
 /// a dataset for the Query Rewrite extension.
@@ -493,7 +474,7 @@ impl GeoIndex {
         vocab: &GeoVocab,
         config: &GeoIndexConfig,
     ) -> Result<Self, GeoError> {
-        let Some(graph) = resolve_graph(dataset, config.graph()) else {
+        let Some(graph) = config.graph().resolve(dataset) else {
             // The configured named graph is not interned, so the dataset holds no
             // quad in it and nothing can match. The empty projection is built
             // through the ordinary steps — an empty entry table, one empty
@@ -812,23 +793,6 @@ fn parse_serialization(
          <{datatype}>, which is none of the five GeoSPARQL serialization datatypes; a geometry is \
          read according to its datatype, and there is nothing here to read it as"
     )))
-}
-
-/// Resolve the caller's [`GraphSelector`] against the dataset in hand.
-///
-/// [`None`] where the selector names a graph this dataset has not interned:
-/// nothing is in a graph that is not there, so no quad can match and the caller
-/// projects the empty index. This cannot fail — an absent graph is a state of the
-/// corpus, not a fault in the wiring.
-fn resolve_graph<D: DatasetView>(
-    dataset: &D,
-    selector: &GraphSelector,
-) -> Option<GraphMatch<D::Id>> {
-    Some(match selector {
-        GraphSelector::Any => GraphMatch::Any,
-        GraphSelector::Default => GraphMatch::Default,
-        GraphSelector::Named(name) => GraphMatch::Named(dataset.term_id_by_value(name)?),
-    })
 }
 
 /// Resolve a dataset-local id to its dataset-independent [`TermValue`] through

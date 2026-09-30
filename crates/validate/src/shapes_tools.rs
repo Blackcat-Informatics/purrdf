@@ -127,32 +127,12 @@ impl RulesHost {
     /// the stored-fact limit and the join-step limit.
     #[must_use]
     pub fn limit_knobs(self) -> LimitKnobs {
-        match self {
-            Self::Rust => LimitKnobs::new(
-                "RulesRequest::max_term_generating_rounds",
-                "RulesRequest::max_generated_terms",
-                "RulesRequest::max_stored_facts",
-                "RulesRequest::max_join_steps",
-            ),
-            Self::Python => LimitKnobs::new(
-                "apply_rules(max_term_generating_rounds=...)",
-                "apply_rules(max_generated_terms=...)",
-                "apply_rules(max_stored_facts=...)",
-                "apply_rules(max_join_steps=...)",
-            ),
-            Self::Wasm => LimitKnobs::new(
-                "shaclApplyRules's maxTermGeneratingRounds",
-                "shaclApplyRules's maxGeneratedTerms",
-                "shaclApplyRules's maxStoredFacts",
-                "shaclApplyRules's maxJoinSteps",
-            ),
-            Self::CAbi => LimitKnobs::new(
-                "purrdf_shacl_apply_rules's max_term_generating_rounds",
-                "purrdf_shacl_apply_rules's max_generated_terms",
-                "purrdf_shacl_apply_rules's max_stored_facts",
-                "purrdf_shacl_apply_rules's max_join_steps",
-            ),
-        }
+        self.knobs(
+            "RulesRequest",
+            "apply_rules",
+            "shaclApplyRules",
+            "purrdf_shacl_apply_rules",
+        )
     }
 
     /// The host's names for the same four limits on its SHACL ENTAILMENT entry point
@@ -160,32 +140,42 @@ impl RulesHost {
     /// C `purrdf_shacl_entail_to_ntriples`.
     #[must_use]
     pub fn entail_limit_knobs(self) -> LimitKnobs {
-        match self {
-            Self::Rust => LimitKnobs::new(
-                "EntailRequest::max_term_generating_rounds",
-                "EntailRequest::max_generated_terms",
-                "EntailRequest::max_stored_facts",
-                "EntailRequest::max_join_steps",
-            ),
-            Self::Python => LimitKnobs::new(
-                "entail(max_term_generating_rounds=...)",
-                "entail(max_generated_terms=...)",
-                "entail(max_stored_facts=...)",
-                "entail(max_join_steps=...)",
-            ),
-            Self::Wasm => LimitKnobs::new(
-                "shaclEntail's maxTermGeneratingRounds",
-                "shaclEntail's maxGeneratedTerms",
-                "shaclEntail's maxStoredFacts",
-                "shaclEntail's maxJoinSteps",
-            ),
-            Self::CAbi => LimitKnobs::new(
-                "purrdf_shacl_entail_to_ntriples's max_term_generating_rounds",
-                "purrdf_shacl_entail_to_ntriples's max_generated_terms",
-                "purrdf_shacl_entail_to_ntriples's max_stored_facts",
-                "purrdf_shacl_entail_to_ntriples's max_join_steps",
-            ),
-        }
+        self.knobs(
+            "EntailRequest",
+            "entail",
+            "shaclEntail",
+            "purrdf_shacl_entail_to_ntriples",
+        )
+    }
+
+    /// The four limits' knobs on one entry point, spelled as this host spells a knob:
+    /// a Rust request field (`RulesRequest::max_join_steps`), a Python keyword argument
+    /// (`apply_rules(max_join_steps=...)`), a WebAssembly argument
+    /// (`shaclApplyRules's maxJoinSteps`) or a C parameter
+    /// (`purrdf_shacl_apply_rules's max_join_steps`). Every entry point names its limits
+    /// by this one convention, so it is stated once and each entry point supplies only
+    /// its four entry names.
+    fn knobs(self, rust: &str, python: &str, wasm: &str, c_abi: &str) -> LimitKnobs {
+        const SNAKE: [&str; 4] = [
+            "max_term_generating_rounds",
+            "max_generated_terms",
+            "max_stored_facts",
+            "max_join_steps",
+        ];
+        const CAMEL: [&str; 4] = [
+            "maxTermGeneratingRounds",
+            "maxGeneratedTerms",
+            "maxStoredFacts",
+            "maxJoinSteps",
+        ];
+        let [rounds, generated_terms, stored_facts, join_steps] =
+            core::array::from_fn(|at| match self {
+                Self::Rust => format!("{rust}::{}", SNAKE[at]),
+                Self::Python => format!("{python}({}=...)", SNAKE[at]),
+                Self::Wasm => format!("{wasm}'s {}", CAMEL[at]),
+                Self::CAbi => format!("{c_abi}'s {}", SNAKE[at]),
+            });
+        LimitKnobs::new(rounds, generated_terms, stored_facts, join_steps)
     }
 }
 

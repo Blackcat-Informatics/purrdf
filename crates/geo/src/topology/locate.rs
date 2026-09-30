@@ -1176,7 +1176,7 @@ mod nesting_tests {
             );
         }
 
-        arbitrary::on_small_stack(move || {
+        purrdf_stack::on_stack(arbitrary::SMALL_STACK, move || {
             let deep = arbitrary::nest(two, arbitrary::DEEP);
             assert_eq!(locate(&inside, &deep), Set::Interior);
             assert_eq!(locate(&on_edge, &deep), Set::Boundary);
@@ -1195,6 +1195,7 @@ mod nesting_tests {
                 topological_dimension(&arbitrary::nest(empty, arbitrary::DEEP)),
                 -1
             );
-        });
+        })
+        .expect("the thread starts");
     }
 }

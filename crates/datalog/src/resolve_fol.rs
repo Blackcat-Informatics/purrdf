@@ -214,6 +214,24 @@ pub enum FolProof {
 }
 
 impl FolProof {
+    /// The fields every variant carries — the producing clause's index, its identity
+    /// and the stated goal — read by the one match over the variants.
+    fn header(&self) -> (usize, &str, NodeId) {
+        match self {
+            Self::Assert {
+                rule,
+                rule_identity,
+                goal,
+            }
+            | Self::ByRule {
+                rule,
+                rule_identity,
+                goal,
+                ..
+            } => (*rule, rule_identity, *goal),
+        }
+    }
+
     /// Whether this proof node is an unconditional [`Self::Assert`] leaf.
     #[must_use]
     pub fn is_assert(&self) -> bool {
@@ -223,28 +241,20 @@ impl FolProof {
     /// The producing clause's authored index, regardless of variant.
     #[must_use]
     pub fn rule(&self) -> usize {
-        match self {
-            Self::Assert { rule, .. } | Self::ByRule { rule, .. } => *rule,
-        }
+        self.header().0
     }
 
     /// The producing clause's content-addressed identity, regardless of variant —
     /// see [`clause_identity`].
     #[must_use]
     pub fn rule_identity(&self) -> &str {
-        match self {
-            Self::Assert { rule_identity, .. } | Self::ByRule { rule_identity, .. } => {
-                rule_identity
-            }
-        }
+        self.header().1
     }
 
     /// The STATED conclusion this proof is of, regardless of variant.
     #[must_use]
     pub fn goal(&self) -> NodeId {
-        match self {
-            Self::Assert { goal, .. } | Self::ByRule { goal, .. } => *goal,
-        }
+        self.header().2
     }
 
     /// This node's positive premises, in authored body order (empty for an

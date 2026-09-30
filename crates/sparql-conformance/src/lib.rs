@@ -35,6 +35,7 @@
 //! enter a published `.crate`.
 
 pub mod compare;
+pub mod ledger;
 pub mod manifest;
 pub mod mode_restricted;
 pub mod owl2;

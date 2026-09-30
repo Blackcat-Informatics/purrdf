@@ -326,7 +326,7 @@ fn walk_query(query: &mut Query, visit: &mut dyn FnMut(u32, Cell<'_>)) -> u32 {
 /// whose empty argument list allocates nothing.
 fn walk_pattern(root: &mut GraphPattern, index: &mut u32, visit: &mut dyn FnMut(u32, Cell<'_>)) {
     let mut steps: purrdf_core::SmallVec<[Step; 16]> = purrdf_core::smallvec![Step::Enter(
-        Node::Pattern(std::mem::replace(root, pattern_placeholder()))
+        Node::Pattern(std::mem::replace(root, GraphPattern::empty_bgp()))
     )];
     let mut returned: purrdf_core::SmallVec<[Node; 16]> = purrdf_core::SmallVec::new();
     while let Some(step) = steps.pop() {
@@ -450,14 +450,6 @@ enum Slot<'a> {
     Aggregate(&'a mut AggregateExpression),
 }
 
-/// A pattern with no cells and no children, left in a slot whose node is out being
-/// walked. Allocates nothing.
-fn pattern_placeholder() -> GraphPattern {
-    GraphPattern::Bgp {
-        patterns: Vec::new(),
-    }
-}
-
 /// An expression with no children, left in a slot whose node is out being walked.
 /// Allocates nothing.
 fn expression_placeholder() -> Expression {
@@ -467,7 +459,9 @@ fn expression_placeholder() -> Expression {
 /// Take the node out of `slot`, leaving a placeholder.
 fn take(slot: Slot<'_>) -> Node {
     match slot {
-        Slot::Pattern(pattern) => Node::Pattern(std::mem::replace(pattern, pattern_placeholder())),
+        Slot::Pattern(pattern) => {
+            Node::Pattern(std::mem::replace(pattern, GraphPattern::empty_bgp()))
+        }
         Slot::Expression(expression) => {
             Node::Expression(std::mem::replace(expression, expression_placeholder()))
         }
@@ -610,7 +604,7 @@ fn for_each_child_slot(shell: &mut Shell, f: &mut dyn FnMut(Slot<'_>)) {
             GraphPattern::OrderBy { inner, expression } => {
                 f(Slot::Pattern(inner));
                 for order in expression.iter_mut() {
-                    f(Slot::Expression(order_key(order)));
+                    f(Slot::Expression(order.expression_mut()));
                 }
             }
             GraphPattern::Project { inner, .. }
@@ -679,16 +673,9 @@ fn for_each_child_slot(shell: &mut Shell, f: &mut dyn FnMut(Slot<'_>)) {
                 f(Slot::Expression(arg));
             }
             for order in order_by.iter_mut() {
-                f(Slot::Expression(order_key(order)));
+                f(Slot::Expression(order.expression_mut()));
             }
         }
-    }
-}
-
-/// The expression a sort key orders by.
-fn order_key(order: &mut OrderExpression) -> &mut Expression {
-    match order {
-        OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => expr,
     }
 }
 
@@ -1623,11 +1610,6 @@ mod iterative_walk_tests {
         }
     }
 
-    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
-    }
-
     // ── The checks ─────────────────────────────────────────────────────────────────
 
     /// Over two hundred generated queries, the loop numbers the same cells in the same
@@ -1692,7 +1674,7 @@ mod iterative_walk_tests {
     /// leaves the variable under the operators written and the operators in place.
     #[test]
     fn a_hundred_thousand_nested_operators_are_numbered_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let mut expression = Expression::Variable(var("v"));
             for _ in 0..DEPTH {
                 expression = Expression::Not(Child::new(expression));
@@ -1749,6 +1731,7 @@ mod iterative_walk_tests {
                     }],
                 }
             );
-        });
+        })
+        .expect("spawn");
     }
 }

@@ -82,32 +82,26 @@ pub enum GeoError {
     Domain(String),
 }
 
+purrdf_lex::constructors! {
+    impl GeoError {
+        /// A [`GeoError::Arity`] with `what` as its detail.
+        pub fn arity(what) -> Self::Arity;
+
+        /// A [`GeoError::Config`] with `what` as its detail.
+        pub fn config(what) -> Self::Config;
+
+        /// A [`GeoError::Literal`] with `what` as its detail.
+        pub fn literal(what) -> Self::Literal;
+
+        /// A [`GeoError::Unsupported`] with `what` as its detail.
+        pub fn unsupported(what) -> Self::Unsupported;
+
+        /// A [`GeoError::Domain`] with `what` as its detail.
+        pub fn domain(what) -> Self::Domain;
+    }
+}
+
 impl GeoError {
-    /// A [`GeoError::Arity`] with `what` as its detail.
-    pub fn arity(what: impl Into<String>) -> Self {
-        Self::Arity(what.into())
-    }
-
-    /// A [`GeoError::Config`] with `what` as its detail.
-    pub fn config(what: impl Into<String>) -> Self {
-        Self::Config(what.into())
-    }
-
-    /// A [`GeoError::Literal`] with `what` as its detail.
-    pub fn literal(what: impl Into<String>) -> Self {
-        Self::Literal(what.into())
-    }
-
-    /// A [`GeoError::Unsupported`] with `what` as its detail.
-    pub fn unsupported(what: impl Into<String>) -> Self {
-        Self::Unsupported(what.into())
-    }
-
-    /// A [`GeoError::Domain`] with `what` as its detail.
-    pub fn domain(what: impl Into<String>) -> Self {
-        Self::Domain(what.into())
-    }
-
     /// Whether this refusal is a SPARQL **expression error** — scoped to the one
     /// solution being evaluated — rather than a condition that must abort the whole
     /// query.

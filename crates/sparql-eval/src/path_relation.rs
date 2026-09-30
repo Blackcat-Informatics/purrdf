@@ -347,7 +347,7 @@
 use purrdf_core::TermBox;
 use purrdf_hash::Domain;
 use std::collections::VecDeque;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{DatasetView, GraphMatch, TermValue};
@@ -1247,6 +1247,12 @@ fn path_arity() -> PfArity {
     PfArity::new(1, ROW_WIDTH - 1)
 }
 
+/// The one mode both witness relations declare: all-free, the ⊥ of the lattice,
+/// because either can serve every access pattern of the call shape. Materialized
+/// once so [`PropertyFunction::modes`] can hand out a slice.
+static WITNESS_MODES: LazyLock<[BindingPattern; 1]> =
+    LazyLock::new(|| [path_arity().all_free_mode()]);
+
 /// Read a bound argument as a hop count for pushdown purposes.
 ///
 /// Returns `None` when the term is not a literal, or its lexical form does not parse as a
@@ -1725,9 +1731,6 @@ fn row_bound(
 pub struct PathWitnessRelation {
     graph: Arc<PathGraph>,
     limits: PathLimits,
-    /// The single declared mode (all-free), materialized once so
-    /// [`PropertyFunction::modes`] can hand out a slice.
-    modes: [BindingPattern; 1],
 }
 
 impl PathWitnessRelation {
@@ -1737,12 +1740,8 @@ impl PathWitnessRelation {
     /// [`ShortestPathWitnessRelation`] registered alongside it: the two questions differ,
     /// the edges do not.
     #[must_use]
-    pub fn new(graph: Arc<PathGraph>, limits: PathLimits) -> Self {
-        Self {
-            graph,
-            limits,
-            modes: [path_arity().all_free_mode()],
-        }
+    pub const fn new(graph: Arc<PathGraph>, limits: PathLimits) -> Self {
+        Self { graph, limits }
     }
 }
 
@@ -1759,7 +1758,7 @@ impl PropertyFunction for PathWitnessRelation {
     }
 
     fn modes(&self) -> &[BindingPattern] {
-        &self.modes
+        &*WITNESS_MODES
     }
 
     fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
@@ -1787,7 +1786,7 @@ impl PropertyFunction for PathWitnessRelation {
         else {
             return Ok(Box::new(EmptyCursor));
         };
-        Ok(Box::new(PathWitnessCursor {
+        Ok(Box::new(Witnesses(PathWitnessCursor {
             on_path: vec![false; self.graph.node_count()],
             graph: Arc::clone(&self.graph),
             prepared,
@@ -1796,7 +1795,7 @@ impl PropertyFunction for PathWitnessRelation {
             stack: Vec::new(),
             hops: Vec::new(),
             digests: Vec::new(),
-        }))
+        })))
     }
 }
 
@@ -1947,16 +1946,50 @@ impl PathWitnessCursor {
     }
 }
 
-impl PfCursor for PathWitnessCursor {
+impl WitnessTraversal for PathWitnessCursor {
+    fn prepared(&mut self) -> &mut Prepared {
+        &mut self.prepared
+    }
+
+    fn step(&mut self) -> Result<bool, EvalError> {
+        Self::step(self)
+    }
+}
+
+/// A traversal a witness relation drives: one unit of work at a time, queuing the rows
+/// a walk produces on its [`Prepared`] invocation.
+trait WitnessTraversal {
+    /// The invocation whose licence and pending rows the traversal fills.
+    fn prepared(&mut self) -> &mut Prepared;
+
+    /// Perform one unit of traversal work; `false` only when every seed is exhausted.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::Function`] when a resource guard is breached.
+    fn step(&mut self) -> Result<bool, EvalError>;
+}
+
+/// The cursor both witness relations return: drain the queued rows, stop the moment the
+/// licence is spent, and otherwise take one more unit of traversal work.
+///
+/// Checking the licence before every row and every unit is what keeps a ceiling from
+/// being spent on work whose rows nobody asked for, and a single unit per turn keeps one
+/// `next` call bounded (see [`PfCursor`]'s deaf-relation doctrine).
+#[derive(Debug)]
+struct Witnesses<T>(T);
+
+impl<T: WitnessTraversal> PfCursor for Witnesses<T> {
     fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
         loop {
-            if self.prepared.licence_spent() {
+            let prepared = self.0.prepared();
+            if prepared.licence_spent() {
                 return Ok(None);
             }
-            if let Some(row) = self.prepared.take_pending() {
+            if let Some(row) = prepared.take_pending() {
                 return Ok(Some(row));
             }
-            if !self.step()? {
+            if !self.0.step()? {
                 return Ok(None);
             }
         }
@@ -2024,8 +2057,6 @@ impl PfCursor for PathWitnessCursor {
 pub struct ShortestPathWitnessRelation {
     graph: Arc<PathGraph>,
     limits: PathLimits,
-    /// The single declared mode (all-free).
-    modes: [BindingPattern; 1],
 }
 
 impl ShortestPathWitnessRelation {
@@ -2034,12 +2065,8 @@ impl ShortestPathWitnessRelation {
     /// Takes the same [`Arc<PathGraph>`] a [`PathWitnessRelation`] takes, so a host that
     /// registers both under two IRIs pays for one snapshot.
     #[must_use]
-    pub fn new(graph: Arc<PathGraph>, limits: PathLimits) -> Self {
-        Self {
-            graph,
-            limits,
-            modes: [path_arity().all_free_mode()],
-        }
+    pub const fn new(graph: Arc<PathGraph>, limits: PathLimits) -> Self {
+        Self { graph, limits }
     }
 }
 
@@ -2053,7 +2080,7 @@ impl PropertyFunction for ShortestPathWitnessRelation {
     }
 
     fn modes(&self) -> &[BindingPattern] {
-        &self.modes
+        &*WITNESS_MODES
     }
 
     fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
@@ -2091,7 +2118,7 @@ impl PropertyFunction for ShortestPathWitnessRelation {
         ) else {
             return Ok(Box::new(EmptyCursor));
         };
-        Ok(Box::new(ShortestPathWitnessCursor {
+        Ok(Box::new(Witnesses(ShortestPathWitnessCursor {
             discovered: vec![false; self.graph.node_count()],
             graph: Arc::clone(&self.graph),
             prepared,
@@ -2099,7 +2126,7 @@ impl PropertyFunction for ShortestPathWitnessRelation {
             seed: 0,
             visits: Vec::new(),
             emit_cursor: 0,
-        }))
+        })))
     }
 }
 
@@ -2252,19 +2279,13 @@ impl ShortestPathWitnessCursor {
     }
 }
 
-impl PfCursor for ShortestPathWitnessCursor {
-    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
-        loop {
-            if self.prepared.licence_spent() {
-                return Ok(None);
-            }
-            if let Some(row) = self.prepared.take_pending() {
-                return Ok(Some(row));
-            }
-            if !self.step()? {
-                return Ok(None);
-            }
-        }
+impl WitnessTraversal for ShortestPathWitnessCursor {
+    fn prepared(&mut self) -> &mut Prepared {
+        &mut self.prepared
+    }
+
+    fn step(&mut self) -> Result<bool, EvalError> {
+        Self::step(self)
     }
 }
 

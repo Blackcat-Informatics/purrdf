@@ -77,10 +77,7 @@ impl GovernedOutcome {
     /// This execution's consumption and ceilings, whichever outcome it reached.
     #[must_use]
     pub const fn evidence(&self) -> &GovernorEvidence {
-        match self {
-            Self::Complete { evidence, .. } => evidence,
-            Self::BudgetExhausted(exhausted) => &exhausted.evidence,
-        }
+        self.receipts().0
     }
 
     /// The identity of the property-function registry this execution ran under,
@@ -92,9 +89,19 @@ impl GovernedOutcome {
     /// scope — never absent, for the reason [`RelationIdentity`] gives.
     #[must_use]
     pub const fn relations(&self) -> &RelationIdentity {
+        self.receipts().1
+    }
+
+    /// The two receipts every outcome carries, whichever it reached: the governor
+    /// evidence and the relation identity.
+    const fn receipts(&self) -> (&GovernorEvidence, &RelationIdentity) {
         match self {
-            Self::Complete { relations, .. } => relations,
-            Self::BudgetExhausted(exhausted) => &exhausted.relations,
+            Self::Complete {
+                evidence,
+                relations,
+                ..
+            } => (evidence, relations),
+            Self::BudgetExhausted(exhausted) => (&exhausted.evidence, &exhausted.relations),
         }
     }
 
@@ -337,42 +344,55 @@ impl RelationIdentity {
 /// This is the evaluator's certificate, restated in the egress model. It is a three-way
 /// interval, not a yes/no: the two bounds are genuinely different licences and collapsing
 /// them would either forbid a sound use or permit an unsound one.
+///
+/// `R` is the rows' carrier: an owned [`PartialSparqlResult`] everywhere a result is
+/// handed out, and a borrow of one through [`Self::as_ref`].
 #[derive(Debug, Clone)]
-pub enum PartialAnswers {
+pub enum PartialAnswers<R = PartialSparqlResult> {
     /// A certified **lower** bound: every row here is an answer to the query. Safe to
     /// admit as answers; the query may have more.
-    Certain(PartialSparqlResult),
+    Certain(R),
     /// A certified **upper** bound: every answer is here, but some rows here may not be
     /// answers. Safe only for the negative reading — a row absent from this result is
     /// definitively not an answer.
-    AtMost(PartialSparqlResult),
+    AtMost(R),
     /// Neither bound survived to the root, so **no row crosses**. The barrier names the
     /// operator that withheld them, which is what tells a caller whether a larger budget
     /// or a different query is the way forward.
     Unknown(NonMonotoneBarrier),
 }
 
-impl PartialAnswers {
-    /// The rows in hand, when they bound the answer on either side.
+impl<R> PartialAnswers<R> {
+    /// The same certificate over a borrow of the rows.
+    #[must_use]
+    pub const fn as_ref(&self) -> PartialAnswers<&R> {
+        match self {
+            Self::Certain(partial) => PartialAnswers::Certain(partial),
+            Self::AtMost(partial) => PartialAnswers::AtMost(partial),
+            Self::Unknown(barrier) => PartialAnswers::Unknown(*barrier),
+        }
+    }
+
+    /// Take the rows in hand, when they bound the answer on either side.
     ///
     /// `None` is [`Self::Unknown`], where there is deliberately nothing to hand out: rows
     /// that bound the answer on neither side offer a caller no sound use, and the one
     /// unsound use — reading them as answers — is the easiest to reach for.
     #[must_use]
-    pub const fn result(&self) -> Option<&PartialSparqlResult> {
+    pub fn into_result(self) -> Option<R> {
         match self {
             Self::Certain(partial) | Self::AtMost(partial) => Some(partial),
             Self::Unknown(_) => None,
         }
     }
+}
 
-    /// Take the rows in hand, when they bound the answer on either side.
+impl PartialAnswers {
+    /// The rows in hand, when they bound the answer on either side; `None` is
+    /// [`Self::Unknown`]. See [`Self::into_result`].
     #[must_use]
-    pub fn into_result(self) -> Option<PartialSparqlResult> {
-        match self {
-            Self::Certain(partial) | Self::AtMost(partial) => Some(partial),
-            Self::Unknown(_) => None,
-        }
+    pub fn result(&self) -> Option<&PartialSparqlResult> {
+        self.as_ref().into_result()
     }
 
     /// The operator that withheld the rows, when no bound survived.
@@ -765,11 +785,6 @@ mod withheld_blank_walk_tests {
         }
     }
 
-    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
-    }
-
     /// Release a deep egress term one level at a time; its derived drop would take one
     /// stack frame per level.
     fn dismantle(mut term: RdfTerm) {
@@ -826,7 +841,7 @@ mod withheld_blank_walk_tests {
     /// label is offered before the walk answers.
     #[test]
     fn a_hundred_thousand_level_term_is_walked_on_a_128_kib_stack() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let mut term = TermValue::Blank {
                 label: "deep".to_owned(),
                 scope: BlankScope::DEFAULT,
@@ -869,6 +884,7 @@ mod withheld_blank_walk_tests {
             }));
             assert_eq!(offered, DEPTH + 1);
             dismantle(egress);
-        });
+        })
+        .expect("spawn");
     }
 }

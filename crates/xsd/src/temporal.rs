@@ -2934,7 +2934,12 @@ pub fn subtract_times(a: &Time, b: &Time) -> Result<Duration, XsdError> {
 /// iff both do, else the general `xsd:duration`. This is a plain `match`, the same
 /// idiom [`Shape`]'s doc requires of it: durations do not carry a total order over
 /// tags for `Ord`/`max` to invent one from.
-fn duration_result_datatype(a: XsdDatatype, b: XsdDatatype) -> XsdDatatype {
+///
+/// The join is a semilattice operation (associative, commutative, idempotent), so a
+/// fold over many operands — a `SUM` or `AVG` over durations — joins the tags one step
+/// at a time with this same function and reaches the tag the operators would give.
+#[must_use]
+pub const fn duration_result_datatype(a: XsdDatatype, b: XsdDatatype) -> XsdDatatype {
     match (a, b) {
         (XsdDatatype::YearMonthDuration, XsdDatatype::YearMonthDuration) => {
             XsdDatatype::YearMonthDuration
@@ -3362,6 +3367,22 @@ impl Gregorian {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_duration_tag_join_keeps_a_subtype_only_when_both_sides_declare_it() {
+        use super::{XsdDatatype as D, duration_result_datatype as join};
+        let tags = [D::Duration, D::YearMonthDuration, D::DayTimeDuration];
+        for a in tags {
+            for b in tags {
+                let expected = if a == b { a } else { D::Duration };
+                assert_eq!(join(a, b), expected, "{a:?} ⊔ {b:?}");
+                assert_eq!(join(a, b), join(b, a), "commutative");
+                for c in tags {
+                    assert_eq!(join(join(a, b), c), join(a, join(b, c)), "associative");
+                }
+            }
+        }
+    }
+
     #[test]
     fn signed_or_short_temporal_fields_are_rejected() {
         for lexical in ["+2020-01-01", "2020-+1-01", "2020-01-+1", "-+202-01-01"] {

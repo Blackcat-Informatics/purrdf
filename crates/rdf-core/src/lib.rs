@@ -167,7 +167,8 @@ pub use content_id::{Blake3ContentId, ContentIdScheme};
 pub use content_store::{Bytes, ContentDigest, ContentStore, ContentStoreError};
 pub use dataset_view::{
     DatasetMut, DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView, GraphMatch,
-    GraphMatchValue, TermLookupError, ViewOperationStatus, ViewTermId, checkpointed_drain,
+    GraphMatchValue, GraphSelector, TermLookupError, ViewOperationStatus, ViewTermId,
+    checkpointed_drain,
 };
 pub use describe::{Describer, describe};
 pub use diagnostic::{RdfDiagnostic, RdfLocation, RdfSeverity};

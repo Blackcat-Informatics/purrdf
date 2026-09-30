@@ -89,16 +89,11 @@ fn is_stack_refusal(diagnostic: &RdfDiagnostic) -> bool {
         || diagnostic.code == EvalError::HOST_STACK_EXHAUSTED_CODE
 }
 
-/// Run `body` on a thread spawned with a [`SMALL_STACK`] stack.
-fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-    purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn a small-stack thread")
-}
-
 /// A hundred thousand levels, in every form: the parse succeeds and its tree is dropped,
 /// preparation and a query are each the typed stack refusal, all on a 128 KiB stack.
 #[test]
 fn a_hundred_thousand_directly_nested_sub_selects_are_refused_typed_on_a_small_stack() {
-    let outcomes = on_small_stack(|| {
+    let outcomes = purrdf_stack::on_stack(SMALL_STACK, || {
         let mut outcomes = Vec::new();
         for (form, text) in requests(LEVELS, &format!("{{ ?s <{EX}p> ?o }}")) {
             let parsed = SparqlParser::new().parse_query(&text).map(drop);
@@ -109,7 +104,8 @@ fn a_hundred_thousand_directly_nested_sub_selects_are_refused_typed_on_a_small_s
             outcomes.push((form, parsed, prepared, queried));
         }
         outcomes
-    });
+    })
+    .expect("spawn a small-stack thread");
     for (form, parsed, prepared, queried) in outcomes {
         parsed.unwrap_or_else(|error| panic!("{form} {LEVELS} deep parses: {error}"));
         for (step, outcome) in [("prepare", prepared), ("query", queried)] {

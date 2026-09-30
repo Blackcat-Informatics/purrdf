@@ -803,12 +803,8 @@ fn render_text(
         out.push('"');
     }
     if let Some(direction) = scene.direction {
-        write!(
-            out,
-            " direction=\"{}\"",
-            RdfTextDirection::from(direction).as_str()
-        )
-        .expect("writing to String cannot fail");
+        write!(out, " direction=\"{}\"", direction.as_str())
+            .expect("writing to String cannot fail");
     }
     out.push('>');
     out.push_str("<title>");

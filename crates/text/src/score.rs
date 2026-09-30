@@ -231,13 +231,15 @@ pub struct PartitionFilter {
     keys: Option<Vec<PartitionKey>>,
 }
 
-impl PartitionFilter {
-    /// A filter that admits every partition.
-    #[must_use]
-    pub fn unconstrained() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl PartitionFilter {
+        /// A filter that admits every partition.
+        #[must_use]
+        pub fn unconstrained() -> Self::default();
     }
+}
 
+impl PartitionFilter {
     /// This filter with its graph dimension replaced.
     #[must_use]
     pub fn with_graph(mut self, graph: Constraint<TermValue>) -> Self {

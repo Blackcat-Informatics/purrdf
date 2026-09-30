@@ -77,6 +77,27 @@ impl<C> Id<C> {
             PhantomData,
         )
     }
+
+    /// The slot this id addresses in `slots`, the arena that minted it.
+    ///
+    /// Every per-arena id space ([`NodeId`], [`SymId`], [`ProofId`], …) resolves through
+    /// this one lookup, so a foreign id fails with the same diagnosis everywhere. `kind`
+    /// names the id type (`"NodeId"`) and `noun` the ids in prose (`"term"`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the id was not minted by that arena: ids are per-arena handles, so a
+    /// foreign id is a programming error, never a data state.
+    #[track_caller]
+    pub(crate) fn slot_in<'a, T>(self, slots: &'a [T], kind: &str, noun: &str) -> &'a T {
+        slots.get(self.index()).unwrap_or_else(|| {
+            panic!(
+                "{kind} {self:?} was not minted by this arena (len {}): {noun} ids are \
+                 per-arena handles and must never cross arena boundaries",
+                slots.len()
+            )
+        })
+    }
 }
 
 // Manual trait impls: deriving would place spurious `C: Trait` bounds on the brand,
@@ -238,6 +259,30 @@ impl fmt::Debug for TermRef {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An id resolves to its slot in the arena that minted it, up to the last slot.
+    #[test]
+    fn slot_in_resolves_every_minted_slot() {
+        let slots = ["a", "b", "c"];
+        assert_eq!(
+            *NodeId::from_index(0).slot_in(&slots, "NodeId", "term"),
+            "a"
+        );
+        assert_eq!(
+            *NodeId::from_index(2).slot_in(&slots, "NodeId", "term"),
+            "c"
+        );
+    }
+
+    /// One past the last slot is a foreign id, refused with the id and the arena length.
+    #[test]
+    #[should_panic(
+        expected = "SymId Id(3) was not minted by this arena (len 3): symbol ids are per-arena handles"
+    )]
+    fn slot_in_refuses_an_id_past_the_arena() {
+        let slots = ["a", "b", "c"];
+        let _ = SymId::from_index(3).slot_in(&slots, "SymId", "symbol");
+    }
 
     /// `index()`/`from_index()` round-trip the 0-based slot to the 1-based niche at
     /// the boundary values — the `+1` niche offset must be exact everywhere, for

@@ -679,19 +679,10 @@ pub fn write_bare(geometry: &Geometry, coordinate_scale: u32) -> Result<String, 
              position as longitude, latitude and an optional altitude, so writing it would drop \
              the measure. purrdf-geo refuses rather than silently discarding an ordinate; write \
              it as a geo:wktLiteral instead",
-            dim_name(geometry.dim())
+            geometry.dim().name()
         )));
     }
     Ok(json::write(&geometry_value(geometry, coordinate_scale)?))
-}
-
-fn dim_name(dim: CoordDim) -> &'static str {
-    match dim {
-        CoordDim::Xy => "XY",
-        CoordDim::Xyz => "XYZ",
-        CoordDim::Xym => "XYM",
-        CoordDim::Xyzm => "XYZM",
-    }
 }
 
 /// The Geometry object for `geometry`, with every collection it nests.
@@ -2050,7 +2041,7 @@ mod nesting_tests {
             }
             text
         };
-        arbitrary::on_small_stack(move || {
+        purrdf_stack::on_stack(arbitrary::SMALL_STACK, move || {
             let text = wrapped(POINT);
             assert_eq!(
                 text.len(),
@@ -2091,6 +2082,7 @@ mod nesting_tests {
                 geometry_of(&wrapped(mixed)),
                 geometry_of(&format!("{OPEN}{mixed}{CLOSE}"))
             );
-        });
+        })
+        .expect("the thread starts");
     }
 }

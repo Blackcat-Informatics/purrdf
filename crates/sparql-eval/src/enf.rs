@@ -1536,11 +1536,6 @@ mod iterative_walk_tests {
         }
     }
 
-    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
-    }
-
     // ── The checks ─────────────────────────────────────────────────────────────────
 
     /// Over two hundred generated spines, the loop normalizes to what the recursion
@@ -1583,7 +1578,7 @@ mod iterative_walk_tests {
     /// leaf, on a thread whose stack holds a few hundred frames of any recursion.
     #[test]
     fn a_hundred_thousand_wrappers_normalize_and_map_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let leaf = bgp(0);
             let mut spine = leaf.clone();
             for level in 0..DEPTH {
@@ -1616,6 +1611,7 @@ mod iterative_walk_tests {
                     true,
                 )]
             );
-        });
+        })
+        .expect("spawn");
     }
 }

@@ -62,6 +62,7 @@
 //! sequence — which is what makes a warrant comparable against a re-lowering of the same
 //! conclusion.
 
+use super::is;
 use std::collections::BTreeSet;
 
 use purrdf_core::{RdfDataset, TermValue};
@@ -212,16 +213,6 @@ pub(crate) enum Read {
     Lowered(Lowering),
 }
 
-/// Whether `term` names an IRI.
-fn is_named(term: &TermValue) -> bool {
-    matches!(term, TermValue::Iri(_))
-}
-
-/// Whether `term` is the IRI `iri`.
-fn is(term: &TermValue, iri: &str) -> bool {
-    matches!(term, TermValue::Iri(value) if value == iri)
-}
-
 /// Split `conclusion` into the negative facts refutation must discharge and the triples it
 /// leaves behind.
 ///
@@ -251,7 +242,7 @@ pub(crate) fn lower(conclusion: &RdfDataset) -> Read {
         let read = if is(predicate, OWL_DIFFERENTFROM) {
             // An existential inequality — "there is something different from b" — is not a
             // fact whose negation this module can assert: it would have to choose a witness.
-            if is_named(subject) && is_named(object) {
+            if subject.is_iri() && object.is_iri() {
                 consumed.insert(index);
                 facts.push(NegativeFact::Distinct {
                     left: subject.clone(),
@@ -383,7 +374,7 @@ fn complement(
             if filler.is_some() {
                 return refuse("the node carries two complements, so it denotes neither");
             }
-            if !is_named(object) {
+            if !object.is_iri() {
                 return refuse(
                     "the complement of a class EXPRESSION would negate membership in a class \
                      whose own axioms nothing here read",
@@ -409,8 +400,7 @@ fn complement(
             continue;
         }
         let [subject, predicate, object] = &indexed.triples[index];
-        if !is(predicate, RDF_TYPE) || surface_of(object) != surface_of(node) || !is_named(subject)
-        {
+        if !is(predicate, RDF_TYPE) || surface_of(object) != surface_of(node) || !subject.is_iri() {
             return refuse("the node is mentioned somewhere this lane did not look");
         }
         instances.push((index, subject.clone()));
@@ -493,7 +483,7 @@ fn all_different(
         return refuse("the node states no member list");
     };
     let collection = read_collection(indexed, &head, node, "the member list")?;
-    if let Some(member) = collection.members.iter().find(|member| !is_named(member)) {
+    if let Some(member) = collection.members.iter().find(|member| !member.is_iri()) {
         return refuse(&format!(
             "the member {} is not a named individual, so it has no identity to separate",
             show(member)

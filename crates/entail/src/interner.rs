@@ -9,6 +9,7 @@
 //! engine intern terms from the source dataset and re-materialize them into a fresh
 //! builder soundly.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::hash::BuildHasher;
 
@@ -23,21 +24,18 @@ pub(crate) struct Interner {
     values: Vec<TermValue>,
 }
 
-fn hash_value(value: &TermValue) -> u64 {
-    purrdf_core::FastHasher::default().hash_one(value)
-}
-
 impl Interner {
     /// Intern `v`, returning its stable dense id (assigned in first-seen order).
     pub(crate) fn intern(&mut self, v: TermValue) -> u32 {
-        let hash = hash_value(&v);
+        let hash = purrdf_core::FastHasher::default().hash_one(&v);
         if let Some(&id) = self.index.find(hash, |&id| self.values[id as usize] == v) {
             return id;
         }
         let id = u32::try_from(self.values.len()).expect("term count fits u32");
         self.values.push(v);
-        self.index
-            .insert_unique(hash, id, |&id| hash_value(&self.values[id as usize]));
+        self.index.insert_unique(hash, id, |&id| {
+            purrdf_core::FastHasher::default().hash_one(&self.values[id as usize])
+        });
         id
     }
 
@@ -55,7 +53,7 @@ impl Interner {
     #[cfg(test)]
     pub(crate) fn id_of_iri(&self, iri: &str) -> Option<u32> {
         let value = TermValue::Iri(iri.to_owned());
-        let hash = hash_value(&value);
+        let hash = purrdf_core::FastHasher::default().hash_one(&value);
         self.index
             .find(hash, |&id| self.values[id as usize] == value)
             .copied()
@@ -166,8 +164,29 @@ mod tests {
     use purrdf_core::TermBox;
     use purrdf_core::{BlankScope, RdfTextDirection};
 
-    use super::{Interner, intern_into};
+    use super::{Interner, blank_closure, blank_subjects, intern_into};
     use purrdf_core::{RdfDatasetBuilder, TermValue};
+
+    /// The closure follows blank objects through a cycle once each, stops at a named
+    /// object, and a named starting term contributes nothing.
+    #[test]
+    fn blank_closure_follows_blank_objects_once_and_ignores_named_terms() {
+        let mut interner = Interner::default();
+        let s = interner.intern(TermValue::iri(EX_S));
+        let p = interner.intern(TermValue::iri(EX_P));
+        let o = interner.intern(TermValue::iri(EX_O));
+        let a = interner.intern(TermValue::blank("a"));
+        let b = interner.intern(TermValue::blank("b"));
+        let triples = [(s, p, a), (a, p, b), (b, p, a), (b, p, o), (o, p, s)];
+        let blanks = blank_subjects(&interner, &triples);
+        assert_eq!(blanks.len(), 2);
+        let mut out = std::collections::BTreeSet::new();
+        blank_closure(&interner, &triples, &blanks, a, &mut out);
+        assert_eq!(out.into_iter().collect::<Vec<_>>(), [1, 2, 3]);
+        let mut named = std::collections::BTreeSet::new();
+        blank_closure(&interner, &triples, &blanks, s, &mut named);
+        assert!(named.is_empty());
+    }
 
     /// A fixture IRI. PurRDF mints no vocabulary, so every fixture term is `example.org`.
     const EX_S: &str = "http://example.org/s";
@@ -391,5 +410,48 @@ mod term_walk_tests {
             assert_eq!(intern_into(&mut builder, &value).index(), LEVELS + 2);
         })
         .expect("the thread starts");
+    }
+}
+
+/// Blank-node subject → the indices of the `triples` it is the subject of, ascending.
+///
+/// The index every blank-node closure walk over an interned triple list reads; see
+/// [`blank_closure`].
+pub(crate) fn blank_subjects(
+    interner: &Interner,
+    triples: &[(u32, u32, u32)],
+) -> BTreeMap<u32, Vec<usize>> {
+    let mut blanks: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+    for (index, &(s, _, _)) in triples.iter().enumerate() {
+        if matches!(interner.value(s), TermValue::Blank { .. }) {
+            blanks.entry(s).or_default().push(index);
+        }
+    }
+    blanks
+}
+
+/// Add to `out` the indices of every triple in the blank-node closure reachable from
+/// `term`: the triples a blank subject carries, followed through their blank objects.
+///
+/// A non-blank `term` contributes nothing; each blank node is expanded once, so a cyclic
+/// blank structure terminates. The one walk behind axiom explanation and module extraction,
+/// which both carry an axiom's anonymous scaffolding along with it.
+pub(crate) fn blank_closure(
+    interner: &Interner,
+    triples: &[(u32, u32, u32)],
+    blanks: &BTreeMap<u32, Vec<usize>>,
+    term: u32,
+    out: &mut BTreeSet<usize>,
+) {
+    let mut stack = vec![term];
+    let mut seen: BTreeSet<u32> = BTreeSet::new();
+    while let Some(node) = stack.pop() {
+        if !matches!(interner.value(node), TermValue::Blank { .. }) || !seen.insert(node) {
+            continue;
+        }
+        for &index in blanks.get(&node).map_or(&[][..], Vec::as_slice) {
+            out.insert(index);
+            stack.push(triples[index].2);
+        }
     }
 }

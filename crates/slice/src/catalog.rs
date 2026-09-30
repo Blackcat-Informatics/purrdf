@@ -223,7 +223,10 @@ impl SliceCatalog {
         // Parse Turtle once into the native IR (lenient: accepts @x-purrdf-* lang tags).
         // The frozen dataset serves BOTH the manifest-view extraction and the
         // lossless `manifest_graph` — no store→IR round-trip.
-        let dataset = parse_manifest(&manifest_bytes, &manifest_path)?;
+        // Parsed under its own RFC-8089 retrieval IRI, so a manifest that spells a slice
+        // or a dependency as a relative reference resolves rather than hard-failing with
+        // the base sitting unused in the path.
+        let dataset = Dataset::parse_file(&manifest_bytes, &manifest_path)?;
 
         // Extract manifest view from the dataset.
         let manifest = extract_manifest_view(&dataset, vocab)?;
@@ -251,15 +254,6 @@ impl SliceCatalog {
     pub fn get(&self, iri: &str) -> Option<&SliceRecord> {
         self.records.iter().find(|r| r.manifest.slice_iri == iri)
     }
-}
-
-// ── Turtle parsing ────────────────────────────────────────────────────────────
-
-/// Parse a `manifest.ttl` under its own RFC-8089 retrieval IRI, so a manifest that
-/// spells a slice or a dependency as a relative reference resolves rather than
-/// hard-failing with the base sitting unused in `path`.
-fn parse_manifest(bytes: &[u8], path: &Path) -> Result<Dataset, SliceError> {
-    Dataset::parse_file(bytes, path)
 }
 
 // ── Manifest extraction ───────────────────────────────────────────────────────
@@ -463,10 +457,6 @@ fn hex_sha256(bytes: &[u8]) -> String {
     purrdf_hash::hex::encode(&digest)
 }
 
-fn parse_rdf_to_dataset(bytes: &[u8], path: &Path) -> Result<Dataset, SliceError> {
-    Dataset::parse_file(bytes, path)
-}
-
 /// The semantic (canonical N-Triples) digest of one RDF artifact.
 ///
 /// # Errors
@@ -475,7 +465,7 @@ fn parse_rdf_to_dataset(bytes: &[u8], path: &Path) -> Result<Dataset, SliceError
 /// be RDF that does not parse, has no derivable retrieval IRI, or does not canonicalize
 /// is a defect in the slice, not an artifact without a semantic identity.
 fn compute_semantic_digest(bytes: &[u8], path: &Path) -> Result<String, SliceError> {
-    let dataset = parse_rdf_to_dataset(bytes, path)?;
+    let dataset = Dataset::parse_file(bytes, path)?;
 
     // Canonicalize blank-node labels BEFORE digesting. Parsing assigns blank-node IDs
     // non-deterministically, so a plain sorted-N-Triples digest would differ
@@ -639,7 +629,7 @@ mod tests {
         let dir = purrdf_testkit::TempDir::for_unit_test().expect("tempdir");
         let path = dir.path().join("manifest.ttl");
         std::fs::write(&path, ttl).expect("write the manifest");
-        let ds = parse_manifest(ttl.as_bytes(), &path).expect("should parse without error");
+        let ds = Dataset::parse_file(ttl.as_bytes(), &path).expect("should parse without error");
         let vocab = SliceVocab::for_namespace("https://example.org/vocab/");
         let result = find_slice_iri(&ds, &vocab);
         match result {

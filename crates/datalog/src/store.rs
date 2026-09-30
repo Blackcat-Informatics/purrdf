@@ -133,12 +133,14 @@ pub struct TermInterner {
     bytes: usize,
 }
 
-impl TermInterner {
-    /// A fresh, empty dictionary.
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl TermInterner {
+        /// A fresh, empty dictionary.
+        pub fn new() -> Self::default();
     }
+}
 
+impl TermInterner {
     /// Intern `surface`, minting a new insertion-ordered id if it is new, else
     /// returning the existing id.
     pub fn intern(&mut self, surface: &str) -> TermId {
@@ -1015,6 +1017,13 @@ pub struct RelationStore {
     empty: Relation,
 }
 
+purrdf_lex::constructors! {
+    impl RelationStore {
+        /// A fresh, empty store.
+        pub fn new() -> Self::default();
+    }
+}
+
 impl RelationStore {
     /// The lexical surface of the DEFAULT GRAPH: the EMPTY surface.
     ///
@@ -1024,11 +1033,6 @@ impl RelationStore {
     /// denotation [`ClauseTerm::DefaultGraph`](crate::clause::ClauseTerm::DefaultGraph)
     /// renders to, which is what makes a clause constant and stored data comparable.
     pub const DEFAULT_GRAPH: &'static str = "";
-
-    /// A fresh, empty store.
-    pub fn new() -> Self {
-        Self::default()
-    }
 
     /// Insert the quad `(subject, predicate, object, graph)`, all four as lexical
     /// surfaces.

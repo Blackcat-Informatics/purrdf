@@ -91,16 +91,7 @@
 use crate::de9im::Set;
 use crate::exact::{Int, Rat};
 use crate::geom::{Coord, CoordSeq, Geometry, GeometryBody};
-use crate::topology::{SegmentIntersection, intersect, locate, on_segment};
-
-/// The Clause 10.2 projection of `coord`: its `x` and `y`, with elevation and
-/// measure dropped.
-///
-/// Applied once, at the boundary of every decomposition below, so that no
-/// measurement is in a position to read a `Z` even by mistake.
-fn plane(coord: &Coord) -> Coord {
-    Coord::xy(coord.x().clone(), coord.y().clone())
-}
+use crate::topology::{SegmentIntersection, intersect, locate, on_segment, plane};
 
 // ---------------------------------------------------------------------------
 // The internal scale
@@ -1948,7 +1939,7 @@ mod nesting_tests {
             assert!(is_simple(&arbitrary::nest(lone.clone(), levels)));
         }
 
-        arbitrary::on_small_stack(move || {
+        purrdf_stack::on_stack(arbitrary::SMALL_STACK, move || {
             let deep = arbitrary::nest(square.clone(), arbitrary::DEEP);
             assert!(same_parts(&Parts::of(&deep), &expected));
             assert_eq!(area(&deep), r(1));
@@ -1957,6 +1948,7 @@ mod nesting_tests {
             assert_eq!(bounds(&deep), bounds(&square));
             assert!(!is_simple(&arbitrary::nest(crossing, arbitrary::DEEP)));
             assert!(is_simple(&arbitrary::nest(lone, arbitrary::DEEP)));
-        });
+        })
+        .expect("the thread starts");
     }
 }

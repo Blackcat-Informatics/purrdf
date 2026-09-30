@@ -167,17 +167,10 @@ impl std::error::Error for ReasoningError {
     }
 }
 
-impl From<RdfDiagnostic> for ReasoningError {
-    fn from(value: RdfDiagnostic) -> Self {
-        Self::Query(value)
-    }
-}
-
-impl From<EntailError> for ReasoningError {
-    fn from(value: EntailError) -> Self {
-        Self::Entailment(value)
-    }
-}
+purrdf_lex::variant_from!(ReasoningError {
+    Query(RdfDiagnostic),
+    Entailment(EntailError),
+});
 
 /// How a caller's **dataset-derived** property-function relations are re-derived over the
 /// closure an entailment-regime query is actually answered against.
@@ -735,21 +728,35 @@ pub enum GovernedEntailment {
 }
 
 impl GovernedEntailment {
+    /// Phase two's outcome and the certificate of the closure it was drawn from,
+    /// when the closure was computed at all.
+    ///
+    /// The one reading of the [`GovernedEntailment::Answered`] arm: the outcome and
+    /// the report travel together, so [`Self::outcome`] and [`Self::report`] are
+    /// its two halves.
+    #[must_use]
+    pub const fn answered(&self) -> Option<(&GovernedOutcome, &ReasoningReport)> {
+        match self {
+            Self::Answered { outcome, report } => Some((outcome, report)),
+            Self::ClosureStopped { .. } => None,
+        }
+    }
+
     /// Phase two's outcome, when the closure was computed at all.
     #[must_use]
     pub const fn outcome(&self) -> Option<&GovernedOutcome> {
-        match self {
-            Self::Answered { outcome, .. } => Some(outcome),
-            Self::ClosureStopped { .. } => None,
+        match self.answered() {
+            Some((outcome, _)) => Some(outcome),
+            None => None,
         }
     }
 
     /// The reasoning certificate, when a closure was produced.
     #[must_use]
     pub const fn report(&self) -> Option<&ReasoningReport> {
-        match self {
-            Self::Answered { report, .. } => Some(report),
-            Self::ClosureStopped { .. } => None,
+        match self.answered() {
+            Some((_, report)) => Some(report),
+            None => None,
         }
     }
 

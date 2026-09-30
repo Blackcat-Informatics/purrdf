@@ -82,17 +82,6 @@ pub fn is_forbidden_edge(from_tier: u8, to_tier: u8) -> bool {
     }
 }
 
-// ── Status label ─────────────────────────────────────────────────────────────
-
-fn status_label(status: ReconciliationStatus) -> &'static str {
-    match status {
-        ReconciliationStatus::Matched => "matched",
-        ReconciliationStatus::Undeclared => "undeclared",
-        ReconciliationStatus::Stale => "stale",
-        ReconciliationStatus::Forbidden => "forbidden",
-    }
-}
-
 // ── Evidence summarizer ───────────────────────────────────────────────────────
 
 fn edge_evidence_summary(edge: &DependencyEdge) -> String {
@@ -294,7 +283,7 @@ pub fn emit_analysis_graph(
         writeln!(
             body,
             "    {dependency_status} {} ;",
-            string_literal(status_label(effective_status))
+            string_literal(effective_status.token())
         )
         .unwrap();
         writeln!(

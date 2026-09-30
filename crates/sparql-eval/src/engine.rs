@@ -341,6 +341,13 @@ impl Default for PlanCache {
     }
 }
 
+purrdf_lex::constructors! {
+    impl PlanCache {
+        /// A fresh, empty cache.
+        pub fn new() -> Self::default();
+    }
+}
+
 impl PlanCache {
     /// The number of memoized plans held.
     ///
@@ -355,11 +362,6 @@ impl PlanCache {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
-    }
-
-    /// A fresh, empty cache.
-    pub fn new() -> Self {
-        Self::default()
     }
 
     /// An empty cache with explicit retention ceilings. A miss always prepares
@@ -762,6 +764,13 @@ impl std::fmt::Debug for NativeSparqlEngine {
             .field("loss_vocabulary", &self.loss_vocabulary)
             .field("eval_options", &self.eval_options)
             .finish()
+    }
+}
+
+purrdf_lex::constructors! {
+    impl NativeSparqlEngine {
+        /// A fresh engine with an empty plan cache and no `LOAD` resolver.
+        pub fn new() -> Self::default();
     }
 }
 
@@ -1763,11 +1772,6 @@ impl NativeSparqlEngine {
             Some(load) => Some(load),
             None => self.resolver.as_deref(),
         }
-    }
-
-    /// A fresh engine with an empty plan cache and no `LOAD` resolver.
-    pub fn new() -> Self {
-        Self::default()
     }
 
     /// Install a host `GraphResolver` so SPARQL `LOAD <iri>` can fetch its source.

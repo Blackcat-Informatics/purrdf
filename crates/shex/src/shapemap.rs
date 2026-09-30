@@ -959,10 +959,7 @@ impl MapParser {
     /// here was worse than in a schema: an unresolvable node selector matches
     /// nothing in the data and reports a clean, empty result map.
     fn resolve(&self, reference: &str) -> Result<String> {
-        self.base
-            .resolve(reference)
-            .map(|iri| iri.as_str().to_owned())
-            .map_err(|e| ShexError::iri(reference, &e))
+        crate::parser::resolve_iri(&self.base, reference)
     }
 
     // ── scanning primitives ──────────────────────────────────────────────────

@@ -515,13 +515,15 @@ pub struct ServiceCatalog {
     fallback: Option<ServiceProfile>,
 }
 
-impl ServiceCatalog {
-    /// An empty catalog: every service is denied.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl ServiceCatalog {
+        /// An empty catalog: every service is denied.
+        #[must_use]
+        pub fn new() -> Self::default();
     }
+}
 
+impl ServiceCatalog {
     /// Register `profile` for the service IRI `endpoint`.
     #[must_use]
     pub fn with_service(mut self, endpoint: impl Into<String>, profile: ServiceProfile) -> Self {
@@ -631,13 +633,15 @@ pub struct InProcessServiceResolver {
     catalog: Option<ServiceCatalog>,
 }
 
-impl InProcessServiceResolver {
-    /// An empty resolver with no endpoints and no catalog.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl InProcessServiceResolver {
+        /// An empty resolver with no endpoints and no catalog.
+        #[must_use]
+        pub fn new() -> Self::default();
     }
+}
 
+impl InProcessServiceResolver {
     /// Register `dataset` as the contents of `endpoint`.
     #[must_use]
     pub fn with_endpoint(mut self, endpoint: impl Into<String>, dataset: Arc<RdfDataset>) -> Self {

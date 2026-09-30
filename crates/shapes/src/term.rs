@@ -63,14 +63,16 @@ pub(crate) fn sort_terms_canonical(values: &mut [Term]) {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct NamedNode(String);
 
-impl NamedNode {
-    /// Construct from an IRI string without validation (the IR has already validated
-    /// lexical well-formedness at ingest).
-    #[inline]
-    pub fn new_unchecked(iri: impl Into<String>) -> Self {
-        Self(iri.into())
+purrdf_lex::constructors! {
+    impl NamedNode {
+        /// Construct from an IRI string without validation (the IR has already validated
+        /// lexical well-formedness at ingest).
+        #[inline]
+        pub fn new_unchecked(iri) -> Self;
     }
+}
 
+impl NamedNode {
     /// The IRI string.
     #[inline]
     pub fn as_str(&self) -> &str {
@@ -98,7 +100,7 @@ impl std::fmt::Display for NamedNode {
 
 impl From<&str> for NamedNode {
     fn from(s: &str) -> Self {
-        Self(s.to_owned())
+        Self::new_unchecked(s)
     }
 }
 

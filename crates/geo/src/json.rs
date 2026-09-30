@@ -174,7 +174,7 @@ mod tests {
     #[test]
     fn nesting_is_bounded_by_memory_alone() {
         let depth = deep::DEEP;
-        deep::on_small_stack(move || {
+        purrdf_stack::on_stack(deep::SMALL_STACK, move || {
             let arrays = format!("{}{}", "[".repeat(depth), "]".repeat(depth));
             let value = parse(&arrays).expect("a hundred thousand nested arrays parse");
             assert_eq!(write(&value), arrays, "and write back byte for byte");
@@ -195,6 +195,7 @@ mod tests {
                 refusal(&unfinished),
                 format!("JSON byte {depth}: expected a JSON value, found `x`")
             );
-        });
+        })
+        .expect("the thread starts");
     }
 }

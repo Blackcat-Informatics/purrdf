@@ -246,12 +246,6 @@ fn contains_property_function(p: &GraphPattern) -> bool {
     found
 }
 
-/// `true` for a group body that renders as the empty string (the identity table
-/// `Z`), so a caller can skip the separating space before the next element.
-fn is_empty_group_body(p: &GraphPattern) -> bool {
-    matches!(p, GraphPattern::Bgp { patterns } if patterns.is_empty())
-}
-
 /// Does a [`GraphPattern::Lateral`] node render as a surface form the parser's
 /// OWN dispatch arms — not the `LATERAL` keyword — re-wrap into exactly this
 /// `Lateral` node on re-parse?
@@ -806,7 +800,7 @@ fn group_body<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>) {
                 // the unit-table left), and the outer keyword would wrap that
                 // again. So both render unwrapped here, exactly like the
                 // fixed-IRI `SERVICE` case does for a plain `Join`.
-                if !is_empty_group_body(left) {
+                if !left.is_empty_bgp() {
                     next.push(Item::Char(' '));
                 }
                 next.push(Item::GroupBody(right));

@@ -96,6 +96,7 @@
 //! that the closure holds. Two runs over one premise and one conclusion mint the same triples
 //! and cite the same licences, on `wasm32` as on native.
 
+use super::is;
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::collections::{ListVocab, build_rdf_list};
@@ -302,16 +303,6 @@ const UNREAD_CONSTRUCTORS: [&str; 10] = [
     OWL_WITHRESTRICTIONS,
 ];
 
-/// Whether `term` is the IRI `iri`.
-fn is(term: &TermValue, iri: &str) -> bool {
-    matches!(term, TermValue::Iri(value) if value == iri)
-}
-
-/// Whether `term` names an IRI.
-fn is_named(term: &TermValue) -> bool {
-    matches!(term, TermValue::Iri(_))
-}
-
 /// Whether `count` is a literal whose value lies in the `xsd:nonNegativeInteger` value space.
 ///
 /// The comprehension condition for a cardinality restriction quantifies over the non-negative
@@ -483,7 +474,7 @@ fn recognize(
             if property.is_some() {
                 return refuse("it restricts two properties at once");
             }
-            if !is_named(object) {
+            if !object.is_iri() {
                 return refuse("it restricts a property expression rather than a named property");
             }
             property = Some(object.clone());
@@ -504,7 +495,7 @@ fn recognize(
     let constructor = match (operands, property, constraint, restriction_typed) {
         (Some((which, head)), None, None, false) => {
             let collection = read_collection(indexed, &head, node, "the operand list")?;
-            if let Some(member) = collection.members.iter().find(|member| !is_named(member)) {
+            if let Some(member) = collection.members.iter().find(|member| !member.is_iri()) {
                 return Err(format!(
                     "the operand list member {}: a NESTED anonymous operand is a class \
                      expression whose own axioms this recognizer has not read",
@@ -551,8 +542,7 @@ fn recognize(
             continue;
         }
         let [subject, predicate, object] = &indexed.triples[index];
-        if !is(predicate, RDF_TYPE) || surface_of(object) != surface_of(node) || !is_named(subject)
-        {
+        if !is(predicate, RDF_TYPE) || surface_of(object) != surface_of(node) || !subject.is_iri() {
             return refuse("it is mentioned somewhere this lane did not look");
         }
         // A membership in a RESTRICTION is a counting or witness question — "does `x` have a
@@ -585,14 +575,16 @@ fn recognize(
 fn constraint_of(predicate: &TermValue, object: &TermValue) -> Option<Constraint> {
     for which in [OWL_SOMEVALUESFROM, OWL_ALLVALUESFROM] {
         if is(predicate, which) {
-            return is_named(object).then(|| Constraint::Values {
+            return object.is_iri().then(|| Constraint::Values {
                 predicate: which,
                 class: object.clone(),
             });
         }
     }
     if is(predicate, OWL_HASVALUE) {
-        return is_named(object).then(|| Constraint::HasValue(object.clone()));
+        return object
+            .is_iri()
+            .then(|| Constraint::HasValue(object.clone()));
     }
     for which in [OWL_MINCARDINALITY, OWL_MAXCARDINALITY, OWL_CARDINALITY] {
         if is(predicate, which) {

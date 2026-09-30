@@ -675,13 +675,15 @@ impl core::fmt::Debug for AggregateRegistry {
     }
 }
 
-impl AggregateRegistry {
-    /// An empty registry.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl AggregateRegistry {
+        /// An empty registry.
+        #[must_use]
+        pub fn new() -> Self::default();
     }
+}
 
+impl AggregateRegistry {
     /// The canonical empty registry — the non-optional "no aggregates
     /// registered" value every registry-carrying seam
     /// ([`crate::engine::QueryOptions::aggregates`],

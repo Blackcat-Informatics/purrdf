@@ -33,7 +33,7 @@ use purrdf_xsd::XsdValue;
 
 use crate::error::EvalError;
 use crate::eval::EvalCtx;
-use crate::expr::{intern_boolean, intern_integer, xsd_of};
+use crate::expr::{arg, intern, intern_boolean, intern_integer, xsd_of};
 use crate::scratch::{SolutionTerm, term_id_to_value};
 
 use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
@@ -220,50 +220,12 @@ fn materialize_list<D: DatasetView + Sync>(
 // internals
 // ---------------------------------------------------------------------------
 
-/// The argument value at index `i`, if bound (not unbound/error).
-fn arg(vals: &[Option<TermValue>], i: usize) -> Option<&TermValue> {
-    vals.get(i).and_then(|v| v.as_ref())
-}
-
 /// Extract a zero-based index from an `xsd:integer`-derived literal.
 fn as_index(value: &TermValue) -> Option<i64> {
     match xsd_of(value)? {
         XsdValue::Integer { value, .. } => i64::try_from(value).ok(),
         _ => None,
     }
-}
-
-/// Intern a value to a solution term (promoting to an existing dataset id).
-///
-/// [`None`] when the value carries a language tag the grammar refuses. The list
-/// functions are expressions, so that refusal is SPARQL 1.1 §17.2's unbound
-/// result — see
-/// [`ScratchInterner::intern_checked`](crate::scratch::ScratchInterner::intern_checked).
-///
-/// # This gate is vacuous here today, and is kept anyway
-///
-/// Be honest about what this module handles: unlike `crate::cdt_fn` and
-/// `crate::cdt_unfold`, these six functions do **not** lift members out of a
-/// composite literal's lexical form. They walk an `rdf:List` — `head`, `rdf:first`,
-/// `rdf:rest` — so every member is a term that was already admitted by
-/// `RdfLiteral::validate_components` on its way into the [`RdfDataset`], and
-/// re-judging it cannot change the verdict. `listSlice`/`listConcat` re-`intern`
-/// members they read from that same walk, and the cells they mint are blank
-/// nodes, which carry no tag at all.
-///
-/// It stays because it costs a scan of a field that is [`None`] in the common
-/// case and because [`walk_list`] reads from the per-query CONSTRUCTED buffer as
-/// well as from the frozen dataset — one cheap door rather than two doors whose
-/// difference has to be re-derived every time that buffer gains a writer. A gate
-/// that is vacuous is not the same as a gate that is wrong; claiming it caught
-/// something here would be.
-///
-/// [`RdfDataset`]: purrdf_core::RdfDataset
-fn intern<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    value: TermValue,
-) -> Option<SolutionTerm<D::Id>> {
-    ctx.scratch.intern_checked(ctx.dataset, value)
 }
 
 /// Walk an `rdf:List` from `head`, returning its member values in order.

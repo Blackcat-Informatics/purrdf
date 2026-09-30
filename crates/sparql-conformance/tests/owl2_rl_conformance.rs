@@ -322,7 +322,8 @@ fn the_non_rl_premises_are_named_and_answer_undecided() {
         let Answer::Undecided(reason) = owl2_rl::decide(case, &imports) else {
             continue;
         };
-        let ledgered = owl2_rl::ledger_lookup(&case.name).is_some();
+        let ledgered =
+            purrdf_sparql_conformance::ledger::lookup(owl2_rl::LEDGER, &case.name).is_some();
         assert_eq!(
             case.direction == Direction::Positive,
             ledgered,

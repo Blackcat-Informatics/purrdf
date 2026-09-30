@@ -255,12 +255,14 @@ pub(crate) fn language_tags_well_formed(value: &TermValue) -> bool {
     true
 }
 
-impl ScratchInterner {
-    /// A fresh, empty interner.
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl ScratchInterner {
+        /// A fresh, empty interner.
+        pub fn new() -> Self::default();
     }
+}
 
+impl ScratchInterner {
     /// Empty this interner while KEEPING the tables it has already grown.
     ///
     /// Observationally a fresh [`Self::new`] — every id it could answer is gone, the
@@ -952,11 +954,6 @@ mod term_walk_tests {
         (builder.freeze().expect("the generated values freeze"), ids)
     }
 
-    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
-    }
-
     /// A triple-term chain `depth` levels deep over `innermost`.
     fn chain(depth: usize, innermost: TermValue) -> TermValue {
         let mut term = innermost;
@@ -1004,7 +1001,7 @@ mod term_walk_tests {
 
     #[test]
     fn a_hundred_thousand_level_term_is_measured_and_checked_on_a_128_kib_stack() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let well_formed = chain(DEPTH, tagged("x", "en"));
             let s_len = format!("{EX}s").len() as u64;
             let p_len = format!("{EX}p").len() as u64;
@@ -1016,6 +1013,7 @@ mod term_walk_tests {
 
             let ill_formed = chain(DEPTH, tagged("x", "en-"));
             assert!(!language_tags_well_formed(&ill_formed));
-        });
+        })
+        .expect("spawn");
     }
 }

@@ -415,12 +415,14 @@ pub struct ProofArena {
     by_content: HashTable<ProofId>,
 }
 
-impl ProofArena {
-    /// A fresh, empty arena.
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl ProofArena {
+        /// A fresh, empty arena.
+        pub fn new() -> Self::default();
     }
+}
 
+impl ProofArena {
     /// The number of interned terms.
     pub fn len(&self) -> usize {
         self.terms.len()
@@ -531,13 +533,7 @@ impl ProofArena {
     /// [`crate::store::TermInterner`]'s are, so a foreign id is a programming error rather
     /// than a data state.
     fn term(&self, id: ProofId) -> &ProofTerm {
-        self.terms.get(id.index()).unwrap_or_else(|| {
-            panic!(
-                "ProofId {id:?} was not minted by this arena (len {}): proof ids are \
-                 per-arena handles and must never cross arena boundaries",
-                self.terms.len()
-            )
-        })
+        id.slot_in(&self.terms, "ProofId", "proof")
     }
 
     // ── The checker ─────────────────────────────────────────────────────────────

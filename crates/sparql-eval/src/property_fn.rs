@@ -2117,13 +2117,15 @@ impl core::fmt::Debug for PropertyFunctionRegistry {
     }
 }
 
-impl PropertyFunctionRegistry {
-    /// An empty registry.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl PropertyFunctionRegistry {
+        /// An empty registry.
+        #[must_use]
+        pub fn new() -> Self::default();
     }
+}
 
+impl PropertyFunctionRegistry {
     /// The canonical empty registry — the non-optional "no relations
     /// registered" value every registry-carrying seam
     /// ([`crate::engine::QueryOptions::property_functions`],

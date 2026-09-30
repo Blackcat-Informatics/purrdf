@@ -169,13 +169,15 @@ pub struct CancellationFlag {
     cancelled: Arc<AtomicBool>,
 }
 
-impl CancellationFlag {
-    /// A fresh, uncancelled flag.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl CancellationFlag {
+        /// A fresh, uncancelled flag.
+        #[must_use]
+        pub fn new() -> Self::default();
     }
+}
 
+impl CancellationFlag {
     /// Cancel every clone of this flag. Idempotent, and never reversible.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Relaxed);
@@ -408,6 +410,35 @@ const fn metering_limits() -> ResourceVector {
     limits
 }
 
+/// The ceiling a caller actually configured for `dimension` in `limits`: `None` for an
+/// unbounded dimension and for one bounded only by [`METERING_CEILING`], which is not a
+/// bound anyone asked for. The one reading behind [`QueryGovernors::caller_ceiling`]
+/// and [`GovernorState::caller_ceiling`], so a configuration and the execution built
+/// from it cannot disagree about what the caller set.
+const fn caller_ceiling_in(limits: &ResourceVector, dimension: ResourceDimension) -> Option<u64> {
+    if !limits.is_bounded(dimension) {
+        return None;
+    }
+    let ceiling = limits.get(dimension);
+    if ceiling == METERING_CEILING {
+        None
+    } else {
+        Some(ceiling)
+    }
+}
+
+/// Whether any caller-settable governor is engaged: a stop signal is attached, or a
+/// caller-settable dimension carries a ceiling. Fixed-ceiling dimensions are excluded:
+/// they hold on every query, so counting them would make every execution look governed.
+/// The one reading behind [`QueryGovernors::is_engaged`] and
+/// [`GovernorState::is_engaged`].
+fn caller_engaged(limits: &ResourceVector, has_stop: bool) -> bool {
+    has_stop
+        || CALLER_SETTABLE_DIMENSIONS
+            .iter()
+            .any(|&dimension| limits.is_bounded(dimension))
+}
+
 /// Whether `dimension` is compared against the **maximum** of any single observation
 /// rather than against a running sum.
 ///
@@ -611,10 +642,7 @@ impl QueryGovernors {
     /// governed and defeat the short-circuit.
     #[must_use]
     pub fn is_engaged(&self) -> bool {
-        self.stop.is_some()
-            || CALLER_SETTABLE_DIMENSIONS
-                .iter()
-                .any(|&dimension| self.limits.is_bounded(dimension))
+        caller_engaged(&self.limits, self.stop.is_some())
     }
 
     /// Whether `dimension` carries a ceiling that must actually be enforced.
@@ -644,15 +672,7 @@ impl QueryGovernors {
     /// narrowed below that.
     #[must_use]
     pub const fn caller_ceiling(&self, dimension: ResourceDimension) -> Option<u64> {
-        if !self.limits.is_bounded(dimension) {
-            return None;
-        }
-        let ceiling = self.limits.get(dimension);
-        if ceiling == METERING_CEILING {
-            None
-        } else {
-            Some(ceiling)
-        }
+        caller_ceiling_in(&self.limits, dimension)
     }
 }
 
@@ -1068,15 +1088,7 @@ impl GovernorState {
     /// access to. See that method for why `Some` is withheld from the metering sentinel.
     #[must_use]
     pub const fn caller_ceiling(&self, dimension: ResourceDimension) -> Option<u64> {
-        if !self.limits.is_bounded(dimension) {
-            return None;
-        }
-        let ceiling = self.limits.get(dimension);
-        if ceiling == METERING_CEILING {
-            None
-        } else {
-            Some(ceiling)
-        }
+        caller_ceiling_in(&self.limits, dimension)
     }
 
     /// Whether **any** caller-settable governor is engaged in this execution.
@@ -1091,10 +1103,7 @@ impl GovernorState {
     /// across workers at all — see `EvalCtx::may_fork_row_loop`.
     #[must_use]
     pub fn is_engaged(&self) -> bool {
-        self.stop.is_some()
-            || CALLER_SETTABLE_DIMENSIONS
-                .iter()
-                .any(|&dimension| self.limits.is_bounded(dimension))
+        caller_engaged(&self.limits, self.stop.is_some())
     }
 
     /// Charge `amount` against `dimension`, **only if** that dimension carries a ceiling.

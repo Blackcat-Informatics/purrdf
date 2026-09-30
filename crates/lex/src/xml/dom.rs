@@ -639,10 +639,16 @@ impl<'d, 'a> Node<'d, 'a> {
         self.link(self.data().previous)
     }
 
+    /// The children that are elements, in document order: text, comments and
+    /// processing instructions skipped.
+    pub fn element_children(&self) -> impl DoubleEndedIterator<Item = Self> + use<'d, 'a> {
+        self.children().filter(Node::is_element)
+    }
+
     /// The first child that is an element.
     #[must_use]
     pub fn first_element_child(&self) -> Option<Self> {
-        self.children().find(Node::is_element)
+        self.element_children().next()
     }
 
     /// The next sibling that is an element.

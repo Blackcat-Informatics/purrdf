@@ -3387,10 +3387,6 @@ mod body_walk_tests {
         body
     }
 
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
-    }
-
     // ── The tests ──────────────────────────────────────────────────────────────────
 
     /// The sanitized copy of every generated body is the copy the recursive reference
@@ -3445,7 +3441,7 @@ mod body_walk_tests {
     /// ground quoted triple as deep is scanned for the blank node at its bottom.
     #[test]
     fn a_hundred_thousand_level_body_is_sanitized_on_a_128_kib_stack() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let leaf = GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(Variable::new("s")),
@@ -3478,6 +3474,7 @@ mod body_walk_tests {
             }
             assert!(ground_term_has_blank_node(&with_blank));
             assert!(!ground_term_has_blank_node(&without));
-        });
+        })
+        .expect("spawn");
     }
 }

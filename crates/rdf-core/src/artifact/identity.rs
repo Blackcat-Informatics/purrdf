@@ -197,10 +197,17 @@ impl fmt::Display for IdentityMismatch {
     }
 }
 
-/// Render a component value for a human: quoted when it is printable UTF-8,
+/// Render an identity component value for a human: quoted when it is UTF-8 with
+/// no control character (the empty value is the quoted `""`), `0x`-prefixed
 /// lowercase hex otherwise. Identity values are usually digests (hex) or IRIs
 /// and version strings (text), and showing a digest as mojibake helps nobody.
-fn render_value(value: &[u8]) -> String {
+///
+/// The one rendering of an identity component: every surface that explains an
+/// identity match or mismatch (this module's [`IdentityMismatch`] display, a
+/// shapes product's explanation) spells a value through it, so the same bytes
+/// read the same everywhere.
+#[must_use]
+pub fn render_value(value: &[u8]) -> String {
     match std::str::from_utf8(value) {
         Ok(text) if !text.chars().any(char::is_control) => format!("\"{text}\""),
         _ => {
@@ -644,5 +651,8 @@ mod tests {
         );
         assert_eq!(render_value(&[0x00, 0xff]), "0x00ff");
         assert_eq!(render_value(b""), "\"\"");
+        // A control character is not printable text, whatever its encoding.
+        assert_eq!(render_value(b"a\nb"), "0x610a62");
+        assert_eq!(render_value(&[0xc3]), "0xc3");
     }
 }

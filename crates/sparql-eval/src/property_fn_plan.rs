@@ -560,16 +560,11 @@ fn collect_chain<'a>(pattern: &'a GraphPattern, atoms: &mut Vec<Atom<'a>>) -> bo
 fn planned_lateral_call(right: &GraphPattern) -> Option<(&GraphPattern, &PropertyFunctionCall)> {
     let mut operand = right;
     while let GraphPattern::Lateral { left, right } = operand
-        && is_identity(left)
+        && left.is_empty_bgp()
     {
         operand = right;
     }
     crate::substitute::lateral_call(operand).map(|call| (operand, call))
-}
-
-/// Whether `pattern` is the identity table `Z` — the empty `Bgp`.
-const fn is_identity(pattern: &GraphPattern) -> bool {
-    matches!(pattern, GraphPattern::Bgp { patterns } if patterns.is_empty())
 }
 
 /// Push one chain member, dropping the EMPTY `Bgp` the parser leaves where a call opens
@@ -580,7 +575,7 @@ fn push_atom<'a>(
     call: Option<&'a PropertyFunctionCall>,
     atoms: &mut Vec<Atom<'a>>,
 ) {
-    if is_identity(pattern) {
+    if pattern.is_empty_bgp() {
         return;
     }
     let position = atoms.len();
@@ -4485,7 +4480,7 @@ mod iterative_walk_tests {
         right: &GraphPattern,
     ) -> Option<(&GraphPattern, &PropertyFunctionCall)> {
         match right {
-            GraphPattern::Lateral { left, right } if is_identity(left) => {
+            GraphPattern::Lateral { left, right } if left.is_empty_bgp() => {
                 reference_planned_lateral_call(right)
             }
             other => crate::substitute::lateral_call(other).map(|call| (other, call)),
@@ -5653,11 +5648,6 @@ mod iterative_walk_tests {
         registry
     }
 
-    /// Run `body` on a fresh thread with 128 KiB of stack.
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        purrdf_stack::on_stack(128 * 1024, body).expect("spawn")
-    }
-
     fn variable(name: &str) -> Variable {
         Variable::new(name)
     }
@@ -6269,7 +6259,7 @@ mod iterative_walk_tests {
     /// to the call's arguments.
     #[test]
     fn a_hundred_thousand_wrappers_are_planned_and_bound_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(128 * 1024, || {
             let mut pattern = call_of(REL_ANY, "a", "b");
             for _ in 0..DEPTH {
                 pattern = GraphPattern::Distinct {
@@ -6300,14 +6290,15 @@ mod iterative_walk_tests {
             let mut bound = DetHashSet::default();
             collect_certainly_bound(&pattern, &mut bound);
             assert_eq!(bound, set(&["a", "b"]));
-        });
+        })
+        .expect("spawn");
     }
 
     /// A hundred thousand `FILTER(BOUND(?a))` wrappers over one triple: bound, on a
     /// 128 KiB stack, to the triple's variables.
     #[test]
     fn a_hundred_thousand_filters_are_bound_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(128 * 1024, || {
             let mut pattern = GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(variable("a")),
@@ -6340,14 +6331,15 @@ mod iterative_walk_tests {
                 set(&["a", "b", "q"]),
                 "the seed reaches the core beneath every wrapper"
             );
-        });
+        })
+        .expect("spawn");
     }
 
     /// A hundred thousand operators over one variable: what the expression needs for
     /// each outcome, and whether it reads only bound variables, on a 128 KiB stack.
     #[test]
     fn a_hundred_thousand_operators_are_required_and_read_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(128 * 1024, || {
             let mut negated = Expression::Bound(variable("a"));
             for _ in 0..DEPTH {
                 negated = Expression::Not(Child::new(negated));
@@ -6364,14 +6356,15 @@ mod iterative_walk_tests {
             let a = variable("a");
             assert!(expression_reads_only_bound(&signed, &|read| *read == a));
             assert!(!expression_reads_only_bound(&signed, &|_| false));
-        });
+        })
+        .expect("spawn");
     }
 
     /// A hundred thousand joins peel into one chain, and a hundred thousand identity
     /// `LATERAL` wrappers peel down to the call they hold, on a 128 KiB stack.
     #[test]
     fn a_hundred_thousand_joins_peel_into_one_chain_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(128 * 1024, || {
             let leaf = || GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(variable("a")),
@@ -6407,14 +6400,15 @@ mod iterative_walk_tests {
             let (node, call) = planned_lateral_call(&wrapped).expect("the call at the bottom");
             assert_eq!(call.iri, REL_ANY);
             assert!(matches!(node, GraphPattern::PropertyFunction(_)));
-        });
+        })
+        .expect("spawn");
     }
 
     /// A quoted triple nested a hundred thousand levels deep: whether it is bound, and
     /// which variables it holds, on a 128 KiB stack.
     #[test]
     fn a_hundred_thousand_quoted_triples_are_bound_and_collected_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(128 * 1024, || {
             let mut term = TermPattern::Variable(variable("a"));
             for _ in 0..DEPTH {
                 term = TermPattern::Triple(Child::new(TriplePattern {
@@ -6428,6 +6422,7 @@ mod iterative_walk_tests {
             let mut collected = DetHashSet::default();
             collect_term_vars(&term, &mut collected);
             assert_eq!(collected, set(&["a"]));
-        });
+        })
+        .expect("spawn");
     }
 }

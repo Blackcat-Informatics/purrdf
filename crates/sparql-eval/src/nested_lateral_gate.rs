@@ -38,11 +38,6 @@ const EX: &str = "http://example.org/";
 /// A stack large enough for every depth these tests evaluate, eager included.
 const BIG_STACK: usize = 512 * 1024 * 1024;
 
-/// Run `body` on a fresh thread with [`BIG_STACK`] of stack.
-fn on_big_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-    purrdf_stack::on_stack(BIG_STACK, body).expect("spawn")
-}
-
 /// An engine that evaluates on the calling thread, so the thread-local counters and the
 /// thread-local eager override see the whole evaluation.
 fn sequential_engine() -> NativeSparqlEngine {
@@ -187,7 +182,7 @@ struct Cost {
 }
 
 fn cost(depth: usize, eager: bool) -> Cost {
-    on_big_stack(move || {
+    purrdf_stack::on_stack(BIG_STACK, move || {
         let query = same_row_nesting(depth);
         let (one, c1) = counted(&edge_per_subject(1), &query, eager);
         assert_eq!(one, vec![vec![iri("s0")]]);
@@ -203,6 +198,7 @@ fn cost(depth: usize, eager: bool) -> Cost {
             once: c1,
         }
     })
+    .expect("spawn")
 }
 
 /// **One more left row of `d` nested `LATERAL`s costs `O(d)` counted work, and the
@@ -396,7 +392,7 @@ fn walks_along_next_answer_the_rows_read_by_hand() {
 /// at any depth.
 #[test]
 fn a_thousand_nested_laterals_answer() {
-    let rows = on_big_stack(|| {
+    let rows = purrdf_stack::on_stack(BIG_STACK, || {
         let mut b = RdfDatasetBuilder::new();
         let p = b.intern_iri(&iri("p"));
         let q = b.intern_iri(&iri("q"));
@@ -414,7 +410,8 @@ fn a_thousand_nested_laterals_answer() {
             body = format!("?s <{EX}p> ?o LATERAL {{ {body} }}");
         }
         answer(&ds, &format!("SELECT ?s WHERE {{ {body} }}"), false)
-    });
+    })
+    .expect("spawn");
     assert_eq!(rows, vec![vec![iri("s1")]]);
 }
 
@@ -548,11 +545,12 @@ fn generated_nested_laterals_match_the_full_substitution() {
                 seed * 7919 + u64::try_from(depth).expect("depth fits"),
                 depth,
             );
-            let rows = on_big_stack({
+            let rows = purrdf_stack::on_stack(BIG_STACK, {
                 let ds = Arc::clone(&ds);
                 let query = query.clone();
                 move || answer_every_way(&ds, &query)
-            });
+            })
+            .expect("spawn");
             queries += 1;
             nonempty += usize::from(!rows.is_empty());
             empty_outer += usize::from(query.contains("none"));

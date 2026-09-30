@@ -1234,7 +1234,7 @@ fn admits_subject(value: &TermValue) -> bool {
 /// `p rdfs:subPropertyOf "cat"` licenses a conclusion the IR cannot hold, in exactly the
 /// way a literal subject does.
 fn admits_predicate(value: &TermValue) -> bool {
-    matches!(value, TermValue::Iri(_))
+    value.is_iri()
 }
 
 /// The surface → value dictionary that lets an answer be read back as RDF 1.2 terms.

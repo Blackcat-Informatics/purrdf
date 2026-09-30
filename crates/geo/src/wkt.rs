@@ -878,7 +878,7 @@ fn parse_coord(cursor: &mut Cursor<'_>, dim: CoordDim) -> Result<Coord, GeoError
         return Err(GeoError::literal(format!(
             "a {} position has {} ordinates, but another number follows the last one at byte {}; \
              the dimension is written once in the tag and governs every position",
-            dim_label(dim),
+            dim.name(),
             dim.ordinates(),
             cursor.pos
         )));
@@ -895,19 +895,9 @@ fn read_ordinate(cursor: &mut Cursor<'_>, dim: CoordDim, index: usize) -> Result
             "{} — this is ordinate {index} of the {} a {} position carries",
             err.detail(),
             dim.ordinates(),
-            dim_label(dim)
+            dim.name()
         ))
     })
-}
-
-/// The dimension's name as diagnostics spell it.
-const fn dim_label(dim: CoordDim) -> &'static str {
-    match dim {
-        CoordDim::Xy => "XY",
-        CoordDim::Xyz => "XYZ",
-        CoordDim::Xym => "XYM",
-        CoordDim::Xyzm => "XYZM",
-    }
 }
 
 // ---------------------------------------------------------------------------

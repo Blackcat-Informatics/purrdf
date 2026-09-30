@@ -131,14 +131,9 @@ impl Owl2Gap {
     }
 }
 
-/// One ledgered divergence: the case's directory name plus its typed gap.
-#[derive(Debug)]
-pub struct LedgerEntry {
-    /// The case directory name under `entailment-suite/w3c-owl2/cases/`.
-    pub case: &'static str,
-    /// Why PurRDF diverges.
-    pub gap: Owl2Gap,
-}
+/// One ledgered divergence: the case's directory name under
+/// `entailment-suite/w3c-owl2/cases/` plus its typed gap.
+pub type LedgerEntry = crate::ledger::LedgerEntry<Owl2Gap>;
 
 /// The divergence ledger: every vendored case PurRDF does not agree with today.
 ///
@@ -186,12 +181,6 @@ pub const LEDGER: &[LedgerEntry] = &[
     //     entry above is an incompleteness (a missed clash) or a refusal to
     //     decide; none is an invented clash.
 ];
-
-/// Look a case up in [`LEDGER`].
-#[must_use]
-pub fn ledger_lookup(case: &str) -> Option<Owl2Gap> {
-    LEDGER.iter().find(|e| e.case == case).map(|e| e.gap)
-}
 
 /// One vendored case.
 #[derive(Debug)]
@@ -379,6 +368,16 @@ pub struct GradedCase {
     pub ledgered: Option<Owl2Gap>,
 }
 
+impl crate::ledger::LedgeredCase for GradedCase {
+    fn agrees(&self) -> bool {
+        matches!(self.grade, Grade::Agree)
+    }
+
+    fn ledgered(&self) -> Option<(&'static str, bool)> {
+        self.ledgered.map(|gap| (gap.label(), gap.is_unsound()))
+    }
+}
+
 /// The whole corpus run.
 #[derive(Debug, Default)]
 pub struct Owl2Summary {
@@ -390,39 +389,27 @@ impl Owl2Summary {
     /// Cases that agreed with the published verdict and are not ledgered.
     #[must_use]
     pub fn agreed(&self) -> usize {
-        self.cases
-            .iter()
-            .filter(|c| matches!(c.grade, Grade::Agree) && c.ledgered.is_none())
-            .count()
+        crate::ledger::agreed(&self.cases)
     }
 
     /// Cases that diverged (withheld or disagreed) and are ledgered — the
     /// "XFail/Skip" column of the conformance matrix.
     #[must_use]
     pub fn ledgered(&self) -> usize {
-        self.cases
-            .iter()
-            .filter(|c| !matches!(c.grade, Grade::Agree) && c.ledgered.is_some())
-            .count()
+        crate::ledger::ledgered(&self.cases)
     }
 
     /// Cases that diverged with NO ledger entry. A hard failure.
     #[must_use]
     pub fn unledgered(&self) -> Vec<&GradedCase> {
-        self.cases
-            .iter()
-            .filter(|c| !matches!(c.grade, Grade::Agree) && c.ledgered.is_none())
-            .collect()
+        crate::ledger::unledgered(&self.cases)
     }
 
     /// Ledgered cases that now AGREE — a stale ledger entry. A hard failure, so
     /// a closed gap must be removed from the table rather than left to rot.
     #[must_use]
     pub fn stale(&self) -> Vec<&GradedCase> {
-        self.cases
-            .iter()
-            .filter(|c| matches!(c.grade, Grade::Agree) && c.ledgered.is_some())
-            .collect()
+        crate::ledger::stale(&self.cases)
     }
 
     /// How many cases carried each published verdict, as `(consistent,
@@ -453,25 +440,7 @@ impl Owl2Summary {
     /// A per-gap tally of the ledger, in label order, for the run log.
     #[must_use]
     pub fn ledger_tally(&self) -> String {
-        let mut counts: Vec<(&'static str, usize, bool)> = Vec::new();
-        for case in &self.cases {
-            let Some(gap) = case.ledgered else { continue };
-            if matches!(case.grade, Grade::Agree) {
-                continue;
-            }
-            if let Some(slot) = counts.iter_mut().find(|(l, _, _)| *l == gap.label()) {
-                slot.1 += 1;
-            } else {
-                counts.push((gap.label(), 1, gap.is_unsound()));
-            }
-        }
-        counts.sort_unstable();
-        let mut out = String::new();
-        for (label, n, unsound) in counts {
-            let mark = if unsound { " [UNSOUND]" } else { "" };
-            let _ = write!(out, "\n  {n:>3}  {label}{mark}");
-        }
-        out
+        crate::ledger::tally(&self.cases)
     }
 
     /// A detailed report of everything that must fail the harness.
@@ -531,7 +500,7 @@ pub fn run(root: &Path) -> Result<Owl2Summary, String> {
             name: case.name.clone(),
             published: case.published,
             grade: grade(case),
-            ledgered: ledger_lookup(&case.name),
+            ledgered: crate::ledger::lookup(LEDGER, &case.name),
         });
     }
     Ok(summary)

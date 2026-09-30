@@ -67,12 +67,14 @@ pub struct Subst {
     meta_sort: Vec<Option<NodeId>>,
 }
 
-impl Subst {
-    /// An empty substitution: nothing bound, nothing sorted.
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl Subst {
+        /// An empty substitution: nothing bound, nothing sorted.
+        pub fn new() -> Self::default();
     }
+}
 
+impl Subst {
     /// Grow both backing vectors to hold index `idx`.
     fn ensure(&mut self, idx: usize) {
         if self.bindings.len() <= idx {

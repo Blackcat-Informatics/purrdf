@@ -146,6 +146,10 @@ pub enum CoordDim {
     Xyzm,
 }
 
+/// Each dimension's spellings, in declaration order: its name (`XYZ`) and its
+/// WKT tag (`Z`). One table, so the two spellings of a dimension cannot drift.
+const DIM_SPELLINGS: [(&str, &str); 4] = [("XY", ""), ("XYZ", "Z"), ("XYM", "M"), ("XYZM", "ZM")];
+
 impl CoordDim {
     /// Whether an elevation ordinate is present.
     #[must_use]
@@ -176,15 +180,19 @@ impl CoordDim {
         }
     }
 
+    /// The dimension's name as diagnostics spell it: `"XY"`, `"XYZ"`, `"XYM"` or
+    /// `"XYZM"`, the OGC Simple Features (ISO 19125-1 §6.1.2.5) coordinate
+    /// dimension names. The one spelling every geometry reader and writer uses
+    /// when it reports a dimension mismatch.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        DIM_SPELLINGS[self as usize].0
+    }
+
     /// The WKT dimension tag: `""`, `"Z"`, `"M"` or `"ZM"`.
     #[must_use]
     pub const fn wkt_tag(self) -> &'static str {
-        match self {
-            Self::Xy => "",
-            Self::Xyz => "Z",
-            Self::Xym => "M",
-            Self::Xyzm => "ZM",
-        }
+        DIM_SPELLINGS[self as usize].1
     }
 }
 
@@ -304,33 +312,30 @@ pub enum GeometryKind {
     GeometryCollection,
 }
 
+/// Each kind's spellings, in declaration order: its uppercase WKT keyword (OGC
+/// 06-103r4 §7) and its RFC 7946 §1.4 GeoJSON `type` member. One table, so the
+/// two spellings of a kind cannot drift apart.
+const KIND_SPELLINGS: [(&str, &str); 7] = [
+    ("POINT", "Point"),
+    ("LINESTRING", "LineString"),
+    ("POLYGON", "Polygon"),
+    ("MULTIPOINT", "MultiPoint"),
+    ("MULTILINESTRING", "MultiLineString"),
+    ("MULTIPOLYGON", "MultiPolygon"),
+    ("GEOMETRYCOLLECTION", "GeometryCollection"),
+];
+
 impl GeometryKind {
     /// The uppercase WKT keyword for this kind.
     #[must_use]
     pub const fn wkt_keyword(self) -> &'static str {
-        match self {
-            Self::Point => "POINT",
-            Self::LineString => "LINESTRING",
-            Self::Polygon => "POLYGON",
-            Self::MultiPoint => "MULTIPOINT",
-            Self::MultiLineString => "MULTILINESTRING",
-            Self::MultiPolygon => "MULTIPOLYGON",
-            Self::GeometryCollection => "GEOMETRYCOLLECTION",
-        }
+        KIND_SPELLINGS[self as usize].0
     }
 
     /// The RFC 7946 GeoJSON `type` member for this kind.
     #[must_use]
     pub const fn geojson_type(self) -> &'static str {
-        match self {
-            Self::Point => "Point",
-            Self::LineString => "LineString",
-            Self::Polygon => "Polygon",
-            Self::MultiPoint => "MultiPoint",
-            Self::MultiLineString => "MultiLineString",
-            Self::MultiPolygon => "MultiPolygon",
-            Self::GeometryCollection => "GeometryCollection",
-        }
+        KIND_SPELLINGS[self as usize].1
     }
 }
 
@@ -548,20 +553,11 @@ fn check_body(dim: CoordDim, body: &GeometryBody) -> Result<(), GeoError> {
                 Err(GeoError::literal(format!(
                     "a geometry collection declared {} but holds a {} member; WKT writes the \
                      dimension once and it governs every member",
-                    dim_name(dim),
-                    dim_name(member.dim)
+                    dim.name(),
+                    member.dim.name()
                 )))
             }
         }),
-    }
-}
-
-fn dim_name(dim: CoordDim) -> &'static str {
-    match dim {
-        CoordDim::Xy => "XY",
-        CoordDim::Xyz => "XYZ",
-        CoordDim::Xym => "XYM",
-        CoordDim::Xyzm => "XYZM",
     }
 }
 
@@ -572,8 +568,8 @@ fn check_coord(dim: CoordDim, coord: &Coord) -> Result<(), GeoError> {
     Err(GeoError::literal(format!(
         "a {} geometry holds a {} coordinate; every coordinate of a geometry carries the \
          dimension the geometry declares",
-        dim_name(dim),
-        dim_name(coord.dim())
+        dim.name(),
+        coord.dim().name()
     )))
 }
 
@@ -681,6 +677,50 @@ mod tests {
     };
     use crate::error::GeoError;
     use crate::exact::Rat;
+
+    #[test]
+    fn every_kind_has_its_wkt_keyword_and_geojson_type() {
+        let kinds = [
+            GeometryKind::Point,
+            GeometryKind::LineString,
+            GeometryKind::Polygon,
+            GeometryKind::MultiPoint,
+            GeometryKind::MultiLineString,
+            GeometryKind::MultiPolygon,
+            GeometryKind::GeometryCollection,
+        ];
+        assert_eq!(
+            kinds.map(GeometryKind::wkt_keyword),
+            [
+                "POINT",
+                "LINESTRING",
+                "POLYGON",
+                "MULTIPOINT",
+                "MULTILINESTRING",
+                "MULTIPOLYGON",
+                "GEOMETRYCOLLECTION",
+            ]
+        );
+        assert_eq!(
+            kinds.map(GeometryKind::geojson_type),
+            [
+                "Point",
+                "LineString",
+                "Polygon",
+                "MultiPoint",
+                "MultiLineString",
+                "MultiPolygon",
+                "GeometryCollection",
+            ]
+        );
+    }
+
+    #[test]
+    fn every_dimension_has_its_simple_features_name() {
+        let names =
+            [CoordDim::Xy, CoordDim::Xyz, CoordDim::Xym, CoordDim::Xyzm].map(CoordDim::name);
+        assert_eq!(names, ["XY", "XYZ", "XYM", "XYZM"]);
+    }
 
     fn r(value: i64) -> Rat {
         Rat::from_i64(value)

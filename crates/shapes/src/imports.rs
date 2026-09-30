@@ -181,13 +181,15 @@ pub struct ShapesImports {
     links: Vec<String>,
 }
 
-impl ShapesImports {
-    /// A table that supplies no document and declares no loaded IRI.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl ShapesImports {
+        /// A table that supplies no document and declares no loaded IRI.
+        #[must_use]
+        pub fn new() -> Self::default();
     }
+}
 
+impl ShapesImports {
     /// Build a table from `(ontology IRI, Turtle document)` pairs — the spelling every
     /// host binding passes across its boundary. Each document is parsed with its ontology
     /// IRI as its base (see [`insert_turtle`](Self::insert_turtle)).

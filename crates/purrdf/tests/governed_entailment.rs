@@ -180,9 +180,26 @@ fn the_remote_request_ceiling_is_in_force_over_the_closure() {
         QueryEntailment::Rdfs,
         &QueryGovernors::UNBOUNDED.with_max_remote_requests(7),
     );
-    let GovernedEntailment::Answered { outcome, .. } = &answered else {
+    let GovernedEntailment::Answered { outcome, report } = &answered else {
         panic!("an unreachable ceiling must not stop the closure");
     };
+    let (read_outcome, read_report) = answered
+        .answered()
+        .expect("the answered arm reads as answered");
+    assert!(
+        std::ptr::eq(read_outcome, outcome) && std::ptr::eq(read_report, report),
+        "the accessor hands back the arm's own outcome and certificate"
+    );
+    assert!(
+        answered
+            .outcome()
+            .is_some_and(|read| std::ptr::eq(read, outcome))
+    );
+    assert!(
+        answered
+            .report()
+            .is_some_and(|read| std::ptr::eq(read, report))
+    );
     let limits = outcome.evidence().limits();
     assert!(limits.is_bounded(ResourceDimension::RemoteRequests));
     assert_eq!(limits.get(ResourceDimension::RemoteRequests), 7);
@@ -406,7 +423,9 @@ fn an_expired_deadline_stops_the_closure_with_nothing_claimed() {
         }
     ));
     assert!(
-        answered.outcome().is_none() && answered.report().is_none(),
+        answered.answered().is_none()
+            && answered.outcome().is_none()
+            && answered.report().is_none(),
         "a stopped closure has no answer and no certificate, and the type says so"
     );
     assert!(!answered.is_complete());

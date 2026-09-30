@@ -3925,11 +3925,6 @@ mod recursion_free_tests {
 
     // ── A hundred thousand levels on a 128 KiB thread ────────────────────────────────
 
-    /// Run `body` on a fresh thread with 128 KiB of stack.
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        purrdf_stack::on_stack(128 * 1024, body).expect("spawn")
-    }
-
     /// `:a :p :b . :b :p :c`.
     fn two_hop_dataset() -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
@@ -3979,7 +3974,7 @@ mod recursion_free_tests {
     /// resolved by the request frame's loop.
     #[test]
     fn a_hundred_thousand_reverses_evaluate_on_a_128_kib_thread() {
-        let objects = on_small_stack(|| {
+        let objects = purrdf_stack::on_stack(128 * 1024, || {
             let dataset = two_hop_dataset();
             let path = nested(
                 PropertyPathExpression::NamedNode(node("p")),
@@ -3987,14 +3982,15 @@ mod recursion_free_tests {
                 PropertyPathExpression::Reverse,
             );
             objects_from_a(&dataset, &path)
-        });
+        })
+        .expect("spawn");
         assert_eq!(objects, vec!["b".to_owned()]);
     }
 
     /// `((:p?)?)…?` is `:p?`: the set lane, one request frame per level on the heap.
     #[test]
     fn a_hundred_thousand_zero_or_ones_evaluate_on_a_128_kib_thread() {
-        let objects = on_small_stack(|| {
+        let objects = purrdf_stack::on_stack(128 * 1024, || {
             let dataset = two_hop_dataset();
             let path = nested(
                 PropertyPathExpression::NamedNode(node("p")),
@@ -4002,7 +3998,8 @@ mod recursion_free_tests {
                 PropertyPathExpression::ZeroOrOne,
             );
             objects_from_a(&dataset, &path)
-        });
+        })
+        .expect("spawn");
         assert_eq!(objects, vec!["a".to_owned(), "b".to_owned()]);
     }
 }

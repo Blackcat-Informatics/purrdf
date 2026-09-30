@@ -94,12 +94,14 @@ impl VarSchema {
     }
 }
 
-impl VarSchema {
-    /// An empty schema (zero columns) — the schema of the identity table `Z`.
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl VarSchema {
+        /// An empty schema (zero columns) — the schema of the identity table `Z`.
+        pub fn new() -> Self::default();
     }
+}
 
+impl VarSchema {
     /// Build a schema from an ordered iterator of variables, keeping first
     /// occurrence and dropping later duplicates (so the column order is the
     /// variables' first-seen order).

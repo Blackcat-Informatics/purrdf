@@ -1377,23 +1377,30 @@ pub(crate) struct RecorderMark {
     data_clashes: usize,
 }
 
+/// Append `step` to one of a [`Recorder`]'s lists unless the list already holds
+/// [`MAX_RECORDED_STEPS`], answering with the step's index.
+///
+/// Every list the recorder keeps is capped by this one rule: past the ceiling the step
+/// is dropped, `truncated` is set, and the answer is `None`, so a truncated proof is
+/// refused wholesale rather than replayed with a hole in it.
+fn record_capped<T>(list: &mut Vec<T>, truncated: &mut bool, step: T) -> Option<usize> {
+    if list.len() >= MAX_RECORDED_STEPS {
+        *truncated = true;
+        return None;
+    }
+    list.push(step);
+    Some(list.len() - 1)
+}
+
 impl Recorder {
     /// Record a clash step, up to the declared ceiling.
     pub(crate) fn clash(&mut self, step: ClashStep) {
-        if self.clashes.len() >= MAX_RECORDED_STEPS {
-            self.truncated = true;
-            return;
-        }
-        self.clashes.push(step);
+        record_capped(&mut self.clashes, &mut self.truncated, step);
     }
 
     /// Record a merge, up to the declared ceiling.
     pub(crate) fn merge(&mut self, step: MergeStep) {
-        if self.merges.len() >= MAX_RECORDED_STEPS {
-            self.truncated = true;
-            return;
-        }
-        self.merges.push(step);
+        record_capped(&mut self.merges, &mut self.truncated, step);
     }
 
     /// Whether the run wrote nothing down at all.
@@ -1412,11 +1419,7 @@ impl Recorder {
 
     /// Record a concrete-domain clash, up to the declared ceiling.
     pub(crate) fn data_clash(&mut self, node: NodeRef) {
-        if self.data_clashes.len() >= MAX_RECORDED_STEPS {
-            self.truncated = true;
-            return;
-        }
-        self.data_clashes.push(node);
+        record_capped(&mut self.data_clashes, &mut self.truncated, node);
     }
 
     /// Record a branch point, up to the declared ceiling, answering with its index.
@@ -1425,12 +1428,7 @@ impl Recorder {
     /// branch tree is refused wholesale by [`DlProof::replay_refutation`] rather than walked
     /// with a hole in it.
     pub(crate) fn branch(&mut self, step: BranchStep) -> Option<usize> {
-        if self.branches.len() >= MAX_RECORDED_STEPS {
-            self.truncated = true;
-            return None;
-        }
-        self.branches.push(step);
-        Some(self.branches.len() - 1)
+        record_capped(&mut self.branches, &mut self.truncated, step)
     }
 
     /// File `outcome` against alternative `ordinal` of branch point `branch`.
@@ -7647,5 +7645,21 @@ mod tests {
         let empty = RdfDatasetBuilder::new().freeze().expect("empty freezes");
         let ctx = DlProofContext::of_ontology(&empty).expect("an empty graph is an OWL graph");
         assert_eq!(ctx.clause_count(), ctx.clause_count());
+    }
+
+    /// The last step under the ceiling is kept at its index; the next one is dropped and
+    /// marks the recording truncated.
+    #[test]
+    fn record_capped_keeps_steps_up_to_the_ceiling_and_marks_the_first_drop() {
+        let mut list: Vec<usize> = (0..MAX_RECORDED_STEPS - 1).collect();
+        let mut truncated = false;
+        assert_eq!(
+            record_capped(&mut list, &mut truncated, 7),
+            Some(MAX_RECORDED_STEPS - 1)
+        );
+        assert!(!truncated);
+        assert_eq!(record_capped(&mut list, &mut truncated, 8), None);
+        assert!(truncated);
+        assert_eq!(list.len(), MAX_RECORDED_STEPS);
     }
 }

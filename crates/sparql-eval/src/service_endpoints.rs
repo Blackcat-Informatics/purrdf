@@ -358,9 +358,12 @@ fn classify(
                         pending.push(ClassifyStep::Pattern(inner, direct));
                     }
                     GraphPattern::OrderBy { inner, expression } => {
-                        pending.extend(expression.iter().rev().map(|key| {
-                            ClassifyStep::Expression(crate::modifier::order_sort_key(key))
-                        }));
+                        pending.extend(
+                            expression
+                                .iter()
+                                .rev()
+                                .map(|key| ClassifyStep::Expression(key.expression())),
+                        );
                         pending.push(ClassifyStep::Pattern(inner, direct));
                     }
                     GraphPattern::Project { inner, variables } => {
@@ -392,7 +395,7 @@ fn classify(
                                 aggregate
                                     .order_by()
                                     .iter()
-                                    .map(crate::modifier::order_sort_key),
+                                    .map(purrdf_sparql_algebra::OrderExpression::expression),
                             ) {
                                 pending.push(ClassifyStep::Expression(e));
                             }
@@ -806,9 +809,7 @@ fn summary_parts<'a>(node: SummaryNode<'a>, push: &mut impl FnMut(SummaryNode<'a
             GraphPattern::OrderBy { inner, expression } => {
                 push(SummaryNode::Pattern(inner));
                 for key in expression {
-                    push(SummaryNode::Expression(crate::modifier::order_sort_key(
-                        key,
-                    )));
+                    push(SummaryNode::Expression(key.expression()));
                 }
             }
             GraphPattern::Group {
@@ -820,7 +821,7 @@ fn summary_parts<'a>(node: SummaryNode<'a>, push: &mut impl FnMut(SummaryNode<'a
                         aggregate
                             .order_by()
                             .iter()
-                            .map(crate::modifier::order_sort_key),
+                            .map(purrdf_sparql_algebra::OrderExpression::expression),
                     ) {
                         push(SummaryNode::Expression(e));
                     }
@@ -2375,11 +2376,7 @@ pub(crate) mod walk_tests {
             GraphPattern::OrderBy { inner, expression } => {
                 classify_reference(inner, direct, scopes, uses);
                 for key in expression {
-                    classify_expression_reference(
-                        crate::modifier::order_sort_key(key),
-                        scopes,
-                        uses,
-                    );
+                    classify_expression_reference(key.expression(), scopes, uses);
                 }
             }
             GraphPattern::Project { inner, variables } => {
@@ -2404,12 +2401,11 @@ pub(crate) mod walk_tests {
                 classify_reference(inner, direct, scopes, uses);
                 scopes.pop();
                 for (_, aggregate) in aggregates {
-                    for e in aggregate.args().iter().chain(
-                        aggregate
-                            .order_by()
-                            .iter()
-                            .map(crate::modifier::order_sort_key),
-                    ) {
+                    for e in aggregate
+                        .args()
+                        .iter()
+                        .chain(aggregate.order_by().iter().map(OrderExpression::expression))
+                    {
                         classify_expression_reference(e, scopes, uses);
                     }
                 }
@@ -2542,10 +2538,8 @@ pub(crate) mod walk_tests {
                 GraphPattern::OrderBy { inner, expression } => {
                     let mut summary = self.summarize_reference(inner, ids);
                     for key in expression {
-                        let key_summary = self.summarize_expression_reference(
-                            crate::modifier::order_sort_key(key),
-                            ids,
-                        );
+                        let key_summary =
+                            self.summarize_expression_reference(key.expression(), ids);
                         merge(&mut summary, key_summary);
                     }
                     summary
@@ -2580,12 +2574,11 @@ pub(crate) mod walk_tests {
                         }
                     }
                     for (_, aggregate) in aggregates {
-                        for e in aggregate.args().iter().chain(
-                            aggregate
-                                .order_by()
-                                .iter()
-                                .map(crate::modifier::order_sort_key),
-                        ) {
+                        for e in aggregate
+                            .args()
+                            .iter()
+                            .chain(aggregate.order_by().iter().map(OrderExpression::expression))
+                        {
                             let expression_summary = self.summarize_expression_reference(e, ids);
                             merge(&mut summary, expression_summary);
                         }

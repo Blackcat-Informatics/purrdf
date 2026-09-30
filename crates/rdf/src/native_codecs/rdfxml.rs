@@ -353,7 +353,7 @@ impl RdfXmlParser {
     ) -> Result<purrdf_iri::BaseScope, RdfDiagnostic> {
         let context = context.for_child(root)?;
         if is_rdf(root, "RDF") {
-            for child in element_children(root) {
+            for child in root.element_children() {
                 self.parse_node_element(child, &context)?;
             }
         } else {
@@ -401,7 +401,7 @@ impl RdfXmlParser {
             )?;
         }
 
-        for child in element_children(element) {
+        for child in element.element_children() {
             self.parse_property_element(&subject, child, &context)?;
         }
         Ok(subject)
@@ -464,7 +464,7 @@ impl RdfXmlParser {
                     annotation,
                 )?;
                 self.insert_property_attribute_statements(&object, element, &context)?;
-                for child in element_children(element) {
+                for child in element.element_children() {
                     self.parse_property_element(&object, child, &context)?;
                 }
                 return Ok(());
@@ -511,7 +511,7 @@ impl RdfXmlParser {
             None => {}
         }
 
-        let element_children: Vec<Node<'_, '_>> = element_children(element).collect();
+        let element_children: Vec<Node<'_, '_>> = element.element_children().collect();
         if let Some(datatype) = attr_rdf(element, RDF_DATATYPE) {
             if !element_children.is_empty() {
                 return Err(parse_err(
@@ -592,7 +592,7 @@ impl RdfXmlParser {
         element: Node<'_, '_>,
         context: &ParseContext,
     ) -> Result<XmlTerm, RdfDiagnostic> {
-        let items: Vec<Node<'_, '_>> = element_children(element).collect();
+        let items: Vec<Node<'_, '_>> = element.element_children().collect();
         // Every cell is minted before any member is parsed, so the cells are labelled in
         // list order whatever the members nest.
         let cells = (0..items.len())
@@ -632,7 +632,7 @@ impl RdfXmlParser {
         element: Node<'_, '_>,
         context: &ParseContext,
     ) -> Result<(XmlTerm, XmlTerm, XmlTerm), RdfDiagnostic> {
-        let nodes: Vec<Node<'_, '_>> = element_children(element).collect();
+        let nodes: Vec<Node<'_, '_>> = element.element_children().collect();
         if nodes.len() != 1 {
             return Err(parse_err(
                 "rdf:parseType=\"Triple\" requires one node element",
@@ -646,7 +646,7 @@ impl RdfXmlParser {
         // `rdf:type` attribute, or another property attribute (literal-valued).
         let type_attr = attr_rdf(node, RDF_TYPE);
         let prop_attrs: Vec<&Attribute<'_>> = property_attrs(node).collect();
-        let child_props: Vec<Node<'_, '_>> = element_children(node).collect();
+        let child_props: Vec<Node<'_, '_>> = node.element_children().collect();
         if usize::from(type_attr.is_some()) + prop_attrs.len() + child_props.len() != 1 {
             return Err(parse_err(
                 "rdf:parseType=\"Triple\" requires exactly one predicate/object",
@@ -688,7 +688,7 @@ impl RdfXmlParser {
                 self.parse_triple_element(property, &context)?,
             )));
         }
-        let nodes: Vec<Node<'_, '_>> = element_children(property).collect();
+        let nodes: Vec<Node<'_, '_>> = property.element_children().collect();
         if nodes.len() == 1 {
             let object = self.subject_for_node(nodes[0], &context)?;
             return Ok(object.into());
@@ -977,11 +977,6 @@ fn property_attrs<'a, 'input>(
                         | RDF_ANNOTATION_NODE_ID
                 ))
         })
-}
-
-/// Element children of `node`, in document order (skipping text / comment nodes).
-fn element_children<'a, 'input>(node: Node<'a, 'input>) -> impl Iterator<Item = Node<'a, 'input>> {
-    node.children().filter(Node::is_element)
 }
 
 /// Concatenate the direct text-node children of `element` (the literal text content).

@@ -211,13 +211,15 @@ pub struct ImportMap {
     loaded: BTreeSet<String>,
 }
 
-impl ImportMap {
-    /// An import map that resolves nothing and declares no loaded document.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl ImportMap {
+        /// An import map that resolves nothing and declares no loaded document.
+        #[must_use]
+        pub fn new() -> Self::default();
     }
+}
 
+impl ImportMap {
     /// Declare that `iri` names `document`, returning whatever it named before.
     pub fn insert(
         &mut self,

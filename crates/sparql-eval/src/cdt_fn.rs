@@ -78,7 +78,7 @@ use purrdf_sparql_algebra::CdtFn;
 
 use crate::error::EvalError;
 use crate::eval::EvalCtx;
-use crate::expr::{intern_boolean, intern_integer};
+use crate::expr::{intern, intern_boolean, intern_integer};
 use crate::scratch::SolutionTerm;
 
 /// Evaluate a SEP-0009 composite-datatype function call.
@@ -682,21 +682,6 @@ fn cdt_literal(
 // ---------------------------------------------------------------------------
 // interning helpers
 // ---------------------------------------------------------------------------
-
-/// Intern a value to a solution term (promoting to an existing dataset id).
-///
-/// [`None`] when the value carries a language tag the grammar refuses. A CDT
-/// member is an arbitrary RDF term parsed out of a composite literal's LEXICAL
-/// FORM — `"[\"x\"@en us]"^^cdt:List` is a caller-supplied string, not a term
-/// the kernel ever admitted — so this is a real seam, not a formality. See
-/// [`ScratchInterner::intern_checked`](crate::scratch::ScratchInterner::intern_checked); the CDT
-/// functions are expressions, so the refusal is §17.2's unbound result.
-fn intern<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    value: TermValue,
-) -> Option<SolutionTerm<D::Id>> {
-    ctx.scratch.intern_checked(ctx.dataset, value)
-}
 
 #[cfg(test)]
 mod tests {

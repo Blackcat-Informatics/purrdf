@@ -1188,13 +1188,15 @@ pub const MAX_RECURSION_DEPTH: u32 = 64;
 /// ABORTING the process rather than by returning an error.
 pub const MAX_NODE_EXPR_DEPTH: u32 = 256;
 
-impl RecursionGuard {
-    /// A fresh guard with no in-flight pairs, at depth zero.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl RecursionGuard {
+        /// A fresh guard with no in-flight pairs, at depth zero.
+        #[must_use]
+        pub fn new() -> Self::default();
     }
+}
 
+impl RecursionGuard {
     /// A fresh guard seeded at `depth` — used when the constraint engine
     /// re-enters expression evaluation across the `conforms` boundary so the
     /// filter/exists recursion depth is preserved across the fresh guard.
