@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use purrdf_core::FastMap;
+use purrdf_lex::json::Value;
 
 use purrdf_retrieval::{
     CanonicalSection, DepthInputs, Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, PlanOrigin,
@@ -241,12 +242,12 @@ fn every_decode_path_records_a_deserialized_origin() {
         "the canonical decoder records that the instance id it read is foreign"
     );
 
-    let json = serde_json::to_string(&plan).expect("plan serializes");
-    let round_tripped: Plan = serde_json::from_str(&json).expect("plan deserializes");
+    let json = plan.to_json_string();
+    let round_tripped = Plan::from_json_str(&json).expect("a plan reads its JSON");
     assert_eq!(
         round_tripped.origin,
         PlanOrigin::Deserialized,
-        "serde skips origin, so a decoded plan gets the default, which is the decoded case"
+        "the JSON form carries no origin, so a decoded plan gets the default, which is the decoded case"
     );
     assert!(
         !json.contains("origin"),
@@ -297,10 +298,10 @@ fn plans_differing_only_in_map_insertion_order_are_equal() {
 }
 
 #[test]
-fn serde_round_trip_preserves_the_plan() {
+fn json_round_trip_preserves_the_plan() {
     let plan = baseline();
-    let json = serde_json::to_string(&plan).expect("plan serializes");
-    let decoded: Plan = serde_json::from_str(&json).expect("plan deserializes");
+    let json = plan.to_json_string();
+    let decoded = Plan::from_json_str(&json).expect("a plan reads its JSON");
     assert_eq!(decoded, plan);
     assert_eq!(decoded.id(), plan.id());
 }
@@ -318,7 +319,7 @@ fn serialized_stratum_depths_are_in_stratum_order() {
         for label in order {
             plan.stratum_depths.insert(iri(label), 1);
         }
-        serde_json::to_string(&plan).expect("plan serializes")
+        plan.to_json_string()
     };
     let forward = json_for(&mut labels.iter());
     let backward = json_for(&mut labels.iter().rev());
@@ -337,8 +338,8 @@ fn serialized_stratum_depths_are_in_stratum_order() {
     );
     // The valid neighbour: a single-stratum plan still round-trips.
     let plan = baseline();
-    let json = serde_json::to_string(&plan).expect("plan serializes");
-    let decoded: Plan = serde_json::from_str(&json).expect("plan deserializes");
+    let json = plan.to_json_string();
+    let decoded = Plan::from_json_str(&json).expect("a plan reads its JSON");
     assert_eq!(decoded, plan);
 }
 
@@ -507,11 +508,11 @@ fn interval_terms_round_trip_through_the_canonical_encoding() {
 }
 
 #[test]
-fn interval_terms_round_trip_through_serde() {
+fn interval_terms_round_trip_through_json() {
     let mut plan = baseline();
     plan.request_terms.extend(interval_terms());
-    let json = serde_json::to_string(&plan).expect("a plan serializes");
-    let decoded: Plan = serde_json::from_str(&json).expect("a plan deserializes");
+    let json = plan.to_json_string();
+    let decoded = Plan::from_json_str(&json).expect("a plan reads its JSON");
     assert_eq!(decoded.request_terms, plan.request_terms);
     assert_eq!(decoded.id(), plan.id());
 }
@@ -1716,20 +1717,19 @@ fn certify_refuses_a_selectivity_term_that_addresses_no_request_term() {
         .expect("a request with no terms records empty runs, which address nothing");
 }
 
-/// A hand-written serde document is held to the entries' construction law: a
+/// A hand-written JSON document is held to the entries' construction law: a
 /// repeated subject is refused, and an unordered one is ordered.
 ///
 /// The two halves are the law's two clauses. Order carries no information the
 /// snapshot did not already have, so an unordered document is admitted and
 /// canonicalised — and it must land on the *same identity* as the ordered one,
-/// or serde would be a way to mint a second id for one plan. A duplicate is
+/// or JSON would be a way to mint a second id for one plan. A duplicate is
 /// information the value cannot hold at all, so it is refused wherever it
 /// arrives.
 #[test]
-fn serde_holds_a_hand_written_snapshot_to_the_entries_law() {
+fn json_holds_a_hand_written_snapshot_to_the_entries_law() {
     let plan = baseline();
-    let mut document: serde_json::Value =
-        serde_json::to_value(&plan).expect("a plan serializes to a document");
+    let mut document = plan.to_json();
 
     let entries = document["statistics_snapshot"]["entries"]
         .as_array()
@@ -1739,9 +1739,8 @@ fn serde_holds_a_hand_written_snapshot_to_the_entries_law() {
 
     let mut reversed = entries.clone();
     reversed.reverse();
-    document["statistics_snapshot"]["entries"] = serde_json::Value::Array(reversed.clone());
-    let decoded: Plan =
-        serde_json::from_value(document.clone()).expect("an unordered document is ordered");
+    document["statistics_snapshot"]["entries"] = Value::Array(reversed);
+    let decoded = Plan::from_json(&document).expect("an unordered document is ordered");
     assert_eq!(
         decoded.statistics_snapshot.entries,
         plan.statistics_snapshot.entries
@@ -1749,17 +1748,21 @@ fn serde_holds_a_hand_written_snapshot_to_the_entries_law() {
     assert_eq!(
         decoded.id(),
         plan.id(),
-        "serde is not a second way to mint an identity for one plan"
+        "JSON is not a second way to mint an identity for one plan"
     );
 
     let mut duplicated = entries.clone();
     duplicated.push(entries[0].clone());
-    document["statistics_snapshot"]["entries"] = serde_json::Value::Array(duplicated);
-    let error = serde_json::from_value::<Plan>(document)
-        .expect_err("a document naming one subject twice is refused");
+    document["statistics_snapshot"]["entries"] = Value::Array(duplicated);
+    let error =
+        Plan::from_json(&document).expect_err("a document naming one subject twice is refused");
+    assert!(
+        matches!(error, PlanError::DuplicateStatisticsSubject { .. }),
+        "the JSON reader refuses with the construction law's own variant: {error:?}"
+    );
     assert!(
         error.to_string().contains("more than once"),
-        "the serde failure carries the construction law's own refusal: {error}"
+        "the refusal carries the construction law's own message: {error}"
     );
 }
 

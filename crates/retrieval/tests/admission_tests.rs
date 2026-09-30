@@ -581,8 +581,8 @@ fn admission_rejects_tampered_deserialized() {
     let registry = fixture_registry();
     let stats = statistics("r1");
     let plan = fresh_plan(&registry, &stats);
-    let json = serde_json::to_string(&plan).expect("a plan serializes");
-    let mut decoded: Plan = serde_json::from_str(&json).expect("a plan deserializes");
+    let json = plan.to_json_string();
+    let mut decoded: Plan = Plan::from_json_str(&json).expect("a plan reads its JSON");
     decoded
         .producer_bindings
         .retain(|binding| binding.producer != mandatory());
@@ -1289,7 +1289,7 @@ fn a_plan_recording_unanswered_subjects_still_admits() {
 /// version this build does write is admitted.**
 ///
 /// [`Plan::from_canonical_bytes`] has a version gate of its own, but a plan
-/// decoded through serde never passes through it, so admission re-checks the
+/// read from JSON never passes through it, so admission re-checks the
 /// dimension rather than assume it. That check is the *first* thing admission
 /// looks at, which is precisely why it has to be executed in both directions: a
 /// gate set one value too wide at step one would refuse every plan there is, and
@@ -1441,14 +1441,14 @@ fn same_fingerprint_different_implementation_refused() {
 // must still be refused, so neither the refusal nor the relaxation can drift.
 // ---------------------------------------------------------------------------
 
-/// The canonical-bytes path and the serde path must agree, so each of the two
+/// The canonical-bytes path and the JSON path must agree, so each of the two
 /// decoders is exercised against the same rebuilt registry.
 fn decoded_both_ways(plan: &Plan) -> Vec<(&'static str, Plan)> {
     let canonical =
         Plan::from_canonical_bytes(&plan.canonical_bytes()).expect("canonical bytes decode");
-    let json = serde_json::to_string(plan).expect("a plan serializes");
-    let serde_decoded: Plan = serde_json::from_str(&json).expect("a plan deserializes");
-    vec![("canonical", canonical), ("serde", serde_decoded)]
+    let json = plan.to_json_string();
+    let json_decoded: Plan = Plan::from_json_str(&json).expect("a plan reads its JSON");
+    vec![("canonical", canonical), ("json", json_decoded)]
 }
 
 #[test]
@@ -3339,9 +3339,9 @@ fn a_hollow_binding_is_refused_on_every_decode_path() {
         .request_terms
         .push(1);
 
-    // serde, which is how a plan crosses a service boundary.
-    let json = serde_json::to_string(&hollow).expect("a plan serializes");
-    let decoded: Plan = serde_json::from_str(&json).expect("a plan deserializes");
+    // JSON, which is how a plan crosses a service boundary.
+    let json = hollow.to_json_string();
+    let decoded: Plan = Plan::from_json_str(&json).expect("a plan reads its JSON");
     match compile(&decoded, &env).expect_err("a deserialized hollow binding is refused") {
         AdmissionError::HollowBinding {
             producer,
@@ -3350,7 +3350,7 @@ fn a_hollow_binding_is_refused_on_every_decode_path() {
             assert_eq!(producer.as_str(), mandatory());
             assert_eq!(request_term, 1);
         }
-        other => panic!("expected HollowBinding from serde, got {other:?}"),
+        other => panic!("expected HollowBinding from JSON, got {other:?}"),
     }
 
     // And the canonical bytes, which is how it is cached and replayed.
@@ -3370,8 +3370,8 @@ fn a_hollow_binding_is_refused_on_every_decode_path() {
     // The neighbouring valid case on both paths: the untampered plan survives
     // the round trip and admits, so the refusal is the edit's and not the
     // decoder's.
-    let json = serde_json::to_string(&plan).expect("a plan serializes");
-    let decoded: Plan = serde_json::from_str(&json).expect("a plan deserializes");
+    let json = plan.to_json_string();
+    let decoded: Plan = Plan::from_json_str(&json).expect("a plan reads its JSON");
     compile(&decoded, &env).expect("an untampered deserialized plan is admitted");
     let decoded =
         Plan::from_canonical_bytes(&plan.canonical_bytes()).expect("canonical bytes decode");

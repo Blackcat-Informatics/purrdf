@@ -94,6 +94,7 @@ mod dataset;
 pub mod entail;
 mod factory;
 pub mod interleaving;
+mod json_options;
 mod jsonld;
 mod operation;
 mod panic_poison;

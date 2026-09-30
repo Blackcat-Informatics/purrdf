@@ -306,7 +306,7 @@
 //!
 //! A plan's identity is a domain-separated BLAKE3 digest over a versioned,
 //! canonical, length-framed encoding ([`Plan::canonical_bytes`]) — never over a
-//! serde document or a `Hash`. The encoding sorts map entries, so it is a pure
+//! JSON document or a `Hash`. The encoding sorts map entries, so it is a pure
 //! function of the plan's fields and is byte-identical on every target.
 //!
 //! A fused answer carries **three** such identities, and they answer three
@@ -395,6 +395,7 @@
 mod admission;
 mod canonical;
 mod compile;
+mod document;
 mod embedding;
 mod error;
 mod execute;

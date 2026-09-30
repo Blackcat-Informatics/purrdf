@@ -352,8 +352,8 @@ fn a_partial_answer_does_not_corrupt_the_machine_readable_stream() {
     let json = capped("json");
     assert_eq!(code(&json), 3, "stderr:\n{}", stderr(&json));
     let body = stdout(&json);
-    let parsed: serde_json::Value =
-        serde_json::from_str(&body).expect("the truncated stream is still valid JSON");
+    let parsed: purrdf_lex::json::Value =
+        purrdf_lex::json::read(&body).expect("the truncated stream is still valid JSON");
     assert_eq!(
         parsed["results"]["bindings"]
             .as_array()

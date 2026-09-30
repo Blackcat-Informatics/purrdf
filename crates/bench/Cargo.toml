@@ -36,7 +36,7 @@ purrdf-xsd = { workspace = true }
 # project's own strict N-Quads reader.
 purrdf-rdf = { workspace = true }
 # Test-only: parse the --manifest JSON contract in the CLI integration tests.
-serde_json = { workspace = true }
+purrdf-lex = { workspace = true }
 # Test-only: the base16 reader and writer the percent-escape checks spell octets with.
 purrdf-hash = { workspace = true }
 # Test-only: the workspace root the make-driven tests run `make` from.

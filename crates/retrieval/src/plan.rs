@@ -35,7 +35,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use purrdf_core::{FastHasher, FastMap};
 use purrdf_sparql_eval::RegistryId;
 use purrdf_text::Fixed;
-use serde::{Deserialize, Serialize, Serializer};
 
 use crate::canonical::{Reader, Writer};
 use crate::error::{CanonicalSection, PlanError, StatisticsDimension};
@@ -89,34 +88,6 @@ const UNSERVED_ACCEPTED_WITHOUT_PLACEMENT: u8 = 3;
 // byte would be one edit away from not matching them, and the encoding would
 // then spell "present" two ways while claiming to spell it one.
 
-/// Serde bridge for [`RegistryId`], which carries its counter privately and has
-/// no serde impl of its own. The value is encoded as the raw `u64` counter; a
-/// decoded identity names no live registry, which is why admission falls back to
-/// the durable content fingerprint for a deserialized plan.
-mod registry_serde {
-    use purrdf_sparql_eval::RegistryId;
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    /// Encode the registry identity as its raw counter.
-    ///
-    /// The by-reference parameter is fixed by serde's `with` contract; the
-    /// by-value form the lint prefers cannot be expressed here.
-    #[allow(clippy::trivially_copy_pass_by_ref)]
-    pub(crate) fn serialize<S: Serializer>(
-        value: &RegistryId,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        serializer.serialize_u64(value.as_u64())
-    }
-
-    /// Decode a registry identity from its raw counter.
-    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<RegistryId, D::Error> {
-        Ok(RegistryId::from_raw(u64::deserialize(deserializer)?))
-    }
-}
-
 /// Where a plan value came from, and therefore which of the two registry
 /// identities admission can hold it to.
 ///
@@ -157,14 +128,14 @@ pub enum PlanOrigin {
     /// admission holds the plan to that exact instance.
     SameProcess,
     /// The plan was reconstructed from bytes, by
-    /// [`Plan::from_canonical_bytes`] or by serde, so
+    /// [`Plan::from_canonical_bytes`] or [`Plan::from_json`], so
     /// [`Plan::registry_instance_id`] is a counter value from some other
     /// process and admission holds the plan to
     /// [`Plan::registry_content_fingerprint`] instead.
     ///
-    /// This is the default because it is what every decode path produces: a
-    /// value carried by `#[serde(skip)]` is filled in by [`Default`], and a
-    /// decoded plan is precisely the case that must not be held to a counter it
+    /// This is the default because it is what every decode path produces: the
+    /// JSON form does not carry an origin, so a plan read from it takes
+    /// [`Default`], and a decoded plan is precisely the case that must not be held to a counter it
     /// cannot have minted.
     #[default]
     Deserialized,
@@ -175,7 +146,7 @@ pub enum PlanOrigin {
 /// The binding names the registered producer IRI, the stratum it emits under,
 /// and which request terms (by index into [`Plan::request_terms`]) it was given.
 /// It carries no function pointer, no trait object and no `TermId`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProducerBinding {
     /// The registered producer IRI, byte-exact.
     pub producer: String,
@@ -186,7 +157,7 @@ pub struct ProducerBinding {
 }
 
 /// Why a producer was not selected for a plan.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RejectionReason {
     /// The producer declares no ranked capability.
     NotRanked,
@@ -207,7 +178,7 @@ pub enum RejectionReason {
 }
 
 /// The planner's decision for one producer.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProducerDecision {
     /// The producer was selected and bound.
     Selected {
@@ -236,7 +207,7 @@ pub enum ProducerDecision {
 /// than as a quiet omission — the request lattice deliberately carries modalities
 /// ahead of the producers that answer them, which is honest only when an
 /// unanswered one says so.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UnservedReason {
     /// No registered producer declares a shape that accepts this term, so
     /// nothing was ever a candidate for it. This is the armed-but-unserved
@@ -287,7 +258,7 @@ pub enum UnservedReason {
 /// `request_term` indexes [`Plan::request_terms`], which is the request in the
 /// caller's own order, so a caller reads the evidence straight back onto the
 /// term it wrote.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct UnservedTerm {
     /// The index into [`Plan::request_terms`] of the term nothing served.
     pub request_term: u32,
@@ -309,7 +280,7 @@ pub struct UnservedTerm {
 /// `depth_from` takes nothing but a `DepthInputs`, so **an input that is not
 /// recorded here cannot be an input at all**. A leg that goes unrecorded is a
 /// compile error rather than a plan that silently under-explains itself.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DepthInputs {
     /// The registry's declared row bound for this stratum, read at the mode the
     /// producer will actually be invoked under.
@@ -446,7 +417,7 @@ pub enum DepthCause {
 ///
 /// A subject that is both carries the stratum's row, because that is the
 /// consultation that bound a depth.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StatisticsEntry {
     /// The subject this row reports on: a stratum a depth was derived for, or
     /// the predicate of one of the request's terms.
@@ -505,10 +476,9 @@ pub struct StatisticsEntry {
 /// against: keeping the first, the last, or the wider of them would be inventing
 /// a rule the data does not carry. It is refused by name with
 /// [`PlanError::DuplicateStatisticsSubject`], on every path in — including
-/// serde's, so a hand-written JSON document is held to the same law as a caller
+/// [`StatisticsEntries::from_json`], so a hand-written JSON document is held to the same law as a caller
 /// with a `Vec`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
-#[serde(try_from = "Vec<StatisticsEntry>")]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StatisticsEntries(Vec<StatisticsEntry>);
 
 impl StatisticsEntries {
@@ -573,19 +543,9 @@ impl<'a> IntoIterator for &'a StatisticsEntries {
 impl TryFrom<Vec<StatisticsEntry>> for StatisticsEntries {
     type Error = PlanError;
 
-    /// The conversion serde's `try_from` runs, so a deserialized snapshot is
-    /// held to [`StatisticsEntries::new`]'s law rather than admitted around it.
+    /// [`StatisticsEntries::new`], the law every path in is held to.
     fn try_from(entries: Vec<StatisticsEntry>) -> Result<Self, Self::Error> {
         Self::new(entries)
-    }
-}
-
-impl Serialize for StatisticsEntries {
-    /// Serialized as the bare sequence of its entries, so the serde document is
-    /// a JSON **array** of rows — the shape the Python surface reads as a list
-    /// and the planner goldens pin.
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.0.serialize(serializer)
     }
 }
 
@@ -621,7 +581,7 @@ impl Serialize for StatisticsEntries {
 /// [`PlanError::DerivationWithoutStatisticsEntry`] for a stratum named nowhere
 /// here, and [`PlanError::UnconsultedStatisticsSubject`] for a row naming
 /// neither a stratum nor a request predicate.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StatisticsSnapshot {
     /// A caller-supplied label for the statistics provider.
     pub source: String,
@@ -651,7 +611,7 @@ pub struct StatisticsSnapshot {
 /// same plan and must keep one identity, yet they are reached differently and
 /// are therefore admitted against different registry identities. It is absent
 /// from [`Plan::canonical_bytes`] and from equality for that single reason.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Plan {
     /// The plan layout version. Callers constructing a plan by hand must set
     /// this to [`PLAN_VERSION`](crate::PLAN_VERSION); a decoded plan whose header
@@ -707,8 +667,8 @@ pub struct Plan {
     pub unserved_terms: Vec<UnservedTerm>,
     /// Per-stratum maximum depth, keyed by stratum label.
     ///
-    /// Serialized in ascending stratum order, never in the map's hash order.
-    #[serde(serialize_with = "serialize_depths_sorted")]
+    /// Written to JSON in ascending stratum order, never in the map's hash
+    /// order.
     pub stratum_depths: FastMap<Iri, u32>,
     /// What each of those depths was derived from, keyed by the same labels.
     ///
@@ -730,7 +690,6 @@ pub struct Plan {
     /// [`Plan::origin`] says the plan never left the process that recorded it;
     /// a [`PlanOrigin::Deserialized`] plan is admitted against
     /// [`Plan::registry_content_fingerprint`] instead.
-    #[serde(with = "registry_serde")]
     pub registry_instance_id: RegistryId,
     /// The durable, instance-independent fingerprint of the registry's declared
     /// contents the plan was planned against.
@@ -738,12 +697,11 @@ pub struct Plan {
     /// Where this plan value came from, which decides which registry identity
     /// admission holds it to.
     ///
-    /// Skipped by serde and absent from [`Plan::canonical_bytes`]: it describes
+    /// Absent from the JSON form and from [`Plan::canonical_bytes`]: it describes
     /// how this value was *reached*, not what it says, so encoding it would give
     /// a plan and its own round trip two identities. Every decode path
     /// therefore yields [`PlanOrigin::Deserialized`], which is
     /// [`PlanOrigin`]'s [`Default`].
-    #[serde(skip)]
     pub origin: PlanOrigin,
 }
 
@@ -1547,17 +1505,6 @@ fn read_decisions(reader: &mut Reader<'_>) -> Result<Vec<ProducerDecision>, Plan
         }
     }
     Ok(decisions)
-}
-
-/// Serialize `depths` as a map in ascending stratum order, so a plan's
-/// serialized form is a function of its entries rather than of hash order.
-fn serialize_depths_sorted<S: Serializer>(
-    depths: &FastMap<Iri, u32>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    let mut entries: Vec<(&Iri, &u32)> = depths.iter().collect();
-    entries.sort_by(|left, right| left.0.as_str().cmp(right.0.as_str()));
-    serializer.collect_map(entries)
 }
 
 /// Write the per-stratum depths, sorted by stratum IRI.

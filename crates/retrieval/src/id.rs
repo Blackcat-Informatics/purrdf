@@ -101,7 +101,7 @@ pub const PLAN_ID_BYTES: usize = 32;
 /// canonical bytes.
 ///
 /// The identity is derived from canonical bytes, never from `Hash` or from a
-/// serde document: two plans are the same plan iff their canonical encodings are
+/// JSON document: two plans are the same plan iff their canonical encodings are
 /// byte-identical, which is exactly when their ids are equal. A changed field is
 /// a changed plan and therefore a changed id.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -271,7 +271,7 @@ pub const EVIDENCE_ID_BYTES: usize = 32;
 ///
 /// Same discipline as [`PlanId`]: the digest is taken over a sorted,
 /// length-framed encoding built by this crate's canonical writer, never over a
-/// `Hash` or a serde document. Length framing is what makes the encoding
+/// `Hash` or a JSON document. Length framing is what makes the encoding
 /// injective, so a stratum named `ex:a` attesting generation `bc` cannot encode
 /// to the same bytes as one named `ex:ab` attesting `c`; sorting by stratum
 /// makes it independent of any iteration order; little-endian integers make it

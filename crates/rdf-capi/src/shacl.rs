@@ -1777,11 +1777,11 @@ ex:StatusShape a sh:NodeShape ;
   ] .
 "
         );
-        let run = |levels: &[&str]| -> serde_json::Value {
+        let run = |levels: &[&str]| -> purrdf_lex::json::Value {
             let sarif =
                 validate_to_sarif_bytes(&shapes, None, None, TOOLS_DATA, levels, &[], false)
                     .expect("the declaration-bearing shapes graph loads and validates");
-            serde_json::from_slice(&sarif).expect("json")
+            purrdf_lex::json::read_slice(&sarif, purrdf_lex::json::Limits::DEFAULT).expect("json")
         };
         let default = run(&[]);
         assert_eq!(default["runs"][0]["properties"]["shaclConforms"], false);
@@ -1888,7 +1888,7 @@ ex:StatusShape a sh:NodeShape ;
         ))
         .expect("no NUL");
         let data = CString::new(DATA).expect("no NUL");
-        let conforms = |levels: &[&str]| -> (i32, Option<serde_json::Value>) {
+        let conforms = |levels: &[&str]| -> (i32, Option<purrdf_lex::json::Value>) {
             let owned: Vec<CString> = levels
                 .iter()
                 .map(|level| CString::new(*level).expect("no NUL"))
@@ -1937,7 +1937,7 @@ ex:StatusShape a sh:NodeShape ;
                 purrdf_buffer_free(buffer);
                 text
             };
-            let log: serde_json::Value = serde_json::from_str(&text).expect("json");
+            let log: purrdf_lex::json::Value = purrdf_lex::json::read(&text).expect("json");
             (
                 status,
                 Some(log["runs"][0]["properties"]["shaclConforms"].clone()),
@@ -1945,11 +1945,17 @@ ex:StatusShape a sh:NodeShape ;
         };
         assert_eq!(
             conforms(&[]),
-            (PurrdfStatus::Ok as i32, Some(serde_json::json!(false)))
+            (
+                PurrdfStatus::Ok as i32,
+                Some(purrdf_lex::json::Value::Bool(false))
+            )
         );
         assert_eq!(
             conforms(&["http://www.w3.org/ns/shacl#Violation"]),
-            (PurrdfStatus::Ok as i32, Some(serde_json::json!(true)))
+            (
+                PurrdfStatus::Ok as i32,
+                Some(purrdf_lex::json::Value::Bool(true))
+            )
         );
         assert_eq!(conforms(&["Violation"]).0, PurrdfStatus::ParseError as i32);
 
@@ -1992,7 +1998,7 @@ ex:StatusShape a sh:NodeShape ;
         added: &str,
         disallows: &[&str],
         subclass_of_in_shapes_graph: bool,
-    ) -> Result<serde_json::Value, i32> {
+    ) -> Result<purrdf_lex::json::Value, i32> {
         use crate::buffer::{purrdf_buffer_data, purrdf_buffer_free};
         let shapes = std::ffi::CString::new(shapes).expect("no interior NUL");
         let data = std::ffi::CString::new(data).expect("no interior NUL");
@@ -2044,7 +2050,11 @@ ex:StatusShape a sh:NodeShape ;
                 purrdf_buffer_data(buffer, &raw mut ptr, &raw mut len),
                 PurrdfStatus::Ok as i32
             );
-            let log = serde_json::from_slice(std::slice::from_raw_parts(ptr, len)).expect("json");
+            let log = purrdf_lex::json::read_slice(
+                std::slice::from_raw_parts(ptr, len),
+                purrdf_lex::json::Limits::DEFAULT,
+            )
+            .expect("json");
             purrdf_buffer_free(buffer);
             if !reason.is_null() {
                 purrdf_buffer_free(reason);
@@ -2071,7 +2081,7 @@ ex:StatusShape a sh:NodeShape ;
               sh:property [ sh:path ex:age ; sh:datatype xsd:integer ; \
                 sh:severity sh:Warning ] .\n";
         let conforms =
-            |log: &serde_json::Value| log["runs"][0]["properties"]["shaclConforms"].clone();
+            |log: &purrdf_lex::json::Value| log["runs"][0]["properties"]["shaclConforms"].clone();
         let default = changes_through_pointers(WARNING_SHAPES, CHANGE_BASE, BAD_AGE, &[], false)
             .expect("the default set");
         assert_eq!(conforms(&default), false, "{default}");
@@ -2100,7 +2110,7 @@ ex:StatusShape a sh:NodeShape ;
             <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Student> .\n\
             <http://example.org/bob> \
             <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
-        let focus = |log: &serde_json::Value| log.to_string();
+        let focus = |log: &purrdf_lex::json::Value| log.to_string();
         let off = changes_through_pointers(SUBCLASS_SHAPES, "", ADDED, &[], false).expect("off");
         assert!(focus(&off).contains("http://example.org/bob"), "{off}");
         assert!(!focus(&off).contains("http://example.org/alice"), "{off}");
@@ -2845,7 +2855,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                 closure.contains("<http://example.com/ns#seen>"),
                 "{closure}"
             );
-            let log: serde_json::Value = serde_json::from_str(&log).expect("SARIF JSON");
+            let log: purrdf_lex::json::Value = purrdf_lex::json::read(&log).expect("SARIF JSON");
             let run = &log["runs"][0];
             let notifications = &run["invocations"][0]["toolExecutionNotifications"];
             if diagnostics.is_empty() {
@@ -3381,7 +3391,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
         let data = CString::new(data_text).expect("no NUL");
         let empty = CString::new("").expect("no NUL");
         let results = |sarif: &str| -> usize {
-            let log: serde_json::Value = serde_json::from_str(sarif).expect("json");
+            let log: purrdf_lex::json::Value = purrdf_lex::json::read(sarif).expect("json");
             log["runs"][0]["results"]
                 .as_array()
                 .expect("a completed run always carries results")

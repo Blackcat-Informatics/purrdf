@@ -98,8 +98,9 @@ purrdf-gts = { workspace = true }
 # Both are already workspace-pinned (purrdf-gts links them); test-only here.
 purrdf-deflate = { workspace = true }
 structured-zstd = { workspace = true }
-# Parse the machine-readable runtime ledger in projection CLI integration tests.
-serde_json = { workspace = true }
+# Reads the JSON the binary prints (runtime ledgers, SARIF, SPARQL results) in
+# the integration tests.
+purrdf-lex = { workspace = true }
 # The integration tests recompute the SHA-256 identities the binary prints, in
 # lowercase hex.
 sha2 = { workspace = true }

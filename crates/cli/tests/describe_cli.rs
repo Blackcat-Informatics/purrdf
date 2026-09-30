@@ -415,8 +415,8 @@ fn a_star_incapable_target_records_the_dropped_statement_rows() {
     ]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
 
-    let ledger: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&ledger_path).expect("ledger written"))
+    let ledger: purrdf_lex::json::Value =
+        purrdf_lex::json::read(&std::fs::read_to_string(&ledger_path).expect("ledger written"))
             .expect("the ledger is JSON");
     assert_eq!(ledger["schema_version"], 1);
     let codes: Vec<&str> = ledger["losses"]

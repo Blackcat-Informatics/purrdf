@@ -3,7 +3,7 @@
 
 //! A minimal length-framed writer/reader for the plan's canonical encoding.
 //!
-//! The encoding is deliberately its own format rather than a serde format: a
+//! The encoding is deliberately its own format rather than a document format: a
 //! plan's identity must be a pure function of the plan's fields, independent of
 //! any serializer's version, formatting choices, or map iteration order. Every
 //! variable-length field is framed by an eight-byte little-endian length, so the

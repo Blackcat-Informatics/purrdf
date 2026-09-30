@@ -32,7 +32,7 @@ path = "src/lib.rs"
 [dependencies]
 # The wasm-clean engine: the GTS-feature build of purrdf excludes PyO3 and
 # parses/serializes RDF text + RDF/XML through the first-party native codecs
-# (crates/rdf/src/native_codecs/, roxmltree-backed) — no purrdf-gts codec, no
+# (crates/rdf/src/native_codecs/, reading XML through purrdf_lex::xml) — no purrdf-gts codec, no
 # Store, no RocksDB, no rayon.
 purrdf = { workspace = true }
 # The permissive zero-dep RDF 1.2 ingestion protocol: the seam
@@ -65,8 +65,9 @@ purrdf-validate = { workspace = true }
 # installs a job's governors and SERVICE/LOAD sources around a validation, and swaps
 # the engine's per-thread scopes with its stack context at every suspension.
 purrdf-shapes = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
+# The workspace's one JSON reader and writer: option documents a JS caller
+# passes as text, and the JSON strings this surface returns.
+purrdf-lex = { workspace = true }
 # EXACT pin (in the workspace table): the `wasm-bindgen` CLI that generates the JS
 # bindings must match the library version byte-for-byte or it refuses to run.
 # `make wasm-pkg` and the CI Node lane install `wasm-bindgen-cli@0.2.125` to match.

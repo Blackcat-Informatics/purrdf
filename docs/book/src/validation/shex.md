@@ -19,8 +19,8 @@ schema layer and the shape-map validator, pure Rust and wasm-clean.
   cardinality forms, `$`/`&` labels and inclusions, `^` inverse, annotations
   and `%…{ … %}` semantic actions, with relative-IRI resolution against
   `BASE` via `purrdf-iri`.
-- **ShExJ** (the JSON wire format, spec Appendix A) — strict, round-tripping
-  serde support matching the shexTest ground truth.
+- **ShExJ** (the JSON wire format, spec Appendix A) — a strict, round-tripping
+  reader and writer matching the shexTest ground truth.
 - **Structural checks** (spec §5.7) — dangling references, label collisions,
   reference-only cycles, and the negation-stratification requirement.
 

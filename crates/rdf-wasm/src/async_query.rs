@@ -231,6 +231,7 @@ use std::time::Duration;
 
 use purrdf::{JsonLdSerializeOptions, RdfDataset, parse_dataset};
 use purrdf_core::SparqlResult;
+use purrdf_lex::json::{self, Value};
 use purrdf_sparql_eval::protocol::FailureCode;
 use purrdf_sparql_eval::remote_http::DEFAULT_TIMEOUT;
 use purrdf_sparql_eval::{
@@ -241,12 +242,12 @@ use purrdf_sparql_eval::{
     ServiceResolver, StopCause, StopSignal, TrippedGovernor, WallDeadline,
 };
 use purrdf_sparql_results::ProvenanceNamespace;
-use serde::Deserialize;
 use wasm_bindgen::convert::TryFromJsValue;
 use wasm_bindgen::prelude::*;
 
 use crate::codec::resolve_media_type;
 use crate::dataset::{Dataset, UpdateClaim};
+use crate::json_options::{self, Record};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::operation::{
     ClosureInputs, JobError, JobOutcome, JobRun, OPTIONS_CODE, OperationInput, SHACL_REFUSAL_CODE,
@@ -4031,25 +4032,66 @@ pub struct ServiceCatalog {
     inner: NativeServiceCatalog,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+/// One service profile document: a closed record of camelCase members
+/// ([`crate::json_options`]); `capabilities` is required.
+#[derive(Debug)]
 struct ProfileJson {
     capabilities: Vec<String>,
-    #[serde(default)]
-    headers: Option<serde_json::Value>,
-    #[serde(default)]
+    headers: Option<Value>,
     credential: Option<CredentialJson>,
-    #[serde(default)]
     user_agent: Option<String>,
-    #[serde(default)]
     timeout_ms: Option<u64>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+impl ProfileJson {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let record = Record::closed(
+            value,
+            "service profile",
+            &[
+                "capabilities",
+                "headers",
+                "credential",
+                "userAgent",
+                "timeoutMs",
+            ],
+        )?;
+        Ok(Self {
+            capabilities: record.required(
+                "capabilities",
+                "an array of strings",
+                json_options::strings,
+            )?,
+            headers: record.optional("headers", "an array", |value| Some(value.clone()))?,
+            credential: match value.get("credential") {
+                None | Some(Value::Null) => None,
+                Some(credential) => Some(CredentialJson::from_json(credential)?),
+            },
+            user_agent: record.optional("userAgent", "a string", json_options::string)?,
+            timeout_ms: record.optional(
+                "timeoutMs",
+                "an integer from 0 to 18446744073709551615",
+                json_options::integer::<u64>,
+            )?,
+        })
+    }
+}
+
+/// A profile's `credential`: exactly a `header` name and its `value`.
 struct CredentialJson {
     header: String,
     value: String,
+}
+
+impl CredentialJson {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let record = Record::closed(value, "service profile credential", &["header", "value"])?;
+        let text = |value: &Value| json_options::string(value).ok_or_else(String::new);
+        Ok(Self {
+            header: record.required("header", "a string", text)?,
+            value: record.required("value", "a string", text)?,
+        })
+    }
 }
 
 // Hand-written so the secret never reaches a log.
@@ -4084,8 +4126,8 @@ fn check_header(name: &str, value: &str) -> Result<(), String> {
 
 /// Parse one service profile document.
 fn parse_profile(json: &str) -> Result<ServiceProfile, String> {
-    let profile: ProfileJson =
-        serde_json::from_str(json).map_err(|error| format!("service profile: {error}"))?;
+    let document = json::read(json).map_err(|error| format!("service profile: {error}"))?;
+    let profile = ProfileJson::from_json(&document)?;
     let mut capabilities = ServiceCapabilities::NONE;
     for name in &profile.capabilities {
         let capability = match name.as_str() {
@@ -4102,17 +4144,14 @@ fn parse_profile(json: &str) -> Result<ServiceProfile, String> {
         capabilities = capabilities.grant(capability);
     }
     let mut out = ServiceProfile::new(capabilities);
-    match profile.headers {
+    match &profile.headers {
         None => {}
-        Some(serde_json::Value::Array(pairs)) => {
+        Some(Value::Array(pairs)) => {
             for pair in pairs {
                 let (name, value) = match pair.as_array().map(Vec::as_slice) {
-                    Some(
-                        [
-                            serde_json::Value::String(name),
-                            serde_json::Value::String(value),
-                        ],
-                    ) => (name.clone(), value.clone()),
+                    Some([Value::String(name), Value::String(value)]) => {
+                        (name.clone(), value.clone())
+                    }
                     _ => {
                         return Err(format!(
                             "service profile: every header must be a [name, value] pair of \
@@ -4986,6 +5025,33 @@ mod tests {
                 .expect_err("capabilities are required")
                 .contains("capabilities")
         );
+    }
+
+    /// A repeated profile member, a credential member outside `header`/`value` and a
+    /// `null` capability list are refused and named; each neighbour is accepted.
+    #[test]
+    fn a_profile_is_a_closed_record_at_every_level() {
+        let error = parse_profile(r#"{"capabilities":["query"],"userAgent":"a","userAgent":"b"}"#)
+            .expect_err("a repeated member");
+        assert!(error.contains("duplicate field `userAgent`"), "{error}");
+        assert!(parse_profile(r#"{"capabilities":["query"],"userAgent":"a"}"#).is_ok());
+        let error = parse_profile(
+            r#"{"capabilities":["credentials"],"credential":{"header":"X-K","value":"v","scheme":"s"}}"#,
+        )
+        .expect_err("an undeclared credential member");
+        assert!(error.contains("unknown field `scheme`"), "{error}");
+        assert!(
+            parse_profile(
+                r#"{"capabilities":["credentials"],"credential":{"header":"X-K","value":"v"}}"#
+            )
+            .is_ok()
+        );
+        let error = parse_profile(r#"{"capabilities":null}"#).expect_err("null capabilities");
+        assert!(error.contains("capabilities"), "{error}");
+        assert!(parse_profile(r#"{"capabilities":[]}"#).is_ok());
+        let error = parse_profile(r#"{"capabilities":["query"],"timeoutMs":1.5}"#)
+            .expect_err("a fractional timeout");
+        assert!(error.contains("timeoutMs"), "{error}");
     }
 
     /// A timeout the host's timer could not honour is refused; the longest one it can is

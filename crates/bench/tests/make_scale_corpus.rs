@@ -384,8 +384,9 @@ fn make_scale_corpus_manifest_path_with_a_space_survives_the_make_entry_point() 
         manifest_path.display()
     );
     let contents = std::fs::read(&manifest_path).expect("read manifest");
-    let _: serde_json::Value =
-        serde_json::from_slice(&contents).expect("manifest must be valid JSON");
+    let _: purrdf_lex::json::Value =
+        purrdf_lex::json::read_slice(&contents, purrdf_lex::json::Limits::DEFAULT)
+            .expect("manifest must be valid JSON");
 
     std::fs::remove_dir_all(&arena).expect("cleanup arena");
 }
@@ -525,8 +526,9 @@ fn make_scale_corpus_takes_shell_and_make_metacharacters_in_a_path_literally() {
                 .collect::<Vec<_>>()
         );
         let contents = std::fs::read(&manifest_path).expect("read manifest");
-        let _: serde_json::Value =
-            serde_json::from_slice(&contents).expect("manifest must be valid JSON");
+        let _: purrdf_lex::json::Value =
+            purrdf_lex::json::read_slice(&contents, purrdf_lex::json::Limits::DEFAULT)
+                .expect("manifest must be valid JSON");
 
         std::fs::remove_dir_all(&arena).expect("cleanup arena");
     }
@@ -1799,8 +1801,9 @@ fn make_scale_corpus_keeps_the_whole_run_manifest_of_a_run_that_succeeded() {
          half the evidence a capture records"
     );
     let contents = std::fs::read(&run_manifest).expect("read the whole-run manifest");
-    let record: serde_json::Value =
-        serde_json::from_slice(&contents).expect("the manifest must be valid JSON");
+    let record: purrdf_lex::json::Value =
+        purrdf_lex::json::read_slice(&contents, purrdf_lex::json::Limits::DEFAULT)
+            .expect("the manifest must be valid JSON");
     assert_eq!(
         record["emitted_lines"], quads,
         "the surviving manifest must describe the corpus that was actually produced"

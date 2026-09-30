@@ -1592,7 +1592,7 @@ fn the_result_map_can_be_written_to_a_file() {
     assert!(stderr(&out).contains("shex conformant false\n"));
 
     let written = std::fs::read_to_string(&out_path).expect("result written");
-    let parsed: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
+    let parsed: purrdf_lex::json::Value = purrdf_lex::json::read(&written).expect("valid JSON");
     assert_eq!(parsed[0]["status"], "nonconformant", "{written}");
 }
 

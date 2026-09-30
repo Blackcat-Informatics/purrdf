@@ -1368,7 +1368,7 @@ fn every_run_reports_an_empty_in_list() {
         assert_eq!(err.contains(line), flagged, "{name}: {err}");
 
         let sarif = run(&["validate", "--shapes", &path, "--format", "sarif", &data]);
-        let log: serde_json::Value = serde_json::from_str(&stdout(&sarif))
+        let log: purrdf_lex::json::Value = purrdf_lex::json::read(&stdout(&sarif))
             .unwrap_or_else(|error| panic!("{name}: SARIF on stdout: {error}: {}", stderr(&sarif)));
         let notified = log["runs"][0]["invocations"][0]["toolExecutionNotifications"][0]["descriptor"]
             ["id"]

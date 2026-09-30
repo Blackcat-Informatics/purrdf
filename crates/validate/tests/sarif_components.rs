@@ -10,10 +10,10 @@
 //! `sarif_detail_related_locations` asserts that the nested results of a
 //! `sh:memberShape` failure (`sh:detail`) reach SARIF as `relatedLocations`.
 
+use purrdf_lex::json::{self, Object, Value};
 use purrdf_shapes::engine::{parse_shapes, validate_dataset_with_shapes_graph};
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 use purrdf_validate::{SarifOptions, report_to_sarif_string};
-use serde_json::{Value, json};
 
 const PREFIXES: &str = "
     @prefix ex:   <http://example.org/> .
@@ -32,8 +32,7 @@ fn sarif(shapes: &str, data: &str) -> Value {
     let shapes = parse_shapes(&format!("{PREFIXES}{shapes}"), None).expect("shapes graph");
     let data = parse_turtle_to_dataset(&format!("{PREFIXES}{data}"), None).expect("data graph");
     let report = validate_dataset_with_shapes_graph(&data, &shapes, None).expect("validation");
-    serde_json::from_str(&report_to_sarif_string(&report, &SarifOptions::default()))
-        .expect("SARIF JSON")
+    json::read(&report_to_sarif_string(&report, &SarifOptions::default())).expect("SARIF JSON")
 }
 
 /// Assert that `log` reports the component `local` under its rule id, and that
@@ -235,14 +234,26 @@ fn sarif_detail_related_locations() {
         .as_array()
         .expect("relatedLocations");
     let detail = |member: &str| {
-        json!({
-            "logicalLocations": [
-                { "name": member, "kind": "focusNode" },
-                { "name": format!("{SH}NodeKindConstraintComponent"), "kind": "constraintComponent" },
-                { "name": "<http://example.org/Member>", "kind": "sourceShape" },
-            ],
-            "message": { "text": "sh:detail: a member must be an IRI" },
-        })
+        let logical =
+            |name: String, kind: &str| Object::new().with("name", name).with("kind", kind);
+        Value::from(
+            Object::new()
+                .with(
+                    "logicalLocations",
+                    Value::array([
+                        logical(member.to_owned(), "focusNode"),
+                        logical(
+                            format!("{SH}NodeKindConstraintComponent"),
+                            "constraintComponent",
+                        ),
+                        logical("<http://example.org/Member>".to_owned(), "sourceShape"),
+                    ]),
+                )
+                .with(
+                    "message",
+                    Object::new().with("text", "sh:detail: a member must be an IRI"),
+                ),
+        )
     };
     assert_eq!(related[1..], [detail("b"), detail("c")]);
     assert_eq!(related[0]["message"]["text"], "shape defined here");

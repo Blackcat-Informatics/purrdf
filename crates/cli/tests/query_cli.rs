@@ -2971,14 +2971,14 @@ fn sha3_select(spelling: impl Fn(&str) -> String) -> String {
 }
 
 /// The one solution row of a `--results-format json` run, as `alias -> value`.
-fn sha3_row(out: &Output) -> serde_json::Map<String, serde_json::Value> {
+fn sha3_row(out: &Output) -> purrdf_lex::json::Object {
     assert!(
         out.status.success(),
         "a SHA-3 SELECT must exit 0; stderr:\n{}",
         stderr(out)
     );
     let body = stdout(out);
-    let doc: serde_json::Value = serde_json::from_str(&body)
+    let doc: purrdf_lex::json::Value = purrdf_lex::json::read(&body)
         .unwrap_or_else(|e| panic!("--results-format json must emit JSON ({e}); got:\n{body}"));
     let bindings = doc["results"]["bindings"]
         .as_array()
@@ -3091,7 +3091,7 @@ fn the_cli_reads_the_sha3_hyphen_as_part_of_the_name() {
         stderr(&arith)
     );
     let body = stdout(&arith);
-    let doc: serde_json::Value = serde_json::from_str(&body).expect("JSON results");
+    let doc: purrdf_lex::json::Value = purrdf_lex::json::read(&body).expect("JSON results");
     assert_eq!(
         doc["results"]["bindings"][0]["n"]["value"].as_str(),
         Some("60"),

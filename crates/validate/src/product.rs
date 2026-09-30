@@ -1026,8 +1026,8 @@ mod tests {
             "sh:path ex:age ; sh:severity sh:Warning ;",
         );
         let product = pack_shapes_product(&warning, None, &[]).expect("shapes pack");
-        let conforms = |sarif: String| -> serde_json::Value {
-            let log: serde_json::Value = serde_json::from_str(&sarif).expect("json");
+        let conforms = |sarif: String| -> purrdf_lex::json::Value {
+            let log = purrdf_lex::json::read(&sarif).expect("json");
             log["runs"][0]["properties"]["shaclConforms"].clone()
         };
         let relaxed = SarifOptions {
@@ -1045,17 +1045,17 @@ mod tests {
                 validate_with_shapes_product(&product, DATA, &SarifOptions::default())
                     .expect("validates")
             ),
-            serde_json::json!(false)
+            false
         );
         assert_eq!(
             conforms(validate_with_shapes_product(&product, DATA, &relaxed).expect("validates")),
-            serde_json::json!(true)
+            true
         );
         assert_eq!(
             conforms(
                 validate_with_rebuilt_shapes_product(&product, DATA, &relaxed).expect("validates")
             ),
-            serde_json::json!(true)
+            true
         );
     }
 

@@ -328,12 +328,29 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "crunchy": "purrdf_lex::cbor (no unrolled float conversion helper)",
     "zerocopy": "purrdf_lex::cbor (f16/f32/f64 bit conversions through std to_bits/from_bits)",
     "zerocopy-derive": "purrdf_lex::cbor (no byte-reinterpretation derives)",
+    "serde_json": "purrdf_lex::json (the RFC 8259 reader, lexeme-keeping value and deterministic writer)",
+    "serde_yaml_ng": "purrdf_lex::yaml (the YAML 1.2 core-schema reader and writer)",
+    "roxmltree": "purrdf_lex::xml (the XML 1.0 reader)",
+    # serde's own closure and the closures of the JSON and YAML crates above:
+    # the data-model traits and their derive macros, the number formatters, the
+    # libyaml port and the ordered map behind YAML mappings. The committed
+    # Cargo.lock listed serde, serde_json or serde_yaml_ng as the only dependent
+    # of each before they left.
+    "serde": "hand-written to_json/from_json over purrdf_lex::json::Value",
+    "serde_core": "hand-written to_json/from_json over purrdf_lex::json::Value",
+    "serde_derive": "hand-written to_json/from_json over purrdf_lex::json::Value",
+    "itoa": "purrdf_lex::json::Number (integers keep their decimal lexeme)",
+    "ryu": "purrdf_lex::json::Number::from_f64 (shortest round-trip binary64 lexeme)",
+    "zmij": "purrdf_lex::json::Number::from_f64 (shortest round-trip binary64 lexeme)",
+    "unsafe-libyaml": "purrdf_lex::yaml (the YAML 1.2 core-schema reader and writer)",
+    "indexmap": "purrdf_lex::json::Object (members in document order)",
+    "equivalent": "purrdf_lex::json::Object (members in document order)",
 }
 
 # Removed as a direct dependency of every workspace member, while a direct
 # dependency's own closure still reaches it: no member may name it again.
 BANNED_DIRECT_ONLY: dict[str, str] = {
-    # regex and serde_json keep it in the graph through their own closures.
+    # regex keeps it in the graph through its own closure.
     "memchr": "purrdf_lex::scan::find_byte / find_byte2 (and a purrdf_lex::scan::ByteClass for a fixed class)",
 }
 
@@ -1785,15 +1802,15 @@ def self_test() -> int:
     failures: list[str] = []
 
     # --- pre-existing real behavior: exact-name tier-1 match in a plain lock.
-    dirty = 'name = "serde"\nname = "thiserror"\nversion = "2.0.12"\n'
-    clean = 'name = "serde"\nname = "purrdf-iri"\n'
+    dirty = 'name = "regex"\nname = "thiserror"\nversion = "2.0.12"\n'
+    clean = 'name = "regex"\nname = "purrdf-iri"\n'
     if any_edge_offenders(dirty) != ["thiserror"]:
         failures.append("a banned package in the lock was not flagged")
     if any_edge_offenders(clean):
         failures.append("a clean lock was flagged")
 
     # --- (A) tier-1 any-edge ban still fails on a lock containing petgraph.
-    petgraph_lock = 'name = "serde"\nname = "petgraph"\nversion = "0.6.5"\n'
+    petgraph_lock = 'name = "regex"\nname = "petgraph"\nversion = "0.6.5"\n'
     if any_edge_offenders(petgraph_lock) != ["petgraph"]:
         failures.append("petgraph in the lock was not flagged (tier-1 regression)")
 
@@ -1835,7 +1852,7 @@ def self_test() -> int:
     # A transitive hex is now forbidden too: the root and fixture locks have
     # no such package, so the removal applies to the complete closure.
     transitive_only_lock = (
-        'name = "serde"\n'
+        'name = "regex"\n'
         'name = "some-third-party-crate"\n'
         "dependencies = [\n"
         ' "hex",\n'
@@ -1843,7 +1860,7 @@ def self_test() -> int:
         'name = "hex"\n'
         'version = "0.4.3"\n'
     )
-    clean_member_manifest = {"dependencies": {"serde": {"workspace": True}}}
+    clean_member_manifest = {"dependencies": {"regex": {"workspace": True}}}
     if direct_dependency_names(clean_member_manifest) & BANNED_ANY_EDGE.keys():
         failures.append("a clean member manifest was flagged")
     if any_edge_offenders(transitive_only_lock) != ["hex"]:
@@ -1861,7 +1878,7 @@ def self_test() -> int:
 
     # --- (B) substitution: a [[patch.unused]] block naming a banned package.
     patch_unused_lock = (
-        'name = "serde"\n\n'
+        'name = "regex"\n\n'
         "[[patch.unused]]\n"
         'name = "petgraph"\n'
         'version = "0.6.5"\n'
@@ -1887,7 +1904,7 @@ def self_test() -> int:
     # --- (B) substitution scan stays quiet on an unrelated patch/replace.
     benign_lock = (
         "[[patch.unused]]\n"
-        'name = "serde"\n'
+        'name = "regex"\n'
         'version = "1.0.0"\n'
         'source = "registry+https://github.com/rust-lang/crates.io-index"\n'
     )
@@ -1953,7 +1970,7 @@ def self_test() -> int:
         failures.append(
             f"a non-root lock violation did not name its file: {nested_failures}"
         )
-    if lock_failures("Cargo.lock", 'name = "serde"\n'):
+    if lock_failures("Cargo.lock", 'name = "regex"\n'):
         failures.append("a clean lock produced a failure message")
 
     # --- (C) discovery works on THIS repository and finds more than the root

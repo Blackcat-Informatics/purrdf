@@ -10,7 +10,7 @@
 //! answers fused under profiles differing in any of those are answers to
 //! different questions, so the profile is content-addressed: its identity is a
 //! domain-separated BLAKE3 digest over a canonical, versioned, length-framed
-//! encoding, never over a serde document or a `Hash`.
+//! encoding, never over a JSON document or a `Hash`.
 
 use std::collections::BTreeMap;
 

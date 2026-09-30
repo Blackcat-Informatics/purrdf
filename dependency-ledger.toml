@@ -381,14 +381,6 @@ distinct = "internal to rayon's work-stealing pool; PurRDF has no thread pool of
 holder = "rayon"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
-[packages.equivalent]
-category = "transitive:serde_yaml_ng"
-reason = "key equivalence trait for indexmap"
-duplicates_native = "purrdf_lex::yaml"
-pending_native = true
-holder = "serde_yaml_ng"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
 [packages.fastrand]
 category = "runtime"
 reason = "seeds structured-zstd FastCOVER dictionary training reproducibly in GTS"
@@ -412,7 +404,7 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 category = "runtime"
 reason = "raw HashTable for store-once interners and dedup maps"
 distinct = "the raw HashTable API behind hash-once, store-once interners, which std does not expose; PurRDF has hashers (purrdf_hash::fixed) but no hash table"
-metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
+metrics = { direct = true, exclusive_closure = 1, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.heck]
 category = "transitive:pyo3"
@@ -426,14 +418,6 @@ category = "transitive:sha2"
 reason = "const-generic arrays for RustCrypto"
 distinct = "RustCrypto plumbing inside sha2, the single SHA-2 implementation; no first-party code calls it"
 holder = "sha2"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
-[packages.indexmap]
-category = "transitive:serde_yaml_ng"
-reason = "insertion-ordered maps for YAML mappings"
-duplicates_native = "purrdf_lex::yaml"
-pending_native = true
-holder = "serde_yaml_ng"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.inout]
@@ -450,14 +434,6 @@ distinct = "internal to clap's terminal output; PurRDF has no command-line parse
 holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
-[packages.itoa]
-category = "transitive:serde_json"
-reason = "integer formatting for serde_json"
-duplicates_native = "purrdf_lex::json"
-pending_native = true
-holder = "serde_json"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
 [packages.leb128fmt]
 category = "transitive:wasm-encoder"
 reason = "LEB128 field emission for the private WASM post-link tool"
@@ -473,7 +449,7 @@ metrics = { direct = true, exclusive_closure = 0, release = true, wasm = false, 
 
 [packages.memchr]
 category = "transitive:regex"
-reason = "byte search inside regex's literal prefilters and serde_json's reader; no workspace member names it"
+reason = "byte search inside regex's literal prefilters; no workspace member names it"
 duplicates_native = "purrdf_lex::scan::find_byte"
 holder = "regex"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
@@ -577,7 +553,7 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 category = "runtime"
 reason = "regex engine for SPARQL REGEX/REPLACE, XSD patterns and SHACL/ShEx pattern constraints"
 distinct = "the matching engine purrdf_core::xsd_regex compiles XSD, XPath, SHACL and ShEx patterns to; PurRDF translates patterns but has no matcher of its own"
-metrics = { direct = true, exclusive_closure = 3, release = true, wasm = true, build_script = false, proc_macro = false }
+metrics = { direct = true, exclusive_closure = 4, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.regex-automata]
 category = "transitive:regex"
@@ -592,64 +568,12 @@ reason = "regex IR for ECMA-262 pattern emission and testkit string generators"
 distinct = "the pattern IR purrdf_core::xsd_regex reads to emit ECMA-262 and the testkit string generators walk; PurRDF has no regex IR of its own"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
-[packages.roxmltree]
-category = "spec-codec"
-reason = "XML 1.0 parsing for RDF/XML, OWL/XML and SPARQL XML results"
-duplicates_native = "purrdf_lex::xml"
-pending_native = true
-metrics = { direct = true, exclusive_closure = 1, release = true, wasm = true, build_script = false, proc_macro = false }
-
 [packages.rustversion]
 category = "transitive:wasm-bindgen"
 reason = "rustc version conditionals for wasm-bindgen"
 distinct = "internal to wasm-bindgen's JavaScript binding; PurRDF has no JavaScript FFI of its own"
 holder = "wasm-bindgen"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = true }
-
-[packages.ryu]
-category = "transitive:serde_yaml_ng"
-reason = "float formatting for YAML output"
-duplicates_native = "purrdf_lex::yaml"
-pending_native = true
-holder = "serde_yaml_ng"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
-[packages.serde]
-category = "runtime"
-reason = "serialization framework behind the JSON, YAML and CBOR codecs"
-duplicates_native = "purrdf_lex::json"
-pending_native = true
-metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
-
-[packages.serde_core]
-category = "transitive:serde"
-reason = "serde core traits"
-duplicates_native = "purrdf_lex::json"
-pending_native = true
-holder = "serde"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
-
-[packages.serde_derive]
-category = "transitive:serde"
-reason = "serde derive macros"
-duplicates_native = "purrdf_lex::json"
-pending_native = true
-holder = "serde"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = true }
-
-[packages.serde_json]
-category = "spec-codec"
-reason = "JSON (RFC 8259) encode/decode for JSON-LD, SPARQL JSON results and bindings"
-duplicates_native = "purrdf_lex::json"
-pending_native = true
-metrics = { direct = true, exclusive_closure = 2, release = true, wasm = true, build_script = true, proc_macro = false }
-
-[packages.serde_yaml_ng]
-category = "spec-codec"
-reason = "YAML parsing for YAML-LD, SSSOM headers and shape configs"
-duplicates_native = "purrdf_lex::yaml"
-pending_native = true
-metrics = { direct = true, exclusive_closure = 5, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.sha2]
 category = "crypto"
@@ -709,14 +633,6 @@ category = "transitive:aes-gcm"
 reason = "universal hash traits for GHASH/POLYVAL"
 distinct = "internal to aes-gcm's AES-256-GCM; PurRDF has no block cipher or AEAD of its own (purrdf_hash::fixed uses single AES rounds only as a hash mixer)"
 holder = "aes-gcm"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
-[packages.unsafe-libyaml]
-category = "transitive:serde_yaml_ng"
-reason = "libyaml port behind serde_yaml_ng"
-duplicates_native = "purrdf_lex::yaml"
-pending_native = true
-holder = "serde_yaml_ng"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.utf8parse]
@@ -791,11 +707,3 @@ reason = "WIT bindings for wasip2"
 distinct = "internal to getrandom's operating-system entropy bindings; PurRDF has no entropy source of its own"
 holder = "getrandom"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = true, proc_macro = false }
-
-[packages.zmij]
-category = "transitive:serde_json"
-reason = "float formatting for serde_json"
-duplicates_native = "purrdf_lex::json"
-pending_native = true
-holder = "serde_json"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }

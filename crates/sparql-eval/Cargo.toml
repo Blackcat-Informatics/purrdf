@@ -64,7 +64,7 @@ purrdf-hash = { workspace = true }
 # stays wasm-clean.
 sha2 = { workspace = true }
 # SPARQL Results reader for decoding remote SERVICE responses. Wasm-clean
-# (hand-rolled, no serde).
+# (its JSON reader is purrdf_lex::json).
 purrdf-sparql-results = { workspace = true }
 # RFC-3986 IRI parsing/resolution, for the IRI()/URI() built-in's relative-reference
 # resolution against the query's base IRI (SPARQL 1.1 §17.4.2.6), AND the language-tag

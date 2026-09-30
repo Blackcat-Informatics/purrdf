@@ -850,12 +850,12 @@ fn the_loss_ledger_is_live_for_rdf_and_refused_for_sarif() {
         &data,
     ]);
     assert_eq!(code(&rdf), 0, "{}", stderr(&rdf));
-    let ledger: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&ledger_path).expect("ledger written"))
+    let ledger: purrdf_lex::json::Value =
+        purrdf_lex::json::read(&std::fs::read_to_string(&ledger_path).expect("ledger written"))
             .expect("the ledger is JSON");
     assert_eq!(ledger["schema_version"], 1, "the ledger's stable schema");
     assert!(
-        ledger["losses"].is_array(),
+        ledger["losses"].as_array().is_some(),
         "the ledger records the ntriples -> rdfxml contract: {ledger}"
     );
 
@@ -3074,7 +3074,9 @@ fn a_shapes_blank_and_a_data_blank_are_two_nodes_in_the_report() {
 
     let sarif = run(&["validate", "--shapes", &shapes, &data, "--format", "sarif"]);
     assert_eq!(code(&sarif), 0, "{}", stderr(&sarif));
-    let log: serde_json::Value = serde_json::from_slice(&sarif.stdout).expect("SARIF is JSON");
+    let log: purrdf_lex::json::Value =
+        purrdf_lex::json::read_slice(&sarif.stdout, purrdf_lex::json::Limits::DEFAULT)
+            .expect("SARIF is JSON");
     let result = &log["runs"][0]["results"][0];
     let text = result["message"]["text"].as_str().expect("message text");
     assert!(text.contains(&value) && text.contains(&shape), "{text}");

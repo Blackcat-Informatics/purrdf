@@ -24,7 +24,7 @@ use purrdf::{
     serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_writer_with,
     serialize_dataset_with, try_canonicalize_flat_view,
 };
-use serde::Deserialize;
+use purrdf_lex::json::{self, Value};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -81,6 +81,7 @@ use purrdf::viz::{
 
 use crate::codec::{resolve_format, resolve_media_type};
 use crate::convert::{quad_to_quad_values, quad_values_to_quad};
+use crate::json_options::{Record, integer, records, string, strings};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::term::{Quad, Term, TermInner};
 
@@ -100,8 +101,9 @@ fn pattern_value(term: Option<&Term>) -> Result<Option<TermValue>, JsError> {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+/// The visualization options a JS caller passes as JSON text: a closed record of
+/// camelCase members, every one optional ([`crate::json_options`]).
+#[derive(Debug, Default)]
 struct VisualOptions {
     mode: Option<String>,
     focus: Option<String>,
@@ -117,10 +119,21 @@ struct VisualOptions {
     svg: VisualSvgOptions,
 }
 
-#[derive(Debug, Deserialize)]
+/// One `vocabulary` entry; members other than `prefix` and `namespace` are ignored.
+#[derive(Debug)]
 struct VisualVocabularyMapping {
     prefix: String,
     namespace: String,
+}
+
+impl VisualVocabularyMapping {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let record = Record::open(value, "visualization vocabulary mapping")?;
+        Ok(Self {
+            prefix: record.required("prefix", "a string", string_member)?,
+            namespace: record.required("namespace", "a string", string_member)?,
+        })
+    }
 }
 
 /// The visualization value a JSON-options string names, in the engine's JSON form.
@@ -128,15 +141,23 @@ fn viz_name<T: VizJson>(name: &str) -> Result<T, JsError> {
     T::from_json(&name.into()).map_err(|error| JsError::new(&error.to_string()))
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug)]
 struct VisualRoleRule {
     predicate_iri: String,
     role: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+impl VisualRoleRule {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let record = Record::closed(value, "visualization role rule", &["predicateIri", "role"])?;
+        Ok(Self {
+            predicate_iri: record.required("predicateIri", "a string", string_member)?,
+            role: record.required("role", "a string", string_member)?,
+        })
+    }
+}
+
+#[derive(Debug, Default)]
 struct VisualLayoutOptions {
     margin: Option<i32>,
     rank_spacing: Option<i32>,
@@ -147,20 +168,120 @@ struct VisualLayoutOptions {
     max_node_width: Option<i32>,
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+impl VisualLayoutOptions {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let record = Record::closed(
+            value,
+            "visualization layout options",
+            &[
+                "margin",
+                "rankSpacing",
+                "nodeSpacing",
+                "componentSpacing",
+                "componentWrapWidth",
+                "crossingSweeps",
+                "maxNodeWidth",
+            ],
+        )?;
+        let i32_member = |name: &str| record.optional(name, "a 32-bit integer", integer::<i32>);
+        Ok(Self {
+            margin: i32_member("margin")?,
+            rank_spacing: i32_member("rankSpacing")?,
+            node_spacing: i32_member("nodeSpacing")?,
+            component_spacing: i32_member("componentSpacing")?,
+            component_wrap_width: i32_member("componentWrapWidth")?,
+            crossing_sweeps: record.optional(
+                "crossingSweeps",
+                "a non-negative 32-bit integer",
+                integer::<u32>,
+            )?,
+            max_node_width: i32_member("maxNodeWidth")?,
+        })
+    }
+}
+
+#[derive(Debug, Default)]
 struct VisualSvgOptions {
     embed_metadata: Option<bool>,
     include_styles: Option<bool>,
     title: Option<String>,
 }
 
+impl VisualSvgOptions {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let record = Record::closed(
+            value,
+            "visualization SVG options",
+            &["embedMetadata", "includeStyles", "title"],
+        )?;
+        Ok(Self {
+            embed_metadata: record.optional("embedMetadata", "a boolean", Value::as_bool)?,
+            include_styles: record.optional("includeStyles", "a boolean", Value::as_bool)?,
+            title: record.optional("title", "a string", string)?,
+        })
+    }
+}
+
+/// A present string member, for [`Record::required`] and [`Record::defaulted`].
+fn string_member(value: &Value) -> Result<String, String> {
+    string(value).ok_or_else(String::new)
+}
+
 impl VisualOptions {
     fn parse(json: Option<String>) -> Result<Self, JsError> {
         json.filter(|value| !value.trim().is_empty()).map_or_else(
             || Ok(Self::default()),
-            |value| serde_json::from_str(&value).map_err(|error| JsError::new(&error.to_string())),
+            |value| {
+                let document = json::read(&value)
+                    .map_err(|error| JsError::new(&format!("visualization options: {error}")))?;
+                Self::from_json(&document).map_err(|error| JsError::new(&error))
+            },
         )
+    }
+
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let record = Record::closed(
+            value,
+            "visualization options",
+            &[
+                "mode",
+                "focus",
+                "roleRules",
+                "vocabulary",
+                "graph",
+                "graphs",
+                "labelPolicy",
+                "maxStatements",
+                "maxTerms",
+                "tableFields",
+                "layout",
+                "svg",
+            ],
+        )?;
+        let usize_member =
+            |name: &str| record.optional(name, "a non-negative integer", integer::<usize>);
+        Ok(Self {
+            mode: record.optional("mode", "a string", string)?,
+            focus: record.optional("focus", "a string", string)?,
+            role_rules: record.defaulted("roleRules", "an array of role rules", |value| {
+                records(value, VisualRoleRule::from_json)
+            })?,
+            vocabulary: record.defaulted(
+                "vocabulary",
+                "an array of vocabulary mappings",
+                |value| records(value, VisualVocabularyMapping::from_json),
+            )?,
+            graph: record.optional("graph", "a string", string)?,
+            graphs: record.defaulted("graphs", "an array of strings", strings)?,
+            label_policy: record.optional("labelPolicy", "a string", string)?,
+            max_statements: usize_member("maxStatements")?,
+            max_terms: usize_member("maxTerms")?,
+            table_fields: record.optional("tableFields", "an array of strings", |value| {
+                strings(value).ok()
+            })?,
+            layout: record.defaulted("layout", "an object", VisualLayoutOptions::from_json)?,
+            svg: record.defaulted("svg", "an object", VisualSvgOptions::from_json)?,
+        })
     }
 
     fn into_engine_options(self) -> Result<(VizSpec, VizRenderOptions), JsError> {
@@ -1170,15 +1291,13 @@ mod tests {
             r#"{"mode":"compact","vocabulary":[{"prefix":"ex","namespace":"https://e/"}],"svg":{"title":"Example graph"}}"#
                 .to_owned(),
         );
-        let model: serde_json::Value =
-            serde_json::from_str(&ds.visual_model_json(options.clone()).expect("model JSON"))
-                .expect("model value");
-        let export: serde_json::Value =
-            serde_json::from_str(&ds.visual_export_json(options.clone()).expect("export JSON"))
+        let model: Value = json::read(&ds.visual_model_json(options.clone()).expect("model JSON"))
+            .expect("model value");
+        let export: Value =
+            json::read(&ds.visual_export_json(options.clone()).expect("export JSON"))
                 .expect("export value");
-        let document: serde_json::Value =
-            serde_json::from_str(&ds.visual_svg_json(options).expect("SVG JSON"))
-                .expect("document value");
+        let document: Value =
+            json::read(&ds.visual_svg_json(options).expect("SVG JSON")).expect("document value");
         assert_eq!(model["statements"].as_array().map(Vec::len), Some(1));
         assert_eq!(export["schema_version"], "purrdf-viz-export-1");
         assert_eq!(export["model"], model);
@@ -1188,6 +1307,52 @@ mod tests {
                 .as_str()
                 .is_some_and(|svg| svg.contains("<metadata id=\"purrdf-viz-export\""))
         );
+    }
+
+    /// The options record is closed at every level: an undeclared member, a repeated
+    /// member, a `null` list and a value of the wrong kind are refused and named, and
+    /// the declared neighbours of each are accepted.
+    #[test]
+    fn visualization_options_refuse_what_they_do_not_declare() {
+        let refused = |text: &str, needle: &str| {
+            let Err(error) = VisualOptions::from_json(&json::read(text).expect("JSON")) else {
+                panic!("{text} was accepted");
+            };
+            assert!(error.contains(needle), "{text}: {error}");
+        };
+        let accepted = |text: &str| {
+            VisualOptions::from_json(&json::read(text).expect("JSON"))
+                .unwrap_or_else(|error| panic!("{text}: {error}"))
+        };
+        refused(r#"{"modes":"compact"}"#, "unknown field `modes`");
+        accepted(r#"{"mode":"compact"}"#);
+        refused(
+            r#"{"mode":"compact","mode":"full"}"#,
+            "duplicate field `mode`",
+        );
+        refused(r#"{"layout":{"margins":4}}"#, "unknown field `margins`");
+        let options = accepted(r#"{"layout":{"margin":4,"crossingSweeps":2}}"#);
+        assert_eq!(options.layout.margin, Some(4));
+        assert_eq!(options.layout.crossing_sweeps, Some(2));
+        refused(r#"{"layout":{"crossingSweeps":-1}}"#, "crossingSweeps");
+        refused(r#"{"layout":{"margin":2147483648}}"#, "margin");
+        accepted(r#"{"layout":{"margin":2147483647}}"#);
+        refused(r#"{"maxTerms":1.5}"#, "maxTerms");
+        assert_eq!(accepted(r#"{"maxTerms":15}"#).max_terms, Some(15));
+        refused(r#"{"graphs":null}"#, "graphs");
+        assert!(accepted(r#"{"graph":null}"#).graph.is_none());
+        refused(r#"{"svg":{"title":7}}"#, "title");
+        refused(
+            r#"{"roleRules":[{"predicateIri":"https://e/p"}]}"#,
+            "missing field `role`",
+        );
+        let rules = accepted(r#"{"roleRules":[{"predicateIri":"https://e/p","role":"r"}]}"#);
+        assert_eq!(rules.role_rules[0].predicate_iri, "https://e/p");
+        // A vocabulary mapping reads its two members and ignores any other.
+        let mapped =
+            accepted(r#"{"vocabulary":[{"prefix":"ex","namespace":"https://e/","note":1}]}"#);
+        assert_eq!(mapped.vocabulary[0].prefix, "ex");
+        refused("[]", "expected an object");
     }
 
     #[test]
@@ -1206,8 +1371,8 @@ mod tests {
         for quad in parsed.quads().expect("quads") {
             added.add(&quad).expect("add");
         }
-        let model: serde_json::Value =
-            serde_json::from_str(&added.visual_model_json(None).expect("model")).expect("JSON");
+        let model: Value =
+            json::read(&added.visual_model_json(None).expect("model")).expect("JSON");
         assert_eq!(model["statements"].as_array().map(Vec::len), Some(1));
         assert_eq!(model["assertions"].as_array().map(Vec::len), Some(1));
         assert_eq!(model["relations"].as_array().map(Vec::len), Some(2));

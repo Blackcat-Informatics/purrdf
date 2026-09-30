@@ -32,6 +32,7 @@ use crate::model::{
     ReportingDescriptorReference, ResultKind, Run, SarifLog, SarifResult, Tool,
 };
 use crate::path_syntax::render_path;
+use purrdf_lex::json::{Object, Value};
 
 /// The tool name emitted in `driver.name`.
 pub const TOOL_NAME: &str = "purrdf";
@@ -217,19 +218,14 @@ pub fn build_report_sarif_with(
     sort_results(&mut results);
     let rules = register_rules(&mut results);
     let mut run = assemble_run(rules, results, options);
-    run.properties.insert(
-        PROP_SHACL_CONFORMS,
-        serde_json::Value::Bool(report.conforms),
-    );
+    run.properties.insert(PROP_SHACL_CONFORMS, report.conforms);
     run.properties.insert(
         PROP_SHACL_CONFORMANCE_DISALLOWS,
         report.conformance_disallows.iris(),
     );
     if let Some(well_formed) = report.shapes_graph_well_formed {
-        run.properties.insert(
-            PROP_SHACL_SHAPES_GRAPH_WELL_FORMED,
-            serde_json::Value::Bool(well_formed),
-        );
+        run.properties
+            .insert(PROP_SHACL_SHAPES_GRAPH_WELL_FORMED, well_formed);
     }
     attach_diagnostics(&mut run, &labelled.diagnostics);
     SarifLog::single_run(run)
@@ -364,7 +360,7 @@ pub fn diagnostics_to_sarif_string(
 ///
 /// This is the ergonomic surface: with `use purrdf_validate::SarifReport;` in
 /// scope, `report.to_sarif(&opts)` reads as a method — yet the writer never
-/// leaves this boundary crate, so `purrdf-shapes` stays free of any SARIF/serde
+/// leaves this boundary crate, so `purrdf-shapes` stays free of any SARIF
 /// concern.
 ///
 /// # Examples
@@ -426,18 +422,11 @@ fn result_to_sarif(
     if !result.annotations.is_empty() {
         properties.insert(
             PROP_SHACL_RESULT_ANNOTATIONS,
-            serde_json::Value::Array(
-                result
-                    .annotations
-                    .iter()
-                    .map(|(property, value)| {
-                        let mut entry = serde_json::Map::new();
-                        entry.insert("property".to_owned(), property.as_str().into());
-                        entry.insert("value".to_owned(), value.to_string().into());
-                        serde_json::Value::Object(entry)
-                    })
-                    .collect(),
-            ),
+            Value::array(result.annotations.iter().map(|(property, value)| {
+                Object::new()
+                    .with("property", property.as_str())
+                    .with("value", value.to_string())
+            })),
         );
     }
 
@@ -690,26 +679,24 @@ fn primary_message(messages: &[Literal]) -> Option<String> {
 }
 
 /// The [`PROP_SHACL_MESSAGES`] value for `messages`.
-fn shacl_messages(messages: &[Literal]) -> serde_json::Value {
-    serde_json::Value::Array(
-        messages
-            .iter()
-            .map(|m| {
-                let mut entry = serde_json::Map::new();
-                entry.insert("text".to_owned(), m.value().into());
-                if let Some(language) = m.language() {
-                    entry.insert("language".to_owned(), language.into());
-                }
-                if let Some(direction) = m.direction() {
-                    entry.insert("direction".to_owned(), direction.as_str().into());
-                }
-                if m.language().is_none() && m.datatype_str() != XSD_STRING {
-                    entry.insert("datatype".to_owned(), m.datatype_str().into());
-                }
-                serde_json::Value::Object(entry)
-            })
-            .collect(),
-    )
+///
+/// Each entry's members are written in name order (`datatype`, `direction`,
+/// `language`, `text`), the order every property-bag object is written in.
+fn shacl_messages(messages: &[Literal]) -> Value {
+    Value::array(messages.iter().map(|m| {
+        let mut entry = Object::new();
+        if m.language().is_none() && m.datatype_str() != XSD_STRING {
+            entry.push("datatype", m.datatype_str());
+        }
+        if let Some(direction) = m.direction() {
+            entry.push("direction", direction.as_str());
+        }
+        if let Some(language) = m.language() {
+            entry.push("language", language);
+        }
+        entry.push("text", m.value());
+        entry
+    }))
 }
 
 /// `xsd:string`.
@@ -809,6 +796,7 @@ fn assemble_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_lex::json;
     use purrdf_shapes::term::{Literal, NamedNode, Term};
 
     fn result(component: &str, severity: Severity, message: Option<&str>) -> ValidationResult {
@@ -946,7 +934,7 @@ mod tests {
                     .properties
                     .0
                     .get(PROP_SHACL_SHAPES_GRAPH_WELL_FORMED),
-                Some(&serde_json::Value::Bool(well_formed))
+                Some(&Value::Bool(well_formed))
             );
         }
     }
@@ -967,11 +955,11 @@ mod tests {
         let properties = &log.runs[0].properties.0;
         assert_eq!(
             properties.get(PROP_SHACL_CONFORMS),
-            Some(&serde_json::Value::Bool(true))
+            Some(&Value::Bool(true))
         );
         assert_eq!(
             properties.get(PROP_SHACL_CONFORMANCE_DISALLOWS),
-            Some(&serde_json::json!([
+            Some(&Value::array([
                 "http://www.w3.org/ns/shacl#Violation",
                 "http://www.w3.org/ns/shacl#Warning",
                 "http://www.w3.org/ns/shacl#Info"
@@ -990,11 +978,11 @@ mod tests {
         let properties = &log.runs[0].properties.0;
         assert_eq!(
             properties.get(PROP_SHACL_CONFORMS),
-            Some(&serde_json::Value::Bool(true))
+            Some(&Value::Bool(true))
         );
         assert_eq!(
             properties.get(PROP_SHACL_CONFORMANCE_DISALLOWS),
-            Some(&serde_json::json!(["http://www.w3.org/ns/shacl#Violation"]))
+            Some(&Value::array(["http://www.w3.org/ns/shacl#Violation"]))
         );
         // A diagnostics log is not a SHACL report and states neither.
         let diagnostics = build_diagnostics_sarif(&[], &SarifOptions::default());
@@ -1073,7 +1061,7 @@ mod tests {
             purrdf_shapes::report::ConformanceDisallows::default(),
         );
         let log = build_report_sarif(&report, &SarifOptions::default());
-        let bags: Vec<Option<&serde_json::Value>> = log.runs[0]
+        let bags: Vec<Option<&Value>> = log.runs[0]
             .results
             .iter()
             .map(|r| r.properties.0.get(PROP_SHACL_RESULT_ANNOTATIONS))
@@ -1086,10 +1074,13 @@ mod tests {
             .expect("the annotated result carries its annotations");
         assert_eq!(
             carried,
-            &serde_json::json!([
-                {"property": "http://example.org/ns#label", "value": "\"dringend\"@de"},
-                {"property": "http://example.org/ns#seen", "value": "<http://example.org/ns#M>"},
-            ])
+            &json::read(
+                r#"[
+                    {"property": "http://example.org/ns#label", "value": "\"dringend\"@de"},
+                    {"property": "http://example.org/ns#seen", "value": "<http://example.org/ns#M>"}
+                ]"#
+            )
+            .expect("JSON")
         );
     }
 
@@ -1349,18 +1340,21 @@ mod tests {
             diagnostics: Vec::new(),
         };
         let json = report_to_sarif_string(&report, &SarifOptions::default());
-        let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        let value = json::read(&json).expect("valid JSON");
 
         assert_eq!(value["version"], "2.1.0");
-        assert!(value["$schema"].is_string());
+        assert!(value["$schema"].as_str().is_some());
         let runs = value["runs"].as_array().expect("runs array");
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0]["tool"]["driver"]["name"], "purrdf");
 
         let allowed = ["error", "warning", "note", "none"];
         for r in runs[0]["results"].as_array().expect("results array") {
-            assert!(r["ruleId"].is_string(), "ruleId must be a string");
-            assert!(r["message"]["text"].is_string(), "message.text required");
+            assert!(r["ruleId"].as_str().is_some(), "ruleId must be a string");
+            assert!(
+                r["message"]["text"].as_str().is_some(),
+                "message.text required"
+            );
             let level = r["level"].as_str().expect("level string");
             assert!(
                 allowed.contains(&level),
@@ -1549,23 +1543,22 @@ mod tests {
             shapes_graph_well_formed: Some(true),
             diagnostics: Vec::new(),
         };
-        let json: serde_json::Value = serde_json::from_str(&report_to_sarif_string(
+        let json = json::read(&report_to_sarif_string(
             &conforming,
             &SarifOptions::default(),
         ))
         .expect("SARIF JSON");
         assert_eq!(
             json["runs"][0]["results"],
-            serde_json::json!([]),
+            Value::Array(Vec::new()),
             "{json:#}"
         );
 
-        let clean_parse: serde_json::Value =
-            serde_json::from_str(&diagnostics_to_sarif_string(&[], &SarifOptions::default()))
-                .expect("SARIF JSON");
+        let clean_parse = json::read(&diagnostics_to_sarif_string(&[], &SarifOptions::default()))
+            .expect("SARIF JSON");
         assert_eq!(
             clean_parse["runs"][0]["results"],
-            serde_json::json!([]),
+            Value::Array(Vec::new()),
             "{clean_parse:#}"
         );
 
@@ -1580,7 +1573,7 @@ mod tests {
             shapes_graph_well_formed: Some(true),
             diagnostics: Vec::new(),
         };
-        let json: serde_json::Value = serde_json::from_str(&report_to_sarif_string(
+        let json = json::read(&report_to_sarif_string(
             &violating,
             &SarifOptions::default(),
         ))

@@ -141,13 +141,11 @@ const MAX_PREALLOCATED_ROWS: usize = 1024;
 /// every producer ended" is a coherent request, and the trailer it returns is
 /// the whole answer to it.
 ///
-/// It is serializable because it is part of a request
+/// It has a JSON form ([`TopK::to_json`]) because it is part of a request
 /// ([`ReadBound`](crate::ReadBound)) and therefore part of a plan, and a plan is
-/// a value a caller stores, ships and hands back. The wire form is the row count
+/// a value a caller stores, ships and hands back. That form is the row count
 /// itself.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TopK(usize);
 
 impl TopK {

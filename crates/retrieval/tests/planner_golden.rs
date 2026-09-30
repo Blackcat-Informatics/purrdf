@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use purrdf_lex::json;
 use purrdf_retrieval::{
     DepthCause, DepthInputs, Iri, Metric, Plan, PlanError, RankFidelity, RegistryId,
     RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term, TopK, UnservedReason,
@@ -451,21 +452,18 @@ fn read_golden(name: &str) -> String {
 
 /// A deterministic rendering of a plan as pretty JSON.
 ///
-/// `serde_json`'s default (non-`preserve_order`) `Value` is sorted-key, so the
-/// `HashMap` stratum maps serialize in canonical order rather than in
-/// iteration order. The registry instance id is a per-process counter
-/// (`registry_id.rs`), so it is pinned here and asserted separately; every
-/// durable field is captured verbatim.
+/// Every object's members are put in name order before the value is written,
+/// so the rendering is a function of the plan's content alone. The registry
+/// instance id is a per-process counter (`registry_id.rs`), so it is pinned
+/// here and asserted separately; every durable field is captured verbatim.
 fn canonical_json(plan: &Plan) -> String {
-    let mut value = serde_json::to_value(plan).expect("a plan serializes");
+    let mut value = plan.to_json();
+    value.sort_keys();
     value
         .as_object_mut()
-        .expect("a plan serializes to an object")
-        .insert(
-            "registry_instance_id".to_owned(),
-            serde_json::Value::from(0_u64),
-        );
-    let mut rendered = serde_json::to_string_pretty(&value).expect("the value renders");
+        .expect("a plan is a JSON object")
+        .insert("registry_instance_id", 0_u64);
+    let mut rendered = json::write_pretty(&value);
     rendered.push('\n');
     rendered
 }

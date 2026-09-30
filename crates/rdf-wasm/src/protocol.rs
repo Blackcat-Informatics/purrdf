@@ -31,6 +31,7 @@
 use std::fmt::Write as _;
 
 use purrdf_core::{ResourceDimension, StopCause, TrippedGovernor as TrippedValue};
+use purrdf_lex::json_escape::{JsonEscapes, push_string};
 use purrdf_sparql_algebra::SparqlParser;
 use purrdf_sparql_eval::protocol::{
     FailureCode, OperationKind, ProblemDetail, ProtocolError, ProtocolRequest, ResultKind,
@@ -181,7 +182,9 @@ const fn status_title(status: u16) -> Option<&'static str> {
 
 /// A JSON string literal for `text`.
 fn json_string(text: &str) -> String {
-    serde_json::Value::String(text.to_owned()).to_string()
+    let mut out = String::with_capacity(text.len() + 2);
+    push_string(&mut out, text, JsonEscapes::ShortForms);
+    out
 }
 
 /// The HTTP problem a failed operation is answered with: build it with
@@ -697,6 +700,7 @@ impl SparqlProtocolRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_lex::json;
 
     fn request(
         method: &str,
@@ -857,8 +861,8 @@ mod tests {
         assert!(!message.contains("text/turtle"));
     }
 
-    fn body(problem: &FailureProblem, id: Option<&str>) -> serde_json::Value {
-        serde_json::from_str(&problem.render(id).expect("renders")).expect("valid JSON")
+    fn body(problem: &FailureProblem, id: Option<&str>) -> json::Value {
+        json::read(&problem.render(id).expect("renders")).expect("valid JSON")
     }
 
     /// A parse refusal is the client's `400` in its own words; an evaluation failure is a
@@ -977,7 +981,7 @@ mod tests {
         assert_eq!(document["code"], "NotAcceptable");
         assert_eq!(
             document["offered"],
-            serde_json::json!([
+            json::Value::array([
                 "application/trig",
                 "application/n-quads",
                 "application/ld+json"
@@ -1013,7 +1017,7 @@ mod tests {
         assert_eq!(document["code"], "answer-cap-exhausted");
         assert_eq!(document["dimension"], "answer-rows");
         assert_eq!(document["consumed"], 3);
-        assert_eq!(document["estimate"], serde_json::Value::Null);
+        assert_eq!(document["estimate"], json::Value::Null);
 
         let refused = trip_from_record(
             Some("refused"),
@@ -1027,7 +1031,7 @@ mod tests {
         let document = body(&FailureProblem::for_trip(refused), None);
         assert_eq!(document["status"], 422);
         assert_eq!(document["estimate"], 20);
-        assert_eq!(document["consumed"], serde_json::Value::Null);
+        assert_eq!(document["consumed"], json::Value::Null);
 
         for label in ["deadline-exceeded", "cancelled"] {
             let stopped = trip_from_record(Some("stopped"), Some(label), None, None, None, None)
@@ -1037,7 +1041,7 @@ mod tests {
             let document = body(&problem, None);
             assert_eq!(document["code"], label);
             assert_eq!(document["cause"], label);
-            assert_eq!(document["dimension"], serde_json::Value::Null);
+            assert_eq!(document["dimension"], json::Value::Null);
         }
         // A record that names no governor is refused, not guessed at.
         assert!(trip_from_record(Some("unknown"), Some("x"), None, None, None, None).is_err());
