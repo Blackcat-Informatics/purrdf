@@ -76,3 +76,10 @@ harness = false
 # Report-only.
 name = "relate"
 harness = false
+
+[[bench]]
+# GeoJSON reading through the one shared JSON reader: a ~1 MB FeatureCollection
+# parsed and re-rendered as a JSON tree, and a large MultiPolygon literal read
+# into the exact geometry model. Report-only.
+name = "geojson_parse"
+harness = false

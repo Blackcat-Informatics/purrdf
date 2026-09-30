@@ -2620,6 +2620,25 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   it afterwards. It now renders through the escaper, so nothing between the producer
   and the drain holds the answer.
 
+- Timings, the one exception to the allocator-bytes rule above, for the helpers
+  centralized into shared homes; report-only, taken on a host at load 9-17 as 24
+  interleaved ABBA pairs against `origin/main` (ratio = branch / main, median of
+  pairs, bootstrap 95% CI). The Turtle literal escape scan over 1 MiB fell from
+  1.30 ms to 78.7 us (0.061 [0.060, 0.062]) and, with an escape every KiB, from
+  1.16 ms to 78.9 us; over escape-dense text it is 0.908 [0.889, 0.928]. The
+  one-shot hex render is 0.337 [0.316, 0.347] at 64 B, 0.409 at 4 KiB and 0.583
+  [0.567, 0.588] at 1 MiB against the core encoder it replaced. Pack dictionary
+  encoding, which runs the shared first-mismatch kernel per record, is unchanged
+  at 0.994 [0.980, 1.026]. The shared JSON reader is slower than the two
+  hand-written readers it replaced: SPARQL-results JSON read of a 10,000-row
+  document 1.329 [1.238, 1.420] (13.9 ms to 17.6 ms), a 1 MB GeoJSON
+  FeatureCollection parse 1.815 [1.770, 1.985] (5.0 ms to 9.1 ms), its re-render
+  1.159, and a large GeoJSON literal 1.219; pack dictionary decode is 1.181
+  [1.151, 1.212] (IRI validation is 36% of its time), and `hex::Lower` `Display`
+  at 64 B is 1.129 [1.107, 1.179] while larger sizes are faster. The benches are
+  `sparql_results_json_read`, `geojson_json`/`geojson_literal`,
+  `core_escape_scan`/`core_pack_dict_prefix` and the `hex` group at 1 MiB.
+
 ### Fixed
 
 - **sparql-eval, wasm:** nested `FILTER NOT EXISTS` answers 181 levels deep on

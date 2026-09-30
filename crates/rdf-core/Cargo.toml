@@ -222,6 +222,15 @@ name = "distance"
 harness = false
 
 [[bench]]
+# The two core paths that reach a shared home: the Turtle literal escape scan
+# (`turtle::emit_term` over 1 MiB of clean, dense-escape and sparse-escape text)
+# and the pack dictionary's front-coding prefix (`EncodedDict::encode`/`decode`
+# over 100,000 sorted IRIs, and the `common_prefix_len` kernel). Report-only --
+# no timing/speedup assertions. `make bench` lane only -- excluded from `make check`.
+name = "shared_homes"
+harness = false
+
+[[bench]]
 # `purrdf_core::SmallVec` on the workspace's row shapes: `IdVec` push /
 # from_slice / collect / clone / into_iter inline and spilled, and dense
 # `Option<TermId>` rows built by `smallvec![None; w]`. Report-only -- no

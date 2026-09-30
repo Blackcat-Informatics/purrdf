@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Digest throughput at 64 B, 1 KiB and 1 MiB, per algorithm and per path the
-//! host can run; base16 at 8 B to 4 KiB per encoding path
+//! host can run; base16 at 8 B to 1 MiB per encoding path
 //! and through every public entry point (the length switch included), and the
 //! 64-digit content-address readers. Report-only; not a gate.
 
@@ -62,9 +62,9 @@ fn digests(c: &mut Bench) {
 }
 
 /// The length classes base16 is selected over: 8 bytes, a 16-, 20- and
-/// 32-byte digest (32 is the length switch), one past it, 64 bytes and a
-/// 4 KiB blob.
-const HEX_SIZES: [usize; 7] = [8, 16, 20, 32, 33, 64, 4096];
+/// 32-byte digest (32 is the length switch), one past it, 64 bytes, a
+/// 4 KiB blob and a 1 MiB payload.
+const HEX_SIZES: [usize; 8] = [8, 16, 20, 32, 33, 64, 4096, 1 << 20];
 
 fn hex(c: &mut Bench) {
     let mut group = c.benchmark_group("hex");

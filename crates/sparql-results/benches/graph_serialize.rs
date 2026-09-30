@@ -35,12 +35,13 @@
 //! output back through [`from_json`], so the escapers' bulk-copy paths and the
 //! SRJ reader's ASCII-run fast path are measurable too. Report-only.
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_sparql_results::{
-    ResultProvenance, SparqlResult, SparqlResultsFormat, from_json, serialize_into, to_csv,
-    to_json, to_tsv, to_xml,
+    ResultProvenance, SparqlResult, SparqlResultsFormat, from_json, from_json_bounded,
+    serialize_into, to_csv, to_json, to_tsv, to_xml,
 };
 use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 
@@ -180,7 +181,7 @@ fn bench_results_serialize(c: &mut Bench) {
                     format,
                     black_box(&provenance),
                     None,
-                    &mut Discard,
+                    &mut std::io::sink(),
                 )
                 .expect("serialize");
                 black_box(outcome.bytes_written);
@@ -193,6 +194,62 @@ fn bench_results_serialize(c: &mut Bench) {
             black_box(parsed);
         });
     });
+    group.finish();
+}
+
+/// Rows in the SRJ read fixtures: a 10,000-row SELECT document.
+const READ_ROWS: usize = 10_000;
+
+/// SRJ text read through the one shared JSON reader (`purrdf_lex::json`).
+///
+/// Two 10,000-row documents: the writer's own output over the escaping-heavy
+/// fixture (every string arm of the unescaper runs) and a hand-written clean
+/// document of IRI, language-tagged and typed cells (the reader's ASCII-run
+/// fast path is the cost). `from_json_bounded` is the admission-gated entry the
+/// federated `SERVICE` reader goes through. Report-only.
+fn bench_json_read(c: &mut Bench) {
+    let escaping = to_json(
+        &build_select_result(READ_ROWS),
+        &ResultProvenance::default(),
+        None,
+    )
+    .expect("serialize the escaping document")
+    .bytes;
+    let mut clean =
+        String::from("{\"head\":{\"vars\":[\"s\",\"label\",\"n\"]},\"results\":{\"bindings\":[");
+    for i in 0..READ_ROWS {
+        if i > 0 {
+            clean.push(',');
+        }
+        let _ = write!(
+            clean,
+            "{{\"s\":{{\"type\":\"uri\",\"value\":\"https://example.org/s{i}\"}},\
+             \"label\":{{\"type\":\"literal\",\"value\":\"label number {i}\",\"xml:lang\":\"en\"}},\
+             \"n\":{{\"type\":\"literal\",\"datatype\":\"{XSD_INTEGER}\",\"value\":\"{i}\"}}}}"
+        );
+    }
+    clean.push_str("]}}");
+    let clean = clean.into_bytes();
+    assert_eq!(
+        from_json(&escaping).expect("escaping parses").rows.len(),
+        READ_ROWS
+    );
+    assert_eq!(
+        from_json(&clean).expect("clean parses").rows.len(),
+        READ_ROWS
+    );
+
+    let mut group = c.benchmark_group("sparql_results_json_read");
+    for (name, bytes) in [("escaping", &escaping), ("clean", &clean)] {
+        group.throughput(Throughput::Bytes(bytes.len() as u64));
+        group.bench_function(format!("from_json_10k_rows_{name}"), |bencher| {
+            bencher.iter(|| black_box(from_json(black_box(bytes)).expect("parse")));
+        });
+        group.bench_function(format!("from_json_bounded_10k_rows_{name}"), |bencher| {
+            bencher
+                .iter(|| black_box(from_json_bounded(black_box(bytes), u64::MAX).expect("parse")));
+        });
+    }
     group.finish();
 }
 
@@ -260,19 +317,10 @@ fn bench_graph_serialize(c: &mut Bench) {
     group.finish();
 }
 
-bench_group!(benches, bench_graph_serialize, bench_results_serialize);
+bench_group!(
+    benches,
+    bench_graph_serialize,
+    bench_results_serialize,
+    bench_json_read
+);
 bench_main!(benches);
-
-/// A writer that keeps nothing, so a streamed arm measures the emitter rather than
-/// the bench's own accumulation of what it produced.
-struct Discard;
-
-impl std::io::Write for Discard {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
