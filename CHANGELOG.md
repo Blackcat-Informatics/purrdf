@@ -51,6 +51,20 @@ under Changed and Fixed where a longer account helps.
   `purrdf_validate::RuleLimits` is `purrdf_shapes::RuleLimits` (still
   re-exported from `purrdf_validate`).
 
+- **lex, jsonschema, rdf:** `purrdf_lex::json::Value` and `Number` equality and
+  `Hash` compare what a document says, not how it spelled it: numbers by the
+  exact decimal they denote (`1 == 1.0 == 1e0`, `-0 == 0`, exponents of any
+  size) and objects without regard to member order (RFC 8259 §4; a repeated
+  name pairs its occurrences in document order), which is JSON Schema's
+  `equal`. `serde_json::Value` was order-insensitive too but distinguished `1`
+  from `1.0`; a caller that must see a respelling or a reordering uses the new
+  `Value::same_text` / `Number::same_text`. `Number` no longer derives `Ord`
+  (a lexeme order disagrees with value equality), and `Value == <integer>`
+  compares by value (`1.0 == 1_u8`). The OKF writer's "JSON literal would lose
+  precision or lexical identity" check and the research-object row
+  de-duplication use `same_text`, so they refuse and keep exactly what they did
+  before.
+
 - **jsonschema, rdf, shapes, slice, geo:** JSON values in public signatures
   are `purrdf_lex::json::Value`, whose numbers keep their lexemes and whose
   objects keep their members in order: schemas and instances in
@@ -399,6 +413,24 @@ under Changed and Fixed where a longer account helps.
   `ToJson`, `JsonKey`, `Within`, `json_string_enum!` and `DecodeError`, which
   carries the RFC 6901 pointer of the offending value. No reader, writer,
   drop, clone, comparison or `Debug` walk recurses on the machine stack.
+- **lex:** `json::Number::decimal` (the canonical exact value: sign, significant
+  digits, a base-ten exponent that is a machine word until it leaves `i64` and
+  its digits after), `Value::same_text` and `Number::same_text`, and
+  `Hash for Value`/`Object` (an iterative, order-independent walk consistent
+  with `==`). `purrdf_xsd::json_number::JsonNumber::parse` builds on
+  `Number::decimal` instead of a second canonicalizer, and
+  `purrdf-jsonschema`'s private `equal`/`hash_value` are gone: `const`, `enum`
+  and `uniqueItems` compare with `Value`'s `==` and `Hash`.
+- **lex:** the JSONTestSuite `test_parsing/` corpus (318 documents: 95 `y_`, 188
+  `n_`, 35 `i_`), vendored byte-frozen in `vectors/JSONTestSuite/` by
+  `scripts/vendor-jsontestsuite.py` (pinned commit, tree id and licence digest;
+  registered in `scripts/check-corpus-frozen.py`). `tests/json_test_suite.rs`
+  requires every `y_` to be accepted and to round-trip, every `n_` to be
+  refused (on a 256 KiB stack, with the depth cap lifted too), and pins each
+  `i_` outcome by file name with its reason (UTF-8 only and no byte-order
+  mark, an unpaired surrogate refused, a number kept as its lexeme, depth an
+  explicit cap). The reader needed no change: no `y_` was refused and no `n_`
+  accepted.
 - **lex:** `purrdf_lex::yaml` reads one YAML 1.2 document (block and flow
   styles, every scalar style, explicit keys, core-schema tags, anchors and
   aliases under a node bound) into a `json::Value` and writes the block layout

@@ -1495,6 +1495,54 @@ mod tests {
     }
 
     #[test]
+    fn context_match_ignores_member_order_but_not_content() {
+        // A JSON object is unordered (RFC 8259 §4): the document's context
+        // matches the configured one however its members are ordered.
+        let base = config();
+        let configured = OfflineJsonLdContext::new(
+            Value::from(
+                Object::new()
+                    .with("@vocab", "https://example.org/dcat/")
+                    .with("@base", "https://example.org/base/"),
+            ),
+            base.context().definitions().clone(),
+        )
+        .expect("offline context");
+        let config = DcatConfig::new(
+            base.common().clone(),
+            configured,
+            base.vocabulary().clone(),
+            base.profile_iri(),
+        )
+        .expect("DCAT config");
+        let input = String::from_utf8(INPUT.to_vec()).expect("UTF-8 fixture");
+        let one_member = r#""@context": {
+    "@vocab": "https://example.org/dcat/"
+  }"#;
+        assert!(input.contains(one_member));
+        let ordered = input.replacen(
+            one_member,
+            r#""@context": {"@vocab": "https://example.org/dcat/", "@base": "https://example.org/base/"}"#,
+            1,
+        );
+        let reordered = input.replacen(
+            one_member,
+            r#""@context": {"@base": "https://example.org/base/", "@vocab": "https://example.org/dcat/"}"#,
+            1,
+        );
+        let wrong = input.replacen(
+            one_member,
+            r#""@context": {"@base": "https://example.org/other/", "@vocab": "https://example.org/dcat/"}"#,
+            1,
+        );
+        let in_order = read_dcat(&package(ordered, &config), &config).expect("same order");
+        let out_of_order = read_dcat(&package(reordered, &config), &config)
+            .expect("the same members in another order");
+        assert_eq!(in_order.model, out_of_order.model);
+        assert!(read_dcat(&package(wrong, &config), &config).is_err());
+    }
+
+    #[test]
     fn config_requires_complete_offline_expansion() {
         let config = config();
         let mut definitions = config.context().definitions().clone();

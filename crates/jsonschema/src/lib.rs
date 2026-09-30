@@ -143,7 +143,6 @@ mod compile;
 mod content;
 mod dialect;
 pub mod ecma;
-mod equal;
 mod error;
 mod format;
 mod meta_set;
@@ -152,6 +151,7 @@ mod output;
 mod pointer;
 mod registry;
 mod schema;
+mod unique_items;
 mod validate;
 
 pub use dialect::Dialect;

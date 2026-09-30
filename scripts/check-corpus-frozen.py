@@ -70,6 +70,7 @@ GUARDED_ROOTS: dict[str, str] = {
     "vectors/shexTest": "scripts/conformance-frozen/vectors-shexTest.sha256",
     "vectors/sparql-cdt": "scripts/conformance-frozen/vectors-sparql-cdt.sha256",
     "vectors/wycheproof": "scripts/conformance-frozen/vectors-wycheproof.sha256",
+    "vectors/JSONTestSuite": "scripts/conformance-frozen/vectors-JSONTestSuite.sha256",
     "crates/shapes/corpus": "scripts/conformance-frozen/shapes-corpus.sha256",
     "crates/shapes/spec": "scripts/conformance-frozen/shapes-spec.sha256",
     "crates/sparql-conformance/corpus/construct": (

@@ -16,9 +16,14 @@
 //!
 //! * **Numbers keep their lexeme.** A [`Number`] is the exact text the document
 //!   wrote, validated against the RFC 8259 §6 grammar and never rounded on the
-//!   way in. [`Number::as_u64`], [`Number::as_i64`], [`Number::as_i128`] and
+//!   way in; [`Number::decimal`] is its exact value. [`Number::as_u64`], [`Number::as_i64`], [`Number::as_i128`] and
 //!   [`Number::as_f64`] decide what it denotes when a caller asks; the writer
 //!   emits the lexeme character for character.
+//! * **Equality is by value.** `==` and `Hash` on a [`Value`] compare numbers by
+//!   the exact decimal they denote (`1 == 1.0 == 1e0`) and objects without
+//!   regard to member order (RFC 8259 §4), the definition JSON Schema's
+//!   `equal` states; [`Value::same_text`] and [`Number::same_text`] are the
+//!   spelling-and-order identity for a caller that needs it.
 //! * **Objects keep every member, in document order.** RFC 8259 §4 permits a
 //!   repeated name and says nothing about which occurrence wins, so an
 //!   [`Object`] is the ordered list of members, duplicates included.
@@ -26,6 +31,11 @@
 //!   [`Object::first_duplicate`] let a caller refuse an ambiguity, and
 //!   [`Limits::unique_members`] refuses one at the byte it occurs (RFC 7493
 //!   §2.3, I-JSON).
+//! * **Input is UTF-8 without a byte-order mark.** [`read_slice`] refuses bytes
+//!   that are not UTF-8 (RFC 8259 §8.1), including UTF-16 and a leading BOM, and
+//!   a `\u` escape naming an unpaired surrogate is refused; a paired escape is
+//!   its character. The JSONTestSuite corpus pins each such outcome
+//!   (`tests/json_test_suite.rs`).
 //! * **Bounded, and bounded explicitly.** [`Limits`] caps container depth,
 //!   value occurrences and decoded string length. The depth cap is always
 //!   explicit: [`Limits::DEFAULT`] states 128 open containers.
@@ -73,7 +83,7 @@ mod value;
 mod write;
 
 pub use error::{Error, ErrorKind};
-pub use number::Number;
+pub use number::{Decimal, Exponent, Number};
 pub use read::{
     Event, Kind, Limits, Occurrence, Reader, Str, occurrences, read, read_slice, read_with,
 };

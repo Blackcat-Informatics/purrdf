@@ -4,6 +4,7 @@
 //! The JSON value tree, whose every whole-tree walk runs over a heap work list.
 
 use core::fmt;
+use core::hash::{Hash, Hasher};
 use core::mem;
 use core::ops::{Index, IndexMut};
 use std::borrow::Cow;
@@ -17,6 +18,29 @@ use crate::json_pointer;
 /// `PartialEq`, `Debug` and `Display` are loops over heap work lists rather
 /// than the compiler's recursive glue: no walk spends a stack frame per level.
 /// `Debug` and `Display` print the value as compact JSON (`{:#}` pretty).
+///
+/// # Equality
+///
+/// `==` and [`Hash`] compare what the document says, not how it spelled it: two
+/// values are equal when they are the same kind and the same value. Numbers
+/// compare by the exact decimal they denote (`1`, `1.0` and `1e0` are equal;
+/// see [`Number`]), strings by code points, arrays item by item, and objects by
+/// their names and each name's value with the members **unordered** (RFC 8259
+/// §4: an object is an unordered collection of name/value pairs), a repeated
+/// name pairing its occurrences in document order. This is also JSON Schema's
+/// `equal` (2020-12 Core §4.2.2), so the schema validator uses `==` directly.
+/// [`Value::same_text`] is the stricter identity for a caller that must see a
+/// changed spelling or member order.
+///
+/// ```rust
+/// use purrdf_lex::json;
+///
+/// let read = |text: &str| json::read(text).unwrap();
+/// assert_eq!(read(r#"{"a":1,"b":[2.0]}"#), read(r#"{"b":[2],"a":1e0}"#));
+/// assert_ne!(read(r#"{"a":1}"#), read(r#"{"a":1,"b":1}"#));
+/// assert_ne!(read("[1,2]"), read("[2,1]"));
+/// assert_ne!(read("1"), read("true"));
+/// ```
 #[derive(Default)]
 pub enum Value {
     /// `null`.
@@ -39,7 +63,7 @@ pub enum Value {
 /// [`Object::get`] answers the FIRST member with a name; [`Object::insert`]
 /// replaces the first member with a name in place or appends; [`Object::push`]
 /// always appends, so a repeat is kept as the reader keeps it.
-#[derive(Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default)]
 pub struct Object {
     members: Vec<(String, Value)>,
 }
@@ -531,14 +555,187 @@ impl Clone for Value {
     }
 }
 
+/// An object's members ordered by name, repeats in document order: the order
+/// [`Value`] equality pairs members in and hashing feeds them in.
+fn by_name(object: &Object) -> Vec<&(String, Value)> {
+    let mut members: Vec<_> = object.members.iter().collect();
+    members.sort_by(|(left, _), (right, _)| left.cmp(right));
+    members
+}
+
+/// Queue the member pairs of two objects for comparison, or say they differ in
+/// their names. Members pair by name, so the order they were written in never
+/// matters; a repeated name pairs its occurrences in document order.
+fn pair_members<'v>(
+    left: &'v Object,
+    right: &'v Object,
+    work: &mut Vec<(&'v Value, &'v Value)>,
+) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let in_order = left
+        .members
+        .iter()
+        .zip(&right.members)
+        .all(|((name, _), (other, _))| name == other);
+    if in_order {
+        // The common case, and the same pairing the sorted walk finds.
+        work.extend(
+            left.members
+                .iter()
+                .zip(&right.members)
+                .map(|((_, value), (_, other))| (value, other)),
+        );
+        return true;
+    }
+    for ((name, value), (other_name, other)) in by_name(left).into_iter().zip(by_name(right)) {
+        if name != other_name {
+            return false;
+        }
+        work.push((value, other));
+    }
+    true
+}
+
+/// Compare the queued pairs, and every pair they queue, to the end.
+fn equal_pairs<'v>(mut work: Vec<(&'v Value, &'v Value)>) -> bool {
+    while let Some(pair) = work.pop() {
+        match pair {
+            (Value::Null, Value::Null) => {}
+            (Value::Bool(a), Value::Bool(b)) if a == b => {}
+            (Value::Number(a), Value::Number(b)) if a == b => {}
+            (Value::String(a), Value::String(b)) if a == b => {}
+            (Value::Array(a), Value::Array(b)) if a.len() == b.len() => {
+                work.extend(a.iter().zip(b));
+            }
+            (Value::Object(a), Value::Object(b)) => {
+                if !pair_members(a, b, &mut work) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Value equality: the same kind and the same value, where numbers compare by
+/// the exact decimal they denote ([`Number`]), strings by code points, arrays
+/// item by item, and objects by their names and each name's value, members
+/// unordered (RFC 8259 §4: an object is an unordered collection). This is JSON
+/// Schema's `equal` (2020-12 Core §4.2.2). [`Value::same_text`] is the
+/// spelling-and-order identity.
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
+        equal_pairs(vec![(self, other)])
+    }
+}
+
+impl Eq for Value {}
+
+impl PartialEq for Object {
+    /// Object equality as [`Value`]'s: names and values, members unordered.
+    fn eq(&self, other: &Self) -> bool {
+        let mut work = Vec::new();
+        pair_members(self, other, &mut work) && equal_pairs(work)
+    }
+}
+
+impl Eq for Object {}
+
+/// One step of the hashing walk: a value to hash, or an object member's name,
+/// which hashes just before its value.
+enum Hashing<'v> {
+    Value(&'v Value),
+    Name(&'v String),
+}
+
+/// Queue an object's members, by name, behind its header.
+fn hash_object<'v, H: Hasher>(object: &'v Object, pending: &mut Vec<Hashing<'v>>, state: &mut H) {
+    state.write_u8(5);
+    state.write_usize(object.len());
+    for (name, member) in by_name(object).into_iter().rev().map(|m| (&m.0, &m.1)) {
+        pending.push(Hashing::Value(member));
+        pending.push(Hashing::Name(name));
+    }
+}
+
+fn hash_pending<H: Hasher>(mut pending: Vec<Hashing<'_>>, state: &mut H) {
+    while let Some(step) = pending.pop() {
+        let value = match step {
+            Hashing::Name(name) => {
+                name.hash(state);
+                continue;
+            }
+            Hashing::Value(value) => value,
+        };
+        match value {
+            Value::Null => state.write_u8(0),
+            Value::Bool(flag) => {
+                state.write_u8(1);
+                flag.hash(state);
+            }
+            Value::Number(number) => {
+                state.write_u8(2);
+                number.hash(state);
+            }
+            Value::String(text) => {
+                state.write_u8(3);
+                text.hash(state);
+            }
+            Value::Array(items) => {
+                state.write_u8(4);
+                state.write_usize(items.len());
+                // Reversed onto the stack, so the items hash first to last.
+                pending.extend(items.iter().rev().map(Hashing::Value));
+            }
+            Value::Object(object) => hash_object(object, &mut pending, state),
+        }
+    }
+}
+
+impl Hash for Value {
+    /// Consistent with `==`: numbers hash their exact value and an object's
+    /// members hash in name order whatever order they were written in. A heap
+    /// work list, so any nesting depth hashes.
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_pending(vec![Hashing::Value(self)], state);
+    }
+}
+
+impl Hash for Object {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let mut pending = Vec::new();
+        hash_object(self, &mut pending, state);
+        hash_pending(pending, state);
+    }
+}
+
+impl Value {
+    /// Whether both values are identical as written: the same kinds, numbers
+    /// spelled alike (`1.0` is not `1`), and object members in the same
+    /// order (`{"a":1,"b":2}` is not `{"b":2,"a":1}`). `==` is the value
+    /// comparison; this is for a caller that needs byte-stable identity, such
+    /// as a check that a rewrite changed no spelling.
+    ///
+    /// ```rust
+    /// use purrdf_lex::json;
+    ///
+    /// let read = |text: &str| json::read(text).unwrap();
+    /// assert_eq!(read("1.0"), read("1"));
+    /// assert!(!read("1.0").same_text(&read("1")));
+    /// assert_eq!(read(r#"{"a":1,"b":2}"#), read(r#"{"b":2,"a":1}"#));
+    /// assert!(!read(r#"{"a":1,"b":2}"#).same_text(&read(r#"{"b":2,"a":1}"#)));
+    /// assert!(read(r#"{"a":[1.5]}"#).same_text(&read(r#"{ "a" : [1.5] }"#)));
+    /// ```
+    pub fn same_text(&self, other: &Self) -> bool {
         let mut work: Vec<(&Self, &Self)> = vec![(self, other)];
         while let Some(pair) = work.pop() {
             match pair {
                 (Self::Null, Self::Null) => {}
                 (Self::Bool(a), Self::Bool(b)) if a == b => {}
-                (Self::Number(a), Self::Number(b)) if a == b => {}
+                (Self::Number(a), Self::Number(b)) if a.same_text(b) => {}
                 (Self::String(a), Self::String(b)) if a == b => {}
                 (Self::Array(a), Self::Array(b)) if a.len() == b.len() => {
                     work.extend(a.iter().zip(b));
@@ -557,8 +754,6 @@ impl PartialEq for Value {
         true
     }
 }
-
-impl Eq for Value {}
 
 impl fmt::Display for Value {
     /// Compact JSON; `{:#}` writes it pretty.
@@ -729,8 +924,7 @@ macro_rules! value_from_integer {
         impl PartialEq<$t> for Value {
             fn eq(&self, other: &$t) -> bool {
                 self.as_number()
-                    .and_then(Number::as_i128)
-                    .is_some_and(|value| i128::try_from(*other).is_ok_and(|other| other == value))
+                    .is_some_and(|number| *number == Number::from(*other))
             }
         }
     )*};

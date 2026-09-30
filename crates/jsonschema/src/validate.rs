@@ -32,13 +32,13 @@ use std::rc::Rc;
 use purrdf_lex::json::{Object, Value};
 
 use crate::ecma::{self, CompiledPattern, MatchLimits, PatternError};
-use crate::equal;
 use crate::error::{EvaluationCause, EvaluationError};
 use crate::format::Format;
 use crate::number::Decimal;
 use crate::output::{Output, OutputUnit};
 use crate::pointer;
 use crate::schema::{Body, JsonType, Keyword, Kind, Node, NodeId, Pattern, Schema};
+use crate::unique_items;
 use purrdf_iri::percent;
 
 /// An object's members, in document order, as an evaluation walks them.
@@ -1705,14 +1705,14 @@ impl<'s> Evaluator<'s> {
                 }
             }
             Kind::Enum(values) => {
-                if values.iter().any(|value| equal::equal(value, instance)) {
+                if values.contains(instance) {
                     Ok(None)
                 } else {
                     Err("the value is not one of the enumerated values".to_owned())
                 }
             }
             Kind::Const(value) => {
-                if equal::equal(value, instance) {
+                if *value == *instance {
                     Ok(None)
                 } else {
                     Err(format!("the value must be {value}"))
@@ -1776,7 +1776,7 @@ impl<'s> Evaluator<'s> {
                 _ => Ok(None),
             },
             Kind::UniqueItems => match instance {
-                Value::Array(items) => match equal::first_duplicate(items) {
+                Value::Array(items) => match unique_items::first_duplicate(items) {
                     Some((first, second)) => Err(format!("items {first} and {second} are equal")),
                     None => Ok(None),
                 },

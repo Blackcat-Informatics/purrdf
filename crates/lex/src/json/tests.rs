@@ -94,7 +94,9 @@ fn a_number_is_kept_as_its_source_lexeme_verbatim() {
         assert_eq!(value.as_number().unwrap().lexeme(), lexeme);
         assert_eq!(write_compact(&value), lexeme);
     }
-    assert_ne!(read("1.5").unwrap(), read("1.50").unwrap());
+    // Two spellings of one number: equal by value, distinct as written.
+    assert_eq!(read("1.5").unwrap(), read("1.50").unwrap());
+    assert!(!read("1.5").unwrap().same_text(&read("1.50").unwrap()));
 }
 
 #[test]

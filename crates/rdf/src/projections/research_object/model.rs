@@ -350,7 +350,11 @@ impl ResearchObjectModel {
             // are a function of its content.
             record_set.rows.iter_mut().for_each(sorted_last_wins);
             record_set.rows.sort_by_key(canonical_json_key);
-            record_set.rows.dedup();
+            // Rows are byte-identical, not merely equal by value: `1` and `1.0`
+            // are two spellings a row keeps.
+            record_set
+                .rows
+                .dedup_by(|later, earlier| later.same_text(earlier));
             for row in &record_set.rows {
                 validate_json_depth(row, policy.max_json_depth(), 0)?;
             }
@@ -682,6 +686,40 @@ mod tests {
         assert_eq!(
             model.clone().normalize(policy(10, 10)).expect("again"),
             model
+        );
+    }
+
+    #[test]
+    fn identical_rows_deduplicate_and_spelled_differently_rows_survive() {
+        let row = |text: &str| purrdf_lex::json::read(text).expect("row");
+        let mut model = minimal();
+        model.record_sets.push(ResearchRecordSet {
+            id: "https://example.org/records".to_owned(),
+            names: vec![],
+            descriptions: vec![],
+            fields: vec![],
+            rows: vec![
+                row(r#"{"b":2,"a":1}"#),
+                row(r#"{"a":1.0}"#),
+                row(r#"{"a":1}"#),
+                row(r#"{"a":1,"b":2}"#),
+                row(r#"{"a":1}"#),
+            ],
+        });
+        model
+            .dataset
+            .record_sets
+            .push("https://example.org/records".to_owned());
+        let model = model.normalize(policy(10, 100)).expect("normalize");
+        let texts: Vec<String> = model.record_sets[0]
+            .rows
+            .iter()
+            .map(purrdf_lex::json::write_compact)
+            .collect();
+        // Byte-identical rows collapse; `1` and `1.0` are two spellings, both kept.
+        assert_eq!(
+            texts,
+            [r#"{"a":1,"b":2}"#, r#"{"a":1.0}"#, r#"{"a":1}"#].map(str::to_owned)
         );
     }
 

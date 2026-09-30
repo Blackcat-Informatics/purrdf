@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! A JSON number as the text the document wrote (RFC 8259 §6).
+//! A JSON number as the text the document wrote (RFC 8259 §6), and the exact
+//! decimal value that text denotes.
 
 use core::fmt;
+use core::hash::{Hash, Hasher};
 use core::ops::RangeInclusive;
 use core::str::FromStr;
 
@@ -17,13 +19,203 @@ use super::{Error, ErrorKind};
 /// number = [ "-" ] ( "0" / %x31-39 *DIGIT ) [ "." 1*DIGIT ] [ ( "e" / "E" ) [ "+" / "-" ] 1*DIGIT ]
 /// ```
 ///
-/// and nothing has decided what it denotes: `1.5`, `1.50` and `15e-1` are three
-/// numbers, and equality compares lexemes. A reader that must decide a value
-/// exactly (an XSD decimal, a geometry coordinate) reads [`Number::lexeme`];
+/// and nothing has rounded it: `1.5`, `1.50` and `15e-1` are three spellings.
+///
+/// # Equality
+///
+/// `==` and [`Hash`] compare the exact decimal value the lexeme denotes
+/// ([`Number::decimal`]), never a rounded machine number: `1.5`, `1.50` and
+/// `15e-1` are equal, `1`, `1.0`, `1e0` and `100e-2` are equal, `-0` equals
+/// `0`, and `1e400` is a number like any other. There is no unequal-but-same
+/// integer/float distinction (a JSON number is one kind of thing, RFC 8259
+/// §6). A caller that needs the spelling itself, such as a byte-stable
+/// round-trip check, asks [`Number::same_text`].
+///
+/// A reader that must decide a value exactly (an XSD decimal, a geometry
+/// coordinate) reads [`Number::lexeme`] or [`Number::decimal`];
 /// [`Number::as_u64`], [`Number::as_i64`], [`Number::as_i128`] and
 /// [`Number::as_f64`] are the machine conversions.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone)]
 pub struct Number(String);
+
+/// The base-ten exponent of a [`Decimal`]: a machine word until the exponent
+/// leaves `i64`, and its digits after that, so the representation is
+/// canonical and derived equality and hashing are the value's.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Exponent {
+    /// An exponent inside `i64`.
+    Small(i64),
+    /// An exponent outside `i64`: its sign and its decimal magnitude, without
+    /// leading zeros.
+    Large {
+        /// Whether the exponent is negative.
+        negative: bool,
+        /// The magnitude's ASCII digits.
+        digits: String,
+    },
+}
+
+impl Exponent {
+    /// `[ "+" / "-" ] 1*DIGIT`, already matched by the JSON number grammar.
+    fn from_written(sign_and_digits: &str) -> Self {
+        let (negative, digits) = match sign_and_digits.as_bytes().first() {
+            Some(b'-') => (true, &sign_and_digits[1..]),
+            Some(b'+') => (false, &sign_and_digits[1..]),
+            _ => (false, sign_and_digits),
+        };
+        Self::from_magnitude(negative, digits.trim_start_matches('0'))
+    }
+
+    /// The exponent with sign `negative` and magnitude `digits` (no leading
+    /// zeros; empty is zero).
+    fn from_magnitude(negative: bool, digits: &str) -> Self {
+        let signed = if negative && !digits.is_empty() {
+            format!("-{digits}")
+        } else {
+            digits.to_owned()
+        };
+        signed.parse::<i64>().map_or_else(
+            |_| {
+                if digits.is_empty() {
+                    Self::Small(0)
+                } else {
+                    Self::Large {
+                        negative,
+                        digits: digits.to_owned(),
+                    }
+                }
+            },
+            Self::Small,
+        )
+    }
+
+    /// `self + amount`, exactly.
+    fn offset(&self, amount: i128) -> Self {
+        match self {
+            Self::Small(value) => {
+                let sum = i128::from(*value).saturating_add(amount);
+                i64::try_from(sum).map_or_else(
+                    |_| Self::from_magnitude(sum < 0, &sum.unsigned_abs().to_string()),
+                    Self::Small,
+                )
+            }
+            Self::Large { negative, digits } => {
+                let step = amount.unsigned_abs().to_string();
+                if *negative == (amount < 0) {
+                    Self::from_magnitude(*negative, &add_digits(digits, &step))
+                } else {
+                    // The exponent is outside `i64` and a step is a slice
+                    // length, so the magnitude is the larger and stays
+                    // positive; the sign is the exponent's.
+                    Self::from_magnitude(*negative, &subtract_digits(digits, &step))
+                }
+            }
+        }
+    }
+}
+
+/// `left + right` over ASCII digit strings.
+fn add_digits(left: &str, right: &str) -> String {
+    let (long, short) = if left.len() >= right.len() {
+        (left.as_bytes(), right.as_bytes())
+    } else {
+        (right.as_bytes(), left.as_bytes())
+    };
+    let mut out = Vec::with_capacity(long.len() + 1);
+    let mut carry = 0_u8;
+    for (index, digit) in long.iter().rev().enumerate() {
+        let other = short
+            .len()
+            .checked_sub(index + 1)
+            .map_or(0, |at| short[at] - b'0');
+        let sum = (digit - b'0') + other + carry;
+        out.push(b'0' + sum % 10);
+        carry = sum / 10;
+    }
+    if carry > 0 {
+        out.push(b'0' + carry);
+    }
+    out.reverse();
+    String::from_utf8(out).expect("ASCII digits")
+}
+
+/// `left - right` over ASCII digit strings, `left >= right`, without leading
+/// zeros.
+fn subtract_digits(left: &str, right: &str) -> String {
+    let (left, right) = (left.as_bytes(), right.as_bytes());
+    let mut out = Vec::with_capacity(left.len());
+    let mut borrow = 0_u8;
+    for (index, digit) in left.iter().rev().enumerate() {
+        let other = right
+            .len()
+            .checked_sub(index + 1)
+            .map_or(0, |at| right[at] - b'0')
+            + borrow;
+        let minuend = digit - b'0';
+        if minuend >= other {
+            out.push(b'0' + minuend - other);
+            borrow = 0;
+        } else {
+            out.push(b'0' + minuend + 10 - other);
+            borrow = 1;
+        }
+    }
+    while out.last() == Some(&b'0') {
+        out.pop();
+    }
+    out.reverse();
+    String::from_utf8(out).expect("ASCII digits")
+}
+
+/// The exact value of a JSON number: `±coefficient × 10^exponent`, the
+/// coefficient's leading and trailing zeros removed, or zero (`"0"`, exponent
+/// `0`, not negative).
+///
+/// The form is canonical, so two lexemes that denote one number (`1`, `1.0`,
+/// `10e-1`, `-0` and `0`) give equal values that hash alike. This is the
+/// workspace's one reading of a JSON number's value: [`Number`] equality and
+/// hashing, and the exact-arithmetic type built on it in `purrdf-xsd`.
+///
+/// ```rust
+/// use purrdf_lex::json::Number;
+///
+/// let decimal = |text: &str| Number::from_lexeme(text).unwrap().decimal();
+/// assert_eq!(decimal("1.0"), decimal("10e-1"));
+/// assert_eq!(decimal("-0"), decimal("0"));
+/// assert_eq!(decimal("1500").coefficient(), "15");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Decimal {
+    negative: bool,
+    coefficient: String,
+    exponent: Exponent,
+}
+
+impl Decimal {
+    /// Whether the value is negative (zero is not).
+    pub const fn is_negative(&self) -> bool {
+        self.negative
+    }
+
+    /// The significant ASCII digits, without leading or trailing zeros; `"0"`
+    /// for zero.
+    pub fn coefficient(&self) -> &str {
+        &self.coefficient
+    }
+
+    /// The base-ten exponent of the coefficient; `0` for zero.
+    pub const fn exponent(&self) -> &Exponent {
+        &self.exponent
+    }
+
+    fn zero() -> Self {
+        Self {
+            negative: false,
+            coefficient: "0".to_owned(),
+            exponent: Exponent::Small(0),
+        }
+    }
+}
 
 /// The byte after the number that starts at `at`, or the offset and name of the
 /// first byte the grammar refuses.
@@ -101,6 +293,57 @@ impl Number {
             return Err(Error::new(ErrorKind::Trailing, end));
         }
         Ok(Self(lexeme))
+    }
+
+    /// The exact value the lexeme denotes; the reading `==` and [`Hash`]
+    /// compare.
+    ///
+    /// ```rust
+    /// use purrdf_lex::json::Number;
+    ///
+    /// let number = |text: &str| Number::from_lexeme(text).unwrap();
+    /// assert_eq!(number("1e2"), number("100"));
+    /// assert_eq!(number("1.50"), number("15e-1"));
+    /// assert_ne!(number("1.5"), number("15"));
+    /// assert!(!number("1e2").same_text(&number("100")));
+    /// ```
+    pub fn decimal(&self) -> Decimal {
+        let body = self.0.strip_prefix('-');
+        let negative = body.is_some();
+        let body = body.unwrap_or(&self.0);
+        let (mantissa, written) = body
+            .split_once(['e', 'E'])
+            .map_or((body, None), |(mantissa, written)| {
+                (mantissa, Some(written))
+            });
+        let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+        let mut coefficient = String::with_capacity(int.len() + frac.len());
+        coefficient.push_str(int);
+        coefficient.push_str(frac);
+        let leading = coefficient.len() - coefficient.trim_start_matches('0').len();
+        if leading == coefficient.len() {
+            return Decimal::zero();
+        }
+        coefficient.drain(..leading);
+        let significant = coefficient.trim_end_matches('0').len();
+        let trailing = coefficient.len() - significant;
+        coefficient.truncate(significant);
+        // The value is `int frac × 10^(exponent − |frac|)`; each term of the
+        // offset is a slice length, far inside `i128`.
+        let shift = i128::try_from(trailing).unwrap_or(i128::MAX)
+            - i128::try_from(frac.len()).unwrap_or(i128::MAX);
+        Decimal {
+            negative,
+            coefficient,
+            exponent: Exponent::from_written(written.unwrap_or("0")).offset(shift),
+        }
+    }
+
+    /// Whether both numbers are spelled identically (`1.0` and `1` are not),
+    /// for a caller that needs byte-stable identity rather than the value
+    /// `==` compares.
+    pub fn same_text(&self, other: &Self) -> bool {
+        self.0 == other.0
     }
 
     /// The lexeme, exactly as written.
@@ -278,6 +521,21 @@ fn layout(scientific: &str, positional: RangeInclusive<i32>) -> String {
         out.push_str(&exponent.unsigned_abs().to_string());
     }
     out
+}
+
+impl PartialEq for Number {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0 || self.decimal() == other.decimal()
+    }
+}
+
+impl Eq for Number {}
+
+impl Hash for Number {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // The decimal form is canonical, so equal numbers hash alike.
+        self.decimal().hash(state);
+    }
 }
 
 impl fmt::Display for Number {

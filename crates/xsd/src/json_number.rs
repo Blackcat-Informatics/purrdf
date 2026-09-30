@@ -20,6 +20,8 @@
 use core::cmp::Ordering;
 use core::hash::{Hash, Hasher};
 
+use purrdf_lex::json::{Exponent as LexExponent, Number};
+
 use crate::bigint::BigInt;
 
 /// A signed base-ten exponent. `Large` holds only values outside `i64`, so the
@@ -32,23 +34,6 @@ enum Exponent {
 }
 
 impl Exponent {
-    /// `[ "+" / "-" ] 1*DIGIT`, already matched by the caller's grammar check.
-    fn from_digits(sign_and_digits: &str) -> Option<Self> {
-        let (negative, digits) = match sign_and_digits.as_bytes().first() {
-            Some(b'-') => (true, &sign_and_digits[1..]),
-            Some(b'+') => (false, &sign_and_digits[1..]),
-            _ => (false, sign_and_digits),
-        };
-        let small = digits.bytes().try_fold(0_i64, |value, digit| {
-            value.checked_mul(10)?.checked_add(i64::from(digit - b'0'))
-        });
-        match small {
-            Some(value) if negative => Some(Self::Small(-value)),
-            Some(value) => Some(Self::Small(value)),
-            None => BigInt::from_digits(sign_and_digits).map(Self::from_big),
-        }
-    }
-
     fn from_big(value: BigInt) -> Self {
         value
             .to_i128()
@@ -145,72 +130,21 @@ impl JsonNumber {
     /// outside the grammar are refused.
     #[must_use]
     pub fn parse(lexeme: &str) -> Option<Self> {
-        let bytes = lexeme.as_bytes();
-        let (negative, body) = match bytes.first() {
-            Some(b'-') => (true, &lexeme[1..]),
-            _ => (false, lexeme),
-        };
-        let digits_from = |text: &str| text.bytes().take_while(u8::is_ascii_digit).count();
-        let int_len = digits_from(body);
-        // `int = zero / ( digit1-9 *DIGIT )`.
-        if int_len == 0 || (int_len > 1 && body.as_bytes()[0] == b'0') {
-            return None;
-        }
-        let (int, rest) = body.split_at(int_len);
-        let (frac, rest) = match rest.strip_prefix('.') {
-            Some(after) => {
-                let frac_len = digits_from(after);
-                if frac_len == 0 {
-                    return None;
-                }
-                after.split_at(frac_len)
+        // The canonical form is `purrdf_lex::json::Number::decimal`, the one
+        // reading of a JSON number's value; this type adds the arithmetic.
+        let decimal = Number::from_lexeme(lexeme).ok()?.decimal();
+        let exponent = match decimal.exponent() {
+            LexExponent::Small(value) => Exponent::Small(*value),
+            LexExponent::Large { negative, digits } => {
+                let sign = if *negative { "-" } else { "" };
+                Exponent::from_big(BigInt::from_digits(&format!("{sign}{digits}"))?)
             }
-            None => ("", rest),
         };
-        let exponent = match rest.as_bytes().first() {
-            None => Exponent::Small(0),
-            Some(b'e' | b'E') => {
-                // `exp = e [ minus / plus ] 1*DIGIT`.
-                let after = &rest[1..];
-                let signed = after.strip_prefix(['+', '-']).unwrap_or(after);
-                if signed.is_empty() || digits_from(signed) != signed.len() {
-                    return None;
-                }
-                Exponent::from_digits(after)?
-            }
-            Some(_) => return None,
-        };
-        let mut coefficient = String::with_capacity(int.len() + frac.len());
-        coefficient.push_str(int);
-        coefficient.push_str(frac);
-        let leading = coefficient
-            .bytes()
-            .take_while(|&digit| digit == b'0')
-            .count();
-        if leading == coefficient.len() {
-            return Some(Self::zero());
-        }
-        coefficient.drain(..leading);
-        let significant = coefficient.trim_end_matches('0').len();
-        let trailing = coefficient.len() - significant;
-        coefficient.truncate(significant);
-        // The value is `int frac × 10^(exponent − |frac|)`; each term of the
-        // offset is a slice length, far inside `i128`.
-        let shift = i128::try_from(trailing).unwrap_or(i128::MAX)
-            - i128::try_from(frac.len()).unwrap_or(i128::MAX);
         Some(Self {
-            negative,
-            coefficient,
-            exponent: exponent.offset(shift),
+            negative: decimal.is_negative(),
+            coefficient: decimal.coefficient().to_owned(),
+            exponent,
         })
-    }
-
-    fn zero() -> Self {
-        Self {
-            negative: false,
-            coefficient: "0".to_owned(),
-            exponent: Exponent::Small(0),
-        }
     }
 
     /// Whether the value is zero.

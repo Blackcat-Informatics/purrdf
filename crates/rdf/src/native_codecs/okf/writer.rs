@@ -884,8 +884,10 @@ impl<'a> Projector<'a> {
                     )));
                 }
                 // The frontmatter holds the JSON value itself; the reader normalizes
-                // its numbers, so a literal it would respell cannot be written.
-                if super::reader::okf_json(&json)? != json {
+                // its numbers and sorts its members, so a literal it would respell
+                // or reorder cannot be written: the check is on spelling and
+                // order, which `==` (by value) does not see.
+                if !super::reader::okf_json(&json)?.same_text(&json) {
                     return Err(OkfError::new(
                         "OKF JSON literal would lose precision or lexical identity in YAML",
                     ));
@@ -1290,6 +1292,14 @@ mod tests {
             (r#"{"ranks":[1,2,0.25]}"#, true),
             (r#"{"n":18446744073709551617}"#, false),
             (r#"{"n":0.123456789012345678901}"#, false),
+            // The reader respells numbers and sorts members, so identity is
+            // spelling and order, which `==` (by value) would not see: a
+            // sorted, canonically spelled neighbour is accepted, its
+            // reordered or respelled twin is refused.
+            (r#"{"a":2,"b":1}"#, true),
+            (r#"{"b":1,"a":2}"#, false),
+            (r#"{"n":100.0}"#, true),
+            (r#"{"n":1e2}"#, false),
         ] {
             let base = profile_dataset(&["Concept"]);
             let mut dataset = MutableDataset::new(base);
