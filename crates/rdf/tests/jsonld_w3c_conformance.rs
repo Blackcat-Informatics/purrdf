@@ -6,13 +6,12 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use purrdf_lex::json::{self, Object, Value};
 use purrdf_rdf::native_codecs::jsonld::{
     CompiledJsonLdContext, JsonLdSerializeOptions, parse_jsonld,
     serialize_dataset_to_jsonld_with_options,
 };
 use purrdf_rdf::{canonical_flat_nquads, datasets_isomorphic, parse_dataset};
-use serde::Deserialize;
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 const EXPECTED_VECTOR_COUNT: usize = 73;
@@ -20,18 +19,73 @@ const EXPECTED_COMPACTION_VECTOR_COUNT: usize = 13;
 const EXPECTED_REVISION: &str = "3e7fa5377b2b3c5176eacf8bde8e01fdb7c4a062";
 const EXPECTED_TAG: &str = "REC-2020-07-16";
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Corpus {
-    schema_version: u32,
+/// The members of a fixture object, refused unless they are exactly `names`.
+fn exact_members<'a>(value: &'a Value, names: &[&str], what: &str) -> &'a Object {
+    let object = value
+        .as_object()
+        .unwrap_or_else(|| panic!("{what} is a JSON object"));
+    for name in object.keys() {
+        assert!(
+            names.contains(&name.as_str()),
+            "{what} has unknown member `{name}`"
+        );
+    }
+    assert_eq!(object.len(), names.len(), "{what} has exactly {names:?}");
+    object
+}
+
+fn text(object: &Object, name: &str) -> String {
+    object[name]
+        .as_str()
+        .unwrap_or_else(|| panic!("`{name}` is a string"))
+        .to_owned()
+}
+
+fn count(object: &Object, name: &str) -> usize {
+    object[name]
+        .as_u64()
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or_else(|| panic!("`{name}` is a count"))
+}
+
+/// A pinned corpus header, and its vectors decoded by `vector`.
+struct Corpus<T> {
+    schema_version: usize,
     upstream_revision: String,
     upstream_tag: String,
     expected_vector_count: usize,
-    vectors: Vec<Vector>,
+    vectors: Vec<T>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+impl<T> Corpus<T> {
+    fn read(text_json: &str, vector: impl Fn(&Value) -> T) -> Self {
+        let document = json::read(text_json).expect("decode pinned W3C vectors");
+        let object = exact_members(
+            &document,
+            &[
+                "schema_version",
+                "upstream_revision",
+                "upstream_tag",
+                "expected_vector_count",
+                "vectors",
+            ],
+            "corpus",
+        );
+        Self {
+            schema_version: count(object, "schema_version"),
+            upstream_revision: text(object, "upstream_revision"),
+            upstream_tag: text(object, "upstream_tag"),
+            expected_vector_count: count(object, "expected_vector_count"),
+            vectors: object["vectors"]
+                .as_array()
+                .expect("`vectors` is an array")
+                .iter()
+                .map(vector)
+                .collect(),
+        }
+    }
+}
+
 struct Vector {
     id: String,
     name: String,
@@ -42,18 +96,33 @@ struct Vector {
     expected_nquads: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CompactionCorpus {
-    schema_version: u32,
-    upstream_revision: String,
-    upstream_tag: String,
-    expected_vector_count: usize,
-    vectors: Vec<CompactionVector>,
+impl Vector {
+    fn from_json(value: &Value) -> Self {
+        let object = exact_members(
+            value,
+            &[
+                "id",
+                "name",
+                "purpose",
+                "input_sha256",
+                "expected_sha256",
+                "input",
+                "expected_nquads",
+            ],
+            "vector",
+        );
+        Self {
+            id: text(object, "id"),
+            name: text(object, "name"),
+            purpose: text(object, "purpose"),
+            input_sha256: text(object, "input_sha256"),
+            expected_sha256: text(object, "expected_sha256"),
+            input: text(object, "input"),
+            expected_nquads: text(object, "expected_nquads"),
+        }
+    }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct CompactionVector {
     id: String,
     name: String,
@@ -66,6 +135,37 @@ struct CompactionVector {
     expected: String,
 }
 
+impl CompactionVector {
+    fn from_json(value: &Value) -> Self {
+        let object = exact_members(
+            value,
+            &[
+                "id",
+                "name",
+                "purpose",
+                "input_sha256",
+                "context_sha256",
+                "expected_sha256",
+                "input",
+                "context",
+                "expected",
+            ],
+            "compaction vector",
+        );
+        Self {
+            id: text(object, "id"),
+            name: text(object, "name"),
+            purpose: text(object, "purpose"),
+            input_sha256: text(object, "input_sha256"),
+            context_sha256: text(object, "context_sha256"),
+            expected_sha256: text(object, "expected_sha256"),
+            input: text(object, "input"),
+            context: text(object, "context"),
+            expected: text(object, "expected"),
+        }
+    }
+}
+
 fn sha256(bytes: &[u8]) -> String {
     // The digest renders itself, the way `rdf12_canon_profile.rs` in this same
     // test directory already spells it — one idiom for "SHA-256 as lowercase
@@ -73,29 +173,46 @@ fn sha256(bytes: &[u8]) -> String {
     format!("{}", purrdf_hash::hex::Lower(&Sha256::digest(bytes)))
 }
 
+/// `text` read as JSON, every object's members in name order: JSON-LD gives member
+/// order no meaning, so documents compare as name-ordered trees.
+fn read_unordered(text: &str) -> Result<Value, json::Error> {
+    let mut value = json::read(text)?;
+    value.sort_keys();
+    Ok(value)
+}
+
 fn flatten_single_carrier_graph(mut value: Value) -> Value {
     let Some(object) = value.as_object_mut() else {
         return value;
     };
-    let Some(Value::Array(mut graph)) = object.remove("@graph") else {
+    let Some(mut graph) = object.remove("@graph") else {
         return value;
     };
-    if graph.len() != 1 {
-        object.insert("@graph".to_owned(), Value::Array(graph));
-        return value;
+    let single = graph
+        .as_array_mut()
+        .filter(|items| items.len() == 1)
+        .and_then(|items| items[0].as_object_mut().map(std::mem::take));
+    match single {
+        Some(node) => {
+            for (name, member) in node {
+                object.insert(name, member);
+            }
+            object.sort_keys();
+        }
+        None => {
+            object.insert("@graph", graph);
+            object.sort_keys();
+        }
     }
-    let Value::Object(node) = graph.remove(0) else {
-        object.insert("@graph".to_owned(), Value::Array(graph));
-        return value;
-    };
-    object.extend(node);
     value
 }
 
 #[test]
 fn pinned_w3c_to_rdf_vectors_match_the_independent_nquads_oracle() {
-    let corpus: Corpus = serde_json::from_str(include_str!("fixtures/jsonld-w3c-rec/vectors.json"))
-        .expect("decode pinned W3C vectors");
+    let corpus = Corpus::read(
+        include_str!("fixtures/jsonld-w3c-rec/vectors.json"),
+        Vector::from_json,
+    );
     assert_eq!(corpus.schema_version, 1);
     assert_eq!(corpus.upstream_revision, EXPECTED_REVISION);
     assert_eq!(corpus.upstream_tag, EXPECTED_TAG);
@@ -173,10 +290,10 @@ fn pinned_w3c_to_rdf_vectors_match_the_independent_nquads_oracle() {
 
 #[test]
 fn pinned_w3c_compaction_vectors_match_the_independent_json_oracle() {
-    let corpus: CompactionCorpus = serde_json::from_str(include_str!(
-        "fixtures/jsonld-w3c-rec/compaction_vectors.json"
-    ))
-    .expect("decode pinned W3C compaction vectors");
+    let corpus = Corpus::read(
+        include_str!("fixtures/jsonld-w3c-rec/compaction_vectors.json"),
+        CompactionVector::from_json,
+    );
     assert_eq!(corpus.schema_version, 1);
     assert_eq!(corpus.upstream_revision, EXPECTED_REVISION);
     assert_eq!(corpus.upstream_tag, EXPECTED_TAG);
@@ -230,7 +347,7 @@ fn pinned_w3c_compaction_vectors_match_the_independent_json_oracle() {
                 continue;
             }
         };
-        let context: Value = serde_json::from_str(&vector.context)
+        let context = read_unordered(&vector.context)
             .unwrap_or_else(|error| panic!("{} invalid context fixture: {error}", vector.id));
         let compiled = CompiledJsonLdContext::compile(&context, None)
             .unwrap_or_else(|error| panic!("{} context did not compile: {error}", vector.id));
@@ -239,8 +356,8 @@ fn pinned_w3c_compaction_vectors_match_the_independent_json_oracle() {
             &JsonLdSerializeOptions::compiled(Arc::new(compiled)),
         )
         .unwrap_or_else(|error| panic!("{} compaction failed: {error}", vector.id));
-        let actual: Value = serde_json::from_str(&output).expect("PurRDF emitted JSON");
-        let expected: Value = serde_json::from_str(&vector.expected)
+        let actual = read_unordered(&output).expect("PurRDF emitted JSON");
+        let expected = read_unordered(&vector.expected)
             .unwrap_or_else(|error| panic!("{} invalid expected JSON: {error}", vector.id));
         let actual = flatten_single_carrier_graph(actual);
         if actual == expected {
@@ -250,8 +367,8 @@ fn pinned_w3c_compaction_vectors_match_the_independent_json_oracle() {
                 "{} ({}):\nexpected:\n{}\nactual:\n{}",
                 vector.id,
                 vector.name,
-                serde_json::to_string_pretty(&expected).expect("expected JSON"),
-                serde_json::to_string_pretty(&actual).expect("actual JSON")
+                json::write_pretty(&expected),
+                json::write_pretty(&actual)
             ));
         }
     }

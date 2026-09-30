@@ -9,6 +9,8 @@ use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 
+use purrdf_lex::json;
+use purrdf_lex::json_escape::JsonEscapes;
 use purrdf_rdf::{
     CsvwAction, CsvwConfig, CsvwContext, CsvwInput, CsvwMode, CsvwVocabulary, CsvwWritePlan,
     ProjectionLimits, read_csvw, write_csvw,
@@ -33,40 +35,51 @@ fn main() -> Result<(), Box<dyn Error>> {
     let metadata_iri = format!("{root}/csvw-metadata.json");
     let parents_iri = format!("{root}/tables/parents.csv");
     let children_iri = format!("{root}/tables/children.csv");
-    let metadata = serde_json::to_vec(&serde_json::json!({
+    let quoted = |text: &str| {
+        let mut out = String::new();
+        purrdf_lex::json_escape::push_string(&mut out, text, JsonEscapes::ShortForms);
+        out
+    };
+    let mut metadata = json::read(&format!(
+        r#"{{
         "@context": "http://www.w3.org/ns/csvw",
         "@type": "TableGroup",
         "tables": [
-            {
-                "url": parents_iri,
-                "tableSchema": {
+            {{
+                "url": {parents},
+                "tableSchema": {{
                     "columns": [
-                        {"name": "id", "titles": "id", "datatype": "integer", "required": true},
-                        {"name": "label", "titles": "label", "datatype": "string", "required": true}
+                        {{"name": "id", "titles": "id", "datatype": "integer", "required": true}},
+                        {{"name": "label", "titles": "label", "datatype": "string", "required": true}}
                     ],
                     "primaryKey": "id"
-                }
-            },
-            {
-                "url": children_iri,
-                "tableSchema": {
+                }}
+            }},
+            {{
+                "url": {children},
+                "tableSchema": {{
                     "columns": [
-                        {"name": "id", "titles": "id", "datatype": "integer", "required": true},
-                        {"name": "parent", "titles": "parent", "datatype": "integer", "required": true},
-                        {"name": "amount", "titles": "amount", "datatype": "decimal", "required": true}
+                        {{"name": "id", "titles": "id", "datatype": "integer", "required": true}},
+                        {{"name": "parent", "titles": "parent", "datatype": "integer", "required": true}},
+                        {{"name": "amount", "titles": "amount", "datatype": "decimal", "required": true}}
                     ],
                     "primaryKey": "id",
-                    "foreignKeys": [{
+                    "foreignKeys": [{{
                         "columnReference": "parent",
-                        "reference": {
-                            "resource": parents_iri,
+                        "reference": {{
+                            "resource": {parents},
                             "columnReference": "id"
-                        }
-                    }]
-                }
-            }
+                        }}
+                    }}]
+                }}
+            }}
         ]
-    }))?;
+    }}"#,
+        parents = quoted(&parents_iri),
+        children = quoted(&children_iri),
+    ))?;
+    metadata.sort_keys();
+    let metadata = json::write_compact(&metadata).into_bytes();
     let limits = ProjectionLimits::new(16, 1_000_000, 2_000_000, 4_000_000, 16)?;
     let config = CsvwConfig::new(
         &metadata_iri,

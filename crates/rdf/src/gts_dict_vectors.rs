@@ -29,7 +29,7 @@ use purrdf_gts::model::Graph;
 use purrdf_gts::reader::read;
 use purrdf_gts::wire::map_get;
 use purrdf_gts::writer::{FrameOptions, Writer, WriterOptions};
-use serde_json::{Value as Json, json};
+use purrdf_lex::json::{self, Format, Object, Value as Json};
 
 use crate::gts::dataset_from_gts_graph;
 use crate::{SerializeGraph, serialize_dataset};
@@ -284,11 +284,12 @@ fn fold_json(graph: &Graph, mode: &str) -> Json {
         .segment_streamable
         .iter()
         .map(|state| {
-            json!({
-                "claimed": state.claimed,
-                "covered": state.covered,
-                "tail": state.tail,
-            })
+            Json::from(
+                Object::new()
+                    .with("claimed", state.claimed)
+                    .with("covered", state.covered)
+                    .with("tail", state.tail),
+            )
         })
         .collect();
     let segment_heads: Vec<String> = graph
@@ -297,44 +298,52 @@ fn fold_json(graph: &Graph, mode: &str) -> Json {
         .map(|head| purrdf_hash::hex::encode(head))
         .collect();
 
-    json!({
-        "blobs": blobs_json(graph),
-        "diagnostics": graph
-            .diagnostics
-            .iter()
-            .map(|diagnostic| diagnostic.code.clone())
-            .collect::<Vec<_>>(),
-        "mode": mode,
-        "nquads": nquads,
-        "opaque_reasons": graph
-            .opaque
-            .iter()
-            .map(|opaque| opaque.reason.clone())
-            .collect::<Vec<_>>(),
-        "profiles": profiles,
-        "quads": quad_count,
-        "segment_heads": segment_heads,
-        "segments": graph.segment_heads.len(),
-        "streamable": streamable,
-        "suppressions": graph.suppressions.len(),
-        "terms": graph.terms.len(),
-    })
+    let mut fold = Json::from(
+        Object::new()
+            .with("blobs", blobs_json(graph))
+            .with(
+                "diagnostics",
+                graph
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.code.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .with("mode", mode)
+            .with("nquads", nquads)
+            .with(
+                "opaque_reasons",
+                graph
+                    .opaque
+                    .iter()
+                    .map(|opaque| opaque.reason.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .with("profiles", profiles)
+            .with("quads", quad_count)
+            .with("segment_heads", segment_heads)
+            .with("segments", graph.segment_heads.len())
+            .with("streamable", streamable)
+            .with("suppressions", graph.suppressions.len())
+            .with("terms", graph.terms.len()),
+    );
+    fold.sort_keys();
+    fold
 }
 
 /// Render an expected-fold value with sorted keys, one-space indentation, and
 /// one trailing newline, matching the shared GTS vector corpus byte format.
-///
-/// # Panics
-///
-/// Panics only if `serde_json` cannot serialize its own in-memory value or
-/// emits non-UTF-8 bytes, both of which are invariant violations.
 #[must_use]
 pub fn render_expected_json(value: &Json) -> String {
-    let mut bytes = Vec::new();
-    let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
-    let mut serializer = serde_json::Serializer::with_formatter(&mut bytes, formatter);
-    serde::Serialize::serialize(value, &mut serializer).expect("serialize expected-fold JSON");
-    let mut text = String::from_utf8(bytes).expect("serde_json emits UTF-8");
+    let mut sorted = value.clone();
+    sorted.sort_keys();
+    let mut text = json::write(
+        &sorted,
+        Format {
+            indent: Some(" "),
+            ..Format::PRETTY
+        },
+    );
     text.push('\n');
     text
 }
@@ -358,7 +367,10 @@ fn blobs_json(graph: &Graph) -> Json {
         let size = entry
             .decoded_len()
             .unwrap_or_else(|error| panic!("blob {digest} decodes: {error}"));
-        blobs.insert(digest.clone(), json!({"mt": media_type, "size": size}));
+        blobs.insert(
+            digest.clone(),
+            Object::new().with("mt", media_type).with("size", size),
+        );
     }
     Json::Object(blobs.into_iter().collect())
 }

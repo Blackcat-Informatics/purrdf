@@ -52,8 +52,8 @@ mod rdfxml;
 // parsed on the same XML reader (`purrdf_lex::xml`) as `rdfxml` and serialized by
 // hand-rolled deterministic XML emission from the first-party `SerGraph`.
 mod trix;
-// First-party HexTuples codec: a line-oriented NDJSON quads serialization, encoded and
-// decoded through `serde_json` (already a dep) into/from the first-party `SerGraph`.
+// First-party HexTuples codec: a line-oriented NDJSON quads serialization, read and
+// written through `purrdf_lex::json` into/from the first-party `SerGraph`.
 mod hextuples;
 // Opt-in triple → source-position side table (SARIF source tracing). A runtime option,
 // NOT a Cargo feature; the default `NoSpans` collector monomorphizes the recording out
@@ -258,8 +258,10 @@ mod tests {
 
         let yaml = jsonld::serialize_dataset_to_yamlld(&dataset, None).expect("YAML-LD");
         let yaml_as_json = jsonld::yamlld_to_jsonld(yaml.as_bytes()).expect("YAML to JSON");
-        let expected: serde_json::Value = serde_json::from_str(&json).expect("expected JSON");
-        let actual: serde_json::Value = serde_json::from_str(&yaml_as_json).expect("actual JSON");
+        let mut expected = purrdf_lex::json::read(&json).expect("expected JSON");
+        let mut actual = purrdf_lex::json::read(&yaml_as_json).expect("actual JSON");
+        expected.sort_keys();
+        actual.sort_keys();
         assert_eq!(actual, expected);
         assert!(!yaml.contains("schema:"));
         assert!(yaml.contains("https://schema.org/name"));
@@ -815,7 +817,7 @@ mod tests {
         // bool/null/number/timestamp on re-parse unless the emitter quotes them.
         // Every lexical form below is exactly one of those adversarial tokens; the
         // round-trip bar is LOSSLESS (`assert_round_trips` requires isomorphism), so
-        // the JSON->YAML bridge must force-quote them rather than let serde_yaml's
+        // the YAML emitter must force-quote them rather than let a YAML reader's
         // default resolver re-coerce the type.
         let adversarial = [
             "true",

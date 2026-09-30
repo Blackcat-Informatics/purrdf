@@ -74,9 +74,9 @@ impl std::io::Write for SinkWriter<'_> {
 }
 
 use purrdf::viz::{
-    VizGraphPolicy, VizLabelPolicy, VizLayoutOptions, VizMode, VizRenderOptions, VizRole,
-    VizRoleRule, VizSpec, VizSvgOptions, VizTableField, VizVocabularyMapping, export_json,
-    project_dataset, project_dataset_export, render_dataset_svg,
+    VizGraphPolicy, VizJson, VizLayoutOptions, VizRenderOptions, VizRole, VizRoleRule, VizSpec,
+    VizSvgOptions, VizTableField, VizVocabularyMapping, export_json, project_dataset,
+    project_dataset_export, render_dataset_svg,
 };
 
 use crate::codec::{resolve_format, resolve_media_type};
@@ -103,18 +103,29 @@ fn pattern_value(term: Option<&Term>) -> Result<Option<TermValue>, JsError> {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 struct VisualOptions {
-    mode: Option<VizMode>,
+    mode: Option<String>,
     focus: Option<String>,
     role_rules: Vec<VisualRoleRule>,
-    vocabulary: Vec<VizVocabularyMapping>,
+    vocabulary: Vec<VisualVocabularyMapping>,
     graph: Option<String>,
     graphs: Vec<String>,
-    label_policy: Option<VizLabelPolicy>,
+    label_policy: Option<String>,
     max_statements: Option<usize>,
     max_terms: Option<usize>,
-    table_fields: Option<Vec<VizTableField>>,
+    table_fields: Option<Vec<String>>,
     layout: VisualLayoutOptions,
     svg: VisualSvgOptions,
+}
+
+#[derive(Debug, Deserialize)]
+struct VisualVocabularyMapping {
+    prefix: String,
+    namespace: String,
+}
+
+/// The visualization value a JSON-options string names, in the engine's JSON form.
+fn viz_name<T: VizJson>(name: &str) -> Result<T, JsError> {
+    T::from_json(&name.into()).map_err(|error| JsError::new(&error.to_string()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -160,7 +171,7 @@ impl VisualOptions {
         }
         let mut spec = VizSpec::default();
         if let Some(mode) = self.mode {
-            spec.mode = mode;
+            spec.mode = viz_name(&mode)?;
         }
         spec.focus = self.focus;
         spec.role_rules = self
@@ -171,7 +182,14 @@ impl VisualOptions {
                 role: VizRole::Custom(rule.role),
             })
             .collect();
-        spec.vocabulary = self.vocabulary;
+        spec.vocabulary = self
+            .vocabulary
+            .into_iter()
+            .map(|mapping| VizVocabularyMapping {
+                prefix: mapping.prefix,
+                namespace: mapping.namespace,
+            })
+            .collect();
         let graph_selectors = self
             .graph
             .into_iter()
@@ -181,7 +199,7 @@ impl VisualOptions {
             spec.graph_policy = VizGraphPolicy::Include(graph_selectors);
         }
         if let Some(label_policy) = self.label_policy {
-            spec.label_policy = label_policy;
+            spec.label_policy = viz_name(&label_policy)?;
         }
         if let Some(max_statements) = self.max_statements {
             spec.max_statements = max_statements;
@@ -190,7 +208,10 @@ impl VisualOptions {
             spec.max_terms = max_terms;
         }
         if let Some(table_fields) = self.table_fields {
-            spec.table_fields = table_fields;
+            spec.table_fields = table_fields
+                .iter()
+                .map(|field| viz_name::<VizTableField>(field))
+                .collect::<Result<_, _>>()?;
         }
 
         let mut layout = VizLayoutOptions::default();
@@ -698,7 +719,7 @@ impl Dataset {
         let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
         let model =
             project_dataset(&frozen, &spec).map_err(|error| JsError::new(&error.to_string()))?;
-        serde_json::to_string(&model).map_err(|error| JsError::new(&error.to_string()))
+        Ok(model.to_json().to_string())
     }
 
     /// `visualExportJson(optionsJson?)` -> model, scene, geometry, and index as JSON.
@@ -720,7 +741,7 @@ impl Dataset {
         let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
         let document = render_dataset_svg(&frozen, &spec, &options)
             .map_err(|error| JsError::new(&error.to_string()))?;
-        serde_json::to_string(&document).map_err(|error| JsError::new(&error.to_string()))
+        Ok(document.to_json().to_string())
     }
 
     /// `match(subject?, predicate?, object?, graph?)` → a new dataset of the matching

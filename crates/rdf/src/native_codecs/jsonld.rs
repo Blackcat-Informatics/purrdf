@@ -34,7 +34,7 @@ use std::fmt::Write as _;
 use std::io::Write as IoWrite;
 use std::sync::Arc;
 
-use serde_json::Value;
+use purrdf_lex::json::Value;
 
 use self::carrier::{
     Document as CarrierDocument, Literal as CarrierLiteral, NamedGraph as CarrierNamedGraph,
@@ -223,7 +223,7 @@ fn triple_components_in(
     term.reifier.and_then(|rid| bindings.get(rid))
 }
 
-/// Convert a sorted BTreeMap into a serde_json object value.
+/// Convert a sorted BTreeMap into a JSON object value, its members in name order.
 fn to_json_object(map: BTreeMap<String, Value>) -> Value {
     Value::Object(map.into_iter().collect())
 }
@@ -261,7 +261,7 @@ impl RdfCodec for JsonLdCodec {
         graph: &SerGraph,
         out: &mut TextSink<'_>,
     ) -> Result<(), RdfDiagnostic> {
-        // Emitted through the sink. `serde_json` already writes into an `io::Write`,
+        // Emitted through the sink. The carrier writes each node into an `io::Write`,
         // so the only thing that ever made this document whole was the buffer the
         // byte limit was being counted against; that buffer is gone and the limit is
         // now a running total. What remains resident is the carrier — the JSON-LD
@@ -1856,7 +1856,7 @@ pub(super) fn parse_jsonld_into_scope(
     // truthful one; overwriting it would claim the document said something it did not.
     if in_force.as_deref() != scope_base(base) {
         match in_force {
-            // `BaseOrigin::Enclosing` is the JSON-LD context frame — serde_json carries no
+            // `BaseOrigin::Enclosing` is the JSON-LD context frame — the value tree carries no
             // source position, so `Directive { line, column }` could only be invented.
             Some(iri) => base
                 .rebind(&iri, purrdf_iri::BaseOrigin::Enclosing)
@@ -2026,86 +2026,27 @@ pub fn jsonld_to_statement_metadata_nquads(
 ///
 /// The conversion is purely structural: YAML scalars/sequences/mappings map one-to-one
 /// onto JSON, so the resulting JSON is consumable by [`parse_jsonld`] and the
-/// statement-metadata downcast.
+/// statement-metadata downcast. The document is read by [`purrdf_lex::yaml`] under
+/// YAML-LD's JSON profile: anchors and aliases, tags beyond the core schema, keys that
+/// are not strings, repeated keys, `.inf`/`.nan` and a second document are refused.
+/// Mapping keys keep their document order and numbers their lexemes.
 pub fn yamlld_to_jsonld(yaml_bytes: &[u8]) -> Result<String, RdfDiagnostic> {
     let text = std::str::from_utf8(yaml_bytes)
         .map_err(|e| decode(format!("YAML-LD-star bytes are not UTF-8: {e}")))?;
-    // Reject anchors/aliases BEFORE deserializing — extended YAML is out of scope.
-    // Detection is structural (node-position only), so `&`/`*` inside scalar definition
-    // prose does not false-positive.
-    if yaml_uses_anchor_or_alias(text) {
-        return Err(decode("YAML-LD-star must not use anchors or aliases"));
-    }
-    let value: serde_yaml::Value =
-        serde_yaml::from_str(text).map_err(|e| decode(format!("parse YAML-LD-star: {e}")))?;
-    serde_json::to_string(&value).map_err(|e| decode(format!("YAML-LD-star -> JSON-LD-star: {e}")))
-}
-
-/// Structural YAML anchor/alias detector (node-position only), so a `&`/`*` that appears
-/// inside scalar prose (e.g. a `skos:definition` value) does not false-positive.
-fn yaml_uses_anchor_or_alias(text: &str) -> bool {
-    let mut block_scalar_indent: Option<usize> = None;
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        let indent = line.len() - trimmed.len();
-        // Inside a block scalar: its content is indented deeper than the header.
-        if let Some(header_indent) = block_scalar_indent {
-            if trimmed.is_empty() || indent > header_indent {
-                continue;
-            }
-            block_scalar_indent = None;
+    let value = purrdf_lex::yaml::read_with(
+        text,
+        purrdf_lex::yaml::Limits {
+            aliases: false,
+            ..purrdf_lex::yaml::Limits::DEFAULT
+        },
+    )
+    .map_err(|e| match e.kind() {
+        purrdf_lex::yaml::ErrorKind::Alias => {
+            decode(format!("YAML-LD-star must not use anchors or aliases: {e}"))
         }
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        // Strip leading block-sequence indicators (possibly nested: "- - x").
-        let mut rest = trimmed;
-        while let Some(r) = rest.strip_prefix("- ") {
-            rest = r.trim_start();
-        }
-        if rest == "-" {
-            continue;
-        }
-        // The node value is the text after the mapping separator (`: `), or the
-        // whole remainder when this line is a bare sequence/scalar node.
-        let value = block_mapping_value(rest).unwrap_or(rest).trim_start();
-        // A block-scalar header (`|`, `>`, `|-`, `>+2`, …) opens here; skip its body.
-        if value.starts_with('|') || value.starts_with('>') {
-            block_scalar_indent = Some(indent);
-            continue;
-        }
-        if value.starts_with('&') || value.starts_with('*') {
-            return true;
-        }
-    }
-    false
-}
-
-/// The block-mapping node value: the text after the `: ` separator, or `None` if the
-/// line is not a `key: value` mapping entry. A quoted key is skipped first so a `:`
-/// inside it is not mistaken for the separator, and IRIs/curies (`https://…`,
-/// `ex:foo`) keep their `:`-without-space.
-fn block_mapping_value(s: &str) -> Option<&str> {
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    if let Some(&q @ (b'\'' | b'"')) = bytes.first() {
-        i = 1;
-        while i < bytes.len() && bytes[i] != q {
-            i += 1;
-        }
-        i = (i + 1).min(bytes.len());
-    }
-    while i < bytes.len() {
-        if bytes[i] == b':' && (i + 1 == bytes.len() || bytes[i + 1] == b' ') {
-            return Some(if i + 2 <= bytes.len() {
-                &s[i + 1..]
-            } else {
-                ""
-            });
-        }
-        i += 1;
-    }
-    None
+        _ => decode(format!("parse YAML-LD-star: {e}")),
+    })?;
+    Ok(purrdf_lex::json::write_compact(&value))
 }
 
 /// Downcast YAML-LD-star bytes to statement-metadata N-Quads in the caller's
@@ -2143,8 +2084,8 @@ mod carrier_law_tests {
     #[allow(unused_imports)]
     use std::io::Write as _;
 
+    use purrdf_lex::json::{self, Object};
     use purrdf_testkit::prop::prelude::*;
-    use serde_json::json;
 
     use super::*;
 
@@ -2218,7 +2159,8 @@ mod carrier_law_tests {
         let compacted =
             serialize_carrier_compacted(expanded.clone(), &context).expect("compaction");
         let document = context::parse_document(compacted.as_bytes()).expect("strict JSON");
-        let initial = CompiledJsonLdContext::compile(&json!({}), None).expect("empty context");
+        let initial =
+            CompiledJsonLdContext::compile(&Object::new().into(), None).expect("empty context");
         let reexpanded = expand::expand_document(document, &initial).expect("re-expansion");
         assert_eq!(expanded, reexpanded, "compacted document:\n{compacted}");
     }
@@ -2238,10 +2180,13 @@ mod carrier_law_tests {
             .expect("rich RDF 1.2 fixture");
         assert_exact_carrier_lens(
             &dataset,
-            &json!({
-                "ex": {"@id": "https://example.org/", "@prefix": true},
-                "items": {"@id": "ex:items", "@container": "@list", "@language": "en"}
-            }),
+            &json::read(
+                r#"{
+                    "ex": {"@id": "https://example.org/", "@prefix": true},
+                    "items": {"@id": "ex:items", "@container": "@list", "@language": "en"}
+                }"#,
+            )
+            .expect("context JSON"),
         );
     }
 
@@ -2307,9 +2252,63 @@ mod carrier_law_tests {
                 .expect("generated fixture");
             assert_exact_carrier_lens(
                 &dataset,
-                &json!({"ex": {"@id": "https://example.org/", "@prefix": true}}),
+                &json::read(r#"{"ex": {"@id": "https://example.org/", "@prefix": true}}"#)
+                    .expect("context JSON"),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod yamlld_input {
+    use super::yamlld_to_jsonld;
+
+    /// Each refused YAML-LD document beside the nearest accepted one.
+    #[test]
+    fn yaml_ld_refuses_what_its_json_profile_cannot_hold_and_accepts_the_neighbours() {
+        for (yaml, refusal) in [
+            ("'@id': https://example.org/s\n", None),
+            (
+                "'@id': https://example.org/s\n'@id': https://example.org/t\n",
+                Some("repeats a key"),
+            ),
+            ("https://example.org/p:\n  '1': one\n", None),
+            (
+                "https://example.org/p:\n  1: one\n",
+                Some("must be a string"),
+            ),
+            (
+                "https://example.org/p: &a one\nhttps://example.org/q: *a\n",
+                Some("must not use anchors or aliases"),
+            ),
+            (
+                "https://example.org/p: one & two\nhttps://example.org/q: '*a'\n",
+                None,
+            ),
+        ] {
+            let result = yamlld_to_jsonld(yaml.as_bytes());
+            match refusal {
+                None => {
+                    result.unwrap_or_else(|error| panic!("{yaml:?} must convert: {error}"));
+                }
+                Some(reason) => {
+                    let error = result.expect_err("the YAML-LD document must be refused");
+                    assert!(
+                        error.message.contains(reason),
+                        "{yaml:?}: {}",
+                        error.message
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn yaml_ld_keys_keep_document_order_and_numbers_their_lexemes() {
+        assert_eq!(
+            yamlld_to_jsonld(b"b: 1.50\na: [x, 2]\n").expect("YAML-LD"),
+            r#"{"b":1.50,"a":["x",2]}"#
+        );
     }
 }
 

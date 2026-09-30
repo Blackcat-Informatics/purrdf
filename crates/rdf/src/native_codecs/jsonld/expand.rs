@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use serde_json::{Map, Value as JsonValue};
+use purrdf_lex::json::{self, Number, Object as Map, Value as JsonValue};
 
 use super::carrier::{Document, Literal, NamedGraph, Node, Term, Triple, Value};
 use super::{
@@ -528,7 +528,7 @@ impl Builder {
         }
         if definition
             .is_some_and(|definition| definition.containers().contains(&JsonLdContainer::Index))
-            && raw.is_object()
+            && raw.as_object().is_some()
         {
             return self.expand_index_map(raw, graph, context, definition);
         }
@@ -570,7 +570,7 @@ impl Builder {
         if raw.is_null() {
             return Ok(None);
         }
-        if !raw.is_object() {
+        if raw.as_object().is_none() {
             return expand_scalar(raw, context, definition).map(Some);
         }
         let object = raw
@@ -1018,8 +1018,7 @@ fn expand_scalar(
             }
             JsonLdTypeMapping::Json => {
                 return Ok(Value::plain(Term::Literal(Literal {
-                    lexical: serde_json::to_string(&crate::json_value::Binary64(raw))
-                        .map_err(|source| decode(format!("encode rdf:JSON value: {source}")))?,
+                    lexical: rdf_json_lexical(raw)?,
                     datatype: Some(RDF_JSON.to_owned()),
                     language: None,
                     direction: None,
@@ -1052,12 +1051,12 @@ fn expand_scalar(
     Ok(Value::plain(Term::Literal(Literal {
         lexical,
         datatype,
-        language: if raw.is_string() {
+        language: if raw.as_str().is_some() {
             effective_language(context, definition).map(str::to_owned)
         } else {
             None
         },
-        direction: if raw.is_string() {
+        direction: if raw.as_str().is_some() {
             effective_direction(context, definition).map(str::to_owned)
         } else {
             None
@@ -1120,8 +1119,7 @@ fn expand_value_object(
     }
     if json_keyword {
         return Ok(Literal {
-            lexical: serde_json::to_string(&crate::json_value::Binary64(value))
-                .map_err(|source| decode(format!("encode rdf:JSON value: {source}")))?,
+            lexical: rdf_json_lexical(value)?,
             datatype,
             language: None,
             direction: None,
@@ -1172,9 +1170,18 @@ fn scalar_lexical_for_datatype(
     }
 }
 
-fn canonical_json_double(value: &serde_json::Number) -> Result<String, RdfDiagnostic> {
-    value
-        .as_f64()
+/// The `rdf:JSON` lexical form of `value`: compact JSON, members ordered by name, every
+/// number in its binary64 spelling.
+fn rdf_json_lexical(value: &JsonValue) -> Result<String, RdfDiagnostic> {
+    let mut value = crate::json_number::binary64(value)
+        .map_err(|source| decode(format!("encode rdf:JSON value: {source}")))?;
+    value.sort_keys();
+    Ok(json::write_compact(&value))
+}
+
+fn canonical_json_double(value: &Number) -> Result<String, RdfDiagnostic> {
+    Some(crate::json_number::read_json(|| value.as_f64()))
+        .filter(|value| value.is_finite())
         .map(purrdf_xsd::numeric::canonical_double)
         .ok_or_else(|| {
             decode(format!(
@@ -1210,7 +1217,7 @@ fn effective_direction(
 /// context (term map, inverse index) for every node, value and graph object visited.
 fn object_context<'a>(
     parent: &'a CompiledJsonLdContext,
-    object: &Map<String, JsonValue>,
+    object: &Map,
 ) -> Result<Cow<'a, CompiledJsonLdContext>, RdfDiagnostic> {
     object.get("@context").map_or_else(
         || Ok(Cow::Borrowed(parent)),
@@ -1241,7 +1248,7 @@ struct ExpandedMember<'a> {
 
 fn expanded_members<'a>(
     context: &CompiledJsonLdContext,
-    object: &'a Map<String, JsonValue>,
+    object: &'a Map,
 ) -> Result<Vec<ExpandedMember<'a>>, RdfDiagnostic> {
     let mut seen = BTreeSet::new();
     let mut members = Vec::with_capacity(object.len());
@@ -1272,7 +1279,7 @@ fn member<'a, 'b>(
 
 fn expanded_member<'a>(
     context: &CompiledJsonLdContext,
-    object: &'a Map<String, JsonValue>,
+    object: &'a Map,
     keyword: &str,
 ) -> Result<Option<&'a JsonValue>, RdfDiagnostic> {
     let members = expanded_members(context, object)?;
@@ -1323,11 +1330,11 @@ fn expand_id_value(
 
 /// [`as_values`]' owning twin: yields the values so each can be released as it is
 /// consumed, rather than borrowed out of a tree that has to outlive the walk.
-fn into_values(value: JsonValue) -> Vec<JsonValue> {
-    match value {
-        JsonValue::Array(values) => values,
+fn into_values(mut value: JsonValue) -> Vec<JsonValue> {
+    match &mut value {
+        JsonValue::Array(values) => std::mem::take(values),
         JsonValue::Null => Vec::new(),
-        value => vec![value],
+        _ => vec![value],
     }
 }
 
@@ -1343,7 +1350,7 @@ fn non_null_values(value: &JsonValue) -> impl Iterator<Item = &JsonValue> {
 }
 
 fn insert_expanded_control(
-    object: &mut Map<String, JsonValue>,
+    object: &mut Map,
     context: &CompiledJsonLdContext,
     keyword: &str,
     value: JsonValue,
@@ -1354,6 +1361,7 @@ fn insert_expanded_control(
         )));
     }
     object.insert(keyword.to_owned(), value);
+    object.sort_keys();
     Ok(())
 }
 
@@ -1680,7 +1688,7 @@ fn id_term(id: &str) -> Result<RdfTerm, RdfDiagnostic> {
 /// The failure reports the module's
 /// [`langtag::LanguageTagError::diagnostic_code`], so the user learns which
 /// production refused. JSON-LD decode diagnostics carry no line/column or JSON
-/// pointer (the `serde_json` value tree this walks has discarded both by the
+/// pointer (the JSON value tree this walks has discarded both by the
 /// time expansion runs), which this does not change.
 /// # Why it is `pub(super)`, and what `what` is for
 ///

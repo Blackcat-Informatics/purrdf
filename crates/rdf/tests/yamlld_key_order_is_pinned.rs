@@ -3,20 +3,10 @@
 
 //! YAML-LD emits its keys in sorted order, straight from the carrier.
 //!
-//! YAML-LD used to reach its output by serializing the whole JSON-LD document to a
-//! `String`, reparsing it into a `serde_json::Value`, and converting that. It therefore
-//! held the `SerGraph`, the carrier, the JSON text and the value tree at once — strictly
-//! more resident than the eager path it replaced, in the one format whose comment said
-//! it could not be helped.
-//!
-//! The reason given was key order: `serde_json`'s map is a `BTreeMap` in this workspace
-//! (no `preserve_order` feature), so reparsing SORTS, and the emitted order is a frozen
-//! contract. The claim was that the round trip was what produced sorted output.
-//!
-//! It was not. The carrier already emits in sorted order — `@`-prefixed keys sort ahead
-//! of IRI keys, and node properties come out of ordered maps — so the reparse sorted
-//! something already sorted. Removing it was verified byte-for-byte against the old
-//! path before it was removed, not assumed.
+//! The emitted key order is a frozen contract, and nothing reorders the document on the
+//! way out: the carrier emits in sorted order — `@`-prefixed keys sort ahead of IRI
+//! keys, and node properties come out of ordered maps — and the YAML writer keeps the
+//! order it is given, one node at a time.
 //!
 //! This test is what keeps that true. There is no YAML-LD golden, so without it the
 //! ordering contract rests on nothing a change would trip over.

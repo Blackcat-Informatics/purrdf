@@ -15,14 +15,15 @@ use std::fmt::{self, Write as _};
 use purrdf_iri::PrefixMap;
 use purrdf_lex::literal_escape::{self, Carrier};
 use purrdf_lex::term_syntax;
-use serde::{Deserialize, Serialize};
 
 use crate::{QuadIds, RdfDataset, RdfTextDirection, TermRef, TermValue};
 
+mod json;
 mod layout;
 mod scene;
 mod svg;
 
+pub use json::VizJson;
 pub use layout::*;
 pub use scene::*;
 pub use svg::*;
@@ -33,38 +34,31 @@ const DEFAULT_MAX_STATEMENTS: usize = 500;
 pub const VIZ_EXPORT_SCHEMA_VERSION: &str = "purrdf-viz-export-1";
 
 /// A typed term identifier within one deterministic visualization projection.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VizTermId(pub String);
 
 /// A typed structural-statement identifier within one visualization projection.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VizStatementId(pub String);
 
 /// A typed assertion identifier within one visualization projection.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VizAssertionId(pub String);
 
 /// A typed relation identifier within one visualization projection.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VizRelationId(pub String);
 
 /// A typed reference identifier within one visualization projection.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VizReferenceId(pub String);
 
 /// A typed named-graph identifier within one visualization projection.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VizGraphId(pub String);
 
 /// A reference to either an ordinary RDF term or a structural statement.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VizValueRef {
     /// A non-triple RDF term.
     Term {
@@ -79,8 +73,7 @@ pub enum VizValueRef {
 }
 
 /// A JSON-friendly RDF term value used by visualization exports.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VizTermValue {
     /// An IRI term.
     Iri {
@@ -108,8 +101,7 @@ pub enum VizTermValue {
 }
 
 /// RDF 1.2 base direction in exported visualization metadata.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VizTextDirection {
     /// Left-to-right base direction.
     Ltr,
@@ -136,8 +128,7 @@ impl From<VizTextDirection> for RdfTextDirection {
 }
 
 /// Visualization role attached to a term or statement.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VizRole {
     /// The current focus selected by the caller.
     Focus,
@@ -158,8 +149,7 @@ pub enum VizRole {
 }
 
 /// RDF dialect/conformance state surfaced by the visualization projection.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VizDialect {
     /// Standard RDF 1.2 position.
     Rdf12,
@@ -170,7 +160,7 @@ pub enum VizDialect {
 }
 
 /// A typed visualization diagnostic.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VizDiagnostic {
     /// Deterministic diagnostic id.
     pub id: String,
@@ -185,7 +175,7 @@ pub struct VizDiagnostic {
 }
 
 /// A caller-supplied role rule.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VizRoleRule {
     /// Predicate IRI that activates this role.
     pub predicate_iri: String,
@@ -194,7 +184,7 @@ pub struct VizRoleRule {
 }
 
 /// A caller-supplied vocabulary mapping used by specs and labels.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VizVocabularyMapping {
     /// Compact prefix.
     pub prefix: String,
@@ -203,8 +193,7 @@ pub struct VizVocabularyMapping {
 }
 
 /// Graph-context filtering policy.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum VizGraphPolicy {
     /// Include every graph context.
     #[default]
@@ -216,8 +205,7 @@ pub enum VizGraphPolicy {
 }
 
 /// Label generation policy.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum VizLabelPolicy {
     /// Generate compact labels from term values.
     #[default]
@@ -227,8 +215,7 @@ pub enum VizLabelPolicy {
 }
 
 /// Visualization mode requested by a spec.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum VizMode {
     /// Compact resource graph.
     #[default]
@@ -240,8 +227,7 @@ pub enum VizMode {
 }
 
 /// Column available in the statement table projection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VizTableField {
     /// Structural statement text and identity.
     Statement,
@@ -260,7 +246,7 @@ pub enum VizTableField {
 }
 
 /// Caller-provided semantic lens for visualization projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizSpec {
     /// Requested visualization mode.
     pub mode: VizMode,
@@ -367,7 +353,7 @@ pub struct VizGraphInput {
 }
 
 /// A projected ordinary RDF term.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizTerm {
     /// Deterministic term id.
     pub id: VizTermId,
@@ -380,7 +366,7 @@ pub struct VizTerm {
 }
 
 /// A projected RDF 1.2 structural statement.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizStatement {
     /// Deterministic statement id.
     pub id: VizStatementId,
@@ -403,7 +389,7 @@ pub struct VizStatement {
 }
 
 /// A concrete assertion occurrence for a structural statement.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizAssertion {
     /// Deterministic assertion id.
     pub id: VizAssertionId,
@@ -414,8 +400,7 @@ pub struct VizAssertion {
 }
 
 /// A projected relation in the RDF 1.2 statement layer.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VizRelation {
     /// A reifier term reifies a structural statement.
     Reifies {
@@ -444,7 +429,7 @@ pub enum VizRelation {
 }
 
 /// A reference to a structural statement as a triple term.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizReference {
     /// Deterministic reference id.
     pub id: VizReferenceId,
@@ -455,8 +440,7 @@ pub struct VizReference {
 }
 
 /// Subject or object position occupied by a triple term.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VizPosition {
     /// Subject position.
     Subject,
@@ -465,8 +449,7 @@ pub enum VizPosition {
 }
 
 /// Exact source site for a structural-statement reference.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum VizReferenceSite {
     /// Triple term occurs in another structural statement.
     Statement {
@@ -493,7 +476,7 @@ pub enum VizReferenceSite {
 }
 
 /// A graph context known to the visualization projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizGraph {
     /// Deterministic graph id.
     pub id: VizGraphId,
@@ -504,7 +487,7 @@ pub struct VizGraph {
 }
 
 /// A statement table row derived from the projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizTableRow {
     /// Statement id.
     pub statement: VizStatementId,
@@ -521,7 +504,7 @@ pub struct VizTableRow {
 }
 
 /// Statement table projection with caller-selected columns.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizTable {
     /// Columns in display order.
     pub fields: Vec<VizTableField>,
@@ -530,7 +513,7 @@ pub struct VizTable {
 }
 
 /// The renderer-neutral Statement Incidence Model.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizProjection {
     /// Terms in deterministic order.
     pub terms: Vec<VizTerm>,
@@ -554,7 +537,7 @@ pub struct VizProjection {
 pub type VizModel = VizProjection;
 
 /// A versioned visualization export.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizExport {
     /// Export schema version.
     pub schema_version: String,
@@ -579,7 +562,7 @@ pub struct VizExport {
 }
 
 /// SVG element to projection-id mapping.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizElementIndexEntry {
     /// SVG element id.
     pub element_id: String,
@@ -592,8 +575,7 @@ pub struct VizElementIndexEntry {
 }
 
 /// SVG element grammar used by the load-bearing element index.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VizElementKind {
     /// Node group.
     NodeGroup,
@@ -672,6 +654,8 @@ pub enum VizError {
     Layout(String),
     /// Serialization failed.
     Serialize(String),
+    /// A JSON value is not the JSON form of the visualization type read from it.
+    Decode(String),
 }
 
 impl fmt::Display for VizError {
@@ -708,6 +692,7 @@ impl fmt::Display for VizError {
             Self::Scene(message) => f.write_str(message),
             Self::Layout(message) => f.write_str(message),
             Self::Serialize(message) => f.write_str(message),
+            Self::Decode(message) => write!(f, "visualization JSON: {message}"),
         }
     }
 }
@@ -794,7 +779,7 @@ pub fn project_graph_input(
 /// Project a dataset and serialize the model to deterministic JSON.
 pub fn project_dataset_json(dataset: &RdfDataset, spec: &VizSpec) -> Result<String, VizError> {
     let projection = project_dataset(dataset, spec)?;
-    serde_json::to_string(&projection).map_err(|err| VizError::Serialize(err.to_string()))
+    Ok(purrdf_lex::json::write_compact(&projection.to_json()))
 }
 
 #[derive(Debug, Clone)]
@@ -1284,8 +1269,7 @@ impl<'a> ProjectionBuilder<'a> {
         statement: &VizStatementId,
         site: VizReferenceSite,
     ) -> Result<(), VizError> {
-        let site_key =
-            serde_json::to_string(&site).map_err(|err| VizError::Serialize(err.to_string()))?;
+        let site_key = purrdf_lex::json::write_compact(&site.to_json());
         let id = VizReferenceId(self.mint_id("reference", &format!("{}|{site_key}", statement.0))?);
         self.references.insert(
             id.clone(),
@@ -1730,11 +1714,13 @@ fn write_leaf_key(out: &mut String, value: &TermValue) -> fmt::Result {
     match value {
         TermValue::Iri(iri) => {
             out.write_str("iri:")?;
-            write_json_string(iri, out)
+            write_json_string(iri, out);
+            Ok(())
         }
         TermValue::Blank { label, scope } => {
             write!(out, "blank:{}:", scope.ordinal())?;
-            write_json_string(label, out)
+            write_json_string(label, out);
+            Ok(())
         }
         TermValue::Literal {
             lexical_form,
@@ -1743,12 +1729,12 @@ fn write_leaf_key(out: &mut String, value: &TermValue) -> fmt::Result {
             direction,
         } => {
             out.write_str("literal:")?;
-            write_json_string(lexical_form, out)?;
+            write_json_string(lexical_form, out);
             out.write_char(':')?;
-            write_json_string(datatype, out)?;
+            write_json_string(datatype, out);
             out.write_char(':')?;
             if let Some(language) = language {
-                write_json_string(language, out)?;
+                write_json_string(language, out);
             }
             out.write_char(':')?;
             if let Some(direction) = direction {
@@ -1760,9 +1746,12 @@ fn write_leaf_key(out: &mut String, value: &TermValue) -> fmt::Result {
     }
 }
 
-fn write_json_string(value: &str, out: &mut String) -> fmt::Result {
-    let encoded = serde_json::to_string(value).expect("string serialization cannot fail");
-    out.write_str(&encoded)
+fn write_json_string(value: &str, out: &mut String) {
+    purrdf_lex::json_escape::push_string(
+        out,
+        value,
+        purrdf_lex::json_escape::JsonEscapes::ShortForms,
+    );
 }
 
 fn label_for_term(value: &TermValue, policy: VizLabelPolicy, prefixes: &PrefixMap) -> String {
@@ -2557,7 +2546,8 @@ mod term_walk_tests {
             }
             TermValue::Iri(iri) => {
                 out.write_str("iri:")?;
-                write_json_string(iri, out)
+                write_json_string(iri, out);
+                Ok(())
             }
             leaf => out.write_str(&term_key(leaf)),
         }

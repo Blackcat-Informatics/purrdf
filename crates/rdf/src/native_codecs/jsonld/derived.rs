@@ -65,7 +65,7 @@ impl CandidateStats {
         let compacted_bytes = self
             .compacted_bytes(alias.len())
             .ok_or_else(|| derived_limit("derived namespace compacted-byte count overflow"))?;
-        let context_cost = prefix_definition_cost(alias, namespace)?;
+        let context_cost = prefix_definition_cost(alias, namespace);
         Ok(self
             .expanded_bytes
             .checked_sub(compacted_bytes)
@@ -298,11 +298,13 @@ fn namespace_boundary(iri: &str) -> Option<&str> {
         .then_some(namespace)
 }
 
-fn prefix_definition_cost(alias: &str, namespace: &str) -> Result<usize, RdfDiagnostic> {
-    let value = serde_json::json!({alias: {"@id": namespace, "@prefix": true}});
-    serde_json::to_vec(&value)
-        .map(|bytes| bytes.len())
-        .map_err(|source| derived_invalid(format!("encode derived prefix definition: {source}")))
+fn prefix_definition_cost(alias: &str, namespace: &str) -> usize {
+    use purrdf_lex::json::{self, Object};
+    let value = Object::new().with(
+        alias,
+        Object::new().with("@id", namespace).with("@prefix", true),
+    );
+    json::write_compact(&value.into()).len()
 }
 
 fn derived_limit(message: impl Into<String>) -> RdfDiagnostic {
@@ -389,7 +391,10 @@ mod tests {
     fn unprofitable_candidates_are_discarded_stably() {
         let context = derive_from(["https://example.org/only"], DerivationLimits::default())
             .expect("derive empty context");
-        assert_eq!(context.canonical_context(), &serde_json::json!({}));
+        assert_eq!(
+            context.canonical_context(),
+            &purrdf_lex::json::Value::from(purrdf_lex::json::Object::new())
+        );
     }
 
     #[test]

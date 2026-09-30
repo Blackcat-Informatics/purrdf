@@ -17,7 +17,7 @@ mod tests;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use serde_json::Value;
+use purrdf_lex::json::Value;
 
 use super::{ByteLimit, MAX_JSON_LD_DOCUMENT_BYTES};
 use crate::RdfDiagnostic;
@@ -547,8 +547,7 @@ impl CompiledJsonLdContext {
 
     /// Canonical compact JSON bytes for the retained context.
     pub fn canonical_json(&self) -> String {
-        serde_json::to_string(&self.canonical_context)
-            .expect("serde_json::Value serialization is infallible")
+        purrdf_lex::json::write_compact(&self.canonical_context)
     }
 
     /// Active base IRI, when configured.
@@ -724,18 +723,28 @@ impl JsonLdTermSelection {
     }
 }
 
-fn canonicalize(value: &Value) -> Value {
-    match value {
-        Value::Array(values) => Value::Array(values.iter().map(canonicalize).collect()),
-        Value::Object(values) => {
-            let sorted: BTreeMap<String, Value> = values
-                .iter()
-                .map(|(key, value)| (key.clone(), canonicalize(value)))
-                .collect();
-            Value::Object(sorted.into_iter().collect())
+/// `value` with every object's members ordered by name: the order the context
+/// algorithms walk and the retained context is emitted in. A repeated member name is
+/// refused, since a JSON-LD context names each term and keyword once (RFC 7493 §2.3).
+fn canonicalize(value: &Value) -> Result<Value, RdfDiagnostic> {
+    let mut work = vec![value];
+    while let Some(value) = work.pop() {
+        match value {
+            Value::Array(items) => work.extend(items),
+            Value::Object(object) => {
+                if let Some(name) = object.first_duplicate() {
+                    return Err(context_error(format!(
+                        "JSON-LD context repeats the member `{name}`"
+                    )));
+                }
+                work.extend(object.values());
+            }
+            _ => {}
         }
-        scalar => scalar.clone(),
     }
+    let mut canonical = value.clone();
+    canonical.sort_keys();
+    Ok(canonical)
 }
 
 pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, RdfDiagnostic> {

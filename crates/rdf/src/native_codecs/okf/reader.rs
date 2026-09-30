@@ -8,7 +8,8 @@ use core::fmt;
 use core::ops::ControlFlow;
 
 use purrdf_events::{EventQuad, EventTerm, EventTermId, EventTriple, RdfEventSink, ScopeId};
-use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+use purrdf_lex::json::{self, Number, Value};
+use purrdf_lex::yaml;
 
 use super::{
     MAX_OKF_FRONTMATTER_BYTES, MAX_OKF_LINKS_PER_DOCUMENT, MAX_OKF_YAML_DEPTH, MAX_OKF_YAML_NODES,
@@ -23,189 +24,72 @@ use purrdf_xsd::datatype::XSD_DECIMAL;
 use purrdf_xsd::datatype::XSD_INTEGER;
 use purrdf_xsd::datatype::XSD_STRING;
 
-#[derive(Clone, Debug, PartialEq)]
-enum StrictNumber {
-    Signed(i64),
-    Unsigned(u64),
-    Decimal(String),
+/// The literal an OKF number denotes: an integer in the `i64`/`u64` domain as its
+/// decimal `xsd:integer`, any other number as the canonical `xsd:decimal` of its nearest
+/// finite binary64.
+fn number_literal(number: &Number) -> Result<(String, &'static str), OkfError> {
+    if let Some(value) = number.as_i64() {
+        return Ok((value.to_string(), XSD_INTEGER));
+    }
+    if let Some(value) = number.as_u64() {
+        return Ok((value.to_string(), XSD_INTEGER));
+    }
+    let lexical = decimal_lexical_from_f64(crate::json_number::read_json(|| number.as_f64()))?;
+    let parsed = purrdf_xsd::parse_by_iri(&lexical, XSD_DECIMAL)
+        .map_err(|error| OkfError::new(format!("invalid OKF decimal `{lexical}`: {error}")))?
+        .ok_or_else(|| OkfError::new("internal OKF decimal datatype is not recognized"))?;
+    Ok((parsed.canonical_lexical(), XSD_DECIMAL))
 }
 
-impl StrictNumber {
-    fn lexical(&self) -> String {
-        match self {
-            Self::Signed(value) => value.to_string(),
-            Self::Unsigned(value) => value.to_string(),
-            Self::Decimal(value) => value.clone(),
-        }
-    }
-
-    fn datatype(&self) -> &'static str {
-        match self {
-            Self::Signed(_) | Self::Unsigned(_) => XSD_INTEGER,
-            Self::Decimal(_) => XSD_DECIMAL,
-        }
-    }
-
-    fn to_json(&self) -> Result<serde_json::Value, OkfError> {
-        let number = match self {
-            Self::Signed(value) => serde_json::Number::from(*value),
-            Self::Unsigned(value) => serde_json::Number::from(*value),
-            Self::Decimal(value) => {
-                let parsed =
-                    crate::json_number::read_json(|| value.parse::<f64>()).map_err(|error| {
-                        OkfError::new(format!("invalid OKF decimal `{value}`: {error}"))
-                    })?;
-                serde_json::Number::from_f64(parsed)
-                    .ok_or_else(|| OkfError::new("OKF decimal exceeds finite binary64"))?
-            }
-        };
-        Ok(serde_json::Value::Number(number))
-    }
-}
-
-/// YAML value decoded through a duplicate-rejecting map visitor. `serde_yaml::Value`
-/// accepts duplicate mapping keys with last-write behavior; that would silently
-/// erase authored frontmatter, so the OKF reader owns this strict value tree.
-#[derive(Clone, Debug, PartialEq)]
-enum StrictValue {
-    Null,
-    Bool(bool),
-    Number(StrictNumber),
-    String(String),
-    Sequence(Vec<Self>),
-    Mapping(BTreeMap<String, Self>),
-}
-
-impl StrictValue {
-    fn scalar_text(&self) -> Option<String> {
-        match self {
-            Self::Bool(value) => Some(value.to_string()),
-            Self::Number(value) => Some(value.lexical()),
-            Self::String(value) => Some(value.clone()),
-            Self::Null | Self::Sequence(_) | Self::Mapping(_) => None,
-        }
-    }
-
-    fn to_json(&self) -> Result<serde_json::Value, OkfError> {
-        match self {
-            Self::Null => Ok(serde_json::Value::Null),
-            Self::Bool(value) => Ok(serde_json::Value::Bool(*value)),
-            Self::Number(value) => value.to_json(),
-            Self::String(value) => Ok(serde_json::Value::String(value.clone())),
-            Self::Sequence(values) => values
-                .iter()
-                .map(Self::to_json)
-                .collect::<Result<Vec<_>, _>>()
-                .map(serde_json::Value::Array),
-            Self::Mapping(values) => {
-                let mut object = serde_json::Map::new();
-                for (key, value) in values {
-                    object.insert(key.clone(), value.to_json()?);
+/// `value` as the OKF reader holds it: every object's members in name order, every
+/// integer in the `i64`/`u64` domain as its decimal integer, and every other number as
+/// the shortest JSON spelling of the binary64 its canonical `xsd:decimal` denotes.
+///
+/// The writer holds a JSON extension literal to this same normalization: a literal the
+/// reader would respell cannot be written without losing its lexical identity.
+pub(super) fn okf_json(value: &Value) -> Result<Value, OkfError> {
+    let mut normalized = value.clone();
+    normalized.sort_keys();
+    let mut work: Vec<&mut Value> = vec![&mut normalized];
+    while let Some(value) = work.pop() {
+        match value {
+            Value::Number(number) => {
+                let (lexical, datatype) = number_literal(number)?;
+                let spelled = if datatype == XSD_INTEGER {
+                    Some(lexical)
+                } else {
+                    let value = crate::json_number::read_json(|| lexical.parse::<f64>()).map_err(
+                        |error| OkfError::new(format!("invalid OKF decimal `{lexical}`: {error}")),
+                    )?;
+                    Number::from_f64(value).map(Number::into_lexeme)
                 }
-                Ok(serde_json::Value::Object(object))
+                .ok_or_else(|| OkfError::new("OKF decimal exceeds finite binary64"))?;
+                *number = Number::from_lexeme(spelled)
+                    .map_err(|error| OkfError::new(format!("invalid OKF number: {error}")))?;
             }
+            Value::Array(items) => work.extend(items.iter_mut()),
+            Value::Object(object) => work.extend(object.values_mut()),
+            Value::Null | Value::Bool(_) | Value::String(_) => {}
         }
     }
+    Ok(normalized)
 }
 
-/// Apply the reader's numeric normalization before accepting a writer projection.
-pub(super) fn json_from_yaml(value: serde_yaml::Value) -> Result<serde_json::Value, OkfError> {
-    serde_yaml::from_value::<StrictValue>(value)
-        .map_err(|error| OkfError::new(format!("invalid OKF YAML value: {error}")))?
-        .to_json()
-}
-
-impl<'de> Deserialize<'de> for StrictValue {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(StrictValueVisitor)
-    }
-}
-
-struct StrictValueVisitor;
-
-impl<'de> Visitor<'de> for StrictValueVisitor {
-    type Value = StrictValue;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a finite YAML scalar, sequence, or string-keyed mapping")
-    }
-
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(StrictValue::Null)
-    }
-
-    fn visit_none<E>(self) -> Result<Self::Value, E> {
-        Ok(StrictValue::Null)
-    }
-
-    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
-        Ok(StrictValue::Bool(value))
-    }
-
-    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
-        Ok(StrictValue::Number(StrictNumber::Signed(value)))
-    }
-
-    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
-        Ok(StrictValue::Number(StrictNumber::Unsigned(value)))
-    }
-
-    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        let lexical = decimal_lexical_from_f64(value).map_err(E::custom)?;
-        let parsed = purrdf_xsd::parse_by_iri(&lexical, XSD_DECIMAL)
-            .map_err(E::custom)?
-            .ok_or_else(|| E::custom("internal OKF decimal datatype is not recognized"))?;
-        Ok(StrictValue::Number(StrictNumber::Decimal(
-            parsed.canonical_lexical(),
-        )))
-    }
-
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
-        Ok(StrictValue::String(value.to_owned()))
-    }
-
-    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
-        Ok(StrictValue::String(value))
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let mut values = Vec::with_capacity(sequence.size_hint().unwrap_or(0).min(1_024));
-        while let Some(value) = sequence.next_element()? {
-            values.push(value);
-        }
-        Ok(StrictValue::Sequence(values))
-    }
-
-    fn visit_map<A>(self, mut mapping: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let mut values = BTreeMap::new();
-        while let Some((key, value)) = mapping.next_entry::<String, StrictValue>()? {
-            if values.insert(key.clone(), value).is_some() {
-                return Err(<A::Error as de::Error>::custom(format!(
-                    "duplicate YAML mapping key `{key}`"
-                )));
-            }
-        }
-        Ok(StrictValue::Mapping(values))
-    }
+/// The text of a scalar frontmatter value, or `None` for `null` and collections.
+fn scalar_text(value: &Value) -> Result<Option<String>, OkfError> {
+    Ok(match value {
+        Value::Bool(value) => Some(value.to_string()),
+        Value::Number(number) => Some(number_literal(number)?.0),
+        Value::String(value) => Some(value.clone()),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    })
 }
 
 #[derive(Clone, Debug)]
 struct ParsedDocument {
     path: String,
     subject_iri: String,
-    fields: BTreeMap<String, StrictValue>,
+    fields: BTreeMap<String, Value>,
     body: String,
     links: Vec<MarkdownLink>,
 }
@@ -217,7 +101,7 @@ pub(super) struct MarkdownLink {
     pub(super) ordinal: usize,
 }
 
-type ParsedFrontmatter = (BTreeMap<String, StrictValue>, String);
+type ParsedFrontmatter = (BTreeMap<String, Value>, String);
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum OwnedEventTerm {
@@ -427,13 +311,23 @@ fn parse_frontmatter(path: &str, markdown: &str) -> Result<Option<ParsedFrontmat
                     ),
                 ));
             }
-            let value: StrictValue = serde_yaml::from_str(yaml).map_err(|error| {
-                document_error(path, format!("invalid YAML frontmatter: {error}"))
-            })?;
-            validate_yaml_tree(&value, path)?;
-            let StrictValue::Mapping(fields) = value else {
+            // The frontmatter is bounded while it is read: collections open at once,
+            // and nodes with every alias expansion counted. A repeated key, a key that
+            // is not a string, a tag and `.inf`/`.nan` are refused.
+            let value = yaml::read_with(
+                yaml,
+                yaml::Limits {
+                    max_depth: MAX_OKF_YAML_DEPTH,
+                    max_nodes: MAX_OKF_YAML_NODES as u64,
+                    aliases: true,
+                },
+            )
+            .map_err(|error| document_error(path, format!("invalid YAML frontmatter: {error}")))?;
+            let mut value = okf_json(&value)?;
+            let Some(fields) = value.as_object_mut() else {
                 return Err(document_error(path, "YAML frontmatter must be a mapping"));
             };
+            let fields: BTreeMap<String, Value> = std::mem::take(fields).into_iter().collect();
             return Ok(Some((fields, markdown[after_line..].to_owned())));
         }
         if line_end == markdown.len() {
@@ -445,51 +339,6 @@ fn parse_frontmatter(path: &str, markdown: &str) -> Result<Option<ParsedFrontmat
         path,
         "YAML frontmatter is missing its closing `---` fence",
     ))
-}
-
-fn validate_yaml_tree(value: &StrictValue, path: &str) -> Result<(), OkfError> {
-    fn visit(
-        value: &StrictValue,
-        depth: usize,
-        nodes: &mut usize,
-        path: &str,
-    ) -> Result<(), OkfError> {
-        if depth > MAX_OKF_YAML_DEPTH {
-            return Err(document_error(
-                path,
-                format!("YAML nesting exceeds depth {MAX_OKF_YAML_DEPTH}"),
-            ));
-        }
-        *nodes = nodes
-            .checked_add(1)
-            .ok_or_else(|| document_error(path, "YAML node count overflow"))?;
-        if *nodes > MAX_OKF_YAML_NODES {
-            return Err(document_error(
-                path,
-                format!("YAML tree exceeds {MAX_OKF_YAML_NODES} nodes"),
-            ));
-        }
-        match value {
-            StrictValue::Sequence(values) => {
-                for child in values {
-                    visit(child, depth + 1, nodes, path)?;
-                }
-            }
-            StrictValue::Mapping(values) => {
-                for child in values.values() {
-                    visit(child, depth + 1, nodes, path)?;
-                }
-            }
-            StrictValue::Null
-            | StrictValue::Bool(_)
-            | StrictValue::Number(_)
-            | StrictValue::String(_) => {}
-        }
-        Ok(())
-    }
-
-    let mut nodes = 0;
-    visit(value, 0, &mut nodes, path)
 }
 
 fn build_event_graph(
@@ -514,7 +363,7 @@ fn build_event_graph(
                     graph.quad_iri(subject, predicate, &resource)?;
                 }
                 "tags" => {
-                    let StrictValue::Sequence(values) = value else {
+                    let Value::Array(values) = value else {
                         return Err(document_error(
                             &document.path,
                             "frontmatter `tags` must be a YAML sequence",
@@ -608,22 +457,22 @@ fn emit_extension(
     graph: &mut EventGraph,
     subject: EventTermId,
     predicate: &str,
-    value: &StrictValue,
+    value: &Value,
     json_datatype: &str,
 ) -> Result<(), OkfError> {
     match value {
-        StrictValue::Bool(flag) => {
-            graph.quad_literal(subject, predicate, &flag.to_string(), XSD_BOOLEAN)
+        Value::Bool(flag) => graph.quad_literal(subject, predicate, &flag.to_string(), XSD_BOOLEAN),
+        Value::Number(number) => {
+            let (lexical, datatype) = number_literal(number)?;
+            graph.quad_literal(subject, predicate, &lexical, datatype)
         }
-        StrictValue::Number(number) => {
-            graph.quad_literal(subject, predicate, &number.lexical(), number.datatype())
-        }
-        StrictValue::String(text) => graph.quad_literal(subject, predicate, text, XSD_STRING),
-        StrictValue::Null | StrictValue::Sequence(_) | StrictValue::Mapping(_) => {
-            let json = serde_json::to_string(&value.to_json()?)
-                .map_err(|error| OkfError::new(format!("cannot encode OKF JSON value: {error}")))?;
-            graph.quad_literal(subject, predicate, &json, json_datatype)
-        }
+        Value::String(text) => graph.quad_literal(subject, predicate, text, XSD_STRING),
+        Value::Null | Value::Array(_) | Value::Object(_) => graph.quad_literal(
+            subject,
+            predicate,
+            &json::write_compact(value),
+            json_datatype,
+        ),
     }
 }
 
@@ -693,7 +542,7 @@ fn is_break(flow: ControlFlow<()>) -> bool {
 }
 
 fn required_scalar(
-    fields: &BTreeMap<String, StrictValue>,
+    fields: &BTreeMap<String, Value>,
     key: &str,
     path: &str,
 ) -> Result<String, OkfError> {
@@ -703,9 +552,8 @@ fn required_scalar(
     scalar(value, key, path)
 }
 
-fn scalar(value: &StrictValue, key: &str, path: &str) -> Result<String, OkfError> {
-    value
-        .scalar_text()
+fn scalar(value: &Value, key: &str, path: &str) -> Result<String, OkfError> {
+    scalar_text(value)?
         .ok_or_else(|| document_error(path, format!("frontmatter `{key}` must be a scalar value")))
 }
 
@@ -1031,6 +879,46 @@ mod tests {
     }
 
     #[test]
+    fn frontmatter_keys_are_unique_strings_at_every_level() {
+        for (markdown, refusal) in [
+            ("---\ntype: Concept\ntitle: A\n---\nbody\n", None),
+            (
+                "---\ntype: Concept\ntitle: A\ntitle: B\n---\nbody\n",
+                Some("repeats a key"),
+            ),
+            (
+                "---\ntype: Concept\nproducer:\n  a: 1\n  b: 2\n---\nbody\n",
+                None,
+            ),
+            (
+                "---\ntype: Concept\nproducer:\n  a: 1\n  a: 2\n---\nbody\n",
+                Some("repeats a key"),
+            ),
+            (
+                "---\ntype: Concept\nproducer:\n  \"1\": one\n---\nbody\n",
+                None,
+            ),
+            (
+                "---\ntype: Concept\nproducer:\n  1: one\n---\nbody\n",
+                Some("must be a string"),
+            ),
+        ] {
+            let bundle = OkfBundle::from_documents([("concept.md", markdown)]).expect("bundle");
+            let mut sink = DatasetSink::new();
+            let result = lift_okf_bundle(&bundle, &config(), &mut sink);
+            match refusal {
+                None => {
+                    result.unwrap_or_else(|error| panic!("{markdown:?} must lift: {error}"));
+                }
+                Some(reason) => {
+                    let error = result.expect_err("the frontmatter must be refused");
+                    assert!(error.to_string().contains(reason), "{markdown:?}: {error}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn duplicate_and_unknown_frontmatter_keys_hard_fail_before_finish() {
         for markdown in [
             "---\ntype: Concept\ntype: Other\n---\nbody\n",
@@ -1041,7 +929,7 @@ mod tests {
             let error = lift_okf_bundle(&bundle, &config(), &mut sink)
                 .expect_err("invalid frontmatter must fail");
             assert!(
-                error.to_string().contains("duplicate")
+                error.to_string().contains("repeats a key")
                     || error.to_string().contains("unrecognized"),
                 "unexpected error: {error}"
             );

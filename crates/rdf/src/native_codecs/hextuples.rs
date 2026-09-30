@@ -15,12 +15,13 @@
 //! * `language` is the BCP-47 language tag for a language-tagged literal (else empty),
 //! * `graph` is the named-graph IRI / `_:` blank (empty for the default graph).
 //!
-//! Encoding and decoding reuse `serde_json` (already a dep — no new dependency, so the
-//! crate stays wasm-clean). Emission is byte-deterministic: quads are written in dataset
+//! Each line is read by [`purrdf_lex::json`] and its strings are written by
+//! [`purrdf_lex::json_escape`], the workspace's one JSON reader and string spelling. Emission is byte-deterministic: quads are written in dataset
 //! order, one canonical JSON array per line. HexTuples is a CLASSIC quad syntax with no
 //! RDF-1.2 triple-term surface: a triple term in a serialize request is a HARD error.
 
 use purrdf_core::sink::{TextOut, TextSink};
+use purrdf_lex::json_escape::JsonEscapes;
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -131,13 +132,28 @@ pub(super) fn parse_hextuples_to_dataset(
 /// Unicode `White_Space` property, twenty-six scalars — and therefore answers a question
 /// JSON did not ask. The difference is a SILENT DROP, not a widening: a line holding
 /// nothing but U+00A0 NO-BREAK SPACE trimmed to the empty string and was skipped as
-/// BLANK, when it is in fact a line `serde_json` has no reading for. HexTuples is NDJSON
+/// BLANK, when it is in fact a line the JSON grammar has no reading for. HexTuples is NDJSON
 /// — every non-blank line must be a six-element JSON array — so the only honest answers
 /// are "blank" and "invalid JSON", and U+00A0 is not blank by any rule JSON states.
 /// This is the same defect, in the same directory, that the line/Turtle front-end's
 /// `WS` work removed from `text_parse`; the sibling codec kept its copy.
 fn is_blank_json_line(line: &str) -> bool {
     line.as_bytes().iter().all(|&byte| is_ws(byte))
+}
+
+/// The strings of one line's JSON array, or why the line is not an array of strings.
+fn line_fields(line: &str) -> Result<Vec<String>, String> {
+    let mut value = purrdf_lex::json::read(line).map_err(|error| error.to_string())?;
+    let Some(items) = value.as_array_mut() else {
+        return Err("expected an array".to_owned());
+    };
+    std::mem::take(items)
+        .into_iter()
+        .map(|mut item| match &mut item {
+            purrdf_lex::json::Value::String(text) => Ok(std::mem::take(text)),
+            other => Err(format!("expected a string, found {}", other.kind().name())),
+        })
+        .collect()
 }
 
 /// Decode ONE physical HexTuples line, or `None` when the line is blank.
@@ -154,7 +170,7 @@ fn parse_hextuples_line(
     if is_blank_json_line(line) {
         return Ok(None);
     }
-    let fields: Vec<String> = serde_json::from_str(line)
+    let fields = line_fields(line)
         .map_err(|e| parse_err(format!("line {lineno}: invalid JSON array: {e}")))?;
     if fields.len() != 6 {
         return Err(parse_err(format!(
@@ -248,7 +264,7 @@ fn node_term(value: &str, base: &purrdf_iri::BaseScope) -> Result<HexTerm, RdfDi
 /// production refused, and keeps the `line {lineno}:` prefix this codec's other
 /// per-line diagnostics carry — HexTuples is NDJSON, so the line number is the
 /// whole of the position information it has (there is no column: the parser is
-/// `serde_json` over a whole line and records no intra-line span).
+/// a JSON read over a whole line and records no intra-line span).
 fn validate_language_tag(language: &str, lineno: usize) -> Result<(), RdfDiagnostic> {
     match langtag::parse_with(language, langtag::Profile::ConcreteSyntaxLangtagBounded) {
         Ok(_) => Ok(()),
@@ -438,8 +454,8 @@ fn write_line<W: TextOut + ?Sized>(
     g: Option<usize>,
 ) -> Result<(), RdfDiagnostic> {
     // Every field is a `Cow` borrowed from the term table (or a constant) except the
-    // `_:` blank forms, which are the only ones that need building. serde_json writes
-    // a `Cow<str>` exactly as it writes a `String`, so the line is byte-identical.
+    // `_:` blank forms, which are the only ones that need building. Each is written
+    // straight into the line as a JSON string, so no value tree is built.
     let subject = node_string(graph, s)?;
     let predicate = iri_string(graph, p)?;
     let (value, datatype, language) = object_fields(graph, o)?;
@@ -448,10 +464,17 @@ fn write_line<W: TextOut + ?Sized>(
         None => Cow::Borrowed(""),
     };
     let fields: [Cow<'_, str>; 6] = [subject, predicate, value, datatype, language, graph_field];
-    let line = serde_json::to_string(&fields)
-        .map_err(|e| serialize_err(format!("JSON encode failed: {e}")))?;
+    let mut line =
+        String::with_capacity(fields.iter().map(|field| field.len() + 3).sum::<usize>() + 2);
+    line.push('[');
+    for (index, field) in fields.iter().enumerate() {
+        if index > 0 {
+            line.push(',');
+        }
+        purrdf_lex::json_escape::push_string(&mut line, field, JsonEscapes::ShortForms);
+    }
+    line.push_str("]\n");
     out.push_str(&line);
-    out.push('\n');
     Ok(())
 }
 
@@ -575,7 +598,7 @@ mod tests {
             serialize_dataset(&ds, "application/x-hextuples", SerializeGraph::Dataset).unwrap();
         let text = String::from_utf8(bytes).unwrap();
         let line = text.lines().next().expect("one line");
-        let fields: Vec<String> = serde_json::from_str(line).expect("json array");
+        let fields = line_fields(line).expect("json array");
         assert_eq!(fields.len(), 6);
         assert_eq!(fields[2], "v");
         assert_eq!(fields[3], RDF_LANG_STRING);

@@ -102,7 +102,6 @@ pub mod viz;
 mod nesting;
 // Numeric conversions for the RDF codec boundaries.
 mod json_number;
-pub mod json_value;
 
 // Mirror the kernel's root-level re-exports so `purrdf::RdfTerm`,
 // `purrdf::RdfDiagnostic`, … keep resolving exactly as before. The two
