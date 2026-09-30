@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-09-29T19:45:35-06:00\n"
+"POT-Creation-Date: 2026-09-29T20:27:15-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -813,10 +813,10 @@ msgstr "到达其他引擎"
 
 #: src/getting-started/rust.md:70
 msgid ""
-"Every engine hangs off the same facade. For example, the zero-dependency IRI "
-"leaf and the ShEx schema layer:"
+"Every engine hangs off the same facade. For example, the IRI layer, which "
+"has no third-party dependency, and the ShEx schema layer:"
 msgstr ""
-"每个引擎都挂在同一个门面之下。例如，零依赖的 IRI 叶子 crate 与 ShEx 模式层："
+"每个引擎都挂在同一个门面之下。例如，没有任何第三方依赖的 IRI 层与 ShEx 模式层："
 
 #: src/getting-started/rust.md:74 src/getting-started/rust.md:75
 #: src/concepts/interned-dataset.md:32 src/sparql/querying.md:31
@@ -18165,10 +18165,10 @@ msgid ""
 "threads, filesystem, or RNG dependency."
 msgstr ""
 "**依赖精简且 wasm-clean。** 依赖项为 `purrdf-core`、[`purrdf-datalog`]"
-"(datalog.md)、`purrdf-xsd`、`purrdf-lex`、`purrdf-iri`、`purrdf-hash`，以及以 "
-"`purrdf-core` 的固定密钥哈希器为键计算哈希值的 `hashbrown` 原始哈希表——每一个"
-"都是 `wasm32-unknown-unknown`\\-clean（可干净构建到该目标），因此这些引擎可以"
-"原样带入 Rust、Python、WebAssembly 与 C，不依赖线程、文件系统或 RNG。"
+"(datalog.md)、`purrdf-xsd`、`purrdf-lex`、`purrdf-iri`、`purrdf-hash`，以及"
+"以 `purrdf-core` 的固定密钥哈希器为键计算哈希值的 `hashbrown` 原始哈希表——每"
+"一个都是 `wasm32-unknown-unknown`\\-clean（可干净构建到该目标），因此这些引擎"
+"可以原样带入 Rust、Python、WebAssembly 与 C，不依赖线程、文件系统或 RNG。"
 
 #: src/entailment.md:362
 msgid ""

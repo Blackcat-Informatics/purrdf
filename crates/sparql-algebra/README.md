@@ -24,8 +24,10 @@ in the downstream [`purrdf-sparql-eval`](https://crates.io/crates/purrdf-sparql-
 crate. It builds on the first-party foundation leaves
 [`purrdf-iri`](https://crates.io/crates/purrdf-iri),
 [`purrdf-xsd`](https://crates.io/crates/purrdf-xsd) and
-[`purrdf-hash`](https://crates.io/crates/purrdf-hash), the composite-datatype
-leaf [`purrdf-cdt`](https://crates.io/crates/purrdf-cdt), and `memchr`.
+[`purrdf-hash`](https://crates.io/crates/purrdf-hash), the lexical layer
+[`purrdf-lex`](https://crates.io/crates/purrdf-lex) (terminals, escape decoders
+and the tokenizer's byte scans), and the composite-datatype leaf
+[`purrdf-cdt`](https://crates.io/crates/purrdf-cdt).
 
 Covered surface:
 

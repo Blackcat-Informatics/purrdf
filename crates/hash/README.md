@@ -37,6 +37,34 @@ big-endian label-and-value framing three published identities were minted
 with. Every preimage and wire encoding in the workspace frames through it, and
 `purrdf-hash-conformance` replays its frozen answers on every target.
 
+## SHA-2 is the `sha2` crate
+
+`purrdf-hash` implements no SHA-2. The workspace's one SHA-2 implementation is
+the external `sha2` crate, which the crates that need it depend on directly:
+the SHA-256 content identities and query provenance, and `purrdf-ed25519`'s
+SHA-512. A native SHA-256 (x86 SHA extensions and portable) and SHA-384/512
+were measured against `sha2` on the backends this workspace selects and were
+not faster in every case — SHA-256 on the SHA extensions was 3.7% faster at
+64 B, 1.4% slower at 1 KiB and tied at 1 MiB, and portable SHA-512 was 43–47%
+slower at every size — so `sha2` stays, and `purrdf-hash` keeps its zero
+runtime dependencies.
+
+## Shared kernels
+
+Beside the digests, the crate is the home of the small specified kernels every
+other crate uses, each the workspace's one implementation (`helpers-ledger.toml`
+names the job, and `purrdf-hash-conformance` replays their frozen vectors
+natively and on wasm32):
+
+| Module | What it holds |
+|---|---|
+| `hex` | Base16 (RFC 4648 §8) in either case: `Lower`/`Upper` (`Display`), `encode`, `encode_into`, `encode_to_slice` and their uppercase siblings; `decode` (the `xsd:hexBinary` lexical space), `decode_canonical`, `decode_32`, `decode_32_canonical`, `nibble`, `parse_u32`; and `Digest32`, the 32-byte digest value every content identity wraps |
+| `frame` | Length framing: `frame_le`, `frame_le_into`, `frame_be_labelled` |
+| `Domain` (crate root) | The registered hash domain-separation string (see [Hash domains](#hash-domains)) |
+| `fnv` | FNV-1a 64-bit: `BASIS`, `PRIME`, `fnv1a64`, and `fold` into a caller's state |
+| `mix` | SplitMix64 (`splitmix64_next`, the published counter stream; `splitmix64_step`, the self-composed stream; `splitmix64_finalize`; `GOLDEN_GAMMA`); the signed-unit draws that map a 64-bit draw onto an exact binary64 in `[-1, 1)` (`signed_unit`, `signed_unit_next`, `signed_unit_step` and their `_nonzero` forms); and the 64-bit linear congruential generator with Knuth's MMIX multiplier (`lcg64_next`, `LCG64_MULTIPLIER`, `LCG64_MMIX_INCREMENT`) |
+| `dispatch` | The `Backend` trait every family of named execution paths implements (`selected`, `is_available`, `all_available`, `name`) and `PURRDF_REQUIRE_SIMD_PATHS`, the one variable a test run sets to require paths: `1` for every path the host is expected to run, or a `family:path` list |
+
 ## Usage
 
 ```rust

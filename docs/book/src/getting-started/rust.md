@@ -67,8 +67,8 @@ codec can provide one — never a silent partial parse.
 
 ## Reaching the other engines
 
-Every engine hangs off the same facade. For example, the zero-dependency IRI
-leaf and the ShEx schema layer:
+Every engine hangs off the same facade. For example, the IRI layer, which has
+no third-party dependency, and the ShEx schema layer:
 
 ```rust,ignore
 let iri = purrdf::iri::parse("https://example.org/cat").expect("valid IRI");

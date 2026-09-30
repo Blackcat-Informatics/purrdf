@@ -8,8 +8,331 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+### Breaking Changes
+
+Every job the workspace does now has one implementation, named in
+`helpers-ledger.toml`. The consequences a consumer sees are listed here; the
+new homes are under Added, and the behaviour changes they carry are repeated
+under Changed and Fixed where a longer account helps.
+
+**Removed dependencies**
+
+- **deps:** 43 external packages leave the dependency graph, each replaced by a
+  first-party home and banned on every edge by `scripts/check-banned-deps.py`:
+  `serde`, `serde_core`, `serde_derive`, `serde_json`, `itoa`, `ryu`, `zmij`,
+  `indexmap` and `equivalent` (JSON: `purrdf_lex::json`); `serde_yaml_ng` and
+  `unsafe-libyaml` (YAML: `purrdf_lex::yaml`); `ciborium`, `ciborium-io`,
+  `ciborium-ll`, `half`, `crunchy`, `zerocopy` and `zerocopy-derive` (CBOR:
+  `purrdf_lex::cbor`); `roxmltree` (XML: `purrdf_lex::xml`); `ed25519-dalek`,
+  `curve25519-dalek`, `curve25519-dalek-derive`, `fiat-crypto`, `ed25519`,
+  `signature`, `subtle`, `zeroize`, `rustc_version` and `semver` (Ed25519:
+  `purrdf-ed25519`); and `criterion`, `criterion-plot`, `anes`, `is-terminal`,
+  `hermit-abi`, `cast`, `num-traits`, `autocfg`, `itertools`, `oorandom`,
+  `tinytemplate`, `walkdir`, `same-file` and `winapi-util` (benchmarks:
+  `purrdf_testkit::bench`). `pkcs8`, `spki`, `der`, `base64ct`, `hex`, `time`
+  and its closure, `unicode-normalization` and `tinyvec` are banned the same
+  way. No workspace member depends on `memchr` (refused as a direct
+  dependency), and `regex` is built without its `perf-literal` prefilter, so
+  neither `memchr` nor `aho-corasick` is compiled into any build. `sha2` stays
+  as the one SHA-2 implementation.
+- **all crates:** no public type implements `serde::Serialize` or
+  `serde::Deserialize`. Types that crossed JSON through derives cross it
+  through hand-written conversions over `purrdf_lex::json::Value`, writing the
+  same document shape: the projection configurations, sideband models and
+  reports; `NativeRdfFormat` and the visualization types (`viz::VizJson`); the
+  ShEx `Schema`; the slice catalog records; the SARIF model of
+  `purrdf-validate`; and the retrieval `Plan`.
+
+**Public signatures**
+
+- **jsonschema, rdf, shapes, slice, geo:** JSON values in public signatures
+  are `purrdf_lex::json::Value`, whose numbers keep their lexemes and whose
+  objects keep their members in order: schemas and instances in
+  `purrdf-jsonschema`; the JSON-LD context API
+  (`CompiledJsonLdContext::{compile, compile_with_registry,
+  apply_local_context, canonical_context, scoped_context}`,
+  `JsonLdSerializeOptions::{context, context_with_registry, json_schema}`);
+  `OfflineJsonLdContext::value`, `CsvwAnnotations`, the `CsvwDatatype` facets
+  and `ResearchRecordSet` rows; `LinkmlDocument::from_value` and the JSON
+  Schema importer; the slice catalog's `to_json`/`from_json`; and
+  `purrdf_geo::json::JsonValue`.
+- **gts, rdf:** every public CBOR value — the GTS writer, reader, model, wire
+  and sinks, and `purrdf-rdf`'s GTS metadata and blob payloads — is
+  `purrdf_lex::cbor::Value` instead of `ciborium::Value`.
+  `purrdf_gts::wire::{encode, encode_into, canonical, append_canonical,
+  map_get}` re-export `purrdf_lex::cbor`.
+- **gts, rdf:** `Writer::sign_with`, `CompactionParams::packaging_signer`,
+  `OpenPgpSigningKey` and the `purrdf-rdf` certification keyrings and signer
+  parameters take `purrdf_ed25519` keys instead of `ed25519_dalek` keys.
+- **core, gts:** `purrdf_core::hex` is removed (use `purrdf_hash::hex::encode`),
+  and so is `purrdf_gts::wire::hex`.
+- **rdf:** `JsonLdDirection` is the one base-direction type; its variants are
+  `Ltr`/`Rtl` rather than `LeftToRight`/`RightToLeft`. `VizTextDirection` is
+  a type alias of the same type rather than an enum of its own.
+- **jsonschema:** `EvaluationError::cause` is an `EvaluationCause` rather than
+  a `PatternError`.
+- **retrieval, core:** `PLAN_ID_DOMAIN`, `FUSION_PROFILE_ID_DOMAIN`,
+  `EVIDENCE_ID_DOMAIN` and `PIPELINE_ROOT_DOMAIN` are `purrdf_hash::Domain`
+  constants rather than `&str`, with the same bytes.
+- **gts, retrieval, slice:** maps in public signatures are keyed by the
+  fixed-key `purrdf_hash::fixed::FixedState` rather than std's `RandomState`:
+  `TrustPolicy::trusted_signers`, `Plan::stratum_depths`,
+  `ExecutionResult::statuses` and `OwnershipReport::ownership` change hasher
+  type, and `verify_file_with_keyring` and `verify_compaction` are generic
+  over `S: BuildHasher`.
+- **xsd:** `BigInt::to_decimal_lexical` takes its scale as `u32` (was `u8`).
+- **core:** `DatasetView::rdf_list` refuses a cell with more than one
+  `rdf:rest`; `rdf_list_strict` refuses every malformed list, `rdf:nil`
+  carrying an `rdf:first` or `rdf:rest` included (`ListErrorKind`).
+- **tests, CI:** `PURRDF_REQUIRE_SIMD_PATHS` replaces
+  `PURRDF_REQUIRE_BLAKE3_PATHS`, `PURRDF_REQUIRE_HASH_PATHS`,
+  `PURRDF_REQUIRE_DEFLATE_PATHS` and `PURRDF_REQUIRE_DISPATCH_PATHS`, and
+  covers the CSV scanner. Its value is `1` (every path the host is expected to
+  run, judged from the architecture and `/proc/cpuinfo`) or a comma-separated
+  `family:path` list over the families `blake3`, `crc32`, `csv`, `deflate`,
+  `distance`, `hex` and `sha1`; an unknown family or path fails the run.
+
+**New refusals**
+
+- **gts:** COSE_Sign1 verification is strict: a non-canonical `S`, an
+  undecodable `R`, and a small-order key or `R` are invalid even where the
+  cofactorless equation holds, so a small-order key no longer validates a
+  signature over every frame. `VerifyingKey::from_bytes` refuses a
+  non-canonical key encoding, as RFC 8032 §5.1.3 requires.
+- **gts:** a compaction certificate followed by trailing bytes is refused,
+  bytes after a transformed payload item mark the frame `DamagedFrame`, and a
+  read error before an item in the streaming reader is a torn tail rather
+  than a clean end. `mmr::Proof::from_json` reads with a depth cap.
+- **jsonschema:** a registered schema that repeats a member name is refused as
+  `InvalidKeyword` naming the object.
+- **rdf, shapes, shex:** a JSON-LD context, a JSON Schema being imported, a
+  LinkML mapping and a ShExJ document that repeat a member name are refused;
+  ShExJ admits 128 open containers.
+- **rdf:** YAML-LD and OKF frontmatter refuse a duplicate key, a non-string key
+  (`1:`), a non-core tag, `.inf`/`.nan` and a second document; YAML-LD also
+  refuses aliases.
+- **rdf:** a projection configuration record written as a JSON array, a
+  closed-enum value written as a map, and extra members beside a field-less
+  tagged variant are refused; projection JSON is read at most 128 containers
+  deep.
+- **retrieval, wasm:** retrieval `Plan` JSON, the wasm visualization options and
+  the wasm SERVICE profiles refuse a repeated member and a record written as a
+  JSON array; a plan's embedding component beyond the `f32` range is refused
+  rather than read as infinity. A plan refusal is `PlanError::InvalidJson`
+  with the JSON Pointer of the offending value.
+- **sparql-results:** the JSON reader refuses a number outside the RFC 8259
+  grammar such as `1-2+e` (`-1.2e+3` still parses), and the XML reader refuses
+  a `DOCTYPE` and a root `<sparql>` element in a namespace other than the SPARQL
+  results namespace.
+- **shapes:** a SHACL list cell with two `rdf:rest` edges is refused.
+
+**Changed output**
+
+- **cli:** a governed `query`, `update` or `validate` run starts from
+  `QueryGovernors::METERED`; `--no-ceiling` asks for `UNBOUNDED` (see Changed).
+- **rdf, python:** the GTS fold view builds in only the W3C prefixes; a
+  schema.org IRI stays in full unless the caller supplies the prefix (see
+  Changed).
+- **sparql-eval:** golden change — CONSTRUCT loss-node labels hash with FNV-1a
+  over framed bytes instead of std's unspecified hasher; the fixture triple's
+  label is now `loss-53ade2f793c76fe0`.
+- **sparql-results:** golden change —
+  `crates/sparql-results/tests/golden/results_corpus/construct_starred_graph_json.json`
+  writes an `xsd:string` literal as `"…"` rather than `"…"^^xsd:string`, inside
+  and outside the triple term, because every term writer spells terms through
+  `purrdf_lex::term_syntax`.
+- **shapes:** `crates/shapes/corpus/32-datatype-derived-integer/shapes.ttl` and
+  `36-sparql-prefixes/shapes.ttl` change in their comments only, so their
+  frozen hashes in `scripts/conformance-frozen/shapes-corpus.sha256` move; no
+  expected report changes.
+- **rdf, core, cdt, shex:** literal escapes follow the carrier, from one
+  escaper (`purrdf_lex::literal_escape`). The N-Triples/N-Quads/Turtle/TriG
+  serializer writes BACKSPACE and FORM FEED as `\b` and `\f` and escapes
+  U+FFFE and U+FFFF; the canonical Turtle renderer writes `\b`, `\f`, `\t` and
+  `\r` and escapes a `"` that would close a long string; `cdt` canonical forms
+  write `<<( s p o )>>` with inner spaces and C1 raw; ShExC escapes DEL, C1,
+  `\b` and `\f`. The core Turtle writers `UCHAR`-escape predicate and datatype
+  IRIs, and the fold-view token and statement triple-term predicate escape
+  their IRIs.
+- **rdf:** the fold-view and visualization labels drop `^^xsd:string` and
+  write C1 raw; a compact visualization literal label escapes its lexical
+  form.
+- **iri, rdf, shapes:** CURIE compaction takes the longest matching namespace
+  (`purrdf_iri::contract`), and a local name is the longest suffix holding no
+  `#`, `/` or `:` (`purrdf_iri::split_local_name`). An empty CURIE prefix no
+  longer compacts in `purrdf-shapes`, and the LinkML exact-namespace fallback
+  follows the longest match; the canonical Turtle renderer compacts under
+  `@prefix :` and yields a namespace whose local part the grammar refuses to
+  the next longest (`purrdf_iri::contract_where`).
+- **shapes:** the engine's sort key writes BACKSPACE and FORM FEED as `\b` and
+  `\f` and DEL as `\u007F`, escapes an IRI that needs it, and keeps the
+  datatype of an untagged `rdf:langString` literal, so the order of reports
+  over such terms changes. Object lookups are deduplicated and in id order,
+  which changes which object `first_object` returns and the blank-label
+  numbering of a report.
+- **shex:** shape-map terms are written as RDF 1.2 triple terms
+  `<<( s p o )>>` with their base direction kept, and the shape-map parser
+  reads that spelling back.
+- **entail, shex:** reasoning answers and shape-map node sets sort by
+  `TermValue`'s total order (see Changed).
+- **rdf:** JSON-LD list cells are minted before their members, in the order
+  JSON-LD 1.1 §8.4 walks them, which renumbers blank-node labels; a
+  well-formed list suffix behind a shared cell now folds to a list. The XML
+  nesting limit counts self-closing elements.
+- **sparql-eval:** EXPLAIN spells a base direction `--ltr`/`--rtl` and escapes
+  a backslash; graph names in the named-graph refusal and SERVICE endpoint
+  text are escaped; the Update display writes SPARQL literals rather than Rust
+  debug strings; a list read through a FROM merge counts an edge asserted in
+  two graphs once.
+- **entail:** an OWL negation member list whose cells are typed `rdf:List` is
+  accepted.
+- **rdf, python:** `GtsFoldView::rdf_list` and the OBO Graphs collection reader
+  read through the strict walker: a cell with no or several `rdf:first`, or no
+  or several `rdf:rest`, ends the list there rather than having one of its
+  values picked.
+- **rdf, wasm, sparql-results, geo:** JSON error text names the
+  member and drops the `line X column Y` suffix, and reader syntax errors use
+  `purrdf_lex::json`'s messages; the duplicate-member diagnostic reads "an
+  object repeats a member name".
+- **rdf, shapes:** JSON and YAML numbers keep their lexemes: YAML-LD and LinkML
+  values beyond binary64 round-trip instead of being refused, and the OKF
+  writer spells a decimal as its shortest JSON lexeme (`1e+20`).
+- **jsonschema:** the `properties` annotation follows the instance's member
+  order, and the `application/json` `contentMediaType` check has no depth cap.
+- **rdf:** a CBOR simple value in GTS metadata surfaces as
+  `RdfMetadataValue::Opaque` spelt by the CBOR value (`undefined` for simple
+  value 23).
+- **core, datalog, retrieval:** the derived `Debug` of `ContractHash` and
+  `PlanIdentity` prints `Digest32(<hex>)`. No rendered or parsed hex byte
+  changed case anywhere.
+- **wasm:** a blank node outside the default scope crosses into JS as its scope
+  envelope rather than its bare label (see Fixed).
+
 ### Added
 
+- **ed25519:** `purrdf-ed25519`, a new published, wasm32-clean crate and the
+  workspace's one Ed25519 (RFC 8032): `SigningKey` (key expansion from a
+  32-byte seed, deterministic `sign`, secrets overwritten on drop),
+  `VerifyingKey` (`from_bytes` refuses a non-canonical encoding) with
+  `verify_strict` (refuses `S ≥ L`, an `R` or key that fails §5.1.3 decoding,
+  a small-order key or `R`, and a failed cofactorless equation), and
+  `Signature`. Field arithmetic is radix 2^51 and scalar arithmetic Montgomery
+  mod `L`; signing reads its fixed-base table by masked selection, with no
+  secret-dependent branch or index. SHA-512 is `sha2`'s. Every RFC 8032 §7.1
+  vector and frozen vectors for signing, verification edge cases, key
+  decoding and torsion and mixed-order signatures
+  (`crates/ed25519/tests/vectors/`) are replayed.
+- **lex:** `purrdf_lex::json`, the workspace's one RFC 8259 JSON home: the pull
+  `Reader` (events with byte offsets, `next_key`/`next_item`, `skip_value`,
+  `read_value`), `read`/`read_with`/`read_slice`, `occurrences`, a `Value`
+  whose `Number` keeps its lexeme (`as_f64` correctly rounded,
+  `Number::from_f64` the shortest round-trip lexeme) and whose `Object` keeps
+  every member in order, `Limits` (a depth cap of 128 by default, value and
+  string bounds, and RFC 7493 unique members), and the deterministic
+  `write_compact`/`write_pretty`. `json::record` is the one typed decoder over
+  a `Value`: the strict `Record` reader (required, optional, defaulted and tag
+  members; unknown, repeated and non-object records refused), `FromJson`,
+  `ToJson`, `JsonKey`, `Within`, `json_string_enum!` and `DecodeError`, which
+  carries the RFC 6901 pointer of the offending value. No reader, writer,
+  drop, clone, comparison or `Debug` walk recurses on the machine stack.
+- **lex:** `purrdf_lex::yaml` reads one YAML 1.2 document (block and flow
+  styles, every scalar style, explicit keys, core-schema tags, anchors and
+  aliases under a node bound) into a `json::Value` and writes the block layout
+  (`read`, `read_with`, `write`), with numbers kept as lexemes; a duplicate
+  key, a non-string key, a non-core tag, `.inf`/`.nan` and a second document
+  are refused with typed errors.
+- **lex:** `purrdf_lex::cbor`, the RFC 8949 codec: `Value`, the shortest-form
+  head writers and readers (`cbor::head`), as-is and core deterministic
+  encoding (`encode`, `canonical`, `write_canonical_map`, `encoded_len`), and
+  well-formed, deterministic, prefix, streaming and sequence decoders
+  (`decode`, `decode_deterministic`, `decode_prefix`, `read_from`,
+  `decode_sequence`) under `Limits`, reproducing RFC 8949 Appendix A.
+- **lex:** `purrdf_lex::xml`, the XML 1.0 + Namespaces reader: a pull `Reader`
+  and a `Document` tree, an explicit depth cap, no machine-stack recursion and
+  byte offsets in every error. A `DOCTYPE` is refused unless the caller asks
+  for the internal subset (`Dtd::internal_subset`), whose internal entities
+  expand under an expansion budget; external subsets, external entities and
+  parameter entities are always refused.
+- **lex:** `literal_escape` (`write`/`escape` over `Carrier::{Canonical, Xml,
+  TurtleLong}`, and the chunked kernels behind them), `iri_escape`,
+  `term_syntax` (`write_iri`, `write_literal` with `xsd:string` elided,
+  `write_blank` and the triple-term delimiters), `text_out::TextOut` and
+  `crockford` (`encode_u128`, `write_u128`, `parse_u128`, the ULID text form).
+  `purrdf_core` re-exports `iri_escape` and `TextOut` at their former paths.
+- **hash:** `purrdf_hash::fnv` (`BASIS`, `PRIME`, `fnv1a64`, `fold`),
+  `purrdf_hash::mix` (SplitMix64 `splitmix64_next`, `splitmix64_step`,
+  `splitmix64_finalize` and `GOLDEN_GAMMA`; the `[-1, 1)` draws
+  `signed_unit`, `signed_unit_next`, `signed_unit_step` and their `_nonzero`
+  forms; and the MMIX linear congruential step `lcg64_next` with
+  `LCG64_MULTIPLIER` and `LCG64_MMIX_INCREMENT`), `purrdf_hash::frame`
+  (`frame_le`, `frame_le_into`, `frame_be_labelled`), and
+  `purrdf_hash::dispatch::Backend`, the one trait every family of named
+  execution paths implements (`selected`, `is_available`, `all_available`,
+  `name`), with `PURRDF_REQUIRE_SIMD_PATHS`. All `const fn` where the
+  arithmetic allows; every digest, identity and golden they compute is
+  unchanged.
+- **core:** `purrdf_core::collections`, the one RDF collection home:
+  `walk_rdf_list` and the allocation-free `RdfListWalk` (the strict walk of
+  RDF 1.2 Semantics §D.3, yielding `ListFault`), `ListError`/`ListErrorKind`,
+  `build_rdf_list` over a `ListVocab` (every cell minted before any member),
+  and `convertible_list_cells` (JSON-LD 1.1 §8.4.2). `DatasetView` gains
+  `rdf_list_strict`, `objects`, `objects_of_predicate` and `sole_object`;
+  `graph::scc_component_index`, `write_term_value` and `purrdf_core::bytes`
+  (`read_u32_le` and its siblings) are public. `term_fixture` is a hidden
+  public module, so the published crate builds its own unit tests.
+- **iri:** `contract_where`, CURIE and prefixed-name compaction under the
+  longest namespace whose split the caller's name grammar admits (`contract`
+  is its CURIE case), and `split_local_name` / `local_name`, the one
+  namespace/local split.
+- **xsd:** `purrdf_xsd::json_number::JsonNumber`, an exact RFC 8259 number:
+  `parse`, numeric `Eq`/`Ord`/`Hash` (`1.0` equals `10e-1`), `is_integer`,
+  `is_multiple_of` and `to_u64_saturating`, however many digits it carries.
+- **stack:** `purrdf_stack::{on_stack, on_stack_scoped, StackError}`: run a
+  computation on a stack of a stated size — a fresh thread natively, inline
+  on wasm32 after checking the request against the floor, a request past the
+  floor refused typed.
+- **validate:** `purrdf_validate::governors::{from_parts, from_update_parts,
+  GovernorParts, GovernorPartsError}`, the one governor decoder every host
+  uses, from `QueryGovernors::METERED`; `purrdf_validate::query::provenance`
+  and `ENGINE_LABEL`, the query identity and engine label a SPARQL results
+  emission carries.
+- **sparql-results, cli, python, wasm:** `SparqlResultsFormat::{from_name,
+  token, media_type, ALL}`, the one reading of a results-format name. Every
+  host now accepts `json`, `srj`, `sparql-json`,
+  `application/sparql-results+json`, `xml`, `sparql-xml`,
+  `application/sparql-results+xml`, `csv`, `text/csv`, `tsv` and
+  `text/tab-separated-values`, ignoring ASCII case and surrounding
+  whitespace.
+- **retrieval:** `Plan::to_json_string` / `from_json_str` and the
+  `to_json`/`from_json` of every value a plan carries, writing the document
+  shape the plan always had; `PlanError::InvalidJson` carries the JSON Pointer
+  of a refused value.
+- **testkit:** `purrdf_testkit::bench`, the micro-benchmark harness every bench
+  target runs on (`Bench`, groups, `BenchmarkId`, `Throughput`, `BatchSize`,
+  `iter`/`iter_batched`/`iter_batched_ref`/`iter_with_large_drop`,
+  `bench_group!`/`bench_main!`; warm-up, a median with MAD and a seeded
+  bootstrap 95% interval, saved baselines and a fixed-schema `estimates.json`,
+  natively and on wasm32). Group names, benchmark ids and workloads are
+  unchanged, and CI's regression check reads the same `Performance has
+  regressed.` line. Also `purrdf_testkit::{paths, golden, rng}`: the workspace
+  root and Rust-source walks, byte goldens with one regeneration switch, and
+  seeded draws over `purrdf_hash::mix`.
+- **hash-conformance:** `purrdf-hash-conformance` (unpublished) holds the
+  frozen-vector suites, differentials and benches of `purrdf-hash` on
+  testkit's runner and harness, natively and on wasm32, so `purrdf-hash` has
+  no dev-dependency on testkit.
+- **gates:** `helpers-ledger.toml` names the one home of every job, its
+  specification, frozen vectors and sanctioned variants;
+  `scripts/check-shared-helpers.py` runs the unpublished `helper-census` (a
+  structural census of every function body, forwarder, constant and hex
+  table) against it. `layers.toml` declares every first-party dependency edge
+  (`scripts/check-layers.py`, with `--home-for` naming the lowest common home)
+  and the kernel ring-fence `make rdf-core-hygiene` reads.
+  `scripts/check-hash-domains.py` holds the `Domain` registry.
+  `dependency-ledger.toml` gives every external package a census verdict
+  (`distinct`, or `duplicates_native` naming the home that replaces it). Clippy
+  bans std's `RandomState` maps and sets, and the `fixed-hasher-everywhere` job
+  refuses every other spelling.
 - **core:** `TermValue::to_rdf_term` / `into_rdf_term` and
   `TermValue::from_rdf_term` / `from_rdf_term_in_scope` are the one conversion
   between the dataset-independent value and the owned `RdfTerm` model. A blank
@@ -17,8 +340,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   and is read back by `BlankScope::unqualify_label`, so the round trip is exact;
   a literal's implied datatype (`xsd:string`, or the language datatype its base
   direction selects) is left implicit on the way out and expanded on the way
-  in, with the language tag lowercased. A triple term whose predicate is not an
-  IRI has no owned form and is refused with `NonIriPredicate`.
+  in, with the language tag folded by `purrdf_iri::langtag::identity_fold`. A
+  triple term whose predicate is not an IRI has no owned form and is refused
+  with `NonIriPredicate`.
 - **core:** `DatasetView::term_value(id) -> Result<TermValue, TermLookupError>`
   is the one resolution from a view's id to its value, through a literal's
   datatype and a triple term's components at any depth.
@@ -28,8 +352,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   its canonical decimal form) and `TermValue::boolean` are the one constructor
   for a computed `xsd:integer` and `xsd:boolean` literal.
 - **sparql-eval:** `purrdf_sparql_eval::convert` is public: the query-text
-  conversions from the algebra's terms to `TermValue`, and `map_direction` /
-  `base_direction` between the algebra's and the IR's base direction.
+  conversions from the algebra's terms to `TermValue` (`named_node_to_value`,
+  `literal_to_value`, `ground_term_to_value`, `ground_term_pattern_to_value`,
+  `ground_triple_pattern_to_value`). The algebra and the IR share one
+  base-direction type, `purrdf_cdt::TextDirection`, so no direction mapping
+  exists.
 - **purrdf:** `purrdf::reasoning::query_bgp`, every basic-graph-pattern triple
   of a parsed query as the `QTriple`s OWL 2 Direct-Semantics augmentation reads.
 - **entail:** `EntailError::ForeignTerm`, for an input view that hands back an
@@ -134,10 +461,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   (append to a `String`) and `encode_to_slice` / `encode_upper_to_slice`
   (into a caller's buffer, returning the written `&str`). Reading: `decode`
   (any even length, either case: the `xsd:hexBinary` lexical space),
-  `decode_canonical` (lowercase only), `decode_32` and `decode_32_canonical`
-  (exactly 64 digits), `nibble` and `nibble_canonical` (one digit), each
-  refusal a typed `HexError` naming the offset and byte of the first bad digit
-  or the odd length. `Digest32` is the 32-byte digest value (`Display`,
+  `decode_canonical` (lowercase only), each refusal a typed `HexError` naming
+  the offset and byte of the first bad digit or the odd length; `decode_32` and
+  `decode_32_canonical` (exactly 64 digits) and `nibble` and `nibble_canonical`
+  (one digit) answer `None` for anything else. `Digest32` is the 32-byte digest value (`Display`,
   `from_hex`, `to_hex`, `as_bytes`) that every content identity now wraps.
   Inputs up to `hex::SHORT_MAX` (32) bytes render inline through the
   compare-select loop with no dispatch; longer ones run SSSE3 `pshufb` on
@@ -147,15 +474,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `hex_digit_vectors.txt` pin every path, natively and on wasm32. The
   `hex` group of `cargo bench -p purrdf-hash-conformance --bench digests`
   times each path and entry point at 8 B to 4 KiB.
-- **lex:** `purrdf-lex`, a new published, zero-dependency, wasm32-clean crate
-  holding the lexical foundations every grammar in the workspace shares: the
+- **lex:** `purrdf-lex`, a new published, wasm32-clean crate whose one runtime
+  dependency is `purrdf-hash`, holding the lexical foundations every grammar in
+  the workspace shares: the
   exact Turtle/SPARQL/XML terminal classes (`purrdf_lex::terminals`), the
   chunked byte-class scanners and the `ByteClass` kernel (`purrdf_lex::scan`),
   and the RFC 8259 JSON string escaper (`purrdf_lex::json_escape`). The three
   modules moved here from `purrdf-iri` unchanged, and `purrdf-iri` re-exports
   them, so every `purrdf_iri::terminals`, `purrdf_iri::json_escape` and
   `purrdf_iri::scan` path still names the same items; `purrdf-iri` now depends
-  on `purrdf-lex` and nothing else. The scanner benchmarks moved with them to
+  on `purrdf-lex` and `purrdf-hash` and on no third-party crate. The scanner benchmarks moved with them to
   `cargo bench -p purrdf-lex --bench scan` (groups `lex_scan_*` and
   `lex_json_escape_*`), and the assembly audit measures the scanners in
   `purrdf_lex` under the site ids `lex.scan-*`, `lex.json-escape-*` and
@@ -1278,8 +1606,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **deps:** `memchr` is no longer a dependency of any workspace member: the SPARQL
   tokenizer, the line-oriented codecs, the XML nesting guard and the IRI
   component splitter search with `purrdf_lex::scan::find_byte` / `find_byte2`
-  or a `ByteClass`. It stays in the graph only through `regex` and
-  `serde_json`, and `scripts/check-banned-deps.py` refuses it as a direct
+  or a `ByteClass`. `regex` is built without its `perf-literal` prefilter, so
+  neither `memchr` nor `aho-corasick` is compiled into any build; Cargo keeps
+  both in `Cargo.lock` only because `regex`'s weak feature references name
+  them. `scripts/check-banned-deps.py` refuses `memchr` as a direct
   dependency.
 - **lex:** every reader that decoded a `UCHAR`, an `ECHAR`, an XML character
   reference or a JSON string escape, skipped or trimmed grammar whitespace,
@@ -1320,9 +1650,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   through `purrdf_xsd::rfc3339`; accepted spellings, instants and error
   messages are unchanged.
 - **jsonschema:** the `date-time`, `date` and `time` formats check through
-  `purrdf_xsd::rfc3339`, and exact number comparison and `multipleOf` compute
-  on `purrdf_xsd::bigint::BigInt`; `purrdf-jsonschema` now depends on
-  `purrdf-xsd`. No verdict changed.
+  `purrdf_xsd::rfc3339`, and exact number order, equality, hashing,
+  integrality and `multipleOf` compute on `purrdf_xsd::json_number::JsonNumber`
+  (over `purrdf_xsd::bigint::BigInt` past 128 bits); `purrdf-jsonschema` now
+  depends on `purrdf-xsd`. No verdict changed.
 - **text:** the fixed-point product and quotient compute through
   `purrdf_xsd::wide::mul_div`; `purrdf-text` now depends on `purrdf-xsd`.
 - **gates:** ledger jobs `wide-arith`, `bigint`, `calendar`, `rfc3339` and
@@ -1359,8 +1690,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   replayed by every kernel path, natively and on wasm32, and
   `check-shared-helpers.py` refuses a hand-written copy of the word loop
   (`rule:xor-first-mismatch`).
-- **core, gts:** base16 has one implementation, `purrdf_hash::hex`, and the
-  copies are gone. **Breaking API:** the `purrdf_core::hex` module is removed
+- **core, gts:** base16 has one implementation, `purrdf_hash::hex`.
+  **Breaking API:** the `purrdf_core::hex` module is removed
   (`purrdf_core::hex::lower(bytes)` is `purrdf_hash::hex::encode(bytes)`, the
   same text), and `purrdf_gts::wire::hex` is removed (use
   `purrdf_hash::hex::encode`). `purrdf_gts::wire::digest_label` spells an
@@ -1907,6 +2238,11 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Fixed
 
+- **rdf:** DataCite element text is trimmed by XML whitespace (SPACE, TAB, CR,
+  LF) only; a NO-BREAK SPACE at either end is content.
+- **jsonschema:** `OutputUnit`'s `Clone`, `PartialEq` and `Debug` walk the unit
+  tree over a heap work list, so a thousand-deep output no longer overflows the
+  thread stack.
 - **wasm:** two blank nodes that share a label in different scopes are two
   blank nodes in JS. Query results and dataset iteration used to hand both to
   JS under the bare label, collapsing them; each now crosses as its
@@ -2240,11 +2576,12 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `"1.2241629403378658E2"`, and the same misreading reached CSVW literals and datatype
   bounds, OKF rdf:JSON literals (whose writer then refused as non-canonical a literal
   its reader had produced), research-object record rows, JSON Schema bounds imported
-  as SHACL, compiled-schema catalogs and ShExJ numeric facets. The workspace now
-  enables `float_roundtrip`, whose reader is correctly rounded. On the x87 its exact
-  fast path still rounded twice (`8.64759627780072e32` read as its successor), so
-  every one of those reads now runs under the binary64 precision scope; elsewhere the
-  scope is empty. A non-integral JSON Schema number imported under a decimal carrier
+  as SHACL, compiled-schema catalogs and ShExJ numeric facets. Every JSON number is
+  now read by `purrdf_lex::json`, which keeps its lexeme, and its conversion to
+  binary64 (`Number::as_f64`) is correctly rounded. On the x87 a fast path can still
+  round twice (`8.64759627780072e32` read as its successor), so the RDF codecs'
+  conversion (`json_number::binary64`) runs under the binary64 precision scope;
+  elsewhere the scope is empty. A non-integral JSON Schema number imported under a decimal carrier
   was written in `serde_json`'s exponent form (`2.2e-230`), outside the
   `xsd:decimal` lexical space; it is now written positionally.
 

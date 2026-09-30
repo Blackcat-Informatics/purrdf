@@ -42,7 +42,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-rdf` (`crates/rdf`) | Native text/XML/JSON-LD codecs, GTS adapters, describe, canonicalization |
 | `purrdf-core` (`crates/rdf-core`) | Interned IR kernel, diagnostics, store traits, provenance, RDFC-1.0 |
 | `purrdf-columnar` (`crates/columnar`) | Bidirectional five-table Parquet codec for RDF 1.2 + blobs |
-| `purrdf-gts` (`crates/gts`) | GTS container engine (CBOR log, BLAKE3, COSE) |
+| `purrdf-gts` (`crates/gts`) | GTS container engine (CBOR log through `purrdf_lex::cbor`, BLAKE3, COSE, Ed25519 through `purrdf-ed25519`) |
 | `purrdf-sparql-{algebra,eval,results}` | SPARQL 1.1/1.2 parser, evaluator, results |
 | `purrdf-shapes` (`crates/shapes`) | SHACL validation (full Core + SHACL-SPARQL + SHACL-AF) and SHACL Rules (`sh:rule` inference) |
 | `purrdf-shex` (`crates/shex`) | ShEx 2.1 schemas + validation |
@@ -52,29 +52,128 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-geo` (`crates/geo`) | GeoSPARQL 1.1: exact float-free WKT/GeoJSON geometry and the `geof:` family over both extension seams |
 | `purrdf-text` (`crates/text`) | Deterministic full-text search over literals: exact fixed-point BM25, ranked rows through the property-function seam |
 | `purrdf-retrieval` (`crates/retrieval`) | Composition layer over the ranked producers: plan → compile → execute → fuse, with a canonical BLAKE3 plan identity and an exact, content-addressed fusion law; producers, strata and weights are caller-supplied |
-| `purrdf-validate` (`crates/validate`) | Shared string boundary every language binding routes through |
+| `purrdf-validate` (`crates/validate`) | Shared string boundary every language binding routes through, including what every host (CLI, C ABI, wasm, Python) shares around a query: the governor decoder (`governors::from_parts`, from `QueryGovernors::METERED`) and the query provenance record (`query::provenance`) |
 | `purrdf-json` (`crates/json`) | Ordered JSON byte-cover codec with queryable occurrences, strict reconstruction and caller-selected profile; runtime dependencies are `purrdf-core`, `purrdf-lex` (the JSON string decoder and pointer tokens) and the `purrdf-hash` root |
-| `purrdf-hash` (`crates/hash`) | Native, zero-dependency hashing: BLAKE3-256, MD5 (RFC 1321), SHA-1 (FIPS 180-4), SHA3-224/256/384/512 (FIPS 202) and CRC-32 (ISO-HDLC), streaming and one-shot; SHA-1 and CRC-32 run on the x86 SHA/`pclmulqdq` and Armv8 SHA1/CRC32 instructions when detected at run time, the portable source otherwise; the SPARQL hash built-ins, OpenPGP fingerprints and derivation identities compute through it. Also `fixed::FixedHasher`, the workspace's fixed-key table hasher: folded multiplies, or an AES accumulator on a build whose target enables AES (compile-time only, never run-time detection; wasm32 and 32-bit targets use the portable function), each function pinned by frozen self-vectors. The workspace root: zero dependencies, and every crate may depend on it; it also holds the small specified kernels shared across the workspace (`fnv`, FNV-1a 64-bit; `mix`, SplitMix64) and the `Backend` trait every family of named execution paths implements (`selected`, `is_available`, `all_available`, `name`), with the one `PURRDF_REQUIRE_SIMD_PATHS` check in `dispatch` |
+| `purrdf-hash` (`crates/hash`) | Native, zero-dependency hashing: BLAKE3-256, MD5 (RFC 1321), SHA-1 (FIPS 180-4), SHA3-224/256/384/512 (FIPS 202) and CRC-32 (ISO-HDLC), streaming and one-shot; SHA-1 and CRC-32 run on the x86 SHA/`pclmulqdq` and Armv8 SHA1/CRC32 instructions when detected at run time, the portable source otherwise; the SPARQL hash built-ins, OpenPGP fingerprints and derivation identities compute through it. Also `fixed::FixedHasher`, the workspace's fixed-key table hasher: folded multiplies, or an AES accumulator on a build whose target enables AES (compile-time only, never run-time detection; wasm32 and 32-bit targets use the portable function), each function pinned by frozen self-vectors. The workspace root: zero dependencies, and every crate may depend on it; it also holds the small specified kernels shared across the workspace (`hex`, base16 in either case with the `Digest32` value every 32-byte content identity wraps; `frame`, the length framing every preimage uses; `fnv`, FNV-1a 64-bit; `mix`, SplitMix64, its `[-1, 1)` signed-unit draws and the MMIX 64-bit LCG), `Domain`, the registry type of every hash domain-separation string, and the `Backend` trait every family of named execution paths implements (`selected`, `is_available`, `all_available`, `name`), with the one `PURRDF_REQUIRE_SIMD_PATHS` check in `dispatch`. It implements no SHA-2: the external `sha2` crate is the workspace's one SHA-2 |
 | `purrdf-deflate` (`crates/deflate`) | Native DEFLATE (RFC 1951) and gzip (RFC 1952): a push-based streaming decoder that decodes every gzip member, verifies each trailer and refuses trailing garbage and output past a caller's limit, and a deterministic encoder (gzip `MTIME` 0, `XFL` 0, `OS` 255; the same bytes on every path and however the input is chunked); match copies, match-length compares and window hashing run on SSE2/AVX2, NEON or wasm simd128, portable code otherwise; sole runtime dependency is `purrdf-hash` (the CRC-32) |
 | `purrdf-jsonschema` (`crates/jsonschema`) | Native JSON Schema validation for drafts 2020-12, 2019-09 and 07, each schema resource in its own dialect: every vocabulary, `$dynamicRef`, `$recursiveRef`, `unevaluated*`, `$vocabulary`, the flag/basic/detailed output formats, exact decimal numbers, and ECMA-262 `/u` patterns using `regex` for regular expressions and a bounded explicit-stack matcher for lookaround, backreferences and scoped modifiers; `Schema::is_valid`/`evaluate` return typed errors on resource exhaustion; the `date-time`, `date` and `time` formats read through `purrdf_xsd::rfc3339` and exact number comparison computes on `purrdf_xsd::bigint::BigInt`; depends on `regex`, `purrdf-iri`, `purrdf-xsd`, `purrdf-lex` and `purrdf-hash` only |
 | `purrdf-markdown` (`crates/markdown`) | Structural Markdown-to-RDF 1.2 slicer under a shipped specification: a typed stand-off model over verbatim byte spans, projected to claims; sole runtime dependency is `purrdf-core` |
-| `purrdf-hash` | The zero-dependency root |
-| `purrdf-lex` (`crates/lex`) | Native lexical foundations shared by every grammar, over the zero-dependency `purrdf-hash` root: the exact Turtle/SPARQL/XML/ECMA-262 terminal classes and escape decoders (`terminals`: `decode_uchar`, `echar_value`, `decode_char_ref`, `skip_ws`/`trim_ws`, `is_ncname`, `in_ranges`), the chunked byte-class scanners and `ByteClass` kernel that lower to packed compares on SSE2/AVX2/AVX-512, NEON and wasm simd128, with `find_byte`/`find_byte2` for needles known at run time (`scan`), the RFC 8259 JSON string escaper and decoder every JSON writer and reader shares (`json_escape`), RFC 6901 JSON Pointer tokens (`json_pointer`), RFC 3986 percent-encoding (`percent`), and the workspace's one Unicode normalization pipeline (`unicode`: NFC, NFD, NFKC, NFKD, `is_nfc`, `ccc` and the streaming stages the text analyzer composes its case fold with) over tables generated at `unicode::UNICODE_VERSION`, the version every Unicode table in the workspace is generated from by its one generator (`examples/gen_unicode_tables.rs`); its scope is the workspace's lexical layer — byte-class scanning, terminals, term syntax, literal/IRI escaping, percent encoding, JSON strings and pointers, a JSON reader/writer, an XML reader and Unicode normalisation |
+| `purrdf-ed25519` (`crates/ed25519`) | Ed25519 signatures (RFC 8032): key expansion, deterministic signing over constant-time field and scalar arithmetic, and strict cofactorless verification that refuses a non-canonical `S`, a non-canonical point encoding and a small-order key or `R`; every GTS and RDF signer and verifier uses it; runtime dependencies are `purrdf-hash` and `sha2` (SHA-512) |
+| `purrdf-lex` (`crates/lex`) | The workspace's lexical layer, over the zero-dependency `purrdf-hash` root alone: the exact Turtle/SPARQL/XML/ECMA-262 terminal classes and escape decoders (`terminals`: `decode_uchar`, `echar_value`, `decode_char_ref`, `skip_ws`/`trim_ws`, `is_ncname`, `in_ranges`); the chunked byte-class scanners and `ByteClass` kernel that lower to packed compares on SSE2/AVX2/AVX-512, NEON and wasm simd128, with `find_byte`/`find_byte2` for needles known at run time (`scan`); the RFC 8259 JSON string escaper and decoder (`json_escape`); RFC 6901 JSON Pointer tokens (`json_pointer`); RFC 3986/3987/6570 percent-encoding (`percent`); the one JSON reader, lexeme-keeping value and deterministic writer, with the strict typed record reader (`json`, `json::record`); the YAML 1.2 core-schema reader and block emitter over the JSON data model (`yaml`); the RFC 8949 CBOR codec with core deterministic encoding (`cbor`); the XML 1.0 + Namespaces reader, which expands an internal DTD subset under a budget and refuses external entities (`xml`); the literal and IRI escapers for each carrier (`literal_escape`, `iri_escape`), the RDF 1.2 term spelling (`term_syntax`), the text sink (`text_out`) and Crockford Base32 (`crockford`); and the one Unicode normalization pipeline (`unicode`: NFC, NFD, NFKC, NFKD, `is_nfc`, `ccc` and the streaming stages the text analyzer composes its case fold with) over tables generated at `unicode::UNICODE_VERSION`, the version every Unicode table in the workspace is generated from by its one generator (`examples/gen_unicode_tables.rs`) |
 | `purrdf-iri` (`crates/iri`) | IRI/URI value space (RFC 3987/3986 parse, resolution, normalization, CURIEs, BCP 47 tags and their RDF 1.2 identity fold, IDNA2008) and `vocab`, the W3C vocabulary terms (one module per W3C namespace; XSD datatype IRIs live in `purrdf_xsd::datatype`); runtime dependencies are `purrdf-lex`, whose `terminals`, `scan`, `json_escape`, `json_pointer` and `percent` it re-exports, and the `purrdf-hash` root |
 | `purrdf-xsd` | Foundation over `purrdf-hash` alone |
 | `purrdf-events` | Zero-dependency foundation |
 | `purrdf-deflate` | Leaf over `purrdf-hash` alone |
-| `purrdf-cdt` (`crates/cdt`) | SPARQL composite datatypes (SEP-0009 `cdt:List`/`cdt:Map`): closed leaf over `purrdf-iri` + `purrdf-xsd` only |
-| `purrdf-stack` (`crates/stack`) | How much stack the thread has left (native OS limit, read via target-gated `libc`/`windows-sys` declarations with no C toolchain needed; wasm32 shadow stack against an installable floor) and the margin the SPARQL evaluator refuses at |
+| `purrdf-cdt` (`crates/cdt`) | SPARQL composite datatypes (SEP-0009 `cdt:List`/`cdt:Map`) and `TextDirection`, the one RDF 1.2 base-direction type: `no_std` closed leaf over `purrdf-iri`, `purrdf-xsd`, `purrdf-lex` and `purrdf-hash` only |
+| `purrdf-stack` (`crates/stack`) | How much stack the thread has left (native OS limit, read via target-gated `libc`/`windows-sys` declarations with no C toolchain needed; wasm32 shadow stack against an installable floor) and the margin the SPARQL evaluator refuses at; `on_stack`/`on_stack_scoped` run a computation on a stack of a stated size (a fresh thread natively, checked against the floor on wasm32) |
 | `purrdf-wasm`, `purrdf-capi`, `bindings/python` | WASM, C-ABI, and PyO3 bindings |
 | `purrdf-cli` (`crates/cli`) | The `purrdf` command-line surface (`publish = false`) |
 | `purrdf-envelope-probe` (`crates/envelope-probe`) | The micro-hardware envelope capture tool (`publish = false`) |
 | `purrdf-alloc-probe` (`crates/alloc-probe`) | The shared counting allocator + per-thread/whole-process measurement windows every allocation test and bench measures with (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
 | `purrdf-bench` (`crates/bench`) | Benchmark tooling: the scale-corpus generator (`publish = false`) |
-| `purrdf-testkit` (`crates/testkit`) | Shared test support: byte-exact goldens (`assert_golden!`), temporary paths under the target directory (`temp_dir!`, `temp_file!`, `for_unit_test`), self-hashing frozen differential vectors, the libtest-compatible `harness = false` runner, the property harness (`prop_test!`: choice-sequence shrinking, regex string generators, stateful model testing, a deterministic seed per property), and the micro-benchmark harness every bench target runs on (`purrdf_testkit::bench`, `bench_group!`/`bench_main!`: warm-up, flat sampling, median with MAD and a seeded bootstrap interval, throughput, saved baselines compared with a bootstrapped change, a fixed-schema `estimates.json` per benchmark, natively and on wasm32); its one first-party dependency is `purrdf-hash`, the root, whose own tests do not use testkit, so no member's tests close a cycle through it (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
+| `purrdf-testkit` (`crates/testkit`) | Shared test support: byte-exact goldens (`assert_golden!`, `golden`), the workspace root and Rust-source walks for tests and generators (`paths`), seeded test draws over `purrdf_hash::mix` (`rng`), temporary paths under the target directory (`temp_dir!`, `temp_file!`, `for_unit_test`), self-hashing frozen differential vectors, the libtest-compatible `harness = false` runner, the property harness (`prop_test!`: choice-sequence shrinking, regex string generators, stateful model testing, a deterministic seed per property), and the micro-benchmark harness every bench target runs on (`purrdf_testkit::bench`, `bench_group!`/`bench_main!`: warm-up, flat sampling, median with MAD and a seeded bootstrap interval, throughput, saved baselines compared with a bootstrapped change, a fixed-schema `estimates.json` per benchmark, natively and on wasm32); its one first-party dependency is `purrdf-hash`, the root, whose own tests do not use testkit, so no member's tests close a cycle through it (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
 | `wasm-link` (`crates/wasm-link`) | The wasm package's post-link step: links the suspend, run and poison guarantees into the optimized module (`publish = false`, host tool) |
 | `purrdf-hash-conformance` (`crates/hash-conformance`) | The frozen-vector suites of `purrdf-hash` (digest differentials, BLAKE3 streaming boundaries, base16 rendering, the table hasher's self-vectors and quality), the digest, base16 and BLAKE3 throughput bench and the table hasher's latency bench, on testkit's runner and bench harness, natively and on wasm32; separate from `purrdf-hash` because testkit depends on it (`publish = false`) |
 | `helper-census` (`crates/helper-census`) | The structural helper census: normalises every shipping function body (local names renamed, literals abstracted) and reports isomorphic bodies, repeated thin forwarders, constants by value and hex-digit tables against `helpers-ledger.toml` (`publish = false`, host tool) |
+
+### Where each job lives
+
+Every job the workspace implements once has one home. `helpers-ledger.toml` is
+authoritative (with each job's specification, frozen vectors, sanctioned
+variants and forbidden fingerprints); this table lists its rows, in ledger
+order, with the home each names. Call the home; never write a second body.
+
+| Job | Home |
+|---|---|
+| `iri-reference-resolution` | `purrdf_iri::BaseScope` |
+| `fixed-key-table-hash` | `purrdf_hash::fixed::FixedState` |
+| `fixed-hasher-everywhere` | `purrdf_hash::fixed::FixedState` |
+| `hash-domain` | `purrdf_hash::Domain` |
+| `blake3` | `purrdf_hash::blake3::hash` |
+| `splitmix64` | `purrdf_hash::mix` |
+| `fnv1a64` | `purrdf_hash::fnv` |
+| `md5` | `purrdf_hash::md5::Md5` |
+| `sha1` | `purrdf_hash::sha1::Sha1` |
+| `sha3` | `purrdf_hash::sha3::Sha3` |
+| `crc32` | `purrdf_hash::crc32::Crc32` |
+| `deflate-gzip` | `purrdf_deflate::Inflater` |
+| `match-length` | `purrdf_deflate::common_prefix_len` |
+| `csvw-dialect-csv` | `purrdf_core::csv::Reader` |
+| `strongly-connected-components` | `purrdf_core::graph::tarjan_scc` |
+| `small-vector` | `purrdf_core::SmallVec` |
+| `hex` | `purrdf_hash::hex::encode` |
+| `json-schema-validation` | `purrdf_jsonschema::Schema` |
+| `byte-exact-goldens` | `purrdf_testkit::assert_golden` |
+| `test-temporary-paths` | `purrdf_testkit::TempDir` |
+| `bench-harness` | `purrdf_testkit::bench` |
+| `escape-decode` | `purrdf_lex::terminals::decode_uchar` |
+| `grammar-ws` | `purrdf_lex::terminals::skip_ws` |
+| `json-pointer` | `purrdf_lex::json_pointer::escape_token` |
+| `percent-encoding` | `purrdf_lex::percent::encode` |
+| `range-table-search` | `purrdf_lex::terminals::in_ranges` |
+| `byte-search` | `purrdf_lex::scan::find_byte` |
+| `w3c-vocab` | `purrdf_iri::vocab` |
+| `text-direction` | `purrdf_cdt::TextDirection` |
+| `frame-le` | `purrdf_hash::frame::frame_le` |
+| `le-bytes` | `purrdf_core::bytes::read_u32_le` |
+| `align-up` | `purrdf_core::bytes` |
+| `div-ceil` | `purrdf_retrieval::reciprocal_rank::ceil_div` |
+| `wide-arith` | `purrdf_xsd::wide::mul_div` |
+| `bigint` | `purrdf_xsd::bigint::BigInt` |
+| `calendar` | `purrdf_xsd::temporal::days_from_civil` |
+| `rfc3339` | `purrdf_xsd::rfc3339::parse` |
+| `numeric-predicate` | `purrdf_xsd::XsdDatatype::is_numeric` |
+| `unicode-normalization` | `purrdf_lex::unicode::nfc` |
+| `term-conversion` | `purrdf_core::TermValue` |
+| `term-constructor` | `purrdf_core::TermValue` |
+| `json-document` | `purrdf_lex::json::read` |
+| `yaml-document` | `purrdf_lex::yaml::read` |
+| `cbor-codec` | `purrdf_lex::cbor::encode` |
+| `xml-reader` | `purrdf_lex::xml::Document` |
+| `literal-and-iri-escape` | `purrdf_lex::literal_escape::write` |
+| `term-syntax` | `purrdf_lex::term_syntax::write_literal` |
+| `crockford-base32` | `purrdf_lex::crockford::write_u128` |
+| `rdf-collection` | `purrdf_core::DatasetView` |
+| `thread-stack` | `purrdf_stack::on_stack` |
+| `test-workspace-paths` | `purrdf_testkit::paths::workspace_root` |
+| `query-host-plumbing` | `purrdf_validate::governors::from_parts` |
+| `ed25519` | `purrdf_ed25519::SigningKey` |
+| `prefixed-name` | `purrdf_iri::contract_where` |
+
+### Removed external packages
+
+The native homes above replace these packages, and
+`scripts/check-banned-deps.py` (`BANNED_ANY_EDGE`) refuses every one of them on
+any edge — runtime, build, dev/test or transitive — in every committed
+`Cargo.lock`, each ban naming its replacement (`memchr` alone is refused as a
+direct dependency, in `BANNED_DIRECT_ONLY`):
+
+* JSON, YAML, CBOR and XML: `serde`, `serde_core`, `serde_derive`,
+  `serde_json`, `itoa`, `ryu`, `zmij`, `indexmap`, `equivalent`,
+  `serde_yaml_ng`, `unsafe-libyaml`, `ciborium`, `ciborium-io`, `ciborium-ll`,
+  `half`, `crunchy`, `zerocopy`, `zerocopy-derive` and `roxmltree` —
+  `purrdf_lex::{json, yaml, cbor, xml}`, with hand-written `to_json`/`from_json`
+  over `purrdf_lex::json::Value` in place of derives.
+* Ed25519: `ed25519-dalek`, `curve25519-dalek`, `curve25519-dalek-derive`,
+  `fiat-crypto`, `ed25519`, `signature`, `subtle`, `zeroize`, `rustc_version`,
+  `semver`, `pkcs8`, `spki`, `der` and `base64ct` — `purrdf-ed25519`.
+* Benchmarks: `criterion` and its closure (`criterion-plot`, `anes`,
+  `is-terminal`, `hermit-abi`, `cast`, `num-traits`, `autocfg`, `itertools`,
+  `oorandom`, `tinytemplate`, `walkdir`, `same-file`, `winapi-util`) —
+  `purrdf_testkit::bench`.
+* Byte search: `memchr` — `purrdf_lex::scan::find_byte`/`find_byte2`.
+  `regex` is built without its `perf-literal` prefilter, so neither `memchr`
+  nor `aho-corasick` is compiled into any build; Cargo keeps both in
+  `Cargo.lock` only because `regex`'s weak feature references name them.
+* Base16, dates and normalization: `hex` (`purrdf_hash::hex`), `time`,
+  `time-core`, `time-macros`, `deranged`, `num-conv` and `powerfmt`
+  (`purrdf_xsd::rfc3339`), `unicode-normalization`, `tinyvec` and
+  `tinyvec_macros` (`purrdf_lex::unicode`).
+
+`sha2` is retained: it is the workspace's one SHA-2 implementation.
+`dependency-ledger.toml` gives every package that remains a category, a reason
+and a census verdict (`distinct`, or `duplicates_native` naming the home that
+makes it removable).
 
 ## 2. Hard constraints (violating these fails CI or review)
 
@@ -85,11 +184,15 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   semantics per consumer, which is forbidden. Do not add any other feature,
   optional dependency, or feature-gated behavior.
 * **Kernel ring-fence.** `purrdf-core` must never depend on PyO3.
-  `purrdf-hash` has **zero runtime dependencies**; `purrdf-lex`, `purrdf-iri`,
-  `purrdf-xsd`, `purrdf-events`, `purrdf-testkit` and `purrdf-deflate` depend
-  only on crates listed in their `layers.toml` rows (`make rdf-core-hygiene`
-  checks both, reading the ring-fenced crates and their rows from
-  `layers.toml`).
+  `purrdf-hash` (the `root` of `layers.toml`) has **zero runtime
+  dependencies**. The ring-fenced crates — the rows of `layers.toml` that carry
+  an `external` list: `purrdf-lex`, `purrdf-iri`, `purrdf-xsd`,
+  `purrdf-events`, `purrdf-deflate`, `purrdf-ed25519` and `purrdf-testkit` —
+  depend only on the first-party crates in their `deps` and the external
+  packages in their `external` (empty for all but `purrdf-ed25519`, which takes
+  `sha2`, and `purrdf-testkit`, which takes `regex-syntax`, `sha2` and
+  `wasm-bindgen`). `make rdf-core-hygiene` checks both, reading the root, the
+  ring-fenced crates and their rows from `layers.toml`.
 * **One home per job.** `helpers-ledger.toml` names the single implementation
   of each job the workspace provides once, what it replaces, and each sanctioned
   second implementation with its criterion and documented reason;
@@ -122,7 +225,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   emphasis flanking, while its blank line (§2.1), ATX heading, thematic break
   and GFM table cell all name space-or-tab; citing "CommonMark" alone settles
   nothing, and doing so once put a false exemption into this file.
-* **Everything is wasm-able.** Every release crate (all 30 publishable crates,
+* **Everything is wasm-able.** Every release crate (all 31 publishable crates,
   `purrdf-wasm` included) must build for `wasm32-unknown-unknown` — CI
   hard-fails otherwise (`make wasm` locally). Never add a dependency that
   drags in threads, the filesystem, C toolchains, or wall-clock/RNG syscalls
@@ -286,7 +389,7 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 ## 6. Releases
 
-Tag-driven trusted publishing: `rust-v*` → crates.io (30 crates, ordered),
+Tag-driven trusted publishing: `rust-v*` → crates.io (31 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
 is single-sourced in `[workspace.package]`. Eleven members never reach
 crates.io: `purrdf-capi`, `purrdf-sparql-conformance`,
