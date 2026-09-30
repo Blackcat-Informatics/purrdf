@@ -52,7 +52,7 @@ purrdf-cdt = { workspace = true }
 # (value_cmp/value_eq), effective boolean value, and the numeric tower.
 purrdf-xsd = { workspace = true }
 # Pure-Rust, wasm-clean regex engine for the SPARQL REGEX/REPLACE built-ins. Already
-# in the workspace lock; pulls only regex-automata/regex-syntax/aho-corasick/memchr.
+# in the workspace lock; pulls only regex-automata/regex-syntax.
 regex = { workspace = true }
 # The SPARQL MD5()/SHA1() built-ins and the SEP-0008 SHA-3 built-ins
 # (SHA3-224/256/384/512), and the fixed-key `FixedHasher` behind every

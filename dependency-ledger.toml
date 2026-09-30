@@ -195,8 +195,8 @@ metrics = { direct = true, exclusive_closure = 12, release = true, wasm = true, 
 
 [packages.aho-corasick]
 category = "transitive:regex"
-reason = "multi-literal search inside regex"
-distinct = "internal to regex's literal prefilter; PurRDF has no multi-pattern literal search"
+reason = "locked, never built: regex is built without perf-literal, and Cargo keeps the optional dependencies its weak `?` feature references in Cargo.lock (no build resolves or compiles it; `cargo tree --workspace -i aho-corasick` prints nothing)"
+distinct = "internal to regex's literal prefilter, which the workspace does not enable; PurRDF has no multi-pattern literal search"
 holder = "regex"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
@@ -449,7 +449,7 @@ metrics = { direct = true, exclusive_closure = 0, release = true, wasm = false, 
 
 [packages.memchr]
 category = "transitive:regex"
-reason = "byte search inside regex's literal prefilters; no workspace member names it"
+reason = "locked, never built: regex is built without perf-literal, and Cargo keeps the optional dependencies its weak `?` feature references in Cargo.lock (no build resolves or compiles it; `cargo tree --workspace -i memchr` prints nothing); no workspace member names it"
 duplicates_native = "purrdf_lex::scan::find_byte"
 holder = "regex"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
