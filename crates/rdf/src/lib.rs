@@ -95,7 +95,6 @@ pub mod gts_fixtures;
 // Canonical, review-friendly Turtle serializer over the IR: the
 // native replacement for rdflib `longturtle` in `purrdf normalize`.
 pub mod turtle_normalize;
-/// Statement-centric RDF 1.2 visualization projection and SVG export support.
 pub mod viz;
 // How deep an input document may nest, and the two places that is enforced. Internal: a
 // caller cannot raise or lower it, because every consumer gets the one portability and
