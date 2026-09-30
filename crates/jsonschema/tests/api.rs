@@ -7,8 +7,8 @@
 use std::sync::OnceLock;
 
 use purrdf_jsonschema::{
-    Dialect, EvaluationCause, MAX_REF_CHAIN, Metaschemas, OutputFormat, Registry, Schema,
-    SchemaError,
+    Dialect, EvaluationCause, MAX_REF_CHAIN, Metaschemas, OutputFormat, OutputUnit, Registry,
+    Schema, SchemaError,
     ecma::{MatchLimits, PatternError},
 };
 use purrdf_lex::json::{self as lexjson, Object, Value};
@@ -715,6 +715,60 @@ fn a_recursive_schema_validates_a_thousand_deep_instance_on_a_small_stack() {
         assert!(detailed.pointer("/errors").is_some() || detailed.get("error").is_some());
     })
     .expect("thread");
+}
+
+/// A chain of `depth` output units below one root, the deepest carrying
+/// `error`.
+fn unit_chain(depth: usize, error: &str) -> OutputUnit {
+    let unit = |level: usize| OutputUnit {
+        valid: false,
+        keyword_location: format!("/{level}"),
+        absolute_keyword_location: String::new(),
+        instance_location: String::new(),
+        error: None,
+        annotation: None,
+        children: Vec::new(),
+    };
+    let mut chain = unit(depth);
+    chain.error = Some(error.to_owned());
+    for level in (0..depth).rev() {
+        let mut parent = unit(level);
+        parent.children.push(chain);
+        chain = parent;
+    }
+    chain
+}
+
+#[test]
+fn output_units_ten_thousand_deep_clone_compare_and_format_on_a_small_stack() {
+    const DEPTH: usize = 10_000;
+    purrdf_stack::on_stack(128 * 1024, || {
+        let tree = unit_chain(DEPTH, "leaf");
+        let copy = tree.clone();
+        assert_eq!(copy, tree);
+        // A difference at the deepest unit is found, and a shallower tree is
+        // a different tree.
+        assert_ne!(unit_chain(DEPTH, "other"), tree);
+        assert_ne!(unit_chain(DEPTH - 1, "leaf"), tree);
+        let text = format!("{tree:?}");
+        assert_eq!(text.matches("OutputUnit {").count(), DEPTH + 1);
+        assert!(text.contains(&format!(
+            "depth: {DEPTH}, valid: false, keyword_location: \"/{DEPTH}\""
+        )));
+        assert!(text.contains("error: Some(\"leaf\")"));
+        drop((tree, copy));
+    })
+    .expect("stack");
+    // The formatting names every field of every unit, in pre-order.
+    let small = unit_chain(1, "leaf");
+    assert_eq!(
+        format!("{small:?}"),
+        "[OutputUnit { depth: 0, valid: false, keyword_location: \"/0\", \
+         absolute_keyword_location: \"\", instance_location: \"\", error: None, \
+         annotation: None, children: 1 }, OutputUnit { depth: 1, valid: false, \
+         keyword_location: \"/1\", absolute_keyword_location: \"\", instance_location: \"\", \
+         error: Some(\"leaf\"), annotation: None, children: 0 }]"
+    );
 }
 
 /// `depth` arrays nested inside one another around `1`.

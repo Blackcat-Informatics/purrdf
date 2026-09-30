@@ -19,7 +19,7 @@
 
 use std::process::ExitCode;
 
-use purrdf_stack::{MARGIN_BYTES, StackError, is_low, on_stack, remaining};
+use purrdf_stack::{MARGIN_BYTES, StackError, is_low, on_stack, on_stack_scoped, remaining};
 use purrdf_testkit::harness::{self, Failed, Trial};
 
 /// A request inside the floor runs, returns its value, and measures a stack of the size
@@ -55,15 +55,79 @@ fn an_over_floor_request_is_refused() -> Result<(), Failed> {
     }
 }
 
+/// A scoped request inside the floor runs a computation that borrows the
+/// caller's locals — reading one and writing another — and measures a stack of
+/// the size it asked for.
+fn a_scoped_in_floor_request_borrows_the_caller_s_locals() -> Result<(), Failed> {
+    const BYTES: usize = 4 * MARGIN_BYTES;
+    let members = [3_u64, 5, 7];
+    let mut visits = 0_u32;
+    let (sum, left) = on_stack_scoped(BYTES, || {
+        visits += 1;
+        (members.iter().sum::<u64>(), remaining())
+    })
+    .map_err(|error| error.to_string())?;
+    if sum != 15 || visits != 1 {
+        return Err(format!("the borrowed computation saw {sum} and ran {visits} times").into());
+    }
+    if left + MARGIN_BYTES < BYTES || (cfg!(target_arch = "wasm32") && left > BYTES) {
+        return Err(format!("{left} bytes left on a {BYTES}-byte scoped stack").into());
+    }
+    Ok(())
+}
+
+/// A scoped request larger than the stack left above the floor is refused with
+/// the typed error, and the borrowing computation never runs.
+fn an_over_floor_scoped_request_is_refused() -> Result<(), Failed> {
+    let requested = remaining().saturating_add(1024 * 1024);
+    let mut ran = false;
+    let outcome = on_stack_scoped(requested, || ran = true);
+    match outcome {
+        Err(StackError::ExceedsFloor {
+            requested: reported,
+            available,
+        }) if reported == requested && available < requested && !ran => Ok(()),
+        other => Err(format!("an over-floor scoped request was not refused: {other:?}").into()),
+    }
+}
+
+/// A panic in a scoped computation resumes on the caller with its own payload.
+fn a_scoped_panic_resumes_with_its_payload() -> Result<(), Failed> {
+    let message = String::from("the borrowed computation failed");
+    let caught = std::panic::catch_unwind(|| {
+        on_stack_scoped(4 * MARGIN_BYTES, || -> () {
+            std::panic::panic_any(message.clone())
+        })
+    })
+    .expect_err("the panic resumes");
+    match caught.downcast_ref::<String>() {
+        Some(payload) if *payload == message => Ok(()),
+        _ => Err("the resumed panic lost its payload".into()),
+    }
+}
+
 fn main() -> ExitCode {
-    let mut trials = vec![Trial::test(
-        "an_in_floor_request_runs",
-        an_in_floor_request_runs,
-    )];
+    let mut trials = vec![
+        Trial::test("an_in_floor_request_runs", an_in_floor_request_runs),
+        Trial::test(
+            "a_scoped_in_floor_request_borrows_the_caller_s_locals",
+            a_scoped_in_floor_request_borrows_the_caller_s_locals,
+        ),
+    ];
     if cfg!(target_arch = "wasm32") {
         trials.push(Trial::test(
             "an_over_floor_request_is_refused",
             an_over_floor_request_is_refused,
+        ));
+        trials.push(Trial::test(
+            "an_over_floor_scoped_request_is_refused",
+            an_over_floor_scoped_request_is_refused,
+        ));
+    } else {
+        // wasm32-unknown-unknown aborts on a panic, so there is nothing to resume.
+        trials.push(Trial::test(
+            "a_scoped_panic_resumes_with_its_payload",
+            a_scoped_panic_resumes_with_its_payload,
         ));
     }
     harness::main(trials)

@@ -114,7 +114,8 @@ pub const fn corpus_dims() -> usize {
     CORPUS_DIMS
 }
 
-/// The fixed corpus: a uniform family in `[-1, 1)` generated from the seeded stream.
+/// The fixed corpus: a uniform family in `[-1, 1)` generated from the seeded stream,
+/// [`purrdf_hash::mix::signed_unit_step_nonzero`] over the self-composed SplitMix64 steps.
 ///
 /// The generator is deterministic integer mixing followed by exactly-rounded binary64
 /// arithmetic, so a native host and a wasm host produce bit-identical components. An
@@ -125,12 +126,7 @@ pub fn corpus() -> VectorMatrix {
     let mut state = CORPUS_SEED;
     let mut data = Vec::with_capacity(CORPUS_ROWS * CORPUS_DIMS);
     for _ in 0..CORPUS_ROWS * CORPUS_DIMS {
-        state = crate::level::splitmix64(state);
-        let unit = (state >> 11) as f64 / (1_u64 << 53) as f64;
-        // `mul_add` is one correctly-rounded operation on every target, including wasm
-        // without a fused-multiply-add instruction, so the corpus is bit-identical there.
-        let value = unit.mul_add(2.0, -1.0);
-        data.push(if value == 0.0 { 0.25 } else { value });
+        data.push(purrdf_hash::mix::signed_unit_step_nonzero(&mut state, 0.25));
     }
     VectorMatrix::new(CORPUS_ROWS, CORPUS_DIMS, data).expect("the corpus shape is valid")
 }

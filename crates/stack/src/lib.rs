@@ -699,6 +699,27 @@ pub fn on_stack<R: Send + 'static>(
     bytes: usize,
     f: impl FnOnce() -> R + Send + 'static,
 ) -> Result<R, StackError> {
+    on_stack_scoped(bytes, f)
+}
+
+/// [`on_stack`] for a computation that borrows from the caller: `f` need not be
+/// `'static`, because the stack it runs on is gone before this returns.
+///
+/// Natively `f` runs on a scoped thread of `bytes` that is joined before the
+/// scope closes, so its borrows of the caller's locals are sound; on `wasm32` it
+/// runs inline under the same fresh [`Context`] as [`on_stack`], and a request
+/// over the floor is refused in the same way. Every other property — the fresh
+/// context, a panic resuming on the caller with its payload — is [`on_stack`]'s,
+/// which is this function with a `'static` computation.
+///
+/// # Errors
+///
+/// [`StackError::ExceedsFloor`] on `wasm32` when `bytes` exceeds what is left above the
+/// floor; [`StackError::Spawn`] natively when the thread cannot be started.
+pub fn on_stack_scoped<'env, R: Send + 'env>(
+    bytes: usize,
+    f: impl FnOnce() -> R + Send + 'env,
+) -> Result<R, StackError> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         on_thread(bytes, f)
@@ -709,20 +730,23 @@ pub fn on_stack<R: Send + 'static>(
     }
 }
 
-/// [`on_stack`] natively: `f` on a fresh thread of `bytes`.
+/// [`on_stack_scoped`] natively: `f` on a scoped thread of `bytes`, joined before
+/// the scope closes.
 #[cfg(not(target_arch = "wasm32"))]
-fn on_thread<R: Send + 'static>(
+fn on_thread<'env, R: Send + 'env>(
     bytes: usize,
-    f: impl FnOnce() -> R + Send + 'static,
+    f: impl FnOnce() -> R + Send + 'env,
 ) -> Result<R, StackError> {
-    let handle = std::thread::Builder::new()
-        .stack_size(bytes)
-        .spawn(f)
-        .map_err(StackError::Spawn)?;
-    match handle.join() {
-        Ok(value) => Ok(value),
-        Err(payload) => std::panic::resume_unwind(payload),
-    }
+    std::thread::scope(|scope| {
+        let handle = std::thread::Builder::new()
+            .stack_size(bytes)
+            .spawn_scoped(scope, f)
+            .map_err(StackError::Spawn)?;
+        match handle.join() {
+            Ok(value) => Ok(value),
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    })
 }
 
 /// [`on_stack`] on `wasm32`: `f` inline, under a fresh [`Context`] whose floor is `bytes`
@@ -731,7 +755,10 @@ fn on_thread<R: Send + 'static>(
 /// every target.
 #[cfg_attr(
     not(any(target_arch = "wasm32", test)),
-    expect(dead_code, reason = "the inline path is `on_stack` on wasm32 only")
+    expect(
+        dead_code,
+        reason = "the inline path is `on_stack_scoped` on wasm32 only"
+    )
 )]
 fn on_current_stack<R>(bytes: usize, f: impl FnOnce() -> R) -> Result<R, StackError> {
     /// Puts the caller's context back when `f` returns or unwinds.

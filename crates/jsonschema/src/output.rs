@@ -20,6 +20,8 @@
 //! both projections descend only into units whose validity matches the
 //! result they explain.
 
+use std::fmt;
+
 use purrdf_lex::json::{Object, Value};
 
 /// Which output format [`Output::to_json`] writes.
@@ -34,7 +36,11 @@ pub enum OutputFormat {
 }
 
 /// One node of an evaluation's output.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Units nest once per subschema and keyword applied, so an instance
+/// thousands of levels deep yields a unit tree as deep. Every whole-tree
+/// operation — [`Clone`], [`PartialEq`], [`Debug`](fmt::Debug) and drop — walks
+/// it over a heap work list rather than one stack frame per level.
 pub struct OutputUnit {
     /// Whether the keyword or subschema passed.
     pub valid: bool,
@@ -65,6 +71,100 @@ impl Drop for OutputUnit {
             work.append(&mut unit.children);
             // `unit` now holds no children, so its own drop returns at once.
         }
+    }
+}
+
+impl OutputUnit {
+    /// This unit's own fields, with no children.
+    fn shallow_clone(&self) -> Self {
+        Self {
+            valid: self.valid,
+            keyword_location: self.keyword_location.clone(),
+            absolute_keyword_location: self.absolute_keyword_location.clone(),
+            instance_location: self.instance_location.clone(),
+            error: self.error.clone(),
+            annotation: self.annotation.clone(),
+            children: Vec::with_capacity(self.children.len()),
+        }
+    }
+
+    /// Whether this unit's own fields, and its number of children, equal
+    /// `other`'s.
+    fn shallow_eq(&self, other: &Self) -> bool {
+        self.valid == other.valid
+            && self.keyword_location == other.keyword_location
+            && self.absolute_keyword_location == other.absolute_keyword_location
+            && self.instance_location == other.instance_location
+            && self.error == other.error
+            && self.annotation == other.annotation
+            && self.children.len() == other.children.len()
+    }
+}
+
+impl Clone for OutputUnit {
+    /// Copies the tree depth first: `building` holds the copies of the units
+    /// on the path from the root, each gaining its children as they finish.
+    fn clone(&self) -> Self {
+        let mut building = vec![self.shallow_clone()];
+        let mut path: Vec<(&Self, usize)> = vec![(self, 0)];
+        while let Some((source, next)) = path.last_mut() {
+            if let Some(child) = source.children.get(*next) {
+                *next += 1;
+                building.push(child.shallow_clone());
+                path.push((child, 0));
+                continue;
+            }
+            path.pop();
+            let done = building.pop().expect("one copy per unit on the path");
+            match building.last_mut() {
+                Some(parent) => parent.children.push(done),
+                None => return done,
+            }
+        }
+        unreachable!("the root's copy is returned when its path frame pops")
+    }
+}
+
+impl PartialEq for OutputUnit {
+    fn eq(&self, other: &Self) -> bool {
+        let mut pairs = vec![(self, other)];
+        while let Some((left, right)) = pairs.pop() {
+            if !left.shallow_eq(right) {
+                return false;
+            }
+            pairs.extend(left.children.iter().zip(&right.children));
+        }
+        true
+    }
+}
+
+impl fmt::Debug for OutputUnit {
+    /// The tree in pre-order, one entry per unit carrying its depth below this
+    /// one and its number of children.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct Entry<'u>(usize, &'u OutputUnit);
+        impl fmt::Debug for Entry<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let Self(depth, unit) = self;
+                f.debug_struct("OutputUnit")
+                    .field("depth", depth)
+                    .field("valid", &unit.valid)
+                    .field("keyword_location", &unit.keyword_location)
+                    .field("absolute_keyword_location", &unit.absolute_keyword_location)
+                    .field("instance_location", &unit.instance_location)
+                    .field("error", &unit.error)
+                    .field("annotation", &unit.annotation)
+                    .field("children", &unit.children.len())
+                    .finish()
+            }
+        }
+        let mut list = f.debug_list();
+        let mut work = vec![(0_usize, self)];
+        while let Some((depth, unit)) = work.pop() {
+            list.entry(&Entry(depth, unit));
+            work.extend(unit.children.iter().rev().map(|child| (depth + 1, child)));
+        }
+        list.finish()
     }
 }
 

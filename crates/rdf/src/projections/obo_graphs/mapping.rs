@@ -7,6 +7,7 @@ use crate::projections::source_rows::{
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
+use purrdf_core::collections::{ListErrorKind, ListFault, RdfListWalk, SoleObject};
 use purrdf_core::loss::{
     LOSS_OBO_ANNOTATION_DROPPED, LOSS_OBO_BLANK_IDENTITY_DROPPED,
     LOSS_OBO_LITERAL_FIDELITY_WIDENED, LOSS_OBO_NAMED_GRAPH_DROPPED,
@@ -1144,56 +1145,76 @@ impl<'a> Projector<'a> {
         })
     }
 
+    /// The members of the RDF collection headed by `head` in `graph`, and the
+    /// indices of its `rdf:first`/`rdf:rest` statements (cell by cell), read by
+    /// the strict walker every reader of a collection shares
+    /// ([`RdfListWalk`]) over the configured list vocabulary. A cell must also
+    /// be a blank node: an OWL axiom's collection is never named.
     fn parse_list(
         &self,
         head: &ProjectionTerm,
         graph: Option<&ProjectionTerm>,
     ) -> Result<(Vec<ProjectionTerm>, Vec<usize>), ProjectionError> {
-        let nil = iri(self.config.vocabulary().rdf().rdf_nil());
-        if *head == nil {
-            return Ok((Vec::new(), Vec::new()));
-        }
-        let mut cursor = head.clone();
-        let mut visited = BTreeSet::new();
+        let rdf = self.config.vocabulary().rdf();
+        let nil = iri(rdf.rdf_nil());
+        let (mut firsts, mut rests) = (Vec::new(), Vec::new());
         let mut members = Vec::new();
-        let mut structural = Vec::new();
-        loop {
-            if cursor == nil {
-                break;
-            }
-            if !matches!(cursor, ProjectionTerm::Blank { .. }) {
-                return Err(ProjectionError::integrity(
-                    "RDF collection tail must be the configured rdf:nil IRI or a blank list node",
-                ));
-            }
-            if !visited.insert(cursor.clone()) {
-                return Err(ProjectionError::integrity(
-                    "cyclic RDF collection in OWL axiom",
-                ));
-            }
-            if visited.len() > self.config.max_records() {
+        let walk = RdfListWalk::new(
+            head,
+            Some(&nil),
+            |cell: &ProjectionTerm| {
+                // A cell that is not a blank node is read as having no
+                // `rdf:first`, and that fault is reported as the wrong kind of
+                // tail below.
+                if *cell != nil && !matches!(cell, ProjectionTerm::Blank { .. }) {
+                    return SoleObject::None;
+                }
+                self.sole_statement(cell, rdf.rdf_first(), graph, &mut firsts)
+            },
+            |cell| self.sole_statement(cell, rdf.rdf_rest(), graph, &mut rests),
+        );
+        for item in walk {
+            let member = item.map_err(|fault| list_fault(&fault, &nil))?;
+            if members.len() == self.config.max_records() {
                 return Err(ProjectionError::limit(
                     "RDF collection exceeds the configured OBO Graphs record limit",
                 ));
             }
-            let first = self.required_object(
-                &cursor,
-                self.config.vocabulary().rdf().rdf_first(),
-                graph,
-                "RDF collection first",
-            )?;
-            let rest = self.required_object(
-                &cursor,
-                self.config.vocabulary().rdf().rdf_rest(),
-                graph,
-                "RDF collection rest",
-            )?;
-            structural.push(first.0);
-            structural.push(rest.0);
-            members.push(first.1);
-            cursor = rest.1;
+            members.push(member.clone());
         }
+        let structural = firsts
+            .into_iter()
+            .zip(rests)
+            .flat_map(<[usize; 2]>::from)
+            .collect();
         Ok((members, structural))
+    }
+
+    /// How many statements `(subject, predicate, ?)` has in `graph`, counted up
+    /// to two, as the list walker asks it; the index of a sole statement is
+    /// recorded in `indices`.
+    fn sole_statement<'q>(
+        &'q self,
+        subject: &ProjectionTerm,
+        predicate: &str,
+        graph: Option<&ProjectionTerm>,
+        indices: &mut Vec<usize>,
+    ) -> SoleObject<&'q ProjectionTerm> {
+        let mut matches = self
+            .by_subject_predicate
+            .get(&(subject.clone(), predicate.to_owned()))
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|&index| self.quads[index].graph.as_ref() == graph);
+        match (matches.next(), matches.next()) {
+            (None, _) => SoleObject::None,
+            (Some(index), None) => {
+                indices.push(index);
+                SoleObject::One(&self.quads[index].object)
+            }
+            (Some(_), Some(_)) => SoleObject::Many,
+        }
     }
 
     fn required_object(
@@ -1565,6 +1586,31 @@ fn resolve_term<D: DatasetView>(
     let _ = term.to_canonical_json(config.limits())?;
     cache.insert(id, term.clone());
     Ok(term)
+}
+
+/// The projection error for a malformed OWL-axiom collection.
+fn list_fault(fault: &ListFault<&ProjectionTerm>, nil: &ProjectionTerm) -> ProjectionError {
+    let message = match fault.kind {
+        ListErrorKind::MissingFirst
+            if fault.node != nil && !matches!(fault.node, ProjectionTerm::Blank { .. }) =>
+        {
+            "RDF collection tail must be the configured rdf:nil IRI or a blank list node"
+        }
+        ListErrorKind::MissingFirst => "missing RDF collection first",
+        ListErrorKind::MultipleFirst => {
+            "ambiguous RDF collection first: expected exactly one statement in the source graph"
+        }
+        ListErrorKind::MissingRest => "missing RDF collection rest",
+        ListErrorKind::MultipleRest => {
+            "ambiguous RDF collection rest: expected exactly one statement in the source graph"
+        }
+        ListErrorKind::Cycle => "cyclic RDF collection in OWL axiom",
+        ListErrorKind::NonEmptyNil => {
+            "the configured rdf:nil carries an RDF collection first or rest"
+        }
+        _ => "malformed RDF collection in OWL axiom",
+    };
+    ProjectionError::integrity(message)
 }
 
 fn iri(value: &str) -> ProjectionTerm {
@@ -2220,6 +2266,92 @@ mod tests {
             super::super::super::ProjectionErrorKind::Integrity
         );
         assert!(error.message().contains("ambiguous restriction property"));
+    }
+
+    /// `ex:r owl:propertyChainAxiom (ex:p ex:q)`, its tail `rdf:rest` pointing
+    /// at `tail` (`None` for `rdf:nil`), plus `extra` statements on the cells
+    /// `_:chain-1`, `_:chain-2` or `rdf:nil`.
+    fn chain_dataset(
+        tail: Option<&str>,
+        extra: &[(&str, &str, &str)],
+    ) -> std::sync::Arc<RdfDataset> {
+        let mut builder = RdfDatasetBuilder::new();
+        let node = |builder: &mut RdfDatasetBuilder, name: &str| match name {
+            "_:chain-1" | "_:chain-2" => builder.intern_blank(&name[2..], BlankScope::DEFAULT),
+            "rdf:nil" | "rdf:first" | "rdf:rest" => iri(builder, &format!("{RDF}{}", &name[4..])),
+            _ => iri(builder, &format!("{EX}{name}")),
+        };
+        let rdf_type = iri(&mut builder, &format!("{RDF}type"));
+        let object_property = iri(&mut builder, &format!("{OWL}ObjectProperty"));
+        for name in ["p", "q", "r"] {
+            let property = node(&mut builder, name);
+            builder.push_quad(property, rdf_type, object_property, None);
+        }
+        let chain = iri(&mut builder, &format!("{OWL}propertyChainAxiom"));
+        let (r, p, q) = (
+            node(&mut builder, "r"),
+            node(&mut builder, "p"),
+            node(&mut builder, "q"),
+        );
+        let (head, second) = (
+            node(&mut builder, "_:chain-1"),
+            node(&mut builder, "_:chain-2"),
+        );
+        let (first, rest) = (
+            node(&mut builder, "rdf:first"),
+            node(&mut builder, "rdf:rest"),
+        );
+        let end = node(&mut builder, tail.unwrap_or("rdf:nil"));
+        builder.push_quad(r, chain, head, None);
+        builder.push_quad(head, first, p, None);
+        builder.push_quad(head, rest, second, None);
+        builder.push_quad(second, first, q, None);
+        builder.push_quad(second, rest, end, None);
+        for (s, p, o) in extra {
+            let (s, p, o) = (
+                node(&mut builder, s),
+                node(&mut builder, p),
+                node(&mut builder, o),
+            );
+            builder.push_quad(s, p, o, None);
+        }
+        builder.freeze().expect("structurally valid chain")
+    }
+
+    fn chain_error(dataset: &RdfDataset) -> String {
+        project_obo_graphs(dataset, &config(2_000))
+            .expect_err("a malformed property-chain collection is refused")
+            .message()
+            .to_owned()
+    }
+
+    /// The property-chain collection is read by the strict list walker: a
+    /// well-formed chain projects, and a cycle, a named cell, an ambiguous
+    /// `rdf:first` and an `rdf:nil` that carries an edge are each refused,
+    /// naming the fault.
+    #[test]
+    fn property_chain_collections_are_read_strictly() {
+        let projection =
+            project_obo_graphs(chain_dataset(None, &[]).as_ref(), &config(2_000)).expect("chain");
+        assert_eq!(projection.document.graphs[0].property_chain_axioms.len(), 1);
+
+        let cycle = chain_error(&chain_dataset(Some("_:chain-1"), &[]));
+        assert_eq!(cycle, "cyclic RDF collection in OWL axiom");
+        let named = chain_error(&chain_dataset(Some("elsewhere"), &[]));
+        assert_eq!(
+            named,
+            "RDF collection tail must be the configured rdf:nil IRI or a blank list node"
+        );
+        let ambiguous = chain_error(&chain_dataset(None, &[("_:chain-2", "rdf:first", "r")]));
+        assert!(
+            ambiguous.starts_with("ambiguous RDF collection first"),
+            "{ambiguous}"
+        );
+        let loaded_nil = chain_error(&chain_dataset(None, &[("rdf:nil", "rdf:first", "p")]));
+        assert_eq!(
+            loaded_nil,
+            "the configured rdf:nil carries an RDF collection first or rest"
+        );
     }
 
     #[test]

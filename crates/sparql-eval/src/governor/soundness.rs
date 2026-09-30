@@ -3071,15 +3071,10 @@ mod tests {
             // the same tree, borrowed there, is refused typed. It is built and dropped
             // here, where its own drop fits.
             let tall = nested(100_000);
-            let error = std::thread::scope(|scope| {
-                std::thread::Builder::new()
-                    .stack_size(256 * 1024)
-                    .spawn_scoped(scope, || validate_graph_pattern_depth(&tall))
-                    .expect("spawn")
-                    .join()
-                    .expect("the small thread returned")
-            })
-            .expect_err("direct algebra too tall for the stack is refused");
+            let error =
+                purrdf_stack::on_stack_scoped(256 * 1024, || validate_graph_pattern_depth(&tall))
+                    .expect("the small stack runs the check")
+                    .expect_err("direct algebra too tall for the stack is refused");
             assert!(
                 matches!(error, crate::EvalError::StackExhausted { .. }),
                 "{error:?}"

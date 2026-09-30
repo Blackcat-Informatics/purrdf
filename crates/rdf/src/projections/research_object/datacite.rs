@@ -10,6 +10,7 @@ use purrdf_core::loss::{
 };
 use purrdf_core::{DatasetView, LossLedger, research_object_to_rdf_loss_ledger};
 use purrdf_lex::json::{Object, Value};
+use purrdf_lex::terminals::trim_ws;
 use purrdf_lex::xml::Node;
 
 use super::super::json_codec::{Fields, FromJson, JsonError, ToJson};
@@ -1286,7 +1287,9 @@ fn simple_element_text(node: Node<'_, '_>, path: &str) -> Result<String, Project
     for child in node.children().filter(Node::is_text) {
         value.push_str(child.text().unwrap_or_default());
     }
-    let value = value.trim().to_owned();
+    // XML whitespace is `S ::= (#x20 | #x9 | #xD | #xA)+` (XML 1.0 §2.3): a
+    // NO-BREAK SPACE or any other Unicode space is element content.
+    let value = trim_ws(&value).to_owned();
     if value.is_empty() {
         return Err(
             ProjectionError::integrity(format!("DataCite {path} cannot be empty"))
@@ -2082,6 +2085,37 @@ mod tests {
         )
         .expect("DataCite UTF-8");
         assert_eq!(xml.matches("<version>").count(), 1);
+    }
+
+    /// The text of the first `<subject>` in `xml`, read as element text.
+    fn subject_text(xml: &str) -> Result<String, ProjectionError> {
+        let document = crate::nesting::parse_xml(xml).expect("well-formed XML");
+        let subject = document
+            .descendants()
+            .find(|node| node.is_element() && node.tag_name().name() == "subject")
+            .expect("a subject element");
+        simple_element_text(subject, "/subject")
+    }
+
+    /// Element text is trimmed of XML whitespace only: the four ASCII `S`
+    /// characters go, and a NO-BREAK SPACE (or any other Unicode space) is
+    /// content, so a value of NO-BREAK SPACEs alone is not empty.
+    #[test]
+    fn element_text_trims_xml_whitespace_only() {
+        assert_eq!(
+            subject_text("<subject> \t\r\n cats \n</subject>").expect("text"),
+            "cats"
+        );
+        assert_eq!(
+            subject_text("<subject>\u{a0}cats\u{2003}</subject>").expect("text"),
+            "\u{a0}cats\u{2003}"
+        );
+        assert_eq!(
+            subject_text("<subject>\u{a0}</subject>").expect("NO-BREAK SPACE is content"),
+            "\u{a0}"
+        );
+        let empty = subject_text("<subject> \t\n</subject>").expect_err("XML whitespace only");
+        assert!(empty.message().contains("cannot be empty"), "{empty}");
     }
 
     #[test]

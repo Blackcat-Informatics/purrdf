@@ -160,7 +160,8 @@ pub use bundle::{
     UnitMetadata,
 };
 pub use collections::{
-    ListError, ListErrorKind, ListVocab, RdfListError, SoleObject, build_rdf_list, walk_rdf_list,
+    ListCellUse, ListError, ListErrorKind, ListFault, ListVocab, RdfListError, RdfListWalk,
+    SoleObject, build_rdf_list, convertible_list_cells, walk_rdf_list,
 };
 pub use content_id::{Blake3ContentId, ContentIdScheme};
 pub use content_store::{Bytes, ContentDigest, ContentStore, ContentStoreError};

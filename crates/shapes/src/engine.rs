@@ -122,20 +122,13 @@ fn subjects_of(ds: &impl ShaclRead, pred: &NamedNode) -> Vec<TermId> {
     result
 }
 
-/// Collect distinct objects of `(?, pred, ?)` across all graphs. Dedup is on the
-/// interned [`TermId`] (`Copy`).
+/// The distinct objects of `(?, pred, ?)` across all graphs:
+/// [`DatasetView::objects_of_predicate`](::purrdf::DatasetView::objects_of_predicate)
+/// of the interned predicate, nothing when it is not interned.
 fn objects_of(ds: &impl ShaclRead, pred: &NamedNode) -> Vec<TermId> {
-    let Some(pid) = resolve_pred(ds, pred) else {
-        return Vec::new();
-    };
-    let mut seen: IdSet = IdSet::default();
-    let mut result = Vec::new();
-    for q in quads_for_pattern_ids(ds, None, Some(pid), None, GraphFilter::AnyGraph) {
-        if seen.insert(q.o) {
-            result.push(q.o);
-        }
-    }
-    result
+    resolve_pred(ds, pred).map_or_else(Vec::new, |pid| {
+        ::purrdf::DatasetView::objects_of_predicate(ds, pid, ::purrdf::GraphMatch::Any)
+    })
 }
 
 /// A focus node identity together with the binding it was minted against.

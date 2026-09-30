@@ -34,6 +34,7 @@ use std::fmt::Write as _;
 use std::io::Write as IoWrite;
 use std::sync::Arc;
 
+use purrdf_core::collections::{ListCellUse, convertible_list_cells};
 use purrdf_lex::json::Value;
 
 use self::carrier::{
@@ -1296,99 +1297,95 @@ fn collect_carrier_term_ids(term: &CarrierTerm, output: &mut FixedHashSet<String
     }
 }
 
+/// Fold the RDF lists of one graph's nodes into `@list` values: JSON-LD 1.1
+/// Processing Algorithms and API §8.4.2 (Serialize RDF as JSON-LD), step 6.4,
+/// whose walk is the shared [`convertible_list_cells`].
+///
+/// A cell is a well-formed list node when it is a blank node that no other
+/// graph uses, that is no annotation's subject, that has no `@type`, whose
+/// only entries are one `rdf:first` and one `rdf:rest` value (neither
+/// annotated), and that is referenced exactly once in this graph. A reference
+/// as the `rdf:rest` of a node continues the walk back towards the head there;
+/// any other reference — a property value, an annotation's value, a triple
+/// term component — makes the cell a head. Every head's cells, read forward to
+/// `rdf:nil`, become the `@list` that replaces the reference, and the cells are
+/// no longer written as nodes.
 fn fold_rdf_lists(nodes: &mut Vec<CarrierNode>, externally_used: impl Fn(&str) -> bool) {
-    let mut annotation_subjects = BTreeSet::new();
-    for node in nodes.iter() {
-        collect_annotation_subjects(node, &mut annotation_subjects);
-    }
-    let node_by_id: FixedHashMap<&str, usize> = nodes
-        .iter()
-        .enumerate()
-        .map(|(index, node)| (node.id.as_str(), index))
-        .collect();
-    let candidates: BTreeSet<String> = nodes
-        .iter()
-        .filter(|node| {
-            node.id.starts_with("_:")
-                && !externally_used(&node.id)
-                && !annotation_subjects.contains(&node.id)
-                && node.types.is_empty()
-                && node.properties.len() == 2
-                && node
-                    .properties
-                    .get(RDF_FIRST)
-                    .is_some_and(|values| values.len() == 1 && values[0].annotations.is_empty())
-                && node
-                    .properties
-                    .get(RDF_REST)
-                    .is_some_and(|values| values.len() == 1 && values[0].annotations.is_empty())
-        })
-        .map(|node| node.id.clone())
-        .collect();
+    let (lists, consumed) = {
+        let mut annotation_subjects = BTreeSet::new();
+        for node in nodes.iter() {
+            collect_annotation_subjects(node, &mut annotation_subjects);
+        }
+        let node_by_id: FixedHashMap<&str, &CarrierNode> =
+            nodes.iter().map(|node| (node.id.as_str(), node)).collect();
+        let candidates: BTreeSet<&str> = nodes
+            .iter()
+            .filter(|node| {
+                node.id.starts_with("_:")
+                    && !externally_used(&node.id)
+                    && !annotation_subjects.contains(&node.id)
+                    && node.types.is_empty()
+                    && node.properties.len() == 2
+                    && sole_entry(node, RDF_FIRST).is_some()
+                    && sole_entry(node, RDF_REST).is_some()
+            })
+            .map(|node| node.id.as_str())
+            .collect();
 
-    // List folding only needs to distinguish a unique incoming edge from
-    // multiple edges, so retain a bounded cardinality instead of an unbounded
-    // pointer-sized counter.
-    let mut incoming: BTreeMap<String, u8> = BTreeMap::new();
-    let mut external_heads = BTreeSet::new();
-    for node in nodes.iter() {
-        for (property, values) in &node.properties {
-            for value in values {
-                count_list_references(
-                    value,
-                    &candidates,
-                    &mut incoming,
-                    &mut external_heads,
-                    property == RDF_REST && candidates.contains(&node.id),
-                );
+        let mut usages: BTreeMap<&str, CellUsage<'_>> = BTreeMap::new();
+        for node in nodes.iter() {
+            for (property, values) in &node.properties {
+                let rest_of = (property == RDF_REST).then_some(node.id.as_str());
+                for value in values {
+                    note_list_references(value, &candidates, &mut usages, rest_of);
+                }
             }
         }
-    }
+        let tails = candidates.iter().copied().filter(|id| {
+            node_by_id
+                .get(id)
+                .and_then(|node| sole_entry(node, RDF_REST))
+                .is_some_and(|rest| matches!(&rest.term, CarrierTerm::Id(tail) if tail == RDF_NIL))
+        });
+        let cells = convertible_list_cells(tails, |cell| {
+            if !candidates.contains(cell) {
+                return None;
+            }
+            match usages.get(cell)? {
+                CellUsage::Once(Some(previous)) => Some(ListCellUse::RestOf(*previous)),
+                CellUsage::Once(None) => Some(ListCellUse::Head),
+                CellUsage::Many => None,
+            }
+        });
 
-    let mut lists = BTreeMap::new();
-    let mut consumed = BTreeSet::new();
-    for head in external_heads {
-        if incoming.get(&head) != Some(&1) {
-            continue;
+        // A head is a converted cell whose reference is not the `rdf:rest` of
+        // another converted cell; its list reads forward to `rdf:nil`, and
+        // every cell on the way was converted by the walk that reached it.
+        let mut lists: BTreeMap<String, Vec<CarrierValue>> = BTreeMap::new();
+        for &head in &cells {
+            if matches!(usages.get(head), Some(CellUsage::Once(Some(previous))) if cells.contains(previous))
+            {
+                continue;
+            }
+            let mut values = Vec::new();
+            let mut cell = head;
+            while let Some(node) = node_by_id.get(cell) {
+                let (Some(first), Some(rest)) =
+                    (sole_entry(node, RDF_FIRST), sole_entry(node, RDF_REST))
+                else {
+                    break;
+                };
+                values.push(first.clone());
+                match &rest.term {
+                    CarrierTerm::Id(next) if cells.contains(next.as_str()) => cell = next,
+                    _ => break,
+                }
+            }
+            lists.insert(head.to_owned(), values);
         }
-        let mut current = head.clone();
-        let mut seen = BTreeSet::new();
-        let mut values = Vec::new();
-        let mut chain = Vec::new();
-        let valid = loop {
-            if !seen.insert(current.clone()) || incoming.get(&current) != Some(&1) {
-                break false;
-            }
-            let Some(node) = node_by_id
-                .get(current.as_str())
-                .and_then(|index| nodes.get(*index))
-            else {
-                break false;
-            };
-            let Some(first) = node.properties.get(RDF_FIRST).and_then(|rows| rows.first()) else {
-                break false;
-            };
-            let Some(rest) = node.properties.get(RDF_REST).and_then(|rows| rows.first()) else {
-                break false;
-            };
-            values.push(first.clone());
-            chain.push(current.clone());
-            let CarrierTerm::Id(rest_id) = &rest.term else {
-                break false;
-            };
-            if rest_id == RDF_NIL {
-                break true;
-            }
-            if !candidates.contains(rest_id) {
-                break false;
-            }
-            current.clone_from(rest_id);
-        };
-        if valid && chain.iter().all(|id| !consumed.contains(id)) {
-            consumed.extend(chain);
-            lists.insert(head, values);
-        }
-    }
+        let consumed: BTreeSet<String> = cells.iter().map(|cell| (*cell).to_owned()).collect();
+        (lists, consumed)
+    };
 
     if lists.is_empty() {
         return;
@@ -1404,6 +1401,24 @@ fn fold_rdf_lists(nodes: &mut Vec<CarrierNode>, externally_used: impl Fn(&str) -
     nodes.retain(|node| !consumed.contains(&node.id));
 }
 
+/// The one unannotated value of `node`'s `property`, when it has exactly one.
+fn sole_entry<'a>(node: &'a CarrierNode, property: &str) -> Option<&'a CarrierValue> {
+    node.properties
+        .get(property)
+        .filter(|values| values.len() == 1 && values[0].annotations.is_empty())
+        .map(|values| &values[0])
+}
+
+/// How often, and how, a candidate list cell is referenced within one graph.
+#[derive(Clone, Copy)]
+enum CellUsage<'a> {
+    /// Exactly one reference: as the `rdf:rest` of the node named here, or
+    /// (`None`) in any other position.
+    Once(Option<&'a str>),
+    /// More than one reference.
+    Many,
+}
+
 fn collect_annotation_subjects(node: &CarrierNode, output: &mut BTreeSet<String>) {
     for values in node.properties.values() {
         for value in values {
@@ -1415,60 +1430,50 @@ fn collect_annotation_subjects(node: &CarrierNode, output: &mut BTreeSet<String>
     }
 }
 
-fn count_list_references(
-    value: &CarrierValue,
-    candidates: &BTreeSet<String>,
-    incoming: &mut BTreeMap<String, u8>,
-    external_heads: &mut BTreeSet<String>,
-    direct_rest: bool,
+/// Record every reference `value` makes to a candidate cell: its own term (as
+/// the `rdf:rest` of `rest_of`, when that is where it stands), and every term
+/// inside its triple terms, lists and annotations.
+fn note_list_references<'a>(
+    value: &'a CarrierValue,
+    candidates: &BTreeSet<&'a str>,
+    usages: &mut BTreeMap<&'a str, CellUsage<'a>>,
+    rest_of: Option<&'a str>,
 ) {
-    count_list_term_references(
-        &value.term,
-        candidates,
-        incoming,
-        external_heads,
-        direct_rest,
-    );
+    note_list_term_references(&value.term, candidates, usages, rest_of);
     for annotation in &value.annotations {
         for values in annotation.properties.values() {
             for value in values {
-                count_list_references(value, candidates, incoming, external_heads, false);
+                note_list_references(value, candidates, usages, None);
             }
         }
     }
 }
 
-fn count_list_term_references(
-    term: &CarrierTerm,
-    candidates: &BTreeSet<String>,
-    incoming: &mut BTreeMap<String, u8>,
-    external_heads: &mut BTreeSet<String>,
-    direct_rest: bool,
+fn note_list_term_references<'a>(
+    term: &'a CarrierTerm,
+    candidates: &BTreeSet<&'a str>,
+    usages: &mut BTreeMap<&'a str, CellUsage<'a>>,
+    rest_of: Option<&'a str>,
 ) {
     match term {
-        CarrierTerm::Id(id) if candidates.contains(id) => {
-            let count = incoming.entry(id.clone()).or_default();
-            increment_multiplicity(count);
-            if !direct_rest {
-                external_heads.insert(id.clone());
+        CarrierTerm::Id(id) => {
+            if let Some(&cell) = candidates.get(id.as_str()) {
+                usages
+                    .entry(cell)
+                    .and_modify(|usage| *usage = CellUsage::Many)
+                    .or_insert(CellUsage::Once(rest_of));
             }
         }
         CarrierTerm::Triple(triple) => {
-            count_list_term_references(
-                &triple.subject,
-                candidates,
-                incoming,
-                external_heads,
-                false,
-            );
-            count_list_term_references(&triple.object, candidates, incoming, external_heads, false);
+            note_list_term_references(&triple.subject, candidates, usages, None);
+            note_list_term_references(&triple.object, candidates, usages, None);
         }
         CarrierTerm::List(values) => {
             for value in values {
-                count_list_references(value, candidates, incoming, external_heads, false);
+                note_list_references(value, candidates, usages, None);
             }
         }
-        CarrierTerm::Id(_) | CarrierTerm::Literal(_) => {}
+        CarrierTerm::Literal(_) => {}
     }
 }
 

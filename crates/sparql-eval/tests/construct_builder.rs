@@ -347,23 +347,17 @@ fn deeply_joined_construct_on_a_large_stack() {
     let existing = target.intern_iri("https://example.org/existing");
     let predicate = target.intern_iri(VALUE);
     target.push_quad(existing, predicate, existing, None);
-    let result = std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(4 * 1024 * 1024)
-            .spawn_scoped(scope, || {
-                NativeSparqlEngine::new().construct_prepared_in_operation_into_view(
-                    data.as_ref(),
-                    &prepared,
-                    &[("s".to_owned(), TermValue::blank("c1"))],
-                    QueryOptions::EMPTY,
-                    &state,
-                    &mut target,
-                )
-            })
-            .expect("spawn")
-            .join()
-            .expect("the publishing thread returned rather than aborting")
-    });
+    let result = purrdf_stack::on_stack_scoped(4 * 1024 * 1024, || {
+        NativeSparqlEngine::new().construct_prepared_in_operation_into_view(
+            data.as_ref(),
+            &prepared,
+            &[("s".to_owned(), TermValue::blank("c1"))],
+            QueryOptions::EMPTY,
+            &state,
+            &mut target,
+        )
+    })
+    .expect("the publishing stack runs the construction");
     let Err(GraphBuildError::Query(diagnostic)) = result else {
         panic!("a plan too tall for the publishing stack must be refused")
     };

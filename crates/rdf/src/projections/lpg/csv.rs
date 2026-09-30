@@ -7,12 +7,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
 use super::super::json_codec::{FromJson, ToJson};
-use super::super::util::canonical_json_bounded;
 use super::super::{
-    ProjectionArtifactSink, ProjectionError, ProjectionLimits, ProjectionPackage,
-    ProjectionPackageSink, ProjectionTerm,
+    ProjectionArtifactSink, ProjectionError, ProjectionPackage, ProjectionPackageSink,
+    ProjectionTerm,
 };
-use super::carrier_util::CarrierManifest;
+use super::carrier_util::{
+    json_string, parse_json, read_manifest, require_canonical_package, required_artifact,
+    validate_package_bounds, write_manifest,
+};
 use super::mapping::{LpgProjection, project_lpg, project_lpg_with_progress};
 use super::model::{
     LpgAnnotation, LpgConfig, LpgEdge, LpgGraph, LpgLabel, LpgNode, LpgProperty, LpgReifier,
@@ -28,7 +30,6 @@ use purrdf_core::{DatasetView, LossLedger};
 
 const GENERIC_PROFILE: &str = "purrdf-lpg-csv";
 const NEO4J_PROFILE: &str = "purrdf-lpg-neo4j-admin-csv";
-const PROFILE_VERSION: u32 = 1;
 
 const GENERIC_MANIFEST: &str = "manifest.json";
 const GENERIC_NODES: &str = "nodes.csv";
@@ -227,7 +228,7 @@ pub fn read_lpg_csv(
         GENERIC_SIDEBAND,
     )?;
     let graph = LpgGraph {
-        schema_version: manifest.lpg_schema_version,
+        schema_version: manifest,
         nodes,
         edges,
         reifiers,
@@ -467,7 +468,7 @@ pub fn read_neo4j_csv(
         NEO4J_SIDEBAND,
     )?;
     let graph = LpgGraph {
-        schema_version: manifest.lpg_schema_version,
+        schema_version: manifest,
         nodes,
         edges,
         reifiers,
@@ -495,39 +496,6 @@ pub fn read_neo4j_csv(
     Ok(graph)
 }
 
-fn write_manifest(
-    profile: &str,
-    graph: &LpgGraph,
-    config: &LpgConfig,
-) -> Result<Vec<u8>, ProjectionError> {
-    canonical_json_bounded(
-        &CarrierManifest {
-            profile: profile.to_owned(),
-            profile_version: PROFILE_VERSION,
-            lpg_schema_version: graph.schema_version,
-        },
-        config.limits(),
-        "LPG CSV manifest",
-    )
-}
-
-fn read_manifest(
-    bytes: &[u8],
-    profile: &str,
-    config: &LpgConfig,
-    path: &str,
-) -> Result<CarrierManifest, ProjectionError> {
-    let manifest: CarrierManifest = parse_json(bytes, config, "LPG CSV manifest", path)?;
-    if manifest.profile != profile || manifest.profile_version != PROFILE_VERSION {
-        return Err(ProjectionError::integrity(format!(
-            "manifest identifies profile {:?} version {}; expected {profile:?} version {PROFILE_VERSION}",
-            manifest.profile, manifest.profile_version
-        ))
-        .at_path(path));
-    }
-    Ok(manifest)
-}
-
 fn encode_generic_nodes<S, O>(
     output: &mut LpgArtifactWriter<'_, S, O>,
     graph: &LpgGraph,
@@ -543,9 +511,9 @@ where
             &mut writer,
             [
                 node.id.clone(),
-                json_cell(&node.identity, config, "LPG node identity")?,
-                json_cell(&node.labels, config, "LPG node labels")?,
-                json_cell(&node.properties, config, "LPG node properties")?,
+                json_string(&node.identity, config, "LPG node identity")?,
+                json_string(&node.labels, config, "LPG node labels")?,
+                json_string(&node.properties, config, "LPG node properties")?,
             ],
             GENERIC_NODES,
         )?;
@@ -571,7 +539,7 @@ where
                 edge.source.clone(),
                 edge.target.clone(),
                 edge.edge_type.clone(),
-                json_cell(&edge.rdf, config, "LPG edge RDF sideband")?,
+                json_string(&edge.rdf, config, "LPG edge RDF sideband")?,
             ],
             GENERIC_EDGES,
         )?;
@@ -650,7 +618,7 @@ where
             [
                 "named-graph".to_owned(),
                 id,
-                json_cell(graph_name, config, "named graph")?,
+                json_string(graph_name, config, "named graph")?,
             ],
             path,
         )?;
@@ -661,7 +629,7 @@ where
             [
                 "reifier".to_owned(),
                 row.id.clone(),
-                json_cell(row, config, "LPG reifier")?,
+                json_string(row, config, "LPG reifier")?,
             ],
             path,
         )?;
@@ -672,7 +640,7 @@ where
             [
                 "annotation".to_owned(),
                 row.id.clone(),
-                json_cell(row, config, "LPG annotation")?,
+                json_string(row, config, "LPG annotation")?,
             ],
             path,
         )?;
@@ -786,10 +754,10 @@ where
     for node in nodes {
         let mut record = vec![
             node.id.clone(),
-            json_cell(&node.identity, config, "Neo4j node identity")?,
+            json_string(&node.identity, config, "Neo4j node identity")?,
             label_cell.clone(),
-            json_cell(&node.labels, config, "Neo4j node labels")?,
-            json_cell(&node.properties, config, "Neo4j node properties")?,
+            json_string(&node.labels, config, "Neo4j node labels")?,
+            json_string(&node.properties, config, "Neo4j node properties")?,
         ];
         for iri in property_columns.values() {
             record.push(native_property_cell(&node.properties, iri, config)?);
@@ -962,7 +930,7 @@ pub(super) fn native_property_cell(
     if values.is_empty() {
         Ok(String::new())
     } else {
-        json_cell(&values, config, "Neo4j native property values")
+        json_string(&values, config, "Neo4j native property values")
     }
 }
 
@@ -986,7 +954,7 @@ where
                 edge.source.clone(),
                 edge.target.clone(),
                 token.to_owned(),
-                json_cell(&edge.rdf, config, "Neo4j relationship RDF sideband")?,
+                json_string(&edge.rdf, config, "Neo4j relationship RDF sideband")?,
             ],
             path,
         )?;
@@ -1257,16 +1225,7 @@ fn row_path(path: &str, zero_based_record: usize) -> String {
     format!("{path}:{}", zero_based_record + 2)
 }
 
-fn json_cell<T: ToJson + ?Sized>(
-    value: &T,
-    config: &LpgConfig,
-    description: &str,
-) -> Result<String, ProjectionError> {
-    String::from_utf8(canonical_json_bounded(value, config.limits(), description)?).map_err(
-        |error| ProjectionError::integrity(format!("JSON encoder emitted non-UTF-8: {error}")),
-    )
-}
-
+/// A JSON cell's value: [`parse_json`] of the cell text.
 fn parse_json_cell<T: FromJson + ToJson>(
     value: &str,
     config: &LpgConfig,
@@ -1274,84 +1233,6 @@ fn parse_json_cell<T: FromJson + ToJson>(
     path: &str,
 ) -> Result<T, ProjectionError> {
     parse_json(value.as_bytes(), config, description, path)
-}
-
-fn parse_json<T: FromJson + ToJson>(
-    bytes: &[u8],
-    config: &LpgConfig,
-    description: &str,
-    path: &str,
-) -> Result<T, ProjectionError> {
-    if bytes.len() > config.limits().max_artifact_bytes() {
-        return Err(ProjectionError::limit(format!(
-            "{description} exceeds the per-artifact byte limit"
-        ))
-        .at_path(path));
-    }
-    let value: T = super::super::json_codec::from_slice(bytes).map_err(|error| {
-        ProjectionError::syntax(format!("parse {description} JSON: {error}")).at_path(path)
-    })?;
-    let canonical = canonical_json_bounded(&value, config.limits(), description)?;
-    if canonical != bytes {
-        return Err(ProjectionError::syntax(format!(
-            "{description} JSON is not in canonical PurRDF form"
-        ))
-        .at_path(path));
-    }
-    Ok(value)
-}
-
-fn required_artifact<'a>(
-    package: &'a ProjectionPackage,
-    path: &str,
-) -> Result<&'a [u8], ProjectionError> {
-    package
-        .get(path)
-        .ok_or_else(|| ProjectionError::package("required artifact is missing").at_path(path))
-}
-
-fn validate_package_bounds(
-    package: &ProjectionPackage,
-    limits: ProjectionLimits,
-) -> Result<(), ProjectionError> {
-    if package.len() > limits.max_artifacts() {
-        return Err(ProjectionError::limit(format!(
-            "package has {} artifacts; reader limit is {}",
-            package.len(),
-            limits.max_artifacts()
-        )));
-    }
-    if package.total_bytes() > limits.max_total_bytes()
-        || package.archive_bytes() > limits.max_archive_bytes()
-    {
-        return Err(ProjectionError::limit(
-            "package exceeds the configured total or archive byte limit",
-        ));
-    }
-    for (path, bytes) in package.artifacts() {
-        if bytes.len() > limits.max_artifact_bytes() {
-            return Err(ProjectionError::limit(format!(
-                "artifact is {} bytes; reader limit is {}",
-                bytes.len(),
-                limits.max_artifact_bytes()
-            ))
-            .at_path(path));
-        }
-    }
-    Ok(())
-}
-
-fn require_canonical_package(
-    actual: &ProjectionPackage,
-    canonical: &ProjectionPackage,
-    profile: &str,
-) -> Result<(), ProjectionError> {
-    if !actual.artifacts().eq(canonical.artifacts()) {
-        return Err(ProjectionError::syntax(format!(
-            "{profile} package is valid but not in canonical PurRDF form"
-        )));
-    }
-    Ok(())
 }
 
 struct CsvRecordBudget {
@@ -1405,6 +1286,7 @@ mod tests {
 
     use super::*;
     use crate::lift_lpg;
+    use crate::projections::ProjectionLimits;
 
     const TYPE: &str = "http://example.org/type";
 
@@ -1480,6 +1362,39 @@ mod tests {
             }),
         )
         .expect("replacement package")
+    }
+
+    /// The manifest is read by the carrier reader every LPG profile shares, so
+    /// its refusals carry that reader's wording: a manifest with a space the
+    /// canonical form does not write is "not in canonical PurRDF form", and
+    /// one that is not JSON fails to parse; the canonical manifest reads.
+    #[test]
+    fn manifest_refusals_use_the_shared_carrier_wording() {
+        let config = test_config(1_000);
+        let projected = project_lpg_csv(fixture().as_ref(), &config).expect("project CSV");
+        let manifest = projected.package.get(GENERIC_MANIFEST).expect("manifest");
+        let mut padded = manifest.to_vec();
+        padded.insert(1, b' ');
+        let error = read_lpg_csv(
+            &replace_artifact(&projected.package, GENERIC_MANIFEST, &padded),
+            &config,
+        )
+        .expect_err("a non-canonical manifest is refused");
+        assert_eq!(
+            error.message(),
+            "LPG carrier manifest is not in canonical PurRDF form"
+        );
+        let error = read_lpg_csv(
+            &replace_artifact(&projected.package, GENERIC_MANIFEST, b"{"),
+            &config,
+        )
+        .expect_err("a manifest that is not JSON is refused");
+        assert!(
+            error.message().starts_with("parse LPG carrier manifest: "),
+            "{}",
+            error.message()
+        );
+        assert!(read_lpg_csv(&projected.package, &config).is_ok());
     }
 
     #[test]
