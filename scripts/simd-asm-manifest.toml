@@ -693,7 +693,7 @@ summary = "`Lexer::cur` / `Lexer::peek`, an ASCII fast path that decodes only a 
 
 [[site]]
 id = "rdf.escape-scan"
-summary = "`ser_model::escape_iri` / `escape_literal`: one chunked scan for the next byte that can begin an escape, bulk copies of the runs between"
+summary = "the RDF/XML and TriX writers' escapes, `iri_escape::escape` and `literal_escape::escape` over the XML carrier: one chunked scan for the next byte that can begin an escape, bulk copies of the runs between"
 
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v23.
   [[site.measure]]
@@ -785,8 +785,8 @@ summary = "`ser_model::escape_iri` / `escape_literal`: one chunked scan for the 
   [[site.measure]]
   label = "literal scan sse2"
   configs = ["x86_64"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::native_codecs::ser_model::find_first_literal_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::literal_escape::find_first_xml_carrier_escape"
   min_vector_ops = 6
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -796,8 +796,8 @@ summary = "`ser_model::escape_iri` / `escape_literal`: one chunked scan for the 
   [[site.measure]]
   label = "literal scan avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::native_codecs::ser_model::find_first_literal_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::literal_escape::find_first_xml_carrier_escape"
   min_vector_ops = 5
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -807,8 +807,8 @@ summary = "`ser_model::escape_iri` / `escape_literal`: one chunked scan for the 
   [[site.measure]]
   label = "literal scan avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::native_codecs::ser_model::find_first_literal_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::literal_escape::find_first_xml_carrier_escape"
   min_vector_ops = 2
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -818,8 +818,8 @@ summary = "`ser_model::escape_iri` / `escape_literal`: one chunked scan for the 
   [[site.measure]]
   label = "literal scan neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::native_codecs::ser_model::find_first_literal_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::literal_escape::find_first_xml_carrier_escape"
   min_vector_ops = 5
   require_mnemonics = ["cmeq .16b", "cmhi .16b"]
   max_fma = 0
@@ -829,8 +829,8 @@ summary = "`ser_model::escape_iri` / `escape_literal`: one chunked scan for the 
   [[site.measure]]
   label = "literal scan scalar"
   configs = ["wasm32"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::native_codecs::ser_model::find_first_literal_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::literal_escape::find_first_xml_carrier_escape"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -839,8 +839,8 @@ summary = "`ser_model::escape_iri` / `escape_literal`: one chunked scan for the 
   [[site.measure]]
   label = "literal scan simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::native_codecs::ser_model::find_first_literal_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::literal_escape::find_first_xml_carrier_escape"
   min_vector_ops = 4
   require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
   max_fma = 0
@@ -850,8 +850,8 @@ summary = "`ser_model::escape_iri` / `escape_literal`: one chunked scan for the 
   [[site.measure]]
   label = "literal"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::native_codecs::ser_model::escape_literal"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::literal_escape::escape"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -2177,7 +2177,7 @@ summary = "the pack triples `(?,p,o)` access path (`partition_rows`: the shorter
 
 [[site]]
 id = "core.canon-escape"
-summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-Quads escapes over `purrdf_lex::iri_escape` and the `Canonical` carrier of `purrdf_lex::literal_escape`: one chunked scan per value, bulk copies of the clean runs"
+summary = "the RDFC-1.0 N-Quads writer's terms, `term_syntax::write_iri` / `write_literal` over `purrdf_lex::iri_escape` and the `Canonical` carrier of `purrdf_lex::literal_escape`: one chunked scan per value, bulk copies of the clean runs"
 
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v23.
   [[site.measure]]
@@ -2259,8 +2259,8 @@ summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-
   [[site.measure]]
   label = "iri"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::ir::canon::write_iri_escaped"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::term_syntax::write_iri"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -2334,8 +2334,8 @@ summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-
   [[site.measure]]
   label = "literal"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::ir::canon::write_literal_escaped"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::term_syntax::write_literal"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -2764,7 +2764,7 @@ summary = "`chase::chase_until`, the chase fixpoint"
 
 [[site]]
 id = "entail.escape"
-summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inlined into `write_leaf_surface`), delegated to the canonical N-Quads writers"
+summary = "the entailment engine's term surfaces, spelled by `term_syntax::write_iri` / `write_literal`"
 
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v23.
   [[site.measure]]
@@ -2846,8 +2846,8 @@ summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inl
   [[site.measure]]
   label = "iri"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_entail"
-  symbol = "purrdf_entail::engine::write_iri_escaped"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::term_syntax::write_iri"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -5408,7 +5408,7 @@ summary = "`topology::relate::relate` and its pairwise `segment::intersect`"
 
 [[site]]
 id = "geo.json-write-string"
-summary = "`json::write_string`, the GeoJSON writer's strings: the escape law in its `ShortForms` spelling"
+summary = "the GeoJSON writer's strings through `purrdf_lex::json::write_compact`: the escape law in its `ShortForms` spelling"
 
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v9.
   [[site.measure]]
@@ -5479,20 +5479,20 @@ summary = "`json::write_string`, the GeoJSON writer's strings: the escape law in
   [[site.measure]]
   label = "call site"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_geo"
-  symbol = "purrdf_geo::json::write_string"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json::write_compact"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
 
 [[site]]
 id = "gts.cbor-writer"
-summary = "the GTS canonical CBOR writer (`wire::Canonical` serialization)"
+summary = "the GTS canonical CBOR writer (`purrdf_lex::cbor::canonical_into`, RFC 8949 core deterministic encoding)"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_gts"
-  symbol = "<purrdf_gts::wire::Canonical as serde_core::ser::Serialize>::serialize"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::cbor::canonical_into"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
