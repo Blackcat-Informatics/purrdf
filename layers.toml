@@ -402,6 +402,7 @@ deps = [
     "purrdf-cdt",
     "purrdf-core",
     "purrdf-entail",
+    "purrdf-gts",
     "purrdf-iri",
     "purrdf-sparql-algebra",
     "purrdf-sparql-eval",

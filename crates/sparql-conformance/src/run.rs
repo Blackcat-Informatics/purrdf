@@ -221,19 +221,23 @@ pub fn load_dataset(case: &SparqlTestCase) -> Result<Arc<RdfDataset>, String> {
 /// The native media type for a data file, by extension. Most fixtures are Turtle,
 /// but the RDF-1.2 eval-triple-term tests carry `.trig` quad data (GRAPH blocks),
 /// which the Turtle codec rejects.
-fn data_media_type(path: &std::path::Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("trig") => "application/trig",
-        Some("nq") => "application/n-quads",
-        Some("nt") => "application/n-triples",
-        Some("rdf") => "application/rdf+xml",
-        _ => "text/turtle",
-    }
+///
+/// The extension table is `purrdf_gts::files::media_type_for_path`; this keeps
+/// its answer where it names a native RDF syntax the harness feeds to
+/// `purrdf::parse_dataset` (TriG, N-Quads, N-Triples, RDF/XML) and routes
+/// everything else to Turtle.
+pub(crate) fn data_media_type(path: &std::path::Path) -> &'static str {
+    let guessed = purrdf_gts::files::media_type_for_path(path);
+    [
+        purrdf::NativeRdfFormat::TriG,
+        purrdf::NativeRdfFormat::NQuads,
+        purrdf::NativeRdfFormat::NTriples,
+        purrdf::NativeRdfFormat::RdfXml,
+    ]
+    .into_iter()
+    .map(purrdf::NativeRdfFormat::media_type)
+    .find(|media_type| *media_type == guessed)
+    .unwrap_or_else(|| purrdf::NativeRdfFormat::Turtle.media_type())
 }
 
 /// The per-file base IRI a `qt:data`/`qt:graphData` Turtle file is parsed

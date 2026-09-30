@@ -238,7 +238,7 @@ fn compare_eval(case: &SparqlTestCase, result: &SparqlResult, ordered: bool) -> 
         (ExpectedResult::Graph(path), SparqlResult::Graph(actual)) => {
             let expected_bytes =
                 std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-            let media = media_type_of(path);
+            let media = crate::run::data_media_type(path);
             let expected = purrdf::parse_dataset(&expected_bytes, media, None)
                 .map_err(|e| format!("parse expected graph {}: {e}", path.display()))?;
             let actual_canon = purrdf_core::canonicalize(actual).nquads;
@@ -455,16 +455,6 @@ fn read_boolean(path: &Path, json: bool) -> Result<bool, String> {
         purrdf_sparql_results::from_xml_boolean(&bytes)
     }
     .map_err(|e| format!("parse expected boolean {}: {e}", path.display()))
-}
-
-/// Map a result file's extension to a native RDF media type.
-fn media_type_of(path: &Path) -> &'static str {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("nt") => "application/n-triples",
-        Some("nq") => "application/n-quads",
-        Some("rdf") => "application/rdf+xml",
-        _ => "text/turtle",
-    }
 }
 
 #[cfg(test)]

@@ -429,7 +429,7 @@ fn resolve_sources(sources: &[&Path]) -> Result<Vec<(PathBuf, String)>, String> 
 /// slice catalog, the slice-artifact blob rows of the Python binding and the
 /// slice RDF query loader all call it. The RDF entries name the media types the
 /// native codecs register (`text/turtle`, `application/n-triples`,
-/// `application/n-quads`, `application/trig`); an extension it does not know
+/// `application/n-quads`, `application/trig`, `application/rdf+xml`); an extension it does not know
 /// maps to `application/octet-stream`.
 #[must_use]
 pub fn media_type_for_extension(extension: &str) -> &'static str {
@@ -450,6 +450,7 @@ pub fn media_type_for_extension(extension: &str) -> &'static str {
         "nt" => "application/n-triples",
         "nq" => "application/n-quads",
         "trig" => "application/trig",
+        "rdf" => "application/rdf+xml",
         "sparql" | "rq" => "application/sparql-query",
         "md" => "text/markdown",
         "yaml" | "yml" | "cff" => "application/yaml",
@@ -1894,6 +1895,7 @@ mod media_type_tests {
             ("nt", "application/n-triples"),
             ("nq", "application/n-quads"),
             ("trig", "application/trig"),
+            ("rdf", "application/rdf+xml"),
             ("sparql", "application/sparql-query"),
             ("rq", "application/sparql-query"),
             ("md", "text/markdown"),

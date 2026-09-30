@@ -848,6 +848,7 @@ dependencies = [
  "purrdf-cdt",
  "purrdf-core",
  "purrdf-entail",
+ "purrdf-gts",
  "purrdf-hash",
  "purrdf-iri",
  "purrdf-sparql-algebra",

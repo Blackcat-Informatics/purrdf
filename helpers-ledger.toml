@@ -1288,7 +1288,7 @@ names = ['^(curie_prefix_of|namespace_and_local|split_iri_local)$']
 
 [[job]]
 id = "media-type-by-extension"
-summary = "The media type a file extension names: GTS file and tar ingest, slice artifacts and the slice RDF loader"
+summary = "The media type a file extension names: the GTS files profile (tar entries carry no media type), slice artifacts, the slice RDF loader and the SPARQL conformance data-file loaders"
 home = "purrdf_gts::files::media_type_for_extension"
 entry_points = ["purrdf_gts::files::media_type_for_path"]
 spec = "IANA media type registry; the RDF syntax types the native codecs register"
@@ -1301,7 +1301,19 @@ enforced = true
 [job.forbidden]
 constants = []
 fingerprints = []
-names = ['^(guess_media_type|infer_media_type|media_type_for|media_type_for_ext|mime_for_extension)$']
+names = [
+    '(media_?type|mime|content_?type)(_.*)?_(ext|extension|path|file|suffix|of|for|from|by)(_|$)',
+    '(^|_)(ext|extension|path|file|suffix|guess|infer|detect|sniff)(_.*)?_(media_?type|mime|content_?type)(_|$)',
+    '^(guess|infer|detect|sniff)_(media_?type|mime|content_?type)$',
+]
+
+[[job.variant]]
+symbol = "purrdf_slice::rdf_query::rdf_media_type_for_path"
+file = "crates/slice/src/rdf_query.rs"
+detector = "forbidden"
+criterion = "b"
+anchor = "purrdf_slice::rdf_query::rdf_media_type_for_path"
+reason = "A thin filter over the home: it keeps the home's answer where it names a native RDF syntax and routes everything else to Turtle, which the loader needs and the shared table cannot say. It holds no extension table."
 
 [[job]]
 id = "datalog-shortest-path"

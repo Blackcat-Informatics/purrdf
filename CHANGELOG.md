@@ -374,8 +374,11 @@ under Changed and Fixed where a longer account helps.
   public module, so the published crate builds its own unit tests.
 - **gts:** `files::media_type_for_extension` and `files::media_type_for_path`,
   the one extension-to-media-type table (case-insensitive; the RDF, SPARQL,
-  Markdown, YAML, HTML, image and archive types), behind GTS file ingest, the
-  slice catalog, the Python slice-artifact rows and the slice RDF loader.
+  Markdown, YAML, HTML, image and archive types; `rdf` is
+  `application/rdf+xml`), behind the GTS files profile, the slice catalog, the
+  Python slice-artifact rows, the slice RDF loader and the SPARQL conformance
+  harness's data-file loaders. Tar ingest is not one of them: tar entries carry
+  no media type.
   `purrdf-slice` gains a direct `purrdf-gts` edge.
 - **iri:** `contract_where`, CURIE and prefixed-name compaction under the
   longest namespace whose split the caller's name grammar admits (`contract`
@@ -1808,12 +1811,13 @@ under Changed and Fixed where a longer account helps.
   through `purrdf_xsd::rfc3339`; accepted spellings, instants and error
   messages are unchanged.
 - **gts, slice, python:** file media types come from the one extension table,
-  matched case-insensitively. GTS file and tar ingest now record the RDF,
+  matched case-insensitively. The GTS files profile now records the RDF,
   SPARQL, Markdown, YAML and CFF types (`.ttl` is `text/turtle`, where it was
   `application/octet-stream`); the slice catalog and Python artifact rows gain
   the HTML, XML, text, image, PDF, archive and TriG types; a bare file named
-  `ttl` or `json` with no extension is `application/octet-stream`. The slice
-  RDF loader routes exactly as before.
+  `ttl` or `json` with no extension is `application/octet-stream`. Tar ingest
+  is unchanged: tar entries carry no media type. The slice RDF loader and the
+  SPARQL conformance harness's data-file loaders route exactly as before.
 - **jsonschema:** the `date-time`, `date` and `time` formats check through
   `purrdf_xsd::rfc3339`, and exact number order, equality, hashing,
   integrality and `multipleOf` compute on `purrdf_xsd::json_number::JsonNumber`

@@ -26,6 +26,8 @@ purrdf-sparql-algebra = { workspace = true }
 # both native.
 purrdf = { workspace = true }
 purrdf-core = { workspace = true }
+# The one extension-to-media-type table the data-file loaders filter.
+purrdf-gts = { workspace = true }
 # The SEP-0009 composite value space: the lexical-space grader the divergence
 # scan reads (`tests/cdt_lexical_divergence.rs`).
 purrdf-cdt = { workspace = true }
