@@ -186,6 +186,7 @@ name = "purrdf-shex"
 deps = [
     "purrdf-core",
     "purrdf-iri",
+    "purrdf-lex",
     "purrdf-xsd",
 ]
 
@@ -275,6 +276,7 @@ deps = [
     "purrdf-core",
     "purrdf-hash",
     "purrdf-iri",
+    "purrdf-lex",
     "purrdf-rdf",
     "purrdf-sparql-algebra",
 ]
@@ -286,6 +288,7 @@ deps = [
     "purrdf-datalog",
     "purrdf-hash",
     "purrdf-iri",
+    "purrdf-lex",
     "purrdf-rdf",
     "purrdf-slice",
     "purrdf-sparql-algebra",

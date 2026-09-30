@@ -839,6 +839,7 @@ dependencies = [
  "purrdf-hash",
  "purrdf-iri",
  "purrdf-jsonschema",
+ "purrdf-lex",
  "purrdf-rdf",
  "purrdf-slice",
  "purrdf-sparql-algebra",
@@ -859,6 +860,7 @@ version = "2.0.2"
 dependencies = [
  "purrdf-core",
  "purrdf-iri",
+ "purrdf-lex",
  "purrdf-rdf",
  "purrdf-testkit",
  "purrdf-xsd",
@@ -874,6 +876,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-hash",
  "purrdf-iri",
+ "purrdf-lex",
  "purrdf-rdf",
  "purrdf-sparql-algebra",
  "purrdf-testkit",

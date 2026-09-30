@@ -1253,7 +1253,9 @@ fn emit_path_node(
     }
 }
 
-/// Emit an RDF collection of sub-paths with `head_label` as the first cell.
+/// Emit an RDF collection of sub-paths with `head_label` as the first cell,
+/// through [`build_rdf_list`](purrdf_core::build_rdf_list). Every sub-path's
+/// structure is emitted first, then the cells, labelled in that order.
 fn emit_path_list(
     builder: &mut RdfDatasetBuilder,
     head_label: &str,
@@ -1261,33 +1263,32 @@ fn emit_path_list(
     root: &str,
     counter: &mut usize,
 ) {
-    let mut cell = head_label.to_owned();
-    for (i, part) in parts.iter().enumerate() {
-        let object = path_object(builder, part, root, counter);
-        push_triple(
-            builder,
-            RdfTerm::blank_node(cell.clone()),
-            rdf::FIRST,
-            object,
-        );
-        if i + 1 == parts.len() {
-            push_triple(
-                builder,
-                RdfTerm::blank_node(cell.clone()),
-                rdf::REST,
-                RdfTerm::iri(rdf::NIL),
-            );
-        } else {
-            let next = next_path_label(root, counter);
-            push_triple(
-                builder,
-                RdfTerm::blank_node(cell),
-                rdf::REST,
-                RdfTerm::blank_node(next.clone()),
-            );
-            cell = next;
-        }
-    }
+    let members: Vec<RdfTerm> = parts
+        .iter()
+        .map(|part| path_object(builder, part, root, counter))
+        .collect();
+    let vocab = purrdf_core::ListVocab {
+        first: RdfTerm::iri(rdf::FIRST),
+        rest: RdfTerm::iri(rdf::REST),
+        nil: RdfTerm::iri(rdf::NIL),
+    };
+    purrdf_core::build_rdf_list(
+        members,
+        &vocab,
+        |index| {
+            RdfTerm::blank_node(if index == 0 {
+                head_label.to_owned()
+            } else {
+                next_path_label(root, counter)
+            })
+        },
+        |subject, predicate, object| {
+            let RdfTerm::Iri(predicate) = predicate else {
+                unreachable!("rdf:first and rdf:rest are IRIs")
+            };
+            push_triple(builder, subject, &predicate, object);
+        },
+    );
 }
 
 // ── Round-trip helpers ────────────────────────────────────────────────────────

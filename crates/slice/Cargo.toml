@@ -47,6 +47,9 @@ purrdf-sparql-algebra = { workspace = true }
 # implementation of that step in the workspace, since `purrdf-slice` is the only
 # library crate here that opens files. Zero-dependency foundation crate.
 purrdf-iri = { workspace = true }
+# The RDF 1.2 term syntax and literal escaper the analysis-graph Turtle writer
+# spells its literals and IRIs with.
+purrdf-lex = { workspace = true }
 # Default features (std) re-enabled; the workspace-level entry is
 # default-features = false for the wasm-clean eval path.
 sha2 = { workspace = true, default-features = true }

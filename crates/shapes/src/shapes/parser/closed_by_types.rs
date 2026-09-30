@@ -134,22 +134,11 @@ impl Parser<'_> {
         ClosedTypeIndex::from_entries(entries)
     }
 
-    /// The objects of `(subject, predicate, ?)` in the shapes graph; nothing when
-    /// the shapes graph does not intern `predicate`.
-    fn objects_of_id(
-        &self,
-        subject: TermId,
-        predicate: Option<TermId>,
-    ) -> impl Iterator<Item = TermId> + '_ {
-        predicate.into_iter().flat_map(move |predicate| {
-            quads_for_pattern_ids(
-                self.data,
-                Some(subject),
-                Some(predicate),
-                None,
-                GraphFilter::AnyGraph,
-            )
-            .map(|quad| quad.o)
+    /// The distinct objects of `(subject, predicate, ?)` in the shapes graph;
+    /// nothing when the shapes graph does not intern `predicate`.
+    fn objects_of_id(&self, subject: TermId, predicate: Option<TermId>) -> Vec<TermId> {
+        predicate.map_or_else(Vec::new, |predicate| {
+            ::purrdf::DatasetView::objects(self.data, subject, predicate, ::purrdf::GraphMatch::Any)
         })
     }
 

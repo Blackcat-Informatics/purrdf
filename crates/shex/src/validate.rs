@@ -41,8 +41,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use purrdf_core::{
-    DatasetView, FastMap, FastSet, GraphMatch, RdfDataset, TermId, TermRef, TermValue,
+    DatasetView, FastMap, FastSet, GraphMatch, RdfDataset, RdfTextDirection, TermId, TermRef,
+    TermValue,
 };
+use purrdf_lex::term_syntax;
 
 use crate::ast::{Schema, SemAct, Shape, ShapeExpr, TripleExpr};
 use crate::semact::{SemActContext, SemActRegistry};
@@ -131,9 +133,6 @@ impl ResultShapeMap {
     }
 }
 
-/// `xsd:string`, the implicit datatype omitted from a literal's term syntax.
-use purrdf_xsd::datatype::XSD_STRING;
-
 /// Append `s` as a JSON string literal (serde_json handles escaping).
 fn push_json_string(out: &mut String, s: &str) {
     out.push_str(&serde_json::to_string(s).expect("a &str always serializes"));
@@ -147,17 +146,22 @@ fn status_str(status: ConformanceStatus) -> &'static str {
     }
 }
 
-/// A term in the shape-map term syntax (`<iri>` / `_:label` / Turtle literal), each
-/// triple term spelled `<< s p o >>` over [`TermValue::try_write_nested`]'s work list.
+/// A term in the shape-map term syntax: the RDF 1.2 canonical term form of
+/// [`purrdf_lex::term_syntax`] (`<iri>`, `_:label`, a literal with its language
+/// tag and base direction), each triple term spelled `<<( s p o )>>` over
+/// [`TermValue::try_write_nested`]'s work list. [`crate::shapemap::parse_shape_map`]
+/// reads every spelling this writes back to the same term.
 pub(crate) fn node_term_string(value: &TermValue) -> String {
     let mut out = String::new();
+    let open = format!("{} ", term_syntax::TRIPLE_TERM_OPEN);
+    let close = format!(" {}", term_syntax::TRIPLE_TERM_CLOSE);
     let written = value.try_write_nested(
         &mut out,
-        "<< ",
+        &open,
         " ",
-        " >>",
+        &close,
         |out, leaf| {
-            out.push_str(&leaf_term_string(leaf));
+            write_leaf_term(leaf, out);
             Ok::<(), std::convert::Infallible>(())
         },
         |out, text| {
@@ -171,27 +175,22 @@ pub(crate) fn node_term_string(value: &TermValue) -> String {
 }
 
 /// [`node_term_string`] for a term that is not a triple term.
-fn leaf_term_string(value: &TermValue) -> String {
+fn write_leaf_term(value: &TermValue, out: &mut String) {
     match value {
-        TermValue::Iri(iri) => format!("<{iri}>"),
-        TermValue::Blank { label, .. } => format!("_:{label}"),
+        TermValue::Iri(iri) => term_syntax::write_iri(iri, out),
+        TermValue::Blank { label, .. } => term_syntax::write_blank(label, out),
         TermValue::Literal {
             lexical_form,
             datatype,
             language,
-            ..
-        } => {
-            let mut lit = format!("\"{}\"", turtle_escape(lexical_form));
-            if let Some(language) = language {
-                lit.push('@');
-                lit.push_str(language);
-            } else if datatype != XSD_STRING {
-                lit.push_str("^^<");
-                lit.push_str(datatype);
-                lit.push('>');
-            }
-            lit
-        }
+            direction,
+        } => term_syntax::write_literal(
+            lexical_form,
+            datatype,
+            language.as_deref(),
+            direction.map(RdfTextDirection::as_str),
+            out,
+        ),
         TermValue::Triple { .. } => unreachable!("a triple term is written from its parts"),
     }
 }
@@ -201,26 +200,12 @@ pub(crate) fn shape_term_string(shape: &ShapeSelector) -> String {
     match shape {
         ShapeSelector::Start => "START".to_owned(),
         ShapeSelector::Label(label) if label.starts_with("_:") => label.clone(),
-        ShapeSelector::Label(label) => format!("<{label}>"),
-    }
-}
-
-/// Escape a literal's lexical form for a double-quoted Turtle string.
-fn turtle_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            _ => out.push(c),
+        ShapeSelector::Label(label) => {
+            let mut out = String::new();
+            term_syntax::write_iri(label, &mut out);
+            out
         }
     }
-    out
 }
 
 /// A hook resolving an `EXTERNAL` shape declaration's label to its

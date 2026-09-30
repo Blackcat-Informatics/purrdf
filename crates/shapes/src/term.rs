@@ -20,8 +20,13 @@
 //! - language-tagged literal → `"lex"@tag` (plus `--ltr`/`--rtl` when directional)
 //! - quoted triple → `<<( <s> <p> <o> )>>`
 //!
-//! Literal lexical forms escape `\\ \" \n \r \t` plus C0 control chars as `\u00XX`,
-//! exactly as an N-Triples literal writer does.
+//! Every piece is spelled by [`purrdf_lex::term_syntax`], the workspace's one
+//! RDF 1.2 canonical term form: an IRI (a literal's datatype included) rides
+//! through [`purrdf_lex::iri_escape`], and a lexical form through the
+//! [`Canonical`](purrdf_lex::literal_escape::Carrier::Canonical) carrier of
+//! [`purrdf_lex::literal_escape`] (`ECHAR` for `" \\ LF CR TAB BS FF`, `\u00XX`
+//! for every other C0 control and DEL). A literal with no language tag and a
+//! datatype other than `xsd:string` keeps its `^^<datatype>` suffix.
 
 use crate::data_view::ShaclRead;
 use purrdf_core::{Nested, TermBox, try_fold_nested, visit_nested};
@@ -34,6 +39,10 @@ use ::purrdf::blank_label::ESCAPE_MARKER;
 use ::purrdf::{BlankScope, RdfLiteral, TermRef};
 use ::purrdf::{RdfTextDirection, TermId, TermValue};
 use purrdf_core::SmallVec;
+use purrdf_lex::iri_escape::{self, find_first_candidate, is_iriref_escape_required};
+use purrdf_lex::literal_escape::{self, Carrier, find_first_literal_escape};
+use purrdf_lex::term_syntax::{self, TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN};
+use purrdf_lex::text_out::TextOut;
 
 use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
 use purrdf_xsd::datatype::XSD_STRING;
@@ -258,7 +267,10 @@ impl<D: ShaclRead + ?Sized> TermResolve for D {
 #[derive(Clone, Copy)]
 enum CanonicalPart<'a> {
     Raw(&'a [u8]),
-    Escaped(&'a [u8]),
+    /// A literal's lexical form, escaped by [`literal_escape`]'s canonical carrier.
+    Escaped(&'a str),
+    /// An `IRIREF` body, escaped by [`iri_escape`].
+    Iri(&'a str),
     Term(&'a Term),
     /// An interned term, expanded through the cursor's resolver.
     Id(TermId),
@@ -288,11 +300,8 @@ struct CanonicalBytes<'a> {
     /// The dataset behind [`CanonicalPart::Id`], absent for an owned-term cursor.
     resolver: Option<&'a dyn TermResolve>,
     parts: SmallVec<[CanonicalPart<'a>; 96]>,
-    /// `\uXXXX` (6) and the envelope's `_` plus six hex digits (7) are the two
-    /// widest replacements a single input character expands to.
-    pending_escape: [u8; 7],
-    pending_len: u8,
-    pending_pos: u8,
+    /// The replacement bytes of the one escaped scalar being written.
+    pending: Pending,
     /// The scope digits of the envelope being written.
     digits: [u8; 10],
     digits_len: u8,
@@ -314,9 +323,7 @@ impl<'a> CanonicalBytes<'a> {
         Self {
             resolver: None,
             parts: SmallVec::new(),
-            pending_escape: [0; 7],
-            pending_len: 0,
-            pending_pos: 0,
+            pending: Pending::default(),
             digits: [0; 10],
             digits_len: 0,
             digits_pos: 0,
@@ -349,61 +356,113 @@ impl<'a> CanonicalBytes<'a> {
         bytes
     }
 
-    #[inline]
-    fn queue_escape(&mut self, replacement: &[u8]) {
-        self.pending_escape[..replacement.len()].copy_from_slice(replacement);
-        self.pending_len = u8::try_from(replacement.len()).expect("escape fits in seven bytes");
-        self.pending_pos = 0;
-    }
-
-    #[inline]
-    fn queue_control_escape(&mut self, byte: u8) {
-        self.pending_escape = [b'\\', b'u', b'0', b'0', 0, 0, 0];
-        write_upper_hex(&[byte], &mut self.pending_escape[4..6]);
-        self.pending_len = 6;
-        self.pending_pos = 0;
-    }
-
     /// Queue `_` plus the six uppercase hex digits of `scalar` — the envelope
     /// body's encoding of a character that is not an ASCII letter or digit.
     #[inline]
     fn queue_envelope_escape(&mut self, scalar: u32) {
-        self.pending_escape = [b'_', 0, 0, 0, 0, 0, 0];
+        let mut digits = [0_u8; 6];
         // A scalar value is at most `0x10FFFF`: its low three bytes are all of it.
-        write_upper_hex(&scalar.to_be_bytes()[1..], &mut self.pending_escape[1..7]);
-        self.pending_len = 7;
-        self.pending_pos = 0;
+        let digits =
+            purrdf_hash::hex::encode_upper_to_slice(&scalar.to_be_bytes()[1..], &mut digits)
+                .expect("three bytes render in six digits");
+        self.pending.clear();
+        self.pending.push('_');
+        self.pending.push_str(digits);
+    }
+
+    /// Stream the next piece of the literal body `text`: a clean run whole, or
+    /// the one scalar at its head through [`literal_escape::write`].
+    ///
+    /// Every stop of the canonical kernel is an ASCII byte that is escaped, so
+    /// the scalar at a stop is one byte long.
+    fn advance_literal(&mut self, text: &'a str) {
+        match find_first_literal_escape(text.as_bytes()) {
+            Some(0) => {
+                let (head, rest) = text.split_at(1);
+                self.parts.push(CanonicalPart::Escaped(rest));
+                self.pending.clear();
+                literal_escape::write(head, Carrier::Canonical, &mut self.pending);
+            }
+            stop => {
+                let (run, rest) = text.split_at(stop.unwrap_or(text.len()));
+                self.parts.push(CanonicalPart::Escaped(rest));
+                self.parts.push(CanonicalPart::Raw(run.as_bytes()));
+            }
+        }
+    }
+
+    /// Stream the next piece of the `IRIREF` body `text`: a clean run whole, or
+    /// the one scalar at its head, through [`iri_escape::push_escaped`] when the
+    /// law escapes it.
+    fn advance_iri(&mut self, text: &'a str) {
+        match find_first_candidate(text.as_bytes()) {
+            Some(0) => {
+                let scalar = text.chars().next().expect("a candidate begins a scalar");
+                let (head, rest) = text.split_at(scalar.len_utf8());
+                self.parts.push(CanonicalPart::Iri(rest));
+                if is_iriref_escape_required(scalar) {
+                    self.pending.clear();
+                    iri_escape::push_escaped(head, &mut self.pending);
+                } else {
+                    self.parts.push(CanonicalPart::Raw(head.as_bytes()));
+                }
+            }
+            stop => {
+                let (run, rest) = text.split_at(stop.unwrap_or(text.len()));
+                self.parts.push(CanonicalPart::Iri(rest));
+                self.parts.push(CanonicalPart::Raw(run.as_bytes()));
+            }
+        }
+    }
+
+    /// Push `<iri>` (the parts are a stack, so in reverse).
+    fn push_iri(&mut self, iri: &'a str) {
+        self.parts.push(CanonicalPart::Raw(b">"));
+        self.parts.push(CanonicalPart::Iri(iri));
+        self.parts.push(CanonicalPart::Raw(b"<"));
+    }
+
+    /// Push `<<( `, the subject, ` <predicate> `, the object and ` )>>` (in
+    /// reverse, the parts being a stack).
+    fn push_triple(
+        &mut self,
+        subject: CanonicalPart<'a>,
+        predicate: &'a str,
+        object: CanonicalPart<'a>,
+    ) {
+        self.parts
+            .push(CanonicalPart::Raw(TRIPLE_TERM_CLOSE.as_bytes()));
+        self.parts.push(CanonicalPart::Raw(b" "));
+        self.parts.push(object);
+        self.parts.push(CanonicalPart::Raw(b" "));
+        self.push_iri(predicate);
+        self.parts.push(CanonicalPart::Raw(b" "));
+        self.parts.push(subject);
+        self.parts.push(CanonicalPart::Raw(b" "));
+        self.parts
+            .push(CanonicalPart::Raw(TRIPLE_TERM_OPEN.as_bytes()));
     }
 
     fn expand_term(&mut self, term: &'a Term) {
         match term {
-            Term::NamedNode(node) => {
-                self.parts.push(CanonicalPart::Raw(b">"));
-                self.parts.push(CanonicalPart::Raw(node.0.as_bytes()));
-                self.parts.push(CanonicalPart::Raw(b"<"));
-            }
+            Term::NamedNode(node) => self.push_iri(&node.0),
             Term::BlankNode(label) => {
                 self.parts.push(CanonicalPart::Raw(label.as_bytes()));
                 self.parts.push(CanonicalPart::Raw(b"_:"));
             }
             Term::Literal(literal) => {
                 self.push_literal(
-                    literal.lexical.as_bytes(),
+                    &literal.lexical,
                     &literal.datatype,
                     literal.language.as_deref(),
                     literal.direction,
                 );
             }
-            Term::Triple(triple) => {
-                self.parts.push(CanonicalPart::Raw(b" )>>"));
-                self.parts.push(CanonicalPart::Term(&triple.object));
-                self.parts.push(CanonicalPart::Raw(b"> "));
-                self.parts
-                    .push(CanonicalPart::Raw(triple.predicate.0.as_bytes()));
-                self.parts.push(CanonicalPart::Raw(b" <"));
-                self.parts.push(CanonicalPart::Term(&triple.subject));
-                self.parts.push(CanonicalPart::Raw(b"<<( "));
-            }
+            Term::Triple(triple) => self.push_triple(
+                CanonicalPart::Term(&triple.subject),
+                &triple.predicate.0,
+                CanonicalPart::Term(&triple.object),
+            ),
         }
     }
 
@@ -414,11 +473,7 @@ impl<'a> CanonicalBytes<'a> {
             .resolver
             .expect("an id part is only ever pushed by an id cursor");
         match dataset.resolve_id(id) {
-            TermRef::Iri(iri) => {
-                self.parts.push(CanonicalPart::Raw(b">"));
-                self.parts.push(CanonicalPart::Raw(iri.as_bytes()));
-                self.parts.push(CanonicalPart::Raw(b"<"));
-            }
+            TermRef::Iri(iri) => self.push_iri(iri),
             TermRef::Blank { label, scope } => {
                 self.push_blank(label, scope);
             }
@@ -434,20 +489,14 @@ impl<'a> CanonicalBytes<'a> {
                         unreachable!("a literal datatype must resolve to an IRI, got {other:?}")
                     }
                 };
-                self.push_literal(lexical.as_bytes(), datatype_iri, language, direction);
+                self.push_literal(lexical, datatype_iri, language, direction);
             }
             TermRef::Triple { s, p, o } => {
                 let predicate = match dataset.resolve_id(p) {
                     TermRef::Iri(iri) => iri,
                     other => unreachable!("a triple predicate must be an IRI, got {other:?}"),
                 };
-                self.parts.push(CanonicalPart::Raw(b" )>>"));
-                self.parts.push(CanonicalPart::Id(o));
-                self.parts.push(CanonicalPart::Raw(b"> "));
-                self.parts.push(CanonicalPart::Raw(predicate.as_bytes()));
-                self.parts.push(CanonicalPart::Raw(b" <"));
-                self.parts.push(CanonicalPart::Id(s));
-                self.parts.push(CanonicalPart::Raw(b"<<( "));
+                self.push_triple(CanonicalPart::Id(s), predicate, CanonicalPart::Id(o));
             }
         }
     }
@@ -490,11 +539,11 @@ impl<'a> CanonicalBytes<'a> {
         self.parts.push(CanonicalPart::Raw(b"_:"));
     }
 
-    /// The literal rendering rule [`render_literal`] states, shared by the owned
-    /// and interned arms so they cannot drift.
+    /// The bytes [`term_syntax::write_literal`] writes, as parts, shared by the
+    /// owned and interned arms so they cannot drift.
     fn push_literal(
         &mut self,
-        lexical: &'a [u8],
+        lexical: &'a str,
         datatype: &'a str,
         language: Option<&'a str>,
         direction: Option<RdfTextDirection>,
@@ -508,24 +557,63 @@ impl<'a> CanonicalBytes<'a> {
             }
             self.parts.push(CanonicalPart::Raw(language.as_bytes()));
             self.parts.push(CanonicalPart::Raw(b"\"@"));
-        } else if datatype == XSD_STRING || datatype == RDF_LANG_STRING {
+        } else if datatype == XSD_STRING {
             self.parts.push(CanonicalPart::Raw(b"\""));
         } else {
-            self.parts.push(CanonicalPart::Raw(b">"));
-            self.parts.push(CanonicalPart::Raw(datatype.as_bytes()));
-            self.parts.push(CanonicalPart::Raw(b"\"^^<"));
+            self.push_iri(datatype);
+            self.parts.push(CanonicalPart::Raw(b"\"^^"));
         }
         self.parts.push(CanonicalPart::Escaped(lexical));
         self.parts.push(CanonicalPart::Raw(b"\""));
     }
 }
 
-/// Writes the uppercase hex digits of `bytes` into `out`, which is exactly
-/// twice as long.
-#[inline]
-fn write_upper_hex(bytes: &[u8], out: &mut [u8]) {
-    purrdf_hash::hex::encode_upper_to_slice(bytes, out)
-        .expect("every escape slot is sized to two digits per byte");
+/// The replacement bytes of one escaped scalar, drained before the next part.
+///
+/// A [`TextOut`], so the escape spellings are written by their homes
+/// ([`literal_escape`], [`iri_escape`]) rather than restated here. Seven bytes
+/// hold the widest: a `\u00XX` escape (six) and the blank-node envelope's `_`
+/// plus six hex digits (seven).
+#[derive(Default)]
+struct Pending {
+    bytes: [u8; 7],
+    len: u8,
+    pos: u8,
+}
+
+impl Pending {
+    const fn clear(&mut self) {
+        self.len = 0;
+        self.pos = 0;
+    }
+
+    fn next(&mut self) -> Option<u8> {
+        (self.pos < self.len).then(|| {
+            let byte = self.bytes[usize::from(self.pos)];
+            self.pos += 1;
+            byte
+        })
+    }
+}
+
+impl std::fmt::Write for Pending {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        TextOut::push_str(self, text);
+        Ok(())
+    }
+}
+
+impl TextOut for Pending {
+    fn push_str(&mut self, text: &str) {
+        let start = usize::from(self.len);
+        let end = start + text.len();
+        self.bytes[start..end].copy_from_slice(text.as_bytes());
+        self.len = u8::try_from(end).expect("one escape fits in seven bytes");
+    }
+
+    fn push(&mut self, ch: char) {
+        TextOut::push_str(self, ch.encode_utf8(&mut [0; 4]));
+    }
 }
 
 impl Iterator for CanonicalBytes<'_> {
@@ -533,9 +621,7 @@ impl Iterator for CanonicalBytes<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if self.pending_pos < self.pending_len {
-                let byte = self.pending_escape[usize::from(self.pending_pos)];
-                self.pending_pos += 1;
+            if let Some(byte) = self.pending.next() {
                 return Some(byte);
             }
 
@@ -549,20 +635,18 @@ impl Iterator for CanonicalBytes<'_> {
                     *bytes = remaining;
                     return Some(byte);
                 }
-                CanonicalPart::Escaped(bytes) => {
-                    let Some((&byte, remaining)) = bytes.split_first() else {
-                        self.parts.pop();
-                        continue;
-                    };
-                    *bytes = remaining;
-                    match byte {
-                        b'\\' => self.queue_escape(b"\\\\"),
-                        b'\"' => self.queue_escape(b"\\\""),
-                        b'\n' => self.queue_escape(b"\\n"),
-                        b'\r' => self.queue_escape(b"\\r"),
-                        b'\t' => self.queue_escape(b"\\t"),
-                        control if control < 0x20 => self.queue_control_escape(control),
-                        other => return Some(other),
+                CanonicalPart::Escaped(text) => {
+                    let text = *text;
+                    self.parts.pop();
+                    if !text.is_empty() {
+                        self.advance_literal(text);
+                    }
+                }
+                CanonicalPart::Iri(text) => {
+                    let text = *text;
+                    self.parts.pop();
+                    if !text.is_empty() {
+                        self.advance_iri(text);
                     }
                 }
                 CanonicalPart::Term(term) => {
@@ -601,12 +685,17 @@ impl Iterator for CanonicalBytes<'_> {
 
 /// Order two IRIs by their `<iri>` renderings, from the IRI bytes alone.
 ///
-/// `None` means the answer is not decidable from the IRIs: the shorter one is a
-/// prefix of the longer and the next byte of the longer is the closing `>`, which
-/// a valid IRI cannot contain but an unchecked hand-built term can. The caller
-/// falls back to streaming both renderings, preserving exact behaviour there.
+/// `None` means the answer is not decidable from the raw bytes: either IRI holds
+/// a byte that can begin a scalar [`iri_escape`] rewrites, which a valid IRI
+/// never does but an unchecked hand-built term can. The caller falls back to
+/// streaming both renderings, preserving exact behaviour there. Otherwise the
+/// renderings are the raw bytes between `<` and `>`, and `>` sorts against a
+/// longer IRI's next byte, which is never `>` itself (it is escaped).
 #[inline]
 fn cmp_rendered_iri(left: &[u8], right: &[u8]) -> Option<Ordering> {
+    if find_first_candidate(left).is_some() || find_first_candidate(right).is_some() {
+        return None;
+    }
     let shared = left.len().min(right.len());
     match left[..shared].cmp(&right[..shared]) {
         Ordering::Equal if left.len() == right.len() => Some(Ordering::Equal),
@@ -965,32 +1054,53 @@ impl std::fmt::Display for Term {
     /// its subject next, with its predicate, its object and the closing ` )>>` held
     /// back in that order until the subject's whole nesting is written.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut out = String::new();
+        self.write_canonical(&mut out);
+        f.write_str(&out)
+    }
+}
+
+impl Term {
+    /// Append the module's rendering to `out`, every piece through
+    /// [`term_syntax`].
+    ///
+    /// A quoted triple is written over a work list: its opening `<<( ` at once, then
+    /// its subject next, with its predicate, its object and the closing ` )>>` held
+    /// back in that order until the subject's whole nesting is written.
+    fn write_canonical<W: TextOut + ?Sized>(&self, out: &mut W) {
         enum Piece<'t> {
             Term(&'t Term),
-            Text(&'t str),
+            Predicate(&'t NamedNode),
+            Close,
         }
         let mut held: Vec<Piece<'_>> = Vec::new();
         let mut next = Some(Piece::Term(self));
         while let Some(piece) = next.take().or_else(|| held.pop()) {
             match piece {
-                Piece::Text(text) => f.write_str(text)?,
-                Piece::Term(Self::NamedNode(n)) => write!(f, "<{}>", n.0)?,
-                Piece::Term(Self::BlankNode(b)) => write!(f, "_:{b}")?,
-                Piece::Term(Self::Literal(l)) => f.write_str(&render_literal(l))?,
+                Piece::Close => {
+                    out.push(' ');
+                    out.push_str(TRIPLE_TERM_CLOSE);
+                }
+                Piece::Predicate(p) => {
+                    out.push(' ');
+                    term_syntax::write_iri(&p.0, out);
+                    out.push(' ');
+                }
+                Piece::Term(Self::NamedNode(n)) => term_syntax::write_iri(&n.0, out),
+                Piece::Term(Self::BlankNode(b)) => term_syntax::write_blank(b, out),
+                Piece::Term(Self::Literal(l)) => write_literal(l, out),
                 Piece::Term(Self::Triple(t)) => {
-                    f.write_str("<<( ")?;
+                    out.push_str(TRIPLE_TERM_OPEN);
+                    out.push(' ');
                     held.extend([
-                        Piece::Text(" )>>"),
+                        Piece::Close,
                         Piece::Term(&t.object),
-                        Piece::Text("> "),
-                        Piece::Text(&t.predicate.0),
-                        Piece::Text(" <"),
+                        Piece::Predicate(&t.predicate),
                     ]);
                     next = Some(Piece::Term(&t.subject));
                 }
             }
         }
-        Ok(())
     }
 }
 
@@ -1001,42 +1111,15 @@ enum TermNode<'t> {
     Predicate(&'t NamedNode),
 }
 
-/// Render a literal per the module's rendering contract.
-fn render_literal(l: &Literal) -> String {
-    let lex = escape_literal(&l.lexical);
-    if let Some(lang) = &l.language {
-        return match l.direction {
-            Some(direction) => format!("\"{lex}\"@{lang}--{}", direction.as_str()),
-            None => format!("\"{lex}\"@{lang}"),
-        };
-    }
-    // Plain `xsd:string` (and the rare `rdf:langString` without a tag) render with
-    // NO datatype suffix.
-    if l.datatype == XSD_STRING || l.datatype == RDF_LANG_STRING {
-        return format!("\"{lex}\"");
-    }
-    format!("\"{lex}\"^^<{}>", l.datatype)
-}
-
-/// Escape a literal lexical form as the N-Triples literal writer does:
-/// `\\ \" \n \r \t` plus C0 control characters as `\u00XX`.
-fn escape_literal(s: &str) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04X}", c as u32);
-            }
-            other => out.push(other),
-        }
-    }
-    out
+/// Append a literal per the module's rendering contract: [`term_syntax::write_literal`].
+fn write_literal<W: TextOut + ?Sized>(l: &Literal, out: &mut W) {
+    term_syntax::write_literal(
+        &l.lexical,
+        &l.datatype,
+        l.language.as_deref(),
+        l.direction.map(RdfTextDirection::as_str),
+        out,
+    );
 }
 
 /// Convert a resolved IR [`TermRef`] into a native [`Term`], through triple
@@ -1212,6 +1295,40 @@ mod tests {
         assert_eq!(t.to_string(), "\"a\\\"b\\nc\\td\\\\e\\u0007f\"");
     }
 
+    /// The rendering is the canonical N-Triples form: BACKSPACE and FORM FEED as
+    /// their `ECHAR`, DEL as a `UCHAR`, the C1 block raw.
+    #[test]
+    fn literals_render_in_the_canonical_carrier() {
+        let t = Term::Literal(Literal::new_simple_literal("\u{8}\u{c}\u{7f}\u{85}"));
+        assert_eq!(t.to_string(), "\"\\b\\f\\u007F\u{85}\"");
+    }
+
+    /// An IRI (a datatype IRI included) is written as an escaped `IRIREF`, so an
+    /// unchecked IRI holding a space or `>` still renders as one term.
+    #[test]
+    fn iris_render_escaped() {
+        assert_eq!(
+            nn("http://e/a b>").to_string(),
+            "<http://e/a\\u0020b\\u003E>"
+        );
+        let t = Term::Literal(Literal::new_typed_literal(
+            "v",
+            NamedNode::new_unchecked("http://e/d t"),
+        ));
+        assert_eq!(t.to_string(), "\"v\"^^<http://e/d\\u0020t>");
+    }
+
+    /// Only `xsd:string` is elided: an untagged literal typed `rdf:langString`
+    /// is not an RDF 1.2 literal, and its datatype is shown rather than hidden.
+    #[test]
+    fn an_untagged_lang_string_keeps_its_datatype() {
+        let t = Term::Literal(Literal::new_typed_literal(
+            "plain",
+            NamedNode::new_unchecked(RDF_LANG_STRING),
+        ));
+        assert_eq!(t.to_string(), format!("\"plain\"^^<{RDF_LANG_STRING}>"));
+    }
+
     #[test]
     fn canonical_comparator_matches_rendered_byte_order() {
         let plain_lang_string = Term::Literal(Literal {
@@ -1239,6 +1356,15 @@ mod tests {
             Term::Literal(Literal::new_simple_literal("")),
             Term::Literal(Literal::new_simple_literal("a\"b\\c\n\r\t\u{0000}\u{001f}")),
             Term::Literal(Literal::new_simple_literal("é🐈")),
+            Term::Literal(Literal::new_simple_literal("\u{8}\u{c}\u{7f}\u{85}")),
+            Term::Literal(Literal::new_simple_literal("\\")),
+            nn("http://e/a b"),
+            nn("http://e/a>"),
+            nn("http://e/a\u{a0}"),
+            Term::Literal(Literal::new_typed_literal(
+                "42",
+                NamedNode::new_unchecked("http://e/d t"),
+            )),
             Term::Literal(Literal::new_typed_literal(
                 "42",
                 NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
@@ -1306,6 +1432,7 @@ mod tests {
         builder.intern_literal(RdfLiteral::simple(""));
         builder.intern_literal(RdfLiteral::simple("a\"b\\c\n\r\t\u{0000}\u{001f}"));
         builder.intern_literal(RdfLiteral::simple("é🐈"));
+        builder.intern_literal(RdfLiteral::simple("\u{8}\u{c}\u{7f}\u{85}"));
         builder.intern_literal(RdfLiteral::typed(
             "42",
             "http://www.w3.org/2001/XMLSchema#integer",
@@ -1430,7 +1557,7 @@ pub(crate) mod term_walk_tests {
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermBox, TermId};
 
     use super::{
-        Literal, NamedNode, Term, Triple, render_literal, term_ref_to_native, term_value_to_native,
+        Literal, NamedNode, Term, Triple, term_ref_to_native, term_value_to_native, write_literal,
     };
 
     /// A test-only native twin of a generated term value whose predicates are IRIs.
@@ -1483,14 +1610,19 @@ pub(crate) mod term_walk_tests {
     }
 
     fn reference_display(term: &Term) -> String {
+        let iri = |iri: &str| format!("<{}>", purrdf_lex::iri_escape::escape(iri));
         match term {
-            Term::NamedNode(n) => format!("<{}>", n.0),
+            Term::NamedNode(n) => iri(&n.0),
             Term::BlankNode(b) => format!("_:{b}"),
-            Term::Literal(l) => render_literal(l),
+            Term::Literal(l) => {
+                let mut out = String::new();
+                write_literal(l, &mut out);
+                out
+            }
             Term::Triple(t) => format!(
-                "<<( {} <{}> {} )>>",
+                "<<( {} {} {} )>>",
                 reference_display(&t.subject),
-                t.predicate.0,
+                iri(&t.predicate.0),
                 reference_display(&t.object)
             ),
         }

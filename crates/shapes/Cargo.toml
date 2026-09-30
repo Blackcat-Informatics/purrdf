@@ -63,6 +63,10 @@ serde_json = { workspace = true }
 # reader/writer is one production behavior on native and wasm targets.
 serde = { workspace = true }
 serde_yaml = { workspace = true }
+# The one RDF 1.2 term spelling (`term_syntax`) and literal-body escaper
+# (`literal_escape`): the canonical display form of a term, and so the engine's
+# deterministic sort key, is written through them. Zero-dependency lexical layer.
+purrdf-lex = { workspace = true }
 # Validate caller-supplied schema and prefix IRIs with the workspace's
 # zero-dependency RFC 3987 implementation.
 purrdf-iri = { workspace = true }

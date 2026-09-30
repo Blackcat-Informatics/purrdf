@@ -20,6 +20,9 @@
 
 use std::fmt::Write as _;
 
+use purrdf_lex::literal_escape::{self, Carrier};
+use purrdf_lex::term_syntax;
+
 use crate::cache::ToolchainContext;
 use crate::ownership::{DependencyEdge, ReconciliationStatus, SliceIri};
 use crate::vocab::SliceVocab;
@@ -130,6 +133,23 @@ pub fn bundle_content_id(raw_digests: &[&str]) -> String {
 
 // ── Analysis graph output ─────────────────────────────────────────────────────
 
+/// `value` as a Turtle `IRIREF`, spelled by [`term_syntax::write_iri`].
+fn iri(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    term_syntax::write_iri(value, &mut out);
+    out
+}
+
+/// `value` as an explicitly typed `"…"^^xsd:string` Turtle literal, the body
+/// escaped by the RDF 1.2 canonical literal escaper ([`Carrier::Canonical`]).
+/// The `xsd:` prefix is the one the analysis-graph preamble declares.
+fn string_literal(value: &str) -> String {
+    format!(
+        "\"{}\"^^xsd:string",
+        literal_escape::escape(value, Carrier::Canonical)
+    )
+}
+
 /// The emitted analysis graph: Turtle body text plus metadata.
 #[derive(Debug, Clone)]
 pub struct AnalysisGraph {
@@ -195,42 +215,45 @@ pub fn emit_analysis_graph(
     let mut forbidden_count = 0usize;
 
     // Turtle preamble.
-    writeln!(body, "@prefix {prefix}: <{ns}> .").unwrap();
-    writeln!(body, "@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .").unwrap();
-    writeln!(
-        body,
-        "@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> ."
-    )
-    .unwrap();
+    let xsd_ns = iri("http://www.w3.org/2001/XMLSchema#");
+    let rdfs_ns = iri("http://www.w3.org/2000/01/rdf-schema#");
+    writeln!(body, "@prefix {prefix}: {} .", iri(ns)).unwrap();
+    writeln!(body, "@prefix xsd:   {xsd_ns} .").unwrap();
+    writeln!(body, "@prefix rdfs:  {rdfs_ns} .").unwrap();
     writeln!(body).unwrap();
+
+    let term = |local: &str| iri(&format!("{ns}{local}"));
+    let graph = iri(&analysis_graph_iri);
+    let content_id_literal = string_literal(&content_id);
+    let compiler_literal = string_literal(&toolchain.compiler_version);
+    let profile_literal = string_literal(&toolchain.reasoning_profile);
+    let provenance = |body: &mut String| {
+        writeln!(
+            body,
+            "    {} {content_id_literal} ;",
+            term("bundleContentId")
+        )
+        .unwrap();
+        writeln!(
+            body,
+            "    {} {compiler_literal} ;",
+            term("toolchainCompiler")
+        )
+        .unwrap();
+        writeln!(body, "    {} {profile_literal} .", term("toolchainProfile")).unwrap();
+        writeln!(body).unwrap();
+    };
 
     // Graph-level provenance node. This is generated A-Box instance data folded
     // into the bundle, not vocabulary surface: it carries a human label, its own
     // named-graph provenance anchor, and the assertional `<vocab>boxABox` role so
     // it satisfies the assertional-tier validation contract (no `skos:definition`).
-    writeln!(body, "<{analysis_graph_iri}>").unwrap();
-    writeln!(body, "    a <{ns}SliceAnalysisGraph> ;").unwrap();
+    writeln!(body, "{graph}").unwrap();
+    writeln!(body, "    a {} ;", term("SliceAnalysisGraph")).unwrap();
     writeln!(body, "    rdfs:label \"Slice analysis graph\" ;").unwrap();
-    writeln!(body, "    rdfs:isDefinedBy <{analysis_graph_iri}> ;").unwrap();
-    writeln!(body, "    <{ns}graphBoxRole> <{ns}boxABox> ;").unwrap();
-    writeln!(
-        body,
-        "    <{ns}bundleContentId> {content_id:?}^^xsd:string ;"
-    )
-    .unwrap();
-    writeln!(
-        body,
-        "    <{ns}toolchainCompiler> {:?}^^xsd:string ;",
-        toolchain.compiler_version
-    )
-    .unwrap();
-    writeln!(
-        body,
-        "    <{ns}toolchainProfile> {:?}^^xsd:string .",
-        toolchain.reasoning_profile
-    )
-    .unwrap();
-    writeln!(body).unwrap();
+    writeln!(body, "    rdfs:isDefinedBy {graph} ;").unwrap();
+    writeln!(body, "    {} {} ;", term("graphBoxRole"), term("boxABox")).unwrap();
+    provenance(&mut body);
 
     // Per-slice term-coverage triples (unique slices, sorted for determinism).
     let mut all_slices: Vec<SliceIri> = edges
@@ -240,14 +263,18 @@ pub fn emit_analysis_graph(
     all_slices.sort_unstable();
     all_slices.dedup();
 
+    let term_coverage = iri(&term_coverage);
     for slice_iri in &all_slices {
         let count = term_count_of(slice_iri);
-        writeln!(body, "<{slice_iri}>").unwrap();
-        writeln!(body, "    <{term_coverage}> \"{count}\"^^xsd:integer .").unwrap();
+        writeln!(body, "{}", iri(slice_iri)).unwrap();
+        writeln!(body, "    {term_coverage} \"{count}\"^^xsd:integer .").unwrap();
         writeln!(body).unwrap();
     }
 
     // Per-edge blank nodes.
+    let computed_slice_dependency = iri(&computed_slice_dependency);
+    let dependency_status = iri(&dependency_status);
+    let dependency_evidence = iri(&dependency_evidence);
     for (i, edge) in edges.iter().enumerate() {
         let from_tier = tier_of(&edge.from_slice);
         let to_tier = tier_of(&edge.to_slice);
@@ -263,48 +290,41 @@ pub fn emit_analysis_graph(
         let kind_str = format!("{:?}", edge.edge_kind);
 
         writeln!(body, "_:dep{i}").unwrap();
-        writeln!(body, "    a <{computed_slice_dependency}> ;").unwrap();
+        writeln!(body, "    a {computed_slice_dependency} ;").unwrap();
         writeln!(
             body,
-            "    <{dependency_status}> {:?}^^xsd:string ;",
-            status_label(effective_status)
+            "    {dependency_status} {} ;",
+            string_literal(status_label(effective_status))
         )
         .unwrap();
         writeln!(
             body,
-            "    <{ns}dependencyFromSlice> <{}> ;",
-            edge.from_slice
-        )
-        .unwrap();
-        writeln!(body, "    <{ns}dependencyToSlice> <{}> ;", edge.to_slice).unwrap();
-        writeln!(
-            body,
-            "    <{ns}dependencyEdgeKind> {kind_str:?}^^xsd:string ;"
+            "    {} {} ;",
+            term("dependencyFromSlice"),
+            iri(&edge.from_slice)
         )
         .unwrap();
         writeln!(
             body,
-            "    <{dependency_evidence}> {evidence_str:?}^^xsd:string ;"
+            "    {} {} ;",
+            term("dependencyToSlice"),
+            iri(&edge.to_slice)
         )
         .unwrap();
         writeln!(
             body,
-            "    <{ns}bundleContentId> {content_id:?}^^xsd:string ;"
+            "    {} {} ;",
+            term("dependencyEdgeKind"),
+            string_literal(&kind_str)
         )
         .unwrap();
         writeln!(
             body,
-            "    <{ns}toolchainCompiler> {:?}^^xsd:string ;",
-            toolchain.compiler_version
+            "    {dependency_evidence} {} ;",
+            string_literal(&evidence_str)
         )
         .unwrap();
-        writeln!(
-            body,
-            "    <{ns}toolchainProfile> {:?}^^xsd:string .",
-            toolchain.reasoning_profile
-        )
-        .unwrap();
-        writeln!(body).unwrap();
+        provenance(&mut body);
     }
 
     Ok(AnalysisGraph {
@@ -515,6 +535,71 @@ mod tests {
             triple_count >= 4,
             "expected at least 4 triples, got {triple_count}: \n{turtle}"
         );
+    }
+
+    /// A toolchain string holding a quote, a backslash, a newline, a C0 control, an
+    /// accented letter and a combining mark is emitted as a Turtle literal that
+    /// parses back to exactly that string. Rust `Debug` spelling wrote the control
+    /// and the combining mark as `\u{1}` / `\u{301}`, which is not Turtle.
+    #[test]
+    fn a_toolchain_string_needing_escapes_is_valid_turtle_and_round_trips() {
+        let compiler = "say \"hi\" \\ path\nnext\u{1} caf\u{e9} e\u{301}";
+        let toolchain = ToolchainContext::new(compiler, "el");
+        let result = emit_analysis_graph(&vocab(), &[], "", &[], &toolchain, |_| 2, |_| 0)
+            .expect("the graph is emitted");
+        let turtle = &result.turtle_body;
+        let dataset = crate::rdf_query::Dataset::parse_turtle(turtle.as_bytes(), None, "analysis")
+            .unwrap_or_else(|e| panic!("emitted Turtle is not valid:\n{e}\n\n{turtle}"));
+        let read = dataset
+            .object_literal(
+                &vocab().analysis_graph_iri(),
+                "https://example.org/vocab/toolchainCompiler",
+            )
+            .expect("the query runs");
+        assert_eq!(read.as_deref(), Some(compiler));
+    }
+
+    /// Plain ASCII input is spelled exactly as before: the whole body is pinned.
+    #[test]
+    fn a_plain_ascii_analysis_graph_is_byte_identical() {
+        let edges = vec![make_edge(
+            "https://example.org/vocab/sliceA",
+            "https://example.org/vocab/sliceB",
+            EdgeKind::Ontology,
+            ReconciliationStatus::Matched,
+        )];
+        let result = emit_analysis_graph(&vocab(), &edges, "", &["abc"], &tc(), |_| 2, |_| 4)
+            .expect("the graph is emitted");
+        let id = &result.bundle_content_id;
+        let v = "https://example.org/vocab/";
+        let graph = vocab().analysis_graph_iri();
+        let provenance = format!(
+            "    <{v}bundleContentId> \"{id}\"^^xsd:string ;\n    \
+             <{v}toolchainCompiler> \"purrdf-logic v1\"^^xsd:string ;\n    \
+             <{v}toolchainProfile> \"el\"^^xsd:string .\n\n"
+        );
+        let expected = format!(
+            "@prefix {prefix}: <{v}> .\n\
+             @prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .\n\
+             @prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .\n\n\
+             <{graph}>\n    a <{v}SliceAnalysisGraph> ;\n    \
+             rdfs:label \"Slice analysis graph\" ;\n    rdfs:isDefinedBy <{graph}> ;\n    \
+             <{v}graphBoxRole> <{v}boxABox> ;\n{provenance}\
+             <{v}sliceA>\n    <{coverage}> \"4\"^^xsd:integer .\n\n\
+             <{v}sliceB>\n    <{coverage}> \"4\"^^xsd:integer .\n\n\
+             _:dep0\n    a <{dependency}> ;\n    <{status}> \"matched\"^^xsd:string ;\n    \
+             <{v}dependencyFromSlice> <{v}sliceA> ;\n    \
+             <{v}dependencyToSlice> <{v}sliceB> ;\n    \
+             <{v}dependencyEdgeKind> \"Ontology\"^^xsd:string ;\n    \
+             <{evidence}> \"no evidence (synthetic stale or forbidden edge)\"^^xsd:string ;\n\
+             {provenance}",
+            prefix = vocab().prefix_name(),
+            coverage = vocab().term_coverage(),
+            dependency = vocab().computed_slice_dependency(),
+            status = vocab().dependency_status(),
+            evidence = vocab().dependency_evidence(),
+        );
+        assert_eq!(result.turtle_body, expected);
     }
 
     #[test]

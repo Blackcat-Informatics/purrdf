@@ -986,19 +986,17 @@ impl<'t> SrlParser<'t> {
             items.push(self.graph_node(ctx, out)?);
         }
         self.pos += 1;
-        let cells: Vec<PatternTerm> = items.iter().map(|_| self.fresh()).collect();
-        for (index, (cell, item)) in cells.iter().zip(items).enumerate() {
-            out.push(TriplePattern::new(cell.clone(), iri_term(rdf::FIRST), item));
-            let rest = cells
-                .get(index + 1)
-                .cloned()
-                .unwrap_or_else(|| iri_term(rdf::NIL));
-            out.push(TriplePattern::new(cell.clone(), iri_term(rdf::REST), rest));
-        }
-        Ok(cells
-            .into_iter()
-            .next()
-            .expect("a collection holds at least one item"))
+        let vocab = purrdf_core::ListVocab {
+            first: iri_term(rdf::FIRST),
+            rest: iri_term(rdf::REST),
+            nil: iri_term(rdf::NIL),
+        };
+        Ok(purrdf_core::build_rdf_list(
+            items,
+            &vocab,
+            |_| self.fresh(),
+            |subject, predicate, object| out.push(TriplePattern::new(subject, predicate, object)),
+        ))
     }
 
     /// `ReifiedTriple ::= '<<' ReifiedTripleSubject Verb ReifiedTripleObject Reifier? '>>'`

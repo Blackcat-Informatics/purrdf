@@ -40,7 +40,7 @@
 
 use ::purrdf::RdfDataset;
 
-use crate::data::{GraphFilter, native_quads};
+use crate::data::{GraphFilter, native_quads, objects_of};
 use crate::model::{sh, xsd};
 use crate::shapes::ResultAnnotation;
 use crate::spec::census::{self, Role, TermClass};
@@ -80,7 +80,7 @@ pub(crate) fn parse_with_rule(
     executable: &Term,
 ) -> Result<Vec<ResultAnnotation>, crate::error::RuleViolation> {
     let mut out = Vec::new();
-    for (_, _, node) in objects(data, executable, sh::RESULT_ANNOTATION) {
+    for node in objects_of(data, executable, sh::RESULT_ANNOTATION) {
         if !matches!(node, Term::NamedNode(_) | Term::BlankNode(_)) {
             return Err((
                 Some("resultAnnotation-nodeKind"),
@@ -138,10 +138,7 @@ fn parse_one(
             ),
         ));
     }
-    let properties: Vec<Term> = objects(data, node, sh::ANNOTATION_PROPERTY)
-        .into_iter()
-        .map(|(_, _, o)| o)
-        .collect();
+    let properties: Vec<Term> = objects_of(data, node, sh::ANNOTATION_PROPERTY);
     let property = match properties.as_slice() {
         [Term::NamedNode(property)] => property.clone(),
         _ => {
@@ -169,10 +166,7 @@ fn parse_one(
             ),
         ));
     }
-    let names: Vec<Term> = objects(data, node, sh::ANNOTATION_VAR_NAME)
-        .into_iter()
-        .map(|(_, _, o)| o)
-        .collect();
+    let names: Vec<Term> = objects_of(data, node, sh::ANNOTATION_VAR_NAME);
     let variable = match names.as_slice() {
         [] => {
             // "If no such value exists, use the local name of the value of
@@ -210,10 +204,7 @@ fn parse_one(
             ));
         }
     };
-    let mut default_values: Vec<Term> = objects(data, node, sh::ANNOTATION_VALUE)
-        .into_iter()
-        .map(|(_, _, o)| o)
-        .collect();
+    let mut default_values: Vec<Term> = objects_of(data, node, sh::ANNOTATION_VALUE);
     crate::term::sort_terms_canonical(&mut default_values);
     default_values.dedup();
     Ok(ResultAnnotation {
@@ -221,17 +212,6 @@ fn parse_one(
         variable,
         default_values,
     })
-}
-
-/// Every `(subject, predicate, object)` with `subject` and `predicate`.
-fn objects(data: &RdfDataset, subject: &Term, predicate: &str) -> Vec<(Term, NamedNode, Term)> {
-    native_quads(
-        data,
-        Some(subject),
-        Some(&Term::NamedNode(NamedNode::from(predicate))),
-        None,
-        GraphFilter::AnyGraph,
-    )
 }
 
 /// The annotation pairs one solution gives a validation result: for each

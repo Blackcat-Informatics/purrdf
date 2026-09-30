@@ -502,21 +502,17 @@ fn slot_name_seed(config: &LinkmlConfig, source: &str) -> Result<SlotNameSeed, L
     })
 }
 
+/// The CURIE of `source` under the caller's longest matching namespace
+/// ([`purrdf_iri::contract`]), as `(prefix, local)`; `None` when no namespace
+/// matches or the local part is empty (a namespace IRI itself names no slot).
 fn longest_namespace_match<'a>(
     config: &'a LinkmlConfig,
     source: &'a str,
 ) -> Option<(&'a str, &'a str)> {
-    config
-        .prefixes()
-        .iter()
-        .filter_map(|(prefix, namespace)| {
-            source
-                .strip_prefix(namespace)
-                .filter(|local| !local.is_empty())
-                .map(|local| (namespace.len(), prefix.as_str(), local))
-        })
-        .min_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(right.1)))
-        .map(|(_, prefix, local)| (prefix, local))
+    let curie = purrdf_iri::contract(source, config.curies())?;
+    let (prefix, local) = curie.split_once(':')?;
+    let (prefix, _) = config.prefixes().get_key_value(prefix)?;
+    (!local.is_empty()).then(|| (prefix.as_str(), &source[source.len() - local.len()..]))
 }
 
 fn trailing_local(source: &str) -> &str {

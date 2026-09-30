@@ -168,6 +168,8 @@ pub struct LinkmlConfig {
     description: String,
     default_prefix: String,
     prefixes: BTreeMap<String, String>,
+    /// `prefixes` as the compaction table of [`purrdf_iri::contract`].
+    curies: purrdf_iri::PrefixMap,
     sanitize_policy: SanitizePolicy,
     slot_rehomes: BTreeSet<String>,
 }
@@ -221,6 +223,7 @@ impl LinkmlConfig {
             schema_name,
             description,
             default_prefix,
+            curies: prefixes.iter().collect(),
             prefixes,
             sanitize_policy: SanitizePolicy::Rename,
             slot_rehomes: BTreeSet::new(),
@@ -255,6 +258,11 @@ impl LinkmlConfig {
     #[must_use]
     pub fn prefixes(&self) -> &BTreeMap<String, String> {
         &self.prefixes
+    }
+
+    /// The prefix map as the compaction table of [`purrdf_iri::contract`].
+    pub(crate) const fn curies(&self) -> &purrdf_iri::PrefixMap {
+        &self.curies
     }
 
     /// Policy applied to a source property without a directly usable LinkML name.

@@ -21,7 +21,7 @@ use ::purrdf::{DatasetView, RdfDataset};
 use ::purrdf::{FastMap, FastSet};
 use purrdf_sparql_eval::Prebinding;
 
-use crate::data::{GraphFilter, native_quads};
+use crate::data::{GraphFilter, native_quads, objects_of};
 use crate::error::{IllFormedDeclaration, PrebindingViolation, RuleViolation as Violation};
 use crate::model::{rdf, rdfs, sh, xsd};
 use crate::path;
@@ -820,27 +820,6 @@ pub(crate) fn sparql_local_name(iri: &str) -> String {
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
-
-/// Return all objects for `(subject, predicate, ?)`.
-fn objects_of(data: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
-    let Some(subject_id) = crate::data::resolve_id(data, subject) else {
-        return Vec::new();
-    };
-    let Some(predicate_id) = data.term_id_by_iri(predicate) else {
-        return Vec::new();
-    };
-    let mut seen = ::purrdf::IdSet::default();
-    crate::data::quads_for_pattern_ids(
-        data,
-        Some(subject_id),
-        Some(predicate_id),
-        None,
-        GraphFilter::AnyGraph,
-    )
-    .filter(|quad| seen.insert(quad.o))
-    .map(|quad| crate::term::term_id_to_native(data, quad.o))
-    .collect()
-}
 
 /// Return the first object for `(subject, predicate, ?)`, if any.
 fn first_object_of(data: &RdfDataset, subject: &Term, predicate: &str) -> Option<Term> {
