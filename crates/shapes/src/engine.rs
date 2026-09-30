@@ -3262,32 +3262,15 @@ pub fn validate_projected_dataset_with_shapes_graph(
 /// `rdf:reifies` triples and statement annotations as plain triples.
 pub fn project_dataset(data: &RdfDataset) -> Result<Arc<RdfDataset>, String> {
     use ::purrdf::RdfDatasetBuilder;
-    use purrdf::{RdfQuad, RdfTerm};
 
     let mut builder = RdfDatasetBuilder::new();
 
-    for mut quad in data.owned_quads() {
-        // FlattenToDefaultGraph: drop the source graph name.
+    // The base quads, then the reifier and annotation rows, in the one flat order
+    // `purrdf::flat_rdf_quads` gives them; FlattenToDefaultGraph drops each source
+    // graph name.
+    for mut quad in ::purrdf::flat_rdf_quads(data) {
         quad.graph_name = None;
         builder.push_owned_quad(&quad);
-    }
-
-    // Reifiers → `(reifier, rdf:reifies, <<triple>>)` triples.
-    for reifier in data.owned_reifiers() {
-        builder.push_owned_quad(&RdfQuad::new(
-            reifier.reifier,
-            crate::model::rdf::REIFIES,
-            RdfTerm::triple(reifier.statement),
-        ));
-    }
-
-    // Annotations → `(reifier, predicate, object)` triples.
-    for annotation in data.owned_annotations() {
-        builder.push_owned_quad(&RdfQuad::new(
-            annotation.reifier,
-            annotation.predicate,
-            annotation.object,
-        ));
     }
 
     builder.freeze().map_err(|e| e.to_string())

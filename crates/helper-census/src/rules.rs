@@ -803,6 +803,19 @@ impl LexRules<'_> {
     }
 }
 
+/// Visit a macro call's comma-separated expression arguments (so a rule sees
+/// inside `assert!`, `format!` and the like), then the macro itself.
+pub(crate) fn visit_macro_arguments<V: for<'a> Visit<'a>>(visitor: &mut V, node: &syn::Macro) {
+    if let Ok(arguments) = node
+        .parse_body_with(syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated)
+    {
+        for argument in &arguments {
+            visitor.visit_expr(argument);
+        }
+    }
+    syn::visit::visit_macro(visitor, node);
+}
+
 /// Whether `expression` is the integer literal whose base-10 digits are `digits`
 /// (so `0x10` and `16` are both `"16"`).
 pub(crate) fn is_int_literal(expression: &syn::Expr, digits: &str) -> bool {
@@ -897,14 +910,7 @@ impl<'ast> Visit<'ast> for LexRules<'_> {
     }
 
     fn visit_macro(&mut self, node: &'ast syn::Macro) {
-        if let Ok(arguments) = node.parse_body_with(
-            syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,
-        ) {
-            for argument in &arguments {
-                self.visit_expr(argument);
-            }
-        }
-        syn::visit::visit_macro(self, node);
+        visit_macro_arguments(self, node);
     }
 
     fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
@@ -946,7 +952,7 @@ impl<'ast> Visit<'ast> for LexRules<'_> {
 }
 
 /// Whether `file` sits under a `tests`, `benches` or `examples` directory.
-fn is_test_file(file: &str) -> bool {
+pub(crate) fn is_test_file(file: &str) -> bool {
     file.split('/')
         .rev()
         .skip(1)

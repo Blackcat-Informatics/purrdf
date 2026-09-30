@@ -174,7 +174,7 @@ enforced = true
 
 [job.forbidden]
 constants = []
-fingerprints = ["rule:std-default-hasher"]
+fingerprints = ["rule:std-default-hasher", "rule:default-hasher-new"]
 names = []
 
 [[job]]
@@ -1202,8 +1202,16 @@ enforced = true
 
 [job.forbidden]
 constants = []
-fingerprints = []
+fingerprints = ["rule:rdf-list-walk"]
 names = ['^(single_object|list_members_of|rdf_list_members)$']
+
+[[job.variant]]
+symbol = "purrdf_shapes::schema_import::ImportContext::import_node_list"
+file = "crates/shapes/src/schema_import.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_shapes::schema_import::ImportContext::import_node_list"
+reason = "It reads a JSON Schema document back: `rdf:first` and `rdf:rest` are the property keys of the list conjunct the schema emitter wrote, matched as JSON, and no RDF collection is walked."
 
 [[job]]
 id = "thread-stack"
@@ -1859,3 +1867,20 @@ kind = "shim"
 criterion = "a"
 anchor = "purrdf_hash::arch::x86_64::hex_encode"
 reason = "Per-architecture safe entries, each around its own module's base16 kernel (SSSE3 on x86_64, NEON on aarch64), each a symbol scripts/simd-asm-manifest.toml pins."
+
+[[job]]
+id = "reifier-rows"
+summary = "The flat rdf:reifies and annotation rows of a dataset's statement layer, graph-scoped, built once"
+home = "purrdf_rdf::flat_rdf_quads"
+entry_points = ["purrdf_rdf::flat_rdf_quads_from_dataset"]
+spec = "RDF 1.2 Concepts section 3 (reifiers and triple terms) and RDF 1.2 Semantics section 9 (rdf:reifies is asserted in the graph that declares the reifier)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:reifier-quad-new"]
+names = []

@@ -66,6 +66,7 @@ pub(crate) fn is_fingerprint_id(id: &str) -> bool {
             } else if kind == "rule" {
                 crate::rules::RULES.contains(&id)
                     || crate::layout::RULES.contains(&id)
+                    || crate::structure::RULES.contains(&id)
                     || crate::rules::DELEGATED_RULES.contains(&id)
             } else {
                 rest.len() == 16

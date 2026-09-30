@@ -858,6 +858,133 @@ def lex_rule_fixture_cases() -> list[tuple[str, bool]]:
     return cases
 
 
+# A seeded workspace for the three structural rules (`reifier-quad-new`,
+# `default-hasher-new`, `rdf-list-walk`), run through the real census: every line
+# marked for a job must be reported and nothing else. Beside each refusal sits a
+# valid neighbour: a plain `RdfQuad::new` row, `FixedState`, a walk that calls
+# the home's `walk_rdf_list`, a one-shot read, the home's own `DatasetView` walk,
+# and test code (except `DefaultHasher`, which the rule reads in `src` test
+# modules too).
+STRUCTURE_FIXTURE_LEDGER = """
+[[job]]
+id = "reifier-rows"
+summary = "s"
+home = "fixture_home::flat_rdf_quads"
+entry_points = []
+spec = "s"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:reifier-quad-new"]
+names = []
+
+[[job]]
+id = "fixed-hasher-everywhere"
+summary = "s"
+home = "fixture_home::FixedState"
+entry_points = []
+spec = "s"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:default-hasher-new"]
+names = []
+
+[[job]]
+id = "rdf-collection"
+summary = "s"
+home = "fixture_home::DatasetView"
+entry_points = []
+spec = "s"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:rdf-list-walk"]
+names = []
+"""
+
+STRUCTURE_FIXTURE_FILES = {
+    "crates/home/Cargo.toml": '[package]\nname = "fixture-home"\n',
+    "crates/home/src/lib.rs": (
+        "/// The one flat row builder.\npub fn flat_rdf_quads() {}\n"
+        "/// The one fixed hasher.\npub struct FixedState;\n"
+        "/// The one list reader.\n"
+        "pub trait DatasetView { fn rdf_list(&self) { loop { let _ = (RDF_FIRST, RDF_REST); } } }\n"
+        "/// The one strict walker.\npub fn walk_rdf_list() {}\n"
+    ),
+    "crates/user/Cargo.toml": '[package]\nname = "fixture-user"\n',
+    "crates/user/src/lib.rs": (
+        "pub fn reifier(s: T, t: U) { let _ = RdfQuad::new(s, RDF_REIFIES, RdfTerm::triple(t)); } // REIFIER\n"
+        'pub fn literal(s: T, o: U) { let _ = RdfQuad::new(s, "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies", o); } // REIFIER\n'
+        'pub fn plain(s: T, o: U) { let _ = RdfQuad::new(s, "https://example.org/p", o); }\n'
+        "pub fn hasher() { let _ = std::collections::hash_map::DefaultHasher::new(); } // HASHER\n"
+        "pub fn fixed() { let _ = FixedState::default(); }\n"
+        "pub fn walk(g: &G, mut n: u32) { while let Some(m) = g.object(n, RDF_REST) { let _ = g.object(n, RDF_FIRST); n = m; } } // LIST\n"
+        "pub fn cached(g: &G, mut n: u32) { let first = RDF_FIRST; let rest = RDF_REST; while let Some(m) = g.object(n, rest) { let _ = g.object(n, first); n = m; } } // LIST\n"
+        "pub fn shared(g: &G, n: u32) { let _ = walk_rdf_list(n, |c| g.object(c, RDF_FIRST), |c| g.object(c, RDF_REST)); for _ in 0..2 {} }\n"
+        "pub fn once(g: &G, n: u32) { let _ = (g.object(n, RDF_FIRST), g.object(n, RDF_REST)); }\n"
+        "pub fn interned(i: &mut I) { for _ in 0..2 {} let _ = (i.intern(RDF_FIRST), i.intern(RDF_REST)); }\n"
+        "#[cfg(test)]\n"
+        "mod tests {\n"
+        "    fn traps(s: T, t: U) { let _ = RdfQuad::new(s, RDF_REIFIES, RdfTerm::triple(t)); }\n"
+        "    fn hashed() { let _ = DefaultHasher::default(); } // HASHER\n"
+        "    fn list(g: &G) { loop { let _ = (g.object(0, RDF_FIRST), g.object(0, RDF_REST)); } }\n"
+        "}\n"
+    ),
+    "crates/user/tests/it.rs": (
+        "#[test]\n"
+        "fn pins(s: T, t: U) { let _ = RdfQuad::new(s, RDF_REIFIES, RdfTerm::triple(t)); let _ = DefaultHasher::new(); loop { let _ = (RDF_FIRST, RDF_REST); } }\n"
+    ),
+}
+
+
+def structure_rule_fixture_cases() -> list[tuple[str, bool]]:
+    """Run the census over the seeded structural workspace and compare each
+    job's hits with the lines marked for it."""
+    markers = {"reifier-rows": "// REIFIER", "fixed-hasher-everywhere": "// HASHER", "rdf-collection": "// LIST"}
+    with tempfile.TemporaryDirectory(prefix="helper-census-structure-fixture-") as directory:
+        root = Path(directory)
+        expected: dict[str, set[tuple[str, int]]] = {job: set() for job in markers}
+        for relative, text in STRUCTURE_FIXTURE_FILES.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+            for number, line in enumerate(text.splitlines(), start=1):
+                for job, marker in markers.items():
+                    if line.endswith(marker):
+                        expected[job].add((relative, number))
+        (root / "helpers-ledger.toml").write_text(STRUCTURE_FIXTURE_LEDGER, encoding="utf-8")
+        try:
+            index = json.loads(run_census("--index", root=root))
+        except (CensusError, json.JSONDecodeError) as exc:
+            return [(f"the census runs over the seeded structural workspace ({exc})", False)]
+    cases: list[tuple[str, bool]] = []
+    for job, lines in expected.items():
+        found = index["jobs"][job]
+        copies = {(match["file"], match["line"]) for match in found["matches"] if not match["in_home"]}
+        cases.append((f"every seeded {job} spelling is reported", lines <= copies))
+        cases.append(
+            (f"the {job} neighbours (the home's own walk, the shared entry point, tests) are not reported", copies <= lines)
+        )
+        cases.append((f"each {job} hit is a copy of the enforced job", found["copies"] == len(lines)))
+    return cases
+
+
 # A seeded workspace for the byte-layout rules, run through the real census:
 # every line marked POSITIVE must be reported and nothing else. Beside each
 # refusal sits a valid neighbour: a count written before a loop (not the field
@@ -1585,6 +1712,7 @@ def self_test() -> int:
     cases.extend(literal_fixture_cases())
     cases.extend(hex_rule_fixture_cases())
     cases.extend(lex_rule_fixture_cases())
+    cases.extend(structure_rule_fixture_cases())
     cases.extend(layout_rule_fixture_cases())
     cases.extend(unicode_fixture_cases())
     cases.extend(mismatch_rule_fixture_cases())

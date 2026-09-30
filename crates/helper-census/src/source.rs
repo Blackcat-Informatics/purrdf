@@ -256,6 +256,8 @@ impl Workspace {
                         .extend(crate::rules::hex_rules(package, &path, &parsed));
                     self.rule_hits
                         .extend(crate::rules::lex_rules(package, &path, &parsed));
+                    self.rule_hits
+                        .extend(crate::structure::structure_rules(package, &path, &parsed));
                     if !is_excluded(package_dir, &path) {
                         self.rule_hits
                             .extend(crate::layout::layout_rules(package, &path, &parsed));

@@ -17,6 +17,7 @@ mod ledger;
 mod normalize;
 mod rules;
 mod source;
+mod structure;
 mod toml;
 
 use std::path::PathBuf;
