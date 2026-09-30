@@ -19,6 +19,7 @@ use purrdf_hash::hex::{
 use purrdf_hash::md5::Md5;
 use purrdf_hash::sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512};
 use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main};
+use purrdf_testkit::rng::xorshift64_next;
 
 const SIZES: [(usize, &str); 3] = [(64, "64B"), (1024, "1KiB"), (1 << 20, "1MiB")];
 
@@ -26,12 +27,7 @@ const SIZES: [(usize, &str); 3] = [(64, "64B"), (1024, "1KiB"), (1 << 20, "1MiB"
 fn input(len: usize) -> Vec<u8> {
     let mut state = 0x9E37_79B9_7F4A_7C15u64;
     (0..len)
-        .map(|_| {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state as u8
-        })
+        .map(|_| xorshift64_next(&mut state) as u8)
         .collect()
 }
 

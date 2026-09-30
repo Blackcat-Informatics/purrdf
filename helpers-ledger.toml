@@ -1869,6 +1869,130 @@ anchor = "purrdf_hash::arch::x86_64::hex_encode"
 reason = "Per-architecture safe entries, each around its own module's base16 kernel (SSSE3 on x86_64, NEON on aarch64), each a symbol scripts/simd-asm-manifest.toml pins."
 
 [[job]]
+id = "seeded-permutation"
+summary = "A deterministic, unbiased Fisher-Yates permutation of a slice from a seed, for order-independence tests"
+home = "purrdf_testkit::rng::permute"
+entry_points = []
+spec = "Fisher-Yates shuffle (Durstenfeld's in-place form) over Xoshiro256::up_to, which redraws instead of reducing modulo the bound"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^permute$', '^shuffle(d)?$']
+
+[[job.variant]]
+symbol = "purrdf_hash::arch::blake3_rows::permute"
+file = "crates/hash/src/arch/blake3_rows.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_hash::arch::blake3_rows::permute"
+reason = "BLAKE3's message-word permutation between rounds: a fixed shuffle of sixteen words the specification defines, sharing only a name with a seeded shuffle of a slice."
+
+[[job]]
+id = "lcg64-mmix"
+summary = "The 64-bit linear congruential generator with Knuth's MMIX multiplier, for frozen fixtures"
+home = "purrdf_hash::mix::lcg64_next"
+entry_points = [
+    "purrdf_hash::mix::LCG64_MULTIPLIER",
+    "purrdf_hash::mix::LCG64_MMIX_INCREMENT",
+    "purrdf_testkit::rng::lcg64_next",
+]
+spec = "Knuth's MMIX generator: multiplier 6364136223846793005, increment 1442695040888963407, modulo 2^64"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = ["6364136223846793005", "1442695040888963407"]
+fingerprints = []
+names = ['^lcg(64)?(_next|_step)?$']
+
+[[job]]
+id = "xorshift64"
+summary = "Marsaglia's xorshift64 step with the shift triple (13, 7, 17), for fixtures and frozen vectors generated from it"
+home = "purrdf_testkit::rng::xorshift64_next"
+entry_points = []
+spec = "Marsaglia, Xorshift RNGs (2003): x ^= x << 13; x ^= x >> 7; x ^= x << 17 on a non-zero 64-bit state"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^xorshift(64)?(_next|_step)?$']
+
+[[job]]
+id = "float-control-register"
+summary = "Reading and writing the thread's floating-point control register (MXCSR on x86, FPCR on aarch64) for the float-environment tests"
+home = "purrdf_core::distance::control::mxcsr"
+entry_points = [
+    "purrdf_core::distance::control::set_mxcsr",
+    "purrdf_core::distance::control::Mxcsr",
+    "purrdf_core::distance::control::fpcr",
+    "purrdf_core::distance::control::set_fpcr",
+    "purrdf_core::distance::control::Fpcr",
+]
+spec = "Intel SDM vol. 1 section 10.2.3 (MXCSR, STMXCSR and LDMXCSR) and the Arm ARM (FPCR, MRS and MSR): the one assembly wrapper per register, safe over the defined bits"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(read|write|set|get)_(mxcsr|fpcr)$', '^(mxcsr|fpcr)$']
+
+[[job]]
+id = "purremb-fixture"
+summary = "The PURREMB artifact and stage identities a test or bench declares an embedding family contract with"
+home = "purrdf_core::purremb_fixture::Identities"
+entry_points = ["purrdf_core::purremb_fixture::Identities::at"]
+spec = "PURREMB family contract identities: an artifact identity and an applied stage, each derived from a name, an IRI base and the digest of the name's bytes"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^purremb_(artifact|stage)$', '^fixture_(artifact|stage)$']
+
+[[job]]
+id = "counting-allocator"
+summary = "The counting global allocator and its measurement windows every allocation test and bench measures with"
+home = "purrdf_alloc_probe::CountingAllocator"
+entry_points = [
+    "purrdf_alloc_probe::CurrentThreadWindow",
+    "purrdf_alloc_probe::WholeProcessWindow",
+    "purrdf_alloc_probe::Measurement",
+]
+spec = "the purrdf_alloc_probe contract: allocation count, requested bytes, retained bytes and peak working set over a window, from a GlobalAlloc that delegates to System"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^record_(allocation|deallocation)$', '^(live|peak)_bytes$']
+
+[[job]]
 id = "reifier-rows"
 summary = "The flat rdf:reifies and annotation rows of a dataset's statement layer, graph-scoped, built once"
 home = "purrdf_rdf::flat_rdf_quads"

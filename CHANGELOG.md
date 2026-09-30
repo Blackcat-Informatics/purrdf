@@ -332,11 +332,6 @@ under Changed and Fixed where a longer account helps.
 
 ### Added
 
-- **core:** `purrdf_core::ir::skolem::escape_label_bytes_into`, the one `-xx`
-  blank-label escape (ASCII-alphanumerics pass, every other byte becomes `-`
-  plus two lowercase hex digits). The genid path segment and the SHACL rule
-  engine's minted-blank tags (`purrdf-shapes`) both call it; their output is
-  byte-identical to before. Ledger job `blank-label-hex-escape`.
 - **core:** `purrdf_core::imports::ImportMap::try_insert`, `ImportMap::check_key`
   and `ImportKeyError`: the one import-table key policy (an absolute IRI naming
   one document), used by `ShapesImports`, the reasoning services' import lists,
@@ -347,6 +342,24 @@ under Changed and Fixed where a longer account helps.
   `apply_rules_to_ntriples` (Python, WebAssembly and C) and the entailment
   service all run through it.
 
+- **core, testkit:** test-support homes for what the test suites and benches
+  each spelt out for themselves (doc-hidden, no stability promise):
+  `purrdf_core::purremb_fixture::Identities` (the PURREMB artifact and stage
+  identities of a family contract, the IRI bases, stage payload and salt as
+  fields so each suite keeps its sealed bytes), `purrdf_core::distance::control`
+  (`mxcsr`/`set_mxcsr`/`Mxcsr` and `fpcr`/`set_fpcr`/`Fpcr`: the one assembly
+  wrapper per float control register, `set_mxcsr` clearing the reserved bits
+  that would fault), and `purrdf_testkit::rng::permute` (an unbiased
+  Fisher-Yates over `Xoshiro256::up_to`). The four lex, the xsd and the geo,
+  text, retrieval and purrdf bench SplitMix wrappers, the hash and deflate
+  xorshift benches and the sparql-eval counting allocator now draw from
+  `purrdf_testkit::rng` and `purrdf_alloc_probe`; bench inputs are byte for byte
+  the ones they were.
+- **core:** `purrdf_core::ir::skolem::escape_label_bytes_into`, the one `-xx`
+  blank-label escape (ASCII-alphanumerics pass, every other byte becomes `-`
+  plus two lowercase hex digits). The genid path segment and the SHACL rule
+  engine's minted-blank tags (`purrdf-shapes`) both call it; their output is
+  byte-identical to before. Ledger job `blank-label-hex-escape`.
 - **ed25519:** `purrdf-ed25519`, a new published, wasm32-clean crate and the
   workspace's one Ed25519 (RFC 8032): `SigningKey` (key expansion from a
   32-byte seed, deterministic `sign`, secrets overwritten on drop),

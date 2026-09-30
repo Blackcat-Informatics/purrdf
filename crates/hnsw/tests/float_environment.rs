@@ -35,6 +35,7 @@ mod purremb;
 use std::sync::Arc;
 
 use purrdf_core::DistanceMetric;
+use purrdf_core::distance::control::Mxcsr;
 use purrdf_core::distance::{
     Arithmetic, Bound, Bounded, Exact, FloatEnvironmentError, FloatEnvironmentEvidence, Measure,
     Reassociated, RecordedPathError, Resolved, RowsRef,
@@ -45,52 +46,6 @@ use purrdf_hnsw::{
 use purrdf_sparql_eval::{
     EmbeddingKnnRelation, EmbeddingSpace, EvalError, KnnGuard, PfArgs, PfRow, PropertyFunction,
 };
-
-/// MXCSR flush-to-zero.
-const FTZ: u32 = 1 << 15;
-
-fn read_mxcsr() -> u32 {
-    let mut value: u32 = 0;
-    // SAFETY: `stmxcsr` stores the 32-bit MXCSR to a live, aligned, writable `u32`.
-    unsafe {
-        core::arch::asm!(
-            "stmxcsr [{ptr}]",
-            ptr = in(reg) &raw mut value,
-            options(nostack, preserves_flags),
-        );
-    }
-    value
-}
-
-fn write_mxcsr(value: u32) {
-    // SAFETY: `ldmxcsr` loads MXCSR from a live, aligned `u32`. Every value written here is
-    // the saved register or the saved register with FTZ added, and `Flushed` restores the
-    // saved one on every exit, including a panic.
-    unsafe {
-        core::arch::asm!(
-            "ldmxcsr [{ptr}]",
-            ptr = in(reg) &raw const value,
-            options(nostack, preserves_flags, readonly),
-        );
-    }
-}
-
-/// FTZ set on this thread for as long as the guard lives.
-struct Flushed(u32);
-
-impl Flushed {
-    fn new() -> Self {
-        let saved = read_mxcsr();
-        write_mxcsr(saved | FTZ);
-        Self(saved)
-    }
-}
-
-impl Drop for Flushed {
-    fn drop(&mut self) {
-        write_mxcsr(self.0);
-    }
-}
 
 fn params() -> Params {
     Params::new(4, 8, 16, 8).expect("valid")
@@ -171,7 +126,7 @@ fn every_distance_entry_point_refuses_a_flushing_environment_and_answers_the_def
     let selected = guard::select(&view).expect("one HNSW guard");
 
     {
-        let flushed = Flushed::new();
+        let flushed = Mxcsr::flush_to_zero();
         let build = HnswIndex::build(matrix.clone(), &DistanceMetric::SquaredEuclidean, params());
         let decode = HnswIndex::<Exact>::decode(matrix.clone(), &image);
         let verify = index.verify_rebuild();
@@ -287,7 +242,7 @@ fn every_reassociated_entry_point_refuses_a_flushing_environment_and_answers_the
     };
 
     {
-        let flushed = Flushed::new();
+        let flushed = Mxcsr::flush_to_zero();
         let build = purrdf_hnsw::build::<Reassociated>(
             matrix.clone(),
             &DistanceMetric::SquaredEuclidean,
@@ -456,7 +411,7 @@ fn a_worker_thread_is_checked_where_it_computes_not_where_the_index_was_built() 
 
     let (flushed, clean) = std::thread::scope(|scope| {
         let flushed = scope.spawn(|| {
-            let _flushed = Flushed::new();
+            let _flushed = Mxcsr::flush_to_zero();
             answers()
         });
         let clean = scope.spawn(answers);
@@ -622,7 +577,7 @@ fn every_pair_entry_point_needs_a_handle_a_flushing_thread_cannot_obtain() {
     // refused by name, so no pair distance can be computed there.
     let matrix = VectorMatrix::new(3, 2, subnormal_rows()).expect("finite rows");
     let (flushed_square, exact, fast, recorded, fast_recorded) = {
-        let flushed = Flushed::new();
+        let flushed = Mxcsr::flush_to_zero();
         let square = core::hint::black_box(TINY) * core::hint::black_box(TINY);
         let exact = Exact::resolve();
         let fast = Reassociated::resolve();
@@ -780,7 +735,7 @@ fn every_norm_entry_point_needs_the_exact_handle_a_flushing_thread_cannot_obtain
     // thread by name. So no norm, and no cosine kernel dividing by one, is computed there.
     let matrix = VectorMatrix::new(1, 2, SUBNORMAL_ROW.to_vec()).expect("finite row");
     let (flushed_norm, exact, fast, recorded) = {
-        let flushed = Flushed::new();
+        let flushed = Mxcsr::flush_to_zero();
         let norm = reference_norm(&SUBNORMAL_ROW);
         let exact = Exact::resolve();
         let fast = Reassociated::resolve();

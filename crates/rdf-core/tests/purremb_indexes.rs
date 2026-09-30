@@ -3,17 +3,17 @@
 
 //! Exact external bindings and opaque inline/detached index guards.
 
+use purrdf_core::purremb_fixture::Identities;
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, DerivedIndex, DimensionalityPolicy, DistanceMetric,
-    EffectivePrefix, EmbeddingBuilder, EmbeddingFamily, EmbeddingFamilyContract, EmbeddingTarget,
-    EmbeddingView, ExtensionTarget, ExternalBinding, ExternalBindingContract, ExternalScope,
-    IndexBuildDeterminism, IndexCoordinates, IndexGuardContract, IndexLossContract,
-    IndexPayloadStorage, IndexStorage, IndexUseRole, MatrixCommitment, MatrixInput, MatrixRow,
-    PURREMB_HEADER_LENGTH, PrefixPostprocessing, ProjectionCommitment, ProjectionSpec,
-    RdfDatasetBuilder, SECTION_CONTRACTS, SECTION_EXTERNAL_BINDINGS, SECTION_INDEX_GUARDS,
-    SECTION_INDEX_PAYLOAD, SECTION_TARGETS, StageImplementation, TargetSet, VectorDtype,
-    derive_artifact_root, derive_matrix_content_digest, derive_matrix_id,
+    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, ContentDigest, DerivedIndex,
+    DimensionalityPolicy, DistanceMetric, EffectivePrefix, EmbeddingBuilder, EmbeddingFamily,
+    EmbeddingFamilyContract, EmbeddingTarget, EmbeddingView, ExtensionTarget, ExternalBinding,
+    ExternalBindingContract, ExternalScope, IndexBuildDeterminism, IndexCoordinates,
+    IndexGuardContract, IndexLossContract, IndexPayloadStorage, IndexStorage, IndexUseRole,
+    MatrixCommitment, MatrixInput, MatrixRow, PURREMB_HEADER_LENGTH, PrefixPostprocessing,
+    ProjectionCommitment, ProjectionSpec, RdfDatasetBuilder, SECTION_CONTRACTS,
+    SECTION_EXTERNAL_BINDINGS, SECTION_INDEX_GUARDS, SECTION_INDEX_PAYLOAD, SECTION_TARGETS,
+    TargetSet, VectorDtype, derive_artifact_root, derive_matrix_content_digest, derive_matrix_id,
     derive_projection_content_digest, derive_projection_id, verify_embedding,
     verify_external_artifact, verify_external_pack,
 };
@@ -95,28 +95,11 @@ struct Context {
     commitment: MatrixCommitment,
 }
 
-fn artifact(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        format!("https://example.org/index/{name}"),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("artifact")
-}
-
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            format!("https://example.org/index/{name}"),
-            ContentDigest::of(name.as_bytes()),
-            "application/cbor",
-            vec![1, 2],
-        )
-        .expect("stage"),
-    )
-}
+const FX: Identities = Identities {
+    stage_media: "application/cbor",
+    stage_payload: &[1, 2],
+    ..Identities::at("https://example.org/index/")
+};
 
 fn context() -> Context {
     context_with_metric(DistanceMetric::Cosine)
@@ -129,14 +112,14 @@ fn context_with_metric(metric: DistanceMetric) -> Context {
     let target = source.dataset_target(true).expect("dataset target");
     let target_set = TargetSet::new(vec![target.id]).expect("target set");
     let contract = EmbeddingFamilyContract {
-        model: artifact("model"),
-        engine: artifact("engine"),
-        tokenizer: artifact("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F32,
@@ -233,7 +216,7 @@ fn guard(
     certified_metadata_binding: Option<purrdf_core::ExternalBindingId>,
 ) -> IndexGuardContract {
     IndexGuardContract {
-        implementation: artifact("hnsw-fixture"),
+        implementation: FX.artifact("hnsw-fixture"),
         parameter_encoding: "application/cbor".into(),
         parameters: vec![0xa1, 0x61, b'm', 0x10],
         loss: IndexLossContract {

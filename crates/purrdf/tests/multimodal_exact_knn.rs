@@ -34,6 +34,7 @@
 //!
 //! Every IRI below is this test's own, in the host's role. PurRDF mints no vocabulary.
 
+use purrdf_core::purremb_fixture::Identities;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
@@ -54,11 +55,10 @@ use purrdf::text::{
     GraphSelector, SearchObservations, TextIndex, TextIndexConfig, TextSearchRelation,
 };
 use purrdf::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, DimensionalityPolicy, DistanceMetric, EmbeddingBuilder,
-    EmbeddingFamilyContract, MatrixInput, MatrixRow, PrefixPostprocessing, ProjectionSpec,
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTermTarget, StageImplementation, TargetSet,
-    TermValue, VectorDtype,
+    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
+    DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract, MatrixInput, MatrixRow,
+    PrefixPostprocessing, ProjectionSpec, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTermTarget,
+    TargetSet, TermValue, VectorDtype,
 };
 
 // ---------------------------------------------------------------------------
@@ -191,28 +191,11 @@ fn vectors() -> Vec<Vec<f64>> {
         .collect()
 }
 
-fn identity(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        format!("https://example.org/artifact/{name}"),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("the fixture artifact identity is well formed")
-}
-
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            format!("https://example.org/stage/{name}"),
-            ContentDigest::of(name.as_bytes()),
-            "application/octet-stream",
-            vec![1],
-        )
-        .expect("the fixture stage is well formed"),
-    )
-}
+const FX: Identities = Identities {
+    artifact_base: "https://example.org/artifact/",
+    stage_base: "https://example.org/stage/",
+    ..Identities::at("")
+};
 
 /// The exact space: a sealed embedding artifact over [`vectors`], named by the vector
 /// terms and by **no text subject**, opened and verified exactly as a host opens one.
@@ -238,14 +221,14 @@ fn knn_space() -> EmbeddingSpace {
     declared.sort_unstable_by_key(|target| target.id);
 
     let contract = EmbeddingFamilyContract {
-        model: identity("model"),
-        engine: identity("engine"),
-        tokenizer: identity("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F64,

@@ -336,6 +336,7 @@ mod tests {
         CANONICAL_TABLE, Carrier, TURTLE_LONG_TABLE, XML_TABLE, escape, find_first_literal_escape,
         write,
     };
+    use purrdf_testkit::rng::SplitMix64;
     use std::borrow::Cow;
     use std::fmt::Write as _;
 
@@ -383,19 +384,6 @@ mod tests {
         out
     }
 
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        const fn next(&mut self) -> u64 {
-            purrdf_testkit::rng::splitmix64_next(&mut self.0)
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            usize::try_from(self.next() % n as u64).expect("below n")
-        }
-    }
-
     /// Every ASCII scalar, the whole `0xC2` block, the `0xEF` block's edges and
     /// non-ASCII neighbours in every UTF-8 width.
     fn alphabet() -> Vec<char> {
@@ -419,15 +407,15 @@ mod tests {
     #[test]
     fn every_carrier_agrees_with_the_per_scalar_writer() {
         let alphabet = alphabet();
-        let mut rng = SplitMix(0x00CA_0010_E5CA_9E00);
+        let mut rng = SplitMix64::new(0x00CA_0010_E5CA_9E00);
         let mut escaped_past_first_chunk = 0_usize;
         let (mut borrowed, mut owned) = (0_usize, 0_usize);
         for len in (0..=70).chain([127, 128, 129, 255, 1000, 4099]) {
             for _ in 0..30 {
                 let value: String = (0..len)
                     .map(|_| {
-                        if rng.below(5) == 0 {
-                            alphabet[rng.below(alphabet.len())]
+                        if rng.below_usize(5) == 0 {
+                            alphabet[rng.below_usize(alphabet.len())]
                         } else {
                             'q'
                         }
@@ -528,10 +516,10 @@ mod tests {
     #[test]
     fn a_long_string_body_never_contains_three_raw_quotes_or_ends_in_one() {
         let alphabet = ['"', 'a', '\\', '\n'];
-        let mut rng = SplitMix(0x7700_1234_0000_0001);
+        let mut rng = SplitMix64::new(0x7700_1234_0000_0001);
         for len in 0..40 {
             for _ in 0..50 {
-                let value: String = (0..len).map(|_| alphabet[rng.below(4)]).collect();
+                let value: String = (0..len).map(|_| alphabet[rng.below_usize(4)]).collect();
                 let body = escape(&value, Carrier::TurtleLong);
                 // Read the body as a lexer would: an escape is two bytes, and
                 // a raw quote extends the current run of raw quotes.

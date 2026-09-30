@@ -43,6 +43,7 @@
 //! counterparts — rows produced and producer-reported work, exactly, against the
 //! materialised control — are asserted in `tests/multimodal_read_bound.rs`.
 
+use purrdf_core::purremb_fixture::Identities;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::hint::black_box;
@@ -50,13 +51,13 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
+use purrdf_testkit::rng::SplitMix64;
 
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, DimensionalityPolicy, DistanceMetric, EmbeddingBuilder,
-    EmbeddingFamilyContract, MatrixInput, MatrixRow, PrefixPostprocessing, ProjectionSpec,
-    RdfDataset, RdfDatasetBuilder, RdfTermTarget, StageImplementation, TargetSet, TermValue,
-    VectorDtype,
+    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
+    DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract, MatrixInput, MatrixRow,
+    PrefixPostprocessing, ProjectionSpec, RdfDataset, RdfDatasetBuilder, RdfTermTarget, TargetSet,
+    TermValue, VectorDtype,
 };
 use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, Fixed,
@@ -435,28 +436,7 @@ const PULLED: usize = 66;
 /// The dimensionality of the bench's embedding space.
 const DIMS: usize = 16;
 
-fn identity(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        ex(name),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("the fixture artifact identity is well formed")
-}
-
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            ex(name),
-            ContentDigest::of(name.as_bytes()),
-            "application/octet-stream",
-            vec![1],
-        )
-        .expect("the fixture stage is well formed"),
-    )
-}
+const FX: Identities = Identities::at("http://example.org/");
 
 /// A sealed embedding artifact of `rows` deterministic vectors, opened as a space.
 fn embedding_space(rows: usize) -> EmbeddingSpace {
@@ -479,14 +459,14 @@ fn embedding_space(rows: usize) -> EmbeddingSpace {
     declared.push(source.dataset_target(true).expect("dataset target"));
     declared.sort_unstable_by_key(|target| target.id);
     let contract = EmbeddingFamilyContract {
-        model: identity("model"),
-        engine: identity("engine"),
-        tokenizer: identity("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F64,
@@ -498,7 +478,7 @@ fn embedding_space(rows: usize) -> EmbeddingSpace {
     let family = contract.derive().expect("the family derives");
     let projection = ProjectionSpec::derive(family.id, dimension, PrefixPostprocessing::None);
     let vector_space = projection.vector_space_id;
-    let mut state = 0x0DE9_7B7A_4E00_0001_u64;
+    let mut rng = SplitMix64::new(0x0DE9_7B7A_4E00_0001_u64);
     let matrix = MatrixInput {
         family_id: family.id,
         target_set_id: set.id,
@@ -508,12 +488,7 @@ fn embedding_space(rows: usize) -> EmbeddingSpace {
             .map(|(target, _)| {
                 let values = (0..DIMS)
                     .map(|_| {
-                        // splitmix64, so the bench depends on no private helper.
-                        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-                        let mut z = state;
-                        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-                        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-                        z ^= z >> 31;
+                        let z = rng.next_u64();
                         f64::from(u32::try_from(z >> 40).expect("24 bits fit")) + 1.0
                     })
                     .collect();

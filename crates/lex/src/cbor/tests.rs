@@ -8,6 +8,7 @@ use super::{
     decode_deterministic, decode_prefix, decode_sequence, encode, encoded_len, read_from,
     write_canonical_map,
 };
+use purrdf_testkit::rng::SplitMix64;
 
 fn hex(text: &str) -> Vec<u8> {
     let text: String = text.chars().filter(|c| !c.is_whitespace()).collect();
@@ -498,24 +499,11 @@ fn a_float_is_written_in_the_narrowest_exact_width() {
 
 // ---- the canonical encoders ---------------------------------------------------
 
-/// A fixed-seed generator (SplitMix64), so every run draws the same values.
-struct SplitMix(u64);
-
-impl SplitMix {
-    const fn next(&mut self) -> u64 {
-        purrdf_testkit::rng::splitmix64_next(&mut self.0)
-    }
-
-    fn below(&mut self, n: u64) -> u64 {
-        self.next() % n
-    }
-}
-
-fn arbitrary(rng: &mut SplitMix, depth: usize) -> Value {
+fn arbitrary(rng: &mut SplitMix64, depth: usize) -> Value {
     let leaf = depth == 0 || rng.below(3) == 0;
     match rng.below(if leaf { 7 } else { 10 }) {
-        0 => int(i128::from(rng.next() as i64) >> rng.below(64)),
-        1 => Value::Bytes((0..rng.below(4)).map(|_| rng.next() as u8).collect()),
+        0 => int(i128::from(rng.next_u64() as i64) >> rng.below(64)),
+        1 => Value::Bytes((0..rng.below(4)).map(|_| rng.next_u64() as u8).collect()),
         2 => Value::Float(f64::from(rng.below(1000) as u32) / 8.0),
         3 => text(["", "a", "id", "x", "sig", "é"][rng.below(6) as usize]),
         4 => Value::Bool(rng.below(2) == 0),
@@ -538,7 +526,7 @@ fn arbitrary(rng: &mut SplitMix, depth: usize) -> Value {
 /// what `encode` wrote gives the value back.
 #[test]
 fn streaming_and_bottom_up_canonical_encoders_agree() {
-    let mut rng = SplitMix(0xC0B0_2026_0000_0001);
+    let mut rng = SplitMix64::new(0xC0B0_2026_0000_0001);
     for _ in 0..2000 {
         let value = arbitrary(&mut rng, 4);
         let bytes = canonical(&value);

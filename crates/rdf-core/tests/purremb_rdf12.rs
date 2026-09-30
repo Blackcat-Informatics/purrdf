@@ -3,50 +3,33 @@
 
 //! RDF 1.2 graph, reifier, annotation, directional-literal, and triple-term targets.
 
+use purrdf_core::purremb_fixture::Identities;
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, BlankScope, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, DatasetView, DimensionalityPolicy, DistanceMetric,
-    EmbeddingBuilder, EmbeddingError, EmbeddingFamilyContract, EmbeddingTarget, EmbeddingView,
-    MatrixInput, MatrixRow, PackView, PrefixPostprocessing, ProjectionSpec, RdfAnnotationTarget,
-    RdfDatasetBuilder, RdfGraphTarget, RdfLiteral, RdfReifierTarget, RdfStatementTarget,
-    RdfTermTarget, RdfTextDirection, RelationKind, SourceVerificationMode, StageImplementation,
-    TargetKind, TargetRelation, TargetSet, TermRef, VectorDtype, try_canonicalize,
-    verify_embedding, verify_embedding_source,
+    AppliedStage, BlankScope, CanonicalMetadataInput, CertifiedPurrpckSource, DatasetView,
+    DimensionalityPolicy, DistanceMetric, EmbeddingBuilder, EmbeddingError,
+    EmbeddingFamilyContract, EmbeddingTarget, EmbeddingView, MatrixInput, MatrixRow, PackView,
+    PrefixPostprocessing, ProjectionSpec, RdfAnnotationTarget, RdfDatasetBuilder, RdfGraphTarget,
+    RdfLiteral, RdfReifierTarget, RdfStatementTarget, RdfTermTarget, RdfTextDirection,
+    RelationKind, SourceVerificationMode, TargetKind, TargetRelation, TargetSet, TermRef,
+    VectorDtype, try_canonicalize, verify_embedding, verify_embedding_source,
 };
 
-fn artifact(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        format!("https://example.org/rdf12/{name}"),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("artifact")
-}
-
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            format!("https://example.org/rdf12/{name}"),
-            ContentDigest::of(name.as_bytes()),
-            "application/cbor",
-            vec![0xa1, 1],
-        )
-        .expect("stage"),
-    )
-}
+const FX: Identities = Identities {
+    stage_media: "application/cbor",
+    stage_payload: &[0xa1, 1],
+    ..Identities::at("https://example.org/rdf12/")
+};
 
 fn contract() -> EmbeddingFamilyContract {
     EmbeddingFamilyContract {
-        model: artifact("model"),
-        engine: artifact("engine"),
-        tokenizer: artifact("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("rdf12-projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("rdf12-projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F32,

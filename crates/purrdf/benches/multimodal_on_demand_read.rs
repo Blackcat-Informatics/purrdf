@@ -87,6 +87,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
+use purrdf_testkit::rng::signed_unit_next_nonzero;
 
 use purrdf::hnsw::relation::{HnswRelation, HnswSpace};
 use purrdf::hnsw::{HnswIndex, Params, VectorMatrix};
@@ -222,21 +223,13 @@ fn text_index(dataset: &RdfDataset, predicate: &str) -> Arc<TextIndex> {
     Arc::new(TextIndex::from_dataset(dataset, &config).expect("the fixture index builds"))
 }
 
-/// Deterministic vectors, splitmix64, spelled here so the fixture depends on no
-/// private helper.
+/// Deterministic vectors: testkit's SplitMix64 counter stream mapped to `[-1, 1)`,
+/// the one exact zero replaced by `0.125` so no row has a zero component.
 fn splitmix_vectors(seed: u64, rows: usize, dims: usize) -> Vec<f64> {
     let mut state = seed;
-    let mut data = Vec::with_capacity(rows * dims);
-    for _ in 0..rows * dims {
-        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        let value = ((z >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0);
-        data.push(if value == 0.0 { 0.125 } else { value });
-    }
-    data
+    (0..rows * dims)
+        .map(|_| signed_unit_next_nonzero(&mut state, 0.125))
+        .collect()
 }
 
 /// An HNSW space of `terms.len()` rows, named by `terms`.

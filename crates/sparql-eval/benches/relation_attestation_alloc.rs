@@ -54,11 +54,10 @@
 //!   buffers, row interning, the solution row) and no phase above can be mistaken
 //!   for measuring that floor.
 
-use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
+use purrdf_alloc_probe::{CountingAllocator, Measurement, WholeProcessWindow};
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, SparqlRequest, TermValue};
 use purrdf_sparql_eval::{
@@ -70,81 +69,13 @@ use purrdf_sparql_eval::{
 // The tracking allocator
 // ---------------------------------------------------------------------------
 
-static LIVE_BYTES: AtomicI64 = AtomicI64::new(0);
-static PEAK_BYTES: AtomicI64 = AtomicI64::new(0);
-static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
-
-fn to_i64(size: usize) -> i64 {
-    i64::try_from(size).unwrap_or(i64::MAX)
-}
-
-fn record_allocation(size: usize) {
-    ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-    let size = to_i64(size);
-    let live = LIVE_BYTES
-        .fetch_add(size, Ordering::Relaxed)
-        .saturating_add(size);
-    let mut peak = PEAK_BYTES.load(Ordering::Relaxed);
-    while live > peak {
-        match PEAK_BYTES.compare_exchange_weak(peak, live, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => break,
-            Err(observed) => peak = observed,
-        }
-    }
-}
-
-fn record_deallocation(size: usize) {
-    LIVE_BYTES.fetch_sub(to_i64(size), Ordering::Relaxed);
-}
-
-struct CountingAllocator;
-
-// SAFETY: every operation delegates to `System` with the exact incoming pointer
-// and layout; the atomic accounting does not affect allocator ownership.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: delegated with the caller's exact layout.
-        let pointer = unsafe { System.alloc(layout) };
-        if !pointer.is_null() {
-            record_allocation(layout.size());
-        }
-        pointer
-    }
-
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        record_deallocation(layout.size());
-        // SAFETY: delegated with the caller's exact pointer/layout.
-        unsafe { System.dealloc(pointer, layout) }
-    }
-
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        // SAFETY: delegated with the caller's exact pointer/layout and size.
-        let resized = unsafe { System.realloc(pointer, layout, new_size) };
-        if !resized.is_null() {
-            record_deallocation(layout.size());
-            record_allocation(new_size);
-        }
-        resized
-    }
-}
-
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
-/// The allocation count and peak high-water baseline to measure a phase against.
-fn reset() -> (u64, i64) {
-    let live = LIVE_BYTES.load(Ordering::Relaxed);
-    PEAK_BYTES.store(live, Ordering::Relaxed);
-    (ALLOCATIONS.load(Ordering::Relaxed), live)
-}
-
-fn report(label: &str, baseline: (u64, i64), invocations: u64) {
-    let allocations = ALLOCATIONS
-        .load(Ordering::Relaxed)
-        .saturating_sub(baseline.0);
-    let peak = PEAK_BYTES
-        .load(Ordering::Relaxed)
-        .saturating_sub(baseline.1);
+/// Print what a phase allocated, per invocation.
+fn report(label: &str, measured: Measurement, invocations: u64) {
+    let allocations = measured.allocations;
+    let peak = measured.peak_working_bytes;
     let per_invocation = f64::from(u32::try_from(allocations).unwrap_or(u32::MAX))
         / f64::from(u32::try_from(invocations).unwrap_or(1));
     println!(
@@ -317,7 +248,7 @@ fn phase(label: &str, attests: Attests, lane: Lane, dataset: &Arc<RdfDataset>) {
         .prepare_query_with_options(PER_ROW_CALL, None, options(&relations))
         .expect("the fixture query prepares against the registry");
 
-    let baseline = reset();
+    let window = WholeProcessWindow::open();
     match lane {
         Lane::Governed => {
             let outcome = engine
@@ -338,7 +269,7 @@ fn phase(label: &str, attests: Attests, lane: Lane, dataset: &Arc<RdfDataset>) {
             black_box(&result);
         }
     }
-    report(label, baseline, ROWS);
+    report(label, window.close(), ROWS);
 }
 
 fn main() {

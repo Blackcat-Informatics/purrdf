@@ -1163,39 +1163,22 @@ mod tests {
         );
     }
 
-    fn artifact(name: &str) -> ArtifactIdentity {
-        ArtifactIdentity::new(
-            name,
-            "application/example",
-            ContentDigest::of(name.as_bytes()),
-            None,
-            ArtifactIdentityKind::Single,
-        )
-        .expect("valid fixture artifact")
-    }
-
-    fn stage(name: &str) -> AppliedStage {
-        AppliedStage::Applied(
-            StageImplementation::new(
-                name,
-                ContentDigest::of(name.as_bytes()),
-                "application/octet-stream",
-                vec![1, 2, 3],
-            )
-            .expect("valid fixture stage"),
-        )
-    }
+    const FX: crate::purremb_fixture::Identities = crate::purremb_fixture::Identities {
+        artifact_media: "application/example",
+        stage_payload: &[1, 2, 3],
+        ..crate::purremb_fixture::Identities::at("")
+    };
 
     fn contract(policy: DimensionalityPolicy) -> EmbeddingFamilyContract {
         EmbeddingFamilyContract {
-            model: artifact("model"),
-            engine: artifact("engine"),
-            tokenizer: artifact("tokenizer"),
-            execution: stage("execution"),
-            subject_projection: stage("projection"),
+            model: FX.artifact("model"),
+            engine: FX.artifact("engine"),
+            tokenizer: FX.artifact("tokenizer"),
+            execution: FX.stage("execution"),
+            subject_projection: FX.stage("projection"),
             preprocessing: AppliedStage::NotApplied,
-            chunking: stage("chunking"),
-            pooling: stage("pooling"),
+            chunking: FX.stage("chunking"),
+            pooling: FX.stage("pooling"),
             normalization: AppliedStage::NotApplied,
             truncation: AppliedStage::NotApplied,
             dtype: VectorDtype::F32,

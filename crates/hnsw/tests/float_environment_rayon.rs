@@ -32,38 +32,14 @@
 
 use purrdf_core::DistanceMetric;
 use purrdf_core::distance::Reassociated;
+use purrdf_core::distance::control;
 use purrdf_core::distance::{FloatEnvironmentError, FloatEnvironmentEvidence};
 use purrdf_hnsw::{HnswError, HnswIndex, Params, Ranked, VectorMatrix};
-
-/// MXCSR flush-to-zero.
-const FTZ: u32 = 1 << 15;
-
-fn read_mxcsr() -> u32 {
-    let mut value: u32 = 0;
-    // SAFETY: `stmxcsr` stores the 32-bit MXCSR to a live, aligned, writable `u32`.
-    unsafe {
-        core::arch::asm!(
-            "stmxcsr [{ptr}]",
-            ptr = in(reg) &raw mut value,
-            options(nostack, preserves_flags),
-        );
-    }
-    value
-}
 
 /// Set FTZ on the calling thread for the rest of its life: called only from the global
 /// pool's start handler, on threads this binary's pool owns and no other test shares.
 fn flush_this_thread() {
-    let value = read_mxcsr() | FTZ;
-    // SAFETY: `ldmxcsr` loads MXCSR from a live, aligned `u32`, the register as read with
-    // FTZ added, which is a valid MXCSR value.
-    unsafe {
-        core::arch::asm!(
-            "ldmxcsr [{ptr}]",
-            ptr = in(reg) &raw const value,
-            options(nostack, preserves_flags, readonly),
-        );
-    }
+    control::set_mxcsr(control::mxcsr() | control::MXCSR_FTZ);
 }
 
 fn params() -> Params {

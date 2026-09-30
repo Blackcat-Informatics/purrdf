@@ -315,24 +315,10 @@ pub(crate) mod test_support {
     //!
     //! The determinism contract is asserted by feeding the same inputs in many
     //! different orders and demanding identical observable state. That needs a
-    //! shuffle, and the crate has no RNG (and must not acquire one — no ambient
-    //! entropy on `wasm32-unknown-unknown`), so the permutation is generated from
-    //! an explicit seed by a pure integer mix. Every "random" order in the test
-    //! suite is therefore reproducible on every target: a failure names the seed
-    //! that produced it.
+    //! shuffle; the crate has no RNG of its own (no ambient entropy on
+    //! `wasm32-unknown-unknown`), so the permutation is the workspace's one seeded
+    //! shuffle. Every "random" order in the test suite is therefore reproducible on
+    //! every target: a failure names the seed that produced it.
 
-    /// A deterministic permutation of `items` selected by `seed`.
-    ///
-    /// A Fisher-Yates shuffle driven by the workspace's shared SplitMix64
-    /// stream ([`purrdf_testkit::rng::SplitMix64`]); the same `seed`
-    /// always yields the same order, on every target.
-    pub(crate) fn permute<T: Clone>(items: &[T], seed: u64) -> Vec<T> {
-        let mut out = items.to_vec();
-        let mut rng = purrdf_testkit::rng::SplitMix64::new(seed);
-        for i in (1..out.len()).rev() {
-            let j = rng.below_usize(i + 1);
-            out.swap(i, j);
-        }
-        out
-    }
+    pub(crate) use purrdf_testkit::rng::permute;
 }

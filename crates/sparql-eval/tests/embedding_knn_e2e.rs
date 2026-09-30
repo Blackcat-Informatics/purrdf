@@ -10,16 +10,17 @@
 //! into the crate's internals: a surface whose stages only line up from inside is a
 //! surface a host cannot use.
 
+use purrdf_core::purremb_fixture::Identities;
 use purrdf_testkit::rng::{LCG64_MMIX_INCREMENT, lcg64_next};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, DimensionalityPolicy, DistanceMetric, EmbeddingBuilder,
-    EmbeddingFamilyContract, MatrixInput, MatrixRow, PrefixPostprocessing, ProjectionSpec,
-    RdfDataset, RdfDatasetBuilder, RdfTermTarget, SparqlRequest, SparqlResult, StageImplementation,
-    TargetId, TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
+    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
+    DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract, MatrixInput, MatrixRow,
+    PrefixPostprocessing, ProjectionSpec, RdfDataset, RdfDatasetBuilder, RdfTermTarget,
+    SparqlRequest, SparqlResult, TargetId, TargetSet, TargetSetId, TermValue, VectorDtype,
+    VectorSpaceId,
 };
 use purrdf_sparql_eval::{
     ChargePoint, EmbeddingKnnRelation, EmbeddingSpace, ExtensionEnv, GovernedOutcome,
@@ -45,30 +46,7 @@ const QUERY: &str = "PREFIX knn: <https://example.org/space/>\n\
 // The fixture artifact
 // ---------------------------------------------------------------------------
 
-/// A fixture artifact identity, distinct per `name`.
-fn identity(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        format!("https://example.org/{name}"),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("artifact identity")
-}
-
-/// A fixture applied stage, distinct per `name`.
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            format!("https://example.org/{name}"),
-            ContentDigest::of(name.as_bytes()),
-            "application/octet-stream",
-            vec![1],
-        )
-        .expect("stage"),
-    )
-}
+const FX: Identities = Identities::at("https://example.org/");
 
 /// An IRI term in the fixture namespace.
 fn iri(local: &str) -> TermValue {
@@ -107,14 +85,14 @@ fn artifact(
     declared.sort_unstable_by_key(|target| target.id);
 
     let contract = EmbeddingFamilyContract {
-        model: identity("model"),
-        engine: identity("engine"),
-        tokenizer: identity("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F64,

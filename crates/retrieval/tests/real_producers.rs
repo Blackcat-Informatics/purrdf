@@ -29,6 +29,7 @@
 //! ranking, and inventing a stratum for it would be inventing a ranking it never
 //! claimed.
 
+use purrdf_core::purremb_fixture::Identities;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::Arc;
@@ -37,11 +38,10 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_core::distance::Arithmetic;
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, DimensionalityPolicy, DistanceMetric, EmbeddingBuilder,
-    EmbeddingFamilyContract, MatrixInput, MatrixRow, PrefixPostprocessing, ProjectionSpec,
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTermTarget, StageImplementation, TargetId,
-    TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
+    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
+    DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract, MatrixInput, MatrixRow,
+    PrefixPostprocessing, ProjectionSpec, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTermTarget,
+    TargetId, TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
 };
 use purrdf_retrieval::{
     AdmissionEnvironment, Completeness, DecayRule, Fixed, FusionError, FusionProfile, Iri,
@@ -165,30 +165,7 @@ fn text_index() -> TextIndex {
 // The PURREMB artifact, encoded and sealed by the kernel's own writer
 // ---------------------------------------------------------------------------
 
-/// A fixture artifact identity, distinct per `name`.
-fn identity(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        ex(name),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("the fixture artifact identity is well formed")
-}
-
-/// A fixture applied stage, distinct per `name`.
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            ex(name),
-            ContentDigest::of(name.as_bytes()),
-            "application/octet-stream",
-            vec![1],
-        )
-        .expect("the fixture stage is well formed"),
-    )
-}
+const FX: Identities = Identities::at("https://example.org/");
 
 /// The corpus's vector half alone, as `(subject local name, vector)`.
 fn vector_rows() -> Vec<(&'static str, Vec<f64>)> {
@@ -235,14 +212,14 @@ fn artifact_over(
     declared.sort_unstable_by_key(|target| target.id);
 
     let contract = EmbeddingFamilyContract {
-        model: identity("model"),
-        engine: identity("engine"),
-        tokenizer: identity("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F64,

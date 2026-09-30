@@ -90,7 +90,7 @@ fn crate_src_rust_files(root: &Path) -> Vec<(String, PathBuf)> {
         let entry = entry.expect("dir entry");
         let src = entry.path().join("src");
         if src.is_dir() {
-            collect_rust_files(&src, root, &mut out);
+            out.extend(rust_files_under(&src, root));
         }
     }
     out.sort();
@@ -122,31 +122,23 @@ fn crate_manifests(root: &Path) -> Vec<(String, PathBuf)> {
     out
 }
 
-/// Every `.rs` file under a directory tree, recursively.
+/// Every `.rs` file under a directory tree, recursively, labelled relative to `root`.
 fn rust_files_under(dir: &Path, root: &Path) -> Vec<(String, PathBuf)> {
-    let mut out = Vec::new();
-    collect_rust_files(dir, root, &mut out);
-    out.sort();
-    out
-}
-
-fn collect_rust_files(dir: &Path, root: &Path, out: &mut Vec<(String, PathBuf)>) {
-    for entry in std::fs::read_dir(dir)
-        .unwrap_or_else(|e| panic!("gts-codec-hygiene: cannot read {}: {e}", dir.display()))
-    {
-        let entry = entry.expect("dir entry");
-        let path = entry.path();
-        if path.is_dir() {
-            collect_rust_files(&path, root, out);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+    let mut paths = Vec::new();
+    purrdf_testkit::paths::collect_rs(dir, &mut paths);
+    let mut out: Vec<(String, PathBuf)> = paths
+        .into_iter()
+        .map(|path| {
             let label = path
                 .strip_prefix(root)
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .into_owned();
-            out.push((label, path));
-        }
-    }
+            (label, path)
+        })
+        .collect();
+    out.sort();
+    out
 }
 
 /// Strip Rust line-comments so a doc-comment NAMING a forbidden token is not a false

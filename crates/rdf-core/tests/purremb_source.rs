@@ -3,13 +3,14 @@
 
 //! Exact-source, certified-RDF, and source-ordinal mismatch separation.
 
+use purrdf_core::purremb_fixture::Identities;
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, CorpusTarget, DimensionalityPolicy, DistanceMetric,
-    EmbeddingBuilder, EmbeddingError, EmbeddingFamilyContract, EmbeddingTarget, EmbeddingView,
-    MatrixInput, MatrixRow, PackView, PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder,
-    RdfDatasetTarget, RdfTermTarget, SourceVerificationMode, StageImplementation, TargetSet,
-    TermValue, VectorDtype, derive_artifact_root, verify_embedding, verify_embedding_source,
+    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, ContentDigest, CorpusTarget,
+    DimensionalityPolicy, DistanceMetric, EmbeddingBuilder, EmbeddingError,
+    EmbeddingFamilyContract, EmbeddingTarget, EmbeddingView, MatrixInput, MatrixRow, PackView,
+    PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, RdfDatasetTarget, RdfTermTarget,
+    SourceVerificationMode, TargetSet, TermValue, VectorDtype, derive_artifact_root,
+    verify_embedding, verify_embedding_source,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -25,39 +26,18 @@ struct Fixture {
     corpus_target: EmbeddingTarget,
 }
 
-fn artifact(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        format!("https://example.org/source/{name}"),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("artifact")
-}
-
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            format!("https://example.org/source/{name}"),
-            ContentDigest::of(name.as_bytes()),
-            "application/octet-stream",
-            vec![1],
-        )
-        .expect("stage"),
-    )
-}
+const FX: Identities = Identities::at("https://example.org/source/");
 
 fn contract() -> EmbeddingFamilyContract {
     EmbeddingFamilyContract {
-        model: artifact("model"),
-        engine: artifact("engine"),
-        tokenizer: artifact("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F32,

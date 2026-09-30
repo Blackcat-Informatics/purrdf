@@ -17,15 +17,15 @@
 use purrdf_core::IndexGuardView;
 use purrdf_core::distance::Reassociated;
 use purrdf_core::distance::{Arithmetic, Exact};
+use purrdf_core::purremb_fixture::Identities;
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, DerivedIndex, DimensionalityPolicy, DistanceMetric,
-    EffectivePrefix, EmbeddingBuilder, EmbeddingFamily, EmbeddingFamilyContract, EmbeddingTarget,
-    EmbeddingView, ExtensionTarget, IndexBuildDeterminism, IndexCoordinates, IndexGuardContract,
-    IndexLossContract, IndexPayloadStorage, MatrixInput, MatrixRow, PURREMB_HEADER_LENGTH,
-    PrefixPostprocessing, RdfDatasetBuilder, SECTION_INDEX_PAYLOAD, StageImplementation, TargetId,
-    TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId, derive_artifact_root,
-    verify_embedding,
+    AppliedStage, ArtifactIdentity, CanonicalMetadataInput, CertifiedPurrpckSource, ContentDigest,
+    DerivedIndex, DimensionalityPolicy, DistanceMetric, EffectivePrefix, EmbeddingBuilder,
+    EmbeddingFamily, EmbeddingFamilyContract, EmbeddingTarget, EmbeddingView, ExtensionTarget,
+    IndexBuildDeterminism, IndexCoordinates, IndexGuardContract, IndexLossContract,
+    IndexPayloadStorage, MatrixInput, MatrixRow, PURREMB_HEADER_LENGTH, PrefixPostprocessing,
+    RdfDatasetBuilder, SECTION_INDEX_PAYLOAD, TargetId, TargetSet, TargetSetId, TermValue,
+    VectorDtype, VectorSpaceId, derive_artifact_root, verify_embedding,
 };
 use purrdf_hnsw::{HnswIndex, IndexArithmetic, Params, VectorMatrix, guard, level::splitmix64};
 
@@ -315,14 +315,14 @@ fn context(rows: usize, dims: usize, prefix: usize) -> Context {
         .expect("target set is nonempty and distinct");
 
     let contract = EmbeddingFamilyContract {
-        model: artifact("model"),
-        engine: artifact("engine"),
-        tokenizer: artifact("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F32,
@@ -412,28 +412,11 @@ fn build(context: &Context, indexes: Vec<DerivedIndex>) -> Vec<u8> {
     builder.build().expect("the indexed artifact builds").bytes
 }
 
-fn artifact(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        format!("https://example.org/index/{name}"),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("artifact")
-}
-
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            format!("https://example.org/index/{name}"),
-            ContentDigest::of(name.as_bytes()),
-            "application/cbor",
-            vec![1, 2],
-        )
-        .expect("stage"),
-    )
-}
+const FX: Identities = Identities {
+    stage_media: "application/cbor",
+    stage_payload: &[1, 2],
+    ..Identities::at("https://example.org/index/")
+};
 
 // ---------------------------------------------------------------------------
 // Framing helpers, shared with `crates/rdf-core/tests/purremb_indexes.rs`

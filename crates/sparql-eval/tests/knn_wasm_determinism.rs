@@ -63,14 +63,14 @@
 
 #![allow(clippy::doc_markdown, reason = "prose names targets, not items")]
 
+use purrdf_core::purremb_fixture::Identities;
 use std::sync::Arc;
 
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, DimensionalityPolicy, DistanceMetric, EmbeddingBuilder,
-    EmbeddingFamilyContract, MatrixInput, MatrixRow, PrefixPostprocessing, ProjectionSpec,
-    RdfDatasetBuilder, RdfTermTarget, SparqlRequest, SparqlResult, StageImplementation, TargetSet,
-    TermValue, VectorDtype,
+    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
+    DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract, MatrixInput, MatrixRow,
+    PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, RdfTermTarget, SparqlRequest,
+    SparqlResult, TargetSet, TermValue, VectorDtype,
 };
 use purrdf_sparql_eval::{
     EmbeddingKnnRelation, EmbeddingSpace, ExtensionEnv, KnnGuard, NativeSparqlEngine,
@@ -178,28 +178,7 @@ const EXPECTED: [(&str, &str); 5] = [
     ("v2", "9.661190786522847E-1"),
 ];
 
-fn identity(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        format!("https://example.org/{name}"),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("artifact identity")
-}
-
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            format!("https://example.org/{name}"),
-            ContentDigest::of(name.as_bytes()),
-            "application/octet-stream",
-            vec![1],
-        )
-        .expect("stage"),
-    )
-}
+const FX: Identities = Identities::at("https://example.org/");
 
 /// Encode `rows` as a sealed PURREMB artifact under `metric` and open it as a queryable
 /// space.
@@ -224,14 +203,14 @@ fn space(rows: &[(&'static str, Vec<f64>)], metric: DistanceMetric) -> Embedding
     declared.sort_unstable_by_key(|target| target.id);
 
     let contract = EmbeddingFamilyContract {
-        model: identity("model"),
-        engine: identity("engine"),
-        tokenizer: identity("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F64,

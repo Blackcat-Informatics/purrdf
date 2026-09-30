@@ -321,4 +321,6 @@ pub use ir::{
 };
 
 #[doc(hidden)]
+pub mod purremb_fixture;
+#[doc(hidden)]
 pub mod term_fixture;

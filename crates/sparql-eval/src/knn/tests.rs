@@ -10,15 +10,15 @@
 //! metric it declares, which rows its target set numbers, which matrix its guards bind —
 //! and a hand-built table would test none of it.
 
+use purrdf_core::purremb_fixture::Identities;
 use std::sync::Arc;
 
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, DerivedIndex, DimensionalityPolicy, DistanceMetric,
-    EmbeddingBuilder, EmbeddingFamilyContract, IndexBuildDeterminism, IndexCoordinates,
-    IndexGuardContract, IndexLossContract, IndexPayloadStorage, IndexUseRole, MatrixInput,
-    MatrixRow, PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, RdfTermTarget,
-    StageImplementation, TargetSet, VectorDtype,
+    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DerivedIndex,
+    DimensionalityPolicy, DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract,
+    IndexBuildDeterminism, IndexCoordinates, IndexGuardContract, IndexLossContract,
+    IndexPayloadStorage, IndexUseRole, MatrixInput, MatrixRow, PrefixPostprocessing,
+    ProjectionSpec, RdfDatasetBuilder, RdfTermTarget, TargetSet, VectorDtype,
 };
 
 use super::*;
@@ -41,30 +41,7 @@ struct Fixture {
     bindings: Vec<(TargetId, TermValue)>,
 }
 
-/// A fixture artifact identity, distinct per `name`.
-fn identity(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        format!("https://example.org/{name}"),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("artifact identity")
-}
-
-/// A fixture applied stage, distinct per `name`.
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            format!("https://example.org/{name}"),
-            ContentDigest::of(name.as_bytes()),
-            "application/octet-stream",
-            vec![1],
-        )
-        .expect("stage"),
-    )
-}
+const FX: Identities = Identities::at("https://example.org/");
 
 /// An IRI term in the fixture namespace.
 fn iri(local: &str) -> TermValue {
@@ -116,14 +93,14 @@ fn fixture_with_indexes(
     declared.sort_unstable_by_key(|target| target.id);
 
     let contract = EmbeddingFamilyContract {
-        model: identity("model"),
-        engine: identity("engine"),
-        tokenizer: identity("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F64,
@@ -1438,7 +1415,7 @@ fn a_derived_index_guard_naming_this_space_is_checked_and_a_matching_one_is_admi
         prefix_dimension: space_view.dimension(),
     };
     let guard_contract = IndexGuardContract {
-        implementation: identity("ann-implementation"),
+        implementation: FX.artifact("ann-implementation"),
         parameter_encoding: "application/cbor".to_owned(),
         parameters: vec![0xA0],
         loss: IndexLossContract {
@@ -1547,14 +1524,14 @@ fn prefixed_fixture(
     };
 
     let contract = EmbeddingFamilyContract {
-        model: identity("model"),
-        engine: identity("engine"),
-        tokenizer: identity("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype,

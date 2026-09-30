@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 use core::fmt::Write as _;
+use purrdf_testkit::rng::SplitMix64;
 
 use super::{ErrorKind, Limits, read, read_with, write};
 use crate::json::{self, Object, Value};
@@ -527,19 +528,6 @@ fn the_depth_cap_accepts_n_collections_and_refuses_n_plus_one() {
 
 // ---- both directions ---------------------------------------------------------
 
-/// A fixed-seed generator (SplitMix64), so every run draws the same values.
-struct SplitMix(u64);
-
-impl SplitMix {
-    const fn next(&mut self) -> u64 {
-        purrdf_testkit::rng::splitmix64_next(&mut self.0)
-    }
-
-    fn below(&mut self, n: u64) -> usize {
-        (self.next() % n) as usize
-    }
-}
-
 const TEXTS: &[&str] = &[
     "",
     "a",
@@ -590,26 +578,28 @@ const TEXTS: &[&str] = &[
     ">",
 ];
 
-fn arbitrary(rng: &mut SplitMix, depth: usize) -> Value {
-    let leaf = depth == 0 || rng.below(3) == 0;
-    match rng.below(if leaf { 5 } else { 7 }) {
+fn arbitrary(rng: &mut SplitMix64, depth: usize) -> Value {
+    let leaf = depth == 0 || rng.below_usize(3) == 0;
+    match rng.below_usize(if leaf { 5 } else { 7 }) {
         0 => Value::Null,
-        1 => Value::Bool(rng.below(2) == 0),
-        2 => Value::from(["0", "-3", "1.50", "2e+9", "123456789012345678901234"][rng.below(5)])
-            .as_str()
-            .map(|lexeme| Value::Number(lexeme.parse().expect("a lexeme")))
-            .expect("a string"),
-        3 | 4 => Value::from(TEXTS[rng.below(TEXTS.len() as u64)]),
+        1 => Value::Bool(rng.below_usize(2) == 0),
+        2 => {
+            Value::from(["0", "-3", "1.50", "2e+9", "123456789012345678901234"][rng.below_usize(5)])
+                .as_str()
+                .map(|lexeme| Value::Number(lexeme.parse().expect("a lexeme")))
+                .expect("a string")
+        }
+        3 | 4 => Value::from(TEXTS[rng.below_usize(TEXTS.len())]),
         5 => Value::Array(
-            (0..rng.below(4))
+            (0..rng.below_usize(4))
                 .map(|_| arbitrary(rng, depth - 1))
                 .collect(),
         ),
         _ => {
             let mut object = Object::new();
-            for _ in 0..rng.below(4) {
-                let name =
-                    TEXTS[rng.below(TEXTS.len() as u64)].to_owned() + &rng.below(3).to_string();
+            for _ in 0..rng.below_usize(4) {
+                let name = TEXTS[rng.below_usize(TEXTS.len())].to_owned()
+                    + &rng.below_usize(3).to_string();
                 object.insert(name, arbitrary(rng, depth - 1));
             }
             Value::Object(object)
@@ -620,7 +610,7 @@ fn arbitrary(rng: &mut SplitMix, depth: usize) -> Value {
 /// Whatever the emitter writes, the reader reads back to the same value.
 #[test]
 fn every_written_document_reads_back_to_its_value() {
-    let mut rng = SplitMix(0x7A31_2026_0000_0001);
+    let mut rng = SplitMix64::new(0x7A31_2026_0000_0001);
     for _ in 0..3000 {
         let value = arbitrary(&mut rng, 4);
         let written = write(&value);

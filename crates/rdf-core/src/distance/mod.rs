@@ -157,6 +157,11 @@ pub(crate) mod binary64;
 /// file through `#[path]`, so each of its functions exists once in source and twice
 /// in the build: a build script cannot link the library it is building.
 mod build_identity;
+/// The thread's floating-point control register, read and written through one
+/// assembly wrapper each, for the float-environment tests of this crate and its
+/// dependants; not a stable interface.
+#[doc(hidden)]
+pub mod control;
 mod dispatch;
 mod env;
 mod exact;

@@ -29,15 +29,16 @@
 
 #![allow(clippy::doc_markdown, reason = "prose names targets, not items")]
 
+use purrdf_core::purremb_fixture::Identities;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use purrdf_core::distance::{Arithmetic, Path};
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, DimensionalityPolicy, DistanceMetric, EmbeddingBuilder,
-    EmbeddingFamilyContract, MatrixInput, MatrixRow, PrefixPostprocessing, ProjectionSpec,
-    RdfDatasetBuilder, RdfTermTarget, StageImplementation, TargetSet, TermValue, VectorDtype,
+    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
+    DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract, MatrixInput, MatrixRow,
+    PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, RdfTermTarget, TargetSet, TermValue,
+    VectorDtype,
 };
 use purrdf_sparql_eval::knn::{Bound, Bounded, Exact, Reassociated, Resolved, Selected};
 use purrdf_sparql_eval::{
@@ -204,30 +205,7 @@ fn the_reassociated_distance_refuses_an_overflow() {
 /// The fixture's data namespace.
 const EX: &str = "https://example.org/d/";
 
-/// A fixture artifact identity, distinct per `name`.
-fn identity(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        format!("https://example.org/{name}"),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("artifact identity")
-}
-
-/// A fixture applied stage, distinct per `name`.
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            format!("https://example.org/{name}"),
-            ContentDigest::of(name.as_bytes()),
-            "application/octet-stream",
-            vec![1],
-        )
-        .expect("stage"),
-    )
-}
+const FX: Identities = Identities::at("https://example.org/");
 
 /// Encode `rows` as a sealed PURREMB artifact under `metric` and open it as a queryable
 /// space.
@@ -252,14 +230,14 @@ fn space(rows: &[(String, Vec<f64>)], metric: DistanceMetric) -> EmbeddingSpace 
     declared.sort_unstable_by_key(|target| target.id);
 
     let contract = EmbeddingFamilyContract {
-        model: identity("model"),
-        engine: identity("engine"),
-        tokenizer: identity("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F64,

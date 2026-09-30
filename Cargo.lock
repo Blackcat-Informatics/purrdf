@@ -406,6 +406,7 @@ name = "purrdf"
 version = "2.0.2"
 dependencies = [
  "purrdf-columnar",
+ "purrdf-core",
  "purrdf-datalog",
  "purrdf-entail",
  "purrdf-events",

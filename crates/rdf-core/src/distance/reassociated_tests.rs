@@ -664,23 +664,11 @@ fn the_portable_path_is_not_dispatched_where_a_named_path_exists() {
 #[cfg(target_arch = "x86_64")]
 #[test]
 fn reassociated_refuses_flush_to_zero() {
-    fn set_mxcsr(value: u32) {
-        // SAFETY: `ldmxcsr` loads MXCSR from a live, aligned `u32`. The value differs
-        // from the saved register only in the FTZ bit, the saved value is restored
-        // before any float arithmetic, and the register is per-thread.
-        unsafe {
-            core::arch::asm!(
-                "ldmxcsr [{ptr}]",
-                ptr = in(reg) &raw const value,
-                options(nostack, preserves_flags, readonly),
-            );
-        }
-    }
-    let saved = env::mxcsr();
-    set_mxcsr(saved | (1 << 15));
+    let saved = control::mxcsr();
+    control::set_mxcsr(saved | (1 << 15));
     let refused = Reassociated::resolve();
     let refused_recorded = Reassociated::resolve_recorded(2);
-    set_mxcsr(saved);
+    control::set_mxcsr(saved);
     let flush = FloatEnvironmentError::FlushToZero {
         evidence: FloatEnvironmentEvidence::Register {
             name: "MXCSR",

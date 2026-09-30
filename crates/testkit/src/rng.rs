@@ -57,6 +57,24 @@ pub fn signed_unit_stream(len: usize, seed: u64) -> Vec<f64> {
     (0..len).map(|_| signed_unit_next(&mut state)).collect()
 }
 
+/// A deterministic permutation of `items` selected by `seed`.
+///
+/// An unbiased Fisher-Yates shuffle over [`Xoshiro256::up_to`], which redraws rather
+/// than reducing modulo the bound, seeded through [`SplitMix64`] like every
+/// [`Xoshiro256`]. The same `seed` yields the same order on every target, so a test that
+/// asserts an order-independence law names the seed that broke it.
+#[must_use]
+pub fn permute<T: Clone>(items: &[T], seed: u64) -> Vec<T> {
+    let mut out = items.to_vec();
+    let mut rng = Xoshiro256::from_seed(seed);
+    for i in (1..out.len()).rev() {
+        // `i` widens losslessly to `u64`, and a draw in `0..=i` narrows back.
+        let j = rng.up_to(i as u64) as usize;
+        out.swap(i, j);
+    }
+    out
+}
+
 /// SplitMix64 (Steele, Lea and Flood): a seed expander and a strong 64-bit
 /// finaliser.
 #[derive(Debug, Clone)]
@@ -190,6 +208,29 @@ mod tests {
         let mut by_index = SplitMix64::new(0);
         let indices: Vec<usize> = (0..6).map(|_| by_index.below_usize(10)).collect();
         assert_eq!(indices, [5, 0, 9, 4, 7, 0]);
+    }
+
+    #[test]
+    fn permute_is_a_deterministic_permutation_that_reaches_every_arrangement() {
+        let items: Vec<u32> = (0..6).collect();
+        let a = super::permute(&items, 7);
+        assert_eq!(
+            a,
+            super::permute(&items, 7),
+            "the same seed, the same order"
+        );
+        let mut sorted = a;
+        sorted.sort_unstable();
+        assert_eq!(sorted, items, "an arrangement of the same items");
+        // Neighbours: the empty and one-element inputs are returned as they are.
+        assert_eq!(super::permute::<u32>(&[], 1), Vec::<u32>::new());
+        assert_eq!(super::permute(&[9u32], 1), [9]);
+        // Every one of the 3! arrangements of three items appears over enough seeds.
+        let mut seen = std::collections::BTreeSet::new();
+        for seed in 0..200 {
+            seen.insert(super::permute(&[0u8, 1, 2], seed));
+        }
+        assert_eq!(seen.len(), 6);
     }
 
     #[test]

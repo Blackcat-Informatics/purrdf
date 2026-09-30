@@ -2525,44 +2525,24 @@ mod tests {
     }
 
     use super::*;
-    use crate::ir::embedding::{
-        AppliedStage, ArtifactIdentity, DimensionalityPolicy, DistanceMetric, RdfTermTarget,
-        StageImplementation,
+    use crate::ir::embedding::{AppliedStage, DimensionalityPolicy, DistanceMetric, RdfTermTarget};
+
+    const FX: crate::purremb_fixture::Identities = crate::purremb_fixture::Identities {
+        artifact_media: "application/example",
+        stage_payload: &[1, 2, 3],
+        ..crate::purremb_fixture::Identities::at("")
     };
-
-    fn artifact(name: &str) -> ArtifactIdentity {
-        ArtifactIdentity::new(
-            name,
-            "application/example",
-            ContentDigest::of(name.as_bytes()),
-            None,
-            ArtifactIdentityKind::Single,
-        )
-        .unwrap()
-    }
-
-    fn stage(name: &str) -> AppliedStage {
-        AppliedStage::Applied(
-            StageImplementation::new(
-                name,
-                ContentDigest::of(name.as_bytes()),
-                "application/octet-stream",
-                vec![1, 2, 3],
-            )
-            .unwrap(),
-        )
-    }
 
     fn family_contract() -> EmbeddingFamilyContract {
         EmbeddingFamilyContract {
-            model: artifact("model"),
-            engine: artifact("engine"),
-            tokenizer: artifact("tokenizer"),
-            execution: stage("execution"),
-            subject_projection: stage("projection"),
+            model: FX.artifact("model"),
+            engine: FX.artifact("engine"),
+            tokenizer: FX.artifact("tokenizer"),
+            execution: FX.stage("execution"),
+            subject_projection: FX.stage("projection"),
             preprocessing: AppliedStage::NotApplied,
             chunking: AppliedStage::NotApplied,
-            pooling: stage("pooling"),
+            pooling: FX.stage("pooling"),
             normalization: AppliedStage::NotApplied,
             truncation: AppliedStage::NotApplied,
             dtype: super::super::contract::VectorDtype::F32,
@@ -2689,7 +2669,7 @@ mod tests {
             prefix_dimension: 2,
         };
         let guard = IndexGuardContract {
-            implementation: artifact("index"),
+            implementation: FX.artifact("index"),
             parameter_encoding: "application/example".into(),
             parameters: vec![8, 9],
             loss: IndexLossContract {
