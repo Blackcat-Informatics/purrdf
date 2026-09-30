@@ -1042,3 +1042,237 @@ enforced = true
 constants = []
 fingerprints = []
 names = ['^(integer_term|bool_term|boolean_term|integer_literal|count_term|index_term)$']
+
+[[job]]
+id = "json-document"
+summary = "Reading, holding and writing a JSON document: the pull reader, the value whose numbers keep their lexemes, the strict record reader and the deterministic compact and pretty writers"
+home = "purrdf_lex::json::read"
+entry_points = [
+    "purrdf_lex::json::Value",
+    "purrdf_lex::json::Reader",
+    "purrdf_lex::json::write_compact",
+    "purrdf_lex::json::write_pretty",
+    "purrdf_lex::json::occurrences",
+    "purrdf_lex::json::record::Record",
+]
+spec = "RFC 8259 (the JSON grammar and its string escapes), RFC 6901 for the pointer each error names"
+vectors = []
+bench = []
+sites = ["json.parser-string", "json.parser-whitespace"]
+replaces_external = ["serde_json", "serde", "serde_core", "serde_derive", "itoa", "ryu", "zmij", "indexmap", "equivalent"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(parse_json_value|json_parse_value|parse_json_number|metadata_value_from_json)$']
+
+[[job]]
+id = "yaml-document"
+summary = "Reading and writing a YAML 1.2 document over the JSON data model"
+home = "purrdf_lex::yaml::read"
+entry_points = ["purrdf_lex::yaml::write", "purrdf_lex::yaml::read_with"]
+spec = "YAML 1.2.2 (the core schema, block and flow styles, anchors and aliases under a node bound)"
+vectors = []
+bench = []
+sites = []
+replaces_external = ["serde_yaml_ng", "unsafe-libyaml"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(json_to_yaml|yaml_uses_anchor_or_alias|validate_yaml_tree|validate_yaml_value|yaml_value_error)$']
+
+[[job]]
+id = "cbor-codec"
+summary = "Encoding and decoding CBOR: the shortest-form head, as-is and core deterministic encoding, and well-formed and deterministic decoding"
+home = "purrdf_lex::cbor::encode"
+entry_points = [
+    "purrdf_lex::cbor::Value",
+    "purrdf_lex::cbor::canonical",
+    "purrdf_lex::cbor::decode",
+    "purrdf_lex::cbor::write_canonical_map",
+    "purrdf_lex::cbor::head::write_head",
+]
+spec = "RFC 8949 (section 4.2.1 core deterministic encoding; section 3 the data item heads)"
+vectors = []
+bench = []
+sites = []
+replaces_external = ["ciborium", "ciborium-io", "ciborium-ll", "half", "crunchy", "zerocopy", "zerocopy-derive"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(write_cbor_type_len|write_cbor_head|write_cbor_text|write_cbor_bytes)$']
+
+[[job]]
+id = "xml-reader"
+summary = "Reading an XML document: namespace-resolved elements, attributes and text, entities from the internal subset only, depth bounded, no machine-stack recursion"
+home = "purrdf_lex::xml::Document"
+entry_points = ["purrdf_lex::xml::Reader"]
+spec = "XML 1.0 Fifth Edition (section 5.1, a non-validating processor) and Namespaces in XML 1.0"
+vectors = []
+bench = []
+sites = []
+replaces_external = ["roxmltree"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(guard_xml_nesting|XmlParser)$']
+
+[[job]]
+id = "literal-and-iri-escape"
+summary = "Escaping a literal body for its carrier (canonical N-Triples, XML text, Turtle long string) and an IRIREF body"
+home = "purrdf_lex::literal_escape::write"
+entry_points = ["purrdf_lex::literal_escape::escape", "purrdf_lex::iri_escape::push_escaped", "purrdf_core::iri_escape"]
+spec = "RDF 1.2 N-Triples section 7 (the canonical form's ECHAR and UCHAR), RDF 1.2 Turtle STRING_LITERAL_LONG_QUOTE, XML 1.0 section 2.2 Char"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(escape_literal|nt_escape|turtle_escape|write_literal_escaped|escape_iri|write_iriref_escaped|is_iri_forbidden)$']
+
+[[job]]
+id = "term-syntax"
+summary = "Writing an RDF 1.2 term in its canonical text form: IRI, literal with language, direction and datatype, blank node and triple term"
+home = "purrdf_lex::term_syntax::write_literal"
+entry_points = ["purrdf_lex::term_syntax::write_iri", "purrdf_lex::term_syntax::write_blank", "purrdf_core::write_term_value"]
+spec = "RDF 1.2 N-Triples section 7 (the canonical form, xsd:string implicit, the '<<( s p o )>>' triple term)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(leaf_term_string|term_surface_text|render_term_value)$']
+
+[[job]]
+id = "crockford-base32"
+summary = "Crockford Base32, the text form of a 128-bit ULID"
+home = "purrdf_lex::crockford::write_u128"
+entry_points = ["purrdf_lex::crockford::parse_u128", "purrdf_lex::crockford::encode_u128"]
+spec = "Crockford Base32 (the ULID specification's text encoding)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(crockford_encode|crockford_decode|ulid_text|encode_ulid)$']
+
+[[job]]
+id = "rdf-collection"
+summary = "Walking, building and classifying an RDF collection: the strict member walk, the cell builder and the JSON-LD convertible-list analysis"
+home = "purrdf_core::DatasetView"
+entry_points = ["purrdf_core::collections::build_rdf_list", "purrdf_core::collections::convertible_list_cells"]
+spec = "RDF 1.2 Semantics section 9 (collections), JSON-LD 1.1 API section 8.4.2 (list conversion)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(single_object|list_members_of|rdf_list_members)$']
+
+[[job]]
+id = "thread-stack"
+summary = "Running a closure on a thread with a stated stack, and refusing a request past the wasm32 shadow-stack floor"
+home = "purrdf_stack::on_stack"
+entry_points = ["purrdf_stack::on_stack_scoped"]
+spec = "the stack contract purrdf_stack documents (native: a thread of exactly the requested stack; wasm32: inline under the floor, refused past it)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(on_thread|run_on_big_stack|with_big_stack)$']
+
+[[job]]
+id = "test-workspace-paths"
+summary = "The workspace root and the Rust sources under it, for tests and generators"
+home = "purrdf_testkit::paths::workspace_root"
+entry_points = ["purrdf_testkit::paths::collect_rs", "purrdf_testkit::paths::workspace_root_from"]
+spec = "the Cargo workspace layout (the manifest that declares [workspace])"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(repo_root)$']
+
+[[job]]
+id = "query-host-plumbing"
+summary = "What every host (CLI, C ABI, wasm, Python) shares around a query: its provenance record, its governor ceilings and the results-format name"
+home = "purrdf_validate::governors::from_parts"
+entry_points = ["purrdf_validate::query::provenance", "purrdf_validate::governors::from_update_parts", "purrdf_sparql_results::SparqlResultsFormat::from_name"]
+spec = "SPARQL 1.1 Protocol section 2.1 (results formats by media type) and the governor ceilings purrdf_validate::governors documents"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(build_query_provenance|validate_update_governors|resolve_results_format)$']
+
+[[job]]
+id = "ed25519"
+summary = "Ed25519 keys, signing and strict verification"
+home = "purrdf_ed25519::SigningKey"
+entry_points = ["purrdf_ed25519::VerifyingKey", "purrdf_ed25519::Signature"]
+spec = "RFC 8032 section 5.1 (Ed25519), verified strictly: canonical S, canonical point encodings, small-order key and R refused"
+vectors = ["crates/ed25519/tests/vectors/signing_vectors.txt", "crates/ed25519/tests/vectors/verify_vectors.txt", "crates/ed25519/tests/vectors/key_decoding_vectors.txt", "crates/ed25519/tests/vectors/strictness_vectors.txt"]
+bench = []
+sites = []
+replaces_external = ["ed25519-dalek", "curve25519-dalek", "curve25519-dalek-derive", "fiat-crypto", "ed25519", "signature", "subtle", "zeroize"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "prefixed-name"
+summary = "Compacting an IRI to a prefixed name under the longest admitted namespace, and splitting its local name"
+home = "purrdf_iri::contract_where"
+entry_points = ["purrdf_iri::contract", "purrdf_iri::local_name", "purrdf_iri::split_local_name"]
+spec = "W3C CURIE Syntax 1.0; RDF 1.2 Turtle PN_LOCAL and the XML NCName where a syntax admits its own names"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(curie_prefix_of|namespace_and_local|split_iri_local)$']
