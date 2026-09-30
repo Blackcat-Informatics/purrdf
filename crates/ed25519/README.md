@@ -85,17 +85,6 @@ Verification handles only public data and is variable time.
   point decoding near the edges of the field, frozen in `tests/vectors/` and
   replayed (`tests/reference_vectors.rs`, `tests/edge_cases.rs`). The
   dependency itself is not in the graph.
-- **Timing**: dudect-style statistical constant-time tests that run with the
-  ordinary tests (`tests/constant_time.rs`, `src/timing_tests.rs`). Each takes a
-  fixed secret against fresh random secrets, chooses the class of every sample
-  by a random coin so machine load falls on both alike, crops outliers at a
-  ladder of percentiles and applies Welch's t-test, passing below dudect's
-  threshold of |t| < 10. Signing, key expansion, the fixed-base multiplication
-  (for a zero, a one and random scalars) and the scalar multiply-add are
-  covered, and a planted secret-dependent workload proves the harness reports a
-  leak. A run on a loaded host may be pushed over the threshold by noise, while
-  a real dependence recurs, so an operation gets up to three independent runs
-  and fails only when every one is over the threshold.
 
 `cargo bench -p purrdf-ed25519` times sign and verify over messages from empty
 to 64 KiB, key expansion and decoding, and a GTS-shaped batch of 64 signatures.

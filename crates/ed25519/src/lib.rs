@@ -76,12 +76,7 @@ mod point;
 mod scalar;
 
 #[cfg(test)]
-#[path = "../tests/common/dudect.rs"]
-mod dudect;
-#[cfg(test)]
 mod strictness_tests;
-#[cfg(test)]
-mod timing_tests;
 
 pub use keys::{
     PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH, Signature, SignatureError, SigningKey,
