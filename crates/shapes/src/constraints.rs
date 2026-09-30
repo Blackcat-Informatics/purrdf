@@ -2554,7 +2554,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 let violates = match (compiled, value.lexical(ds)) {
                     (Err(_), _) => true,   // bad regex → violation on every value node
                     (Ok(_), None) => true, // blank node → violation
-                    (Ok(pattern), Some(lex)) => !pattern.as_regex().is_match(lex),
+                    (Ok(pattern), Some(lex)) => !pattern.is_match(lex),
                 };
                 if violates {
                     emit!(ValidationResult {

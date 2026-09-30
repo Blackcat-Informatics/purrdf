@@ -41,6 +41,10 @@ use crate::terminals::{
 /// Bytes per chunk: one 128-bit vector of bytes.
 const CHUNK: usize = 16;
 
+/// Bytes per block of the run-time needle searches: four chunks answered by
+/// one clean-block test (see [`find_byte`] and [`find_byte_pair`]).
+const BLOCK: usize = 4 * CHUNK;
+
 /// An inclusive run `[lo, hi]` of member bytes.
 pub type ByteRun = (u8, u8);
 
@@ -197,10 +201,6 @@ pub const fn byte_run_count(table: &[u8; 256]) -> usize {
     count_runs(table)
 }
 
-/// A caller-defined byte class, scanned in the one formulation every scanner of
-/// this module uses.
-///
-/// The four named scanners ([`find_first_trivia`], [`find_first_iri_body_special`],
 /// The class table holding exactly `needles`: the table a caller with a fixed
 /// needle set hands [`ByteClass::from_table`].
 ///
@@ -222,6 +222,10 @@ pub const fn needle_table(needles: &[u8]) -> [u8; 256] {
     table
 }
 
+/// A caller-defined byte class, scanned in the one formulation every scanner of
+/// this module uses.
+///
+/// The four named scanners ([`find_first_trivia`], [`find_first_iri_body_special`],
 /// [`find_first_json_string_special`], [`find_first_xml_special`]) answer the
 /// classes a *parser* stops at, and those are terminals, spelled here once. A
 /// *writer* stops at classes the grammar does not name — the bytes a given
@@ -368,6 +372,14 @@ fn find_first_in_one_run(bytes: &[u8], runs: &[ByteRun], table: &[u8; 256]) -> O
 /// clean-chunk test is the lanes' maximum, and the chunk that holds a hit
 /// re-tests its bytes for the offset, the shape that lowers to a packed
 /// compare and one mask extraction per chunk on every vector target.
+///
+/// A long input is first walked in [`BLOCK`]-byte blocks, four chunks whose
+/// lanes fold into one maximum: one mask extraction and one branch per
+/// sixty-four bytes rather than per sixteen, which is where a sixteen-byte loop
+/// spends its time once the compares are packed. The block's lanes are the
+/// chunk's lanes widened, so the vectorizer emits four packed compares on a
+/// 128-bit target and two on a 256-bit one; the block that holds a hit and the
+/// bytes after the last whole block take the sixteen-byte path.
 #[allow(
     clippy::inline_always,
     reason = "each public search is one monomorphic kernel: the shared body must be inlined \
@@ -375,6 +387,88 @@ fn find_first_in_one_run(bytes: &[u8], runs: &[ByteRun], table: &[u8; 256]) -> O
 )]
 #[inline(always)]
 fn find_needles<const N: usize>(bytes: &[u8], needles: [u8; N]) -> Option<usize> {
+    let (chunks, _) = bytes.as_chunks::<CHUNK>();
+    let (blocks, _) = chunks.as_chunks::<{ BLOCK / CHUNK }>();
+    let mut skipped = 0;
+    for [a, b, c, d] in blocks {
+        let lanes = merge_lanes([
+            needle_lanes(a, needles),
+            needle_lanes(b, needles),
+            needle_lanes(c, needles),
+            needle_lanes(d, needles),
+        ]);
+        if any_lane(&lanes) {
+            break;
+        }
+        skipped += BLOCK;
+    }
+    find_needles_in_chunks(&bytes[skipped..], needles).map(|i| skipped + i)
+}
+
+/// The lanes of one chunk against run-time needles: lane `i` is `0xFF` when
+/// `chunk[i]` equals one of `needles`, `0x00` otherwise.
+#[allow(
+    clippy::inline_always,
+    reason = "each public search is one monomorphic kernel: the shared body must be inlined \
+              into it so the needle count folds in and the lane loop vectorizes"
+)]
+#[inline(always)]
+fn needle_lanes<const N: usize>(chunk: &[u8; CHUNK], needles: [u8; N]) -> [u8; CHUNK] {
+    let mut lanes = [0_u8; CHUNK];
+    for (lane, &b) in lanes.iter_mut().zip(chunk) {
+        let mut hit = 0;
+        for needle in needles {
+            hit |= u8::from(b == needle);
+        }
+        *lane = hit.wrapping_neg();
+    }
+    lanes
+}
+
+/// The lane-wise OR of a block's four chunks of lanes: non-zero somewhere
+/// exactly when one of them is.
+#[allow(
+    clippy::inline_always,
+    reason = "each public search is one monomorphic kernel: the shared body must be inlined \
+              into it so the lane loop vectorizes"
+)]
+#[inline(always)]
+fn merge_lanes(parts: [[u8; CHUNK]; BLOCK / CHUNK]) -> [u8; CHUNK] {
+    let mut lanes = [0_u8; CHUNK];
+    for part in parts {
+        for (lane, bit) in lanes.iter_mut().zip(part) {
+            *lane |= bit;
+        }
+    }
+    lanes
+}
+
+/// Whether any lane of a chunk is set, read as one 128-bit word.
+///
+/// A block's lanes are the OR of four chunks', and a horizontal maximum over
+/// them was measured to lower, once LLVM fuses the four compares into one wide
+/// compare, to a long extract-and-shuffle reduction per block: a pair search
+/// over 70-byte inputs took 60 µs per 4,096 inputs with the maximum and 39 µs
+/// with the word test, which is a register-width OR and a test on every target.
+#[allow(
+    clippy::inline_always,
+    reason = "each public search is one monomorphic kernel: the shared body must be inlined \
+              into it so the lane loop vectorizes"
+)]
+#[inline(always)]
+fn any_lane(lanes: &[u8; CHUNK]) -> bool {
+    u128::from_ne_bytes(*lanes) != 0
+}
+
+/// The sixteen-byte walk behind [`find_needles`]: the chunk formulation of
+/// [`find_first_in_one_run`] over run-time needles.
+#[allow(
+    clippy::inline_always,
+    reason = "each public search is one monomorphic kernel: the shared body must be inlined \
+              into it so the needle count folds in and the lane loop vectorizes"
+)]
+#[inline(always)]
+fn find_needles_in_chunks<const N: usize>(bytes: &[u8], needles: [u8; N]) -> Option<usize> {
     let (chunks, tail) = bytes.as_chunks::<CHUNK>();
     for (k, chunk) in chunks.iter().enumerate() {
         let mut lanes = [0_u8; CHUNK];
@@ -441,6 +535,248 @@ pub fn find_byte(bytes: &[u8], needle: u8) -> Option<usize> {
 #[must_use]
 pub fn find_byte2(bytes: &[u8], first: u8, second: u8) -> Option<usize> {
     find_needles(bytes, [first, second])
+}
+
+/// The first offset `p` at which `bytes[p]` is one of `lead` and
+/// `bytes[p + gap]` is one of `trail`, or `None`: the candidate search of a
+/// substring filter, which tests two of a needle's positions at once.
+///
+/// Each pair names one or two bytes; a single byte is written twice. A caller
+/// looking for a substring picks two of its positions (the first and last, or
+/// its two rarest bytes), finds the offsets where both agree, and verifies the
+/// rest there. Testing two positions together is what keeps a common byte from
+/// stopping the scan at every occurrence: `e` alone is every tenth byte of
+/// English text, `e` followed four bytes later by `l` is far rarer.
+///
+/// The formulation is [`find_byte`]'s over two views of the input offset by
+/// `gap`: sixty-four-byte blocks whose lanes are the AND of the two positions'
+/// equality compares fold into one clean-block test, the block holding a hit
+/// is re-walked in sixteen-byte chunks, and the positions after the last whole
+/// chunk are one more chunk ending at the last position. The lanes of the two
+/// views are independent, so the vectorizer lowers each block to packed
+/// compares, an AND and one mask test on every vector target
+/// (`pcmpeqb`/`pand`/`pmovmskb` on x86_64, `vpcmpeqb` on 256-bit builds,
+/// `cmeq`/`and` on aarch64, `i8x16.eq`/`v128.and` under wasm `simd128`), with
+/// no run-time dispatch. A pair written as one byte twice takes a kernel that
+/// compares it once.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_lex::scan::find_byte_pair;
+///
+/// // "needle": `n` and, five bytes on, `e`.
+/// let text = b"a nice needle in a haystack";
+/// assert_eq!(find_byte_pair(text, [b'n', b'n'], [b'e', b'e'], 5), Some(7));
+/// // Either case of each position, as a case-insensitive filter asks.
+/// assert_eq!(find_byte_pair(b"A NEEDLE", [b'n', b'N'], [b'e', b'E'], 5), Some(2));
+/// assert_eq!(find_byte_pair(b"needl", [b'n', b'n'], [b'e', b'e'], 5), None);
+/// ```
+#[must_use]
+pub fn find_byte_pair(bytes: &[u8], lead: [u8; 2], trail: [u8; 2], gap: usize) -> Option<usize> {
+    let ([a, b], [c, d]) = (lead, trail);
+    match (a == b, c == d) {
+        (true, true) => find_pair_by(bytes, gap, Byte(a), Byte(c)),
+        (true, false) => find_pair_by(bytes, gap, Byte(a), Bytes2(c, d)),
+        (false, true) => find_pair_by(bytes, gap, Bytes2(a, b), Byte(c)),
+        (false, false) => find_pair_by(bytes, gap, Bytes2(a, b), Bytes2(c, d)),
+    }
+}
+
+/// [`find_byte_pair`] over byte ranges: the first offset `p` at which
+/// `bytes[p]` falls in one of the two inclusive runs of `lead` and
+/// `bytes[p + gap]` in one of the two runs of `trail`, or `None`.
+///
+/// This is the search for a position that is a class rather than one or two
+/// bytes (`[0-9]`, `[A-Fa-f]`); a single run is written twice, and takes a
+/// kernel that tests it once. Each lane is a wrapping subtraction and an
+/// unsigned compare per run, the membership test of [`ByteClass`] with the
+/// runs known only at run time, in the same blocks, chunks and final chunk as
+/// [`find_byte_pair`].
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_lex::scan::find_range_pair;
+///
+/// // A digit, a letter, a digit: the digits two apart.
+/// let digit = [(b'0', b'9'); 2];
+/// assert_eq!(find_range_pair(b"see x1a2 here", digit, digit, 2), Some(5));
+/// assert_eq!(find_range_pair(b"no digits here", digit, digit, 2), None);
+/// // Two runs per position: either case of a hex letter.
+/// let hex = [(b'a', b'f'), (b'A', b'F')];
+/// assert_eq!(find_range_pair(b"xyz Cab", hex, hex, 1), Some(4));
+/// ```
+#[must_use]
+pub fn find_range_pair(
+    bytes: &[u8],
+    lead: [ByteRun; 2],
+    trail: [ByteRun; 2],
+    gap: usize,
+) -> Option<usize> {
+    let run = |(lo, hi): ByteRun| Run(lo, hi.wrapping_sub(lo));
+    let ([a, b], [c, d]) = (lead, trail);
+    match (a == b, c == d) {
+        (true, true) => find_pair_by(bytes, gap, run(a), run(c)),
+        (true, false) => find_pair_by(bytes, gap, run(a), Runs2(run(c), run(d))),
+        (false, true) => find_pair_by(bytes, gap, Runs2(run(a), run(b)), run(c)),
+        (false, false) => find_pair_by(bytes, gap, Runs2(run(a), run(b)), Runs2(run(c), run(d))),
+    }
+}
+
+/// One position test of the pair searches: `1` when a byte belongs, `0` when
+/// it does not. Byte arithmetic rather than a `bool`, so a lane that combines
+/// tests computes all of them: the branch-free shape.
+trait PositionTest: Copy {
+    fn test(self, b: u8) -> u8;
+}
+
+/// One byte.
+#[derive(Clone, Copy)]
+struct Byte(u8);
+
+/// Either of two bytes.
+#[derive(Clone, Copy)]
+struct Bytes2(u8, u8);
+
+/// An inclusive run as its low byte and its width minus one.
+#[derive(Clone, Copy)]
+struct Run(u8, u8);
+
+/// Either of two runs.
+#[derive(Clone, Copy)]
+struct Runs2(Run, Run);
+
+impl PositionTest for Byte {
+    #[allow(
+        clippy::inline_always,
+        reason = "a lane test must fold into its kernel's lane loop"
+    )]
+    #[inline(always)]
+    fn test(self, b: u8) -> u8 {
+        u8::from(b == self.0)
+    }
+}
+
+impl PositionTest for Bytes2 {
+    #[allow(
+        clippy::inline_always,
+        reason = "a lane test must fold into its kernel's lane loop"
+    )]
+    #[inline(always)]
+    fn test(self, b: u8) -> u8 {
+        u8::from(b == self.0) | u8::from(b == self.1)
+    }
+}
+
+impl PositionTest for Run {
+    #[allow(
+        clippy::inline_always,
+        reason = "a lane test must fold into its kernel's lane loop"
+    )]
+    #[inline(always)]
+    fn test(self, b: u8) -> u8 {
+        u8::from(b.wrapping_sub(self.0) <= self.1)
+    }
+}
+
+impl PositionTest for Runs2 {
+    #[allow(
+        clippy::inline_always,
+        reason = "a lane test must fold into its kernel's lane loop"
+    )]
+    #[inline(always)]
+    fn test(self, b: u8) -> u8 {
+        self.0.test(b) | self.1.test(b)
+    }
+}
+
+/// The lanes of one chunk of a pair search: lane `i` is `0xFF` when `leads[i]`
+/// passes `lead` and `trails[i]` passes `trail`.
+#[allow(
+    clippy::inline_always,
+    reason = "each public pair search is one kernel: the lane loop must be inlined into it to \
+              vectorize"
+)]
+#[inline(always)]
+fn test_lanes<L: PositionTest, T: PositionTest>(
+    leads: &[u8; CHUNK],
+    trails: &[u8; CHUNK],
+    lead: L,
+    trail: T,
+) -> [u8; CHUNK] {
+    let mut lanes = [0_u8; CHUNK];
+    for ((lane, &x), &y) in lanes.iter_mut().zip(leads).zip(trails) {
+        *lane = (lead.test(x) & trail.test(y)).wrapping_neg();
+    }
+    lanes
+}
+
+/// The body of [`find_byte_pair`] and [`find_range_pair`]: the first offset
+/// `p` at which `bytes[p]` passes `lead` and `bytes[p + gap]` passes `trail`.
+#[allow(
+    clippy::inline_always,
+    reason = "each public pair search is one kernel: the body must be inlined into it so its \
+              position tests fold in and the lane loops vectorize"
+)]
+#[inline(always)]
+fn find_pair_by<L: PositionTest, T: PositionTest>(
+    bytes: &[u8],
+    gap: usize,
+    lead: L,
+    trail: T,
+) -> Option<usize> {
+    // `p` ranges over `0..positions`, so that `p + gap` stays in bounds; the
+    // two views have that length, so they split into the same chunks.
+    let positions = bytes.len().checked_sub(gap)?;
+    let (leads, _) = bytes[..positions].as_chunks::<CHUNK>();
+    let (trails, _) = bytes[gap..].as_chunks::<CHUNK>();
+    let (lead_blocks, _) = leads.as_chunks::<{ BLOCK / CHUNK }>();
+    let (trail_blocks, _) = trails.as_chunks::<{ BLOCK / CHUNK }>();
+    let lanes_of = |l: &[u8; CHUNK], t: &[u8; CHUNK]| test_lanes(l, t, lead, trail);
+    let mut clean_chunks = 0;
+    for (l, t) in lead_blocks.iter().zip(trail_blocks) {
+        let lanes = merge_lanes([
+            lanes_of(&l[0], &t[0]),
+            lanes_of(&l[1], &t[1]),
+            lanes_of(&l[2], &t[2]),
+            lanes_of(&l[3], &t[3]),
+        ]);
+        if any_lane(&lanes) {
+            break;
+        }
+        clean_chunks += BLOCK / CHUNK;
+    }
+    // The hit chunk's offset is re-read byte by byte, once per search: reading
+    // the lanes as one word for it was measured to spill them into a long
+    // widening sequence on every chunk.
+    let first_hit = |lanes: &[u8; CHUNK]| lanes.iter().position(|&lane| lane != 0);
+    for k in clean_chunks..leads.len() {
+        let lanes = lanes_of(&leads[k], &trails[k]);
+        if any_lane(&lanes) {
+            return first_hit(&lanes).map(|i| k * CHUNK + i);
+        }
+    }
+    let done = leads.len() * CHUNK;
+    if done == positions {
+        return None;
+    }
+    if positions >= CHUNK {
+        // The positions after the last whole chunk, answered by one more
+        // chunk ending at the last position: the positions it shares with the
+        // chunk before it are clean, so its first hit is the first hit.
+        let last = positions - CHUNK;
+        let lanes = lanes_of(
+            bytes[last..positions]
+                .try_into()
+                .expect("a chunk of positions"),
+            bytes[last + gap..positions + gap]
+                .try_into()
+                .expect("a chunk of positions"),
+        );
+        return first_hit(&lanes).map(|i| last + i);
+    }
+    (done..positions).find(|&p| lead.test(bytes[p]) & trail.test(bytes[p + gap]) != 0)
 }
 
 /// The `WS` class table, projected from [`ws_ranges`].
@@ -1093,6 +1429,70 @@ mod tests {
             }
         }
         assert!(hits.iter().all(|&h| h > 0), "{hits:?}");
+    }
+
+    #[test]
+    fn needle_and_pair_searches_agree_with_the_per_byte_search() {
+        // Lengths straddle every block and chunk boundary, and each input is
+        // searched at several skips, so a hit lands in the wide blocks, in the
+        // sixteen-byte chunks after them and in the byte tail.
+        let alphabet = *b"abnNeE\x80\xFF";
+        let mut rng = SplitMix64::new(0x00B7_E0C1_A550_0002);
+        let mut hits = [0_usize; 4];
+        for len in lengths() {
+            for _ in 0..24 {
+                let bytes = random_bytes(&mut rng, &alphabet, len, b'.');
+                for skip in 0..4.min(bytes.len() + 1) {
+                    let input = &bytes[skip..];
+                    let one = find_byte(input, b'n');
+                    assert_eq!(one, input.iter().position(|&b| b == b'n'), "{input:02X?}");
+                    let two = find_byte2(input, b'n', 0xFF);
+                    let expected = input.iter().position(|&b| b == b'n' || b == 0xFF);
+                    assert_eq!(two, expected, "{input:02X?}");
+                    hits[0] += usize::from(one.is_some_and(|i| i >= BLOCK));
+                    for gap in [0, 1, 5, 17, 70] {
+                        let (lead, trail) = (*b"nN", *b"ee");
+                        let found = find_byte_pair(input, lead, trail, gap);
+                        let expected = (0..input.len().saturating_sub(gap))
+                            .find(|&p| lead.contains(&input[p]) && trail.contains(&input[p + gap]));
+                        assert_eq!(found, expected, "gap {gap} in {input:02X?}");
+                        hits[1] += usize::from(found.is_some_and(|i| i >= BLOCK));
+                        hits[2] += usize::from(found.is_some_and(|i| i < CHUNK));
+                        // One byte written twice takes its own kernel.
+                        let single = find_byte_pair(input, [b'n'; 2], [b'e'; 2], gap);
+                        let expected = (0..input.len().saturating_sub(gap))
+                            .find(|&p| input[p] == b'n' && input[p + gap] == b'e');
+                        assert_eq!(single, expected, "gap {gap} in {input:02X?}");
+                        // Runs: `a`-`b` or `N`, then `e` or any byte from 0x80.
+                        let (lead, trail) =
+                            ([(b'a', b'b'), (b'N', b'N')], [(b'e', b'e'), (0x80, 0xFF)]);
+                        let ranged = find_range_pair(input, lead, trail, gap);
+                        let expected = (0..input.len().saturating_sub(gap)).find(|&p| {
+                            matches!(input[p], b'a' | b'b' | b'N')
+                                && (input[p + gap] == b'e' || input[p + gap] >= 0x80)
+                        });
+                        assert_eq!(ranged, expected, "gap {gap} in {input:02X?}");
+                        hits[3] += usize::from(ranged.is_some_and(|i| i >= BLOCK));
+                        // The mixed kernels: one side a single byte or run.
+                        let mixed = find_byte_pair(input, [b'n'; 2], [b'e', 0xFF], gap);
+                        let expected = (0..input.len().saturating_sub(gap))
+                            .find(|&p| input[p] == b'n' && matches!(input[p + gap], b'e' | 0xFF));
+                        assert_eq!(mixed, expected, "gap {gap} in {input:02X?}");
+                        let mixed = find_range_pair(input, [(b'a', b'b'); 2], trail, gap);
+                        let expected = (0..input.len().saturating_sub(gap)).find(|&p| {
+                            matches!(input[p], b'a' | b'b')
+                                && (input[p + gap] == b'e' || input[p + gap] >= 0x80)
+                        });
+                        assert_eq!(mixed, expected, "gap {gap} in {input:02X?}");
+                    }
+                }
+            }
+        }
+        assert!(hits.iter().all(|&h| h > 0), "{hits:?}");
+        // A gap at or past the input's length has no position to test.
+        assert_eq!(find_byte_pair(b"ne", [b'n'; 2], [b'e'; 2], 2), None);
+        assert_eq!(find_byte_pair(b"", [b'n'; 2], [b'e'; 2], 0), None);
+        assert_eq!(find_byte_pair(b"ne", [b'n'; 2], [b'e'; 2], 1), Some(0));
     }
 
     #[test]

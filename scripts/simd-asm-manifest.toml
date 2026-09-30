@@ -217,6 +217,138 @@ summary = "`scan::find_byte2`, the two-needle search behind the line-oriented co
   forbid_relaxed = true
 
 [[site]]
+id = "core.xsd-regex-scan"
+summary = "the required-literal prefilter in front of `xsd_regex::CompiledPattern::is_match` (`sh:pattern`, SPARQL `REGEX`, ShEx `PATTERN`): `scan::find_byte_pair` tests two window positions of one or two bytes at once, `scan::find_range_pair` two narrow-class positions, both out of line in `purrdf_lex`; a one-position window runs `scan::find_byte` / `scan::find_byte2`, measured by the `lex.find-byte2-*` sites"
+
+  # Every configuration measures the out-of-line copies in `purrdf_lex`: sixty-four-byte
+  # blocks of paired lanes (equality for bytes, a wrapping subtraction and an unsigned
+  # compare for runs), one clean-block test, sixteen-byte chunks and one overlapping chunk
+  # after them, in a kernel per shape (one or two bytes or runs on each side). Measured
+  # with the configuration's flags, LTO off and one codegen unit; each floor is half the
+  # measured count, rounded down. Pair: v368 (x86_64), v198 (x86_64-v3), v117
+  # (x86_64-v4), v215 (both aarch64), v0 (wasm32), v146 (wasm32-simd128). Range: v729,
+  # v459, v260, v452 (aarch64) and v460 (neoverse-v1), v0, v306.
+  [[site.measure]]
+  label = "pair sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_byte_pair"
+  min_vector_ops = 184
+  require_mnemonics = ["pcmpeqb", "pand", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "range sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_range_pair"
+  min_vector_ops = 364
+  require_mnemonics = ["psubb", "pminub", "pcmpeqb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "pair avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_byte_pair"
+  min_vector_ops = 99
+  require_mnemonics = ["vpcmpeqb", "vpand"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "range avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_range_pair"
+  min_vector_ops = 229
+  require_mnemonics = ["vpsubb", "vpminub"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares land in mask registers.
+  [[site.measure]]
+  label = "pair avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_byte_pair"
+  min_vector_ops = 58
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "range avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_range_pair"
+  min_vector_ops = 130
+  require_mnemonics = ["vpcmpleub %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "pair neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_byte_pair"
+  min_vector_ops = 107
+  require_mnemonics = ["cmeq .16b", "and .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "range neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_range_pair"
+  min_vector_ops = 226
+  require_mnemonics = ["cmhs .16b", "sub .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the same lane loops as scalar code.
+  [[site.measure]]
+  label = "pair scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_byte_pair"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "range scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_range_pair"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "pair simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_byte_pair"
+  min_vector_ops = 73
+  require_mnemonics = ["i8x16.eq", "v128.and"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "range simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_range_pair"
+  min_vector_ops = 153
+  require_mnemonics = ["i8x16.le_u", "i8x16.sub"]
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
 id = "sha2.sha256-compress"
 summary = "SHA-256 block compression (content digests): sha2's SHA-NI kernel on x86_64, its portable code elsewhere"
 

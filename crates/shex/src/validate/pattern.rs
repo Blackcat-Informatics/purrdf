@@ -44,14 +44,14 @@
 use std::sync::Arc;
 
 use purrdf_core::FastMap;
-use regex::Regex;
+use purrdf_core::xsd_regex::CompiledPattern;
 
 /// One memoized `PATTERN` compile: the shared compiled regex, or the shared
 /// facet-violation message for a pattern or flag string that does not compile.
 ///
 /// The error is an `Arc<str>` so a failed probe clones a refcount exactly as a
 /// successful probe clones the regex's `Arc`.
-type CachedPattern = Result<Arc<Regex>, Arc<str>>;
+type CachedPattern = Result<Arc<CompiledPattern>, Arc<str>>;
 
 /// The per-flags layer of a [`PatternCache`]: compile results keyed by the
 /// exact `flags` string (the empty string when no flags were given).
@@ -96,7 +96,7 @@ impl PatternCache {
         &mut self,
         pattern: &str,
         flags: Option<&str>,
-    ) -> Result<Arc<Regex>, Arc<str>> {
+    ) -> Result<Arc<CompiledPattern>, Arc<str>> {
         let flags = flags.unwrap_or("");
         if let Some(cached) = self
             .by_pattern
@@ -117,7 +117,7 @@ impl PatternCache {
 }
 
 /// Compile a ShEx `PATTERN` facet (XSD/XPath regex source + flags) into a
-/// [`Regex`] that implements `fn:matches` partial-match semantics.
+/// [`CompiledPattern`] that implements `fn:matches` partial-match semantics.
 ///
 /// This is the uncached primitive; validation goes through
 /// [`PatternCache::compiled`].
@@ -128,10 +128,12 @@ impl PatternCache {
 /// reason it does not compile — an unsupported flag letter, a construct the
 /// `fn:matches` grammar does not define (`\b`, `\B`), a backreference, an
 /// unrecognized Unicode block name, or a malformed pattern.
-pub(crate) fn compile_pattern(pattern: &str, flags: Option<&str>) -> Result<Regex, String> {
+pub(crate) fn compile_pattern(
+    pattern: &str,
+    flags: Option<&str>,
+) -> Result<CompiledPattern, String> {
     let flags = flags.unwrap_or("");
     purrdf_core::xsd_regex::compile(pattern, flags)
-        .map(|compiled| compiled.as_regex().clone())
         .map_err(|e| format!("invalid pattern /{pattern}/{flags}: {e}"))
 }
 

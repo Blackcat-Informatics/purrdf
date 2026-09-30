@@ -2661,6 +2661,40 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 - **sparql-eval, wasm:** nested `FILTER NOT EXISTS` answers 181 levels deep on
   the synchronous wasm lane, up from 75; nested `FILTER EXISTS` answers 203, up
+- Timings for XSD patterns, SPARQL `REGEX` and `sh:pattern` since `regex` lost
+  its literal prefilter; report-only, taken on a host at load 5.4-14.4 (the
+  one-minute average, read before every run) as 10 interleaved
+  main/branch/fixed/fixed/branch/main rounds, each tree built by the same
+  driver calling the same public API (ratio = arm / `origin/main` per round,
+  median of rounds, bootstrap 95% CI). Without a prefilter every unanchored
+  search walked its haystack through the lazy DFA: a 64 KiB haystack with the
+  match in its last bytes took 86-88 us for `needle`, `foo.*bar`,
+  `\d{4}-\d{2}`, `[a-z]+@example\.org` and `NEEDLE` under `i`, ratios 25.3
+  to 151 against main; `example\.org` over 4,096 70-byte IRIs was 5.94 [5.90, 5.99], SPARQL
+  `REGEX` over 2,048 4 KiB literals 1.64 to 2.47 and `sh:pattern` over 1,024
+  4 KiB values 10.6 to 11.7. `CompiledPattern::is_match` now runs a
+  required-literal prefilter read from the engine's own syntax tree, searched
+  with `purrdf_lex::scan::find_byte_pair` and `find_range_pair`: the 64 KiB
+  cases are 0.54 [0.48, 0.57] (`needle`, 1.0 us to 0.5 us), 0.61 [0.58, 0.64],
+  0.77 [0.74, 0.78], 0.56 [0.52, 0.57] and 0.31 [0.30, 0.31] (`NEEDLE` under
+  `i`, 3.4 us to 1.1 us) of main, and SPARQL `REGEX` 0.90 [0.86, 0.93], 0.84
+  [0.74, 0.88] and 0.79 [0.77, 0.81]. `sh:pattern` is 1.16 to 1.25, which is
+  the branch's validation and not its matching: `^[a-z]`, which runs no
+  prefilter, is 1.21 [1.16, 1.23] of main on the branch with and without it.
+  The no-literal controls are unchanged (`[a-z]{25}` 0.98 [0.97, 1.03]), and
+  the start- and end-anchored IRI patterns, left to the engine, are 1.08.
+  `example\.org` over 70-byte IRIs stays slower, 2.05 [2.01, 2.11] (36.5 us
+  to 74.3 us per 4,096): a haystack shorter than one sixty-four-byte block
+  pays the pair search's chunk walk and verification per call. A cold
+  `xsd_regex::compile` now also parses the translated source once more to read
+  the window: 3.8 us to 5.4 us for `^[a-z0-9]+$` (1.37 [1.15, 1.71]), 4.6 us
+  to 5.9 us for `needle` and 37 us to 49 us for `^\i\c*$` (1.23 [1.04, 1.77];
+  4 interleaved rounds at load 13-16 against the branch before the fix), paid
+  once per pattern behind each call site's compile cache. The benches are
+  `xsd_regex_match` and `xsd_regex_compile` in `xsd_regex`,
+  `regex_long_literals` in `regex_eval` and `shacl_pattern_long_values` in
+  `pattern_validate`.
+
   from 117, and nested `LATERAL` 282, up from 193, where the query-height
   admission now ends it before the evaluator's stack does. One operator serving
   both `DISTINCT` and `REDUCED` had been inlined into the evaluator's recursive

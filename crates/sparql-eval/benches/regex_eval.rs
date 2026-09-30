@@ -33,9 +33,20 @@
 //! `!Sync`; it cannot be captured by a rayon `install` closure, so the pool
 //! the main-thread evaluation drives must be the shared one.
 //!
+//! A second group, `regex_long_literals`, filters 2,048 literals of 4 KiB of
+//! lowercase filler, one in sixteen ending with the text every pattern matches,
+//! through one constant `REGEX` each. It measures the required-literal
+//! prefilter `CompiledPattern::is_match` runs in front of the `regex` engine
+//! (built without its own literal prefilter): `needle` (a literal),
+//! `foo.*bar` (a literal prefix), `\d{4}-\d{2}` (a required `-` a bounded
+//! distance into the match), `NEEDLE` under `i`, and `[a-z]{25}` (no
+//! literal: the control, which no literal matches, so the engine walks every
+//! byte).
+//!
 //! Report-only, `cargo bench -p purrdf-sparql-eval --bench regex_eval` (the
 //! `make bench` lane) — excluded from `make check`. No timing is asserted.
 
+use purrdf_testkit::text::lowercase_filler as filler;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -43,6 +54,7 @@ use purrdf_core::{
 };
 use purrdf_sparql_eval::NativeSparqlEngine;
 use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main, black_box};
+use purrdf_testkit::rng::SplitMix64;
 
 const EX: &str = "https://example.org/";
 const ROW_COUNTS: &[usize] = &[1_000, 10_000];
@@ -159,5 +171,59 @@ fn bench_regex_eval(c: &mut Bench) {
     group.finish();
 }
 
-bench_group!(benches, bench_regex_eval);
+/// The text every `regex_long_literals` pattern but the control matches in.
+const MATCH_TAIL: &str = " foo needle bar 2026-09";
+
+/// Literals in the long-literal dataset, and how many carry [`MATCH_TAIL`].
+const LONG_ROWS: usize = 2048;
+const LONG_MATCHES: usize = LONG_ROWS / 16;
+
+/// `LONG_ROWS` subjects with one 4 KiB `ex:text` literal each; every sixteenth
+/// ends with [`MATCH_TAIL`]. Seeded, so the dataset is the same every run.
+fn long_literal_dataset() -> Arc<RdfDataset> {
+    let mut rng = SplitMix64::new(0x0047_2600_BE4C_0002);
+    let mut b = RdfDatasetBuilder::new();
+    let p_text = b.intern_iri(&format!("{EX}text"));
+    for i in 0..LONG_ROWS {
+        let subject = b.intern_iri(&format!("{EX}doc{i}"));
+        let mut text = filler(&mut rng, 4096);
+        if i % 16 == 0 {
+            text.push_str(MATCH_TAIL);
+        }
+        let literal = b.intern_literal(RdfLiteral::simple(text));
+        b.push_quad(subject, p_text, literal, None);
+    }
+    b.freeze().expect("freeze long-literal regex dataset")
+}
+
+/// `(case name, SPARQL string literal of the pattern, flags, rows)`.
+const LONG_CASES: &[(&str, &str, &str, usize)] = &[
+    ("literal", "needle", "", LONG_MATCHES),
+    ("prefix_unbounded", "foo.*bar", "", LONG_MATCHES),
+    ("inner_bounded", r"\\d{4}-\\d{2}", "", LONG_MATCHES),
+    ("literal_i", "NEEDLE", "i", LONG_MATCHES),
+    ("control_no_literal", "[a-z]{25}", "", 0),
+];
+
+fn bench_regex_long_literals(c: &mut Bench) {
+    let engine = NativeSparqlEngine::new();
+    let ds = long_literal_dataset();
+    let mut group = c.benchmark_group("regex_long_literals");
+    group.sample_size(10);
+    group.throughput(Throughput::Elements(LONG_ROWS as u64));
+    for &(label, pattern, flags, rows) in LONG_CASES {
+        let query = format!(
+            "SELECT ?s WHERE {{ ?s <{EX}text> ?v . FILTER(REGEX(?v, \"{pattern}\", \"{flags}\")) }}"
+        );
+        // Untimed sanity: the filter keeps exactly the rows that carry the
+        // tail, or the timed region would answer a different question.
+        assert_eq!(run(&engine, &ds, &query), rows, "case {label}");
+        group.bench_function(BenchmarkId::new(label, LONG_ROWS), |bencher| {
+            bencher.iter(|| black_box(run(black_box(&engine), black_box(&ds), black_box(&query))));
+        });
+    }
+    group.finish();
+}
+
+bench_group!(benches, bench_regex_eval, bench_regex_long_literals);
 bench_main!(benches);

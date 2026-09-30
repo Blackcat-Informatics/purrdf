@@ -567,9 +567,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                                 RegexSlot::Linked(compiled) => compiled.clone(),
                                 RegexSlot::PerRow => helpers::cached_regex(ctx, &pattern.0, flags),
                             };
-                            compiled.map(|re| {
-                                helpers::intern_boolean(ctx, re.as_regex().is_match(&text.0))
-                            })
+                            compiled.map(|re| helpers::intern_boolean(ctx, re.is_match(&text.0)))
                         }
                         _ => None,
                     };

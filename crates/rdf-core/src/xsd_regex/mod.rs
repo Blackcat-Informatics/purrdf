@@ -125,6 +125,7 @@ mod ecma;
 mod ecma_emit;
 mod emit;
 mod error;
+mod prefilter;
 mod replace;
 mod scan;
 mod xflag;
@@ -216,18 +217,51 @@ pub const MAX_FOLDED_CLASS_ESCAPES: usize = 32;
 pub struct CompiledPattern {
     regex: regex::Regex,
     is_literal: bool,
+    prefilter: Option<prefilter::Prefilter>,
 }
 
 impl CompiledPattern {
-    /// The compiled [`regex::Regex`], for the match-only callers
-    /// (`is_match`, `find`, …).
+    /// The compiled [`regex::Regex`], for the callers that need more than a
+    /// yes/no answer (`find`, `captures`, …).
     ///
     /// This is the *only* way to reach the underlying engine: a caller that
     /// needs replacement uses [`replace_all`](Self::replace_all), which
-    /// carries the semantics the raw [`regex::Regex`] does not.
+    /// carries the semantics the raw [`regex::Regex`] does not, and a caller
+    /// that asks whether the pattern matches uses [`is_match`](Self::is_match),
+    /// which runs the required-literal prefilter in front of the engine.
     #[must_use]
     pub fn as_regex(&self) -> &regex::Regex {
         &self.regex
+    }
+
+    /// `fn:matches` semantics: whether this pattern matches anywhere in
+    /// `haystack` — the answer [`regex::Regex::is_match`] gives, for every
+    /// pattern and haystack.
+    ///
+    /// The `regex` crate is built without its literal prefilter, so this is
+    /// where one runs: when every match of the pattern contains a window of
+    /// single-byte positions (`needle`, the `-` of `\d{4}-\d{2}`, the
+    /// `@example.org` of `[a-z]+@example\.org`, either case of each letter
+    /// under `i`), the haystack is searched for that window with
+    /// `purrdf_lex::scan`'s packed compares first. A haystack without one is
+    /// refused without entering the engine, and the engine is started where
+    /// the first window's match could begin rather than at offset zero.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_core::xsd_regex::compile;
+    ///
+    /// let pattern = compile(r"\d{4}-\d{2}", "").expect("a valid pattern");
+    /// assert!(pattern.is_match("released 2026-09 at last"));
+    /// assert!(!pattern.is_match("no date here, only 2026"));
+    /// ```
+    #[must_use]
+    pub fn is_match(&self, haystack: &str) -> bool {
+        match &self.prefilter {
+            Some(prefilter) => prefilter.is_match(&self.regex, haystack),
+            None => self.regex.is_match(haystack),
+        }
     }
 
     /// `fn:replace` semantics: replace every match of this pattern in
@@ -255,7 +289,18 @@ impl CompiledPattern {
         haystack: &'h str,
         replacement: &str,
     ) -> Result<Cow<'h, str>, ReplacementError> {
+        // A haystack the prefilter proves holds no match is returned as is,
+        // which is what the engine would return, without entering it. The
+        // non-`q` replacement is still parsed first, so a malformed one is
+        // [err:FORX0004] whether or not the haystack matches.
+        let unmatched = self
+            .prefilter
+            .as_ref()
+            .is_some_and(|prefilter| !prefilter.may_match(haystack));
         if self.is_literal {
+            if unmatched {
+                return Ok(Cow::Borrowed(haystack));
+            }
             // `q`: "the replacement string is used as is" (F&O §5.6.2). With
             // `q`, `$` and `\` in the replacement are ordinary characters,
             // exactly `NoExpand`'s contract, and [err:FORX0004] cannot apply.
@@ -267,6 +312,9 @@ impl CompiledPattern {
         // explicit capture-group count, so subtract it once, here.
         let template =
             replace::Template::parse(replacement, self.regex.captures_len().saturating_sub(1))?;
+        if unmatched {
+            return Ok(Cow::Borrowed(haystack));
+        }
         Ok(self
             .regex
             .replace_all(haystack, |caps: &regex::Captures<'_>| template.expand(caps)))
@@ -375,9 +423,23 @@ pub fn compile(pattern: &str, flags: &str) -> Result<CompiledPattern, XsdRegexEr
         .dot_matches_new_line(prepared.dot_all)
         .multi_line(prepared.multi_line)
         .build()?;
+    // The prefilter reads the syntax the engine just compiled, parsed with the
+    // same modes, so its window is the engine's language (case folding
+    // included) rather than a second reading of the source. The engine
+    // accepted the source, so the parse cannot fail; if it did, the pattern
+    // simply runs without a prefilter.
+    let prefilter = regex_syntax::ParserBuilder::new()
+        .case_insensitive(prepared.case_insensitive)
+        .dot_matches_new_line(prepared.dot_all)
+        .multi_line(prepared.multi_line)
+        .build()
+        .parse(&prepared.source)
+        .ok()
+        .and_then(|hir| prefilter::Prefilter::build(&hir));
     Ok(CompiledPattern {
         regex,
         is_literal: prepared.mode == PatternMode::Literal,
+        prefilter,
     })
 }
 

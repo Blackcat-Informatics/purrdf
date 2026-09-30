@@ -37,7 +37,6 @@ purrdf-iri = { workspace = true }
 # result shape map spell terms with.
 purrdf-lex = { workspace = true }
 purrdf-xsd = { workspace = true }
-regex = { workspace = true }
 
 [dev-dependencies]
 # Runs the deep-structure tests on a stack of a stated size: a fresh thread

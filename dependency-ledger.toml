@@ -564,8 +564,8 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 
 [packages.regex-syntax]
 category = "runtime"
-reason = "regex IR for ECMA-262 pattern emission and testkit string generators"
-distinct = "the pattern IR purrdf_core::xsd_regex reads to emit ECMA-262 and the testkit string generators walk; PurRDF has no regex IR of its own"
+reason = "regex IR for ECMA-262 pattern emission, the compiled-pattern literal prefilter and testkit string generators"
+distinct = "the pattern IR purrdf_core::xsd_regex reads to emit ECMA-262 and to find the byte window its prefilter searches with purrdf_lex::scan, and the testkit string generators walk; PurRDF has no regex IR of its own"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.rustversion]

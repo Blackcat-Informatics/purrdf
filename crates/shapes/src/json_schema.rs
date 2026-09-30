@@ -4344,7 +4344,7 @@ impl LexicalConstraints<'_> {
             || self.max_length.is_some_and(|n| length > n)
             || self.sources.iter().any(|(regex, flags)| {
                 purrdf_core::xsd_regex::compile(regex, flags)
-                    .is_ok_and(|compiled| !compiled.as_regex().is_match(lexical))
+                    .is_ok_and(|compiled| !compiled.is_match(lexical))
             })
     }
 
