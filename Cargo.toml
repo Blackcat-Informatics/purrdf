@@ -164,9 +164,6 @@ serde = { version = "1", features = ["derive"] }
 # typed numbers instead of treating serde's internal number map as a JSON object.
 # RDF binary64 conversion and YAML emission use explicit primitive serializers.
 serde_json = { version = "1", features = ["float_roundtrip", "arbitrary_precision"] }
-# Maintained continuation of the archived serde_yaml 0.9 (same API; the
-# `serde_yaml` name is kept at use sites via this package rename).
-serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
 # SHA-256/384/512 (the SPARQL SHA-2 built-ins, content digests); pure software.
 sha2 = { version = "0.11", default-features = false }
 structured-zstd = "0.0.49"
