@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-09-29T14:41:08-06:00\n"
+"POT-Creation-Date: 2026-09-29T19:45:35-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -2442,8 +2442,8 @@ msgid ""
 msgstr ""
 "文本编解码器*不*在内核中——解析与序列化位于上一层的 [`purrdf-rdf`](https://"
 "docs.rs/purrdf-rdf) 中。这种拆分让内核保持小巧，并让其不变量能在 crate 边界上"
-"强制执行：不含 PyO3（一项卫生检查会对依赖树进行断言），"
-"`wasm32`\\-clean（可干净构建到该目标），且 IR 层不涉及文件 IO。"
+"强制执行：不含 PyO3（一项卫生检查会对依赖树进行断言），`wasm32`\\-clean（可干"
+"净构建到该目标），且 IR 层不涉及文件 IO。"
 
 #: src/concepts/interned-dataset.md:84
 msgid "Why this design"
@@ -4830,7 +4830,7 @@ msgstr ""
 
 #: src/concepts/codecs.md:196 src/concepts/base-iris.md:258
 #: src/sparql/querying.md:1943 src/validation/shacl.md:1419
-#: src/validation/shex.md:64 src/entailment.md:364
+#: src/validation/shex.md:64 src/entailment.md:365
 msgid "Conformance"
 msgstr "一致性"
 
@@ -17063,11 +17063,11 @@ msgstr ""
 
 #: src/validation/shex.md:22
 msgid ""
-"**ShExJ** (the JSON wire format, spec Appendix A) — strict, round-tripping "
-"serde support matching the shexTest ground truth."
+"**ShExJ** (the JSON wire format, spec Appendix A) — a strict, round-tripping "
+"reader and writer matching the shexTest ground truth."
 msgstr ""
-"**ShExJ**（JSON 线格式，规范附录 A）——严格且可往返（转换）的 serde 支持，与 "
-"shexTest 的基准事实一致。"
+"**ShExJ**（JSON 线格式，规范附录 A）——严格且可往返（转换）的读取器与写出器，"
+"与 shexTest 的基准事实一致。"
 
 #: src/validation/shex.md:24
 msgid ""
@@ -18158,30 +18158,30 @@ msgstr ""
 #: src/entailment.md:355
 msgid ""
 "**Dependency-lean and wasm-clean.** The dependencies are `purrdf-core`, "
-"[`purrdf-datalog`](datalog.md), `purrdf-xsd`, `roxmltree`, `purrdf-hash`, "
-"and `hashbrown`'s raw hash table, keyed by `purrdf-core`'s fixed-key hasher "
-"— every one of them `wasm32-unknown-unknown`\\-clean, so the engines carry "
-"into Rust, Python, WebAssembly, and C unchanged, with no threads, "
-"filesystem, or RNG dependency."
+"[`purrdf-datalog`](datalog.md), `purrdf-xsd`, `purrdf-lex`, `purrdf-iri`, "
+"`purrdf-hash`, and `hashbrown`'s raw hash table, keyed by `purrdf-core`'s "
+"fixed-key hasher — every one of them `wasm32-unknown-unknown`\\-clean, so "
+"the engines carry into Rust, Python, WebAssembly, and C unchanged, with no "
+"threads, filesystem, or RNG dependency."
 msgstr ""
 "**依赖精简且 wasm-clean。** 依赖项为 `purrdf-core`、[`purrdf-datalog`]"
-"(datalog.md)、`purrdf-xsd`、`roxmltree`、`purrdf-hash`，以及以 `purrdf-core` "
-"的固定密钥哈希器为键计算哈希值的 `hashbrown` 原始哈希表——每一个都是 `wasm32-"
-"unknown-unknown`\\-clean（可干净构建到该目标），因此这些引擎可以原样带入 "
-"Rust、Python、WebAssembly 与 C，不依赖线程、文件系统或 RNG。"
+"(datalog.md)、`purrdf-xsd`、`purrdf-lex`、`purrdf-iri`、`purrdf-hash`，以及以 "
+"`purrdf-core` 的固定密钥哈希器为键计算哈希值的 `hashbrown` 原始哈希表——每一个"
+"都是 `wasm32-unknown-unknown`\\-clean（可干净构建到该目标），因此这些引擎可以"
+"原样带入 Rust、Python、WebAssembly 与 C，不依赖线程、文件系统或 RNG。"
 
-#: src/entailment.md:361
+#: src/entailment.md:362
 msgid ""
 "**Deterministic.** Same input + regime → same closure, always — and the same "
 "report, byte for byte."
 msgstr ""
 "**确定性。** 相同的输入 + 机制 → 相同的推理闭包，始终如此——报告也逐字节相同。"
 
-#: src/entailment.md:366
+#: src/entailment.md:367
 msgid "Two corpora measure two different things, and the distinction matters:"
 msgstr "两份语料度量的是两件不同的事，这一区别很重要："
 
-#: src/entailment.md:368
+#: src/entailment.md:369
 msgid ""
 "**W3C SPARQL 1.1 entailment-regime group — 70 of 70 cases pass**, with zero "
 "ledgered residuals: the RDF/RDFS/OWL-RL chase, the OWL-Direct (DL) tableau, "
@@ -18192,7 +18192,7 @@ msgstr ""
 "RDF/RDFS/OWL-RL chase、OWL-Direct（DL）tableau、RIF-Core 规则引擎，以及 RDF "
 "公理性的谓词类型推定，全部经由 SPARQL 一致性测试框架运行。"
 
-#: src/entailment.md:372
+#: src/entailment.md:373
 msgid ""
 "**W3C OWL 2 test suite — 258 of 262 cases agree, 4 ledgered**, zero "
 "unledgered. This corpus is _consistency_\\-shaped: all 262 vendored cases "
@@ -18209,7 +18209,7 @@ msgstr ""
 "明。4 个分歧中的每一个都在一个带类型的台账中点名列出；未入台账的分歧，以及已"
 "入台账却开始一致的用例，都是硬失败。"
 
-#: src/entailment.md:380
+#: src/entailment.md:381
 msgid ""
 "Two things this row does **not** say. First, the upstream material is not "
 "free of entailment tests — the W3C manifest holds **206 positive and 23 "
@@ -18234,7 +18234,7 @@ msgstr ""
 "荷的分拣，而非能力限制，而「262 个中 258 个」是基于一份语料的数字，而不是基"
 "于 W3C 所发布内容的数字。"
 
-#: src/entailment.md:393
+#: src/entailment.md:394
 msgid ""
 "Those five figures are a **dated measurement**, recorded in `census.tsv`'s "
 "`dl_probe` column and described in that suite's `PROVENANCE.md`. The harness "
@@ -18249,7 +18249,7 @@ msgstr ""
 "归。重新推导这些数字意味着重新运行探测，这是一项有意的操作，而不是把关检查的"
 "一部分。"
 
-#: src/entailment.md:399
+#: src/entailment.md:400
 msgid ""
 "**W3C OWL 2 RL entailment tests — 50 of 50 cases agree, 0 ledgered**, zero "
 "unledgered. This is the independent oracle for the rule table: W3C's own "
@@ -18262,7 +18262,7 @@ msgstr ""
 "`Regime::OwlRl` 下调用一次 `purrdf_entail::entails()` 作答。两个通道证明的是"
 "不同的事，分开报告。"
 
-#: src/entailment.md:405
+#: src/entailment.md:406
 msgid ""
 "**The negative lane is 23 of 23: no unsoundness.** The chase never derived a "
 "triple W3C publishes as _not_ entailed. That is the safety result, and it "
@@ -18273,14 +18273,14 @@ msgstr ""
 "被蕴涵的三元组。这是安全性结果，它在*全部* 23 个负向用例上都成立——可靠性是每"
 "个用例都必须满足的，因此没有按 profile 过滤任何用例。"
 
-#: src/entailment.md:410
+#: src/entailment.md:411
 msgid ""
 "**Those 23 agreements are two different results, and the harness prints the "
 "split** on a scoreboard line of its own:"
 msgstr ""
 "**这 23 次一致是两种不同的结果，测试框架会打印其划分**，单独占一行记分板："
 
-#: src/entailment.md:417
+#: src/entailment.md:418
 msgid ""
 "Three are _decided_ non-entailments — both halves of Theorem PR1's "
 "hypothesis hold, so the closure's failure to contain the non-conclusion is a "
@@ -18298,7 +18298,7 @@ msgstr ""
 "`refuted 0`。`23 of 23` 应读作「未发现不可靠性」，绝不能读作「证明了 23 个非"
 "蕴涵」。"
 
-#: src/entailment.md:426
+#: src/entailment.md:427
 msgid ""
 "The positive lane is **27 of 27** — the 27 positive entailments W3C itself "
 "places inside the RL profile under RDF-Based semantics — and the typed "
@@ -18313,7 +18313,7 @@ msgstr ""
 "`imports-unresolved` 为 0，且**需要采取行动的项为 0**（`missing-rule` 为 "
 "0）。"
 
-#: src/entailment.md:433
+#: src/entailment.md:434
 msgid ""
 "Every class it used to hold is closed, and the rule table did not change "
 "once to close any of them. `entails()` reaches a conclusion six ways, and "
@@ -18322,7 +18322,7 @@ msgstr ""
 "它过去包含的每一类都已关闭，而为了关闭其中任何一类，规则表一次也没有改变。"
 "`entails()` 以六种方式得出结论，其中五种不是匹配："
 
-#: src/entailment.md:437
+#: src/entailment.md:438
 msgid ""
 "**refutation.** A negative fact still has no head anywhere in Tables 4–9 — "
 "no rule concludes `owl:differentFrom`, and none concludes membership in an "
@@ -18345,7 +18345,7 @@ msgstr ""
 "态，并且恰好在每一对都被驳倒时才被蕴涵——这就是为什么有两个条目随之离开了 "
 "`schema-conclusion` 类。"
 
-#: src/entailment.md:448
+#: src/entailment.md:449
 msgid ""
 "**freeze-and-chase.** `p rdf:type owl:TransitiveProperty` abbreviates a "
 "universally quantified Horn implication, and an implication is decided by "
@@ -18363,7 +18363,7 @@ msgstr ""
 "的一次查找，而且这一步不可省略：模式公理是一个合取式，只确立其中有意思的那一"
 "半，就会声称该语义并不许可的结论。"
 
-#: src/entailment.md:456
+#: src/entailment.md:457
 msgid ""
 "**comprehension.** A conclusion may assert that a CLASS EXISTS — an "
 "anonymous `owl:unionOf`, an anonymous `owl:Restriction` — which the RDF-"
@@ -18376,7 +18376,7 @@ msgstr ""
 "件所许可，但须满足一个关于运算对象的类型附加条件。只生成结论所点名的那些脚手"
 "架，且所用的空节点已检查在两份文档中都不存在。"
 
-#: src/entailment.md:461
+#: src/entailment.md:462
 msgid ""
 "**reflexivity.** `owl:ReflexiveProperty` is outside the RL syntax, so the "
 "profile states no rule for it — and a rule that did would range over every "
@@ -18388,7 +18388,7 @@ msgstr ""
 "给出规则——而如果有这样一条规则，它的取值范围将是每一个资源，从而扩大每个使用"
 "方默认都会计算的推理闭包。结论自身的自环改为从前提的自反类型声明中读出。"
 
-#: src/entailment.md:466
+#: src/entailment.md:467
 msgid ""
 "**datatype containment.** A property's declared `rdfs:range` datatypes "
 "intersect, and the intersection may be contained in one the premise never "
@@ -18402,7 +18402,7 @@ msgstr ""
 "⊓ unsignedInt ⊑ unsignedShort`，这两者都无法通过对三元组做连接来发现。在 XSD "
 "值空间上判定，采用三值逻辑，否定答案只有在反例范围被精确判定时才会给出。"
 
-#: src/entailment.md:473
+#: src/entailment.md:474
 msgid ""
 "The last case needed no mechanism at all, only the document its premise "
 "names: `webont-imports-011` `owl:imports` a support ontology the upstream "
@@ -18415,7 +18415,7 @@ msgstr ""
 "W3C 自己的 URL 获取后随库固化在这些用例旁边，并作为调用方持有的配置提供给 "
 "`entails()`。该库仍然不获取任何内容。"
 
-#: src/entailment.md:479
+#: src/entailment.md:480
 msgid ""
 "Nothing about the inventory moves: `rules(Regime::OwlRl)` and "
 "`implemented(Regime::OwlRl)` are still exactly the same 78, "
@@ -18435,7 +18435,7 @@ msgstr ""
 "结的常量、规则体与规则头；生成的三元组以及许可它们的推理闭包三元组），以及它"
 "自己的检查器，无需运行推理机即可重新判定全部内容。"
 
-#: src/entailment.md:489
+#: src/entailment.md:490
 msgid ""
 "The one case that used to be actionable is closed by an **extension**, and "
 "the extension is labelled rather than absorbed. `a owl:differentFrom b` "
@@ -18463,7 +18463,7 @@ msgstr ""
 "到的推理闭包是表 4–9 再加上一份它可以阅读并拒绝的清单，而 `OWL-RL 78 / 78` 仍"
 "然只是关于表 4–9 的声明，别无其他。"
 
-#: src/entailment.md:503
+#: src/entailment.md:504
 msgid ""
 "The live scoreboard is [`docs/CONFORMANCE.md`](https://github.com/Blackcat-"
 "Informatics/purrdf/blob/main/docs/CONFORMANCE.md)."
@@ -20364,8 +20364,8 @@ msgid ""
 msgstr ""
 "`purrdf-core` 绝不能依赖 PyO3，并有一道卫生关卡对依赖树进行断言。根 crate "
 "`purrdf-hash` 保持**零运行时依赖**，其上的基础叶子 crate（`purrdf-lex`、"
-"`purrdf-iri`、`purrdf-xsd`、`purrdf-events`）只依赖其 `layers.toml` 行所允许的"
-"第一方 crate，不依赖任何第三方 crate。诊断在内核中保持结构化且不含 SARIF；"
+"`purrdf-iri`、`purrdf-xsd`、`purrdf-events`）只依赖其 `layers.toml` 行所允许"
+"的第一方 crate，不依赖任何第三方 crate。诊断在内核中保持结构化且不含 SARIF；"
 "SARIF 边界是 `purrdf-validate` 这个叶子 crate。"
 
 #: src/project/design-rules.md:55
