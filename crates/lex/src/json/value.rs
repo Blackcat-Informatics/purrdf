@@ -73,18 +73,12 @@ impl Object {
 
     /// The value of the first member named `name`.
     pub fn get(&self, name: &str) -> Option<&Value> {
-        self.members
-            .iter()
-            .find(|(member, _)| member == name)
-            .map(|(_, value)| value)
+        crate::assoc::get(&self.members, name)
     }
 
     /// The value of the first member named `name`, mutably.
     pub fn get_mut(&mut self, name: &str) -> Option<&mut Value> {
-        self.members
-            .iter_mut()
-            .find(|(member, _)| member == name)
-            .map(|(_, value)| value)
+        crate::assoc::get_mut(&mut self.members, name)
     }
 
     /// Whether a member is named `name`.
@@ -116,15 +110,7 @@ impl Object {
     /// Set the first member named `name` to `value` in place, returning the
     /// value it replaces, or append the member when there is none.
     pub fn insert(&mut self, name: impl Into<String>, value: impl Into<Value>) -> Option<Value> {
-        let name = name.into();
-        let value = value.into();
-        match self.get_mut(&name) {
-            Some(slot) => Some(mem::replace(slot, value)),
-            None => {
-                self.members.push((name, value));
-                None
-            }
-        }
+        crate::assoc::insert(&mut self.members, name.into(), value.into())
     }
 
     /// Append a member, even when its name repeats one already present.
@@ -287,7 +273,7 @@ impl Value {
 
     /// An array of `items`.
     pub fn array<T: Into<Self>>(items: impl IntoIterator<Item = T>) -> Self {
-        Self::Array(items.into_iter().map(Into::into).collect())
+        items.into_iter().collect()
     }
 
     /// An object of `members`, in order, repeats retained.
@@ -725,7 +711,7 @@ impl From<f32> for Value {
 
 impl<T: Into<Self>> From<Vec<T>> for Value {
     fn from(items: Vec<T>) -> Self {
-        Self::Array(items.into_iter().map(Into::into).collect())
+        Self::from_iter(items)
     }
 }
 
@@ -745,7 +731,7 @@ impl<T: Into<Self>> From<Option<T>> for Value {
 impl<T: Into<Self>> FromIterator<T> for Value {
     /// An array.
     fn from_iter<I: IntoIterator<Item = T>>(items: I) -> Self {
-        Self::array(items)
+        Self::Array(items.into_iter().map(Into::into).collect())
     }
 }
 
@@ -767,19 +753,9 @@ macro_rules! value_from_integer {
     )*};
 }
 
-value_from_integer!(u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
-
-impl From<u128> for Value {
-    fn from(value: u128) -> Self {
-        Self::Number(Number::from(value))
-    }
-}
-
-impl From<i128> for Value {
-    fn from(value: i128) -> Self {
-        Self::Number(Number::from(value))
-    }
-}
+value_from_integer!(
+    u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize
+);
 
 impl PartialEq<str> for Value {
     fn eq(&self, other: &str) -> bool {

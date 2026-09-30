@@ -9,8 +9,8 @@ use crate::cdt_blank::{cdt_embedded_blanks, rewrite_cdt_blank_terms};
 use crate::hash::FastMap;
 use crate::{
     BlankScope, DatasetView, DeltaDatasetView, DeltaViewId, GraphMatch, QuadIds, QuadProbePlan,
-    QuadRef, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfStoreCapabilities, TermId, TermRef,
-    TermValue, ViewLimits, ViewStats, ViewTermId, ViewWork,
+    RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfStoreCapabilities, TermId, TermRef, TermValue,
+    ViewLimits, ViewStats, ViewTermId, ViewWork,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
@@ -267,7 +267,7 @@ impl CompositeSource {
                 let LocalId::Base(id) = id else {
                     panic!("native source requires a native handle")
                 };
-                map_term(ds.resolve(id), LocalId::Base, |s| s)
+                ds.resolve(id).map_ids_scoped(LocalId::Base, |s| s)
             }
             Carrier::Delta(ds) => ds.resolve(id),
             Carrier::Selected(selection) => {
@@ -277,11 +277,10 @@ impl CompositeSource {
                 // The scope arm is the identity ON PURPOSE: the retained composite
                 // has already resolved this term into its canonical blank space and
                 // selection is not a renaming of it.
-                map_term(
-                    selection.view.resolve(inner),
-                    |id| selection.local(id),
-                    |scope| scope,
-                )
+                selection
+                    .view
+                    .resolve(inner)
+                    .map_ids_scoped(|id| selection.local(id), |scope| scope)
             }
         }
     }
@@ -509,7 +508,7 @@ impl CompositeSource {
                             .filter(move |_| annotations && subject.is_none())
                             .flat_map(move |ds| ds.annotation_quads_in_graph(graph)),
                     )
-                    .map(|q| map_quad(q, LocalId::Base))
+                    .map(|q| q.map_ids(LocalId::Base))
             });
         let delta = self.delta_ref().into_iter().flat_map(move |ds| {
             subject
@@ -579,7 +578,7 @@ impl CompositeSource {
                             }),
                     )
                     .filter(move |q| q.g.is_some_and(|graph| selection.graphs.contains(&graph)))
-                    .map(move |q| map_quad(q, |id| selection.local(id)))
+                    .map(move |q| q.map_ids(|id| selection.local(id)))
             });
         native.chain(delta).chain(selected)
     }
@@ -599,7 +598,7 @@ impl CompositeSource {
                 native_pattern
                     .into_iter()
                     .flat_map(move |(s, p, o, g)| ds.quads_for_pattern_with_plan(&plan, s, p, o, g))
-                    .map(|q| map_quad(q, LocalId::Base))
+                    .map(|q| q.map_ids(LocalId::Base))
             });
         let delta = self
             .delta_ref()
@@ -625,7 +624,7 @@ impl CompositeSource {
                             selection.probe_graph(selected_plan, s, p, o, graph)
                         })
                     })
-                    .map(move |q| map_quad(q, |id| selection.local(id)))
+                    .map(move |q| q.map_ids(|id| selection.local(id)))
             });
         native.chain(delta).chain(selected).chain(
             self.metadata_rows(table, s, g)
@@ -1302,7 +1301,7 @@ impl CompositeDatasetView {
         }
     }
     fn map_row(&self, index: usize, q: QuadIds<LocalId>) -> QuadIds<CompositeViewId> {
-        let mut q = map_quad(q, |id| self.map_id(index, id));
+        let mut q = q.map_ids(|id| self.map_id(index, id));
         if let SourceGraph::Replace(graph) = self.placement[index] {
             q.g = graph;
         }
@@ -1792,18 +1791,9 @@ impl DatasetView for CompositeDatasetView {
     fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.quads_for_pattern(None, None, None, GraphMatch::Any)
     }
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_, Self::Id>> + '_ {
-        self.quads().map(|q| QuadRef {
-            s: self.resolve(q.s),
-            p: self.resolve(q.p),
-            o: self.resolve(q.o),
-            g: q.g.map(|id| self.resolve(id)),
-        })
-    }
     fn resolve(&self, id: Self::Id) -> TermRef<'_, Self::Id> {
         let index = id.source as usize;
-        map_term(
-            self.sources[index].resolve(id.local),
+        self.sources[index].resolve(id.local).map_ids_scoped(
             |local| self.map_id(index, local),
             |scope| self.scopes[index][&scope],
         )
@@ -1991,43 +1981,6 @@ fn matches_pattern<I: Copy + Eq>(
         && p.is_none_or(|id| id == q.p)
         && o.is_none_or(|id| id == q.o)
         && g.matches(q.g)
-}
-fn map_quad<A, B>(q: QuadIds<A>, map: impl Fn(A) -> B) -> QuadIds<B> {
-    QuadIds {
-        s: map(q.s),
-        p: map(q.p),
-        o: map(q.o),
-        g: q.g.map(map),
-    }
-}
-fn map_term<A, B>(
-    term: TermRef<'_, A>,
-    map: impl Fn(A) -> B,
-    scope: impl Fn(BlankScope) -> BlankScope,
-) -> TermRef<'_, B> {
-    match term {
-        TermRef::Iri(iri) => TermRef::Iri(iri),
-        TermRef::Blank { label, scope: old } => TermRef::Blank {
-            label,
-            scope: scope(old),
-        },
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => TermRef::Literal {
-            lexical,
-            datatype: map(datatype),
-            language,
-            direction,
-        },
-        TermRef::Triple { s, p, o } => TermRef::Triple {
-            s: map(s),
-            p: map(p),
-            o: map(o),
-        },
-    }
 }
 fn local_native_pattern(
     s: Option<LocalId>,

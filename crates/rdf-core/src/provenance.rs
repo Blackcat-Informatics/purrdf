@@ -310,11 +310,7 @@ impl UnitInterner {
     }
 }
 
-impl Default for UnitInterner {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(UnitInterner);
 
 /// Interner for `ArtifactId`s — maps a logical artifact path to a dense numeric
 /// id. The path is a string the caller controls (e.g. a repo-relative file path
@@ -370,11 +366,7 @@ impl ArtifactInterner {
     }
 }
 
-impl Default for ArtifactInterner {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(ArtifactInterner);
 
 /// Interner for `OriginSetId`s — maps a canonical sorted set of
 /// `(UnitId, ArtifactId)` pairs to a dense numeric id.
@@ -436,11 +428,7 @@ impl OriginSetInterner {
     }
 }
 
-impl Default for OriginSetInterner {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(OriginSetInterner);
 
 // ─── DatasetProvenance ────────────────────────────────────────────────────────
 
@@ -586,11 +574,7 @@ impl DatasetProvenance {
     }
 }
 
-impl Default for DatasetProvenance {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(DatasetProvenance);
 
 // ─── Provenance gate ──────────────────────────────────────────────────────────
 

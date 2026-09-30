@@ -226,6 +226,26 @@ pub(crate) struct StrRange {
     pub len: u32,
 }
 
+/// Append `s` to `arena` and return the range it occupies: the one writer of the
+/// term arenas [`arena_str`] reads.
+///
+/// The range must fit `u32`, and it is checked BEFORE the arena is extended: an
+/// overflow fails fast and leaves the arena consistent, rather than growing it past
+/// `u32::MAX` and corrupting every later range.
+///
+/// # Panics
+///
+/// When the arena would pass `u32::MAX` bytes.
+pub(crate) fn push_arena_str(arena: &mut Vec<u8>, s: &str) -> StrRange {
+    let offset = u32::try_from(arena.len()).expect("term arena exceeds u32::MAX bytes");
+    let len = u32::try_from(s.len()).expect("term string exceeds u32::MAX bytes");
+    offset
+        .checked_add(len)
+        .expect("term arena exceeds u32::MAX bytes");
+    arena.extend_from_slice(s.as_bytes());
+    StrRange { offset, len }
+}
+
 /// Borrow an arena range as `&str`. The arena only ever receives validated UTF-8
 /// (it is appended from `&str` values) and ranges are recorded at push time, so the
 /// sub-slice is always valid UTF-8.
@@ -269,6 +289,26 @@ pub(crate) enum InternedTerm {
     /// resolved `(s, p, o)` (C0.3).
     Triple { s: TermId, p: TermId, o: TermId },
 }
+
+/// The canonical kind tag of an RDF term value of any representation whose
+/// variants are `Iri`, `Literal`, `Blank` and `Triple`: the one rank table that
+/// orders terms of DIFFERENT kinds. It mirrors the canonical Turtle renderer's
+/// `ObjKey` kind ordering (IRI < Literal < Blank < Triple, see `turtle_render`), so
+/// every total order over terms — a [`TermValue`]'s and a pack dictionary
+/// entry's alike — AGREES with the serializer's notion of canonical term order
+/// rather than inventing a second, conflicting one. (Note this is NOT the derive
+/// order, which would put Blank before Literal — hence the hand-written `Ord`.)
+macro_rules! canonical_kind_tag {
+    ($term:expr) => {
+        match $term {
+            Self::Iri(..) => 0,
+            Self::Literal { .. } => 1,
+            Self::Blank { .. } => 2,
+            Self::Triple { .. } => 3,
+        }
+    };
+}
+pub(crate) use canonical_kind_tag;
 
 /// A **dataset-independent** term value — the lookup key for
 /// [`RdfDataset::term_id_by_value`](super::RdfDataset::term_id_by_value).
@@ -404,20 +444,11 @@ impl TermValue {
         matches!(self, Self::Blank { .. })
     }
 
-    /// The canonical kind tag used to order terms of DIFFERENT kinds. It mirrors the
-    /// canonical Turtle renderer's `ObjKey` kind ordering (IRI < Literal < Blank <
-    /// Triple, see `turtle_render`), so the total order below AGREES with the
-    /// serializer's notion of canonical term order rather than inventing a second,
-    /// conflicting one. (Note this is NOT the derive order, which would put Blank
-    /// before Literal — hence the hand-written `Ord`.)
+    /// The canonical kind tag used to order terms of DIFFERENT kinds (see
+    /// [`canonical_kind_tag!`]).
     #[inline]
     pub(super) fn canonical_tag(&self) -> u8 {
-        match self {
-            Self::Iri(_) => 0,
-            Self::Literal { .. } => 1,
-            Self::Blank { .. } => 2,
-            Self::Triple { .. } => 3,
-        }
+        canonical_kind_tag!(self)
     }
 }
 
@@ -752,6 +783,18 @@ impl TermValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn push_arena_str_appends_and_answers_the_range_it_occupies() {
+        let mut arena = Vec::new();
+        let first = push_arena_str(&mut arena, "abc");
+        let empty = push_arena_str(&mut arena, "");
+        let second = push_arena_str(&mut arena, "déf");
+        assert_eq!(arena_str(&arena, first), "abc");
+        assert_eq!(arena_str(&arena, empty), "");
+        assert_eq!(arena_str(&arena, second), "déf");
+        assert_eq!((second.offset, second.len), (3, 4));
+    }
 
     #[test]
     fn term_id_index_round_trips() {

@@ -84,7 +84,7 @@ pub(crate) fn release_ground(node: GroundTerm, work: &mut DropWork) {
     }
 }
 
-fn take_child<T: Subtree>(child: &mut Child<T>, work: &mut DropWork) {
+fn take_child<T: Subtree + purrdf_lex::walk::Dismantle>(child: &mut Child<T>, work: &mut DropWork) {
     if let Some(node) = child.take() {
         (*node).release(work);
     }

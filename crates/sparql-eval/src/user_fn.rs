@@ -346,14 +346,10 @@ pub struct ExprFunction {
     pub(crate) arity: Arity,
 }
 
-impl core::fmt::Debug for ExprFunction {
+purrdf_hash::debug_non_exhaustive!(
     /// The closure body has no `Debug` impl, so only the declared arity is shown.
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ExprFunction")
-            .field("arity", &self.arity)
-            .finish_non_exhaustive()
-    }
-}
+    ExprFunction { arity }
+);
 
 /// A native function's determinism class â the volatility axis of its descriptor
 /// (after PostgreSQL's `provolatile`).
@@ -475,17 +471,12 @@ pub struct NativeFunction {
     pub(crate) volatility: Volatility,
 }
 
-impl core::fmt::Debug for NativeFunction {
+purrdf_hash::debug_non_exhaustive!(
     /// The closure body has no `Debug` impl, so only the declared arity and
     /// volatility are shown (the same two fields the fork-join parallel gate and
     /// the native-dispatch path `eval_native_function` consult).
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("NativeFunction")
-            .field("arity", &self.arity)
-            .field("volatility", &self.volatility)
-            .finish_non_exhaustive()
-    }
-}
+    NativeFunction { arity, volatility }
+);
 
 /// A caller-injected table of user functions, keyed by function IRI. Holds two
 /// independent kinds under two separate tables â SHACL-AF SPARQL-bodied

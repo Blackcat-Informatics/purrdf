@@ -1076,10 +1076,7 @@ impl<'a> Scope<'a> {
     /// not in the argument scope (§6.3's second case).
     #[must_use]
     pub fn lookup_arg(&self, key: &ArgKey) -> Option<&'a NodeExpr> {
-        self.args
-            .iter()
-            .find(|(bound, _)| bound == key)
-            .map(|(_, expr)| expr)
+        purrdf_lex::assoc::get(self.args, key)
     }
 
     /// Every argument binding in force, in call order.

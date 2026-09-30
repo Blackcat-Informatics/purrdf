@@ -164,11 +164,7 @@ impl std::fmt::Debug for Inflater {
     }
 }
 
-impl Default for Inflater {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(Inflater);
 
 impl Inflater {
     /// A decoder on the fastest kernel path this processor supports.

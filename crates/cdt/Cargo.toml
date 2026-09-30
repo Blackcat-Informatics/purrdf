@@ -37,6 +37,9 @@ purrdf-lex = { workspace = true }
 purrdf-iri = { workspace = true }
 # The XSD value space the numeric/boolean shorthands and `parse_literal` resolve into.
 purrdf-xsd = { workspace = true }
+# The one RDF 1.2 base-direction type, defined in the event protocol below this
+# crate, so a directional literal's direction is the same type at every layer.
+purrdf-events = { workspace = true }
 
 [dev-dependencies]
 # Runs the deep-structure tests on a stack of a stated size: a fresh thread

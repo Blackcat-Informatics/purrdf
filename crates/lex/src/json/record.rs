@@ -24,7 +24,7 @@
 //! * **Absent and `null` are one thing for an optional member**
 //!   ([`Record::optional`]); a defaulted member ([`Record::defaulted`]) takes
 //!   its default only when absent, so `null` for a list is refused.
-//! * **Closed vocabularies are strings.** [`json_string_enum!`] spells each
+//! * **Closed vocabularies are strings.** [`json_string_enum!`](crate::json_string_enum) spells each
 //!   variant of a closed enum once; any other string is `unknown variant`.
 //! * **Numbers are exact.** An integer type reads only an integer lexeme
 //!   (no fraction, no exponent) that fits it; `f32` and `f64` read any number

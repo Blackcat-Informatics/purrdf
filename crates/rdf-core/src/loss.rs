@@ -183,34 +183,12 @@ impl LossLedger {
 
 /// The intentional losses incurred projecting the RDF 1.2 dataset IR → GTS.
 pub fn rdf_to_gts_loss_ledger() -> LossLedger {
-    LossLedger::contract(vec![LossEntry {
-        code: Cow::Borrowed("blob-bytes-absent"),
-        from: Cow::Borrowed("rdf-1.2-dataset"),
-        to: Cow::Borrowed("gts"),
-        note: Cow::Borrowed(
-            "Blob payloads are preserved as content-addressed references (the blob_id digest \
-             plus the origin file id), never materialized into the RDF IR, which must stay \
-             value-light for arbitrarily large payloads (e.g. multi-terabyte data dumps). A \
-             destination GTS carries the reference; the payload bytes are streamed \
-             origin->destination on demand (deferred materialization).",
-        ),
-        location: None,
-    }])
+    contract_profile("rdf-1.2-dataset", "gts", RDF_TO_GTS_PROFILE)
 }
 
 /// The intentional losses incurred reading GTS → the RDF 1.2 dataset IR.
 pub fn gts_to_rdf_loss_ledger() -> LossLedger {
-    LossLedger::contract(vec![LossEntry {
-        code: Cow::Borrowed("bnode-scope-flatten"),
-        from: Cow::Borrowed("gts"),
-        to: Cow::Borrowed("rdf-1.2-dataset"),
-        note: Cow::Borrowed(
-            "`purrdf_gts::reader::read()` folds all segments into one term table, collapsing \
-             per-segment blank-node scope; the distinct scopes are recovered only via the \
-             streaming-event importer.",
-        ),
-        location: None,
-    }])
+    contract_profile("gts", "rdf-1.2-dataset", GTS_TO_RDF_PROFILE)
 }
 
 /// The closed loss contract for projecting an arbitrary RDF 1.2 dataset to an
@@ -223,48 +201,7 @@ pub fn gts_to_rdf_loss_ledger() -> LossLedger {
 /// that occur for the dataset being written, while this contract enumerates every
 /// code it is permitted to record.
 pub fn rdf_to_okf_loss_ledger() -> LossLedger {
-    LossLedger::contract(vec![
-        LossEntry {
-            code: Cow::Borrowed("named-graph-dropped"),
-            from: Cow::Borrowed("rdf-1.2-dataset"),
-            to: Cow::Borrowed("okf"),
-            note: Cow::Borrowed(
-                "OKF documents have no named-graph placement; a quad asserted outside the \
-                 default graph cannot be represented in Markdown frontmatter or body text.",
-            ),
-            location: None,
-        },
-        LossEntry {
-            code: Cow::Borrowed("okf-annotation-dropped"),
-            from: Cow::Borrowed("rdf-1.2-dataset"),
-            to: Cow::Borrowed("okf"),
-            note: Cow::Borrowed(
-                "An RDF 1.2 annotation outside the exact caller-configured OKF Markdown-link \
-                 profile has no OKF representation and is omitted from the bundle.",
-            ),
-            location: None,
-        },
-        LossEntry {
-            code: Cow::Borrowed("okf-non-profile-quad-dropped"),
-            from: Cow::Borrowed("rdf-1.2-dataset"),
-            to: Cow::Borrowed("okf"),
-            note: Cow::Borrowed(
-                "An RDF statement outside the caller-configured OKF profile, including an \
-                 OWL axiom, has no Markdown/frontmatter field and is omitted from the bundle.",
-            ),
-            location: None,
-        },
-        LossEntry {
-            code: Cow::Borrowed("okf-reifier-dropped"),
-            from: Cow::Borrowed("rdf-1.2-dataset"),
-            to: Cow::Borrowed("okf"),
-            note: Cow::Borrowed(
-                "An RDF 1.2 reifier outside the exact caller-configured OKF Markdown-link \
-                 profile has no OKF representation and is omitted from the bundle.",
-            ),
-            location: None,
-        },
-    ])
+    contract_profile("rdf-1.2-dataset", "okf", RDF_TO_OKF_PROFILE)
 }
 
 /// The closed loss contract for lifting an OKF Markdown bundle into an RDF 1.2
@@ -274,17 +211,53 @@ pub fn rdf_to_okf_loss_ledger() -> LossLedger {
 /// attached to an OKF concept and therefore does not enter the RDF profile. The
 /// reader records each skipped page with this code and a file location.
 pub fn okf_to_rdf_loss_ledger() -> LossLedger {
-    LossLedger::contract(vec![LossEntry {
-        code: Cow::Borrowed("okf-navigation-page-dropped"),
-        from: Cow::Borrowed("okf"),
-        to: Cow::Borrowed("rdf-1.2-dataset"),
-        note: Cow::Borrowed(
-            "A frontmatter-less index.md navigation page has no OKF concept subject and is \
-             omitted from the RDF profile; its path is recorded on the runtime loss entry.",
-        ),
-        location: None,
-    }])
+    contract_profile("okf", "rdf-1.2-dataset", OKF_TO_RDF_PROFILE)
 }
+
+const RDF_TO_GTS_PROFILE: &[(&str, &str)] = &[(
+    "blob-bytes-absent",
+    "Blob payloads are preserved as content-addressed references (the blob_id digest \
+     plus the origin file id), never materialized into the RDF IR, which must stay \
+     value-light for arbitrarily large payloads (e.g. multi-terabyte data dumps). A \
+     destination GTS carries the reference; the payload bytes are streamed \
+     origin->destination on demand (deferred materialization).",
+)];
+
+const GTS_TO_RDF_PROFILE: &[(&str, &str)] = &[(
+    "bnode-scope-flatten",
+    "`purrdf_gts::reader::read()` folds all segments into one term table, collapsing \
+     per-segment blank-node scope; the distinct scopes are recovered only via the \
+     streaming-event importer.",
+)];
+
+const RDF_TO_OKF_PROFILE: &[(&str, &str)] = &[
+    (
+        "named-graph-dropped",
+        "OKF documents have no named-graph placement; a quad asserted outside the \
+         default graph cannot be represented in Markdown frontmatter or body text.",
+    ),
+    (
+        "okf-annotation-dropped",
+        "An RDF 1.2 annotation outside the exact caller-configured OKF Markdown-link \
+         profile has no OKF representation and is omitted from the bundle.",
+    ),
+    (
+        "okf-non-profile-quad-dropped",
+        "An RDF statement outside the caller-configured OKF profile, including an \
+         OWL axiom, has no Markdown/frontmatter field and is omitted from the bundle.",
+    ),
+    (
+        "okf-reifier-dropped",
+        "An RDF 1.2 reifier outside the exact caller-configured OKF Markdown-link \
+         profile has no OKF representation and is omitted from the bundle.",
+    ),
+];
+
+const OKF_TO_RDF_PROFILE: &[(&str, &str)] = &[(
+    "okf-navigation-page-dropped",
+    "A frontmatter-less index.md navigation page has no OKF concept subject and is \
+     omitted from the RDF profile; its path is recorded on the runtime loss entry.",
+)];
 
 /// RDF→LPG loss code: an RDF predicate/object statement becomes a native property
 /// graph edge or property whose target data model has no RDF model-theoretic meaning.

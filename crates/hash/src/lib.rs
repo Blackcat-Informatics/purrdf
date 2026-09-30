@@ -19,6 +19,12 @@
 //! buffer ([`frame::frame_le`]) or streamed into a [`Digest`]
 //! ([`frame::frame_le_into`]).
 //!
+//! [`fixed::hash_one`] is the table hash of one value. [`debug_non_exhaustive!`],
+//! [`default_from_new!`] and [`vector_backend!`] are the trait impls every type of
+//! one shape shares — a `Debug` of some fields, a `Default` that is `new`, a
+//! kernel-path family on the vector-ISA ladder — each spelled once for the
+//! workspace, which reaches this root from every crate.
+//!
 //! [`Domain`] is the one spelling of a hash domain-separation string: every
 //! domain the workspace hashes under is a registered `Domain` constant, unique
 //! and prefix-free across the workspace, and never renamed once published.
@@ -94,6 +100,7 @@ pub mod fixed;
 pub mod fnv;
 pub mod frame;
 pub mod hex;
+mod impls;
 pub mod md5;
 pub mod mix;
 pub mod sha1;

@@ -323,6 +323,18 @@ pub enum XsdError {
     },
 }
 
+impl XsdError {
+    /// [`XsdError::InvalidLexical`] for `lexical` read as `datatype`: the one
+    /// constructor every lexical-space check reports its refusal through.
+    pub(crate) fn invalid(datatype: XsdDatatype, lexical: &str, reason: &'static str) -> Self {
+        Self::InvalidLexical {
+            datatype,
+            lexical: lexical.to_owned(),
+            reason,
+        }
+    }
+}
+
 impl std::fmt::Display for XsdError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

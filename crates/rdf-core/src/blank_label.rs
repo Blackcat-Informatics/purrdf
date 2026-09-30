@@ -531,105 +531,17 @@ fn is_xml_text_char(c: char) -> bool {
     !c.is_whitespace() && purrdf_iri::terminals::is_xml_char(c)
 }
 
-/// Inclusive Unicode scalar-value range `[lo, hi]`.
-pub(crate) type CharRange = (u32, u32);
-
-/// Whether a range table is non-empty per entry, within the Unicode scalar
-/// space, and strictly ascending with a gap between neighbours.
-///
-/// [`in_ranges`] binary-searches these tables, and a binary search over an
-/// unsorted or overlapping table does not fail loudly — it silently answers
-/// `false` for a scalar the table contains, which here would mean an
-/// in-alphabet label taking the escape path (or, in the mirror case, an
-/// out-of-alphabet label being written verbatim into a document no conforming
-/// parser can read back). The precondition is therefore asserted at compile
-/// time below rather than asked for in prose.
-const fn ranges_sorted_disjoint(ranges: &[CharRange]) -> bool {
-    let mut i = 0;
-    while i < ranges.len() {
-        let range = ranges[i];
-        if range.0 > range.1 || range.1 > 0x0010_FFFF {
-            return false;
-        }
-        if i > 0 && ranges[i - 1].1 >= range.0 {
-            return false;
-        }
-        i += 1;
-    }
-    true
-}
-
-/// The binary-search precondition for both tables in this module, proved.
-const _: () = {
-    assert!(
-        ranges_sorted_disjoint(PN_CHARS_BASE_RANGES),
-        "PN_CHARS_BASE_RANGES must be sorted, non-empty and disjoint",
-    );
-    assert!(
-        ranges_sorted_disjoint(PN_CHARS_EXTRA_RANGES),
-        "PN_CHARS_EXTRA_RANGES must be sorted, non-empty and disjoint",
-    );
-};
-
-/// `PN_CHARS_BASE` from the W3C Turtle/SPARQL grammar, which is also
-/// character-for-character the XML 1.0 `NameStartChar` production minus
-/// `':'` and `'_'` (`'_'` is folded into `PN_CHARS_U` instead, see
-/// [`is_pn_chars_u`]). Ranges are sorted and non-overlapping — the precondition
-/// [`in_ranges`]'s binary search rests on, proved by the const assertion above
-/// rather than assumed.
-const PN_CHARS_BASE_RANGES: &[CharRange] = &[
-    (0x0041, 0x005A),   // [A-Z]
-    (0x0061, 0x007A),   // [a-z]
-    (0x00C0, 0x00D6),   // [#xC0-#xD6]
-    (0x00D8, 0x00F6),   // [#xD8-#xF6]
-    (0x00F8, 0x02FF),   // [#xF8-#x2FF]
-    (0x0370, 0x037D),   // [#x370-#x37D]
-    (0x037F, 0x1FFF),   // [#x37F-#x1FFF]
-    (0x200C, 0x200D),   // [#x200C-#x200D]
-    (0x2070, 0x218F),   // [#x2070-#x218F]
-    (0x2C00, 0x2FEF),   // [#x2C00-#x2FEF]
-    (0x3001, 0xD7FF),   // [#x3001-#xD7FF]
-    (0xF900, 0xFDCF),   // [#xF900-#xFDCF]
-    (0xFDF0, 0xFFFD),   // [#xFDF0-#xFFFD]
-    (0x10000, 0xEFFFF), // [#x10000-#xEFFFF]
-];
-
-/// The extra ranges `PN_CHARS`/`NCNameChar` fold in beyond `PN_CHARS_U`
-/// (beyond `'-'` and `[0-9]`, which are cheap ASCII checks handled inline).
-/// Sorted and non-overlapping for [`in_ranges`], proved by the const assertion
-/// above.
-const PN_CHARS_EXTRA_RANGES: &[CharRange] = &[
-    (0x00B7, 0x00B7), // #xB7
-    (0x0300, 0x036F), // [#x300-#x36F]
-    (0x203F, 0x2040), // [#x203F-#x2040]
-];
-
-/// `PN_CHARS_BASE` (== XML `NameStartChar - ':' - '_'`).
-fn is_pn_chars_base(c: char) -> bool {
-    purrdf_iri::terminals::in_ranges(u32::from(c), PN_CHARS_BASE_RANGES)
-}
-
-/// `PN_CHARS_U ::= PN_CHARS_BASE | '_'` (== `NCNameStartChar`).
-pub(crate) fn is_pn_chars_u(c: char) -> bool {
-    c == '_' || is_pn_chars_base(c)
-}
-
-/// `PN_CHARS ::= PN_CHARS_U | '-' | [0-9] | #xB7 | [#x300-#x036F] |
-/// [#x203F-#x2040]`.
-pub(crate) fn is_pn_chars(c: char) -> bool {
-    is_pn_chars_u(c)
-        || c == '-'
-        || c.is_ascii_digit()
-        || purrdf_iri::terminals::in_ranges(u32::from(c), PN_CHARS_EXTRA_RANGES)
-}
+/// The Turtle/SPARQL name classes (`PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`),
+/// from the grammar terminals every PurRDF parser reads names with, so a label
+/// this module writes verbatim is exactly one those parsers accept.
+pub(crate) use purrdf_lex::terminals::{is_pn_chars, is_pn_chars_u};
 
 #[cfg(test)]
 mod tests {
     use super::{
         ESCAPE_MARKER, LabelAlphabet, decode_blank_label, encode_blank_label, escape_label,
-        is_pn_chars, is_pn_chars_base, is_pn_chars_u, is_valid_blank_node_label,
-        is_valid_blank_node_label_prefix, is_valid_label, is_valid_ncname, is_valid_xml_text,
-        retarget_owned_label,
+        is_pn_chars, is_pn_chars_u, is_valid_blank_node_label, is_valid_blank_node_label_prefix,
+        is_valid_label, is_valid_ncname, is_valid_xml_text, retarget_owned_label,
     };
     use crate::BlankScope;
     use std::borrow::Cow;
@@ -1367,38 +1279,6 @@ mod tests {
                     );
                 }
             }
-        }
-    }
-
-    /// The two transcriptions of the same W3C productions -- this module's
-    /// egress tables and the scanner-side [`purrdf_iri::terminals`] -- must
-    /// agree on every Unicode scalar value. Neither is derived from the other,
-    /// so this is the check that catches a typo in either.
-    #[test]
-    fn egress_tables_agree_with_the_shared_scanner_terminals() {
-        for cp in 0..=0x0010_FFFF_u32 {
-            let Some(c) = char::from_u32(cp) else {
-                continue;
-            };
-            // `PN_CHARS_BASE` is asserted on its own rather than left to follow
-            // from `PN_CHARS_U`: both sides define `_U` as `'_' || base`, so a
-            // disagreement at `'_'` -- the one scalar `_U` admits regardless of
-            // the base table -- would cancel out and go unseen.
-            assert_eq!(
-                is_pn_chars_base(c),
-                purrdf_iri::terminals::is_pn_chars_base(c),
-                "{c:?}"
-            );
-            assert_eq!(
-                is_pn_chars_u(c),
-                purrdf_iri::terminals::is_pn_chars_u(c),
-                "{c:?}"
-            );
-            assert_eq!(
-                is_pn_chars(c),
-                purrdf_iri::terminals::is_pn_chars(c),
-                "{c:?}"
-            );
         }
     }
 }

@@ -29,7 +29,7 @@ pub use purrdf_xsd::datatype::XSD_STRING;
 
 /// Return whether `direction` is a valid RDF 1.2 base direction token.
 pub fn is_literal_direction(direction: &str) -> bool {
-    purrdf_events::TextDirection::from_token(direction).is_some()
+    purrdf_events::TextDirection::from_str_token(direction).is_some()
 }
 
 /// The profile a container's `"l"` field (§7.1, "literal language tag (BCP 47)")
@@ -272,12 +272,10 @@ pub fn map_reifier_row_ids(row: ReifierRow, f: impl Fn(usize) -> usize) -> Reifi
     (f(reifier), map_triple_ids(triple, &f), graph.map(&f))
 }
 
-/// Apply `f` to every term id in an [`AnnotationRow`].
-#[must_use]
-pub fn map_annotation_row_ids(row: AnnotationRow, f: impl Fn(usize) -> usize) -> AnnotationRow {
-    let (reifier, predicate, value, graph) = row;
-    (f(reifier), f(predicate), f(value), graph.map(&f))
-}
+/// Apply `f` to every term id in an [`AnnotationRow`]: the row has a [`Quad`]'s
+/// four id columns and optional graph slot, so it is mapped by [`map_quad_ids`]
+/// (and stops compiling here the day the two shapes part).
+pub use self::map_quad_ids as map_annotation_row_ids;
 
 /// A quad with term ids resolved to borrowed [`Term`] values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -635,29 +633,17 @@ impl Graph {
 
     /// Set a meta key, replacing in place (Python dict assignment).
     pub fn set_meta(&mut self, key: String, value: Value) {
-        if let Some(slot) = self.meta.iter_mut().find(|(k, _)| *k == key) {
-            slot.1 = value;
-        } else {
-            self.meta.push((key, value));
-        }
+        purrdf_lex::assoc::insert(&mut self.meta, key, value);
     }
 
     /// Record a blob's declared metadata, replacing in place.
     pub fn set_blob_meta(&mut self, digest: String, meta: Value) {
-        if let Some(slot) = self.blob_meta.iter_mut().find(|(d, _)| *d == digest) {
-            slot.1 = meta;
-        } else {
-            self.blob_meta.push((digest, meta));
-        }
+        purrdf_lex::assoc::insert(&mut self.blob_meta, digest, meta);
     }
 
     /// Store a blob entry under its digest, replacing in place.
     pub fn set_blob_entry(&mut self, digest: String, entry: BlobEntry) {
-        if let Some(slot) = self.blobs.iter_mut().find(|(d, _)| *d == digest) {
-            slot.1 = entry;
-        } else {
-            self.blobs.push((digest, entry));
-        }
+        purrdf_lex::assoc::insert(&mut self.blobs, digest, entry);
     }
 
     /// Store decoded inline blob bytes under their digest, replacing in place.
@@ -672,16 +658,13 @@ impl Graph {
 
     /// Look up a blob entry without decoding it.
     pub fn blob_entry(&self, digest: &str) -> Option<&BlobEntry> {
-        self.blobs
-            .iter()
-            .find(|(d, _)| d == digest)
-            .map(|(_, entry)| entry)
+        purrdf_lex::assoc::get(&self.blobs, digest)
     }
 
     /// Look up a blob and decode/cache it on demand.
     pub fn blob_bytes(&mut self, digest: &str) -> Result<Option<&[u8]>, CodecError> {
-        match self.blobs.iter_mut().find(|(d, _)| d == digest) {
-            Some((_, entry)) => entry.decode().map(Some),
+        match purrdf_lex::assoc::get_mut(&mut self.blobs, digest) {
+            Some(entry) => entry.decode().map(Some),
             None => Ok(None),
         }
     }

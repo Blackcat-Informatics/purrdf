@@ -8,33 +8,14 @@
 //! emitters. It deliberately is not a second public schema algebra: the public
 //! carrier remains [`CompiledSchema`].
 
-use std::error::Error;
-use std::fmt;
-
 use crate::json_model::{Object, Value, ValueKind};
 
 use crate::json_schema::CompiledSchema;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SchemaCatalogError {
-    message: String,
+purrdf_lex::message_error! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct SchemaCatalogError;
 }
-
-impl SchemaCatalogError {
-    fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for SchemaCatalogError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
-    }
-}
-
-impl Error for SchemaCatalogError {}
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CompiledSchemaCatalog {

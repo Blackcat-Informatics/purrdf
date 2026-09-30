@@ -144,6 +144,34 @@ pub fn canonical_tlv(bytes: &[u8]) -> Result<TlvIter<'_>, EmbeddingError> {
     Ok(TlvIter { bytes, position: 0 })
 }
 
+/// The entry of the canonical TLV block `bytes` tagged `tag`, or `None` when the
+/// block has none: the one lookup of an optional field, after the whole block has
+/// been validated as canonical.
+pub(super) fn optional_tlv(
+    bytes: &[u8],
+    tag: u16,
+) -> Result<Option<TlvEntryRef<'_>>, EmbeddingError> {
+    Ok(canonical_tlv(bytes)?.find(|entry| entry.tag == tag))
+}
+
+/// The entry of the canonical TLV block `bytes` tagged `tag`, which the record
+/// requires: absent is the missing field `context`, and present it must carry
+/// `wire` and be marked critical.
+pub(super) fn required_tlv<'a>(
+    bytes: &'a [u8],
+    tag: u16,
+    wire: TlvWireType,
+    context: &'static str,
+) -> Result<TlvEntryRef<'a>, EmbeddingError> {
+    let entry = optional_tlv(bytes, tag)?.ok_or(EmbeddingError::Missing(context))?;
+    if entry.wire_type != wire || !entry.critical {
+        return Err(EmbeddingError::MalformedTlv(
+            "required field has wrong type or criticality",
+        ));
+    }
+    Ok(entry)
+}
+
 /// Verifies a canonical block's embedded SHA-256 field against its payload.
 ///
 /// Kind-specific schema validation remains responsible for requiring the two
@@ -872,7 +900,13 @@ pub struct EffectiveSpace {
     pub ordinal: u32,
 }
 
-fn validate_identifier(value: &str, context: &'static str) -> Result<(), EmbeddingError> {
+/// Refuse text a PURREMB record does not carry: empty text is a missing field, and
+/// text holding a NUL byte is refused as invalid text. Every identifier and text
+/// field of the contract and of the metadata is checked by this one rule.
+pub(super) fn validate_identifier(
+    value: &str,
+    context: &'static str,
+) -> Result<(), EmbeddingError> {
     if value.is_empty() {
         return Err(EmbeddingError::Missing(context));
     }
@@ -1099,6 +1133,35 @@ fn validate_u32_list(value: &[u8]) -> Result<(), EmbeddingError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A required field must be present, of its declared wire type and critical; an
+    /// optional one is simply found or absent.
+    #[test]
+    fn required_and_optional_fields_read_one_canonical_block() {
+        let mut block = Vec::new();
+        push_tlv(&mut block, 1, TlvWireType::Utf8, true, b"x").expect("a canonical entry");
+        push_tlv(&mut block, 2, TlvWireType::Utf8, false, b"y").expect("a canonical entry");
+        assert_eq!(
+            required_tlv(&block, 1, TlvWireType::Utf8, "one").map(|entry| entry.value),
+            Ok(&b"x"[..])
+        );
+        assert_eq!(
+            required_tlv(&block, 3, TlvWireType::Utf8, "three").err(),
+            Some(EmbeddingError::Missing("three"))
+        );
+        assert!(matches!(
+            required_tlv(&block, 2, TlvWireType::Utf8, "two"),
+            Err(EmbeddingError::MalformedTlv(_))
+        ));
+        assert_eq!(
+            optional_tlv(&block, 2).map(|entry| entry.map(|e| e.value)),
+            Ok(Some(&b"y"[..]))
+        );
+        assert_eq!(
+            optional_tlv(&block, 3).map(|entry| entry.is_none()),
+            Ok(true)
+        );
+    }
 
     fn artifact(name: &str) -> ArtifactIdentity {
         ArtifactIdentity::new(

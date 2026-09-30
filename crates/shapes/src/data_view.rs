@@ -11,8 +11,8 @@ use ::purrdf::ir::{
     CompositeDatasetView, DeltaDatasetView, QuadProbePlan, ViewLimits, import::DatasetImporter,
 };
 use ::purrdf::{
-    BlankScope, DatasetView, FastMap, FastSet, GraphMatch, QuadIds, QuadRef, RdfDataset,
-    RdfDatasetBuilder, RdfStoreCapabilities, RdfTextDirection, TermId, TermRef, TermValue,
+    BlankScope, DatasetView, FastMap, FastSet, GraphMatch, QuadIds, RdfDataset, RdfDatasetBuilder,
+    RdfStoreCapabilities, RdfTextDirection, TermId, TermRef, TermValue,
 };
 use purrdf_core::SmallVec;
 
@@ -816,14 +816,6 @@ impl DatasetView for ShaclDatasetView {
     type ProbePlan = QuadProbePlan;
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         self.quads_for_pattern(None, None, None, GraphMatch::Any)
-    }
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
-        self.quads().map(|q| QuadRef {
-            s: self.resolve(q.s),
-            p: self.resolve(q.p),
-            o: self.resolve(q.o),
-            g: q.g.map(|id| self.resolve(id)),
-        })
     }
     fn resolve(&self, id: TermId) -> TermRef<'_> {
         match &self.source {

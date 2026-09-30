@@ -45,7 +45,7 @@
 
 use purrdf_core::{DatasetView, TermId, TermValue, ViewTermId};
 
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 use hashbrown::HashTable;
 
@@ -201,12 +201,6 @@ pub(crate) fn value_bytes(value: &TermValue) -> u64 {
 #[inline]
 fn is_query_scoped_blank(value: &TermValue) -> bool {
     matches!(value, TermValue::Blank { scope, .. } if *scope == crate::convert::QUERY_BLANK_SCOPE)
-}
-
-fn hash_value(value: &TermValue) -> u64 {
-    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    value.hash(&mut hasher);
-    hasher.finish()
 }
 
 /// The profile every language tag in this workspace is judged on — the parser's,
@@ -492,7 +486,7 @@ impl ScratchInterner {
         {
             return SolutionTerm::Existing(id);
         }
-        let hash = hash_value(&value);
+        let hash = purrdf_hash::fixed::hash_one(&value);
         if let Some(&sid) = self
             .index
             .find(hash, |sid| self.values[sid.index()] == value)
@@ -502,8 +496,9 @@ impl ScratchInterner {
         let sid = ScratchId::from_index(self.values.len());
         self.minted_bytes = self.minted_bytes.saturating_add(value_bytes(&value));
         self.values.push(value);
-        self.index
-            .insert_unique(hash, sid, |sid| hash_value(&self.values[sid.index()]));
+        self.index.insert_unique(hash, sid, |sid| {
+            purrdf_hash::fixed::hash_one(&self.values[sid.index()])
+        });
         SolutionTerm::Computed(sid)
     }
 

@@ -208,14 +208,6 @@ impl Decimal {
     }
 }
 
-fn invalid(dt: XsdDatatype, lexical: &str, reason: &'static str) -> XsdError {
-    XsdError::InvalidLexical {
-        datatype: dt,
-        lexical: lexical.to_string(),
-        reason,
-    }
-}
-
 /// Whether `lexical` is in the `xsd:integer` lexical space (XSD 1.1 Part 2
 /// §3.4.13.1): an optional `+` or `-`, then one or more ASCII digits. Unbounded:
 /// this is the lexical space, not the `i128` this crate parses into. No
@@ -246,7 +238,11 @@ pub fn is_decimal_lexical(lexical: &str) -> bool {
 pub fn parse_integer(s: &str) -> Result<i128, XsdError> {
     let dt = XsdDatatype::Integer;
     if !is_integer_lexical(s) {
-        return Err(invalid(dt, s, "expected an optional sign then digits"));
+        return Err(XsdError::invalid(
+            dt,
+            s,
+            "expected an optional sign then digits",
+        ));
     }
     s.parse::<i128>().map_err(|_| XsdError::OutOfRange {
         datatype: dt,
@@ -266,11 +262,11 @@ pub fn parse_integer_typed(lexical: &str, datatype: XsdDatatype) -> Result<i128,
     // We call parse_integer but report the error under `datatype` for non-Integer
     // subtypes, so callers see the correct IRI in the error.
     if !is_integer_lexical(lexical) {
-        return Err(XsdError::InvalidLexical {
+        return Err(XsdError::invalid(
             datatype,
-            lexical: lexical.to_string(),
-            reason: "expected an optional sign then digits",
-        });
+            lexical,
+            "expected an optional sign then digits",
+        ));
     }
     let value = lexical.parse::<i128>().map_err(|_| XsdError::OutOfRange {
         datatype,
@@ -305,14 +301,14 @@ pub fn parse_decimal(s: &str) -> Result<Decimal, XsdError> {
     // A second '.' can only live after the first one, i.e. inside `frac_str`:
     // one scan of the tail replaces the `contains` + `matches().count()` pair.
     if frac_str.contains('.') {
-        return Err(invalid(dt, s, "more than one decimal point"));
+        return Err(XsdError::invalid(dt, s, "more than one decimal point"));
     }
     if int_str.is_empty() && frac_str.is_empty() {
-        return Err(invalid(dt, s, "no digits"));
+        return Err(XsdError::invalid(dt, s, "no digits"));
     }
     if !int_str.bytes().all(|b| b.is_ascii_digit()) || !frac_str.bytes().all(|b| b.is_ascii_digit())
     {
-        return Err(invalid(dt, s, "non-digit character"));
+        return Err(XsdError::invalid(dt, s, "non-digit character"));
     }
     if frac_str.len() > usize::from(MAX_DECIMAL_SCALE) {
         return Err(XsdError::OutOfRange {
@@ -356,7 +352,7 @@ pub fn parse_float(s: &str) -> Result<f32, XsdError> {
     }
     reject_non_xsd_numeric(s, dt)?;
     s.parse::<f32>()
-        .map_err(|_| invalid(dt, s, "not a valid float lexical"))
+        .map_err(|_| XsdError::invalid(dt, s, "not a valid float lexical"))
 }
 
 /// XSD **1.0**-pinned `xsd:double` parse: identical to [`parse_double`] but rejects
@@ -366,7 +362,7 @@ pub fn parse_float(s: &str) -> Result<f32, XsdError> {
 /// turning the whole crate back to 1.0.
 pub fn parse_double_xsd10(s: &str) -> Result<f64, XsdError> {
     if s == "+INF" {
-        return Err(invalid(
+        return Err(XsdError::invalid(
             XsdDatatype::Double,
             s,
             "XSD 1.0 spells positive infinity INF",
@@ -382,7 +378,7 @@ pub fn parse_double_xsd10(s: &str) -> Result<f64, XsdError> {
 /// turning the whole crate back to 1.0.
 pub fn parse_float_xsd10(s: &str) -> Result<f32, XsdError> {
     if s == "+INF" {
-        return Err(invalid(
+        return Err(XsdError::invalid(
             XsdDatatype::Float,
             s,
             "XSD 1.0 spells positive infinity INF",
@@ -401,7 +397,7 @@ fn parse_ieee(s: &str, dt: XsdDatatype) -> Result<f64, XsdError> {
     }
     reject_non_xsd_numeric(s, dt)?;
     s.parse::<f64>()
-        .map_err(|_| invalid(dt, s, "not a valid double lexical"))
+        .map_err(|_| XsdError::invalid(dt, s, "not a valid double lexical"))
 }
 
 /// Reject lexicals Rust's float parser would accept but XSD forbids (`inf`,
@@ -411,7 +407,7 @@ fn reject_non_xsd_numeric(s: &str, dt: XsdDatatype) -> Result<(), XsdError> {
     if s.bytes()
         .any(|b| b.is_ascii_alphabetic() && b != b'e' && b != b'E')
     {
-        return Err(invalid(dt, s, "non-XSD numeric token"));
+        return Err(XsdError::invalid(dt, s, "non-XSD numeric token"));
     }
     Ok(())
 }

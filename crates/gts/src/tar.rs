@@ -4,7 +4,6 @@
 //! Tar stream import/export for files-profile-v2 GTS archives.
 
 use std::collections::BTreeMap;
-use std::fmt;
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use crate::codec::encode_chain;
@@ -17,28 +16,11 @@ const CORE_PAX_KEYS: &[&str] = &[
     "path", "linkpath", "size", "uid", "gid", "uname", "gname", "mtime", "devmajor", "devminor",
 ];
 
-/// Error raised by tar import/export helpers.
-#[derive(Debug)]
-pub struct TarError {
-    detail: String,
+purrdf_lex::message_error! {
+    /// Error raised by tar import/export helpers.
+    #[derive(Debug)]
+    pub struct TarError;
 }
-
-impl TarError {
-    /// Build a tar error from a detail message.
-    pub fn new(detail: impl Into<String>) -> Self {
-        Self {
-            detail: detail.into(),
-        }
-    }
-}
-
-impl fmt::Display for TarError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.detail)
-    }
-}
-
-impl std::error::Error for TarError {}
 
 /// Compression to apply while writing a tar stream.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -96,7 +96,6 @@
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::fmt;
 
 use purrdf_hash::frame::frame_le;
 
@@ -114,59 +113,16 @@ use crate::hash::FastMap;
 // Errors
 // ---------------------------------------------------------------------------
 
-/// Why decoding a [`Triples`] byte buffer failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum PackTriplesError {
-    /// The buffer ended before all the bytes a header promised were present.
-    Truncated {
-        /// The total leading byte count the format required.
-        needed: usize,
-        /// The byte count actually available.
-        found: usize,
-    },
-    /// The buffer's header was internally inconsistent, an id/offset reference
-    /// fell outside its documented domain, or a boundary bitmap's popcount
-    /// disagreed with the structure it is supposed to index.
-    Malformed(&'static str),
-}
-
-impl fmt::Display for PackTriplesError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Truncated { needed, found } => write!(
-                f,
-                "pack-triples: truncated input: needed at least {needed} bytes, found {found}"
-            ),
-            Self::Malformed(reason) => write!(f, "pack-triples: malformed input: {reason}"),
-        }
-    }
-}
-
-impl std::error::Error for PackTriplesError {}
-
-impl From<PackBitsError> for PackTriplesError {
-    fn from(e: PackBitsError) -> Self {
-        match e {
-            PackBitsError::Truncated { needed, found } => Self::Truncated { needed, found },
-            PackBitsError::Malformed(reason) => Self::Malformed(reason),
-        }
-    }
-}
+/// Why decoding a [`Triples`] byte buffer failed: the pack codecs' one decode
+/// error. Every section decoder reads the same bit-packed primitives and fails in
+/// the same two ways (a header promising bytes the buffer lacks, or an
+/// inconsistent header), so it reports [`PackBitsError`] itself; which section
+/// refused is the container's variant, not a second error type.
+pub type PackTriplesError = PackBitsError;
 
 // ---------------------------------------------------------------------------
 // Small owned-vector helpers shared by every FoQ/local-map builder.
 // ---------------------------------------------------------------------------
-
-/// Build a bit-packed [`IntVector`] wide enough for `values`' maximum element.
-fn build_int_vector(values: &[u64]) -> IntVector {
-    let max = values.iter().copied().max().unwrap_or(0);
-    let mut v = IntVector::with_width(bits_for(max));
-    for &x in values {
-        v.push(x);
-    }
-    v
-}
 
 // ---------------------------------------------------------------------------
 // Encoding: dataset+dict -> per-partition triple lists -> byte blocks.
@@ -291,9 +247,9 @@ fn encode_partition(graph_id: Option<PackTermId>, triples: &[(u64, u64, u64)]) -
         i = j;
     }
 
-    let local_s = build_int_vector(&s_set);
-    let local_p = build_int_vector(&p_set);
-    let local_o = build_int_vector(&o_set);
+    let local_s = IntVector::from_values(&s_set);
+    let local_p = IntVector::from_values(&p_set);
+    let local_o = IntVector::from_values(&o_set);
 
     let mut pred_index_data = Vec::new();
     let mut pred_offsets = Vec::with_capacity(n_p);
@@ -323,12 +279,12 @@ fn encode_partition(graph_id: Option<PackTermId>, triples: &[(u64, u64, u64)]) -
     out.extend_from_slice(&bp.freeze().to_bytes());
     out.extend_from_slice(&so.to_bytes());
     out.extend_from_slice(&bo.freeze().to_bytes());
-    out.extend_from_slice(&build_int_vector(&pred_offsets).to_bytes());
-    out.extend_from_slice(&build_int_vector(&pred_counts).to_bytes());
-    out.extend_from_slice(&build_int_vector(&pred_totals).to_bytes());
+    out.extend_from_slice(&IntVector::from_values(&pred_offsets).to_bytes());
+    out.extend_from_slice(&IntVector::from_values(&pred_counts).to_bytes());
+    out.extend_from_slice(&IntVector::from_values(&pred_totals).to_bytes());
     frame_le(&mut out, &pred_index_data);
-    out.extend_from_slice(&build_int_vector(&obj_offsets).to_bytes());
-    out.extend_from_slice(&build_int_vector(&obj_counts).to_bytes());
+    out.extend_from_slice(&IntVector::from_values(&obj_offsets).to_bytes());
+    out.extend_from_slice(&IntVector::from_values(&obj_counts).to_bytes());
     frame_le(&mut out, &obj_index_data);
     out
 }
@@ -771,41 +727,17 @@ fn binary_search_range(
 /// Subject `local_s`'s slice `[start, end)` into `sp` (mark-last convention over
 /// `bp` — see the [module docs](self)).
 fn subject_slice(part: &PartitionRef<'_>, local_s: u64) -> (usize, usize) {
-    let ls = local_s as usize;
-    let start = if ls == 0 {
-        0
-    } else {
-        part.bp
-            .select1(ls - 1)
-            .expect("dense local subject numbering guarantees a bp boundary bit per subject")
-            + 1
-    };
-    let end = part
-        .bp
-        .select1(ls)
+    part.bp
+        .mark_last_range(local_s as usize)
         .expect("dense local subject numbering guarantees a bp boundary bit per subject")
-        + 1;
-    (start, end)
 }
 
 /// `Sp` position `sp_pos`'s object slice `[start, end)` into `so` (identical
 /// mark-last convention over `bo`, substituting `Sp`-position for subject).
 fn sp_pair_slice(part: &PartitionRef<'_>, sp_pos: u64) -> (usize, usize) {
-    let i = sp_pos as usize;
-    let start = if i == 0 {
-        0
-    } else {
-        part.bo
-            .select1(i - 1)
-            .expect("every sp position has a bo boundary bit")
-            + 1
-    };
-    let end = part
-        .bo
-        .select1(i)
+    part.bo
+        .mark_last_range(sp_pos as usize)
         .expect("every sp position has a bo boundary bit")
-        + 1;
-    (start, end)
 }
 
 /// The local subject id owning `Sp` position `sp_pos` (the count of

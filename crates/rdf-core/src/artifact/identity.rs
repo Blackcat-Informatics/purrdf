@@ -227,12 +227,10 @@ pub struct Identity {
     digest: [u8; 32],
 }
 
-impl Default for Identity {
+purrdf_hash::default_from_new!(
     /// The empty identity — see [`Identity::new`].
-    fn default() -> Self {
-        Self::new()
-    }
-}
+    Identity
+);
 
 impl Identity {
     /// The empty identity: no components, and the digest of the empty byte

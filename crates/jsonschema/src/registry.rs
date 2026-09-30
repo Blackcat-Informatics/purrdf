@@ -120,11 +120,7 @@ impl fmt::Debug for Registry {
     }
 }
 
-impl Default for Registry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(Registry);
 
 impl Registry {
     /// An empty registry: no documents, no meta-schemas, documents without

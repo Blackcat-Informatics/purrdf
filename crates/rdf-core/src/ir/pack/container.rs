@@ -380,18 +380,6 @@ impl From<PackDictError> for PackError {
     }
 }
 
-impl From<PackTriplesError> for PackError {
-    fn from(e: PackTriplesError) -> Self {
-        Self::Triples(e)
-    }
-}
-
-impl From<PackSideError> for PackError {
-    fn from(e: PackSideError) -> Self {
-        Self::Side(e)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // PackBuilder — the offline factory writer.
 // ---------------------------------------------------------------------------
@@ -509,10 +497,10 @@ fn encode_view<D: DatasetView>(view: &D) -> Result<Vec<u8>, PackError> {
     let dict = PackDict::open(&dict_bytes)?;
 
     let triples_bytes = Triples::encode(&dict, view).to_bytes();
-    let triples_ref = TriplesRef::from_bytes(&triples_bytes)?;
+    let triples_ref = TriplesRef::from_bytes(&triples_bytes).map_err(PackError::Triples)?;
 
     let side_bytes = SideTables::encode(&dict, view).to_bytes();
-    let side_ref = SideTablesRef::from_bytes(&side_bytes)?;
+    let side_ref = SideTablesRef::from_bytes(&side_bytes).map_err(PackError::Side)?;
 
     let base_named_graphs = triples_ref.named_graph_ids().next().is_some();
     let capabilities = side::capabilities(&dict, &side_ref, base_named_graphs);
@@ -695,8 +683,8 @@ impl<'a> PackView<'a> {
         }
 
         let dict = PackDict::open(section_bytes[0])?;
-        let triples = TriplesRef::from_bytes(section_bytes[1])?;
-        let side = SideTablesRef::from_bytes(section_bytes[2])?;
+        let triples = TriplesRef::from_bytes(section_bytes[1]).map_err(PackError::Triples)?;
+        let side = SideTablesRef::from_bytes(section_bytes[2]).map_err(PackError::Side)?;
 
         let base_named_graphs = triples.named_graph_ids().next().is_some();
         let capabilities = side::capabilities(&dict, &side, base_named_graphs);

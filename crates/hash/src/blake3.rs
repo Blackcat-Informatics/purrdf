@@ -449,11 +449,7 @@ impl<const BUFFER: usize> Streaming<BUFFER> {
         output.root(self.short_backend)
     }
 }
-impl<const BUFFER: usize> Default for Streaming<BUFFER> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::default_from_new!([const BUFFER: usize] Streaming<BUFFER>);
 impl<const BUFFER: usize> core::fmt::Debug for Streaming<BUFFER> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Blake3")

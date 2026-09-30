@@ -32,56 +32,14 @@
 
 use core::cmp::Ordering;
 use core::convert::Infallible;
-use core::fmt::{self, Write as _};
+use core::fmt;
 use core::hash::{Hash, Hasher};
-use core::ops::{ControlFlow, Deref, DerefMut};
+use core::ops::ControlFlow;
 
 use super::dataset::TermRef;
 use super::term::TermValue;
 use crate::dataset_view::DatasetView;
-
-/// A stack holding its first `N` entries inline and the rest on the heap: a walk over
-/// a shallowly nested term allocates nothing of its own.
-struct Pending<T, const N: usize> {
-    inline: [Option<T>; N],
-    held: usize,
-    spill: Vec<T>,
-}
-
-impl<T, const N: usize> Pending<T, N> {
-    fn with(first: T) -> Self {
-        let mut stack = Self {
-            inline: core::array::from_fn(|_| None),
-            held: 0,
-            spill: Vec::new(),
-        };
-        stack.push(first);
-        stack
-    }
-
-    fn push(&mut self, value: T) {
-        if self.held < N {
-            self.inline[self.held] = Some(value);
-            self.held += 1;
-        } else {
-            self.spill.push(value);
-        }
-    }
-
-    fn pop(&mut self) -> Option<T> {
-        if let Some(value) = self.spill.pop() {
-            return Some(value);
-        }
-        self.held = self.held.checked_sub(1)?;
-        self.inline[self.held].take()
-    }
-
-    fn extend<const K: usize>(&mut self, values: [T; K]) {
-        for value in values {
-            self.push(value);
-        }
-    }
-}
+use purrdf_lex::walk::{Dismantle, Nested as NestedBox, Tok, WorkList, write_debug};
 
 /// One boxed component of a triple term.
 ///
@@ -89,134 +47,27 @@ impl<T, const N: usize> Pending<T, N> {
 /// [`TermBox::new`] or `TermValue::into()`, and taken apart with
 /// [`TermBox::into_inner`]. Its drop takes a nested triple term apart over a work list,
 /// so dropping a term of any depth needs no more machine stack.
-pub struct TermBox(Option<Box<TermValue>>);
+pub type TermBox = NestedBox<TermValue>;
 
-impl TermBox {
-    /// Box `value` as a triple-term component.
-    #[must_use]
-    pub fn new(value: TermValue) -> Self {
-        Self(Some(Box::new(value)))
-    }
-
-    /// The component, unboxed.
-    #[must_use]
-    pub fn into_inner(mut self) -> TermValue {
-        *self.take_box()
-    }
-
-    /// The component, still boxed.
-    #[must_use]
-    pub fn into_box(mut self) -> Box<TermValue> {
-        self.take_box()
-    }
-
-    fn take_box(&mut self) -> Box<TermValue> {
-        self.0
-            .take()
-            .expect("a term box is emptied only by its own drop")
-    }
-}
-
-impl Drop for TermBox {
-    fn drop(&mut self) {
-        let Some(node) = self.0.take() else {
-            return;
-        };
-        if !matches!(*node, TermValue::Triple { .. }) {
+impl Dismantle for TermValue {
+    /// Take a triple term apart over a work list: every component that is itself a
+    /// triple term is moved onto the list before its owner goes.
+    fn dismantle(node: Box<Self>) {
+        if !matches!(*node, Self::Triple { .. }) {
             return;
         }
-        let mut work: Pending<Box<TermValue>, 8> = Pending::with(node);
+        let mut work: WorkList<Box<Self>, 8> = WorkList::with(node);
         while let Some(mut node) = work.pop() {
-            if let TermValue::Triple { s, p, o } = &mut *node {
+            if let Self::Triple { s, p, o } = &mut *node {
                 for component in [s, p, o] {
-                    if let Some(inner) = component.0.take()
-                        && matches!(*inner, TermValue::Triple { .. })
+                    if let Some(inner) = component.take()
+                        && matches!(*inner, Self::Triple { .. })
                     {
                         work.push(inner);
                     }
                 }
             }
         }
-    }
-}
-
-impl Deref for TermBox {
-    type Target = TermValue;
-
-    fn deref(&self) -> &TermValue {
-        self.0
-            .as_deref()
-            .expect("a term box is emptied only by its own drop")
-    }
-}
-
-impl DerefMut for TermBox {
-    fn deref_mut(&mut self) -> &mut TermValue {
-        self.0
-            .as_deref_mut()
-            .expect("a term box is emptied only by its own drop")
-    }
-}
-
-impl AsRef<TermValue> for TermBox {
-    fn as_ref(&self) -> &TermValue {
-        self
-    }
-}
-
-impl core::borrow::Borrow<TermValue> for TermBox {
-    fn borrow(&self) -> &TermValue {
-        self
-    }
-}
-
-impl From<TermValue> for TermBox {
-    fn from(value: TermValue) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<Box<TermValue>> for TermBox {
-    fn from(value: Box<TermValue>) -> Self {
-        Self(Some(value))
-    }
-}
-
-impl Clone for TermBox {
-    fn clone(&self) -> Self {
-        Self::new(TermValue::clone(self))
-    }
-}
-
-impl PartialEq for TermBox {
-    fn eq(&self, other: &Self) -> bool {
-        TermValue::eq(self, other)
-    }
-}
-
-impl Eq for TermBox {}
-
-impl PartialOrd for TermBox {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for TermBox {
-    fn cmp(&self, other: &Self) -> Ordering {
-        TermValue::cmp(self, other)
-    }
-}
-
-impl Hash for TermBox {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        TermValue::hash(self, state);
-    }
-}
-
-impl fmt::Debug for TermBox {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        TermValue::fmt(self, f)
     }
 }
 
@@ -323,7 +174,7 @@ impl TermValue {
     /// subject, predicate and object, each with everything below it — over a work
     /// list. The first `Break` ends the visit and is returned.
     pub fn visit_terms<B>(&self, mut visit: impl FnMut(&Self) -> ControlFlow<B>) -> ControlFlow<B> {
-        let mut pending: Pending<&Self, 16> = Pending::with(self);
+        let mut pending: WorkList<&Self, 16> = WorkList::with(self);
         while let Some(term) = pending.pop() {
             visit(term)?;
             if let Self::Triple { s, p, o } = term {
@@ -341,7 +192,7 @@ impl TermValue {
         &self,
         mut visit: impl FnMut(TermVisit<'_>) -> ControlFlow<B>,
     ) -> ControlFlow<B> {
-        let mut pending: Pending<TermVisit<'_>, 16> = Pending::with(TermVisit::Open(self));
+        let mut pending: WorkList<TermVisit<'_>, 16> = WorkList::with(TermVisit::Open(self));
         while let Some(event) = pending.pop() {
             match event {
                 TermVisit::Open(term @ Self::Triple { s, p, o }) => {
@@ -479,7 +330,7 @@ pub fn try_fold_nested<N: Copy, C: ?Sized, T, E>(
         Nested::Leaf(answer) => return Ok(answer),
         Nested::Triple(s, p, o) => (s, p, o),
     };
-    let mut steps: Pending<FoldStep<N>, 32> = Pending::with(FoldStep::Assemble(root));
+    let mut steps: WorkList<FoldStep<N>, 32> = WorkList::with(FoldStep::Assemble(root));
     steps.extend([FoldStep::Enter(o), FoldStep::Enter(p), FoldStep::Enter(s)]);
     let mut answers: Vec<T> = Vec::with_capacity(3);
     while let Some(step) = steps.pop() {
@@ -520,7 +371,7 @@ pub fn visit_nested<N: Copy, B>(
     let Some([s, p, o]) = visit(root)? else {
         return ControlFlow::Continue(());
     };
-    let mut pending: Pending<N, 16> = Pending::with(o);
+    let mut pending: WorkList<N, 16> = WorkList::with(o);
     pending.extend([p, s]);
     while let Some(node) = pending.pop() {
         if let Some([s, p, o]) = visit(node)? {
@@ -540,7 +391,7 @@ impl Clone for TermValue {
         let Self::Triple { .. } = self else {
             return shallow_clone(self);
         };
-        let mut stack: Pending<Step<'_>, 32> = Pending::with(Step::Enter(self));
+        let mut stack: WorkList<Step<'_>, 32> = WorkList::with(Step::Enter(self));
         let mut copies: Vec<Self> = Vec::with_capacity(3);
         while let Some(step) = stack.pop() {
             match step {
@@ -605,7 +456,7 @@ fn compare_pairs(
     if !matches!(a, TermValue::Triple { .. }) || !matches!(b, TermValue::Triple { .. }) {
         return shallow(a, b);
     }
-    let mut pending: Pending<(&TermValue, &TermValue), 16> = Pending::with((a, b));
+    let mut pending: WorkList<(&TermValue, &TermValue), 16> = WorkList::with((a, b));
     while let Some((a, b)) = pending.pop() {
         match shallow(a, b) {
             Ordering::Equal => {}
@@ -762,7 +613,7 @@ impl PartialOrd for TermValue {
 // the pre-order sequence, fed from a work list.
 impl Hash for TermValue {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        let mut pending: Pending<&Self, 16> = Pending::with(self);
+        let mut pending: WorkList<&Self, 16> = WorkList::with(self);
         while let Some(term) = pending.pop() {
             match term {
                 Self::Iri(iri) => {
@@ -795,163 +646,60 @@ impl Hash for TermValue {
     }
 }
 
-/// Writes into a formatter, indenting every line after the first by four spaces per
-/// open pretty-printed struct — what the standard library's builders produce by
-/// nesting one `PadAdapter` per level.
-struct Pad<'f, 'g> {
-    f: &'f mut fmt::Formatter<'g>,
-    depth: usize,
-    line_start: bool,
-}
+/// One token of a term value's `Debug` script.
+type ValueTok<'a> = Tok<&'a TermValue, &'a dyn fmt::Debug>;
 
-impl fmt::Write for Pad<'_, '_> {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        for piece in s.split_inclusive('\n') {
-            if self.line_start {
-                for _ in 0..self.depth {
-                    self.f.write_str("    ")?;
-                }
-            }
-            self.line_start = piece.ends_with('\n');
-            self.f.write_str(piece)?;
-        }
-        Ok(())
+/// Append the script `#[derive(Debug)]` prints for `value` to `out`, a triple
+/// term's components as [`Tok::Node`]s.
+fn debug_script<'a>(value: &'a TermValue, out: &mut WorkList<ValueTok<'a>, 32>) {
+    match value {
+        TermValue::Iri(iri) => out.extend([
+            Tok::Tuple("Iri"),
+            Tok::Leaf(iri as &dyn fmt::Debug),
+            Tok::EndTuple,
+        ]),
+        TermValue::Blank { label, scope } => out.extend([
+            Tok::Struct("Blank"),
+            Tok::Field("label"),
+            Tok::Leaf(label as &dyn fmt::Debug),
+            Tok::Field("scope"),
+            Tok::Leaf(scope),
+            Tok::EndStruct,
+        ]),
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            direction,
+        } => out.extend([
+            Tok::Struct("Literal"),
+            Tok::Field("lexical_form"),
+            Tok::Leaf(lexical_form as &dyn fmt::Debug),
+            Tok::Field("datatype"),
+            Tok::Leaf(datatype),
+            Tok::Field("language"),
+            Tok::Leaf(language),
+            Tok::Field("direction"),
+            Tok::Leaf(direction),
+            Tok::EndStruct,
+        ]),
+        TermValue::Triple { s, p, o } => out.extend([
+            Tok::Struct("Triple"),
+            Tok::Field("s"),
+            Tok::Node(&**s),
+            Tok::Field("p"),
+            Tok::Node(&**p),
+            Tok::Field("o"),
+            Tok::Node(&**o),
+            Tok::EndStruct,
+        ]),
     }
 }
 
 impl fmt::Debug for TermValue {
     /// `{:?}` / `{:#?}` exactly as `#[derive(Debug)]` writes them, over a work list.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        enum Piece<'a> {
-            Term(&'a TermValue),
-            /// A struct field's name, preceded by what separates it from the one
-            /// before; `first` opens the struct.
-            Field(&'static str, bool),
-            /// The value of a field ends.
-            EndField,
-            /// A struct with fields closes.
-            Close,
-        }
-        let pretty = f.alternate();
-        let mut out = Pad {
-            f,
-            depth: 0,
-            line_start: false,
-        };
-        let leaf = |out: &mut Pad<'_, '_>, value: &dyn fmt::Debug| {
-            if pretty {
-                write!(out, "{value:#?}")
-            } else {
-                write!(out, "{value:?}")
-            }
-        };
-        let mut stack = vec![Piece::Term(self)];
-        while let Some(piece) = stack.pop() {
-            match piece {
-                Piece::Field(name, first) => write_field(&mut out, pretty, name, first)?,
-                Piece::EndField => {
-                    if pretty {
-                        out.write_str(",\n")?;
-                    }
-                }
-                Piece::Close => close(&mut out, pretty)?,
-                Piece::Term(Self::Iri(iri)) => {
-                    out.write_str("Iri")?;
-                    if pretty {
-                        out.write_str("(\n")?;
-                        out.depth += 1;
-                        leaf(&mut out, iri)?;
-                        out.write_str(",\n")?;
-                        out.depth -= 1;
-                    } else {
-                        out.write_str("(")?;
-                        leaf(&mut out, iri)?;
-                    }
-                    out.write_str(")")?;
-                }
-                Piece::Term(Self::Blank { label, scope }) => {
-                    out.write_str("Blank")?;
-                    for (k, (name, value)) in [
-                        ("label", label as &dyn fmt::Debug),
-                        ("scope", scope as &dyn fmt::Debug),
-                    ]
-                    .into_iter()
-                    .enumerate()
-                    {
-                        write_field(&mut out, pretty, name, k == 0)?;
-                        leaf(&mut out, value)?;
-                        if pretty {
-                            out.write_str(",\n")?;
-                        }
-                    }
-                    close(&mut out, pretty)?;
-                }
-                Piece::Term(Self::Literal {
-                    lexical_form,
-                    datatype,
-                    language,
-                    direction,
-                }) => {
-                    out.write_str("Literal")?;
-                    for (k, (name, value)) in [
-                        ("lexical_form", lexical_form as &dyn fmt::Debug),
-                        ("datatype", datatype as &dyn fmt::Debug),
-                        ("language", language as &dyn fmt::Debug),
-                        ("direction", direction as &dyn fmt::Debug),
-                    ]
-                    .into_iter()
-                    .enumerate()
-                    {
-                        write_field(&mut out, pretty, name, k == 0)?;
-                        leaf(&mut out, value)?;
-                        if pretty {
-                            out.write_str(",\n")?;
-                        }
-                    }
-                    close(&mut out, pretty)?;
-                }
-                Piece::Term(Self::Triple { s, p, o }) => {
-                    out.write_str("Triple")?;
-                    stack.extend([
-                        Piece::Close,
-                        Piece::EndField,
-                        Piece::Term(o),
-                        Piece::Field("o", false),
-                        Piece::EndField,
-                        Piece::Term(p),
-                        Piece::Field("p", false),
-                        Piece::EndField,
-                        Piece::Term(s),
-                        Piece::Field("s", true),
-                    ]);
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Open a struct field: what separates it from the one before, then its name.
-fn write_field(out: &mut Pad<'_, '_>, pretty: bool, name: &str, first: bool) -> fmt::Result {
-    if pretty {
-        if first {
-            out.write_str(" {\n")?;
-            out.depth += 1;
-        }
-    } else {
-        out.write_str(if first { " { " } else { ", " })?;
-    }
-    out.write_str(name)?;
-    out.write_str(": ")
-}
-
-/// Close a struct that has fields.
-fn close(out: &mut Pad<'_, '_>, pretty: bool) -> fmt::Result {
-    if pretty {
-        out.depth -= 1;
-        out.write_str("}")
-    } else {
-        out.write_str(" }")
+        write_debug(f, self, debug_script)
     }
 }
 

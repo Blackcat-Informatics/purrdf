@@ -464,6 +464,7 @@ dependencies = [
 name = "purrdf-cdt"
 version = "2.0.2"
 dependencies = [
+ "purrdf-events",
  "purrdf-hash",
  "purrdf-iri",
  "purrdf-lex",
@@ -694,6 +695,7 @@ name = "purrdf-lex"
 version = "2.0.2"
 dependencies = [
  "purrdf-hash",
+ "purrdf-stack",
  "purrdf-testkit",
 ]
 
@@ -964,6 +966,7 @@ name = "purrdf-xsd"
 version = "2.0.2"
 dependencies = [
  "purrdf-hash",
+ "purrdf-lex",
  "purrdf-testkit",
 ]
 

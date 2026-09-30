@@ -475,10 +475,7 @@ impl<'d, 'a> Node<'d, 'a> {
     /// other node.
     #[must_use]
     pub fn attributes(&self) -> &'d [Attribute<'a>] {
-        match &self.data().kind {
-            Kind::Element { attributes, .. } => &self.document.attributes[attributes.clone()],
-            _ => &[],
-        }
+        &self.document.attributes[self.element_ranges().0]
     }
 
     /// The value of the attribute `name` names (see [`NameQuery`]).
@@ -507,9 +504,20 @@ impl<'d, 'a> Node<'d, 'a> {
     /// The namespace declarations this element's start tag makes.
     #[must_use]
     pub fn namespace_declarations(&self) -> &'d [NamespaceDecl<'a>] {
+        &self.document.namespaces[self.element_ranges().1]
+    }
+
+    /// The element's attribute and namespace-declaration ranges into the
+    /// document's tables, or two empty ranges for any other node: where both
+    /// per-element slices are read from.
+    fn element_ranges(&self) -> (Range<usize>, Range<usize>) {
         match &self.data().kind {
-            Kind::Element { namespaces, .. } => &self.document.namespaces[namespaces.clone()],
-            _ => &[],
+            Kind::Element {
+                attributes,
+                namespaces,
+                ..
+            } => (attributes.clone(), namespaces.clone()),
+            _ => (0..0, 0..0),
         }
     }
 

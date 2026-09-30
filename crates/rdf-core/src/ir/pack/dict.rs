@@ -74,7 +74,7 @@ use purrdf_iri::IriError;
 use crate::dataset_view::DatasetView;
 use crate::hash::{FastMap, FastSet};
 use crate::ir::composite::owned_value;
-use crate::ir::term::{StrRange, arena_str};
+use crate::ir::term::{StrRange, arena_str, canonical_kind_tag};
 use crate::ir::term_walk::{Nested, try_fold_nested};
 use crate::{BlankScope, RdfTextDirection, TermRef, TermValue};
 
@@ -615,14 +615,10 @@ enum DictEntry {
 }
 
 impl DictEntry {
-    /// Match `TermValue::canonical_tag`, which differs from the record wire tags.
+    /// The canonical kind tag, which differs from the record wire tags: the
+    /// [`canonical_kind_tag!`] rank every term value orders by.
     const fn canonical_tag(self) -> u8 {
-        match self {
-            Self::Iri(_) => 0,
-            Self::Literal { .. } => 1,
-            Self::Blank { .. } => 2,
-            Self::Triple { .. } => 3,
-        }
+        canonical_kind_tag!(self)
     }
 }
 
@@ -1363,43 +1359,18 @@ impl PackDict {
 mod tests {
     use super::*;
     use crate::TermBox;
+    use crate::backend::TermFactory as _;
     use crate::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
     use purrdf_testkit::prop::prelude::*;
     use std::collections::HashSet;
-
-    /// Intern one dataset-independent value into a builder, recursing for triple
-    /// terms (mirrors `paged_backend.rs`'s `intern_value` helper).
-    fn intern_value(b: &mut RdfDatasetBuilder, v: &TermValue) -> TermId {
-        match v {
-            TermValue::Iri(s) => b.intern_iri(s),
-            TermValue::Blank { label, scope } => b.intern_blank(label, *scope),
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                direction,
-            } => b.intern_literal(RdfLiteral {
-                lexical_form: lexical_form.clone(),
-                datatype: Some(datatype.clone()),
-                language: language.clone(),
-                direction: *direction,
-            }),
-            TermValue::Triple { s, p, o } => {
-                let s = intern_value(b, s);
-                let p = intern_value(b, p);
-                let o = intern_value(b, o);
-                b.intern_triple(s, p, o)
-            }
-        }
-    }
 
     /// Build a frozen dataset from `(s, p, o)` triples in the default graph.
     fn build_dataset(triples: &[(TermValue, TermValue, TermValue)]) -> std::sync::Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         for (s, p, o) in triples {
-            let s = intern_value(&mut b, s);
-            let p = intern_value(&mut b, p);
-            let o = intern_value(&mut b, o);
+            let s = b.intern_value(s);
+            let p = b.intern_value(p);
+            let o = b.intern_value(o);
             b.push_quad(s, p, o, None);
         }
         b.freeze().expect("valid dataset")
@@ -1813,10 +1784,10 @@ mod tests {
         // predicate, or object — so it must still mint a unified id and round-trip
         // via `id_by_value`/`term_value`, agreeing with `predicate_id_by_value`.
         let mut b = RdfDatasetBuilder::new();
-        let s = intern_value(&mut b, &iri("s"));
-        let p = intern_value(&mut b, &iri("p"));
-        let o = intern_value(&mut b, &iri("o"));
-        let g = intern_value(&mut b, &iri("g"));
+        let s = b.intern_value(&iri("s"));
+        let p = b.intern_value(&iri("p"));
+        let o = b.intern_value(&iri("o"));
+        let g = b.intern_value(&iri("g"));
         b.push_quad(s, p, o, Some(g));
         let dataset = b.freeze().expect("valid dataset");
 
@@ -1834,11 +1805,11 @@ mod tests {
         // "g" names the graph of the second quad AND is the subject of the first
         // quad: it must get exactly ONE unified id, not a second duplicate entry.
         let mut b = RdfDatasetBuilder::new();
-        let g = intern_value(&mut b, &iri("g"));
-        let p = intern_value(&mut b, &iri("p"));
-        let o1 = intern_value(&mut b, &iri("o1"));
-        let s2 = intern_value(&mut b, &iri("s2"));
-        let o2 = intern_value(&mut b, &iri("o2"));
+        let g = b.intern_value(&iri("g"));
+        let p = b.intern_value(&iri("p"));
+        let o1 = b.intern_value(&iri("o1"));
+        let s2 = b.intern_value(&iri("s2"));
+        let o2 = b.intern_value(&iri("o2"));
         b.push_quad(g, p, o1, None);
         b.push_quad(s2, p, o2, Some(g));
         let dataset = b.freeze().expect("valid dataset");
@@ -1861,11 +1832,11 @@ mod tests {
         // The side-table term closure must still fold both into the dictionary
         // and round-trip them.
         let mut b = RdfDatasetBuilder::new();
-        let s = intern_value(&mut b, &iri("s"));
-        let p = intern_value(&mut b, &iri("p"));
-        let o = intern_value(&mut b, &iri("o"));
+        let s = b.intern_value(&iri("s"));
+        let p = b.intern_value(&iri("p"));
+        let o = b.intern_value(&iri("o"));
         let triple = b.intern_triple(s, p, o);
-        let reifier = intern_value(&mut b, &iri("r"));
+        let reifier = b.intern_value(&iri("r"));
         b.push_reifier(reifier, triple);
         let dataset = b.freeze().expect("valid dataset");
         assert_eq!(dataset.quad_count(), 0, "reification is side-table only");
@@ -1889,14 +1860,14 @@ mod tests {
         // The annotation's predicate and object appear ONLY in the annotation
         // side-table (never a base quad's subject/predicate/object).
         let mut b = RdfDatasetBuilder::new();
-        let s = intern_value(&mut b, &iri("s"));
-        let p = intern_value(&mut b, &iri("p"));
-        let o = intern_value(&mut b, &iri("o"));
+        let s = b.intern_value(&iri("s"));
+        let p = b.intern_value(&iri("p"));
+        let o = b.intern_value(&iri("o"));
         let triple = b.intern_triple(s, p, o);
-        let reifier = intern_value(&mut b, &iri("r"));
+        let reifier = b.intern_value(&iri("r"));
         b.push_reifier(reifier, triple);
-        let ap = intern_value(&mut b, &iri("confidence"));
-        let ao = intern_value(&mut b, &TermValue::simple_literal("0.9"));
+        let ap = b.intern_value(&iri("confidence"));
+        let ao = b.intern_value(&TermValue::simple_literal("0.9"));
         b.push_annotation(reifier, ap, ao);
         let dataset = b.freeze().expect("valid dataset");
 
@@ -1917,11 +1888,11 @@ mod tests {
     #[test]
     fn rdf_reifies_predicate_gets_unified_id_when_reifiers_present() {
         let mut b = RdfDatasetBuilder::new();
-        let s = intern_value(&mut b, &iri("s"));
-        let p = intern_value(&mut b, &iri("p"));
-        let o = intern_value(&mut b, &iri("o"));
+        let s = b.intern_value(&iri("s"));
+        let p = b.intern_value(&iri("p"));
+        let o = b.intern_value(&iri("o"));
         let triple = b.intern_triple(s, p, o);
-        let reifier = intern_value(&mut b, &iri("r"));
+        let reifier = b.intern_value(&iri("r"));
         // Mirror the ingest path: `rdf:reifies` is interned even though it never
         // appears in any base quad or side-table row tuple directly.
         b.intern_iri(RDF_REIFIES);

@@ -37,42 +37,54 @@ pub struct TempDir {
     path: PathBuf,
 }
 
+/// The constructors both scratch types share, each over the type's own
+/// `create_at`: a fresh name from [`fresh_path`], under a caller's root or the
+/// unit-test root [`unit_test_root`] finds.
+macro_rules! scratch_constructors {
+    ($ty:ident, $what:literal) => {
+        impl $ty {
+            #[doc = concat!("A fresh ", $what, " directly under `root`, which is created if absent.")]
+            pub fn new_in(root: impl AsRef<Path>) -> io::Result<Self> {
+                Self::with_prefix_in(DEFAULT_PREFIX, root)
+            }
+
+            #[doc = concat!("A fresh ", $what, " under `root` whose name starts with `prefix`.")]
+            ///
+            /// A prefix holding a path separator, or one that is `.` or `..`, is
+            /// refused: the entry would not be a direct child of `root`.
+            pub fn with_prefix_in(prefix: &str, root: impl AsRef<Path>) -> io::Result<Self> {
+                Self::create_at(fresh_path(prefix, root.as_ref())?)
+            }
+
+            #[doc = concat!("A fresh ", $what, " for a crate's `src/` unit tests, under the `tmp`")]
+            /// directory of the build directory the running test binary was built
+            /// into.
+            ///
+            /// Cargo sets `CARGO_TARGET_TMPDIR` only for integration tests and benches,
+            /// so a unit test derives the same place from its own executable. Cargo
+            /// writes a `CACHEDIR.TAG` file at the root of every directory it builds
+            /// into — the target directory, or a separate `build.build-dir` when one is
+            /// configured — and the test binary lives somewhere beneath that root
+            /// (`<root>/<profile>/deps/` in the classic layout, deeper in the
+            /// per-package one). The nearest ancestor holding the tag is the root, and
+            /// its `tmp` directory is the one `CARGO_TARGET_TMPDIR` names for a host
+            /// build. An executable with no such ancestor is an error, never a
+            /// fallback.
+            pub fn for_unit_test() -> io::Result<Self> {
+                Self::new_in(unit_test_root()?)
+            }
+        }
+    };
+}
+
+scratch_constructors!(TempDir, "directory");
+scratch_constructors!(NamedTempFile, "empty file, opened for reading and writing,");
+
 impl TempDir {
-    /// A fresh directory directly under `root`, which is created if absent.
-    pub fn new_in(root: impl AsRef<Path>) -> io::Result<Self> {
-        Self::with_prefix_in(DEFAULT_PREFIX, root)
-    }
-
-    /// A fresh directory under `root` whose name starts with `prefix`.
-    ///
-    /// A prefix holding a path separator, or one that is `.` or `..`, is
-    /// refused: the directory would not be a direct child of `root`.
-    pub fn with_prefix_in(prefix: &str, root: impl AsRef<Path>) -> io::Result<Self> {
-        Self::create_at(fresh_path(prefix, root.as_ref())?)
-    }
-
     /// Create exactly `path`; an existing entry there is a collision error.
     fn create_at(path: PathBuf) -> io::Result<Self> {
         std::fs::create_dir(&path).map_err(|error| collision_or(error, &path))?;
         Ok(Self { path })
-    }
-
-    /// A fresh directory for a crate's `src/` unit tests, under the `tmp`
-    /// directory of the build directory the running test binary was built
-    /// into.
-    ///
-    /// Cargo sets `CARGO_TARGET_TMPDIR` only for integration tests and benches,
-    /// so a unit test derives the same place from its own executable. Cargo
-    /// writes a `CACHEDIR.TAG` file at the root of every directory it builds
-    /// into — the target directory, or a separate `build.build-dir` when one is
-    /// configured — and the test binary lives somewhere beneath that root
-    /// (`<root>/<profile>/deps/` in the classic layout, deeper in the
-    /// per-package one). The nearest ancestor holding the tag is the root, and
-    /// its `tmp` directory is the one `CARGO_TARGET_TMPDIR` names for a host
-    /// build. An executable with no such ancestor is an error, never a
-    /// fallback.
-    pub fn for_unit_test() -> io::Result<Self> {
-        Self::new_in(unit_test_root()?)
     }
 
     /// The directory's path.
@@ -97,18 +109,6 @@ pub struct NamedTempFile {
 }
 
 impl NamedTempFile {
-    /// A fresh, empty file directly under `root`, which is created if absent,
-    /// opened for reading and writing.
-    pub fn new_in(root: impl AsRef<Path>) -> io::Result<Self> {
-        Self::with_prefix_in(DEFAULT_PREFIX, root)
-    }
-
-    /// A fresh, empty file under `root` whose name starts with `prefix`, with
-    /// the prefix rules of [`TempDir::with_prefix_in`].
-    pub fn with_prefix_in(prefix: &str, root: impl AsRef<Path>) -> io::Result<Self> {
-        Self::create_at(fresh_path(prefix, root.as_ref())?)
-    }
-
     /// Create exactly `path`; an existing entry there is a collision error.
     fn create_at(path: PathBuf) -> io::Result<Self> {
         let file = OpenOptions::new()
@@ -121,12 +121,6 @@ impl NamedTempFile {
             path,
             file: Some(file),
         })
-    }
-
-    /// A fresh file for a crate's `src/` unit tests, in the directory
-    /// [`TempDir::for_unit_test`] uses.
-    pub fn for_unit_test() -> io::Result<Self> {
-        Self::new_in(unit_test_root()?)
     }
 
     /// The file's path.

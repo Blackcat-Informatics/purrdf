@@ -6,7 +6,7 @@ use crate::{FastMap, FastSet};
 use purrdf_lex::cbor::Value;
 
 use crate::model::{Graph, Quad, Suppression, Term, TermKind, Triple3};
-use crate::reader::{as_idx, as_text, text_or};
+use crate::reader::{as_idx, text_or};
 use crate::reader_index::DigestIndex;
 use crate::wire::map_get;
 
@@ -305,7 +305,7 @@ impl Unioner {
             let mapped: Vec<(Value, Value)> = entries
                 .iter()
                 .map(|(k, v)| {
-                    let key = as_text(k);
+                    let key = k.as_text();
                     if (kind == "term" || kind == "reifier") && key == Some("id") {
                         if let Some(tid) = as_idx(v)
                             && tid < n

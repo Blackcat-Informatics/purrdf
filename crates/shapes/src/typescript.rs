@@ -26,8 +26,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::error::Error;
-use std::fmt::{self, Write as _};
+use std::fmt::Write as _;
 
 use crate::json_model::{Number, NumberKind, Object, Value, ValueKind};
 use ::purrdf::RdfLocation;
@@ -174,27 +173,11 @@ impl TypeScriptPackage {
     }
 }
 
-/// A malformed TypeScript configuration, input schema, or declaration graph.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeScriptError {
-    message: String,
+purrdf_lex::message_error! {
+    /// A malformed TypeScript configuration, input schema, or declaration graph.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct TypeScriptError;
 }
-
-impl TypeScriptError {
-    fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for TypeScriptError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
-    }
-}
-
-impl Error for TypeScriptError {}
 
 /// Emit deterministic TypeScript 7.0 declarations from one compiled
 /// SHACL-derived JSON Schema.

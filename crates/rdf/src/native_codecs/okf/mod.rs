@@ -15,7 +15,6 @@ mod writer;
 
 use purrdf_iri::percent;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 
 pub use reader::lift_okf_bundle;
 pub use writer::{OkfWriteOutcome, OkfWriter, write_okf_bundle};
@@ -48,32 +47,11 @@ const RESERVED_PROFILE_KEYS: &[&str] = &[
     "path",
 ];
 
-/// A typed hard failure from OKF configuration, parsing, lifting, or writing.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OkfError {
-    detail: String,
+purrdf_lex::message_error! {
+    /// A typed hard failure from OKF configuration, parsing, lifting, or writing.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct OkfError, detail;
 }
-
-impl OkfError {
-    pub(super) fn new(detail: impl Into<String>) -> Self {
-        Self {
-            detail: detail.into(),
-        }
-    }
-
-    /// The stable human-readable error detail.
-    pub fn detail(&self) -> &str {
-        &self.detail
-    }
-}
-
-impl fmt::Display for OkfError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.detail)
-    }
-}
-
-impl std::error::Error for OkfError {}
 
 pub(super) fn decimal_lexical_from_f64(value: f64) -> Result<String, OkfError> {
     if !value.is_finite() {

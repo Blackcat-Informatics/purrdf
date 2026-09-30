@@ -303,7 +303,7 @@ pub fn write<W: TextOut + ?Sized>(value: &str, carrier: Carrier, out: &mut W) {
 
 /// `value` escaped for `carrier`, borrowed when no scalar needs an escape.
 ///
-/// The same bytes as [`write`]. The scan that finds the first escape is the
+/// The same bytes as [`write()`]. The scan that finds the first escape is the
 /// scan that emits, so a value that needs escaping is still read once.
 ///
 /// ```

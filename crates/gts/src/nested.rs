@@ -28,10 +28,7 @@ pub struct NestedReadResult {
 impl NestedReadResult {
     /// Look up a nested fold by its containing blob digest.
     pub fn subgraph(&self, digest: &str) -> Option<&Graph> {
-        self.subgraphs
-            .iter()
-            .find(|(d, _)| d == digest)
-            .map(|(_, graph)| graph)
+        purrdf_lex::assoc::get(&self.subgraphs, digest)
     }
 }
 

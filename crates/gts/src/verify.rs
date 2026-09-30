@@ -142,11 +142,7 @@ pub fn format_fingerprint(fingerprint: &str) -> String {
 
 /// Return the embedded `gts:transportKey` meta value if well-formed.
 pub fn extract_transport_key(graph: &Graph) -> Option<EmbeddedTransportKey> {
-    let value = graph
-        .meta
-        .iter()
-        .find(|(k, _)| k == "gts:transportKey")
-        .map(|(_, v)| v)?;
+    let value = purrdf_lex::assoc::get(&graph.meta, "gts:transportKey")?;
     let Value::Map(entries) = value else {
         return None;
     };

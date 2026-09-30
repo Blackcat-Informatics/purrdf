@@ -804,30 +804,24 @@ impl<A: Arithmetic> Resolved<A> {
     }
 
     /// The divergence evidence of this arithmetic along this path; see
-    /// [`Arithmetic::evidence`].
+    /// [`Selected::evidence`].
     #[must_use]
     pub fn evidence(self) -> Option<&'static str> {
-        A::evidence(self.path)
+        self.selected().evidence()
     }
 
     /// The code an image records for results computed by this handle; see
-    /// [`Arithmetic::image_code`].
+    /// [`Selected::image_code`].
     #[must_use]
     pub fn image_code(self) -> u32 {
-        A::image_code(self.path).unwrap_or_else(|| {
-            unreachable!(
-                "{} resolved to {}, which is not one of its paths",
-                A::ID,
-                self.path
-            )
-        })
+        self.selected().image_code()
     }
 
     /// The compile shape of this build's compilations of the arithmetic; see
-    /// [`Arithmetic::build_shape`].
+    /// [`Selected::build_shape`].
     #[must_use]
     pub fn build_shape(self) -> Option<BuildShape> {
-        A::build_shape()
+        self.selected().build_shape()
     }
 
     /// See [`Arithmetic::distances`].
@@ -1005,11 +999,17 @@ impl<A: Arithmetic> Eq for Selected<A> {}
 
 impl<A: Arithmetic> fmt::Debug for Selected<A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Selected")
-            .field("arithmetic", &A::ID)
-            .field("path", &self.path)
-            .finish()
+        debug_handle::<A>(f, "Selected", self.path)
     }
+}
+
+/// The `Debug` of a [`Selected`] or [`Resolved`] handle, named `name`: the
+/// arithmetic's id and the path, which is everything either handle carries.
+fn debug_handle<A: Arithmetic>(f: &mut fmt::Formatter<'_>, name: &str, path: Path) -> fmt::Result {
+    f.debug_struct(name)
+        .field("arithmetic", &A::ID)
+        .field("path", &path)
+        .finish()
 }
 
 impl<A: Arithmetic> PartialEq for Resolved<A> {
@@ -1022,10 +1022,7 @@ impl<A: Arithmetic> Eq for Resolved<A> {}
 
 impl<A: Arithmetic> fmt::Debug for Resolved<A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Resolved")
-            .field("arithmetic", &A::ID)
-            .field("path", &self.path)
-            .finish()
+        debug_handle::<A>(f, "Resolved", self.path)
     }
 }
 

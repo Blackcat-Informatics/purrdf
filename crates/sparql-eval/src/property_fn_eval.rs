@@ -1030,18 +1030,16 @@ pub struct CallCursor {
     ended: bool,
 }
 
-impl std::fmt::Debug for CallCursor {
+purrdf_hash::debug_non_exhaustive!(
     /// Names the relation and the read's position. A cursor is host code with no
     /// `Debug` of its own, so nothing past the counts is printed.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CallCursor")
-            .field("iri", &self.iri)
-            .field("variables", &self.variables)
-            .field("yielded", &self.yielded)
-            .field("ended", &self.ended)
-            .finish_non_exhaustive()
+    CallCursor {
+        iri,
+        variables,
+        yielded,
+        ended
     }
-}
+);
 
 /// One operator a row of an on-demand call read passes on its way to the answer.
 enum ReadStage {

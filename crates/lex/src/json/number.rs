@@ -4,6 +4,7 @@
 //! A JSON number as the text the document wrote (RFC 8259 §6).
 
 use core::fmt;
+use core::ops::RangeInclusive;
 use core::str::FromStr;
 
 use super::{Error, ErrorKind};
@@ -198,24 +199,32 @@ impl Number {
     /// assert!(Number::from_f64(f64::NAN).is_none());
     /// ```
     pub fn from_f64(value: f64) -> Option<Self> {
-        value
-            .is_finite()
-            .then(|| Self(layout(&format!("{value:e}"), -5..=15)))
+        Self::from_shortest(value.is_finite(), value, -5..=15)
     }
 
     /// [`Number::from_f64`] for a binary32: the shortest digits that round-trip
     /// through binary32, positional when the decimal exponent is in `-6..=12`.
     pub fn from_f32(value: f32) -> Option<Self> {
-        value
-            .is_finite()
-            .then(|| Self(layout(&format!("{value:e}"), -6..=12)))
+        Self::from_shortest(value.is_finite(), value, -6..=12)
+    }
+
+    /// The number of a finite binary float, from Rust's shortest round-trip
+    /// digits (`{:e}`), positional when the decimal exponent is in `positional`;
+    /// `None` when the float is not `finite`. Both widths spell through here, so
+    /// they differ only in their digits and their window.
+    fn from_shortest(
+        finite: bool,
+        value: impl fmt::LowerExp,
+        positional: RangeInclusive<i32>,
+    ) -> Option<Self> {
+        finite.then(|| Self(layout(&format!("{value:e}"), positional)))
     }
 }
 
 /// Lay out the shortest round-trip digits in `scientific` (Rust's `{:e}`
 /// spelling: `[-]d[.ddd]e[-]x`), positionally when the decimal exponent is in
 /// `positional`.
-fn layout(scientific: &str, positional: core::ops::RangeInclusive<i32>) -> String {
+fn layout(scientific: &str, positional: RangeInclusive<i32>) -> String {
     let (negative, body) = match scientific.strip_prefix('-') {
         Some(body) => (true, body),
         None => (false, scientific),

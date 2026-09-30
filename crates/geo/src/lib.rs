@@ -84,7 +84,6 @@
 // would not — so flattening those would either collide outright or drop the
 // qualifier that makes the call site readable.
 mod de9im;
-mod debug_script;
 mod error;
 
 pub mod construct;

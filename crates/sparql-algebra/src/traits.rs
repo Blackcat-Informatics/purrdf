@@ -18,7 +18,7 @@
 //!
 //! `Clone` builds the copy bottom-up ([`crate::owned::clone_tree`]).
 
-use core::fmt::{self, Write as _};
+use core::fmt;
 use core::hash::{Hash, Hasher};
 
 use crate::algebra::{
@@ -141,55 +141,32 @@ impl Leaf<'_> {
         self.tag().hash(state);
         each_leaf!(self, x => x.hash(state));
     }
+}
 
-    fn write(self, out: &mut Pad<'_, '_>) -> fmt::Result {
-        if out.pretty {
-            each_leaf!(self, x => write!(out, "{x:#?}"))
-        } else {
-            each_leaf!(self, x => write!(out, "{x:?}"))
-        }
+impl fmt::Debug for Leaf<'_> {
+    /// The leaf's own `Debug`, in the form `f` asks for.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        each_leaf!(self, x => fmt::Debug::fmt(x, f))
     }
 }
 
 /// One token of a node's script.
-#[derive(Clone, Copy)]
-enum Tok<'a> {
-    /// A struct or struct-like variant opens: its name.
-    Struct(&'static str),
-    /// A field of the open struct: its name. Its value follows.
-    Field(&'static str),
-    /// The open struct closes.
-    EndStruct,
-    /// A tuple or tuple-like variant opens: its name, empty for a bare tuple.
-    Tuple(&'static str),
-    /// The open tuple closes.
-    EndTuple,
-    /// A fieldless variant.
-    Unit(&'static str),
-    /// A list of this many entries opens.
-    List(usize),
-    /// The open list closes.
-    EndList,
-    /// A leaf value.
-    Leaf(Leaf<'a>),
-    /// A child node, read as its own script.
-    Node(NodeRef<'a>),
-}
+type Tok<'a> = purrdf_lex::walk::Tok<NodeRef<'a>, Leaf<'a>>;
 
-impl Tok<'_> {
-    fn same(self, other: Self) -> bool {
-        match (self, other) {
-            (Self::Struct(a), Self::Struct(b))
-            | (Self::Field(a), Self::Field(b))
-            | (Self::Tuple(a), Self::Tuple(b))
-            | (Self::Unit(a), Self::Unit(b)) => a == b,
-            (Self::List(a), Self::List(b)) => a == b,
-            (Self::EndStruct, Self::EndStruct)
-            | (Self::EndTuple, Self::EndTuple)
-            | (Self::EndList, Self::EndList) => true,
-            (Self::Leaf(a), Self::Leaf(b)) => a.same(b),
-            _ => false,
-        }
+/// Whether two non-node tokens are the same token: the derive's comparison of one
+/// script step.
+fn same_tok(left: Tok<'_>, right: Tok<'_>) -> bool {
+    match (left, right) {
+        (Tok::Struct(a), Tok::Struct(b))
+        | (Tok::Field(a), Tok::Field(b))
+        | (Tok::Tuple(a), Tok::Tuple(b))
+        | (Tok::Unit(a), Tok::Unit(b)) => a == b,
+        (Tok::List(a), Tok::List(b)) => a == b,
+        (Tok::EndStruct, Tok::EndStruct)
+        | (Tok::EndTuple, Tok::EndTuple)
+        | (Tok::EndList, Tok::EndList) => true,
+        (Tok::Leaf(a), Tok::Leaf(b)) => a.same(b),
+        _ => false,
     }
 }
 
@@ -572,7 +549,7 @@ pub(crate) fn nodes_eq(a: NodeRef<'_>, b: NodeRef<'_>) -> bool {
                 expand(a, &mut left);
                 expand(b, &mut right);
             }
-            (Some(a), Some(b)) if a.same(b) => {}
+            (Some(a), Some(b)) if same_tok(a, b) => {}
             _ => return false,
         }
     }
@@ -594,184 +571,11 @@ pub(crate) fn node_hash<H: Hasher>(node: NodeRef<'_>, state: &mut H) {
     }
 }
 
-/// Writes into a formatter, indenting every line after the first by four spaces per
-/// open pretty-printed container — what nesting the standard library's `PadAdapter`
-/// once per level produces.
-struct Pad<'f, 'g> {
-    f: &'f mut fmt::Formatter<'g>,
-    pretty: bool,
-    depth: usize,
-    line_start: bool,
-}
-
-impl fmt::Write for Pad<'_, '_> {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        for piece in s.split_inclusive('\n') {
-            if self.line_start {
-                for _ in 0..self.depth {
-                    self.f.write_str("    ")?;
-                }
-            }
-            self.line_start = piece.ends_with('\n');
-            self.f.write_str(piece)?;
-        }
-        Ok(())
-    }
-}
-
-/// A container open in [`node_debug`]: what it is and how many entries it holds so
-/// far.
-struct Open {
-    kind: OpenKind,
-    entries: usize,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum OpenKind {
-    Struct,
-    Tuple { bare: bool },
-    List,
-}
-
-impl Pad<'_, '_> {
-    /// A value starts inside the innermost open container: write what separates it
-    /// from the entry before it.
-    fn begin(&mut self, open: &mut WorkList<Open, 16>) -> fmt::Result {
-        let Some(container) = open.top_mut() else {
-            return Ok(());
-        };
-        match container.kind {
-            // The field token already wrote the separator and the name.
-            OpenKind::Struct => return Ok(()),
-            OpenKind::Tuple { .. } => {
-                if self.pretty {
-                    if container.entries == 0 {
-                        self.write_str("(\n")?;
-                        self.depth += 1;
-                    }
-                } else {
-                    self.write_str(if container.entries == 0 { "(" } else { ", " })?;
-                }
-            }
-            OpenKind::List => {
-                if self.pretty {
-                    if container.entries == 0 {
-                        self.write_str("\n")?;
-                        self.depth += 1;
-                    }
-                } else if container.entries > 0 {
-                    self.write_str(", ")?;
-                }
-            }
-        }
-        container.entries += 1;
-        Ok(())
-    }
-
-    /// A value inside an open container has ended.
-    fn end(&mut self, open: &WorkList<Open, 16>) -> fmt::Result {
-        if self.pretty && !open.is_empty() {
-            self.write_str(",\n")?;
-        }
-        Ok(())
-    }
-}
-
 /// `{:?}` / `{:#?}` exactly as `#[derive(Debug)]` writes them, over a work list.
 pub(crate) fn node_debug(node: NodeRef<'_>, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    let pretty = f.alternate();
-    let mut out = Pad {
-        f,
-        pretty,
-        depth: 0,
-        line_start: false,
-    };
-    let mut stack = Tokens::with(Tok::Node(node));
-    let mut open: WorkList<Open, 16> = WorkList::new();
-    while let Some(tok) = stack.pop() {
-        match tok {
-            Tok::Node(node) => expand(node, &mut stack),
-            Tok::Struct(name) | Tok::Tuple(name) => {
-                out.begin(&mut open)?;
-                out.write_str(name)?;
-                open.push(Open {
-                    kind: if matches!(tok, Tok::Struct(_)) {
-                        OpenKind::Struct
-                    } else {
-                        OpenKind::Tuple {
-                            bare: name.is_empty(),
-                        }
-                    },
-                    entries: 0,
-                });
-            }
-            Tok::List(_) => {
-                out.begin(&mut open)?;
-                out.write_str("[")?;
-                open.push(Open {
-                    kind: OpenKind::List,
-                    entries: 0,
-                });
-            }
-            Tok::Field(name) => {
-                let container = open
-                    .top_mut()
-                    .expect("a field is written inside its struct");
-                if pretty {
-                    if container.entries == 0 {
-                        out.write_str(" {\n")?;
-                        out.depth += 1;
-                    }
-                } else {
-                    out.write_str(if container.entries == 0 { " { " } else { ", " })?;
-                }
-                container.entries += 1;
-                out.write_str(name)?;
-                out.write_str(": ")?;
-            }
-            Tok::EndStruct | Tok::EndTuple | Tok::EndList => {
-                let container = open.pop().expect("a container closes after it opens");
-                match container.kind {
-                    OpenKind::Struct if container.entries > 0 => {
-                        if pretty {
-                            out.depth -= 1;
-                            out.write_str("}")?;
-                        } else {
-                            out.write_str(" }")?;
-                        }
-                    }
-                    OpenKind::Struct => {}
-                    OpenKind::Tuple { bare } if container.entries > 0 => {
-                        if pretty {
-                            out.depth -= 1;
-                        } else if container.entries == 1 && bare {
-                            out.write_str(",")?;
-                        }
-                        out.write_str(")")?;
-                    }
-                    OpenKind::Tuple { .. } => {}
-                    OpenKind::List => {
-                        if pretty && container.entries > 0 {
-                            out.depth -= 1;
-                        }
-                        out.write_str("]")?;
-                    }
-                }
-                out.end(&open)?;
-            }
-            Tok::Unit(name) => {
-                out.begin(&mut open)?;
-                out.write_str(name)?;
-                out.end(&open)?;
-            }
-            Tok::Leaf(leaf) => {
-                out.begin(&mut open)?;
-                leaf.write(&mut out)?;
-                out.end(&open)?;
-            }
-        }
-    }
-    Ok(())
+    purrdf_lex::walk::write_debug(f, node, |node, out: &mut Tokens<'_>| {
+        Script { out }.of(node);
+    })
 }
 
 /// `Clone`, `PartialEq`, `Eq`, `Hash` and `Debug` for a node type, each over a work

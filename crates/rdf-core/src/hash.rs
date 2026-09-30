@@ -36,11 +36,7 @@ pub type IdSet = FastSet<crate::TermId>;
 /// The [`FastHasher`] hash of `value`: the bucket hash of the IR's store-once
 /// tables and interners. Equal values hash alike within one build; the hash only
 /// chooses a bucket, is never persisted, and never orders an output.
-#[inline]
-pub(crate) fn hash_of<T: core::hash::Hash + ?Sized>(value: &T) -> u64 {
-    use core::hash::BuildHasher as _;
-    FastHasher::new().hash_one(value)
-}
+pub(crate) use purrdf_hash::fixed::hash_one as hash_of;
 
 /// The coarse size fingerprint of a dataset holding `quads` quads over `terms`
 /// distinct terms: the answer every counted backend gives to

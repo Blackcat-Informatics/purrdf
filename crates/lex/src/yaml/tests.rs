@@ -642,21 +642,17 @@ fn every_written_document_reads_back_to_its_value() {
 
 #[test]
 fn a_hundred_thousand_deep_document_is_written_and_read_without_overflow() {
-    std::thread::Builder::new()
-        .stack_size(256 * 1024)
-        .spawn(|| {
-            const DEPTH: usize = 100_000;
-            let unbounded = Limits {
-                max_depth: usize::MAX,
-                ..Limits::DEFAULT
-            };
-            let text = format!("{}0{}", "[".repeat(DEPTH), "]".repeat(DEPTH));
-            let value = read_with(&text, unbounded).unwrap();
-            let written = write(&value);
-            assert_eq!(written, format!("{}0\n", "- ".repeat(DEPTH)));
-            assert_eq!(read_with(&written, unbounded).unwrap(), value);
-        })
-        .unwrap()
-        .join()
-        .unwrap();
+    purrdf_stack::on_stack(256 * 1024, || {
+        const DEPTH: usize = 100_000;
+        let unbounded = Limits {
+            max_depth: usize::MAX,
+            ..Limits::DEFAULT
+        };
+        let text = format!("{}0{}", "[".repeat(DEPTH), "]".repeat(DEPTH));
+        let value = read_with(&text, unbounded).unwrap();
+        let written = write(&value);
+        assert_eq!(written, format!("{}0\n", "- ".repeat(DEPTH)));
+        assert_eq!(read_with(&written, unbounded).unwrap(), value);
+    })
+    .expect("a 256 KiB stack thread runs the walk");
 }

@@ -27,51 +27,29 @@
 
 use super::scan::StopSet;
 
-/// A field-scanner kernel path: the `csv` family of [`purrdf_hash::Backend`],
-/// so `PURRDF_REQUIRE_SIMD_PATHS` names them as `csv:<path>`.
-///
-/// [`Backend::ALL`](purrdf_hash::Backend::ALL) is the order
-/// [`super::arch::find`] prefers them in, so
-/// [`Backend::selected`](purrdf_hash::Backend::selected) names the kernel the
-/// reader and writer run.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Backend {
-    /// [`super::scan::find_portable`], sixteen-byte chunks answered lane by
-    /// lane; available everywhere, and the oracle every other path is tested
-    /// against.
-    Portable,
-    /// SSE2 on `x86_64` (the architecture baseline), 16-byte chunks.
-    Sse2,
-    /// AVX2 on `x86_64`, detected at run time, 32-byte chunks.
-    Avx2,
-    /// NEON on `aarch64` (the architecture baseline), 16-byte chunks.
-    Neon,
-    /// wasm `simd128`, in a build with `simd128` enabled, 16-byte chunks.
-    Simd128,
-}
-
-impl purrdf_hash::Backend for Backend {
-    const ALL: &'static [Self] = &[
-        Self::Avx2,
-        Self::Sse2,
-        Self::Neon,
-        Self::Simd128,
-        Self::Portable,
-    ];
-
-    fn is_available(self) -> bool {
-        super::arch::kernel(self).is_some()
+purrdf_hash::vector_backend! {
+    /// A field-scanner kernel path: the `csv` family of [`purrdf_hash::Backend`],
+    /// so `PURRDF_REQUIRE_SIMD_PATHS` names them as `csv:<path>`.
+    ///
+    /// [`Backend::ALL`](purrdf_hash::Backend::ALL) is the order
+    /// [`super::arch::find`] prefers them in, so
+    /// [`Backend::selected`](purrdf_hash::Backend::selected) names the kernel the
+    /// reader and writer run.
+    pub enum Backend {
+        /// [`super::scan::find_portable`], sixteen-byte chunks answered lane by
+        /// lane; available everywhere, and the oracle every other path is tested
+        /// against.
+        Portable,
+        /// SSE2 on `x86_64` (the architecture baseline), 16-byte chunks.
+        Sse2,
+        /// AVX2 on `x86_64`, detected at run time, 32-byte chunks.
+        Avx2,
+        /// NEON on `aarch64` (the architecture baseline), 16-byte chunks.
+        Neon,
+        /// wasm `simd128`, in a build with `simd128` enabled, 16-byte chunks.
+        Simd128,
     }
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::Portable => "portable",
-            Self::Sse2 => "sse2",
-            Self::Avx2 => "avx2",
-            Self::Neon => "neon",
-            Self::Simd128 => "simd128",
-        }
-    }
+    available: |path| super::arch::kernel(path).is_some();
 }
 
 /// One named kernel run over plain byte slices: the member set and the

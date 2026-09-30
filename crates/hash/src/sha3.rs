@@ -265,11 +265,7 @@ fn absorb_blocks(state: &mut [u64; LANES], rate: usize, blocks: &[u8]) {
     }
 }
 
-impl<const OUT: usize> Default for Sha3<OUT> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::default_from_new!([const OUT: usize] Sha3<OUT>);
 
 impl<const OUT: usize> fmt::Debug for Sha3<OUT> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -38,11 +38,7 @@ use crate::wire::{
 };
 
 pub(crate) fn as_i128(v: &Value) -> Option<i128> {
-    if let Value::Integer(i) = v {
-        Some(i128::from(*i))
-    } else {
-        None
-    }
+    v.as_integer().map(i128::from)
 }
 
 /// Coerce a value to a non-negative index, else `None` (Python `_as_int`).
@@ -50,16 +46,8 @@ pub(crate) fn as_idx(v: &Value) -> Option<usize> {
     as_i128(v).and_then(|n| usize::try_from(n).ok())
 }
 
-pub(crate) fn as_text(v: &Value) -> Option<&str> {
-    if let Value::Text(t) = v {
-        Some(t)
-    } else {
-        None
-    }
-}
-
 pub(crate) fn text_or<'a>(v: Option<&'a Value>, default: &'a str) -> &'a str {
-    v.and_then(as_text).unwrap_or(default)
+    v.and_then(Value::as_text).unwrap_or(default)
 }
 
 fn diag_code_for(reason: &str) -> &'static str {
@@ -810,7 +798,9 @@ impl Folder<'_, '_, '_> {
         for raw in rows {
             let Value::Map(entries) = raw else { continue };
             let kind = TermKind::from_wire(map_get(entries, "k").and_then(as_i128));
-            let value = map_get(entries, "v").and_then(as_text).map(str::to_string);
+            let value = map_get(entries, "v")
+                .and_then(Value::as_text)
+                .map(str::to_string);
             // This row's id, read before any decode that can raise a diagnostic:
             // diagnostics land in `self.g.diagnostics`, never in `self.g.terms`,
             // so the id a refusal quotes is the id this row goes on to take.
@@ -848,7 +838,7 @@ impl Folder<'_, '_, '_> {
             // tag and the grammar refused it". The base-direction arm below
             // needs that distinction: the two cases must not fold to the same
             // outcome, because only one of them is a defect in the input.
-            let (lang, lang_refused) = match map_get(entries, "l").and_then(as_text) {
+            let (lang, lang_refused) = match map_get(entries, "l").and_then(Value::as_text) {
                 Some(tag) => match language_tag_refusal(tag) {
                     Some(code) => {
                         self.diag(
@@ -874,7 +864,7 @@ impl Folder<'_, '_, '_> {
             // diagnostic. The writer filters direction before emitting it, so a
             // value here can only have come from a foreign container, which is
             // precisely the case a diagnostic is for.
-            let direction = match map_get(entries, "dir").and_then(as_text) {
+            let direction = match map_get(entries, "dir").and_then(Value::as_text) {
                 Some(value) if crate::model::is_literal_direction(value) => Some(value.to_string()),
                 Some(value) => {
                     self.diag(
@@ -1275,7 +1265,7 @@ impl Folder<'_, '_, '_> {
     fn h_meta(&mut self, payload: &Value) {
         if let Value::Map(entries) = payload {
             for (k, v) in entries {
-                let key = as_text(k).map_or_else(|| format!("{k:?}"), str::to_string);
+                let key = k.as_text().map_or_else(|| format!("{k:?}"), str::to_string);
                 self.g.set_meta(key, v.clone());
             }
         }
@@ -1293,7 +1283,7 @@ impl Folder<'_, '_, '_> {
                 .cloned()
                 .collect(),
             reason: map_get(entries, "reason")
-                .and_then(as_text)
+                .and_then(Value::as_text)
                 .map(str::to_string),
             by: map_get(entries, "by").and_then(as_idx),
         };
@@ -1333,7 +1323,7 @@ impl Folder<'_, '_, '_> {
                     Value::Map(term_entries) => Value::Map(
                         term_entries
                             .iter()
-                            .map(|(k, v)| match as_text(k) {
+                            .map(|(k, v)| match k.as_text() {
                                 Some("dt" | "rf") => (k.clone(), sh(v)),
                                 // `tt` is a 3-id row, so it shifts row-wise.
                                 Some("tt") => (k.clone(), sh_row(v)),
@@ -1397,7 +1387,7 @@ impl Folder<'_, '_, '_> {
         }
         if let Some(Value::Map(meta)) = map_get(entries, "meta") {
             for (k, v) in meta {
-                let key = as_text(k).map_or_else(|| format!("{k:?}"), str::to_string);
+                let key = k.as_text().map_or_else(|| format!("{k:?}"), str::to_string);
                 self.g.set_meta(key, v.clone());
             }
         }
@@ -1477,7 +1467,7 @@ impl Folder<'_, '_, '_> {
 }
 
 /// §3.1 boundary rule: a map carrying `"gts"` and lacking `"t"`.
-fn is_header_item(item: &Value) -> bool {
+pub(crate) fn is_header_item(item: &Value) -> bool {
     let inner = match item {
         Value::Tag(_, inner) => inner.as_ref(),
         other => other,
@@ -1618,7 +1608,9 @@ pub fn segment_append_state(data: &[u8]) -> Result<SegmentAppendState, String> {
                     .map_err(|_| "cannot append: a catalog id is out of range".to_string())?,
                 name: text_or(map_get(fields, "name"), "").to_string(),
                 cls: text_or(map_get(fields, "cls"), "encode").to_string(),
-                dct: map_get(fields, "dct").and_then(as_text).map(str::to_string),
+                dct: map_get(fields, "dct")
+                    .and_then(Value::as_text)
+                    .map(str::to_string),
                 level,
             });
         }
@@ -1876,7 +1868,7 @@ impl ActiveStreamingSegment {
                         },
                     );
                 }
-                if map_get(&header, "gts").and_then(as_text) != Some(MAGIC)
+                if map_get(&header, "gts").and_then(Value::as_text) != Some(MAGIC)
                     || map_get(&header, "v").and_then(as_i128) != Some(i128::from(VERSION))
                 {
                     push_diagnostic(
@@ -2412,7 +2404,7 @@ fn read_segment_with_sink(
             },
         );
     }
-    if map_get(header, "gts").and_then(as_text) != Some(MAGIC)
+    if map_get(header, "gts").and_then(Value::as_text) != Some(MAGIC)
         || map_get(header, "v").and_then(as_i128) != Some(i128::from(VERSION))
     {
         push_diagnostic(

@@ -17,7 +17,9 @@
 //! This crate is the home of the workspace's lexical layer: byte-class
 //! scanning, grammar terminals, term syntax, literal and IRI escaping, percent
 //! encoding, JSON strings, JSON pointers, a JSON reader and writer, a YAML
-//! reader and writer, a CBOR codec, an XML reader and Unicode normalisation.
+//! reader and writer, a CBOR codec, an XML reader and Unicode normalisation,
+//! and the stack-free walks and ordered pair lists those readers and writers
+//! are built on.
 //! Each is a law a grammar states; none is a vocabulary, and nothing here
 //! mints an IRI.
 //!
@@ -87,6 +89,16 @@
 //!   generated from the vendored Unicode Character Database at
 //!   [`unicode::UNICODE_VERSION`], the one version every Unicode table in the
 //!   workspace is generated from.
+//! * **Deep trees** — [`walk`], what every recursive type of the workspace walks
+//!   itself with instead of the machine stack: the inline-first work list
+//!   ([`walk::WorkList`]), the iteratively dropped box ([`walk::Nested`]) and
+//!   the writer that prints such a type exactly as `#[derive(Debug)]` would
+//!   ([`walk::write_debug`]).
+//! * **Ordered pairs** — [`assoc`], the first-match lookup and the
+//!   replace-in-place-or-append insert of a `[(K, V)]` list whose order is part
+//!   of its value (a JSON object's members, a GTS graph's metadata).
+//! * **Message errors** — [`message_error!`], the one declaration of an error
+//!   type whose whole content is a human-readable message.
 //!
 //! # Examples
 //!
@@ -113,6 +125,7 @@
 )]
 #![forbid(unsafe_code)]
 
+pub mod assoc;
 pub mod cbor;
 pub mod crockford;
 pub mod iri_escape;
@@ -120,6 +133,7 @@ pub mod json;
 pub mod json_escape;
 pub mod json_pointer;
 pub mod literal_escape;
+mod message_error;
 pub mod percent;
 pub mod scan;
 pub mod term_syntax;
@@ -127,5 +141,6 @@ pub mod terminals;
 pub mod text_out;
 pub mod unicode;
 mod unicode_tables;
+pub mod walk;
 pub mod xml;
 pub mod yaml;

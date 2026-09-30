@@ -105,8 +105,8 @@ use super::view_accounting::{
 use crate::dataset_view::{DatasetView, GraphMatch};
 use crate::provenance::DatasetProvenance;
 use crate::{
-    ContentDigest, ContentStore, QuadIds, QuadRef, RdfDiagnostic, RdfLookaside,
-    RdfStoreCapabilities, TermRef, TermValue,
+    ContentDigest, ContentStore, QuadIds, RdfDiagnostic, RdfLookaside, RdfStoreCapabilities,
+    TermRef, TermValue,
 };
 
 /// Field separator inside the digest fold (mirrors `StageProduct::from_artifacts`).
@@ -736,15 +736,6 @@ impl<D: DatasetView> DatasetView for ResidueView<'_, D> {
 
     fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.0.quads().filter(|q| self.keeps(q.g))
-    }
-
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_, Self::Id>> + '_ {
-        self.quads().map(|q| QuadRef {
-            s: self.resolve(q.s),
-            p: self.resolve(q.p),
-            o: self.resolve(q.o),
-            g: q.g.map(|id| self.resolve(id)),
-        })
     }
 
     fn resolve(&self, id: Self::Id) -> TermRef<'_, Self::Id> {

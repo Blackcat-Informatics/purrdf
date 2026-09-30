@@ -17,20 +17,22 @@ use crate::kernels::{
     hash_windows_portable, match_length_portable,
 };
 
-/// A kernel path.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Backend {
-    /// Portable safe code; always available.
-    Portable,
-    /// x86_64 SSE2 (the architecture baseline): 16-byte copies and compares.
-    Sse2,
-    /// x86_64 AVX2, detected at run time: 32-byte copies and compares, and
-    /// eight 4-byte windows hashed per shuffle + lane multiply.
-    Avx2,
-    /// aarch64 NEON: 16-byte copies and compares, four windows per hash step.
-    Neon,
-    /// wasm32 simd128, in a `+simd128` build: as NEON.
-    Simd128,
+purrdf_hash::vector_backend! {
+    /// A kernel path.
+    pub enum Backend {
+        /// Portable safe code; always available.
+        Portable,
+        /// x86_64 SSE2 (the architecture baseline): 16-byte copies and compares.
+        Sse2,
+        /// x86_64 AVX2, detected at run time: 32-byte copies and compares, and
+        /// eight 4-byte windows hashed per shuffle + lane multiply.
+        Avx2,
+        /// aarch64 NEON: 16-byte copies and compares, four windows per hash step.
+        Neon,
+        /// wasm32 simd128, in a `+simd128` build: as NEON.
+        Simd128,
+    }
+    available: |path| path.kernels().is_some();
 }
 
 /// A path's resolved kernels.
@@ -47,30 +49,6 @@ impl std::fmt::Debug for Kernels {
         f.debug_struct("Kernels")
             .field("backend", &self.backend)
             .finish_non_exhaustive()
-    }
-}
-
-impl purrdf_hash::Backend for Backend {
-    const ALL: &'static [Self] = &[
-        Self::Avx2,
-        Self::Sse2,
-        Self::Neon,
-        Self::Simd128,
-        Self::Portable,
-    ];
-
-    fn is_available(self) -> bool {
-        self.kernels().is_some()
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::Portable => "portable",
-            Self::Sse2 => "sse2",
-            Self::Avx2 => "avx2",
-            Self::Neon => "neon",
-            Self::Simd128 => "simd128",
-        }
     }
 }
 

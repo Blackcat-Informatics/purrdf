@@ -260,16 +260,7 @@ pub struct RdfListWalk<Id, F, R> {
     yielded: usize,
 }
 
-impl<Id: std::fmt::Debug, F, R> std::fmt::Debug for RdfListWalk<Id, F, R> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RdfListWalk")
-            .field("head", &self.head)
-            .field("cell", &self.cell)
-            .field("yielded", &self.yielded)
-            .field("pending", &self.pending)
-            .finish_non_exhaustive()
-    }
-}
+purrdf_hash::debug_non_exhaustive!([Id: std::fmt::Debug, F, R] RdfListWalk<Id, F, R> { head, cell, yielded, pending });
 
 impl<Id, F, R> RdfListWalk<Id, F, R>
 where

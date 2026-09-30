@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-lex"
-description = "Native lexical foundations for PurRDF's grammars, over the zero-dependency purrdf-hash root: the exact Turtle/SPARQL/XML/ECMA-262 character-class terminals and escape decoders, chunked byte-class scanners and needle searches that lower to packed compares, the RFC 8259 JSON string escaper and decoder, the JSON reader, value and deterministic writer, the YAML 1.2 reader and emitter, the RFC 8949 CBOR codec, RFC 6901 JSON Pointer tokens, RFC 3986 percent-encoding, Unicode normalization (NFC, NFD, NFKC, NFKD) as streaming stages, the RDF 1.2 term syntax with its IRI and literal escapers, an XML 1.0 + Namespaces reader, and Crockford Base32"
+description = "Native lexical foundations for PurRDF's grammars, over the zero-dependency purrdf-hash root: the exact Turtle/SPARQL/XML/ECMA-262 character-class terminals and escape decoders, chunked byte-class scanners and needle searches that lower to packed compares, the RFC 8259 JSON string escaper and decoder, the JSON reader, value and deterministic writer, the YAML 1.2 reader and emitter, the RFC 8949 CBOR codec, RFC 6901 JSON Pointer tokens, RFC 3986 percent-encoding, Unicode normalization (NFC, NFD, NFKC, NFKD) as streaming stages, the RDF 1.2 term syntax with its IRI and literal escapers, an XML 1.0 + Namespaces reader, Crockford Base32, ordered association lists, and the heap work lists, iteratively dropped boxes and derive-exact Debug writer that deep trees walk with instead of the machine stack"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -39,6 +39,9 @@ purrdf-hash = { workspace = true }
 # fixed-seed inputs from, and the native benchmark harness. Path-only and
 # unpublished, so it is stripped from the packaged manifest.
 purrdf-testkit = { workspace = true }
+# The one fixed-size stack runner the no-recursion tests put a hundred-thousand
+# deep document on. Test-only: no normal edge, no layering change.
+purrdf-stack = { workspace = true }
 
 [[bench]]
 name = "scan"

@@ -271,11 +271,7 @@ impl Crc32 {
     }
 }
 
-impl Default for Crc32 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::default_from_new!(Crc32);
 
 impl fmt::Debug for Crc32 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

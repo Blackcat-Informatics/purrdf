@@ -15,22 +15,13 @@
 //! JS-layer concern.
 
 use purrdf::ir::{Nested, try_fold_nested};
-use purrdf::{DatasetSink, RdfTerm, RdfTextDirection};
+use purrdf::{DatasetSink, RdfTerm};
 use purrdf_core::FastMap;
-use purrdf_events::{
-    EventQuad, EventTerm, EventTermId, EventTriple, RdfEventSink, ScopeId, TextDirection,
-};
+use purrdf_events::{EventQuad, EventTerm, EventTermId, EventTriple, RdfEventSink, ScopeId};
 use wasm_bindgen::prelude::*;
 
 use crate::dataset::Dataset;
 use crate::term::{Quad, TermInner, XSD_STRING, canonicalize_literal};
-
-fn to_event_direction(direction: RdfTextDirection) -> TextDirection {
-    match direction {
-        RdfTextDirection::Ltr => TextDirection::Ltr,
-        RdfTextDirection::Rtl => TextDirection::Rtl,
-    }
-}
 
 /// An RDF/JS `Sink` — a streaming consumer that interns pushed quads through the
 /// `purrdf-events` protocol and freezes them at `finish()`.
@@ -143,7 +134,7 @@ impl Sink {
             RdfTerm::Literal(lit) => {
                 let canonical = canonicalize_literal(lit.clone());
                 let datatype = canonical.datatype.as_deref().unwrap_or(XSD_STRING);
-                let direction = canonical.direction.map(to_event_direction);
+                let direction = canonical.direction;
                 let id = self.mint();
                 let _ = self
                     .sink_mut()?

@@ -12,6 +12,7 @@ use purrdf_iri::json_escape::{JsonEscapes, push_body};
 use purrdf_lex::cbor::Value;
 use purrdf_lex::json::{self, Object, Value as Json};
 
+use crate::reader::{as_i128, as_idx};
 use crate::wire::{
     MAGIC, VERSION, blake3_256, canonical, content_id, header_id, iter_items, map_get,
     unwrap_header,
@@ -565,29 +566,9 @@ pub fn parse_hex_32(input: &str) -> Result<Vec<u8>, String> {
         .ok_or_else(|| "hex value contains a non-hex character".to_string())
 }
 
-fn as_i128(v: &Value) -> Option<i128> {
-    if let Value::Integer(i) = v {
-        Some(i128::from(*i))
-    } else {
-        None
-    }
-}
-
-fn as_usize(v: &Value) -> Option<usize> {
-    as_i128(v).and_then(|n| usize::try_from(n).ok())
-}
-
-fn as_text(v: &Value) -> Option<&str> {
-    if let Value::Text(t) = v {
-        Some(t)
-    } else {
-        None
-    }
-}
-
 fn is_header_item(item: &Value) -> bool {
     unwrap_header(item).is_ok_and(|header| {
-        map_get(header, "gts").and_then(as_text) == Some(MAGIC)
+        map_get(header, "gts").and_then(Value::as_text) == Some(MAGIC)
             && map_get(header, "v").and_then(as_i128) == Some(i128::from(VERSION))
     })
 }
@@ -612,7 +593,7 @@ pub fn prove_file(data: &[u8], target_frame_id: &[u8]) -> Result<Proof, String> 
     while item_index < items.len() {
         let header = unwrap_header(&items[item_index].1)
             .map_err(|e| format!("item {item_index} is not a segment header: {e}"))?;
-        if map_get(header, "gts").and_then(as_text) != Some(MAGIC)
+        if map_get(header, "gts").and_then(Value::as_text) != Some(MAGIC)
             || map_get(header, "v").and_then(as_i128) != Some(i128::from(VERSION))
         {
             return Err(format!("item {item_index} is not a GTS v1 header"));
@@ -643,12 +624,12 @@ pub fn prove_file(data: &[u8], target_frame_id: &[u8]) -> Result<Proof, String> 
             }
             expected_prev.clone_from(&computed);
             frame_ids.push(computed);
-            if map_get(frame, "t").and_then(as_text) == Some("index") {
+            if map_get(frame, "t").and_then(Value::as_text) == Some("index") {
                 let Some(Value::Map(index_payload)) = map_get(frame, "d") else {
                     item_index += 1;
                     continue;
                 };
-                let Some(count) = map_get(index_payload, "count").and_then(as_usize) else {
+                let Some(count) = map_get(index_payload, "count").and_then(as_idx) else {
                     item_index += 1;
                     continue;
                 };

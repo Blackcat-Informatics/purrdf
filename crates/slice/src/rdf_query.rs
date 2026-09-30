@@ -936,11 +936,7 @@ impl DatasetAccumulator {
     }
 }
 
-impl Default for DatasetAccumulator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(DatasetAccumulator);
 
 // ── Media-type routing ──────────────────────────────────────────────────────────
 
