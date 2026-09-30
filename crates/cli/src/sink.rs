@@ -6,7 +6,7 @@
 //! [`write_rdf`] is the one place the pipeline emits a dataset. It handles both
 //! target kinds:
 //!
-//! * an RDF syntax → [`serialize_dataset_to_format`] over the borrowed view (a
+//! * an RDF syntax → `serialize_dataset_to_format` over the borrowed view (a
 //!   `PackView` serializes with zero materialization), then write the bytes;
 //! * the pack container → reconstruct a concrete dataset via
 //!   [`dataset_from_view`] and build the pack bytes with [`PackBuilder`].

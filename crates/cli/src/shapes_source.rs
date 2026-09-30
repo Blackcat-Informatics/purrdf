@@ -69,6 +69,7 @@ use purrdf_core::imports::imported_iris;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
 use purrdf_rdf::{NativeRdfFormat, SourceFormat};
 
+use crate::argv_documents::{ImportRole, parse_import_pairs};
 use crate::error::{CliError, argv_iri_refusal};
 use crate::{format, source};
 
@@ -342,60 +343,21 @@ struct ShapesImportPair<'a> {
     format: SourceFormat,
 }
 
-/// Decide every `--import IRI=FILE` ARGUMENT, with no I/O at all.
-///
-/// Nothing here touches the filesystem, so the FIRST malformed pair is reported before the
-/// FIRST file is opened — a malformed pair is a usage error naming the argument, never a
-/// skipped import, because a shapes graph folded without a document the operator supplied is
-/// a different shapes graph. This mirrors `shex`'s `resolve_import_pairs`, including why the
-/// IRI half must be ABSOLUTE: it is matched against the shapes graph's `owl:imports` objects,
-/// which are absolute by the time the parser is done with them, and it is the base the
-/// imported document parses under.
+/// Decide every `--import IRI=FILE` ARGUMENT, with no I/O at all: the shared
+/// [`parse_import_pairs`] rules, so the FIRST malformed pair is reported before the FIRST file
+/// is opened, then the syntax each path's own extension classifies it as.
 fn resolve_shapes_import_pairs(specs: &[String]) -> Result<Vec<ShapesImportPair<'_>>, CliError> {
-    let mut pairs: Vec<ShapesImportPair<'_>> = Vec::with_capacity(specs.len());
-    for spec in specs {
-        let Some((iri, path)) = spec.split_once('=') else {
-            return Err(CliError::Usage(format!(
-                "--import {spec}: an import pair is `IRI=FILE` — the ontology IRI the shapes \
-                 graph imports, then the local document that resolves it — and this one has \
-                 no `=`"
-            )));
-        };
-        if iri.is_empty() || path.is_empty() {
-            return Err(CliError::Usage(format!(
-                "--import {spec}: both halves of `IRI=FILE` are required — the IRI names what \
-                 the shapes graph imports, and the path names the document that is it"
-            )));
-        }
-        if path == "-" {
-            return Err(CliError::Usage(format!(
-                "--import {spec}: an imported document's syntax is inferred from its own path \
-                 extension, and `-` has none. Write the document to a file, or name it with a \
-                 recognized RDF extension"
-            )));
-        }
-        if let Err(error) = BaseIri::parse(iri) {
-            return Err(CliError::Usage(format!(
-                "--import {spec}: the IRI half `{iri}` is not an absolute IRI ({code}): it is \
-                 matched against the shapes graph's owl:imports objects, which are absolute, \
-                 and it is the base the imported document parses under. {error}",
-                code = error.diagnostic_code()
-            )));
-        }
-        if pairs.iter().any(|seen| seen.iri == iri) {
-            return Err(CliError::Usage(format!(
-                "--import {iri}=…: the IRI is named twice, and one IRI resolves to one \
-                 document; the second pair would be read and never used"
-            )));
-        }
-        pairs.push(ShapesImportPair {
-            spec,
-            iri,
-            path,
-            format: format::resolve(None, path)?,
-        });
-    }
-    Ok(pairs)
+    parse_import_pairs(specs, ImportRole::SHAPES_GRAPH)?
+        .into_iter()
+        .map(|pair| {
+            Ok(ShapesImportPair {
+                spec: pair.spec,
+                iri: pair.iri,
+                path: pair.path,
+                format: format::resolve(None, pair.path)?,
+            })
+        })
+        .collect()
 }
 
 /// Resolve a `--shapes-graph` value against the shapes document's base.
@@ -414,7 +376,7 @@ fn resolve_shapes_import_pairs(specs: &[String]) -> Result<Vec<ShapesImportPair<
 /// an already-absolute invocation is byte-for-byte what it always was. A RELATIVE one resolves
 /// against `base`, so `--shapes-graph sg` names exactly what `sh:shapesGraph <sg>` written in
 /// the shapes document names. A relative one with nothing in scope is refused: see
-/// [`argv_iri_refusal`](crate::error::argv_iri_refusal).
+/// [`argv_iri_refusal`].
 pub(crate) fn resolve_shapes_graph(
     raw: Option<&str>,
     base: Option<&str>,

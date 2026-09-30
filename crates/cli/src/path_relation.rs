@@ -60,7 +60,7 @@
 //! vocabulary IRIs**, so `iri=` — the name a query spells in predicate position — is
 //! caller-supplied with no default namespace to fall back on, exactly as
 //! `--aggregate-namespace` and `--provenance-namespace` are. And
-//! [`PathLimits`](purrdf_sparql_eval::PathLimits) deliberately has no `Default`: a
+//! [`PathLimits`] deliberately has no `Default`: a
 //! zero-hop path has no witness, and an unbounded traversal depth is a stack overflow,
 //! which is an ABORT and so escapes the property-function seam's panic containment
 //! entirely. A number this binary invented and the operator never read is precisely the

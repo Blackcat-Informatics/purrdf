@@ -32,12 +32,12 @@ use std::sync::Arc;
 use purrdf_core::DatasetView;
 use purrdf_core::imports::imported_iris;
 use purrdf_entail::{ImportMap, Materialization};
-use purrdf_iri::BaseScope;
 use purrdf_rdf::SourceFormat;
 use purrdf_validate::regime::MaterializeLimits;
 
+use crate::argv_documents::{ImportRole, import_readers, parse_import_pairs, refuse_shared_stdin};
 use crate::cli::{CliRdfFormat, ReportTarget};
-use crate::error::{CliError, argv_iri_refusal};
+use crate::error::CliError;
 use crate::format;
 use crate::report;
 use crate::source;
@@ -50,67 +50,6 @@ use crate::source;
 /// containing one does not, and that trade is stated rather than discovered.
 pub(crate) fn split_import(spec: &str) -> Option<(&str, &str)> {
     spec.split_once('=')
-}
-
-/// Decide every `--import IRI=FILE` ARGUMENT, with no I/O: the pair's shape, and the
-/// ontology-IRI half as an ABSOLUTE IRI.
-///
-/// A malformed pair is a usage error naming the argument, never a skipped import: a premise
-/// answered without a document the operator supplied is answered over a different premise.
-///
-/// # Why the half must be absolute, rather than resolved against something
-///
-/// The half is compared with the premise's `owl:imports` OBJECTS, which are absolute by the
-/// time the parser is done with them. So `foo` matched nothing, and the only thing the
-/// operator saw was a refusal naming the premise's `owl:imports` — a typo in an ARGUMENT
-/// reported as a defect in their DATA.
-///
-/// Resolving the half against a base this command guessed would not fix that; it would hide
-/// it. Which base an `owl:imports` object resolved under is the PREMISE's business — it may
-/// declare its own `@base`, and one document may rebind it several times — so a base picked
-/// here would turn `foo` into some absolute IRI that still matches nothing. The half is
-/// therefore required to be absolute, through the shared [`BaseScope`] with NO base in
-/// scope: an absolute value is carried lexical-verbatim, and anything else is refused
-/// against the command line by [`argv_iri_refusal`](crate::error::argv_iri_refusal), naming the flag, the pair and the
-/// offending half.
-pub(crate) fn parse_pairs(specs: &[String]) -> Result<Vec<(String, &str)>, CliError> {
-    // No base, deliberately: see the section above. `BaseScope` is still the seam, so the
-    // codes an operator sees here are the workspace's shared `purrdf_iri` spellings rather
-    // than a private one this module invented.
-    let scope = BaseScope::empty();
-    let mut resolved: Vec<(String, &str)> = Vec::with_capacity(specs.len());
-    for spec in specs {
-        let Some((iri, path)) = split_import(spec) else {
-            return Err(CliError::Usage(format!(
-                "--import {spec}: an import pair is `IRI=FILE` — the ontology IRI the premise \
-                 declares, then the local document that resolves it — and this one has no `=`"
-            )));
-        };
-        if iri.is_empty() || path.is_empty() {
-            return Err(CliError::Usage(format!(
-                "--import {spec}: both halves of `IRI=FILE` are required — the ontology IRI \
-                 names what the premise imports, and the path names the document that is it"
-            )));
-        }
-        let absolute = scope.resolve(iri).map_err(|error| {
-            argv_iri_refusal(
-                &format!("--import {spec}"),
-                &error,
-                "iri-relative-no-base",
-                &format!(
-                    "the ontology-IRI half `{iri}` is a relative IRI reference, and it is \
-                         matched against the premise's `owl:imports` objects, which are \
-                         absolute. It can therefore resolve no import at all. This is a \
-                         command-line value, so no `@base` in any document reaches it and none \
-                         is guessed for it: write the half as the absolute IRI the premise's \
-                         `owl:imports` names"
-                ),
-                &format!("the ontology-IRI half `{iri}` is not a usable IRI: "),
-            )
-        })?;
-        resolved.push((absolute.as_str().to_owned(), path));
-    }
-    Ok(resolved)
 }
 
 /// The IRI a premise document was read FROM — the base it parsed under, which is its
@@ -126,35 +65,6 @@ pub(crate) fn premise_iri(
         SourceFormat::Native(native) => source::effective_base(path, native, base),
         SourceFormat::Pack | SourceFormat::Gts => Ok(None),
     }
-}
-
-/// Refuse a command line that reads standard input twice: the premise and an `--import`
-/// document, or two `--import` documents. A process has ONE standard input, so two readers
-/// would each get part of one stream.
-pub(crate) fn refuse_two_stdins(
-    premises: &[&str],
-    pairs: &[(String, &str)],
-) -> Result<(), CliError> {
-    let mut named: Vec<String> = premises
-        .iter()
-        .filter(|path| **path == "-")
-        .map(|_| "the premise".to_owned())
-        .collect();
-    named.extend(
-        pairs
-            .iter()
-            .filter(|(_, path)| *path == "-")
-            .map(|(iri, _)| format!("--import {iri}=-")),
-    );
-    if named.len() > 1 {
-        return Err(CliError::Usage(format!(
-            "{} each read standard input, and there is only one: a process has a single stdin \
-             stream, so two documents reading it would each get part of one. Give all but one \
-             of them a path",
-            named.join(" and ")
-        )));
-    }
-    Ok(())
 }
 
 /// A premise's `--import` table, resolved against the command line and read, ready to close
@@ -183,19 +93,21 @@ impl PremiseImports {
         base: Option<&str>,
         premises: &[(&str, SourceFormat)],
     ) -> Result<Self, CliError> {
-        let pairs = parse_pairs(specs)?;
-        let paths: Vec<&str> = premises.iter().map(|(path, _)| *path).collect();
-        refuse_two_stdins(&paths, &pairs)?;
+        let pairs = parse_import_pairs(specs, ImportRole::PREMISE)?;
+        let mut readers: Vec<(String, &str)> = premises
+            .iter()
+            .map(|(path, _)| ("the premise".to_owned(), *path))
+            .collect();
+        readers.extend(import_readers(&pairs));
+        refuse_shared_stdin(&readers)?;
         let mut map = ImportMap::default();
-        for (iri, path) in &pairs {
-            let document_format = format::resolve(from, path)?;
-            let document = source::load_dataset(path, document_format, base)?;
-            if map.insert(iri.clone(), document).is_some() {
-                return Err(CliError::Usage(format!(
-                    "--import {iri}: the ontology IRI is named by two pairs; keeping either \
-                     document would be a choice the command line did not make"
-                )));
-            }
+        for pair in &pairs {
+            let document_format = format::resolve(from, pair.path)?;
+            let document = source::load_dataset(pair.path, document_format, base)?;
+            // `parse_import_pairs` already blamed the argument for a repeated or relative IRI;
+            // the table's own key policy is the one every insertion site shares.
+            map.try_insert(pair.iri, document)
+                .map_err(|error| CliError::Usage(format!("--import {}=…: {error}", pair.iri)))?;
         }
         for (path, premise_format) in premises {
             if let Some(iri) = premise_iri(path, *premise_format, base)? {

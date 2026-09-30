@@ -2215,7 +2215,7 @@ fn malformed_shapes_import_pairs_are_usage_errors() {
         ("notapair", "has no `=`"),
         ("http://example.org/x=", "both halves"),
         ("=file.ttl", "both halves"),
-        ("rel/path=a.ttl", "iri-non-absolute-base"),
+        ("rel/path=a.ttl", "iri-relative-no-base"),
     ] {
         let spec = pair.replace("a.ttl", &a);
         let out = run(&["validate", "--shapes", &root, "--import", &spec, &data]);

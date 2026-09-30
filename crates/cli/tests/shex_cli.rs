@@ -1042,7 +1042,7 @@ fn an_import_iri_half_must_be_absolute_and_is_blamed_on_the_argument() {
         "the refusal names the flag and quotes the pair: {why}"
     );
     assert!(
-        why.contains("iri-non-absolute-base") && why.contains("the ontology-IRI half `ages`"),
+        why.contains("iri-relative-no-base") && why.contains("the ontology-IRI half `ages`"),
         "…the shared code and the specific malformed part: {why}"
     );
     assert!(stdout(&relative).is_empty(), "no verdict is invented");

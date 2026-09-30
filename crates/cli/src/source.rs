@@ -25,7 +25,7 @@
 //!
 //! ## Pack sources and immutable acquisition
 //!
-//! A pack source is acquired through [`ImmutableInput`](crate::immutable::ImmutableInput),
+//! A pack source is acquired through [`ImmutableInput`],
 //! which yields bytes guaranteed **stable and un-truncatable** for the lifetime of
 //! the owner: a disk pack is memory-mapped only when the mapping cannot be faulted
 //! by a hostile concurrent pathname writer (a verified kernel seal, or our own

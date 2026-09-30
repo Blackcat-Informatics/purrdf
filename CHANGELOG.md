@@ -1730,6 +1730,15 @@ under Changed and Fixed where a longer account helps.
   the exact relation does; a negative count, a count past the guard's
   `max_neighbours` and a non-integer are still refused.
 
+- **cli:** every command reads its document arguments through one shared-stdin
+  check and one `--import IRI=PATH` parser. A refusal names every argument that
+  reads standard input (`IN, --shapes and --changes each read standard
+  input…`); `validate` also refuses `IN` beside a `--shapes-product` on stdin,
+  and `rules --srl` counts an `--import IRI=-` as a stdin reader. A relative
+  import IRI is `iri-relative-no-base` in every command (`shex` and
+  `validate --import` printed `iri-non-absolute-base`), a repeated import IRI
+  is "named twice" everywhere, and `entails`, `consistency` and the premise
+  commands refuse it before reading any document. Exit codes are unchanged.
 - **cli (BREAKING):** a governed `query`, `update` or `validate` run starts from
   `QueryGovernors::METERED` instead of `QueryGovernors::UNBOUNDED`, through
   `purrdf_validate::governors::from_parts`, the decoder the C ABI, the wasm

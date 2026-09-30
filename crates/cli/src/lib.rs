@@ -37,7 +37,7 @@
 //! * `node-expr` — evaluate one node expression of a shapes graph against a focus node;
 //! * `shapes` — shapes-graph authoring tools; its `lint` verb certifies a shapes graph
 //!   cold: the loader's verdict, the W3C `shacl-shacl.ttl` results and every function
-//!   call's binding — see [`shapes_tools`].
+//!   call's binding — see `shapes_tools`.
 //!
 //! `reason` and `entails` are the two halves of entailment and neither is the
 //! other: `reason` computes a CLOSURE, which is what a caller wants who will go on
@@ -85,6 +85,7 @@
 //! write their one-line verdict to **stderr**, unconditionally, so a shell can branch on
 //! it without parsing the RDF or JSON artifact stdout must stay.
 
+mod argv_documents;
 mod cli;
 mod consistency;
 mod convert;

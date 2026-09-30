@@ -58,7 +58,7 @@
 //! the premise's own `owl:imports` — a diagnostic that sends someone who fat-fingered an
 //! ARGUMENT to go and look at their DATA.
 //!
-//! [`crate::premise_imports::parse_pairs`] decides the half against the command line instead,
+//! [`crate::argv_documents::parse_import_pairs`] decides the half against the command line instead,
 //! through the shared
 //! [`purrdf_iri::BaseScope`] with no base in scope: an absolute half is carried
 //! lexical-verbatim, so nothing about a correct invocation changes, and anything else is a
@@ -119,6 +119,9 @@ use purrdf_validate::regime::{
     verify_entailment_to_string,
 };
 
+use crate::argv_documents::{
+    ImportPair, ImportRole, import_readers, parse_import_pairs, refuse_shared_stdin,
+};
 use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget, ReportTarget, refuse_document_flags};
 use crate::error::CliError;
 use crate::format;
@@ -222,13 +225,20 @@ pub(crate) fn run(
              none: its answer is a line-oriented verdict, not RDF",
     )?;
     let question = question(options)?;
-    refuse_two_stdins(options, question)?;
     refuse_unconsumable_base(options, question)?;
     // The `--import` ARGUMENTS are decided before a single document is opened: a malformed
     // pair, or an ontology-IRI half that denotes nothing, is a defect in the command line and
     // must fail against it rather than surfacing later as the boundary's refusal naming the
     // premise's own `owl:imports`.
-    let import_pairs = crate::premise_imports::parse_pairs(options.imports)?;
+    let import_pairs = parse_import_pairs(options.imports, ImportRole::PREMISE)?;
+    // The premise, the question and every `--import` document may each be `-`, and at most
+    // one of them may be.
+    let mut readers = vec![
+        ("--premise".to_owned(), options.premise),
+        (question.flag().to_owned(), question.path()),
+    ];
+    readers.extend(import_readers(&import_pairs));
+    refuse_shared_stdin(&readers)?;
 
     // Everything is read and transcoded BEFORE the boundary is called, so an unreadable
     // import fails against the file the operator named rather than as a refusal attributed
@@ -314,38 +324,6 @@ fn question<'a>(options: &EntailsOptions<'a>) -> Result<Question<'a>, CliError> 
     }
 }
 
-/// Refuse a command line that reads standard input twice.
-///
-/// The premise, the question and every `--import` document may each be `-`. A process has
-/// ONE standard input, so two of them naming it is not a command that reads one stream twice
-/// — it is a command that reads half a document into each. Refused, naming both, rather than
-/// mis-read.
-fn refuse_two_stdins(options: &EntailsOptions<'_>, question: Question<'_>) -> Result<(), CliError> {
-    let mut named: Vec<String> = Vec::new();
-    if options.premise == "-" {
-        named.push("--premise".to_owned());
-    }
-    if question.path() == "-" {
-        named.push(question.flag().to_owned());
-    }
-    for spec in options.imports {
-        if let Some((iri, path)) = crate::premise_imports::split_import(spec)
-            && path == "-"
-        {
-            named.push(format!("--import {iri}=-"));
-        }
-    }
-    if named.len() > 1 {
-        return Err(CliError::Usage(format!(
-            "{} each read standard input, and there is only one: a process has a single stdin \
-             stream, so two documents reading it would each get part of one. Give all but one \
-             of them a path",
-            named.join(" and ")
-        )));
-    }
-    Ok(())
-}
-
 /// Refuse `--import` pairs the premise's `owl:imports` closure never reaches, as a USAGE
 /// error (exit 2) — the message every entailment subcommand gives
 /// ([`report::unreached_import_refusal`]), and the exit status `validate` gives an unused
@@ -368,7 +346,8 @@ pub(crate) fn refuse_unreached_pairs(
     };
     let mut map = purrdf_entail::ImportMap::default();
     for (iri, document) in imports {
-        map.insert(iri.clone(), parse(document, &format!("--import {iri}"))?);
+        map.try_insert(iri.clone(), parse(document, &format!("--import {iri}"))?)
+            .map_err(|error| CliError::Usage(format!("--import {iri}=…: {error}")))?;
     }
     for iri in premise_iris {
         map.declare_loaded(*iri);
@@ -394,16 +373,19 @@ pub(crate) fn refuse_unreached_pairs(
 
 /// Read each resolved `--import` document, transcoding it into the boundary's N-Quads.
 ///
-/// Every argument-level decision was already made by [`crate::premise_imports::parse_pairs`], so what remains
+/// Every argument-level decision was already made by [`crate::argv_documents::parse_import_pairs`], so what remains
 /// here is I/O: this function reads documents and nothing else refuses a command line.
 fn read_imports(
-    pairs: &[(String, &str)],
+    pairs: &[ImportPair<'_>],
     options: &EntailsOptions<'_>,
 ) -> Result<Vec<(String, String)>, CliError> {
     let mut resolved = Vec::with_capacity(pairs.len());
-    for (iri, path) in pairs {
-        let what = format!("--import {iri}");
-        resolved.push((iri.clone(), read_as_nquads(path, &what, options)?));
+    for pair in pairs {
+        let what = format!("--import {}", pair.iri);
+        resolved.push((
+            pair.iri.to_owned(),
+            read_as_nquads(pair.path, &what, options)?,
+        ));
     }
     Ok(resolved)
 }
@@ -430,7 +412,7 @@ fn refuse_unconsumable_base(
         documents.push((path, "the --conclusion document".to_owned()));
     }
     for spec in options.imports {
-        if let Some((iri, path)) = spec.split_once('=')
+        if let Some((iri, path)) = crate::premise_imports::split_import(spec)
             && !iri.is_empty()
             && !path.is_empty()
         {

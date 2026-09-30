@@ -62,6 +62,7 @@ use std::path::Path;
 use purrdf_rdf::{JsonLdSerializeOptions, SourceFormat};
 use purrdf_validate::regime::{ReasonerSession, ReasoningAnswer, check_dl_proof};
 
+use crate::argv_documents::{ImportRole, import_readers, parse_import_pairs, refuse_shared_stdin};
 use crate::cli::{CliRdfFormat, LedgerTarget, refuse_document_flags};
 use crate::error::{CliError, CliOutcome};
 use crate::format;
@@ -130,8 +131,10 @@ pub(crate) fn run(
     )?;
     // The `--import` ARGUMENTS are decided before a single document is opened, exactly as
     // `entails` decides them: a malformed pair is a defect in the command line.
-    let import_pairs = premise_imports::parse_pairs(options.imports)?;
-    premise_imports::refuse_two_stdins(&[options.input], &import_pairs)?;
+    let import_pairs = parse_import_pairs(options.imports, ImportRole::PREMISE)?;
+    let mut readers = vec![("the premise".to_owned(), options.input)];
+    readers.extend(import_readers(&import_pairs));
+    refuse_shared_stdin(&readers)?;
     let format = format::resolve(options.from, options.input)?;
     let document = read_as_nquads(options, format)?;
     // The IRI the input document was read FROM: an `owl:imports` of it names the ontology
@@ -139,9 +142,12 @@ pub(crate) fn run(
     let premise_base = premise_imports::premise_iri(options.input, format, options.base)?;
     let premise_iris: Vec<&str> = premise_base.as_deref().into_iter().collect();
     let mut imports = Vec::with_capacity(import_pairs.len());
-    for (iri, path) in &import_pairs {
-        let what = format!("--import {iri}");
-        imports.push((iri.clone(), read_path_as_nquads(path, &what, options)?));
+    for pair in &import_pairs {
+        let what = format!("--import {}", pair.iri);
+        imports.push((
+            pair.iri.to_owned(),
+            read_path_as_nquads(pair.path, &what, options)?,
+        ));
     }
     crate::entails::refuse_unreached_pairs(&document, &imports, &premise_iris)?;
     let table: Vec<(&str, &str)> = imports

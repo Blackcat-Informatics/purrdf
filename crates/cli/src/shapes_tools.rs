@@ -37,6 +37,10 @@ use purrdf::shapes::{Inference, RuleOptions, engine, lint};
 use purrdf_rdf::{JsonLdSerializeOptions, SourceFormat};
 use purrdf_validate::ExprSelector;
 
+use crate::argv_documents::{
+    ImportPair, ImportRole, import_readers, parse_import_pairs, refuse_shared_stdin,
+    supplied_readers,
+};
 use crate::cli::{CliRdfFormat, LedgerTarget, ReportTarget, refuse_document_flags};
 use crate::error::CliError;
 use crate::shapes_source::{
@@ -99,23 +103,6 @@ enum RuleSource<'a> {
     Srl { path: &'a str, base: Option<String> },
 }
 
-/// Refuse a command line that reads standard input twice: a process has one stdin.
-fn refuse_two_stdins(readers: &[(&str, Option<&str>)]) -> Result<(), CliError> {
-    let named: Vec<&str> = readers
-        .iter()
-        .filter(|(_, path)| *path == Some("-"))
-        .map(|(flag, _)| *flag)
-        .collect();
-    if named.len() > 1 {
-        return Err(CliError::Usage(format!(
-            "{} all read standard input, and there is only one: a process has a single stdin \
-             stream, so each document would get part of one. Give all but one of them a path",
-            named.join(" and ")
-        )));
-    }
-    Ok(())
-}
-
 /// Run the `rules` subcommand.
 pub(crate) fn run_rules(
     options: &RulesOptions<'_>,
@@ -132,11 +119,18 @@ pub(crate) fn run_rules(
     if let Some(level) = options.check {
         return run_srl_check(options, level, ledger_target);
     }
-    refuse_two_stdins(&[
-        ("IN", Some(options.input)),
+    let srl_pairs = if options.srl.is_some() {
+        parse_import_pairs(options.imports, ImportRole::RULE_SET)?
+    } else {
+        Vec::new()
+    };
+    let mut readers = vec![("IN".to_owned(), options.input)];
+    readers.extend(supplied_readers(&[
         ("--shapes", options.shapes),
         ("--srl", options.srl),
-    ])?;
+    ]));
+    readers.extend(import_readers(&srl_pairs));
+    refuse_shared_stdin(&readers)?;
     let data_format = format::resolve(options.from, options.input)?;
     let target_format = format::resolve_target(options.to, options.output, "the --to target")?;
     format::refuse_unconsumable_base(
@@ -172,10 +166,6 @@ pub(crate) fn run_rules(
                     .to_owned(),
             ));
         }
-    };
-    let srl_pairs = match rule_source {
-        RuleSource::Srl { .. } => import_pairs(options.imports)?,
-        RuleSource::Shapes { .. } => Vec::new(),
     };
 
     let data = source::load_dataset(options.input, data_format, options.base)?;
@@ -283,34 +273,6 @@ fn utf8_text(path: &str, flag: &str) -> Result<String, CliError> {
         .map_err(|error| CliError::Runtime(format!("{flag} {path}: not UTF-8 text: {error}")))
 }
 
-/// One `--import IRI=FILE` pair for a SPARQL 1.2 RL rule set: `(spec, iri, path)`.
-type ImportPair<'a> = (&'a str, &'a str, &'a str);
-
-/// Decide every `--import IRI=FILE` argument with no I/O: a malformed pair is a usage error
-/// naming the argument, before any file is opened. The IRI half must be absolute — it is
-/// matched against the rule set's `IMPORTS` IRIs and is the base the imported document
-/// parses under.
-fn import_pairs(specs: &[String]) -> Result<Vec<ImportPair<'_>>, CliError> {
-    specs
-        .iter()
-        .map(|spec| {
-            let (iri, path) = spec.split_once('=').ok_or_else(|| {
-                CliError::Usage(format!(
-                    "--import {spec}: an import pair is `IRI=FILE` — the IRI the rule set \
-                     imports, then the local document that resolves it — and this one has no `=`"
-                ))
-            })?;
-            if !purrdf_iri::is_absolute(iri).unwrap_or(false) {
-                return Err(CliError::Usage(format!(
-                    "--import {spec}: the IRI half `{iri}` must be an absolute IRI, the one the \
-                     rule set's IMPORTS names"
-                )));
-            }
-            Ok((spec.as_str(), iri, path))
-        })
-        .collect()
-}
-
 /// The base a `--srl` rule set parses under: `--srl-base`, else the file's `file://`
 /// retrieval IRI; stdin has none.
 fn srl_base(path: &str, srl_base: Option<&str>) -> Result<Option<String>, CliError> {
@@ -340,7 +302,7 @@ fn run_srl_check(
                 .to_owned(),
         ));
     };
-    let pairs = import_pairs(options.imports)?;
+    let pairs = parse_import_pairs(options.imports, ImportRole::RULE_SET)?;
     let base = srl_base(path, options.srl_base)?;
     let checked = check_srl(path, base.as_deref(), &pairs, level)?;
     println!("--srl {path}: {}", checked.summary());
@@ -363,19 +325,19 @@ fn check_srl(
     let text = utf8_text(path, "--srl")?;
     let texts = pairs
         .iter()
-        .map(|(_, iri, file)| utf8_text(file, &format!("--import {iri}")))
+        .map(|pair| utf8_text(pair.path, &format!("--import {}", pair.iri)))
         .collect::<Result<Vec<String>, CliError>>()?;
     let table: Vec<(&str, &str)> = pairs
         .iter()
         .zip(&texts)
-        .map(|((_, iri, _), text)| (*iri, text.as_str()))
+        .map(|(pair, text)| (pair.iri, text.as_str()))
         .collect();
     srl::check(&text, base, &table, level).map_err(|error| match error {
         srl::SrlError::UnreachedImports { iris } => {
             let specs: Vec<&str> = pairs
                 .iter()
-                .filter(|(_, iri, _)| iris.iter().any(|unreached| unreached == iri))
-                .map(|(spec, ..)| *spec)
+                .filter(|pair| iris.iter().any(|unreached| unreached == pair.iri))
+                .map(|pair| pair.spec)
                 .collect();
             CliError::Usage(format!(
                 "--import {}: the rule set's import closure never reaches {}, so {} would be \
@@ -477,9 +439,9 @@ pub(crate) fn run_node_expr(
     jsonld_options: Option<&JsonLdSerializeOptions>,
 ) -> Result<(), CliError> {
     refuse_text_report_flags("node-expr", ledger_target, jsonld_options)?;
-    refuse_two_stdins(&[
-        ("IN", Some(options.input)),
-        ("--shapes", Some(options.shapes)),
+    refuse_shared_stdin(&[
+        ("IN".to_owned(), options.input),
+        ("--shapes".to_owned(), options.shapes),
     ])?;
     let data_format = format::resolve(options.from, options.input)?;
     format::refuse_unconsumable_base(

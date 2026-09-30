@@ -39,7 +39,7 @@
 //!
 //! # A pack source is described zero-copy
 //!
-//! [`Describer`](purrdf_core::describe::Describer) is generic over [`DatasetView`], so the
+//! [`Describer`] is generic over [`DatasetView`], so the
 //! extraction runs over whichever concrete view the input resolved to — a parsed `RdfDataset`
 //! for a text source, or a verified `PackView` for a pack, with no `dataset_from_view` rebuild
 //! in between. The extracted subgraph is always a fresh, frozen `RdfDataset`.
@@ -151,7 +151,7 @@ impl ViewOp for DescribeOp<'_> {
 }
 
 /// The closing imperative of this verb's named-graph refusal: the quad-capable `--to`
-/// targets, in [`CliRdfFormat`](crate::cli::CliRdfFormat) declaration order.
+/// targets, in [`CliRdfFormat`] declaration order.
 ///
 /// The rest of the sentence is `purrdf_core::named_graph::named_graph_refusal`, shared
 /// verbatim with the `query` lane and with the Python and wasm hosts; only the remedy is

@@ -1333,6 +1333,40 @@ fingerprints = []
 names = ['^(shortest_rule_path|shortest_dependency_path)$']
 
 [[job]]
+id = "cli-shared-stdin"
+summary = "Refusing a command line in which two documents read standard input: one helper names every reader in one message"
+home = "purrdf_cli::argv_documents::refuse_shared_stdin"
+entry_points = []
+spec = "a process has a single standard input stream; a second reader would get part of one document (usage error, exit 2)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:home-literal"]
+names = []
+
+[[job]]
+id = "cli-import-pairs"
+summary = "Parsing and deciding the `--import IRI=FILE` command-line pairs for every subcommand: shape, halves, `-`, absolute IRI half and repeated IRI"
+home = "purrdf_cli::argv_documents::parse_import_pairs"
+entry_points = []
+spec = "the `--import IRI=FILE` contract of purrdf_cli::argv_documents: an absolute IRI half carried verbatim, decided from the arguments alone (usage error, exit 2)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:home-literal"]
+names = []
+
+[[job]]
 id = "blank-label-hex-escape"
 summary = "Escaping bytes into the blank-label alphabet: ASCII-alphanumerics pass, every other byte becomes `-` plus two lowercase hex digits (genid segments and minted-blank tags)"
 home = "purrdf_core::ir::skolem::escape_label_bytes_into"

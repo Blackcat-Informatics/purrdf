@@ -92,8 +92,8 @@ use crate::{sink, source};
 /// gap.
 ///
 /// `box_role_vocab` is `--box-role-vocab NS`, turned into a
-/// [`purrdf_shapes::model::BoxRoleVocab`] by
-/// [`BoxRoleVocab::for_namespace`](purrdf_shapes::model::BoxRoleVocab::for_namespace) and
+/// `purrdf_shapes::model::BoxRoleVocab` by
+/// `BoxRoleVocab::for_namespace` and
 /// recorded into the product's identity by
 /// [`purrdf_validate::pack_shapes_product_from_dataset`] — the identical function
 /// `validate --shapes --box-role-vocab NS` spends the parsed value on. PurRDF mints no
@@ -214,11 +214,9 @@ pub(crate) fn pack(
 ///
 /// # Errors
 ///
-/// [`CliError::Runtime`] naming the refused [`ProductDimension`] when the product is not
+/// [`CliError::Runtime`] naming the refused `ProductDimension` when the product is not
 /// a well-formed product of this format, or when its shapes dataset does not canonicalize
 /// to the digest its binding claims.
-///
-/// [`ProductDimension`]: purrdf_shapes::product::ProductDimension
 pub(crate) fn verify(product: &str) -> Result<(), CliError> {
     let owner = source::acquire_product_input(product)?;
     purrdf_validate::certify_shapes_product(owner.as_bytes())

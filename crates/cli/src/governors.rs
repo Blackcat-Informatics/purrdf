@@ -28,7 +28,7 @@
 //!
 //! Every other governor is a count the engine charges against. A deadline is a host-owned
 //! stop signal: the CLI builds a [`WallDeadline`] — the library's single clock reader —
-//! and hands it over as the execution's [`StopSignal`](purrdf_sparql_eval::StopSignal).
+//! and hands it over as the execution's [`StopSignal`].
 //! The engine reads no clock of its own. The deadline starts when
 //! [`GovernorFlags::to_governors`] is called, and the `query` lane calls it with the data
 //! source already open, immediately before evaluation — so reading and parsing that source

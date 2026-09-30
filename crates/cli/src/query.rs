@@ -161,7 +161,7 @@ struct QueryOp<'a> {
     /// against (see [`AggregateRegistry`]'s instance-identity fingerprint) — never a
     /// freshly built one, even with identical content, or evaluation refuses the plan.
     aggregates: Option<&'a AggregateRegistry>,
-    /// The `--path-relation` specs to snapshot over this view. See [`prepare_against`]
+    /// The `--path-relation` specs to snapshot over this view. See `prepare_against`
     /// for why the registry is born here rather than beside the flags.
     relations: RelationSpecs<'a>,
 }
