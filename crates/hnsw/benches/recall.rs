@@ -21,7 +21,7 @@
 //! Each corpus is built twice over the same matrix and parameters: once as the
 //! [`Exact`](purrdf_core::distance::Exact) index ([`HnswIndex::build`]) and once as the
 //! [`Reassociated`](purrdf_core::distance::Reassociated) one
-//! ([`HnswIndex::build_reassociated`]), and each runs the same `ef` sweep, printed under its
+//! ([`build::<Reassociated>`]), and each runs the same `ef` sweep, printed under its
 //! own `arithmetic=` heading. Both are graded against the one exact scan: a reassociated
 //! index's recall is the fraction of the exact nearest rows it offered. The two sweeps are
 //! printed side by side and never divided into each other.

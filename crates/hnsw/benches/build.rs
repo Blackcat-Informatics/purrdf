@@ -5,7 +5,7 @@
 //!
 //! This target exists to disclose the shipped build paths' wall-clock cost at scale, rather
 //! than leave it unmeasured. It builds the index through the **shipped build paths** —
-//! [`HnswIndex::build`] under the exact arithmetic and [`HnswIndex::build_reassociated`]
+//! [`HnswIndex::build`] under the exact arithmetic and [`build::<Reassociated>`]
 //! under the reassociated one, not a private shortcut — at every rung of the shared declared
 //! ladder (`corpus::LADDER`: 5,000, 50,000, 200,000 and 1,000,000 rows at 4,096
 //! dimensions), times each once, and prints both in one table. The reassociated row names
