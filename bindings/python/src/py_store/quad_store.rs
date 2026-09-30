@@ -68,7 +68,7 @@ impl PyQuadStore {
     /// is recognized in predicate position EXACTLY, so no namespace declaration is
     /// needed to reach one.
     ///
-    /// `aggregate_namespace` registers purrdf's first-party statistical aggregate set
+    /// `aggregate_namespace` registers PurRDF's first-party statistical aggregate set
     /// (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
     /// `FIRST`, `LAST`, `TOPK`) under that IRI, so the query text can call
     /// `AGG(<{NAMESPACE}NAME>, args…)` (see
@@ -262,7 +262,7 @@ impl PyQuadStore {
     /// regime, carrying both the query outcome and the reasoning report.
     ///
     /// `aggregate_namespace` behaves exactly as on [`query_governed`](Self::query_governed):
-    /// it registers purrdf's first-party statistical aggregate set under that IRI for the
+    /// it registers PurRDF's first-party statistical aggregate set under that IRI for the
     /// closure query's PARSE and its evaluation, so `AGG(<{NAMESPACE}NAME>, args…)` reaches
     /// the entailment-aware lane exactly as it reaches the ordinary one. Unset (the default)
     /// leaves every one of the ten names an ordinary unregistered custom-aggregate IRI.
