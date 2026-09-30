@@ -155,11 +155,9 @@ use crate::dataset_view::{
     DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView, GraphMatch, ViewTermId,
     checkpointed_drain,
 };
-use crate::iri_escape::push_escaped;
-use purrdf_lex::literal_escape::Carrier;
-
-/// `xsd:string` — the implicit datatype that N-Quads writes bare (no `^^<…>`).
-use purrdf_xsd::datatype::XSD_STRING;
+use purrdf_lex::term_syntax::{
+    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri, write_literal,
+};
 
 /// The IRI namespace the RDF 1.2 overlay lowers into, reserved by this profile.
 ///
@@ -2618,11 +2616,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
 
     fn write_slot(&self, slot: Slot<D::Id>, render: BlankRender<'_, D::Id>, out: &mut String) {
         match slot {
-            Slot::Sentinel(iri) => {
-                out.push('<');
-                write_iri_escaped(iri, out);
-                out.push('>');
-            }
+            Slot::Sentinel(iri) => write_iri(iri, out),
             Slot::Term(id) => self.write_term(id, render, out),
             Slot::AnnotationGraph(g) => {
                 // `None`: bare annotation sentinel — byte-identical to the pre-graph
@@ -2630,9 +2624,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 // annotation stays lossless and never collides with a genuine quad
                 // (which never carries two graph tokens). Not re-parsed — this string
                 // is only hashed / byte-compared as the canonical oracle.
-                out.push('<');
-                write_iri_escaped(SENTINEL_ANNOTATION_GRAPH, out);
-                out.push('>');
+                write_iri(SENTINEL_ANNOTATION_GRAPH, out);
                 if let Some(g) = g {
                     out.push(' ');
                     self.write_term(g, render, out);
@@ -2672,15 +2664,8 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 Step::Term(id) => id,
             };
             match self.ds.resolve(id) {
-                TermRef::Iri(iri) => {
-                    out.push('<');
-                    write_iri_escaped(iri, out);
-                    out.push('>');
-                }
-                TermRef::Blank { .. } => {
-                    out.push_str("_:");
-                    out.push_str(render.label(id));
-                }
+                TermRef::Iri(iri) => write_iri(iri, out),
+                TermRef::Blank { .. } => write_blank(render.label(id), out),
                 TermRef::Literal {
                     lexical,
                     datatype,
@@ -2688,36 +2673,25 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     direction,
                 } => {
                     let rendered = self.render_composite_lexical(lexical, datatype, render);
-                    out.push('"');
-                    write_literal_escaped(&rendered, out);
-                    out.push('"');
-                    if let Some(lang) = language {
-                        out.push('@');
-                        out.push_str(lang);
-                        if let Some(dir) = direction {
-                            out.push_str("--");
-                            out.push_str(dir.as_str());
-                        }
-                    } else {
-                        let dt = match self.ds.resolve(datatype) {
-                            TermRef::Iri(iri) => iri,
-                            other => {
-                                unreachable!("literal datatype must be an IRI, got {other:?}")
-                            }
-                        };
-                        if dt != XSD_STRING {
-                            out.push_str("^^<");
-                            write_iri_escaped(dt, out);
-                            out.push('>');
-                        }
-                    }
+                    let TermRef::Iri(dt) = self.ds.resolve(datatype) else {
+                        unreachable!("literal datatype must be an IRI")
+                    };
+                    write_literal(
+                        &rendered,
+                        dt,
+                        language,
+                        direction.map(crate::RdfTextDirection::as_str),
+                        out,
+                    );
                 }
                 TermRef::Triple { s, p, o } => {
                     // RDF-1.2 triple term: `<<( <s> <p> <o> )>>` (the RDF 1.2
                     // N-Quads form).
-                    out.push_str("<<( ");
+                    out.push_str(TRIPLE_TERM_OPEN);
+                    out.push(' ');
                     held.extend([
-                        Step::Text(" )>>"),
+                        Step::Text(TRIPLE_TERM_CLOSE),
+                        Step::Text(" "),
                         Step::Term(o),
                         Step::Text(" "),
                         Step::Term(p),
@@ -2815,58 +2789,6 @@ fn next_permutation(a: &mut [usize]) -> bool {
     a.swap(i - 1, j);
     a[i..].reverse();
     true
-}
-
-/// Escape an IRI for `<…>` N-Quads form.
-///
-/// Which scalars ride as `\uXXXX` is decided by
-/// [`is_iriref_escape_required`](crate::iri_escape::is_iriref_escape_required)
-/// and the emission is [`push_escaped`](crate::iri_escape::push_escaped), the one
-/// implementation of both — see that module for the production
-/// (`IRIREF ::= '<' ( [^#x00-#x20<>"{}|^`\] | UCHAR )* '>'`, Turtle 1.2 §6.5
-/// `[18t]`) and for why egress escapes DEL and the C1 block, which the grammar
-/// permits raw. Clean ASCII IRIs pass through unchanged.
-fn write_iri_escaped(iri: &str, out: &mut String) {
-    push_escaped(iri, out);
-}
-
-/// Append `value` escaped for a `"…"` canonical N-Quads string.
-///
-/// The canonical N-Triples `ECHAR` set (`\\`, `\"`, `\n`, `\r`, `\t`, `\b`,
-/// `\f`); every other C0 control and U+007F (DEL) becomes `\uXXXX` in upper-case
-/// hex, and every other scalar — all non-ASCII, the C1 block included — rides
-/// verbatim as UTF-8. The W3C RDFC-1.0 test suite pins that last point (test060
-/// carries the C1 block raw in a literal), unlike an IRI, where the writer
-/// escapes the full control range.
-///
-/// The [`Canonical`](Carrier::Canonical) carrier of
-/// [`purrdf_lex::literal_escape`], the one literal escaper: one chunked scan
-/// finds each byte to escape, and every run between two of them is copied
-/// whole.
-///
-/// ```
-/// use purrdf_core::ir::canon::write_literal_escaped;
-///
-/// let mut out = String::new();
-/// write_literal_escaped("a\"b\\c\n\u{8}\u{1}\u{7f}\u{85}é", &mut out);
-/// assert_eq!(out, "a\\\"b\\\\c\\n\\b\\u0001\\u007F\u{85}é");
-/// ```
-pub fn write_literal_escaped(value: &str, out: &mut String) {
-    purrdf_lex::literal_escape::write(value, Carrier::Canonical, out);
-}
-
-#[cfg(test)]
-mod escape_tests {
-    use super::{write_iri_escaped, write_literal_escaped};
-
-    #[test]
-    fn c1_rides_raw_in_a_literal_and_escaped_in_an_iri() {
-        let (mut literal, mut iri) = (String::new(), String::new());
-        write_literal_escaped("\u{85}\u{7f}", &mut literal);
-        write_iri_escaped("\u{85}\u{7f}", &mut iri);
-        assert_eq!(literal, "\u{85}\\u007F");
-        assert_eq!(iri, "\\u0085\\u007F");
-    }
 }
 
 #[cfg(test)]

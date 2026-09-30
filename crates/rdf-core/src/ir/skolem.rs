@@ -498,47 +498,25 @@ fn remap_composite_lexical<M: TermMapper>(
     Ok(out)
 }
 
-/// The composite-lexical element text a mapped term is written back as.
+/// The composite-lexical element text a mapped term is written back as: the
+/// RDF 1.2 term syntax ([`purrdf_lex::term_syntax`]), which is also how the
+/// composite canonical form spells an IRI.
 fn element_text(builder: &RdfDatasetBuilder, id: TermId) -> String {
     use crate::blank_label::{LabelAlphabet, encode_blank_label};
+    use purrdf_lex::term_syntax::{write_blank, write_iri};
 
+    let mut out = String::new();
     match builder.resolve(id) {
-        TermRef::Iri(iri) => {
-            let mut out = String::with_capacity(iri.len() + 2);
-            out.push('<');
-            write_iriref_escaped(iri, &mut out);
-            out.push('>');
-            out
-        }
-        TermRef::Blank { label, scope } => {
-            format!(
-                "_:{}",
-                encode_blank_label(label, scope, LabelAlphabet::BlankNodeLabel)
-            )
-        }
+        TermRef::Iri(iri) => write_iri(iri, &mut out),
+        TermRef::Blank { label, scope } => write_blank(
+            &encode_blank_label(label, scope, LabelAlphabet::BlankNodeLabel),
+            &mut out,
+        ),
         other => {
             unreachable!("a term rewrite may only produce an IRI or a blank node, got {other:?}")
         }
     }
-}
-
-/// Write an IRI as a composite `IRIREF` body, `\u`-escaping every character the
-/// production excludes so the result is always a legal token.
-fn write_iriref_escaped(iri: &str, out: &mut String) {
-    for ch in iri.chars() {
-        match ch {
-            // `'` is legal in an `IRIREF`, but a composite literal may be
-            // embedded inside a single-quoted string, where a raw `'` would
-            // close it. Escaping it costs nothing and is always legal.
-            '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' | '\'' => {
-                let _ = write!(out, "\\u{:04X}", ch as u32);
-            }
-            c if (c as u32) <= 0x20 => {
-                let _ = write!(out, "\\u{:04X}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
+    out
 }
 
 /// Rebuild `ds` as a NEW frozen dataset with every term routed through

@@ -159,7 +159,9 @@ pub use bundle::{
     ArtifactIndex, ArtifactRecord, BundleError, RdfBundle, SegmentUnitMap, UnitCatalog,
     UnitMetadata,
 };
-pub use collections::{ListError, ListErrorKind, ListVocab, RdfListError, build_rdf_list};
+pub use collections::{
+    ListError, ListErrorKind, ListVocab, RdfListError, SoleObject, build_rdf_list, walk_rdf_list,
+};
 pub use content_id::{Blake3ContentId, ContentIdScheme};
 pub use content_store::{Bytes, ContentDigest, ContentStore, ContentStoreError};
 pub use dataset_view::{

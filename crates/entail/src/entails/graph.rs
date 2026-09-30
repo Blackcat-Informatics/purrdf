@@ -27,7 +27,13 @@
 use std::convert::Infallible;
 use std::fmt::Write as _;
 
+use std::collections::{BTreeMap, BTreeSet};
+
+use purrdf_core::collections::{SoleObject, walk_rdf_list};
 use purrdf_core::{RdfDataset, RdfTextDirection, TermValue};
+
+use crate::engine::surface_of;
+use crate::vocab::{RDF_FIRST, RDF_LIST, RDF_NIL, RDF_REST, RDF_TYPE};
 
 /// A `(subject, predicate, object)` triple of owned, dataset-independent terms.
 pub(crate) type Triple = [TermValue; 3];
@@ -48,6 +54,147 @@ pub(crate) fn default_graph_triples(ds: &RdfDataset) -> Vec<Triple> {
             ]
         })
         .collect()
+}
+
+/// One graph, indexed the two ways a recognizer reads it.
+pub(crate) struct Indexed {
+    /// Every default-graph triple, in the dataset's frozen quad order.
+    pub(crate) triples: Vec<Triple>,
+    /// Subject surface → the indices of the triples it is the subject of.
+    by_subject: BTreeMap<String, Vec<usize>>,
+    /// Term surface → the indices of the triples mentioning it in ANY position.
+    mentions: BTreeMap<String, Vec<usize>>,
+}
+
+impl Indexed {
+    /// Index `ds`'s default graph.
+    pub(crate) fn of(ds: &RdfDataset) -> Self {
+        let triples = default_graph_triples(ds);
+        let mut by_subject: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        let mut mentions: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (index, triple) in triples.iter().enumerate() {
+            by_subject
+                .entry(surface_of(&triple[0]))
+                .or_default()
+                .push(index);
+            for position in triple {
+                let slot = mentions.entry(surface_of(position)).or_default();
+                if slot.last() != Some(&index) {
+                    slot.push(index);
+                }
+            }
+        }
+        Self {
+            triples,
+            by_subject,
+            mentions,
+        }
+    }
+
+    /// The indices of the triples `term` is the subject of.
+    pub(crate) fn subject_of(&self, term: &TermValue) -> &[usize] {
+        self.by_subject
+            .get(&surface_of(term))
+            .map_or(&[][..], Vec::as_slice)
+    }
+
+    /// The indices of the triples mentioning `term` anywhere.
+    pub(crate) fn mentioning(&self, term: &TermValue) -> &[usize] {
+        self.mentions
+            .get(&surface_of(term))
+            .map_or(&[][..], Vec::as_slice)
+    }
+}
+
+/// An RDF collection a recognizer consumes whole: its members, its cells, and the
+/// indices of every triple the cells carry.
+pub(crate) struct Collection {
+    /// The members, in list order.
+    pub(crate) members: Vec<TermValue>,
+    /// The cells, in list order.
+    pub(crate) cells: Vec<TermValue>,
+    /// The indices of the cells' own triples.
+    pub(crate) triples: BTreeSet<usize>,
+}
+
+/// Read the RDF collection headed by `head`, which `previous` points at, as a structure a
+/// recognizer may consume on its own: `what` names it in a refusal.
+///
+/// The collection must be well formed under the strict walker
+/// ([`purrdf_core::collections::walk_rdf_list`]: one `rdf:first` and one `rdf:rest` per
+/// cell, reaching `rdf:nil` without revisiting a cell). Consuming it adds what consuming
+/// needs: every cell is a BLANK node, carries nothing beside its two edges but an
+/// `rdf:type rdf:List` typing (which the RDFS list comprehension condition licenses for
+/// every collection, so stating it states nothing new), and is pointed at only by its
+/// predecessor. Anything else refuses: reasoning over the well-formed PREFIX of a broken
+/// collection answers a question the caller did not ask.
+pub(crate) fn read_collection(
+    indexed: &Indexed,
+    head: &TermValue,
+    previous: &TermValue,
+    what: &str,
+) -> Result<Collection, String> {
+    let (first, rest, nil) = (
+        TermValue::iri(RDF_FIRST),
+        TermValue::iri(RDF_REST),
+        TermValue::iri(RDF_NIL),
+    );
+    let objects = |cell: &TermValue, predicate: &TermValue| {
+        SoleObject::of(
+            indexed
+                .subject_of(cell)
+                .iter()
+                .map(|&index| &indexed.triples[index])
+                .filter(|[_, p, _]| p == predicate)
+                .map(|[_, _, object]| object),
+        )
+    };
+    let members = walk_rdf_list(
+        head,
+        Some(&nil),
+        |cell| objects(cell, &first),
+        |cell| objects(cell, &rest),
+    )
+    .map_err(|error| format!("{what} at {}: {}", show(error.node), error.kind))?;
+    let typing = [TermValue::iri(RDF_TYPE), TermValue::iri(RDF_LIST)];
+    let mut collection = Collection {
+        members: members.into_iter().cloned().collect(),
+        cells: Vec::new(),
+        triples: BTreeSet::new(),
+    };
+    let (mut cell, mut from) = (head, previous);
+    for _ in 0..collection.members.len() {
+        let refuse = |why: &str| Err(format!("{what} at {}: {why}", show(cell)));
+        if !matches!(cell, TermValue::Blank { .. }) {
+            return refuse("a collection cell must be a blank node");
+        }
+        let own = indexed.subject_of(cell);
+        let mut next = None;
+        for &index in own {
+            let [_, predicate, object] = &indexed.triples[index];
+            if predicate == &rest {
+                next = Some(object);
+            } else if predicate != &first && [predicate, object] != [&typing[0], &typing[1]] {
+                return refuse("the cell carries a triple that is not part of a collection");
+            }
+        }
+        // Reached from exactly one place, and that place is the predecessor: a cell two
+        // collections share is a cell this walk cannot consume on either's behalf.
+        for &index in indexed.mentioning(cell) {
+            if own.contains(&index) {
+                continue;
+            }
+            let [subject, _, object] = &indexed.triples[index];
+            if subject != from || object != cell {
+                return refuse("the cell is reached from more than one place");
+            }
+        }
+        collection.triples.extend(own);
+        collection.cells.push(cell.clone());
+        from = cell;
+        cell = next.expect("the strict walk gave every cell one rdf:rest");
+    }
+    Ok(collection)
 }
 
 /// The datatype a literal's own surface shape already implies, per RDF 1.2 C0.1.

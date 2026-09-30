@@ -43,3 +43,38 @@ fn update_corpus_parses() {
         "expected at least 8 .ru fixtures, found {count}"
     );
 }
+
+/// An Update request's display re-parses to the same request, with every literal
+/// in the canonical term form: a control character or C1 scalar the Rust debug
+/// form would spell `\u{…}` is written as SPARQL reads it.
+#[test]
+fn update_display_writes_literals_in_term_syntax_and_round_trips() {
+    let parser = SparqlParser::new();
+    for (text, expected) in [
+        (
+            "INSERT DATA { <http://example.org/s> <http://example.org/p> \"a\\u0001b\u{85}\\\"\" }",
+            "INSERT DATA { <http://example.org/s> <http://example.org/p> \"a\\u0001b\u{85}\\\"\" . }",
+        ),
+        (
+            "INSERT DATA { <http://example.org/s> <http://example.org/p> \"x\"@ar--rtl }",
+            "INSERT DATA { <http://example.org/s> <http://example.org/p> \"x\"@ar--rtl . }",
+        ),
+        (
+            "INSERT DATA { <http://example.org/s> <http://example.org/p> 1 }",
+            "INSERT DATA { <http://example.org/s> <http://example.org/p> \
+             \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> . }",
+        ),
+        (
+            "INSERT DATA { <http://example.org/s> <http://example.org/p> \"plain\" }",
+            "INSERT DATA { <http://example.org/s> <http://example.org/p> \"plain\" . }",
+        ),
+    ] {
+        let update = parser.parse_update(text).expect("the request parses");
+        let written = update.to_string();
+        assert_eq!(written, expected);
+        let again = parser
+            .parse_update(&written)
+            .expect("the display re-parses");
+        assert_eq!(again.to_string(), written);
+    }
+}

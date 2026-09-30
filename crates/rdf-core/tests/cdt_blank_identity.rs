@@ -196,6 +196,25 @@ fn skolemization_round_trips_over_an_embedded_blank() {
     );
 }
 
+/// A rewrite writes every IRI element it touches in the composite canonical
+/// `IRIREF` form, so an apostrophe (legal raw in an `IRIREF`) stays raw and a
+/// plain IRI is byte-identical.
+#[test]
+fn a_rewritten_composite_keeps_iri_elements_in_their_canonical_form() {
+    let source = blank_subject_list(
+        "x",
+        "[_:x, <http://example.org/it's>, <http://example.org/a>]",
+    );
+    let skolemized = skolemize(&source, "http://example.org").expect("no reserved genid");
+    let lexical = sole_literal(&skolemized);
+    assert!(
+        lexical.contains("<http://example.org/it's>"),
+        "an apostrophe was escaped: {lexical}"
+    );
+    assert!(lexical.contains("<http://example.org/a>"), "{lexical}");
+    assert!(!lexical.contains("\\u0027"), "{lexical}");
+}
+
 /// The lexical form of the sole literal object in a one-quad dataset.
 fn sole_literal(ds: &RdfDataset) -> String {
     let object = ds.quads().next().map(|q| q.o).expect("one quad");

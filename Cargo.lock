@@ -529,6 +529,7 @@ version = "2.0.2"
 dependencies = [
  "purrdf-hash",
  "purrdf-iri",
+ "purrdf-lex",
  "purrdf-testkit",
  "purrdf-xsd",
 ]
@@ -624,9 +625,9 @@ dependencies = [
  "purrdf-datalog",
  "purrdf-hash",
  "purrdf-iri",
+ "purrdf-lex",
  "purrdf-testkit",
  "purrdf-xsd",
- "roxmltree",
 ]
 
 [[package]]
@@ -819,6 +820,7 @@ dependencies = [
  "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-hash",
+ "purrdf-lex",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-testkit",
@@ -913,7 +915,6 @@ dependencies = [
  "purrdf-sparql-results",
  "purrdf-testkit",
  "purrdf-validate",
- "roxmltree",
 ]
 
 [[package]]
@@ -927,6 +928,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-hash",
  "purrdf-iri",
+ "purrdf-lex",
  "purrdf-sparql-algebra",
  "purrdf-sparql-results",
  "purrdf-stack",
@@ -946,6 +948,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-hash",
  "purrdf-iri",
+ "purrdf-lex",
  "purrdf-testkit",
 ]
 

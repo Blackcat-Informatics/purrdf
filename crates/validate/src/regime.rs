@@ -83,7 +83,7 @@ use core::fmt;
 use core::fmt::Write as _;
 use purrdf_core::TermBox;
 
-use purrdf_core::{TermValue, display_term};
+use purrdf_core::{TermValue, write_term_value};
 use purrdf_datalog::chase::ChaseError;
 use purrdf_datalog::seminaive::{BudgetResource, EvalError, EvalOptions, render_capacity_refusal};
 use purrdf_entail::{
@@ -1567,77 +1567,19 @@ impl ReasoningAnswer {
 // ── Term syntax at the boundary ─────────────────────────────────────────────
 
 /// Render `term` in N-Triples term syntax (`<iri>`, `_:label`, `"lex"@en`,
-/// `<<( s p o )>>`).
-///
-/// The escaping is [`purrdf_core::display_term`]'s, so a term rendered here and
-/// the same term rendered by the native serializers escape identically. This is
-/// report/diagnostic identity text (answer and certificate lines), not RDF
-/// document egress, so blank-node label alphabets are deliberately not enforced
-/// here and the function stays total. A triple term whose nesting the owned model
-/// cannot hold is written HERE rather than through `display_term`'s owned model,
-/// because the owned model requires a triple term's predicate to be an IRI and this
-/// function must be total over [`TermValue`].
+/// `<<( s p o )>>`) — [`write_term_value`], the one canonical term writer, so a
+/// term rendered here and the same term rendered by the native serializers are
+/// the same bytes. It is total over [`TermValue`]: a triple term whose predicate
+/// is not an IRI is written as what it is.
 ///
 /// N-Triples terms are self-delimiting — `<…>` ends at the unescaped `>`, `_:…` at
 /// whitespace, `"…"` at the unescaped closing quote — which is what makes a
 /// two-term line like `subclass <C> <D>` unambiguous even though a literal's
 /// lexical form may contain a space.
-///
-/// A triple term the owned model cannot hold is written over a work list: its opening
-/// `<<( ` at once, then its subject next, with the separators, the predicate, the object
-/// and the closing ` )>>` held back in that order until the subject is written. Each of
-/// its components is written by the same rule, so a well-formed one goes through
-/// `display_term` whole.
 fn emit(term: &TermValue) -> String {
-    enum Piece<'t> {
-        Term(&'t TermValue),
-        Text(&'static str),
-    }
     let mut out = String::new();
-    let mut held: Vec<Piece<'_>> = Vec::new();
-    let mut next = Some(Piece::Term(term));
-    while let Some(piece) = next.take().or_else(|| held.pop()) {
-        let term = match piece {
-            Piece::Text(text) => {
-                out.push_str(text);
-                continue;
-            }
-            Piece::Term(term) => term,
-        };
-        let TermValue::Triple { s, p, o } = term else {
-            out.push_str(&emit_leaf(term));
-            continue;
-        };
-        match term.to_rdf_term().ok() {
-            Some(owned) => out.push_str(&display_term(&owned)),
-            // A triple term whose predicate is not an IRI — at THIS nesting level or
-            // any level nested inside `s`/`o` — is not a well-formed RDF triple, so
-            // the owned model cannot hold it anywhere along the chain. Rendering it
-            // structurally is the honest option: the caller sees what the term
-            // actually is, including the real offending predicate, rather than a
-            // fabricated empty IRI standing in for it.
-            None => {
-                out.push_str("<<( ");
-                held.extend([
-                    Piece::Text(" )>>"),
-                    Piece::Term(o),
-                    Piece::Text(" "),
-                    Piece::Term(p),
-                    Piece::Text(" "),
-                ]);
-                next = Some(Piece::Term(s));
-            }
-        }
-    }
+    write_term_value(term, &mut out);
     out
-}
-
-/// [`emit`] for a term that is not a triple term.
-fn emit_leaf(term: &TermValue) -> String {
-    match term.to_rdf_term().ok() {
-        Some(owned) => display_term(&owned),
-        None => unreachable!("a term that is not a triple term has an owned twin"),
-    }
 }
 
 /// Parse ONE N-Triples term — an IRI or a blank node — from `text`.

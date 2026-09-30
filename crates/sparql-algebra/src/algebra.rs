@@ -26,6 +26,9 @@ use crate::ast::{
     Variable,
 };
 use crate::tree::{Args, Chain, Child, NonEmpty};
+use purrdf_lex::term_syntax::{
+    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri, write_literal,
+};
 
 /// The closed SEP-0009 function registry and its argument-count signatures,
 /// re-exported so a consumer that matches on [`Function::Cdt`] can name
@@ -444,16 +447,27 @@ impl core::fmt::Display for Update {
     }
 }
 
+/// Append a [`NamedNodePattern`] in SPARQL surface syntax (`<iri>` or `?var`).
+fn write_named_node_pattern(n: &NamedNodePattern, out: &mut String) {
+    match n {
+        NamedNodePattern::NamedNode(node) => write_iri(node.as_str(), out),
+        NamedNodePattern::Variable(v) => {
+            out.push('?');
+            out.push_str(v.as_str());
+        }
+    }
+}
+
 /// Render an [`NamedNodePattern`] in SPARQL surface syntax (`<iri>` or `?var`).
 fn fmt_named_node_pattern(n: &NamedNodePattern) -> String {
-    match n {
-        NamedNodePattern::NamedNode(node) => format!("<{}>", node.as_str()),
-        NamedNodePattern::Variable(v) => format!("?{}", v.as_str()),
-    }
+    let mut out = String::new();
+    write_named_node_pattern(n, &mut out);
+    out
 }
 
 /// Render a [`TriplePattern`] as `s p o`, its quoted triple terms `<<( s p o )>>`,
 /// over a work list: a term nested to any depth is written without recursion.
+/// Every constant is spelled by [`purrdf_lex::term_syntax`].
 fn fmt_triple_pattern(t: &TriplePattern) -> String {
     enum Part<'a> {
         Text(&'static str),
@@ -471,26 +485,27 @@ fn fmt_triple_pattern(t: &TriplePattern) -> String {
     while let Some(part) = stack.pop() {
         match part {
             Part::Text(text) => out.push_str(text),
-            Part::Predicate(p) => out.push_str(&fmt_named_node_pattern(p)),
+            Part::Predicate(p) => write_named_node_pattern(p, &mut out),
             Part::Term(term) => match term {
-                TermPattern::NamedNode(n) => {
-                    out.push('<');
-                    out.push_str(n.as_str());
-                    out.push('>');
-                }
-                TermPattern::BlankNode(b) => {
-                    out.push_str("_:");
-                    out.push_str(b.as_str());
-                }
-                TermPattern::Literal(l) => out.push_str(&fmt_literal(l)),
+                TermPattern::NamedNode(n) => write_iri(n.as_str(), &mut out),
+                TermPattern::BlankNode(b) => write_blank(b.as_str(), &mut out),
+                TermPattern::Literal(l) => write_literal(
+                    l.value(),
+                    l.datatype().as_str(),
+                    l.language(),
+                    l.direction().map(crate::ast::BaseDirection::as_str),
+                    &mut out,
+                ),
                 TermPattern::Variable(v) => {
                     out.push('?');
                     out.push_str(v.as_str());
                 }
                 TermPattern::Triple(inner) => {
-                    out.push_str("<<( ");
+                    out.push_str(TRIPLE_TERM_OPEN);
+                    out.push(' ');
                     stack.extend([
-                        Part::Text(" )>>"),
+                        Part::Text(TRIPLE_TERM_CLOSE),
+                        Part::Text(" "),
                         Part::Term(&inner.object),
                         Part::Text(" "),
                         Part::Predicate(&inner.predicate),
@@ -502,15 +517,6 @@ fn fmt_triple_pattern(t: &TriplePattern) -> String {
         }
     }
     out
-}
-
-/// Render a [`Literal`] in SPARQL surface syntax.
-fn fmt_literal(l: &Literal) -> String {
-    match (l.language(), l.direction()) {
-        (Some(lang), Some(dir)) => format!("{:?}@{lang}--{}", l.value(), dir.as_str()),
-        (Some(lang), None) => format!("{:?}@{lang}", l.value()),
-        (None, _) => format!("{:?}^^<{}>", l.value(), l.datatype().as_str()),
-    }
 }
 
 /// Render a `DELETE`/`INSERT` template (a list of [`QuadPattern`]s) as the body of

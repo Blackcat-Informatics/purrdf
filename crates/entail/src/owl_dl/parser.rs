@@ -68,7 +68,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use purrdf_core::{DatasetView, TermValue};
+use purrdf_core::collections::{SoleObject, walk_rdf_list};
+use purrdf_core::{DatasetView, ListError, TermValue};
 
 use purrdf_datalog::StopSignal;
 use purrdf_xsd::XsdDatatype;
@@ -352,6 +353,36 @@ impl Vocab {
 /// objects; deterministic lookups). Shared by the knowledge-base build and the query
 /// class-expression view.
 pub(crate) type TripleIndex = BTreeMap<u32, BTreeMap<u32, Vec<u32>>>;
+
+/// The members of the RDF collection headed by `head` in `index`, by the strict walker
+/// ([`walk_rdf_list`]): the one reading of a collection the DL parser and the profile
+/// certifier share.
+///
+/// # Errors
+///
+/// [`ListError`] when the collection is malformed.
+pub(crate) fn index_list(
+    index: &TripleIndex,
+    v: &Vocab,
+    head: u32,
+) -> Result<Vec<u32>, ListError<u32>> {
+    let objects = |cell: u32, predicate: u32| {
+        SoleObject::of(
+            index
+                .get(&cell)
+                .and_then(|preds| preds.get(&predicate))
+                .into_iter()
+                .flatten()
+                .copied(),
+        )
+    };
+    walk_rdf_list(
+        head,
+        Some(v.nil),
+        |cell| objects(cell, v.first),
+        |cell| objects(cell, v.rest),
+    )
+}
 
 /// Insert `(s, p, o)` into `index`.
 pub(crate) fn index_insert(index: &mut TripleIndex, s: u32, p: u32, o: u32) {
@@ -968,25 +999,11 @@ impl<'a> CeExtractor<'a> {
         }
     }
 
-    /// Walk an RDF list to its member node ids.
+    /// Walk an RDF list to its member node ids ([`index_list`]).
     pub(crate) fn node_list(&self, head: u32) -> Result<Vec<u32>, EntailError> {
-        let mut out = Vec::new();
-        let mut seen = BTreeSet::new();
-        let mut cur = head;
-        while cur != self.v.nil {
-            self.poll()?;
-            if !seen.insert(cur) {
-                return Err(EntailError::Parse("cyclic RDF list".to_owned()));
-            }
-            let first = self
-                .get(cur, self.v.first)
-                .ok_or_else(|| EntailError::Parse("RDF list cell without rdf:first".to_owned()))?;
-            out.push(first);
-            cur = self
-                .get(cur, self.v.rest)
-                .ok_or_else(|| EntailError::Parse("RDF list cell without rdf:rest".to_owned()))?;
-        }
-        Ok(out)
+        self.poll()?;
+        index_list(self.index, self.v, head)
+            .map_err(|error| EntailError::Parse(format!("malformed RDF list: {}", error.kind)))
     }
 
     /// Walk an RDF list of class expressions.
@@ -1327,7 +1344,7 @@ fn axiom_node(
         // `owl:distinctMembers`, and an ontology may carry either.
         for list_property in [v.members, v.distinct_members] {
             ce.poll()?;
-            let Some(head) = first_object(ce, node, list_property) else {
+            let Some(head) = ce.get(node, list_property) else {
                 continue;
             };
             let members = ce.node_list(head)?;
@@ -1343,7 +1360,7 @@ fn axiom_node(
             }
         }
     } else if axiom_class == v.all_disjoint_classes {
-        if let Some(head) = first_object(ce, node, v.members) {
+        if let Some(head) = ce.get(node, v.members) {
             let members = ce.node_list(head)?;
             let concepts: Vec<Concept> = members
                 .iter()
@@ -1362,7 +1379,7 @@ fn axiom_node(
             }
         }
     } else if axiom_class == v.all_disjoint_properties {
-        if let Some(head) = first_object(ce, node, v.members) {
+        if let Some(head) = ce.get(node, v.members) {
             let members = ce.node_list(head)?;
             for (index, &left) in members.iter().enumerate() {
                 for &right in &members[index + 1..] {
@@ -1396,13 +1413,14 @@ fn negative_assertion(
 ) -> Result<(), EntailError> {
     ce.poll()?;
     let (Some(source), Some(property)) = (
-        first_object(ce, node, v.source_individual),
-        first_object(ce, node, v.assertion_property),
+        ce.get(node, v.source_individual),
+        ce.get(node, v.assertion_property),
     ) else {
         return Ok(());
     };
-    let Some(target) = first_object(ce, node, v.target_individual)
-        .or_else(|| first_object(ce, node, v.target_value))
+    let Some(target) = ce
+        .get(node, v.target_individual)
+        .or_else(|| ce.get(node, v.target_value))
     else {
         return Ok(());
     };
@@ -1414,11 +1432,6 @@ fn negative_assertion(
     acc.abox_types.push((source, cid));
     acc.individuals.insert(source);
     Ok(())
-}
-
-/// The first object of `(subject, predicate, ·)` in the extractor's own index.
-fn first_object(ce: &CeExtractor<'_>, subject: u32, predicate: u32) -> Option<u32> {
-    ce.index.get(&subject)?.get(&predicate)?.first().copied()
 }
 
 /// Interpret one `(s, p, o)` triple as an axiom / ABox fact.

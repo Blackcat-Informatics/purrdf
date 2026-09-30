@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
-use roxmltree::{Document, Node};
+use purrdf_lex::xml::{Document, Dtd, Node, Options};
 
 use crate::{
     Atom, EntailError, Fact, Materialization, Regime, RifTerm, Rule, RuleSet, materialize,
@@ -121,8 +121,19 @@ where
 }
 
 fn parse_document(text: &str, base: &BaseScope) -> Result<ParsedRifDocument, String> {
-    // RIF imports are resolved by the caller; XML DTD/entity expansion is never needed.
-    let document = Document::parse(text).map_err(|error| error.to_string())?;
+    // The W3C RIF documents declare their namespace IRIs as internal general entities
+    // (`<!DOCTYPE Document [ <!ENTITY rif "…"> … ]>`, used as `xmlns="&rif;"` and
+    // `type="&xs;string"`), which XML 1.0 §5.1 obliges even a non-validating processor to
+    // expand. The internal subset is read for exactly that; an external subset, an
+    // external entity and a parameter entity are still refused, and nothing is fetched.
+    let options = Options {
+        dtd: Dtd::internal_subset(),
+        ..Options::default()
+    };
+    let document = Document::parse_with_options(text, options).map_err(|error| {
+        let (line, column) = error.line_column(text);
+        format!("{error} (line {line}, column {column})")
+    })?;
     let root = document.root_element();
     require(&root, "Document")?;
     // `xml:base` on the document element scopes the whole document.
@@ -616,16 +627,39 @@ mod tests {
     }
 
     #[test]
-    fn rejects_dtds() {
-        let text = RIF.replacen(
-            "<Document",
-            "<!DOCTYPE Document [<!ENTITY x \"expanded\">]><Document",
-            1,
+    fn expands_internal_entities_and_refuses_external_ones() {
+        // The W3C RIF documents spell their namespaces through internal entities.
+        let internal = RIF
+            .replacen(
+                "<Document xmlns=\"http://www.w3.org/2007/rif#\"",
+                "<!DOCTYPE Document [<!ENTITY rif \"http://www.w3.org/2007/rif#\">\
+                 <!ENTITY xs \"http://www.w3.org/2001/XMLSchema#\">]><Document xmlns=\"&rif;\"",
+                1,
+            )
+            .replace(
+                "type=\"http://www.w3.org/2001/XMLSchema#string\"",
+                "type=\"&xs;string\"",
+            );
+        assert_ne!(
+            internal, RIF,
+            "the fixture spells its namespaces through entities"
         );
-        assert!(matches!(
-            parse_rif_xml(&text, None),
-            Err(EntailError::Parse(_))
-        ));
+        assert_eq!(
+            parse_rif_xml(&internal, None).unwrap(),
+            parse_rif_xml(RIF, None).unwrap(),
+            "an internal entity reads as its replacement text"
+        );
+        // An external entity would be a fetch: refused, as is an external subset.
+        for doctype in [
+            "<!DOCTYPE Document [<!ENTITY x SYSTEM \"https://example.org/x\">]>",
+            "<!DOCTYPE Document SYSTEM \"https://example.org/rif.dtd\">",
+        ] {
+            let text = RIF.replacen("<Document", &format!("{doctype}<Document"), 1);
+            assert!(
+                matches!(parse_rif_xml(&text, None), Err(EntailError::Parse(_))),
+                "{doctype}"
+            );
+        }
     }
 
     #[test]

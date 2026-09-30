@@ -107,8 +107,9 @@ use crate::lists::{CLASH_RELATION, ListIndex, is_internal};
 use crate::report::{InconsistencyWitness, InconsistentRun, ReasoningReport, WitnessTriple};
 use crate::report::{RunStats, TerminationCertificate};
 use crate::surrogates::SurrogateIndex;
-use crate::vocab::{XSD_NONNEGATIVEINTEGER, XSD_STRING};
+use crate::vocab::XSD_NONNEGATIVEINTEGER;
 use crate::{EntailError, Regime};
+use purrdf_lex::term_syntax::{write_iri, write_literal};
 
 /// Every LITERAL constant the declared calculus names, as `(lexical form, datatype IRI)`.
 ///
@@ -1326,7 +1327,7 @@ impl Terms {
 ///
 /// * the four kinds are told apart by their first byte — `<` for an IRI, `_` for a blank
 ///   node, `"` for a literal, and `<<(` for a triple term, whose second byte is a `<` no
-///   IRI surface can carry because [`write_iri_escaped`] escapes `<` and `>`;
+///   IRI surface can carry because [`write_iri`] escapes `<` and `>`;
 /// * an IRI's surface is its escaped text bracketed once, and the escape is injective;
 /// * a blank node's scope is decimal digits terminated by the `.` that no digit can be,
 ///   and the label is the verbatim remainder;
@@ -1365,16 +1366,12 @@ fn write_surface(value: &TermValue, out: &mut String) {
 
 /// Append the surface of a term that is not a triple term to `out`.
 ///
-/// Out of line, so the IRI and literal escape calls are one compiled function
-/// rather than a fragment of [`write_surface`]'s work list.
+/// An IRI and a literal are [`purrdf_lex::term_syntax`]'s canonical spelling, the
+/// bytes canonical N-Quads writes; only a blank node differs (see [`surface_of`]).
 #[inline(never)]
 fn write_leaf_surface(value: &TermValue, out: &mut String) {
     match value {
-        TermValue::Iri(iri) => {
-            out.push('<');
-            write_iri_escaped(iri, out);
-            out.push('>');
-        }
+        TermValue::Iri(iri) => write_iri(iri, out),
         TermValue::Blank { label, scope } => {
             // Internal store-surface identity key (scope-first form; injective
             // because the digit-only scope ends at the first dot) plus the
@@ -1387,149 +1384,14 @@ fn write_leaf_surface(value: &TermValue, out: &mut String) {
             datatype,
             language,
             direction,
-        } => {
-            out.push('"');
-            write_literal_escaped(lexical_form, out);
-            out.push('"');
-            if let Some(language) = language {
-                // Language and direction determine the datatype by C0.1 — the
-                // builder re-derives it — so spelling it out
-                // would add bytes that carry no identity.
-                out.push('@');
-                out.push_str(language);
-                if let Some(direction) = direction {
-                    out.push_str("--");
-                    out.push_str(direction.as_str());
-                }
-            } else if datatype != XSD_STRING {
-                out.push_str("^^<");
-                write_iri_escaped(datatype, out);
-                out.push('>');
-            }
-        }
+        } => write_literal(
+            lexical_form,
+            datatype,
+            language.as_deref(),
+            direction.map(purrdf_core::RdfTextDirection::as_str),
+            out,
+        ),
         TermValue::Triple { .. } => unreachable!("a triple term is written from its parts"),
-    }
-}
-
-/// Escape an IRI for a `<…>` surface, matching canonical N-Quads.
-///
-/// Every character the IRIREF grammar forbids becomes a `\uXXXX` escape, so no IRI's
-/// surface can carry a bare `<` or `>` — which is what keeps a bracketed IRI and a
-/// `<<( … )>>` triple term apart. A spec `rdf:`/`rdfs:`/`owl:` IRI contains none of them,
-/// so a clause constant's surface is its plain bracketed text.
-///
-/// Both the membership question and the emission are
-/// [`purrdf_core::iri_escape::push_escaped`], the one place this workspace answers
-/// them and the writer canonical N-Quads uses. This function once spelled the set out
-/// for itself as `is_control() || ' '` plus the nine delimiters, and then its own
-/// per-`char` emission loop — the same law, reached independently. Agreeing copies are
-/// not confirmations; they are chances to disagree later.
-fn write_iri_escaped(iri: &str, out: &mut String) {
-    purrdf_core::iri_escape::push_escaped(iri, out);
-}
-
-/// Escape a literal's lexical form for a `"…"` surface, matching canonical N-Quads.
-///
-/// The canonical N-Quads literal law is
-/// [`purrdf_core::ir::canon::write_literal_escaped`], and this surface is defined
-/// to match it, so it delegates rather than transcribing the `ECHAR` table again.
-fn write_literal_escaped(value: &str, out: &mut String) {
-    purrdf_core::ir::canon::write_literal_escaped(value, out);
-}
-
-#[cfg(test)]
-mod escape_tests {
-    use super::{write_iri_escaped, write_literal_escaped};
-    use std::fmt::Write as _;
-
-    /// The per-`char` writers this module carried before it delegated, kept
-    /// verbatim as the oracle: every surface key is whatever these produced.
-    fn reference_iri(iri: &str, out: &mut String) {
-        for ch in iri.chars() {
-            if purrdf_core::iri_escape::is_iriref_escape_required(ch) {
-                reference_u_escape(ch, out);
-            } else {
-                out.push(ch);
-            }
-        }
-    }
-
-    fn reference_literal(value: &str, out: &mut String) {
-        for ch in value.chars() {
-            match ch {
-                '\\' => out.push_str("\\\\"),
-                '"' => out.push_str("\\\""),
-                '\n' => out.push_str("\\n"),
-                '\r' => out.push_str("\\r"),
-                '\t' => out.push_str("\\t"),
-                '\u{08}' => out.push_str("\\b"),
-                '\u{0c}' => out.push_str("\\f"),
-                c if (c as u32) < 0x20 || c as u32 == 0x7f => reference_u_escape(c, out),
-                c => out.push(c),
-            }
-        }
-    }
-
-    fn reference_u_escape(ch: char, out: &mut String) {
-        let cp = ch as u32;
-        if cp <= 0xFFFF {
-            let _ = write!(out, "\\u{cp:04X}");
-        } else {
-            let _ = write!(out, "\\U{cp:08X}");
-        }
-    }
-
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        const fn next(&mut self) -> u64 {
-            purrdf_testkit::rng::splitmix64_next(&mut self.0)
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            usize::try_from(self.next() % n as u64).expect("below n")
-        }
-    }
-
-    #[test]
-    fn delegated_writers_agree_with_the_per_char_writers() {
-        // Every ASCII scalar (every special byte), the whole block led by 0xC2
-        // (the C1 controls), and non-ASCII in every UTF-8 width.
-        let mut alphabet: Vec<char> = (0_u8..0x80).map(char::from).collect();
-        alphabet.extend(('\u{80}'..='\u{BF}').chain([
-            '\u{E9}',
-            '\u{2028}',
-            '\u{FFFD}',
-            '\u{FFFF}',
-            '\u{1F408}',
-            '\u{10FFFF}',
-        ]));
-        let mut rng = SplitMix(0x00E7_7A11_E5CA_9E00);
-        let mut changed = 0_usize;
-        for len in (0..=70).chain([127, 128, 129, 1000]) {
-            for _ in 0..40 {
-                let value: String = (0..len)
-                    .map(|_| {
-                        if rng.below(5) == 0 {
-                            alphabet[rng.below(alphabet.len())]
-                        } else {
-                            'q'
-                        }
-                    })
-                    .collect();
-                let (mut got, mut expected) = (String::new(), String::new());
-                write_iri_escaped(&value, &mut got);
-                reference_iri(&value, &mut expected);
-                assert_eq!(got, expected, "iri {value:?}");
-                changed += usize::from(got != value);
-                let (mut got, mut expected) = (String::new(), String::new());
-                write_literal_escaped(&value, &mut got);
-                reference_literal(&value, &mut expected);
-                assert_eq!(got, expected, "literal {value:?}");
-            }
-        }
-        assert!(changed > 0, "escapes were exercised");
     }
 }
 
@@ -1933,7 +1795,7 @@ mod tests {
         let error = close(&ds, Regime::OwlRl, &EvalOptions::default(), None)
             .expect_err("a malformed collection is refused");
         let rendered = error.to_string();
-        assert!(rendered.contains("carries no rdf:rest"), "{rendered}");
+        assert!(rendered.contains("has no rdf:rest"), "{rendered}");
         assert!(rendered.contains(EX_L0), "{rendered}");
         // The RDFS lane says nothing about `owl:intersectionOf`, so the same graph is
         // ordinary data there and closes without complaint.
@@ -1952,7 +1814,10 @@ mod tests {
         ]);
         let error = close(&ds, Regime::OwlRl, &EvalOptions::default(), None)
             .expect_err("a cycle is refused");
-        assert!(error.to_string().contains("cyclic"), "{error}");
+        assert!(
+            error.to_string().contains("rdf:rest chain returns"),
+            "{error}"
+        );
     }
 
     /// A BLANK NODE IN THE INPUT IS ONE BLANK NODE IN THE CLOSURE, in every position —
@@ -2164,7 +2029,7 @@ mod term_walk_tests {
     use purrdf_core::backend::TermFactory as _;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermBox, TermId, TermRef, TermValue};
 
-    use super::{surface_of, write_iri_escaped};
+    use super::surface_of;
 
     fn reference_value(ds: &RdfDataset, id: TermId) -> TermValue {
         match ds.resolve(id) {
@@ -2186,9 +2051,8 @@ mod term_walk_tests {
                 reference_surface(o)
             ),
             TermValue::Iri(iri) => {
-                let mut out = String::from("<");
-                write_iri_escaped(iri, &mut out);
-                out.push('>');
+                let mut out = String::new();
+                purrdf_lex::term_syntax::write_iri(iri, &mut out);
                 out
             }
             leaf => surface_of(leaf),

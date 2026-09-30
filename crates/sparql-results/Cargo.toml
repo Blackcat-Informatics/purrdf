@@ -32,6 +32,8 @@ name = "purrdf_sparql_results"
 # The hex digit reader behind the JSON `\uXXXX` escape.
 purrdf-hash = { workspace = true }
 purrdf-core = { workspace = true }
+# The workspace's one XML reader, for SPARQL Results XML documents.
+purrdf-lex = { workspace = true }
 # The IRI/URI value space: validates a caller-supplied `ProvenanceNamespace`
 # namespace IRI as an absolute RFC-3987 IRI (see `model::ProvenanceNamespace::new`).
 # Also the language-tag grammar (`langtag`) the SRJ/SRX READERS hold an incoming

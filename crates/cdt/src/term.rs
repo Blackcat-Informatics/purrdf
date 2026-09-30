@@ -241,7 +241,7 @@ impl CdtTerm {
     /// )?;
     /// assert_eq!(
     ///     CdtValue::list(vec![triple])?.canonical_lexical(),
-    ///     "[<<(<http://example.org/s> <http://example.org/p> null)>>]"
+    ///     "[<<( <http://example.org/s> <http://example.org/p> null )>>]"
     /// );
     /// # Ok::<(), purrdf_cdt::CdtError>(())
     /// ```
