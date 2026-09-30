@@ -280,11 +280,6 @@ use purrdf_iri::vocab::rdf::NS as RDF_NS;
 use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 use purrdf_xsd::datatype::XSD_NS;
 
-/// Return whether `direction` is a valid RDF 1.2 base direction token.
-fn is_literal_direction(direction: &str) -> bool {
-    RdfTextDirection::from_str_token(direction).is_some()
-}
-
 /// Compare two term-id sequences by their rendered text, position by position.
 ///
 /// The sequences are the same length at every call site. `left` and `right` are scratch
@@ -464,8 +459,10 @@ fn write_term_in<W: TextOut + ?Sized>(
                 if let Some(lang) = &t.lang {
                     out.push('@');
                     out.push_str(lang);
-                    if let Some(direction) =
-                        t.direction.as_deref().filter(|d| is_literal_direction(d))
+                    if let Some(direction) = t
+                        .direction
+                        .as_deref()
+                        .filter(|d| RdfTextDirection::from_str_token(d).is_some())
                     {
                         out.push_str("--");
                         out.push_str(direction);

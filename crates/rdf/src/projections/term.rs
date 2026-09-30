@@ -10,42 +10,13 @@ use purrdf_lex::json::{Object, Value};
 
 use super::util::canonical_json_bounded;
 use super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
+use crate::direction_json::{direction_from_json, direction_to_json};
 use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
-use purrdf_lex::json_string_enum;
 
 use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
 
-/// Portable RDF 1.2 literal base direction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ProjectionDirection {
-    /// Left-to-right.
-    Ltr,
-    /// Right-to-left.
-    Rtl,
-}
-
-json_string_enum!(ProjectionDirection {
-    Ltr => "ltr",
-    Rtl => "rtl",
-});
-
-impl From<RdfTextDirection> for ProjectionDirection {
-    fn from(value: RdfTextDirection) -> Self {
-        match value {
-            RdfTextDirection::Ltr => Self::Ltr,
-            RdfTextDirection::Rtl => Self::Rtl,
-        }
-    }
-}
-
-impl From<ProjectionDirection> for RdfTextDirection {
-    fn from(value: ProjectionDirection) -> Self {
-        match value {
-            ProjectionDirection::Ltr => Self::Ltr,
-            ProjectionDirection::Rtl => Self::Rtl,
-        }
-    }
-}
+/// Portable RDF 1.2 literal base direction: the one RDF 1.2 base-direction type.
+pub type ProjectionDirection = RdfTextDirection;
 
 /// Dataset-independent, serialization-stable RDF 1.2 term identity.
 ///
@@ -167,7 +138,7 @@ impl ProjectionTerm {
                 lexical_form: lexical.clone(),
                 datatype: Some(datatype.clone()),
                 language: language.clone(),
-                direction: direction.map(Into::into),
+                direction: *direction,
             }),
             Self::Triple {
                 subject,
@@ -239,7 +210,7 @@ impl ProjectionTerm {
                     lexical: lexical.to_owned(),
                     datatype: datatype.to_owned(),
                     language: language.map(str::to_owned),
-                    direction: direction.map(Into::into),
+                    direction,
                 })
             }
             TermRef::Triple { s, p, o } => {
@@ -301,7 +272,7 @@ impl ProjectionTerm {
                 lexical: lexical_form.clone(),
                 datatype: datatype.clone(),
                 language: language.clone(),
-                direction: direction.map(Into::into),
+                direction: *direction,
             },
             TermValue::Triple { s, p, o } => {
                 Self::validate_depth(limits, depth)?;
@@ -341,7 +312,7 @@ impl ProjectionTerm {
                 lexical_form: lexical.clone(),
                 datatype: datatype.clone(),
                 language: language.clone(),
-                direction: direction.map(Into::into),
+                direction: *direction,
             },
             Self::Triple {
                 subject,
@@ -452,7 +423,7 @@ impl ProjectionTerm {
                             "language tag must use lowercase canonical form",
                         ));
                     }
-                    let expected = RdfLiteral::language_datatype_iri(direction.map(Into::into));
+                    let expected = RdfLiteral::language_datatype_iri(*direction);
                     if datatype != expected {
                         return Err(ProjectionError::term(format!(
                             "language-tagged literals must use datatype {expected}"
@@ -513,7 +484,7 @@ impl FromJson for ProjectionTerm {
                 lexical: fields.required("lexical")?,
                 datatype: fields.required("datatype")?,
                 language: fields.optional("language")?,
-                direction: fields.optional("direction")?,
+                direction: fields.optional_with("direction", direction_from_json)?,
             },
             _ => Self::Triple {
                 subject: fields.required("subject")?,
@@ -546,7 +517,7 @@ impl ToJson for ProjectionTerm {
                 .with("lexical", lexical.as_str())
                 .with("datatype", datatype.as_str())
                 .with("language", language.to_json())
-                .with("direction", direction.to_json()),
+                .with("direction", direction_to_json(*direction)),
             Self::Triple {
                 subject,
                 predicate,

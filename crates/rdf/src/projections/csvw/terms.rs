@@ -5,6 +5,7 @@
 
 use super::super::selection::{GraphSelection, SubjectSelector};
 use super::table::table_fragment_iri;
+use crate::direction_json::{direction_from_json, direction_to_json};
 use crate::projections::loss::record_row_loss;
 use crate::projections::source_rows::{SourceAnnotation, SourceQuad, SourceReifier};
 use crate::projections::util::reject_duplicates;
@@ -17,9 +18,7 @@ use purrdf_core::loss::{
     LOSS_CSVW_TERMS_REIFIER_DROPPED, LOSS_CSVW_TERMS_SUBJECT_UNREPRESENTABLE,
     LOSS_CSVW_TERMS_SUBJECT_UNSELECTED,
 };
-use purrdf_core::{
-    DatasetView, LossLedger, RdfTextDirection, check_ledger_sound, rdf_to_csvw_terms_loss_ledger,
-};
+use purrdf_core::{DatasetView, LossLedger, check_ledger_sound, rdf_to_csvw_terms_loss_ledger};
 use purrdf_lex::json::{Object, Value};
 
 use super::config::CsvwConfig;
@@ -586,7 +585,7 @@ impl FromJson for CsvwTermsValueMode {
             Self::Literal {
                 datatype: fields.required("datatype")?,
                 language: fields.optional("language")?,
-                direction: fields.optional("direction")?,
+                direction: fields.optional_with("direction", direction_from_json)?,
             }
         };
         fields.deny_unknown()?;
@@ -608,7 +607,7 @@ impl ToJson for CsvwTermsValueMode {
                 .with("kind", "literal")
                 .with("datatype", datatype.to_json())
                 .with("language", language.to_json())
-                .with("direction", direction.to_json()),
+                .with("direction", direction_to_json(*direction)),
         })
     }
 }
@@ -1495,7 +1494,7 @@ fn canonical_dialect() -> CsvwDialect {
 }
 
 fn direction_to_csvw(direction: ProjectionDirection) -> CsvwTextDirection {
-    RdfTextDirection::from(direction).into()
+    direction.into()
 }
 
 fn validate_datatype(datatype: &CsvwDatatype) -> Result<(), ProjectionError> {

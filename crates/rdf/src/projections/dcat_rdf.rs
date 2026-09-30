@@ -8,8 +8,7 @@ use crate::projections::util::validate_portable_bound;
 use std::sync::Arc;
 
 use purrdf_core::{
-    DatasetView, LossLedger, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection,
-    check_ledger_sound,
+    DatasetView, LossLedger, RdfDataset, RdfDatasetBuilder, RdfLiteral, check_ledger_sound,
 };
 use purrdf_lex::json::{Object, Value};
 
@@ -556,7 +555,7 @@ fn rdf_literal(value: &ResearchText) -> RdfLiteral {
         lexical_form: value.value.clone(),
         datatype: Some(value.datatype.clone()),
         language: value.language.clone(),
-        direction: value.direction.map(RdfTextDirection::from),
+        direction: value.direction,
     }
 }
 

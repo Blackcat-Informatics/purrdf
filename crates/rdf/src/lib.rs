@@ -101,6 +101,7 @@ pub mod viz;
 // denial-of-service envelope.
 mod nesting;
 // Numeric conversions for the RDF codec boundaries.
+mod direction_json;
 mod json_number;
 
 // Mirror the kernel's root-level re-exports so `purrdf::RdfTerm`,

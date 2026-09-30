@@ -22,7 +22,7 @@ use purrdf_core::loss::{
 use purrdf_lex::json::record::{Owned, into_owned};
 use purrdf_lex::json::{Object, Value};
 
-use super::super::{ProjectionDirection, ProjectionError, validate_absolute_iri};
+use super::super::{ProjectionError, validate_absolute_iri};
 use super::json::{OfflineJsonLdContext, json_pointer, record_loss};
 use super::{ResearchObjectConfig, ResearchObjectRoles, ResearchRole, ResearchText, ResearchValue};
 
@@ -158,11 +158,7 @@ pub(super) fn text_object(value: &ResearchText) -> Value {
     if let Some(direction) = value.direction {
         object.insert(
             "@direction".to_owned(),
-            Value::String(
-                purrdf_core::RdfTextDirection::from(direction)
-                    .as_str()
-                    .to_owned(),
-            ),
+            Value::String(direction.as_str().to_owned()),
         );
     }
     Value::Object(object)
@@ -411,7 +407,7 @@ pub(super) trait ProfileReader {
                 .as_str()
                 .and_then(purrdf_core::RdfTextDirection::from_str_token)
             {
-                Some(direction) => Some(ProjectionDirection::from(direction)),
+                Some(direction) => Some(direction),
                 None => {
                     self.unsupported(&json_pointer(pointer, "@direction"));
                     return Ok(None);

@@ -70,6 +70,16 @@ under Changed and Fixed where a longer account helps.
 - **rdf:** `JsonLdDirection` is the one base-direction type; its variants are
   `Ltr`/`Rtl` rather than `LeftToRight`/`RightToLeft`. `VizTextDirection` is
   a type alias of the same type rather than an enum of its own.
+- **rdf:** `ProjectionDirection` (and with it the direction of a `ProjectionTerm`)
+  is a type alias of the same base-direction type, so its `ltr`/`rtl` JSON
+  spelling and parse come from `purrdf_events::TextDirection` and the JSON
+  layer keeps one adapter (`direction_to_json`/`direction_from_json`) shared
+  with the visualization documents. `CsvwTextDirection` and `CsvwTableDirection`
+  keep their CSVW-only `auto`/`inherit` members and take `ltr`/`rtl` through
+  `TextDirection`; serialized bytes are unchanged. The native codec seam's
+  private `is_literal_direction` is gone (`TextDirection::from_str_token` at its
+  one caller), and the ledger job `text-direction` now names
+  `purrdf_gts::model::is_literal_direction` as the one predicate.
 - **jsonschema:** `EvaluationError::cause` is an `EvaluationCause` rather than
   a `PatternError`.
 - **retrieval, core:** `PLAN_ID_DOMAIN`, `FUSION_PROFILE_ID_DOMAIN`,

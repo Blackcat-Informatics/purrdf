@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use crate::direction_json::direction_to_json;
 use crate::projections::util::reject_duplicate_keys;
 use std::collections::BTreeSet;
 
@@ -418,7 +419,7 @@ impl ResearchText {
             .with("value", self.value.as_str())
             .with("datatype", self.datatype.as_str())
             .with("language", self.language.to_json())
-            .with("direction", self.direction.to_json())
+            .with("direction", direction_to_json(self.direction))
     }
 }
 

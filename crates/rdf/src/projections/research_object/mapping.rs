@@ -1065,7 +1065,7 @@ fn push_texts(
             lexical_form: value.value.clone(),
             datatype: Some(value.datatype.clone()),
             language: value.language.clone(),
-            direction: value.direction.map(Into::into),
+            direction: value.direction,
         });
         builder.push_quad(subject, predicate, object, None);
     }

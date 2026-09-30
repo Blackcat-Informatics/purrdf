@@ -22,6 +22,7 @@
 //! Reading refuses a member the form does not declare, a repeated member, a missing
 //! required member, a value of the wrong JSON type, and an unknown variant name.
 
+use crate::direction_json::{direction_from_json, direction_to_json};
 use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
 use purrdf_lex::json::{Object, Value};
 
@@ -37,7 +38,7 @@ use super::{
     VizSceneLabel, VizSceneNode, VizSceneNodeKind, VizSceneTable, VizSceneTableCell,
     VizSceneTableRow, VizSemanticRef, VizSpec, VizStatement, VizStatementId, VizSvgDocument,
     VizSvgOptions, VizTable, VizTableField, VizTableRow, VizTerm, VizTermId, VizTermValue,
-    VizTextDirection, VizValueRef, VizVocabularyMapping,
+    VizValueRef, VizVocabularyMapping,
 };
 
 impl From<DecodeError> for VizError {
@@ -71,27 +72,6 @@ viz_identifier_json!(
     VizReferenceId,
     VizGraphId,
 );
-
-/// A base direction as its lowercase token, `None` as `null`.
-fn direction_to_json(direction: Option<VizTextDirection>) -> Value {
-    direction.map_or(Value::Null, |direction| Value::from(direction.as_str()))
-}
-
-/// A base direction read from its lowercase token.
-fn direction_from_json(value: &Value) -> Result<VizTextDirection, DecodeError> {
-    let token = value
-        .as_str()
-        .ok_or_else(|| DecodeError::invalid_type(value, "enum VizTextDirection"))?;
-    VizTextDirection::from_str_token(token).ok_or_else(|| {
-        DecodeError::unknown_variant(
-            token,
-            &[
-                VizTextDirection::Ltr.as_str(),
-                VizTextDirection::Rtl.as_str(),
-            ],
-        )
-    })
-}
 
 impl ToJson for VizValueRef {
     fn to_json(&self) -> Value {
@@ -855,6 +835,7 @@ purrdf_lex::json_record!(VizSvgDocument as "struct VizSvgDocument" {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::viz::VizTextDirection;
 
     #[test]
     fn variants_spell_their_camel_case_names() {

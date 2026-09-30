@@ -728,9 +728,9 @@ reason = "The one XML reader lives in purrdf-lex, below purrdf-iri, and must che
 
 [[job]]
 id = "text-direction"
-summary = "The RDF 1.2 base direction: one enum, its ltr/rtl token and the parse of that token"
+summary = "The RDF 1.2 base direction: one enum, its ltr/rtl token, the parse of that token and the is-a-direction predicate; a second token table, JSON-enum spelling or predicate body (renamed or not) fails the gate"
 home = "purrdf_events::TextDirection"
-entry_points = ["purrdf_cdt::TextDirection", "purrdf_core::RdfTextDirection", "purrdf_sparql_algebra::ast::BaseDirection"]
+entry_points = ["purrdf_cdt::TextDirection", "purrdf_core::RdfTextDirection", "purrdf_sparql_algebra::ast::BaseDirection", "purrdf_gts::model::is_literal_direction"]
 spec = "RDF 1.2 Concepts section 3.3 (the base direction of a directional language-tagged string is ltr or rtl)"
 vectors = []
 bench = []

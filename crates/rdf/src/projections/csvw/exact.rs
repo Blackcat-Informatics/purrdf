@@ -14,8 +14,7 @@ use purrdf_lex::json::{Object, Value};
 
 use super::super::util::canonical_json_bounded;
 use super::super::{
-    ProjectionDirection, ProjectionError, ProjectionLimits, ProjectionPackage, ProjectionTerm,
-    stable_identifier,
+    ProjectionError, ProjectionLimits, ProjectionPackage, ProjectionTerm, stable_identifier,
 };
 use super::CsvwConfig;
 use purrdf_lex::json::record::ToJson;
@@ -514,9 +513,7 @@ fn write_terms(
                     })?
                     .to_owned(),
                 language.clone().unwrap_or_default(),
-                direction.map_or_else(String::new, |value| {
-                    RdfTextDirection::from(value).as_str().to_owned()
-                }),
+                direction.map_or_else(String::new, |value| value.as_str().to_owned()),
                 String::new(),
                 String::new(),
                 String::new(),
@@ -1045,7 +1042,7 @@ fn resolve_term_row(
                         ProjectionError::syntax("literal direction must be empty, ltr, or rtl")
                             .at_path(TERMS_PATH)
                     })?;
-                Some(ProjectionDirection::from(direction))
+                Some(direction)
             };
             ProjectionTerm::Literal {
                 lexical: row.value.clone(),

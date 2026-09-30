@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use crate::direction_json::{direction_from_json, direction_to_json};
 use crate::projections::util::absolute_iri;
 use crate::projections::util::validate_portable_bound;
 use std::collections::{BTreeMap, BTreeSet};
@@ -495,7 +496,7 @@ impl FromJson for VoidStaticValue {
                 _ => {
                     let lexical: String = fields.required("lexical")?;
                     let language: String = fields.required("language")?;
-                    let direction = fields.optional("direction")?;
+                    let direction = fields.optional_with("direction", direction_from_json)?;
                     fields.deny_unknown()?;
                     Self::language_literal(lexical, language, direction)
                 }
@@ -523,7 +524,7 @@ impl ToJson for VoidStaticValue {
                 .with("kind", "language-literal")
                 .with("lexical", lexical.as_str())
                 .with("language", language.as_str())
-                .with("direction", direction.to_json()),
+                .with("direction", direction_to_json(*direction)),
         })
     }
 }
