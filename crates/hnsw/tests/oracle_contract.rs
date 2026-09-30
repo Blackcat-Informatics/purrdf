@@ -21,6 +21,9 @@
 #[path = "support/purremb.rs"]
 mod purremb;
 
+#[path = "support/fixture.rs"]
+mod fixture;
+use fixture::seeded_matrix;
 use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
@@ -36,21 +39,9 @@ use purrdf_core::DistanceMetric;
 
 use purrdf_xsd::datatype::XSD_INTEGER;
 
-/// A deterministic fixture matrix.
-fn matrix(rows: usize, dims: usize, seed: u64) -> VectorMatrix {
-    let mut state = seed;
-    let mut data = Vec::with_capacity(rows * dims);
-    for _ in 0..rows * dims {
-        data.push(purrdf_testkit::rng::signed_unit_step_nonzero(
-            &mut state, 0.25,
-        ));
-    }
-    VectorMatrix::new(rows, dims, data).expect("valid fixture")
-}
-
 /// A space over a fresh fixture, plus the matrix its exact oracle ranks.
 fn fixture_space(rows: usize, dims: usize, params: Params) -> (VectorMatrix, Arc<HnswSpace>) {
-    let matrix = matrix(rows, dims, 0xabcd_ef01_2345_6789);
+    let matrix = seeded_matrix(rows, dims, 0xabcd_ef01_2345_6789, Some(0.25));
     let index = HnswIndex::build(matrix.clone(), &DistanceMetric::SquaredEuclidean, params)
         .expect("builds");
     let terms = (0..rows)

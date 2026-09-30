@@ -51,6 +51,12 @@ impl Config {
             ..Self::default()
         }
     }
+
+    /// The default configuration with `cases_from_env(default)` cases (see
+    /// [`cases_from_env`]): `PURRDF_PROP_CASES` when it is set, `default` otherwise.
+    pub fn with_env_cases(default: u32) -> Self {
+        Self::with_cases(cases_from_env(default))
+    }
 }
 
 /// `PURRDF_PROP_CASES` when it is set, `default` otherwise: the case count of

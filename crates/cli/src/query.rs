@@ -263,24 +263,6 @@ impl ViewOp for QueryOp<'_> {
     }
 }
 
-/// Build the statistical-aggregate registry `--aggregate-namespace` requests, or
-/// `None` when the flag is absent — the CLI's SOLE aggregate-registration surface.
-///
-/// `AggregateRegistry::register_statistical_aggregates` takes only an IRI namespace
-/// string, so it crosses this command-line boundary the same way `--property-fn-namespaces`
-/// would if this binary had a relations surface to declare one over: no callback, no
-/// per-aggregate marshaling. The general custom-aggregate seam
-/// (`purrdf_sparql_eval::agg_fn::AggregateRegistry::register`, an arbitrary
-/// `init`/`step`/`combine`/`finish` closure) is a Rust-host-only capability with no
-/// string-shaped surface at all — it genuinely cannot reach a command-line flag — and this
-/// binary does not attempt to expose it.
-pub(crate) fn build_aggregate_registry(namespace: Option<&str>) -> Option<AggregateRegistry> {
-    let namespace = namespace?;
-    let mut registry = AggregateRegistry::default();
-    registry.register_statistical_aggregates(namespace);
-    Some(registry)
-}
-
 /// Parse `--provenance-namespace PREFIX=IRI` into its raw `(prefix, iri)` halves.
 ///
 /// A bare split on the first `=` — [`ProvenanceNamespace::new`] does the real
@@ -811,7 +793,9 @@ pub(crate) fn run(
     // `AggregateRegistry`'s instance-identity fingerprint) — so preparing and evaluating
     // against two independently built registries, even with identical content, would
     // break every `--aggregate-namespace` query.
-    let aggregates = build_aggregate_registry(options.aggregate_namespace);
+    // The CLI's SOLE aggregate-registration surface: `--aggregate-namespace` names
+    // the statistical set's namespace, and nothing else crosses the command line.
+    let aggregates = purrdf_validate::query::statistical_aggregates(options.aggregate_namespace);
 
     // Refused ONCE, before any lane opens the data source: `PropertyFunctionRegistry`
     // PANICS on a duplicate IRI, and a command line is a host misconfiguration rather than

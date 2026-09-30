@@ -30,11 +30,10 @@
 //! is pinned, over an annotation-syntax template; [`a_reifier_query_certifies_its_partial_rows`]
 //! governs a SELECT whose pattern matches through a triple term.
 
-use std::fmt::Write as _;
-use std::process::{Command, Output};
+mod support;
+use support::{code, run, stderr_utf8 as stderr, stdout_utf8 as stdout, write_file};
 
-/// The path to the built `purrdf` binary this integration test target links against.
-const PURRDF: &str = env!("CARGO_BIN_EXE_purrdf");
+use std::fmt::Write as _;
 
 /// Three `ex:knows` edges and one name, so an answer cap has something to cut.
 const DATA_TTL: &str = concat!(
@@ -63,36 +62,6 @@ const REIFIER_QUERY: &str = concat!(
     "<<( ?s <http://example.org/knows> ?o )>> . ",
     "?r <http://example.org/certainty> ?c }",
 );
-
-/// Run `purrdf` with `args`, returning the captured [`Output`].
-fn run(args: &[&str]) -> Output {
-    Command::new(PURRDF)
-        .args(args)
-        .output()
-        .expect("spawn purrdf")
-}
-
-/// stdout of an [`Output`] as a `String`.
-fn stdout(out: &Output) -> String {
-    String::from_utf8(out.stdout.clone()).expect("utf-8 stdout")
-}
-
-/// stderr of an [`Output`] as a `String`.
-fn stderr(out: &Output) -> String {
-    String::from_utf8(out.stderr.clone()).expect("utf-8 stderr")
-}
-
-/// The exit code of an [`Output`].
-fn code(out: &Output) -> i32 {
-    out.status.code().expect("the process exited normally")
-}
-
-/// Write `contents` to `dir/name` and return the path as an owned string.
-fn write_file(dir: &std::path::Path, name: &str, contents: &str) -> String {
-    let path = dir.join(name);
-    std::fs::write(&path, contents).expect("write fixture");
-    path.to_str().expect("utf-8 path").to_owned()
-}
 
 /// EVERY CEILING REACHES THE ENGINE'S LIMIT VECTOR, including the one nothing can charge.
 ///

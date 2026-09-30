@@ -18,10 +18,6 @@ use purrdf_shapes::{
 };
 use purrdf_testkit::prop::prelude::*;
 
-fn arbitrary_bytes() -> impl Strategy<Value = Vec<u8>> {
-    prop::collection::vec(any::<u8>(), 0..4096)
-}
-
 const NODE_EXPR_PREFIXES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
      @prefix ex: <http://example.org/ns#> .\n";
 
@@ -93,23 +89,25 @@ fn shared_named_sub_expression_is_not_a_cycle() {
 /// Structure-aware SHACL Turtle: real `sh:` shape fragments interleaved with
 /// noise, to reach the shape-graph interpreter, not just the Turtle lexer.
 fn structured_shapes() -> impl Strategy<Value = String> {
-    let fragments: Vec<&'static str> = vec![
-        "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
-        "@prefix ex: <https://example.org/> .\n",
-        "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
-        "ex:S a sh:NodeShape ; sh:targetClass ex:C .\n",
-        "ex:S sh:property [ sh:path ex:p ; sh:minCount 1 ] .\n",
-        "ex:S sh:property [ sh:path ex:p ; sh:datatype xsd:string ] .\n",
-        "ex:S sh:property [ sh:path ex:p ; sh:pattern \"^a+$\" ] .\n",
-        "ex:S sh:property [ sh:path ex:p ; sh:minCount \"notanint\" ] .\n",
-        "ex:S sh:node ex:S .\n",
-        "ex:S sh:property [ sh:path [ sh:inversePath ex:p ] ] .\n",
-        "\u{0}\u{1}",
-        "ex:S a sh:NodeShape ; sh:property",
-        "@prefix sh:",
-    ];
-    prop::collection::vec(prop::sample::select(fragments), 0..24).prop_map(|parts| parts.concat())
+    prop::sample::interleaved(SHAPES_FRAGMENTS.to_vec(), 24)
 }
+
+/// The fragments [`structured_shapes`] interleaves.
+const SHAPES_FRAGMENTS: [&str; 13] = [
+    "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
+    "@prefix ex: <https://example.org/> .\n",
+    "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    "ex:S a sh:NodeShape ; sh:targetClass ex:C .\n",
+    "ex:S sh:property [ sh:path ex:p ; sh:minCount 1 ] .\n",
+    "ex:S sh:property [ sh:path ex:p ; sh:datatype xsd:string ] .\n",
+    "ex:S sh:property [ sh:path ex:p ; sh:pattern \"^a+$\" ] .\n",
+    "ex:S sh:property [ sh:path ex:p ; sh:minCount \"notanint\" ] .\n",
+    "ex:S sh:node ex:S .\n",
+    "ex:S sh:property [ sh:path [ sh:inversePath ex:p ] ] .\n",
+    "\u{0}\u{1}",
+    "ex:S a sh:NodeShape ; sh:property",
+    "@prefix sh:",
+];
 
 fn arbitrary_json() -> impl Strategy<Value = Value> {
     let leaf = prop_oneof![
@@ -152,7 +150,7 @@ prop_test! {
     #![prop_config(Config { cases: 256, ..Config::default() })]
 
     #[test]
-    fn parse_shapes_never_panics_raw(data in arbitrary_bytes()) {
+    fn parse_shapes_never_panics_raw(data in prop::collection::bytes(4096)) {
         if let Ok(text) = std::str::from_utf8(&data) {
             let _ = parse_shapes(text, None);
         }
@@ -170,7 +168,7 @@ prop_test! {
     }
 
     #[test]
-    fn parse_linkml_never_panics(data in arbitrary_bytes()) {
+    fn parse_linkml_never_panics(data in prop::collection::bytes(4096)) {
         if let Ok(text) = std::str::from_utf8(&data) {
             let _ = parse_linkml(text);
         }

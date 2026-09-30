@@ -18,6 +18,7 @@ use purrdf_gts::compact::{
     CompactionParams, DictPlan, compact_streamable, detached_signature_leaves,
     detached_signature_proof,
 };
+use purrdf_gts::fixture::{fixed_key, object_literal};
 use purrdf_gts::mmr;
 use purrdf_gts::model::{Graph, Signature};
 use purrdf_gts::reader::read;
@@ -25,12 +26,6 @@ use purrdf_gts::stream;
 use purrdf_gts::verify::verify_file_with_keyring;
 use purrdf_gts::wire::blake3_256;
 use purrdf_gts::writer::Writer;
-
-/// A fixed, deterministic Ed25519 signing key (RFC 8032 signing is
-/// deterministic per key + message, so tests stay byte-reproducible).
-fn fixed_key(byte: u8) -> SigningKey {
-    SigningKey::from_bytes(&[byte; 32])
-}
 
 /// A source GTS file whose every frame (including the blob frames a
 /// streamable compaction turns into detached-signature provenance) is
@@ -53,18 +48,6 @@ fn source_unsigned(blob_count: u32) -> Vec<u8> {
         w.add_blob_owned(blob, Some("text/plain"), None);
     }
     w.into_bytes()
-}
-
-/// The literal value of the object of the first quad using `predicate_iri`.
-fn object_literal(g: &Graph, predicate_iri: &str) -> Option<String> {
-    let p = g
-        .terms
-        .iter()
-        .position(|t| t.value.as_deref() == Some(predicate_iri))?;
-    g.quads
-        .iter()
-        .find(|&&(_, pred, _, _)| pred == p)
-        .and_then(|&(_, _, o, _)| g.terms[o].value.clone())
 }
 
 fn packaging_params<'a>(packaging_key: SigningKey, packaging_kid: &str) -> CompactionParams<'a> {

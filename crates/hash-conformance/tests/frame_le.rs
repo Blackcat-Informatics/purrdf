@@ -23,9 +23,9 @@
 //! target with `PURRDF_RECORD_FRAME_LE=1`.
 
 use purrdf_hash::frame::{frame_be_labelled, frame_le, frame_le_into};
-use purrdf_hash::mix::splitmix64_next;
 use purrdf_hash::{Digest, blake3};
 use purrdf_hash_conformance::iri_corpus;
+use purrdf_testkit::rng::splitmix64_bytes;
 use purrdf_testkit::vectors::{VectorFile, decode_bytes, encode_bytes};
 
 /// The frozen framing vectors.
@@ -78,18 +78,6 @@ fn specified_frame(input: &[u8]) -> Vec<u8> {
     framed
 }
 
-/// The first `length` bytes of the little-endian SplitMix64 `next` stream
-/// from the seed `length`.
-fn stream_bytes(length: usize) -> Vec<u8> {
-    let mut state = length as u64;
-    let mut bytes = Vec::with_capacity(length + 8);
-    while bytes.len() < length {
-        bytes.extend_from_slice(&splitmix64_next(&mut state).to_le_bytes());
-    }
-    bytes.truncate(length);
-    bytes
-}
-
 /// Every input: its kind, its encoded field, and its bytes. A `fill` input is
 /// spelled `BYTE*LENGTH` (the byte in hexadecimal, the length in decimal).
 fn inputs() -> Vec<(&'static str, String, Vec<u8>)> {
@@ -114,7 +102,7 @@ fn inputs() -> Vec<(&'static str, String, Vec<u8>)> {
         bytes("bytes", iri.into_bytes());
     }
     for length in 0..=256 {
-        bytes("stream", stream_bytes(length));
+        bytes("stream", splitmix64_bytes(length, length as u64));
     }
     for byte in FILL_BYTES {
         for length in FILL_LENGTHS {

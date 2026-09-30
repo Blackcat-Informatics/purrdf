@@ -30,6 +30,17 @@ impl<T: Clone + fmt::Debug> Strategy for Select<T> {
     }
 }
 
+/// The concatenation of up to `max_parts - 1` of `fragments`, chosen with
+/// repetition: structure-aware text for a parser's never-panic sweep, where real
+/// fragments interleaved with noise reach deep parser states instead of bouncing
+/// off the lexer.
+pub fn interleaved(
+    fragments: Vec<&'static str>,
+    max_parts: usize,
+) -> impl Strategy<Value = String> {
+    super::collection::vec(select(fragments), 0..max_parts).prop_map(|parts| parts.concat())
+}
+
 /// A position in a collection whose length is known only later: a uniform
 /// fraction of the length, shrinking to the first element. Generate one with
 /// `any::<Index>()`.

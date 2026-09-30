@@ -961,7 +961,10 @@ fn every_shipped_sparql_example_parses() {
         "crates/rdf-capi/include/purrdf.h",
         "crates/rdf-wasm/js/index.mjs",
         "bindings/python/src/py_store/quad_store.rs",
-        "bindings/python/src/py_store/query.rs",
+        // The binding's registry builder moved to `purrdf_validate::query::
+        // statistical_aggregates`, shared by every host; the Python surface's
+        // `AGG(<iri>…)` text is its type stub's.
+        "bindings/python/python/src/purrdf/__init__.pyi",
         "docs/playground/examples/gallery.mjs",
     ];
     for surface in REQUIRED_SURFACES {

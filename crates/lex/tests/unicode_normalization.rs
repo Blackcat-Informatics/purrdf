@@ -19,6 +19,7 @@
 //! Each vector file holds answers recorded once and never edited: a
 //! disagreement is a defect in the pipeline, never a reason to touch a vector.
 
+use purrdf_testkit::ucd::{code_point as hex, scalar, sequence, unicode_data};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,29 +27,12 @@ use std::path::{Path, PathBuf};
 use purrdf_lex::unicode::{UNICODE_VERSION, ccc, is_nfc, nfc, nfd, nfkc, nfkd};
 use purrdf_testkit::vectors::{VectorFile, decode_str, encode_str};
 
-fn vectors(text: &'static str) -> VectorFile<'static> {
-    VectorFile::parse(text).unwrap_or_else(|error| panic!("{error}"))
-}
-
 fn ucd(name: &str) -> String {
     let (major, minor, patch) = UNICODE_VERSION;
     let path: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join(format!("../iri/unicode/{major}.{minor}.{patch}"))
         .join(name);
     fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {}: {err}", path.display()))
-}
-
-fn hex(text: &str) -> u32 {
-    u32::from_str_radix(text.trim(), 16).unwrap_or_else(|err| panic!("bad hex {text:?}: {err}"))
-}
-
-fn scalar(point: u32) -> char {
-    char::from_u32(point).unwrap_or_else(|| panic!("{point:04X} is not a scalar value"))
-}
-
-/// A space-separated code point sequence as a string.
-fn sequence(field: &str) -> String {
-    field.split_whitespace().map(|p| scalar(hex(p))).collect()
 }
 
 fn show(text: &str) -> String {
@@ -74,7 +58,7 @@ fn forms(input: &str) -> [String; 5] {
 /// does not list is a starter that is its own form under all four.
 #[test]
 fn every_frozen_normalization_answer_is_reproduced() {
-    let file = vectors(include_str!("vectors/unicode_normalization_vectors.txt"));
+    let file = VectorFile::load(include_str!("vectors/unicode_normalization_vectors.txt"));
     let mut listed: BTreeSet<u32> = BTreeSet::new();
     let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();
     for record in file.records() {
@@ -127,7 +111,7 @@ fn every_frozen_normalization_answer_is_reproduced() {
 
 #[test]
 fn the_normalization_forms_replay_the_independent_answers_exactly() {
-    let file = vectors(include_str!(
+    let file = VectorFile::load(include_str!(
         "vectors/normalization_differential_vectors.txt"
     ));
     let replayed = file
@@ -140,33 +124,6 @@ fn the_normalization_forms_replay_the_independent_answers_exactly() {
         })
         .unwrap_or_else(|mismatch| panic!("{mismatch}"));
     assert_eq!(replayed, 17_086);
-}
-
-/// Every assigned code point and its `UnicodeData.txt` fields, with the
-/// `First`/`Last` ranges expanded.
-fn unicode_data() -> BTreeMap<u32, Vec<String>> {
-    let text = ucd("UnicodeData.txt");
-    let mut out = BTreeMap::new();
-    let mut first: Option<u32> = None;
-    for line in text.lines() {
-        let fields: Vec<String> = line.split(';').map(str::to_owned).collect();
-        let point = hex(&fields[0]);
-        if fields[1].ends_with(", First>") {
-            first = Some(point);
-            continue;
-        }
-        let low = if fields[1].ends_with(", Last>") {
-            first
-                .take()
-                .unwrap_or_else(|| panic!("range end {point:04X} without a start"))
-        } else {
-            point
-        };
-        for p in low..=point {
-            out.insert(p, fields.clone());
-        }
-    }
-    out
 }
 
 /// One invariant of the `NormalizationTest.txt` header: a form's name, the
@@ -250,7 +207,7 @@ fn normalization_test_every_line_every_column() {
     // Part 2: every assigned code point part 1 does not list is its own form
     // under all four.
     let mut checked = 0usize;
-    for &point in unicode_data().keys() {
+    for &point in unicode_data(&ucd("UnicodeData.txt")).keys() {
         if part1.contains(&point) {
             continue;
         }
@@ -297,7 +254,7 @@ fn composition_exclusions_agree_with_the_derived_property() {
         .collect();
     assert!(!excluded.is_empty());
     let mut decomposable = 0usize;
-    for (&point, fields) in &unicode_data() {
+    for (&point, fields) in &unicode_data(&ucd("UnicodeData.txt")) {
         let mapping = fields[5].trim();
         if mapping.is_empty() || mapping.starts_with('<') {
             continue;

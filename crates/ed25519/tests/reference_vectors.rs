@@ -39,12 +39,14 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// A lowercase-hex vector field as bytes.
-fn unhex(field: &str) -> Vec<u8> {
+fn hex_field(field: &str) -> Vec<u8> {
     purrdf_hash::hex::decode(&decode_str(field).expect("an encoded field")).expect("a hex field")
 }
 
-fn unhex_array<const N: usize>(field: &str) -> [u8; N] {
-    unhex(field).try_into().expect("a fixed-length hex field")
+fn hex_field_array<const N: usize>(field: &str) -> [u8; N] {
+    hex_field(field)
+        .try_into()
+        .expect("a fixed-length hex field")
 }
 
 fn verdict(accepted: bool) -> String {
@@ -150,9 +152,9 @@ fn verification_edge_cases_match_the_frozen_reference() {
     let replayed = file
         .replay(4, |inputs| {
             let accepted = ours_strict(
-                &unhex_array(inputs[1]),
-                &unhex(inputs[2]),
-                &unhex_array(inputs[3]),
+                &hex_field_array(inputs[1]),
+                &hex_field(inputs[2]),
+                &hex_field_array(inputs[3]),
             );
             vec![verdict(accepted)]
         })
@@ -198,7 +200,7 @@ fn key_decoding_matches_the_frozen_reference_except_where_rfc_8032_refuses() {
         let [encoding, decoded, class] = record.fields[..] else {
             panic!("line {}: three fields expected", record.line);
         };
-        let bytes: [u8; 32] = unhex_array(encoding);
+        let bytes: [u8; 32] = hex_field_array(encoding);
         let ours = VerifyingKey::from_bytes(&bytes);
         let non_canonical_y = {
             let mut y = bytes;

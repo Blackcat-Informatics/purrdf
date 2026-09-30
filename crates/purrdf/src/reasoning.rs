@@ -20,7 +20,7 @@ use purrdf_rdf::{
 };
 use purrdf_sparql_algebra::{
     BlankNode, Expression, GraphPattern, GroundTerm, NamedNodePattern, OrderExpression,
-    PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
+    PropertyFunctionCall, Query, TermPattern, Variable,
 };
 use purrdf_sparql_eval::convert;
 use purrdf_sparql_eval::{
@@ -1145,7 +1145,7 @@ fn withhold_surrogates_from_outcome(
 /// front of the caller.
 fn observable_variables(query: &Query) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
-    let pattern = query_pattern(query);
+    let pattern = query.pattern();
     match query {
         Query::Select { .. } => match find_projection(pattern) {
             Some(projected) => names.extend(projected),
@@ -1156,7 +1156,7 @@ fn observable_variables(query: &Query) -> BTreeSet<String> {
         },
         Query::Construct { template, .. } => {
             for quad in template {
-                collect_triple_pattern_variables(&quad.triple, &mut names);
+                quad.triple.collect_variable_names(&mut names);
                 // A template GRAPH variable is observable: its binding decides
                 // which graph the row's statement lands in, so the caller reads
                 // the value back off the result dataset's graph name just as
@@ -1178,16 +1178,6 @@ fn observable_variables(query: &Query) -> BTreeSet<String> {
     }
     collect_returned_value_variables(pattern, &mut names);
     names
-}
-
-/// The root graph pattern of any query form.
-fn query_pattern(query: &Query) -> &GraphPattern {
-    match query {
-        Query::Select { pattern, .. }
-        | Query::Construct { pattern, .. }
-        | Query::Describe { pattern, .. }
-        | Query::Ask { pattern, .. } => pattern,
-    }
 }
 
 /// The variable list of the first [`GraphPattern::Project`] reached by peeling off solution
@@ -1304,7 +1294,7 @@ fn collect_returned_value_variables(pattern: &GraphPattern, names: &mut BTreeSet
 /// of them is visible in the enclosing group graph pattern.
 fn collect_call_variables(call: &PropertyFunctionCall, names: &mut BTreeSet<String>) {
     for term in call.subject_args.iter().chain(&call.object_args) {
-        collect_term_pattern_variable(term, names);
+        term.collect_variable_names(names);
     }
 }
 
@@ -1356,14 +1346,14 @@ fn collect_all_variables(pattern: &GraphPattern, names: &mut BTreeSet<String>) {
         match pattern {
             GraphPattern::Bgp { patterns } => {
                 for triple in patterns {
-                    collect_triple_pattern_variables(triple, names);
+                    triple.collect_variable_names(names);
                 }
             }
             GraphPattern::Path {
                 subject, object, ..
             } => {
-                collect_term_pattern_variable(subject, names);
-                collect_term_pattern_variable(object, names);
+                subject.collect_variable_names(names);
+                object.collect_variable_names(names);
             }
             GraphPattern::Values { variables, .. } | GraphPattern::Project { variables, .. } => {
                 names.extend(variables.iter().map(|v| v.as_str().to_owned()));
@@ -1413,36 +1403,6 @@ fn collect_all_variables(pattern: &GraphPattern, names: &mut BTreeSet<String>) {
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. } => pending.push(inner),
             GraphPattern::PropertyFunction(call) => collect_call_variables(call, names),
-        }
-    }
-}
-
-/// The variables of one triple pattern, in all three positions.
-fn collect_triple_pattern_variables(triple: &TriplePattern, names: &mut BTreeSet<String>) {
-    collect_term_pattern_variable(&triple.subject, names);
-    if let NamedNodePattern::Variable(variable) = &triple.predicate {
-        names.insert(variable.as_str().to_owned());
-    }
-    collect_term_pattern_variable(&triple.object, names);
-}
-
-/// `term`'s variable name, if it is one — descending, over a work list, into an RDF 1.2
-/// quoted triple, whose nested variables bind exactly the way a top-level one does and
-/// can therefore carry a witness just as visibly.
-fn collect_term_pattern_variable(term: &TermPattern, names: &mut BTreeSet<String>) {
-    let mut pending = vec![term];
-    while let Some(term) = pending.pop() {
-        match term {
-            TermPattern::Variable(variable) => {
-                names.insert(variable.as_str().to_owned());
-            }
-            TermPattern::Triple(triple) => {
-                if let NamedNodePattern::Variable(variable) = &triple.predicate {
-                    names.insert(variable.as_str().to_owned());
-                }
-                pending.extend([&triple.subject, &triple.object]);
-            }
-            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
         }
     }
 }
@@ -1843,14 +1803,8 @@ fn simple_report() -> ReasoningReport {
 /// triple term is skipped, since a triple term never scaffolds a class expression.
 #[must_use]
 pub fn query_bgp(query: &Query) -> Vec<QTriple> {
-    let pattern = match query {
-        Query::Select { pattern, .. }
-        | Query::Construct { pattern, .. }
-        | Query::Describe { pattern, .. }
-        | Query::Ask { pattern, .. } => pattern,
-    };
     let mut triples = Vec::new();
-    collect_bgp(pattern, &mut triples);
+    collect_bgp(query.pattern(), &mut triples);
     triples
 }
 

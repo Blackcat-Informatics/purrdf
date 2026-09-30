@@ -274,6 +274,21 @@ impl Analyzer {
         }
     }
 
+    /// The terms of `input`, owned, in token order: what the index's own pipeline
+    /// produces for a needle, and so what a caller matches a stored term against.
+    ///
+    /// The convenience form of [`Analyzer::analyze`] for a caller that keeps the
+    /// terms rather than streaming them: one `String` per term.
+    #[must_use]
+    pub fn terms(&self, input: &str) -> Vec<String> {
+        let mut tokens = Vec::new();
+        self.analyze(input, &mut tokens);
+        tokens
+            .into_iter()
+            .map(|token| token.text.into_owned())
+            .collect()
+    }
+
     /// Analyze `input` through `scratch`, handing each token to `sink`.
     ///
     /// The allocation-free form, and the one to drive a corpus with. `scratch`

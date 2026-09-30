@@ -27,48 +27,13 @@
 //!   names the ARTIFACT by the identity digest `shacl explain` publishes for that same file
 //!   — so a verdict in a log is attributable to the bytes that produced it.
 
+mod support;
+use support::{code, run, stderr, stdout, write_file};
+
 use std::path::Path;
-use std::process::{Command, Output};
-use std::sync::Arc;
+use std::process::Output;
 
 use purrdf_core::artifact::{ArtifactBuilder, ArtifactSpec, ArtifactView};
-use purrdf_shapes::engine::{PreparedShapes, parse_shapes};
-use purrdf_shapes::product::ShapesProfile;
-
-/// A `Command` for the built `purrdf` binary.
-fn purrdf() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_purrdf"))
-}
-
-/// Run `purrdf` with `args`, returning the captured [`Output`].
-fn run(args: &[&str]) -> Output {
-    purrdf()
-        .args(args)
-        .output()
-        .expect("spawn the built purrdf binary")
-}
-
-/// stdout of an [`Output`] as a `String`.
-fn stdout(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
-/// stderr of an [`Output`] as a `String`.
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
-}
-
-/// The exit code of an [`Output`].
-fn code(out: &Output) -> i32 {
-    out.status.code().expect("the process exited normally")
-}
-
-/// Write `contents` to `dir/name`, returning the path as a `String`.
-fn write_file(dir: &Path, name: &str, contents: &str) -> String {
-    let p = dir.join(name);
-    std::fs::write(&p, contents).expect("write fixture file");
-    p.to_str().expect("temp path is valid UTF-8").to_owned()
-}
 
 /// The same minimal shapes graph `validate_cli` uses: one violation to find.
 const SHAPES: &str = concat!(
@@ -1387,10 +1352,7 @@ const SECTION_AST: u32 = 2;
 /// [`foreign_stage_product`] tampers with, and the fixture the `shacl diff` tests
 /// compare a foreign stage id against, base for base.
 fn foreign_stage_product_source(shapes_ttl: &str) -> Vec<u8> {
-    let shapes = parse_shapes(shapes_ttl, None).expect("the fixture shapes parse");
-    PreparedShapes::new(Arc::new(shapes))
-        .to_product(&ShapesProfile::CORE)
-        .expect("the fixture packs under this build")
+    purrdf_shapes::product_fixture::core_product(shapes_ttl)
 }
 
 /// Parse `shapes_ttl`, prepare and pack it exactly as `shacl pack` does, then splice

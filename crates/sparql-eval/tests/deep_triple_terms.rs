@@ -17,9 +17,11 @@
 //!   evaluation stands when it walks the term, because every walk over a term runs over
 //!   a work list.
 
+mod support;
 use purrdf_core::TermBox;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use support::solutions;
 
 use purrdf_core::{
     DatasetView, GraphMatch, QuadIds, QuadProbePlan, QuadRef, RdfDataset, RdfDatasetBuilder,
@@ -196,16 +198,6 @@ fn query_on<D: DatasetView + Sync>(
         },
         QueryOptions::EMPTY,
     )
-}
-
-/// The variables and rows of a `SELECT`.
-fn solutions(result: SparqlResult) -> (Vec<String>, Vec<Vec<Option<TermValue>>>) {
-    match result {
-        SparqlResult::Solutions {
-            variables, rows, ..
-        } => (variables, rows),
-        other => panic!("a SELECT answers with solutions, got {other:?}"),
-    }
 }
 
 fn iri(local: &str) -> Option<TermValue> {

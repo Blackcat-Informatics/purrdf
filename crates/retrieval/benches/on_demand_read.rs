@@ -45,10 +45,8 @@
 
 use purrdf_core::purremb_fixture::Identities;
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::hint::black_box;
 use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 use purrdf_testkit::rng::SplitMix64;
@@ -60,9 +58,9 @@ use purrdf_core::{
     TermValue, VectorDtype,
 };
 use purrdf_retrieval::{
-    AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, Fixed,
-    FusionProfile, Iri, RECIP_K, RankFidelity, RankedStreamAdapter, RequestTerm, RetrievalRequest,
-    Statistics, Term, TopK, compile, execute, fuse, plan, search,
+    AdmissionEnvironment, CandidateDomains, DomainTag, DuplicatePolicy, Iri, RankFidelity,
+    RankedStreamAdapter, RequestTerm, RetrievalRequest, Statistics, Term, TopK, compile, execute,
+    fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, EmbeddingKnnRelation, EmbeddingSpace, EvalError, ExclusionBasis,
@@ -71,33 +69,17 @@ use purrdf_sparql_eval::{
     Volatility,
 };
 
+#[path = "../tests/support/lookup.rs"]
+mod lookup;
+
+use lookup::{profile, strata};
+use purrdf_retrieval::block_on;
+use purrdf_retrieval::fixture::iri;
+
 /// The fixture namespace. A bench mints no vocabulary of its own, and a
 /// reserved-for-documentation authority is the only one it may put in a term.
 fn ex(suffix: &str) -> String {
     format!("http://example.org/{suffix}")
-}
-
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
-
-/// A single-threaded executor; nothing here ever pends.
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
 }
 
 /// The flattened argument position every producer here projects its candidate from.
@@ -223,10 +205,6 @@ impl PfCursor for Rows {
     }
 }
 
-fn strata() -> [Iri; 2] {
-    [iri(&ex("stratum/left")), iri(&ex("stratum/right"))]
-}
-
 fn registry(shape: Shape, rows: u64) -> PropertyFunctionRegistry {
     let arity = PfArity::new(1, 1);
     let block = DomainTag::parse(&ex("domain/shared")).expect("a valid tag");
@@ -328,19 +306,6 @@ fn statistics(rows: u64) -> Cardinalities {
         cardinalities.insert(iri(&ex(predicate)), rows);
     }
     Cardinalities(cardinalities)
-}
-
-fn profile() -> FusionProfile {
-    FusionProfile::with_decay(
-        strata()
-            .into_iter()
-            .map(|stratum| (stratum, Fixed::ONE))
-            .collect(),
-        DecayRule::ReciprocalRank {
-            k: u32::try_from(RECIP_K).expect("the smoothing constant fits"),
-        },
-    )
-    .expect("the fixture profile is valid")
 }
 
 /// The read `search` takes: every stratum on demand.

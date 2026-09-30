@@ -137,6 +137,24 @@ pub fn row_key(row: &[Option<crate::TermValue>]) -> String {
     format!("{row:?}")
 }
 
+/// A SELECT result as a deterministic golden: the tab-joined variable list on
+/// line one (projection order), then the sorted [`row_key`] lines, each
+/// newline-terminated. The one format the golden capture writes and the corpus
+/// gate compares.
+#[must_use]
+pub fn solutions_golden(variables: &[String], rows: &[Vec<Option<crate::TermValue>>]) -> String {
+    let mut out = String::new();
+    out.push_str(&variables.join("\t"));
+    out.push('\n');
+    let mut keys: Vec<String> = rows.iter().map(|r| row_key(r)).collect();
+    keys.sort();
+    for k in keys {
+        out.push_str(&k);
+        out.push('\n');
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::is_deferred_construct;

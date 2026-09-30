@@ -22,59 +22,8 @@
 //! * `--base`, `--from`/`--to`, stdin/stdout and the RDF-emitting global flags behave exactly
 //!   as they do for `convert`/`reason`.
 
-use std::path::Path;
-use std::process::{Command, Output};
-
 mod support;
-
-/// A `Command` for the built `purrdf` binary.
-fn purrdf() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_purrdf"))
-}
-
-/// Run `purrdf` with `args`, returning the captured [`Output`].
-fn run(args: &[&str]) -> Output {
-    purrdf()
-        .args(args)
-        .output()
-        .expect("spawn the built purrdf binary")
-}
-
-/// Run `purrdf` with `args`, writing `stdin_bytes` to its standard input.
-///
-/// A `BrokenPipe` on the write is NOT a harness failure. Refusing a bad argument
-/// before reading a byte of input is the binary behaving correctly — a usage
-/// error should not require the operator to finish feeding a document first — so
-/// the child may well have exited and closed the read end before this write
-/// lands. That is a RACE between two correct behaviours, and letting it panic
-/// here turns a graded assertion into an intermittently red gate. Every other
-/// I/O error still fails, and a run whose input never arrived is still graded:
-/// the assertions below read the child's real output either way.
-fn pipe(args: &[&str], stdin_bytes: &str) -> Output {
-    support::run_with_stdin(purrdf().args(args), stdin_bytes.as_bytes())
-}
-
-/// stdout of an [`Output`] as a `String`.
-fn stdout(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
-/// stderr of an [`Output`] as a `String`.
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
-}
-
-/// The exit code of an [`Output`].
-fn code(out: &Output) -> i32 {
-    out.status.code().expect("the process exited normally")
-}
-
-/// Write `contents` to `dir/name`, returning the path as a `String`.
-fn write_file(dir: &Path, name: &str, contents: &str) -> String {
-    let p = dir.join(name);
-    std::fs::write(&p, contents).expect("write fixture file");
-    p.to_str().expect("temp path is valid UTF-8").to_owned()
-}
+use support::{code, pipe, run, stderr, stdout, write_file};
 
 /// A graph exercising every SCBD rule at once:
 ///

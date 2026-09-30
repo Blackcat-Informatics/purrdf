@@ -3218,11 +3218,15 @@ enum ExistsScopeBasis {
 }
 
 /// Whether a construct that introduces a fresh binding inside the pattern
-/// [`find_scope_conflict`] walks is a `BIND`/`(expr AS ?v)` target or a
-/// `VALUES` variable — the two shapes it can report, matching the two
-/// message forms each call site produces.
+/// [`find_scope_conflict`] walks is a `BIND`/`(expr AS ?v)` target, a
+/// `VALUES` variable or an `UNFOLD` target — the shapes it can report,
+/// matching the message forms each call site produces.
+///
+/// Public because the evaluator's `EXISTS` row-collision check reports the
+/// same introductions in the same words: one enum, so the parser's refusal
+/// and the evaluator's name a construct identically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScopeIntro {
+pub enum ScopeIntro {
     /// `BIND(expr AS ?v)`, a sub-`SELECT`'s `(expr AS ?v)` projection target,
     /// a `GROUP BY (expr AS ?v)` condition, or a `GROUP BY` aggregate's output
     /// variable — all lower to an `Extend`/`Group` introduction and share one
@@ -3237,7 +3241,10 @@ enum ScopeIntro {
 }
 
 impl ScopeIntro {
-    fn as_str(self) -> &'static str {
+    /// The construct as a diagnostic names it: `BIND target`, `VALUES
+    /// variable` or `UNFOLD target`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Bind => "BIND target",
             Self::Values => "VALUES variable",

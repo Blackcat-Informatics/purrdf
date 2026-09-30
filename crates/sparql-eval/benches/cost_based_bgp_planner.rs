@@ -20,27 +20,16 @@
 //! Report-only, `cargo bench -p purrdf-sparql-eval` (the `make bench` lane) — excluded
 //! from `make check`.
 
-use std::sync::Arc;
+#[path = "../tests/support/mod.rs"]
+mod support;
+
+use support::skewed_star;
 
 use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder};
+use purrdf_core::RdfDataset;
 use purrdf_sparql_algebra::SparqlParser;
 use purrdf_sparql_eval::{EvalCtx, evaluate_query};
-
-/// A skewed star: `:hub --pred--> N leaves` for each `(name, N)` pair.
-fn skewed_star(spec: &[(&str, usize)]) -> Arc<RdfDataset> {
-    let mut b = RdfDatasetBuilder::new();
-    let hub = b.intern_iri("http://ex/hub");
-    for &(name, count) in spec {
-        let pred = b.intern_iri(&format!("http://ex/{name}"));
-        for i in 0..count {
-            let leaf = b.intern_iri(&format!("http://ex/{name}{i}"));
-            b.push_quad(hub, pred, leaf, None);
-        }
-    }
-    b.freeze().expect("freeze")
-}
 
 const STAR_QUERY: &str = "SELECT ?a ?b ?c ?d WHERE { \
      ?s <http://ex/hot> ?a . ?s <http://ex/warm> ?b . \

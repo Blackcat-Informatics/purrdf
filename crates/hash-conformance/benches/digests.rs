@@ -25,7 +25,7 @@ const SIZES: [(usize, &str); 3] = [(64, "64B"), (1024, "1KiB"), (1 << 20, "1MiB"
 
 /// Deterministic, non-trivial input bytes.
 fn input(len: usize) -> Vec<u8> {
-    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    let mut state = purrdf_hash::mix::GOLDEN_GAMMA;
     (0..len)
         .map(|_| xorshift64_next(&mut state) as u8)
         .collect()

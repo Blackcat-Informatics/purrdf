@@ -8,8 +8,13 @@
 //! every neighbour's control differs from its treatment in the observable the test
 //! reads.
 
+#[path = "support/terms.rs"]
+mod terms;
+
 use std::fmt::Write as _;
 use std::sync::Arc;
+use terms::ex_ns as iri;
+use terms::integer as int;
 
 use purrdf::RdfDataset;
 use purrdf_shapes::data::ShaclData;
@@ -37,17 +42,6 @@ const PREFIXES: &str = r"
 
 const EX: &str = "http://example.org/ns#";
 use purrdf_xsd::datatype::XSD_INTEGER;
-
-fn iri(local: &str) -> Term {
-    Term::NamedNode(NamedNode::from(format!("{EX}{local}").as_str()))
-}
-
-fn int(value: i64) -> Term {
-    Term::Literal(Literal::new_typed_literal(
-        value.to_string(),
-        NamedNode::from(XSD_INTEGER),
-    ))
-}
 
 fn shapes(body: &str) -> Result<Shapes, String> {
     parse_shapes(&format!("{PREFIXES}\n{body}"), None).map_err(String::from)

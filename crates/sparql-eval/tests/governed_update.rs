@@ -15,8 +15,14 @@
 //! caller's `Arc` handle is the *same* handle — not an equal one — because "rebuilt to an
 //! equal value" and "never written" are different facts and only the second is the contract.
 
+mod support;
+
+// A `quiet = 1` countdown proves the `LOAD` seam does its *own* poll: the per-operation
+// poll sees a clear signal and only the poll inside `load` can stop the request.
+use support::PollCountdown;
+
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use purrdf_core::{
     DatasetMut, GraphMatchValue, MutableDataset, RdfDataset, RdfDatasetBuilder, ResourceDimension,
@@ -24,7 +30,7 @@ use purrdf_core::{
 };
 use purrdf_sparql_eval::{
     CancellationFlag, GovernedUpdateOutcome, GraphResolver, NativeSparqlEngine, QueryGovernors,
-    QueryOptions, StopSignal,
+    QueryOptions,
 };
 
 /// The number of `ex:p` edges in the fixture store.
@@ -195,43 +201,6 @@ impl GraphResolver for CancellingResolver {
         // not resolver cooperation, must prevent publication.
         self.flag.cancel();
         Ok(Arc::clone(&self.document))
-    }
-}
-
-/// A stop signal that reports clear for its first `quiet` polls and `Cancelled` for every
-/// poll after that.
-///
-/// It honours the latching contract — once it says `Some`, it says `Some` forever — while
-/// letting a test place the firing edge at a chosen poll. That is what makes it possible to
-/// prove the `LOAD` seam does its *own* poll: with `quiet = 1` the per-operation poll sees
-/// a clear signal and only the poll inside `load` can stop the request.
-#[derive(Debug)]
-struct QuietThenCancelled {
-    quiet: usize,
-    polls: AtomicUsize,
-    latched: AtomicBool,
-}
-
-impl QuietThenCancelled {
-    fn new(quiet: usize) -> Arc<Self> {
-        Arc::new(Self {
-            quiet,
-            polls: AtomicUsize::new(0),
-            latched: AtomicBool::new(false),
-        })
-    }
-}
-
-impl StopSignal for QuietThenCancelled {
-    fn poll(&self) -> Option<StopCause> {
-        if self.latched.load(Ordering::Relaxed) {
-            return Some(StopCause::Cancelled);
-        }
-        if self.polls.fetch_add(1, Ordering::Relaxed) < self.quiet {
-            return None;
-        }
-        self.latched.store(true, Ordering::Relaxed);
-        Some(StopCause::Cancelled)
     }
 }
 
@@ -416,7 +385,7 @@ fn load_is_not_issued_when_the_stop_signal_latches_at_the_host_seam() {
             &mut dataset,
             request(&format!("{PREFIX}LOAD ex:doc")),
             QueryOptions::EMPTY,
-            &QueryGovernors::UNBOUNDED.with_stop_signal(QuietThenCancelled::new(1)),
+            &QueryGovernors::UNBOUNDED.with_stop_signal(PollCountdown::new(1)),
         )
         .expect("a tripped governor is an outcome");
 
@@ -447,7 +416,7 @@ fn load_silent_does_not_launder_a_governor_trip_into_a_noop_success() {
             &mut dataset,
             request(&format!("{PREFIX}LOAD SILENT ex:doc")),
             QueryOptions::EMPTY,
-            &QueryGovernors::UNBOUNDED.with_stop_signal(QuietThenCancelled::new(1)),
+            &QueryGovernors::UNBOUNDED.with_stop_signal(PollCountdown::new(1)),
         )
         .expect("a tripped governor is an outcome");
 
@@ -806,7 +775,7 @@ fn a_where_stopped_part_way_applies_none_of_the_mutation_it_had_computed() {
             request(&update),
             QueryOptions::EMPTY,
             // No ceiling on any dimension: a stop signal, and nothing else.
-            &QueryGovernors::UNBOUNDED.with_stop_signal(QuietThenCancelled::new(1)),
+            &QueryGovernors::UNBOUNDED.with_stop_signal(PollCountdown::new(1)),
         )
         .expect("a stopped WHERE is an outcome, not an update error");
 

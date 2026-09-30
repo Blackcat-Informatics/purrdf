@@ -7,7 +7,10 @@ use purrdf_rdf::{
     PackBuilder, PackView, ProjectionConfig, ProjectionPackage, ProjectionProfile, SerializeGraph,
     parse_dataset, project_archive, project_okf_terms, serialize_dataset,
 };
-use sha2::{Digest, Sha256};
+
+#[path = "support/digest.rs"]
+mod digest;
+use digest::sha256;
 
 const CONFIG: &[u8] = include_bytes!("fixtures/okf-terms.json");
 const SOURCE: &[u8] = include_bytes!("fixtures/okf-terms.trig");
@@ -102,13 +105,6 @@ const LOSS_LEDGER: &str = r#"{
   ]
 }
 "#;
-
-fn sha256(bytes: &[u8]) -> String {
-    // The digest renders itself, the way `rdf12_canon_profile.rs` in this same
-    // test directory already spells it — one idiom for "SHA-256 as lowercase
-    // hex" across the suite rather than a per-file accumulate loop.
-    format!("{}", purrdf_hash::hex::Lower(&Sha256::digest(bytes)))
-}
 
 #[test]
 fn fixture_pins_documents_indexes_losses_member_order_and_archive_digest() {

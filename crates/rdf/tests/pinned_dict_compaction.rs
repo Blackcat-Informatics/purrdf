@@ -15,67 +15,29 @@
 //! "Folds to the same graph" is asserted at canonical-graph identity, not at
 //! blob-bytes identity — a pinned dictionary must be a pure compression detail.
 
-use purrdf_core::FastMap;
-
 use purrdf_gts::compact::{DictPlan, DictStrategy};
-use purrdf_gts::dict::raw_content_dict;
-use purrdf_gts::model::{Term, TermKind};
+use purrdf_gts::fixture::shipped_dictionary;
+use purrdf_gts::model::Term;
 use purrdf_gts::reader::{read, segment_append_state};
 use purrdf_gts::writer::Writer;
 use purrdf_rdf::gts_certify::{compact_and_certify, refold_digest, verify_compaction};
-use purrdf_rdf::gts_dict_vectors::{TIMESTAMP, VECTOR_ZSTD_LEVEL, authorship_key, fixed_source};
+use purrdf_rdf::gts_dict_vectors::{
+    TIMESTAMP, VECTOR_ZSTD_LEVEL, authorship_key, fixed_source, keyring, packaging_key,
+};
 
 /// The name the caller pins its shipped dictionary under.
 const PINNED_NAME: &str = "shipped-bundle-v1";
-
-fn packaging_key() -> purrdf_ed25519::SigningKey {
-    purrdf_ed25519::SigningKey::from_bytes(&[7u8; 32])
-}
-
-fn keyring() -> FastMap<String, purrdf_ed25519::VerifyingKey> {
-    FastMap::from_iter([
-        ("authorA".to_string(), authorship_key().verifying_key()),
-        ("pack".to_string(), packaging_key().verifying_key()),
-    ])
-}
-
-/// The caller's SHIPPED dictionary, derived from a vocabulary unrelated to any
-/// source compacted here so a re-derivation could never reproduce it.
-fn shipped_dictionary() -> Vec<u8> {
-    let corpus: Vec<Vec<u8>> = (0..400u32)
-        .map(|i| {
-            format!(
-                "<https://example.org/slice/logic#c{}> <https://example.org/p/grounds> \
-                 \"a shipped-vocabulary sentence unrelated to any packed content, {}\" .\n",
-                i % 23,
-                i
-            )
-            .into_bytes()
-        })
-        .collect();
-    let refs: Vec<&[u8]> = corpus.iter().map(Vec::as_slice).collect();
-    raw_content_dict(&refs, 8192).expect("the shipped dictionary builds")
-}
 
 /// A signed, BLOB-LESS source log: terms and quads only — the agent-memory
 /// shape, which has no dictionary corpus at all.
 fn blobless_source() -> Vec<u8> {
     let mut w = Writer::new("purrdf.gts");
     w.sign_with(authorship_key(), "authorA");
-    let iri = |value: &str| Term {
-        kind: TermKind::Iri,
-        value: Some(value.to_string()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    };
     let mut terms: Vec<Term> = (0..24u32)
-        .map(|i| iri(&format!("https://example.org/memory/claim{i}")))
+        .map(|i| Term::iri(format!("https://example.org/memory/claim{i}")))
         .collect();
-    terms.push(iri("https://example.org/memory/recalls"));
-    terms.push(iri("https://example.org/memory/session"));
+    terms.push(Term::iri("https://example.org/memory/recalls"));
+    terms.push(Term::iri("https://example.org/memory/session"));
     w.add_terms(&terms);
     let quads: Vec<(usize, usize, usize, Option<usize>)> =
         (0..24usize).map(|s| (s, 24, 25, None)).collect();

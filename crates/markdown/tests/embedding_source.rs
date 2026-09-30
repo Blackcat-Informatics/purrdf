@@ -5,11 +5,9 @@
 
 use purrdf_core::purremb_fixture::Identities;
 use purrdf_core::{
-    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
-    DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract, EmbeddingView, MatrixInput,
+    CanonicalMetadataInput, CertifiedPurrpckSource, EmbeddingBuilder, EmbeddingView, MatrixInput,
     MatrixRow, PackView, PrefixPostprocessing, ProjectionSpec, RdfTermTarget,
-    SourceVerificationMode, TargetSet, TermValue, VectorDtype, verify_embedding,
-    verify_embedding_source,
+    SourceVerificationMode, TargetSet, TermValue, verify_embedding, verify_embedding_source,
 };
 use purrdf_markdown::{Profile, SourceDocument, Vocabulary, slice_markdown};
 use purrdf_rdf::parse_dataset;
@@ -19,26 +17,6 @@ const DOCUMENT: &str = "# Field notes\n\n1. Two observations.\n\n## Concordance\
     | 1 | `observations.ttl` | `first` `second` |\n";
 
 const FX: Identities = Identities::at("https://example.org/embedding/");
-
-fn contract() -> EmbeddingFamilyContract {
-    EmbeddingFamilyContract {
-        model: FX.artifact("model"),
-        engine: FX.artifact("engine"),
-        tokenizer: FX.artifact("tokenizer"),
-        execution: FX.stage("execution"),
-        subject_projection: FX.stage("projection"),
-        preprocessing: AppliedStage::NotApplied,
-        chunking: AppliedStage::NotApplied,
-        pooling: FX.stage("pooling"),
-        normalization: AppliedStage::NotApplied,
-        truncation: AppliedStage::NotApplied,
-        dtype: VectorDtype::F32,
-        metric: DistanceMetric::Cosine,
-        dimensionality: DimensionalityPolicy::fixed(1, PrefixPostprocessing::None)
-            .expect("fixed dimensionality"),
-        extensions: Vec::new(),
-    }
-}
 
 #[test]
 fn a_two_anchor_citation_certifies_with_a_source_ordinal_embedding_target() {
@@ -78,7 +56,7 @@ fn a_two_anchor_citation_certifies_with_a_source_ordinal_embedding_target() {
         .into_target(true, Some(ordinal))
         .expect("citation target with its source ordinal");
     let set = TargetSet::new(vec![target.id]).expect("target set");
-    let contract = contract();
+    let contract = FX.cosine_contract("projection", 1);
     let family = contract.derive().expect("embedding family");
     let matrix = MatrixInput {
         family_id: family.id,

@@ -58,7 +58,11 @@
 //! total. Run with `--nocapture` for the per-section and per-type scoreboard:
 //! `cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture`
 
+#[path = "support/report.rs"]
+mod report;
+
 use purrdf_shapes::shacl_corpora;
+use report::merge;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -367,14 +371,6 @@ fn infer(tc: &InferCase) -> Result<(Arc<RdfDataset>, Arc<RdfDataset>), String> {
     let holder = ShaclData::new(Arc::clone(&projected), Arc::clone(&projected), None);
     let inferred = apply_rules(&holder, &shapes).map_err(|e| format!("apply_rules failed: {e}"))?;
     Ok((inferred, projected))
-}
-
-/// `base ⊎ derived`, blank labels standardized apart per source.
-fn merge(base: &RdfDataset, derived: &RdfDataset) -> Result<Arc<RdfDataset>, String> {
-    let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(base);
-    builder.push_dataset(derived);
-    builder.freeze().map_err(|e| e.to_string())
 }
 
 /// The expected inferred triples as a dataset of their own.

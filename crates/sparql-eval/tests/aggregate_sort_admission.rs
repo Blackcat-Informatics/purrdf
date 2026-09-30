@@ -3,13 +3,17 @@
 
 //! Aggregate sort keys participate in admission, effects and execution contracts.
 
+mod support;
+
+use support::ask;
+
 use purrdf_sparql_algebra::Child;
 use std::sync::Arc;
 
 use purrdf_core::{RdfDatasetBuilder, ResourceDimension, SparqlEngine, SparqlRequest};
 use purrdf_sparql_algebra::{
     AggregateExpression, AggregateFunction, Expression, GraphPattern, GroundTerm, Literal,
-    OrderExpression, PropertyFunctionCall, Query, QueryDataset, TermPattern, Variable,
+    OrderExpression, PropertyFunctionCall, TermPattern, Variable,
 };
 use purrdf_sparql_eval::eval::{EvalCtx, eval, evaluate_query};
 use purrdf_sparql_eval::governor::GovernorState;
@@ -17,15 +21,6 @@ use purrdf_sparql_eval::{
     EvalError, ExtensionEnv, InProcessServiceResolver, MemoryRelation, NativeSparqlEngine,
     PreparedQuery, PropertyFunctionRegistry, QueryGovernors, QueryOptions,
 };
-
-fn ask(pattern: GraphPattern) -> Query {
-    Query::Ask {
-        pattern,
-        dataset: QueryDataset::default(),
-        base_iri: None,
-        version: None,
-    }
-}
 
 fn fold(key: Expression) -> GraphPattern {
     GraphPattern::Group {

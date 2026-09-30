@@ -11,12 +11,11 @@
 //! The neighbours: the same shapes three levels deep answer, on an ordinary test thread,
 //! exactly the rows and triples their innermost group computes.
 
-use std::sync::Arc;
+mod support;
 
-use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, SparqlRequest, SparqlResult,
-    TermValue,
-};
+use support::two_integer_objects;
+
+use purrdf_core::{RdfDiagnostic, SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_algebra::SparqlParser;
 use purrdf_sparql_eval::{EvalError, NativeSparqlEngine, QueryOptions};
 
@@ -27,21 +26,6 @@ const SMALL_STACK: usize = 128 * 1024;
 
 /// How many levels the deep requests are written.
 const LEVELS: usize = 100_000;
-
-/// `<s1> <p> 1` and `<s2> <p> 2`.
-fn dataset() -> Arc<RdfDataset> {
-    let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
-    for n in 1..=2 {
-        let s = builder.intern_iri(&format!("{EX}s{n}"));
-        let o = builder.intern_literal(RdfLiteral::typed(
-            n.to_string(),
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        builder.push_quad(s, p, o, None);
-    }
-    builder.freeze().expect("the fixture dataset")
-}
 
 /// `core`, a group, as the `WHERE` group of `levels` sub-`SELECT`s, each of which is
 /// directly the `WHERE` group of the one around it.
@@ -71,7 +55,7 @@ fn requests(levels: usize, core: &str) -> [(&'static str, String); 3] {
 
 /// Run `query` through the engine over [`dataset`].
 fn answer(query: &str) -> Result<SparqlResult, RdfDiagnostic> {
-    let dataset = dataset();
+    let dataset = two_integer_objects();
     NativeSparqlEngine::new().query_with_options_view(
         &*dataset,
         SparqlRequest {

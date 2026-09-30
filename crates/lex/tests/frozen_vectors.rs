@@ -12,6 +12,7 @@
 //! component splitter. A disagreement is a defect here, never a reason to
 //! edit a vector; the headers say what each covers.
 
+use purrdf_lex::scan::needle_table;
 use std::borrow::Cow;
 
 use purrdf_lex::json_escape;
@@ -271,15 +272,6 @@ fn percent_decoders_replay_the_frozen_vectors() {
 
 /// The four needle sets of the needle vectors, as the classes a caller with a
 /// fixed set declares.
-const fn needle_table(needles: &[u8]) -> [u8; 256] {
-    let mut table = [0_u8; 256];
-    let mut k = 0;
-    while k < needles.len() {
-        table[needles[k] as usize] = 1;
-        k += 1;
-    }
-    table
-}
 const HASH: [u8; 256] = needle_table(b"#");
 const QUERY_HASH: [u8; 256] = needle_table(b"?#");
 const PATH_END: [u8; 256] = needle_table(b"/?#");

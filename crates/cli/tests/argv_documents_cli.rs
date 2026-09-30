@@ -7,10 +7,10 @@
 //! A refusal is a claim too, so every refusal here is paired with the neighbouring command
 //! line that is valid and must still succeed (or reach a different, later refusal).
 
-use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
 mod support;
+use support::{purrdf, stderr, write_file};
 
 const PREMISE: &str = concat!(
     "@prefix ex: <http://example.org/> .\n",
@@ -19,20 +19,6 @@ const PREMISE: &str = concat!(
     "ex:x a ex:A .\n",
 );
 const CONCLUSION: &str = "@prefix ex: <http://example.org/> .\nex:x a ex:B .\n";
-
-fn purrdf() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_purrdf"))
-}
-
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
-}
-
-fn write_file(dir: &Path, name: &str, contents: &str) -> String {
-    let path = dir.join(name);
-    std::fs::write(&path, contents).expect("write fixture");
-    path.to_str().expect("utf-8 path").to_owned()
-}
 
 fn entails_with(args: &[&str], stdin: &str) -> Output {
     support::run_with_stdin(

@@ -87,7 +87,7 @@ impl Kind {
     fn term(self, name: &str) -> TermValue {
         match self {
             Self::Iri => TermValue::iri(format!("{EX}{name}")),
-            Self::Literal => simple_literal(name),
+            Self::Literal => TermValue::simple_literal(name),
             Self::Blank => TermValue::Blank {
                 label: name.to_owned(),
                 scope: BlankScope::DEFAULT,
@@ -98,15 +98,6 @@ impl Kind {
                 o: TermBox::new(TermValue::iri(format!("{EX}{name}"))),
             },
         }
-    }
-}
-
-fn simple_literal(text: &str) -> TermValue {
-    TermValue::Literal {
-        lexical_form: text.to_owned(),
-        datatype: "http://www.w3.org/2001/XMLSchema#string".into(),
-        language: None,
-        direction: None,
     }
 }
 
@@ -186,7 +177,7 @@ impl PropertyFunction for Table {
                 for n in 1..=count {
                     rows.push(vec![
                         term.clone(),
-                        simple_literal(&format!("{term_key}/{n}")),
+                        TermValue::simple_literal(format!("{term_key}/{n}")),
                     ]);
                 }
             }

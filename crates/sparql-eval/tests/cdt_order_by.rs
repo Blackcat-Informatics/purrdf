@@ -26,21 +26,16 @@
 //! the extreme, and assert which row won. That reads the ORDER off the production
 //! evaluator rather than off a comparator called directly.
 
+use purrdf_core::term_fixture::empty_dataset;
 use std::fmt::Write as _;
-use std::sync::Arc;
 
 use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
+    RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
 };
 use purrdf_sparql_eval::NativeSparqlEngine;
 
 const CDT_LIST: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List";
 const CDT_MAP: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/Map";
-
-/// An empty default graph — every case's data comes from its own `VALUES` block.
-fn empty_dataset() -> Arc<RdfDataset> {
-    RdfDatasetBuilder::new().freeze().expect("empty dataset")
-}
 
 /// Evaluate one `ASK` and answer its boolean.
 fn ask(query: &str) -> bool {

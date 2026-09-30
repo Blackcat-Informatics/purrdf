@@ -10,6 +10,8 @@
 //! [`CdtOutcome::Error`](purrdf_cdt::CdtOutcome::Error), and a case that expects a
 //! value asserts the value rather than merely that something was produced.
 
+mod support;
+
 use purrdf_cdt::{
     CDT_FUNCTIONS, CDT_LIST, CDT_MAP, CDT_NS, CdtArity, CdtEntry, CdtError, CdtFn, CdtKey,
     CdtLiteral, CdtOutcome, CdtTerm, CdtValue, MAX_ELEMENTS, MAX_LEXICAL_BYTES, MapRemoval, concat,
@@ -18,6 +20,7 @@ use purrdf_cdt::{
     map_constructor, map_contains_key, map_get, map_keys, map_merge, map_put, map_remove, map_size,
     merge, parse_list, parse_map, put, remove, reverse, size, subseq, tail,
 };
+use support::{composite, triple};
 
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
@@ -39,17 +42,6 @@ fn items(lexical: &str) -> Vec<CdtTerm> {
 
 fn entries(lexical: &str) -> Vec<CdtEntry> {
     map(lexical).into_map().expect("parse_map yields a map")
-}
-
-/// A composite element, refused by the constructor only when it would break one of
-/// the crate's two bounds — which no fixture in this file does.
-fn composite(value: CdtValue) -> CdtTerm {
-    CdtTerm::composite(value).expect("the fixture is within every bound")
-}
-
-/// A triple-term element, under the same standing as [`composite`].
-fn triple(subject: CdtTerm, predicate: CdtTerm, object: CdtTerm) -> CdtTerm {
-    CdtTerm::triple(subject, predicate, object).expect("the fixture is within every bound")
 }
 
 fn int(lexical: &str) -> CdtTerm {

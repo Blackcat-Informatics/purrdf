@@ -283,7 +283,7 @@ impl<'a> Projector<'a> {
         let source = self.config.source();
         if quad.predicate == source.classes().rdf_type() {
             if quad.object == ProjectionTerm::iri(source.classes().concept()) {
-                let Some(concept) = iri_value(&quad.subject) else {
+                let Some(concept) = quad.subject.as_iri() else {
                     return Ok(());
                 };
                 self.add_concept(concept)?;
@@ -297,7 +297,7 @@ impl<'a> Projector<'a> {
         }
 
         if let Some((kind, target_predicate)) = self.label_role(&quad.predicate) {
-            let Some(concept) = iri_value(&quad.subject) else {
+            let Some(concept) = quad.subject.as_iri() else {
                 return Ok(());
             };
             if matches!(
@@ -320,7 +320,7 @@ impl<'a> Projector<'a> {
         }
 
         if let Some(target_predicate) = self.documentation_role(&quad.predicate) {
-            let Some(concept) = iri_value(&quad.subject) else {
+            let Some(concept) = quad.subject.as_iri() else {
                 return Ok(());
             };
             if matches!(quad.object, ProjectionTerm::Triple { .. }) {
@@ -333,7 +333,7 @@ impl<'a> Projector<'a> {
         }
 
         if let Some((kind, target_predicate)) = self.relation_role(&quad.predicate) {
-            let (Some(subject), Some(object)) = (iri_value(&quad.subject), iri_value(&quad.object))
+            let (Some(subject), Some(object)) = (quad.subject.as_iri(), quad.object.as_iri())
             else {
                 if matches!(
                     (&quad.subject, &quad.object),
@@ -355,7 +355,7 @@ impl<'a> Projector<'a> {
         let source_relations = source.relations();
         if quad.predicate == source_relations.in_scheme() {
             if quad.object == ProjectionTerm::iri(self.config.scheme_iri()) {
-                let Some(concept) = iri_value(&quad.subject) else {
+                let Some(concept) = quad.subject.as_iri() else {
                     return Ok(());
                 };
                 self.add_concept(concept)?;
@@ -365,7 +365,7 @@ impl<'a> Projector<'a> {
         }
         if quad.predicate == source_relations.has_top_concept() {
             if quad.subject == ProjectionTerm::iri(self.config.scheme_iri()) {
-                let Some(concept) = iri_value(&quad.object) else {
+                let Some(concept) = quad.object.as_iri() else {
                     return Ok(());
                 };
                 self.add_top_concept(concept)?;
@@ -376,7 +376,7 @@ impl<'a> Projector<'a> {
         if quad.predicate == source_relations.top_concept_of()
             && quad.object == ProjectionTerm::iri(self.config.scheme_iri())
         {
-            let Some(concept) = iri_value(&quad.subject) else {
+            let Some(concept) = quad.subject.as_iri() else {
                 return Ok(());
             };
             self.add_top_concept(concept)?;
@@ -851,13 +851,6 @@ fn intern_term(
             ));
         }
     })
-}
-
-fn iri_value(term: &ProjectionTerm) -> Option<&str> {
-    let ProjectionTerm::Iri { value } = term else {
-        return None;
-    };
-    Some(value)
 }
 
 fn unordered_pair(left: &str, right: &str) -> (String, String) {

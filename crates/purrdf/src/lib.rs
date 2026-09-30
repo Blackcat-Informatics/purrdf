@@ -444,29 +444,9 @@ mod tests {
     #[test]
     fn facade_exposes_the_retrieval_ladder() {
         use std::collections::BTreeMap;
-        use std::future::Future;
         use std::sync::Arc;
-        use std::task::{Context, Poll, Wake, Waker};
 
-        /// The ladder's futures are awaited in one task and never cross a thread
-        /// boundary, so a parking waker is the whole runtime they need.
-        fn block_on<F: Future>(future: F) -> F::Output {
-            struct ParkWaker(std::thread::Thread);
-            impl Wake for ParkWaker {
-                fn wake(self: Arc<Self>) {
-                    self.0.unpark();
-                }
-            }
-            let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-            let mut context = Context::from_waker(&waker);
-            let mut future = Box::pin(future);
-            loop {
-                match future.as_mut().poll(&mut context) {
-                    Poll::Ready(output) => return output,
-                    Poll::Pending => std::thread::park(),
-                }
-            }
-        }
+        use crate::retrieval::block_on;
 
         /// A provider that reports nothing: the producer declares a finite row
         /// bound from its own frozen index, so there is no unbounded declaration

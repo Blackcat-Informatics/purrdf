@@ -18,10 +18,6 @@ use purrdf_xsd::temporal::{civil_from_days, days_from_civil, days_in_month, is_l
 use purrdf_xsd::wide::{div_wide, gcd, mul_div, wide_mul};
 use purrdf_xsd::{XsdDatatype, json_number};
 
-fn vectors(text: &'static str) -> VectorFile<'static> {
-    VectorFile::parse(text).unwrap_or_else(|error| panic!("{error}"))
-}
-
 /// A `date-time` answer as the vectors spell it: `ok:<seconds>:<nanos>` or
 /// `err:<byte offset>:<kind>`.
 fn date_time_answer(text: &str, separator: Separator, leap_second: LeapSecond) -> String {
@@ -47,7 +43,7 @@ fn date_time_answer(text: &str, separator: Separator, leap_second: LeapSecond) -
 /// grammar is accepted exactly when the frozen verdict says so.
 #[test]
 fn rfc3339_matches_every_frozen_spelling() {
-    let file = vectors(include_str!("vectors/rfc3339_vectors.txt"));
+    let file = VectorFile::load(include_str!("vectors/rfc3339_vectors.txt"));
     let mut date_times = 0;
     for record in file.records() {
         let text = decode_str(record.fields[1]).expect("an encoded spelling");
@@ -80,7 +76,7 @@ fn rfc3339_matches_every_frozen_spelling() {
 /// first day, its year's leap-ness, and the inverse mapping at both ends.
 #[test]
 fn calendar_matches_the_frozen_months() {
-    let file = vectors(include_str!("vectors/calendar_vectors.txt"));
+    let file = VectorFile::load(include_str!("vectors/calendar_vectors.txt"));
     let replayed = file
         .replay(2, |fields| {
             let year: i64 = fields[0].parse().expect("a year");
@@ -106,7 +102,7 @@ fn calendar_matches_the_frozen_months() {
 /// edge-value cube and a SplitMix corpus.
 #[test]
 fn wide_arithmetic_matches_the_frozen_vectors() {
-    let file = vectors(include_str!("vectors/wide_vectors.txt"));
+    let file = VectorFile::load(include_str!("vectors/wide_vectors.txt"));
     file.replay(3, |fields| {
         let [a, b, c] = [0, 1, 2].map(|index| fields[index].parse::<u128>().expect("a u128"));
         let (high, low) = wide_mul(a, b);
@@ -127,7 +123,7 @@ fn wide_arithmetic_matches_the_frozen_vectors() {
 
 #[test]
 fn gcd_matches_the_frozen_divisors() {
-    let file = vectors(include_str!("vectors/gcd_vectors.txt"));
+    let file = VectorFile::load(include_str!("vectors/gcd_vectors.txt"));
     file.replay(2, |fields| {
         let [a, b] = [0, 1].map(|index| fields[index].parse::<u128>().expect("a u128"));
         vec![gcd(a, b).to_string()]
@@ -139,7 +135,7 @@ fn gcd_matches_the_frozen_divisors() {
 /// or binary32 value or midpoint reaches.
 #[test]
 fn from_binary_matches_the_frozen_expansions() {
-    let file = vectors(include_str!("vectors/binary_decimal_vectors.txt"));
+    let file = VectorFile::load(include_str!("vectors/binary_decimal_vectors.txt"));
     file.replay(2, |fields| {
         let numerator: i128 = fields[0].parse().expect("a numerator");
         let exponent: i32 = fields[1].parse().expect("an exponent");
@@ -152,7 +148,7 @@ fn from_binary_matches_the_frozen_expansions() {
 /// Every ordered pair of the frozen JSON number lexemes: order and divisibility.
 #[test]
 fn json_number_order_matches_the_frozen_pairs() {
-    let file = vectors(include_str!("vectors/json_number_vectors.txt"));
+    let file = VectorFile::load(include_str!("vectors/json_number_vectors.txt"));
     for record in file.records() {
         let order = match json_number::cmp(record.fields[0], record.fields[1]) {
             Some(Ordering::Less) => "<",
@@ -180,7 +176,7 @@ fn json_number_order_matches_the_frozen_pairs() {
 /// that are not.
 #[test]
 fn numeric_predicates_match_the_frozen_vectors() {
-    let file = vectors(include_str!("vectors/numeric_predicate_vectors.txt"));
+    let file = VectorFile::load(include_str!("vectors/numeric_predicate_vectors.txt"));
     file.replay(2, |fields| {
         let input = decode_str(fields[1]).expect("an encoded input");
         let (first, second) = if fields[0] == "lexical" {

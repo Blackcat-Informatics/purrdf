@@ -66,6 +66,10 @@
 //!
 //! Everything is under `example.org`: PurRDF mints no vocabulary IRIs.
 
+#[path = "support/report.rs"]
+mod report;
+
+use report::report_nt;
 use std::sync::Arc;
 
 use purrdf::RdfDataset;
@@ -145,21 +149,6 @@ fn restored() -> PreparedShapes {
 /// Freeze one of the fixture data graphs.
 fn dataset(turtle: &str) -> Arc<RdfDataset> {
     parse_turtle_to_dataset(turtle, None).expect("the fixture data parses")
-}
-
-/// Validate `data` with `prepared` and render the report as canonical N-Triples.
-///
-/// The RDF form is the comparison surface rather than a field-by-field walk: two
-/// runs agree exactly when the graphs they produce are the same bytes, and a lost
-/// constraint shows up as a missing result rather than as a field nobody thought to
-/// compare.
-fn report_nt(prepared: &PreparedShapes, data: &Arc<RdfDataset>) -> String {
-    prepared
-        .bind_shared_dataset(Arc::clone(data))
-        .expect("the data graph binds")
-        .validate()
-        .expect("validation runs")
-        .to_ntriples()
 }
 
 /// Every `sh:pattern` lazy cell reachable from `shapes`, in shape and property

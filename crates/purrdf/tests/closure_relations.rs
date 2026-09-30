@@ -65,7 +65,7 @@ fn some_values_from() -> Arc<RdfDataset> {
          owl:someValuesFrom ex:B ] .\n",
         "ex:a a ex:A .\n",
     );
-    parse_dataset(turtle.as_bytes(), "text/turtle", None).expect("the ontology parses")
+    ontology(turtle)
 }
 
 /// `ex:A owl:equivalentClass ex:B` puts the TBox OUTSIDE the combined approach's Horn
@@ -80,6 +80,11 @@ fn equivalent_class() -> Arc<RdfDataset> {
         "ex:a a ex:A .\n",
         "ex:a ex:p ex:b .\n",
     );
+    ontology(turtle)
+}
+
+/// A Turtle ontology fixture, parsed.
+fn ontology(turtle: &str) -> Arc<RdfDataset> {
     parse_dataset(turtle.as_bytes(), "text/turtle", None).expect("the ontology parses")
 }
 

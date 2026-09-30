@@ -4,16 +4,12 @@
 //! Public-surface round trips for deterministic openCypher and GraphML LPG packages.
 
 use purrdf_rdf::{
-    LpgConfig, LpgExecutionLimits, LpgScope, ProjectionLimits, ProjectionPackage,
-    RdfDatasetBuilder, RdfLiteral, datasets_isomorphic, lift_lpg, project_lpg_cypher,
-    project_lpg_graphml, read_lpg_cypher, read_lpg_graphml, write_lpg_cypher, write_lpg_graphml,
+    LpgConfig, LpgExecutionLimits, LpgScope, ProjectionLimits, RdfDatasetBuilder, RdfLiteral,
+    datasets_isomorphic, lift_lpg, project_lpg_cypher, project_lpg_graphml, read_lpg_cypher,
+    read_lpg_graphml, write_lpg_cypher, write_lpg_graphml,
 };
 
 const TYPE: &str = "http://example.org/type";
-
-fn artifacts_equal(left: &ProjectionPackage, right: &ProjectionPackage) -> bool {
-    left.artifacts().eq(right.artifacts())
-}
 
 #[test]
 fn public_graph_carriers_round_trip_without_hidden_vocabulary() {
@@ -42,10 +38,14 @@ fn public_graph_carriers_round_trip_without_hidden_vocabulary() {
     let cypher = project_lpg_cypher(dataset.as_ref(), &config).expect("Cypher projection");
     assert!(!cypher.loss_ledger.is_empty());
     let cypher_graph = read_lpg_cypher(&cypher.package, &config).expect("Cypher read");
-    assert!(artifacts_equal(
-        &cypher.package,
-        &write_lpg_cypher(&cypher_graph, &config).expect("Cypher rewrite")
-    ));
+    assert!(
+        cypher
+            .package
+            .artifacts()
+            .eq(write_lpg_cypher(&cypher_graph, &config)
+                .expect("Cypher rewrite")
+                .artifacts())
+    );
     assert!(datasets_isomorphic(
         &dataset,
         &lift_lpg(&cypher_graph, &config)
@@ -56,10 +56,14 @@ fn public_graph_carriers_round_trip_without_hidden_vocabulary() {
     let graphml = project_lpg_graphml(dataset.as_ref(), &config).expect("GraphML projection");
     assert!(!graphml.loss_ledger.is_empty());
     let graphml_graph = read_lpg_graphml(&graphml.package, &config).expect("GraphML read");
-    assert!(artifacts_equal(
-        &graphml.package,
-        &write_lpg_graphml(&graphml_graph, &config).expect("GraphML rewrite")
-    ));
+    assert!(
+        graphml
+            .package
+            .artifacts()
+            .eq(write_lpg_graphml(&graphml_graph, &config)
+                .expect("GraphML rewrite")
+                .artifacts())
+    );
     assert!(datasets_isomorphic(
         &dataset,
         &lift_lpg(&graphml_graph, &config)

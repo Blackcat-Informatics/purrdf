@@ -60,6 +60,11 @@
 //! cargo test -p purrdf-sparql-conformance --test evaluator_trace -- --ignored regenerate_update_trace
 //! ```
 
+mod support;
+
+use purrdf::viz::stable_hash_hex;
+use support::suite_root;
+
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -93,10 +98,6 @@ const MIN_UPDATE_CASES: usize = 100;
 /// finding cases cannot leave the trace passing over nothing.
 const MIN_CASES: usize = 300;
 
-fn suite_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("suite")
-}
-
 /// Every `manifest.ttl` under `root`, sorted.
 fn discover_manifests(root: &Path, out: &mut Vec<PathBuf>) {
     let entries =
@@ -117,11 +118,6 @@ fn is_volatile(query_text: &str) -> bool {
     ["now(", "rand(", "uuid("]
         .iter()
         .any(|call| lower.contains(call))
-}
-
-/// FNV-1a, 64-bit ([`purrdf_hash::fnv`]): a fixed digest for the sweep's partial rows.
-fn digest(text: &str) -> String {
-    format!("{:016x}", purrdf_hash::fnv::fnv1a64(text.as_bytes()))
 }
 
 /// Everything one case's evaluations share.
@@ -317,7 +313,7 @@ fn write_rows(result: &SparqlResult, prepared: &Prepared<'_>, out: &mut String) 
     if !prepared.volatile {
         let mut canonical = String::new();
         render_result(result, prepared.ordered, false, &mut canonical);
-        write!(out, " digest={}", digest(&canonical)).expect("write");
+        write!(out, " digest={}", stable_hash_hex(&canonical)).expect("write");
     }
 }
 
@@ -474,7 +470,7 @@ fn store_digest(store: &RdfDataset, volatile: bool) -> String {
     if volatile {
         format!("quads={quads}")
     } else {
-        format!("quads={quads} digest={}", digest(&nquads))
+        format!("quads={quads} digest={}", stable_hash_hex(&nquads))
     }
 }
 

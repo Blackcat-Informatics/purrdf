@@ -705,7 +705,7 @@ fn apply_changes(
     let mut mutation = MutableDataset::new(Arc::clone(base));
     if let Some((path, format)) = added {
         let document = source::load_dataset(path, format, base_iri)?;
-        for row in surface_rows(&document) {
+        for row in QuadValues::surface_of(&document) {
             mutation.insert(row).map_err(|error| {
                 CliError::Runtime(format!("--changes {path}: {}", error.diagnostic_code()))
             })?;
@@ -713,7 +713,7 @@ fn apply_changes(
     }
     if let Some((path, format)) = removed {
         let document = source::load_dataset(path, format, base_iri)?;
-        for row in surface_rows(&document) {
+        for row in QuadValues::surface_of(&document) {
             // A row the data graph does not carry retracts nothing. That is the
             // `DatasetMut::remove` contract everywhere else in PurRDF, and it is right
             // here: a change set is a description of what moved, not an assertion about
@@ -722,22 +722,6 @@ fn apply_changes(
         }
     }
     Ok(mutation)
-}
-
-/// Every row of `document`'s RDF surface — the plain rows and BOTH statement tables — as
-/// the owned value-quads the COW layer is mutated with.
-fn surface_rows(document: &RdfDataset) -> Vec<QuadValues> {
-    document
-        .quads()
-        .chain(document.reifier_quads())
-        .chain(document.annotation_quads())
-        .map(|quad| QuadValues {
-            s: document.term_value(quad.s),
-            p: document.term_value(quad.p),
-            o: document.term_value(quad.o),
-            g: quad.g.map(|g| document.term_value(g)),
-        })
-        .collect()
 }
 
 /// Serialize `report` to `--format` and write it to `OUT`.

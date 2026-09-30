@@ -73,6 +73,12 @@ impl Span {
         Self { start, end }
     }
 
+    /// The span as a range of `usize` offsets, for slicing the source it
+    /// annotates: `&source[span.range()]`.
+    pub(crate) const fn range(&self) -> std::ops::Range<usize> {
+        self.start as usize..self.end as usize
+    }
+
     /// How many bytes the span covers.
     #[must_use]
     pub const fn len(&self) -> u64 {
@@ -419,7 +425,7 @@ impl<'a> Unit<'a> {
     /// The unit's exact bytes: `&source[span]`, verbatim.
     #[must_use]
     pub fn quote(&self) -> &'a str {
-        &self.source[self.span.start as usize..self.span.end as usize]
+        &self.source[self.span.range()]
     }
 
     /// Up to [`CONTEXT_BYTES`] of the document immediately before the
@@ -703,7 +709,7 @@ impl<'a> MalformedRow<'a> {
     /// The row's line, verbatim.
     #[must_use]
     pub fn line(&self) -> &'a str {
-        &self.source[self.span.start as usize..self.span.end as usize]
+        &self.source[self.span.range()]
     }
 
     /// What could not be made of it.
@@ -911,7 +917,7 @@ impl<'a> Document<'a> {
     /// than answer with bytes the span does not denote.
     #[must_use]
     pub fn structure_text(&self, span: Span) -> &'a str {
-        &self.source[span.start as usize..span.end as usize]
+        &self.source[span.range()]
     }
 
     /// Every concordance row that could be read, in document order,

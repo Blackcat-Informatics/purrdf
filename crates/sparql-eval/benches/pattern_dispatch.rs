@@ -34,11 +34,14 @@
 //! `cargo bench -p purrdf-sparql-eval --bench pattern_dispatch` (the `make bench`
 //! lane) — excluded from `make check`. No timing is asserted.
 
+#[path = "../tests/support/mod.rs"]
+mod support;
+
+use support::result_size;
+
 use std::sync::Arc;
 
-use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult,
-};
+use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest};
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 use purrdf_testkit::bench::{Bench, bench_group, bench_main, black_box};
 
@@ -109,15 +112,6 @@ fn operator_dense(levels: usize) -> String {
         );
     }
     format!("PREFIX ex: <https://example.org/>\nSELECT ?s ?n WHERE {{ {body} }}")
-}
-
-/// The size of any result: its rows, its graph's quads, or `1` for a `true` `ASK`.
-fn result_size(result: &SparqlResult) -> usize {
-    match result {
-        SparqlResult::Solutions { rows, .. } => rows.len(),
-        SparqlResult::Graph(graph) => graph.quad_count(),
-        SparqlResult::Boolean(value) => usize::from(*value),
-    }
 }
 
 /// `(bench id, query text, exact expected rows)`.

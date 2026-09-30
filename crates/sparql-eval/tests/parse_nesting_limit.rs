@@ -15,35 +15,20 @@
 //! what is asserted is that the deepest level that answers and the first that is
 //! refused are neighbours, not where they fall.
 
-use std::sync::Arc;
+mod support;
 
-use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, SparqlRequest, SparqlResult,
-    TermValue,
-};
+use purrdf_testkit::text::nested;
+use support::two_integer_objects;
+
+use purrdf_core::{RdfDiagnostic, SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::{EvalError, NativeSparqlEngine, QueryOptions};
 
 const EX: &str = "http://example.org/";
 
-/// `<s1> <p> 1` and `<s2> <p> 2`.
-fn dataset() -> Arc<RdfDataset> {
-    let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
-    for n in 1..=2 {
-        let s = builder.intern_iri(&format!("{EX}s{n}"));
-        let o = builder.intern_literal(RdfLiteral::typed(
-            n.to_string(),
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        builder.push_quad(s, p, o, None);
-    }
-    builder.freeze().expect("the fixture dataset")
-}
-
 /// The local names of the subjects `query` answers with, sorted, or the engine's
 /// diagnostic.
 fn subjects(query: &str) -> Result<Vec<String>, RdfDiagnostic> {
-    let dataset = dataset();
+    let dataset = two_integer_objects();
     let result = NativeSparqlEngine::new().query_with_options_view(
         &*dataset,
         SparqlRequest {
@@ -71,11 +56,6 @@ fn subjects(query: &str) -> Result<Vec<String>, RdfDiagnostic> {
 /// ([`EvalError::STACK_EXHAUSTED_CODE`]).
 fn is_stack_refusal(diagnostic: &RdfDiagnostic) -> bool {
     diagnostic.code == EvalError::STACK_EXHAUSTED_CODE
-}
-
-/// `open` written `n` times around `core`, closed by `close` written `n` times.
-fn nested(open: &str, core: &str, close: &str, n: usize) -> String {
-    format!("{}{core}{}", open.repeat(n), close.repeat(n))
 }
 
 /// A nesting shape, written `n` levels deep, and the subjects it must answer with: each

@@ -30,30 +30,38 @@
 //! says a caller stopped below it.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_core::{FastMap, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CandidateDomains, CompiledRetrieval, DecayRule,
     DepthInputs, ExclusionVerdict, ExecutionError, ExecutionResult, Fixed, FusionError,
     FusionProfile, FusionResult, FusionStream, Iri, PfAttestation, Plan, PlanError, PlanId,
-    PlanOrigin, ProducerBinding, ProducerReceipt, ProducerStatus, ProtocolError, RankFidelity,
-    RankedRow, RankedStream, RankedStreamAdapter, RankedStreamImpl, ReadBound, RequestTerm,
-    RetrievalRequest, RowBlock, ScoreExactness, SearchError, SearchResult, Statistics,
-    StatisticsEntries, StatisticsSnapshot, StratumUnit, StreamContract, StreamEnding, Term, TopK,
-    UnitError, UnservedReason, UnservedTerm, compile, contribution, execute, fuse, plan, search,
+    PlanOrigin, ProducerBinding, ProducerReceipt, ProducerStatus, ProtocolError, RankedRow,
+    RankedStream, RankedStreamAdapter, RankedStreamImpl, ReadBound, RetrievalRequest, RowBlock,
+    ScoreExactness, SearchError, SearchResult, Statistics, StatisticsEntries, StatisticsSnapshot,
+    StratumUnit, StreamContract, StreamEnding, Term, TopK, UnitError, UnservedReason, UnservedTerm,
+    compile, contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, DomainTag, DuplicatePolicy, EvalError, ExclusionBasis,
-    ExtensionEnv, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-    PropertyFunctionRegistry, QueryOptions, RankArithmetic, RankedDeclaration, RequestFacet,
-    TermKind, TermPattern, TermPlacement, Volatility,
+    DomainTag, DuplicatePolicy, ExtensionEnv, NativeSparqlEngine, PropertyFunctionRegistry,
+    QueryOptions, TermKind, TermPattern,
 };
 
 mod common;
+
+#[path = "support/streams.rs"]
+mod streams;
+
+use streams::{permuted_index, profile, render, stratum, unique_items};
+
+#[path = "support/registry.rs"]
+mod registry;
+
+use purrdf_retrieval::block_on;
+use purrdf_retrieval::fixture::iri;
+use registry::{MockStatistics, ex, lexical_term, producer, ranked};
 
 const K: u32 = 60;
 
@@ -68,10 +76,6 @@ const TOP_K: TopK = TopK::new(1024);
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
-
-fn ex(suffix: &str) -> String {
-    format!("http://example.org/{suffix}")
-}
 
 /// A bundle of `units` under the identities `compiled` carries.
 ///
@@ -91,173 +95,6 @@ fn bundle_of(units: Vec<StratumUnit>, compiled: &CompiledRetrieval) -> CompiledR
     )
 }
 
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
-
-fn stratum(suffix: &str) -> Iri {
-    iri(&ex(&format!("stratum/{suffix}")))
-}
-
-fn kernel_iri(text: &str) -> purrdf_core::Iri {
-    purrdf_core::parse_iri(text).expect("fixture IRIs are valid")
-}
-
-/// Each accepted pattern, with the request term's value rendered into the
-/// object-side position. The mocks are arity (1,1) and project `?c0`, so the
-/// candidate is position 0 and a rendered facet binds at position 1.
-///
-/// An unconstrained `TermKind::Any` pattern is the exception: it declares **no**
-/// placement at all, so it is matched by every request term and receives none of
-/// them. Its argument stays free, and the plan reports every term that reached
-/// only this producer — matching a shape is not the same as receiving it.
-fn accepted(patterns: Vec<TermPattern>) -> Vec<AcceptedTerm> {
-    patterns
-        .into_iter()
-        .map(|pattern| {
-            let placements = if pattern == TermPattern::of_kind(TermKind::Any) {
-                Vec::new()
-            } else {
-                vec![TermPlacement {
-                    facet: RequestFacet::Value,
-                    position: 1,
-                    datatype: None,
-                }]
-            };
-            AcceptedTerm {
-                pattern,
-                placements,
-            }
-        })
-        .collect()
-}
-
-/// A ranked declaration, supplied where a producer is registered. `mandatory`
-/// is declared by the host rather than inferred: it states, explicitly, what an
-/// unconstrained `TermKind::Any` pattern used to imply.
-fn ranked(stratum_iri: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedDeclaration {
-    RankedDeclaration {
-        stratum: kernel_iri(stratum_iri),
-        accepted_terms: accepted(patterns),
-        depth_placement: None,
-        candidate_position: 0,
-        duplicates: DuplicatePolicy::Unique,
-        fidelity: RankFidelity::EXACT,
-        arithmetic: RankArithmetic::FloatFree,
-        domains: CandidateDomains::Unrestricted,
-        block_position: None,
-        exclusion: ExclusionBasis::Unavailable,
-        mandatory,
-    }
-}
-
-/// The contract every fixture producer here declares, and the one a hand-built
-/// stream in this file states: no repeats. It is spelled once so the registered
-/// declaration above and the streams below cannot drift into describing two
-/// different promises. The contiguous, ascending ranks these streams emit are
-/// not part of it — that law holds for every stream and is checked rank by rank
-/// rather than declared.
-fn unique_items() -> StreamContract {
-    StreamContract::new(
-        DuplicatePolicy::Unique,
-        RankFidelity::EXACT,
-        CandidateDomains::Unrestricted,
-        ExclusionBasis::Unavailable,
-    )
-}
-
-fn lexical_term() -> RequestTerm {
-    RequestTerm::Lexical {
-        text: "quick brown fox".to_owned(),
-        language: Some("en".to_owned()),
-        predicate: Some(iri(&ex("body"))),
-    }
-}
-
-/// A mock ranked producer that declares `rows` and emits `emitted`.
-struct MockProducer {
-    arity: PfArity,
-    mode: BindingPattern,
-    rows: u64,
-    emitted: Vec<Vec<TermValue>>,
-}
-
-impl PropertyFunction for MockProducer {
-    fn volatility(&self) -> Volatility {
-        Volatility::Stable
-    }
-
-    fn arity(&self) -> PfArity {
-        self.arity
-    }
-
-    fn modes(&self) -> &[BindingPattern] {
-        std::slice::from_ref(&self.mode)
-    }
-
-    fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
-        self.rows
-    }
-
-    fn open(
-        &self,
-        args: &PfArgs<'_>,
-        _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
-        // A bound position is an input the call site supplied, and the engine
-        // drops any row that disagrees with it there. Echoing the input back is
-        // the cheapest correct behaviour, and it is what makes these fixtures
-        // sensitive to the constants the compiler renders.
-        let bound: Vec<Option<TermValue>> =
-            args.flattened().map(Option::<&TermValue>::cloned).collect();
-        let mut rows: Vec<Vec<TermValue>> = Vec::with_capacity(self.emitted.len());
-        for row in &self.emitted {
-            let mut echoed = Vec::with_capacity(row.len());
-            for (position, value) in row.iter().enumerate() {
-                echoed.push(
-                    bound
-                        .get(position)
-                        .and_then(Clone::clone)
-                        .unwrap_or_else(|| value.clone()),
-                );
-            }
-            rows.push(echoed);
-        }
-        Ok(Box::new(RowCursor {
-            rows: rows.into_iter(),
-        }))
-    }
-}
-
-struct RowCursor {
-    rows: std::vec::IntoIter<Vec<TermValue>>,
-}
-
-impl PfCursor for RowCursor {
-    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
-        Ok(self.rows.next())
-    }
-}
-
-/// A ranked producer emitting `count` distinct `(entity, score)` row pairs.
-fn make_producer(rows: u64, prefix: &str, count: usize) -> Arc<dyn PropertyFunction> {
-    let arity = PfArity::new(1, 1);
-    let emitted = (0..count)
-        .map(|index| {
-            vec![
-                TermValue::iri(format!("{}entity{index}", ex(prefix))),
-                TermValue::iri(format!("{}score{index}", ex(prefix))),
-            ]
-        })
-        .collect();
-    Arc::new(MockProducer {
-        arity,
-        mode: arity.all_free_mode(),
-        rows,
-        emitted,
-    })
-}
-
 /// A single catch-all producer under its own stratum.
 fn single_registry(
     stratum_iri: &str,
@@ -268,34 +105,10 @@ fn single_registry(
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         producer_iri,
-        make_producer(rows, "hand/", count),
+        producer(rows, "hand/", count),
         ranked(stratum_iri, vec![TermPattern::of_kind(TermKind::Any)], true),
     );
     registry
-}
-
-struct MockStatistics {
-    source: String,
-    revision: String,
-    cardinalities: BTreeMap<Iri, u64>,
-}
-
-impl Statistics for MockStatistics {
-    fn source(&self) -> &str {
-        &self.source
-    }
-
-    fn revision(&self) -> &str {
-        &self.revision
-    }
-
-    fn cardinality(&self, predicate: &Iri) -> Option<u64> {
-        self.cardinalities.get(predicate).copied()
-    }
-
-    fn selectivity_ppm(&self, _subject: &Iri, _term: &RequestTerm) -> Option<u64> {
-        None
-    }
 }
 
 /// Statistics that bound exactly one stratum at `cardinality`.
@@ -316,40 +129,9 @@ fn single_profile(stratum_iri: &str) -> FusionProfile {
     .expect("the fixture profile is valid")
 }
 
-/// A profile weighting the named strata, which is also what leaves room for
-/// every one of them to contribute to a candidate: the contribution maximum is
-/// the stratum count.
-fn profile(weights: &[(&str, Fixed)], k: u32) -> FusionProfile {
-    let map: BTreeMap<Iri, Fixed> = weights
-        .iter()
-        .map(|(name, weight)| (stratum(name), *weight))
-        .collect();
-    FusionProfile::with_decay(map, DecayRule::ReciprocalRank { k })
-        .expect("fixture profile is valid")
-}
-
 // ---------------------------------------------------------------------------
 // A minimal single-threaded executor (the mocks never actually pend)
 // ---------------------------------------------------------------------------
-
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
-}
 
 /// Run `sparql` through the evaluator itself, with no composition type in the
 /// path: this is exactly what a caller does when it stops at `compile` (or
@@ -1193,7 +975,7 @@ fn start_at_execute_evaluator_only() {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         ex("pf/match"),
-        make_producer(10, "direct/", 3),
+        producer(10, "direct/", 3),
         ranked(
             &ex("stratum/direct"),
             vec![TermPattern::of_kind(TermKind::Any)],
@@ -1324,38 +1106,8 @@ fn a_hand_built_stream_can_declare_the_depth_that_stopped_it() {
 // 7. Fused is top-k with memory proportional to the frontier
 // ---------------------------------------------------------------------------
 
-/// How many candidates the strata may disagree about at once.
-///
-/// Each stratum below emits the same universe of candidates permuted **within**
-/// blocks of this size, so a candidate's ranks differ across strata by less than
-/// one block and the frontier holds the candidates of at most a couple of blocks
-/// at any moment. It is the disagreement window, and it is what the frontier's
-/// size is proportional to — not the stream length, which is the claim.
-const DISAGREEMENT_BLOCK: u64 = 4;
-
 /// The three strata the frontier fixtures fuse, in their permutation order.
 const FRONTIER_STRATA: [&str; 3] = ["nra/a", "nra/b", "nra/c"];
-
-/// The candidate one stratum emits at 1-based `rank`.
-///
-/// Stratum 0 emits the universe in order; stratum 1 reverses each block; stratum
-/// 2 rotates each block by half its width. Each is a permutation of the same
-/// universe, so every stream emits distinct items (the protocol's uniqueness
-/// rule) and every candidate is eventually seen by every stratum — which is what
-/// makes the frontier hold candidates awaiting confirmation rather than sit
-/// empty. A single-stratum fixture proves nothing here: with one stream there is
-/// nothing to await, and the frontier never holds anything at all.
-fn permuted_index(stream: usize, rank: u64) -> u64 {
-    let index = rank - 1;
-    let block = index / DISAGREEMENT_BLOCK;
-    let offset = index % DISAGREEMENT_BLOCK;
-    let permuted = match stream {
-        0 => offset,
-        1 => DISAGREEMENT_BLOCK - 1 - offset,
-        _ => (offset + DISAGREEMENT_BLOCK / 2) % DISAGREEMENT_BLOCK,
-    };
-    block * DISAGREEMENT_BLOCK + permuted
-}
 
 /// What a [`LazyStream`] emits at a 1-based rank: the candidate a given stream
 /// carries there. The rows themselves — rank, contribution, receipt — are the
@@ -1956,35 +1708,6 @@ fn no_stage_takes_a_selector() {
 // 12. The canonical encoding is a pure function of the value
 // ---------------------------------------------------------------------------
 
-/// Render a fusion as deterministic text: rows in final order with their
-/// provenance, then statuses by stratum, then the profile identity.
-fn render_fusion(result: &FusionResult<Term>) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::new();
-    for fused in &result.rows {
-        let _ = writeln!(
-            out,
-            "row {} score={} witness={}",
-            fused.entity.as_str(),
-            fused.score.to_decimal_lexical(),
-            fused.threshold_witness.to_decimal_lexical()
-        );
-        for (stratum, rank, value) in &fused.contributions {
-            let _ = writeln!(
-                out,
-                "  {} rank={rank} score={}",
-                stratum.as_str(),
-                value.to_decimal_lexical()
-            );
-        }
-    }
-    for (stratum, status) in &result.trailer.statuses {
-        let _ = writeln!(out, "status {} {status:?}", stratum.as_str());
-    }
-    let _ = writeln!(out, "profile {}", result.trailer.profile_id.to_hex());
-    out
-}
-
 async fn equality_fusion(profile: &FusionProfile) -> FusionResult<Term> {
     let streams = vec![
         (
@@ -2050,7 +1773,7 @@ fn encoding_and_fusion_are_deterministic_in_one_process() {
     // law within this process.
     let first = block_on(equality_fusion(&profile));
     let second = block_on(equality_fusion(&profile));
-    assert_eq!(render_fusion(&first), render_fusion(&second));
+    assert_eq!(render(&first), render(&second));
 }
 
 // ---------------------------------------------------------------------------
@@ -2284,11 +2007,7 @@ fn registry_declaring(
     declaration.domains = domains;
     declaration.duplicates = duplicates;
     let mut registry = PropertyFunctionRegistry::new();
-    registry.register_ranked(
-        producer_iri,
-        make_producer(rows, "hand/", count),
-        declaration,
-    );
+    registry.register_ranked(producer_iri, producer(rows, "hand/", count), declaration);
     registry
 }
 

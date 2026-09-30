@@ -10,10 +10,13 @@
 //! allocator is `#[global_allocator]`, it observes every heap allocation any code
 //! in the loop body would make — there is nowhere for a hidden allocation to hide.
 
+#[path = "support/borrowed.rs"]
+mod borrowed;
+use borrowed::term_ref_len;
 use std::hash::{Hash, Hasher};
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
-use purrdf_core::{BlankScope, QuadIds, QuadRef, RdfDatasetBuilder, RdfLiteral, TermRef};
+use purrdf_core::{BlankScope, QuadIds, QuadRef, RdfDatasetBuilder, RdfLiteral};
 
 // A CURRENT-THREAD window, not a whole-process one: `cargo test` runs every test in
 // the binary concurrently on separate threads sharing one process and one
@@ -120,18 +123,4 @@ fn quad_refs_resolution_allocates_zero() {
 /// them — exercises the resolved view of every position.
 fn quad_ref_len(q: &QuadRef<'_>) -> usize {
     term_ref_len(q.s) + term_ref_len(q.p) + term_ref_len(q.o) + q.g.map_or(0, term_ref_len)
-}
-
-/// Touch a borrowed term's `&str` content without copying it — returns a length so
-/// the borrow is genuinely observed by the optimizer. Triple-term components are
-/// ids (no borrowed string content), so they contribute nothing here.
-fn term_ref_len(t: TermRef<'_>) -> usize {
-    match t {
-        TermRef::Iri(s) => s.len(),
-        TermRef::Blank { label, .. } => label.len(),
-        TermRef::Literal {
-            lexical, language, ..
-        } => lexical.len() + language.map_or(0, str::len),
-        TermRef::Triple { .. } => 0,
-    }
 }

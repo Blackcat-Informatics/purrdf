@@ -1479,50 +1479,6 @@ fn node_analysis<'a>(
     table.get(&(std::ptr::from_ref(pattern) as usize))
 }
 
-/// Collect the variables a term pattern mentions, descending into a quoted
-/// triple's own component positions — the analysis-module twin of
-/// `crate::expr::term_pattern_vars`, kept local so this module needs no
-/// visibility change into `crate::expr`'s private helpers.
-///
-/// A term that is not a quoted triple is answered without allocating. A quoted
-/// triple is walked over a work list — subject, predicate, object, at every level —
-/// so a term nested to any depth needs no more machine stack.
-fn collect_term_pattern_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
-    /// One position of the walk: a term, or a quoted triple's predicate.
-    enum Position<'a> {
-        Term(&'a TermPattern),
-        Predicate(&'a NamedNodePattern),
-    }
-    match term {
-        TermPattern::Variable(v) => {
-            out.insert(v.clone());
-            return;
-        }
-        TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
-            return;
-        }
-        TermPattern::Triple(_) => {}
-    }
-    let mut pending = vec![Position::Term(term)];
-    while let Some(position) = pending.pop() {
-        match position {
-            Position::Term(TermPattern::Variable(v))
-            | Position::Predicate(NamedNodePattern::Variable(v)) => {
-                out.insert(v.clone());
-            }
-            Position::Term(TermPattern::Triple(triple)) => {
-                pending.push(Position::Term(&triple.object));
-                pending.push(Position::Predicate(&triple.predicate));
-                pending.push(Position::Term(&triple.subject));
-            }
-            Position::Term(
-                TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_),
-            )
-            | Position::Predicate(NamedNodePattern::NamedNode(_)) => {}
-        }
-    }
-}
-
 /// Whether a `Path` endpoint term can make `crate::path::resolve_end` raise
 /// [`crate::error::EvalError::unsupported_deferred`] with
 /// [`crate::error::UnsupportedKind::QuotedTripleTermVariable`] — the hard error
@@ -1543,7 +1499,7 @@ fn path_endpoint_can_hard_error(term: &TermPattern) -> bool {
         return false;
     }
     let mut vars = DetHashSet::default();
-    collect_term_pattern_vars(term, &mut vars);
+    term.collect_variables(&mut vars);
     !vars.is_empty()
 }
 
@@ -1904,11 +1860,11 @@ fn assemble_pattern(pattern: &GraphPattern, values: &mut AnalysisValues) -> Node
         GraphPattern::Bgp { patterns } => {
             let mut vars = DetHashSet::default();
             for tp in patterns {
-                collect_term_pattern_vars(&tp.subject, &mut vars);
+                tp.subject.collect_variables(&mut vars);
                 if let NamedNodePattern::Variable(v) = &tp.predicate {
                     vars.insert(v.clone());
                 }
-                collect_term_pattern_vars(&tp.object, &mut vars);
+                tp.object.collect_variables(&mut vars);
             }
             NodeAnalysis {
                 certainly_bound: vars.clone(),
@@ -1921,8 +1877,8 @@ fn assemble_pattern(pattern: &GraphPattern, values: &mut AnalysisValues) -> Node
             subject, object, ..
         } => {
             let mut vars = DetHashSet::default();
-            collect_term_pattern_vars(subject, &mut vars);
-            collect_term_pattern_vars(object, &mut vars);
+            subject.collect_variables(&mut vars);
+            object.collect_variables(&mut vars);
             NodeAnalysis {
                 certainly_bound: vars.clone(),
                 free_vars: vars,
@@ -1959,7 +1915,7 @@ fn assemble_pattern(pattern: &GraphPattern, values: &mut AnalysisValues) -> Node
         GraphPattern::PropertyFunction(call) => {
             let mut vars = DetHashSet::default();
             for term in call.subject_args.iter().chain(&call.object_args) {
-                collect_term_pattern_vars(term, &mut vars);
+                term.collect_variables(&mut vars);
             }
             NodeAnalysis {
                 free_vars: vars,
@@ -2589,33 +2545,11 @@ fn pattern_probe_step<'p, 't>(
 }
 
 /// Whether the fresh binding [`exists_row_collision`] reports is an `Extend`/
-/// `(expr AS ?v)` target or a `VALUES` column — the same two shapes, and the
-/// same message wording, as `purrdf_sparql_algebra`'s parser-side
-/// `ScopeIntro` (that type is private to the parser crate, so this is a
-/// separate, deliberately identical, enum rather than a shared one — see
-/// [`exists_row_collision`]'s doc for why the eval crate needs its own copy
-/// of the same theorem).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RowCollisionIntro {
-    /// A `BIND(expr AS ?v)` target, a sub-`SELECT`'s `(expr AS ?v)`
-    /// projection target, a `GROUP BY (expr AS ?v)` condition, or a `GROUP
-    /// BY` aggregate's output variable.
-    Bind,
-    /// A `VALUES` block's column variable.
-    Values,
-    /// An `UNFOLD(expr AS ?e, ?i)` target — either of the two.
-    Unfold,
-}
-
-impl RowCollisionIntro {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Bind => "BIND target",
-            Self::Values => "VALUES variable",
-            Self::Unfold => "UNFOLD target",
-        }
-    }
-}
+/// `(expr AS ?v)` target, a `VALUES` column or an `UNFOLD` target — the same
+/// shapes, and the same message wording, as the parser's scope check reports:
+/// the parser's own [`ScopeIntro`](purrdf_sparql_algebra::parser::ScopeIntro),
+/// so the two can never name a construct differently.
+pub(crate) use purrdf_sparql_algebra::parser::ScopeIntro as RowCollisionIntro;
 
 /// Find the first variable `pattern` introduces (via `BIND`, a sub-`SELECT`'s
 /// `(expr AS ?v)` projection target, a `GROUP BY` aggregate's output
@@ -5526,7 +5460,7 @@ mod iterative_walks {
                 }));
             }
             let mut collected = DetHashSet::default();
-            collect_term_pattern_vars(&term, &mut collected);
+            term.collect_variables(&mut collected);
             assert_eq!(collected, vars(&["s", "o"]));
             let bgp = GraphPattern::Bgp {
                 patterns: vec![TriplePattern {

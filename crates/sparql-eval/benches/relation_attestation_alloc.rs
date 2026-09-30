@@ -54,6 +54,11 @@
 //!   buffers, row interning, the solution row) and no phase above can be mistaken
 //!   for measuring that floor.
 
+#[path = "../tests/support/mod.rs"]
+mod support;
+
+use support::with_env;
+
 use std::hint::black_box;
 use std::sync::Arc;
 
@@ -62,7 +67,7 @@ use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, SparqlRequest, TermValue};
 use purrdf_sparql_eval::{
     EvalError, ExtensionEnv, IndexGeneration, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, QueryGovernors, QueryOptions, Volatility,
+    PropertyFunction, PropertyFunctionRegistry, QueryGovernors, Volatility,
 };
 
 // ---------------------------------------------------------------------------
@@ -218,10 +223,6 @@ fn registry(attests: Attests) -> ExtensionEnv {
     ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly")
 }
 
-fn options(env: &ExtensionEnv) -> QueryOptions<'_> {
-    QueryOptions::new().with_env(env)
-}
-
 /// Whether a phase runs the lane that can carry a witness.
 #[derive(Clone, Copy)]
 enum Lane {
@@ -245,7 +246,7 @@ fn phase(label: &str, attests: Attests, lane: Lane, dataset: &Arc<RdfDataset>) {
     // Prepared outside the measured window on both lanes, so neither phase pays for
     // parsing and planning and the figures are the evaluation's own.
     let prepared = engine
-        .prepare_query_with_options(PER_ROW_CALL, None, options(&relations))
+        .prepare_query_with_options(PER_ROW_CALL, None, with_env(&relations))
         .expect("the fixture query prepares against the registry");
 
     let window = WholeProcessWindow::open();
@@ -256,7 +257,7 @@ fn phase(label: &str, attests: Attests, lane: Lane, dataset: &Arc<RdfDataset>) {
                     &**dataset,
                     &prepared,
                     &[],
-                    options(&relations),
+                    with_env(&relations),
                     &QueryGovernors::UNBOUNDED,
                 )
                 .expect("a governed run of the fixture query is an outcome");
@@ -264,7 +265,7 @@ fn phase(label: &str, attests: Attests, lane: Lane, dataset: &Arc<RdfDataset>) {
         }
         Lane::Ungoverned => {
             let result = engine
-                .query_with_options_view(&**dataset, request, options(&relations))
+                .query_with_options_view(&**dataset, request, with_env(&relations))
                 .expect("the fixture relation declares nothing short, so this answers");
             black_box(&result);
         }

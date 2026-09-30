@@ -7,16 +7,24 @@
 //! dropped comments and whitespace, so a reformat or a reworded comment cannot
 //! separate two copies. Two normal forms are computed.
 //!
-//! * The **structural form** (clone types 1 and 2) keeps keywords, punctuation,
-//!   delimiters and the names of the items a body uses (paths, called functions and
-//!   methods, macros, types, variants, primitive types), renames every local name
-//!   — bindings, parameters, fields, lifetimes — to its first-appearance position
-//!   (`$0`, `$1`, …) and replaces every literal with its kind (`$int`, `$str`, …).
-//!   Two bodies that differ only in the names they chose for their own values and
-//!   in the constants they carry collide; two bodies whose control flow differs, or
-//!   that call different functions or match different enums, do not. Renaming item
-//!   names too would make every `match self { Self::A => "a", … }` of the same
-//!   arity one "group", which is shape, not shared functionality.
+//! * The **structural form** (clone types 1 and 2, and the near misses of type 3
+//!   that differ only in how a value is held) keeps keywords, punctuation,
+//!   delimiters, the names of the items a body uses (paths, called functions and
+//!   methods, macros, types, variants, primitive types) and the names of the
+//!   fields it reads, renames every local name — bindings, parameters,
+//!   lifetimes — to its first-appearance position (`$0`, `$1`, …) and replaces
+//!   every literal with its kind (`$int`, `$str`, …; a type suffix is part of the
+//!   kind's spelling, so `0u64` and `0` agree). It drops the spellings that only
+//!   change how a value is held: a borrow (`&x`, `&mut x`), a deref (`*x`), `ref`,
+//!   the value adapters (`.as_str()`, `.clone()`, `.to_owned()`, …), a
+//!   full-range reindex (`x[..]`), a `let` type annotation and a type-only
+//!   turbofish — so `parent[&cursor]` over `usize` and `parent[cursor]` over
+//!   `&str` are one breadth-first search. Two bodies whose control flow differs,
+//!   that call different functions, match different enums or read different
+//!   fields do not collide; nor do two that differ in a const generic argument.
+//!   Renaming item names too would make every `match self { Self::A => "a", … }`
+//!   of the same arity one "group", which is shape, not shared functionality; for
+//!   the same reason a body under [`LITERAL_TIER`] tokens keeps its literals.
 //! * The **shim form** renames only the function's own parameters and keeps every
 //!   other identifier and literal verbatim, so two thin forwarders collide exactly
 //!   when they spell the same target with the same fixed arguments. The target is
@@ -32,9 +40,24 @@ use std::collections::{BTreeMap, BTreeSet};
 use proc_macro2::{Delimiter, Spacing, TokenStream, TokenTree};
 
 /// The structural form of a body whose normal form has fewer tokens than this is
-/// not grouped: at this size a body is a one-line accessor or a thin shim, and
-/// thin shims are allowed. Shims are grouped separately, by their shim form.
-pub(crate) const MIN_TOKENS: usize = 30;
+/// not grouped: at this size a body is a one-line accessor or a required trait
+/// method. Measured over the workspace (shipping, tests, benches and examples):
+/// lowering the floor from 30 to 20 found 53 new shipping groups, most of them
+/// small helpers written twice; below 20 the new groups are dominated by `&`/`&mut`
+/// accessor twins and per-type trait impls that share a shape and no job.
+pub(crate) const MIN_TOKENS: usize = 20;
+
+/// A single-expression forwarder shorter than this is a thin shim: it is grouped
+/// by its shim form, never by its structural form, since two shims that spell
+/// different fixed arguments forward to different places.
+pub(crate) const SHIM_MAX_TOKENS: usize = 30;
+
+/// A body whose structural form is shorter than this is fingerprinted with its
+/// literals verbatim. At this size a body's constants are most of what it says:
+/// two twenty-token `match` arms that map the same variants to different strings
+/// are two tables, and two that map them to the same strings are one table
+/// written twice.
+pub(crate) const LITERAL_TIER: usize = 30;
 
 /// A shim needs at least this many tokens to be grouped; below it every
 /// `{ f(x) }` would be a group.
@@ -101,6 +124,14 @@ pub(crate) struct BodyPrint {
 pub(crate) fn body_print(body: &TokenStream, params: &BTreeSet<String>) -> BodyPrint {
     let mut structural = Vec::new();
     structural_form(body, &mut BTreeMap::new(), &mut structural);
+    let mut grouped = Vec::new();
+    if structural.len() < LITERAL_TIER {
+        let level = Level {
+            literals: true,
+            ..Level::default()
+        };
+        structural_level(body, level, &mut BTreeMap::new(), &mut grouped);
+    }
     let shim = shim_candidate(body).then(|| {
         let mut form = Vec::new();
         shim_form(body, params, &mut BTreeMap::new(), &mut form);
@@ -108,9 +139,16 @@ pub(crate) fn body_print(body: &TokenStream, params: &BTreeSet<String>) -> BodyP
     });
     BodyPrint {
         tokens: structural.len(),
-        structural: fingerprint("body", &structural),
+        structural: fingerprint(
+            "body",
+            if grouped.is_empty() {
+                &structural
+            } else {
+                &grouped
+            },
+        ),
         shim: shim
-            .filter(|form| form.len() >= MIN_SHIM_TOKENS && structural.len() < MIN_TOKENS)
+            .filter(|form| form.len() >= MIN_SHIM_TOKENS && structural.len() < SHIM_MAX_TOKENS)
             .map(|form| fingerprint("shim", &form)),
     }
 }
@@ -144,26 +182,88 @@ fn names_an_item(tokens: &[TokenTree], index: usize, text: &str) -> bool {
 }
 
 /// The structural form of `stream`, appended to `out`: keywords, punctuation,
-/// delimiters and item names verbatim, local names (bindings, parameters,
-/// fields, lifetimes) renamed to their first-appearance position, literals
-/// replaced by their kind.
+/// delimiters, item names and field names verbatim, local names (bindings,
+/// parameters, lifetimes) renamed to their first-appearance position, literals
+/// replaced by their kind, and the value-form spellings
+/// [`value_form_erasures`] names dropped.
+///
+/// A field name is kept because it names a member of a type, as a method name
+/// does: two accessors `Self::A { tripped, .. } => Some(*tripped)` and
+/// `Self::A { partial, .. } => Some(partial)` read different fields and are two
+/// jobs, however alike their shape.
 pub(crate) fn structural_form(
     stream: &TokenStream,
     names: &mut BTreeMap<String, usize>,
     out: &mut Vec<String>,
 ) {
+    structural_level(stream, Level::default(), names, out);
+}
+
+/// How one delimiter level of a body is normalised.
+#[derive(Clone, Copy, Debug, Default)]
+struct Level {
+    /// The level is the braces of a struct literal or pattern.
+    fields: bool,
+    /// Literals are kept verbatim rather than abstracted to their kind.
+    literals: bool,
+}
+
+/// Whether the identifier at `index` names a field: `.field` (not a method
+/// call), or, inside a struct literal or pattern (`fields`), a name in field
+/// position — first or after a comma, and followed by `:` (not `::`), a comma
+/// or the end of the braces.
+fn names_a_field(tokens: &[TokenTree], index: usize, fields: bool) -> bool {
+    let previous = index.checked_sub(1).and_then(|at| tokens.get(at));
+    let before_previous = index.checked_sub(2).and_then(|at| tokens.get(at));
+    let next = tokens.get(index + 1);
+    let accessed = matches!(previous, Some(TokenTree::Punct(punct)) if punct.as_char() == '.' && punct.spacing() == Spacing::Alone)
+        && !is_joint(before_previous, '.')
+        && !matches!(next, Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Parenthesis)
+        && !is_joint(next, ':');
+    let in_position = fields
+        && (index == 0 || is_punct(previous, ','))
+        && (next.is_none()
+            || is_punct(next, ',')
+            || matches!(next, Some(TokenTree::Punct(punct)) if punct.as_char() == ':' && punct.spacing() == Spacing::Alone));
+    accessed || in_position
+}
+
+/// Whether the braces after `previous` hold a struct literal or pattern: they
+/// follow a type or variant name (`Point {`, `Self::A {`).
+fn opens_fields(previous: Option<&TokenTree>) -> bool {
+    matches!(previous, Some(TokenTree::Ident(ident)) if {
+        let text = ident.to_string();
+        text == "Self" || text.starts_with(|first: char| first.is_ascii_uppercase())
+    })
+}
+
+fn structural_level(
+    stream: &TokenStream,
+    level: Level,
+    names: &mut BTreeMap<String, usize>,
+    out: &mut Vec<String>,
+) {
     let tokens: Vec<TokenTree> = stream.clone().into_iter().collect();
+    let erased = value_form_erasures(&tokens);
     for (index, token) in tokens.iter().enumerate() {
+        if erased[index] {
+            continue;
+        }
+        let previous = index.checked_sub(1).and_then(|at| tokens.get(at));
         match token {
             TokenTree::Group(group) => {
                 let (open, close) = delimiters(group.delimiter());
                 out.push(open.to_owned());
-                structural_form(&group.stream(), names, out);
+                let fields = group.delimiter() == Delimiter::Brace && opens_fields(previous);
+                structural_level(&group.stream(), Level { fields, ..level }, names, out);
                 out.push(close.to_owned());
             }
             TokenTree::Ident(ident) => {
                 let text = ident.to_string();
-                if KEYWORDS.contains(&text.as_str()) || names_an_item(&tokens, index, &text) {
+                if KEYWORDS.contains(&text.as_str())
+                    || names_an_item(&tokens, index, &text)
+                    || names_a_field(&tokens, index, level.fields)
+                {
                     out.push(text);
                 } else {
                     let next = names.len();
@@ -172,9 +272,236 @@ pub(crate) fn structural_form(
                 }
             }
             TokenTree::Punct(punct) => out.push(punct_text(punct)),
-            TokenTree::Literal(literal) => out.push(literal_kind(&literal.to_string()).to_owned()),
+            TokenTree::Literal(literal) => {
+                let text = literal.to_string();
+                // A tuple field (`pair.0`) is a field name, not a constant.
+                if level.literals || (is_punct(previous, '.') && !is_joint(previous, '.')) {
+                    out.push(text);
+                } else {
+                    out.push(literal_kind(&text).to_owned());
+                }
+            }
         }
     }
+}
+
+/// The value-form adapters the structural form drops: a no-argument method that
+/// changes how a value is held (borrowed, copied, owned) and not what it is.
+/// `next.as_str()` and `next` (over `&str` and over `usize`) are one algorithm.
+const VALUE_ADAPTERS: [&str; 11] = [
+    "as_str",
+    "as_ref",
+    "as_slice",
+    "as_mut",
+    "as_deref",
+    "borrow",
+    "borrow_mut",
+    "clone",
+    "cloned",
+    "copied",
+    "to_owned",
+];
+
+fn is_punct(token: Option<&TokenTree>, wanted: char) -> bool {
+    matches!(token, Some(TokenTree::Punct(punct)) if punct.as_char() == wanted)
+}
+
+fn is_joint(token: Option<&TokenTree>, wanted: char) -> bool {
+    matches!(token, Some(TokenTree::Punct(punct)) if punct.as_char() == wanted && punct.spacing() == Spacing::Joint)
+}
+
+fn is_ident(token: Option<&TokenTree>, wanted: &str) -> bool {
+    matches!(token, Some(TokenTree::Ident(ident)) if ident == wanted)
+}
+
+/// Whether `token` ends an operand, so a `&` or `*` after it is the binary
+/// operator (`a & b`, `f() * 2`, `x? * y`) rather than a borrow or a deref. A
+/// braced block ends a statement (`for … { … } *total += 1;`), not an operand.
+fn ends_operand(token: Option<&TokenTree>) -> bool {
+    match token {
+        None => false,
+        Some(TokenTree::Ident(ident)) => {
+            let text = ident.to_string();
+            matches!(text.as_str(), "self" | "Self" | "true" | "false")
+                || !KEYWORDS.contains(&text.as_str())
+        }
+        Some(TokenTree::Literal(_)) => true,
+        Some(TokenTree::Group(group)) => group.delimiter() != Delimiter::Brace,
+        Some(TokenTree::Punct(punct)) => punct.as_char() == '?',
+    }
+}
+
+/// Whether `stream` is exactly `..`: the full-range index of `&x[..]`.
+fn is_full_range(stream: &TokenStream) -> bool {
+    let tokens: Vec<TokenTree> = stream.clone().into_iter().collect();
+    tokens.len() == 2 && is_joint(tokens.first(), '.') && is_punct(tokens.get(1), '.')
+}
+
+/// Whether the `>` at `index` is the head of `->` or `=>`, not a closing angle.
+fn is_arrow_head(tokens: &[TokenTree], index: usize) -> bool {
+    let previous = index.checked_sub(1).and_then(|at| tokens.get(at));
+    is_joint(previous, '-') || is_joint(previous, '=')
+}
+
+/// The end (exclusive) of the generic argument list whose `<` is at `open`: the
+/// matching `>`, counting nested `<`/`>` and ignoring the `>` of `->` and `=>`.
+fn angle_end(tokens: &[TokenTree], open: usize) -> Option<usize> {
+    let mut depth = 0_usize;
+    for (index, token) in tokens.iter().enumerate().skip(open) {
+        let TokenTree::Punct(punct) = token else {
+            continue;
+        };
+        match punct.as_char() {
+            '<' => depth += 1,
+            '>' if !is_arrow_head(tokens, index) => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(index + 1);
+                }
+            }
+            ';' => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Whether generic arguments name types only: no literal, `true`, `false` or
+/// braced const block, whose value would change what the call does
+/// (`Decompose::<true, _>` is compatibility decomposition, `::<false, _>` is not).
+fn names_only_types(arguments: &[TokenTree]) -> bool {
+    arguments.iter().all(|token| match token {
+        TokenTree::Literal(_) => false,
+        TokenTree::Ident(ident) => ident != "true" && ident != "false",
+        TokenTree::Group(group) => group.delimiter() != Delimiter::Brace,
+        TokenTree::Punct(_) => true,
+    })
+}
+
+/// The span of a `let` binding's type annotation, `: Type` up to the `=` or `;`
+/// that closes it, for the `let` at `at`.
+fn let_annotation(tokens: &[TokenTree], at: usize) -> Option<(usize, usize)> {
+    let mut index = at + 1;
+    let colon = loop {
+        match tokens.get(index)? {
+            TokenTree::Punct(punct) if punct.as_char() == ';' || punct.as_char() == '=' => {
+                return None;
+            }
+            TokenTree::Punct(punct)
+                if punct.as_char() == ':'
+                    && punct.spacing() == Spacing::Alone
+                    && !is_joint(tokens.get(index - 1), ':') =>
+            {
+                break index;
+            }
+            _ => index += 1,
+        }
+    };
+    let mut depth = 0_isize;
+    for (index, token) in tokens.iter().enumerate().skip(colon + 1) {
+        let TokenTree::Punct(punct) = token else {
+            continue;
+        };
+        match punct.as_char() {
+            '<' => depth += 1,
+            '>' if !is_arrow_head(tokens, index) => depth -= 1,
+            ';' => return Some((colon, index)),
+            '=' if depth <= 0 && punct.spacing() == Spacing::Alone => {
+                return Some((colon, index));
+            }
+            _ => {}
+        }
+    }
+    Some((colon, tokens.len()))
+}
+
+/// Which of `tokens` (one delimiter level) the structural form drops so that
+/// spellings of one algorithm that differ only in how a value is held
+/// collide: a borrow (`&x`, `&mut x`, `&&x`), a deref (`*x`), a `ref` binding, a
+/// value adapter (`.as_str()`, `.clone()`, … — [`VALUE_ADAPTERS`]), a full-range
+/// reindex (`x[..]`), a `let` type annotation and a turbofish that names types
+/// only (`::<T>`; a const argument is kept, see [`names_only_types`]). Index
+/// forms follow: `m[&k]` is `m[k]`. The binary `&`, `&&`, `*` and their compound
+/// assignments are kept.
+fn value_form_erasures(tokens: &[TokenTree]) -> Vec<bool> {
+    let mut erased = vec![false; tokens.len()];
+    let mut index = 0;
+    while index < tokens.len() {
+        let previous = index.checked_sub(1).and_then(|at| tokens.get(at));
+        match &tokens[index] {
+            TokenTree::Punct(punct) if matches!(punct.as_char(), '&' | '*') => {
+                if ends_operand(previous) {
+                    // A binary operator; step over `&&`, `&=`, `*=` whole.
+                    index += if punct.spacing() == Spacing::Joint {
+                        2
+                    } else {
+                        1
+                    };
+                    continue;
+                }
+                erased[index] = true;
+                if punct.as_char() == '&' && is_ident(tokens.get(index + 1), "mut") {
+                    erased[index + 1] = true;
+                    index += 1;
+                }
+            }
+            TokenTree::Punct(punct)
+                if punct.as_char() == '.'
+                    && punct.spacing() == Spacing::Alone
+                    && !is_joint(previous, '.') =>
+            {
+                let adapter = matches!(
+                    tokens.get(index + 1),
+                    Some(TokenTree::Ident(ident)) if VALUE_ADAPTERS.contains(&ident.to_string().as_str())
+                ) && matches!(
+                    tokens.get(index + 2),
+                    Some(TokenTree::Group(group))
+                        if group.delimiter() == Delimiter::Parenthesis && group.stream().is_empty()
+                );
+                if adapter {
+                    erased[index..index + 3].fill(true);
+                    index += 3;
+                    continue;
+                }
+            }
+            TokenTree::Punct(punct)
+                if punct.as_char() == ':'
+                    && punct.spacing() == Spacing::Joint
+                    && is_punct(tokens.get(index + 1), ':')
+                    && is_punct(tokens.get(index + 2), '<') =>
+            {
+                if let Some(end) = angle_end(tokens, index + 2)
+                    && names_only_types(&tokens[index + 3..end - 1])
+                {
+                    erased[index..end].fill(true);
+                    index = end;
+                    continue;
+                }
+            }
+            TokenTree::Group(group)
+                if group.delimiter() == Delimiter::Bracket
+                    && ends_operand(previous)
+                    && is_full_range(&group.stream()) =>
+            {
+                erased[index] = true;
+            }
+            TokenTree::Ident(ident) if ident == "ref" => {
+                erased[index] = true;
+                if is_ident(tokens.get(index + 1), "mut") {
+                    erased[index + 1] = true;
+                    index += 1;
+                }
+            }
+            TokenTree::Ident(ident) if ident == "let" => {
+                if let Some((start, end)) = let_annotation(tokens, index) {
+                    erased[start..end].fill(true);
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    erased
 }
 
 /// The shim form of `stream`: parameters renamed, everything else verbatim.
@@ -502,6 +829,97 @@ mod tests {
         assert_ne!(form(LOOP_A), form(while_loop));
         let early_return = "let mut total = 0u64; for byte in bytes { if *byte == 0 { return total; } total = total.wrapping_mul(31).wrapping_add(u64::from(*byte)); } total";
         assert_ne!(form(LOOP_A), form(early_return));
+    }
+
+    /// The datalog shortest-path pair the thirty-token, verbatim-borrow census
+    /// could not see: one over `usize`, one over `&str`.
+    #[test]
+    fn borrow_deref_clone_and_index_forms_are_one_value_form() {
+        for (left, right) in [
+            ("cursor = parent[&cursor];", "cursor = parent[cursor];"),
+            (
+                "for &next in g.get(&node) { s.insert(next); }",
+                "for next in g.get(node) { s.insert(next.as_str()); }",
+            ),
+            ("let x = &mut v; f(*x)", "let x = v; f(x)"),
+            (
+                "f(a.clone(), b.to_owned(), c.as_ref(), d.cloned())",
+                "f(a, b, c, d)",
+            ),
+            ("g(&text[..])", "g(text)"),
+            (
+                "if let Some(ref mut x) = y { h(&&x) }",
+                "if let Some(x) = y { h(x) }",
+            ),
+            ("let total = 0u64;", "let total = 7;"),
+        ] {
+            assert_eq!(form(left), form(right), "{left} / {right}");
+        }
+    }
+
+    /// A `let` annotation and a type-only turbofish are erased; a const argument
+    /// is behaviour, and is kept.
+    #[test]
+    fn types_are_erased_and_const_arguments_are_kept() {
+        let unit = form("let m: BTreeMap<usize, usize> = BTreeMap::new();");
+        assert_eq!(unit, form("let m: BTreeMap<&str, &str> = BTreeMap::new();"));
+        assert_eq!(unit, form("let m = BTreeMap::new();"));
+        assert_eq!(form("let v: Vec<Vec<u8>> = w;"), form("let v = w;"));
+        assert_eq!(form("x.parse::<u64>()"), form("x.parse::<u32>()"));
+        assert_eq!(form("Vec::<u8>::new()"), form("Vec::new()"));
+        assert_ne!(
+            form("Decompose::<true, _>::new(n)"),
+            form("Decompose::<false, _>::new(n)")
+        );
+        // A primitive outside an annotation or turbofish is still arithmetic.
+        assert_ne!(form("x as u32"), form("x as u64"));
+    }
+
+    /// Only the prefix `&` and `*` are borrows and derefs; the binary operators
+    /// and their compound assignments stay.
+    #[test]
+    fn binary_ampersand_and_star_are_kept() {
+        assert_ne!(form("a & b"), form("a b"));
+        assert_ne!(form("a * b"), form("a b"));
+        assert_ne!(form("f(x) * 2"), form("f(x) 2"));
+        assert_ne!(form("a &= b"), form("a = b"));
+        assert_ne!(form("a *= b"), form("a = b"));
+        assert_eq!(form("a && &b"), form("a && b"));
+        assert_ne!(form("a && b"), form("a & b"));
+        // After a block a `*` opens a statement: it is a deref.
+        assert_eq!(
+            form("for i in v { f(i); } *t += 1;"),
+            form("for i in v { f(i); } t += 1;")
+        );
+    }
+
+    /// A field names a member of a type, as a method does: accessors of
+    /// different fields are different jobs.
+    #[test]
+    fn field_names_are_kept() {
+        assert_ne!(form("self.first + 1"), form("self.second + 1"));
+        assert_ne!(form("pair.0"), form("pair.1"));
+        assert_ne!(
+            form("match self { Self::A { tripped, .. } => Some(*tripped), _ => None }"),
+            form("match self { Self::A { partial, .. } => Some(partial), _ => None }")
+        );
+        assert_eq!(
+            form("match self { Self::A { tripped: t, .. } => Some(*t), _ => None }"),
+            form("match self { Self::A { tripped: x, .. } => Some(x), _ => None }")
+        );
+    }
+
+    /// Below [`super::LITERAL_TIER`] a body is fingerprinted with its literals:
+    /// two small tables with different strings are two tables.
+    #[test]
+    fn small_bodies_keep_their_literals() {
+        let params = BTreeSet::new();
+        let print = |source: &str| body_print(&tokens(source), &params).structural;
+        let small = "match self { Self::A => \"a\", Self::B => \"b\", Self::C => \"c\" }";
+        let other = "match self { Self::A => \"x\", Self::B => \"y\", Self::C => \"z\" }";
+        assert_ne!(print(small), print(other));
+        assert_eq!(print(small), print(small));
+        assert_eq!(print(LOOP_A), print(LOOP_B));
     }
 
     #[test]

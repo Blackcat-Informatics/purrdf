@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 
-use purrdf_ed25519::SigningKey;
+use purrdf_ed25519::{SigningKey, VerifyingKey};
 use purrdf_gts::compact::{DEFAULT_DICT_NAME, DictPlan, DictStrategy};
 use purrdf_gts::dict::raw_content_dict;
 use purrdf_gts::model::Graph;
@@ -31,6 +31,7 @@ use purrdf_gts::wire::map_get;
 use purrdf_gts::writer::{FrameOptions, Writer, WriterOptions};
 use purrdf_lex::json::{self, Format, Object, Value as Json};
 
+use crate::FastMap;
 use crate::gts::dataset_from_gts_graph;
 use crate::{SerializeGraph, serialize_dataset};
 
@@ -54,6 +55,28 @@ pub fn authorship_key() -> SigningKey {
 #[must_use]
 pub fn packaging_key() -> SigningKey {
     SigningKey::from_bytes(&[7u8; 32])
+}
+
+/// The verifying keyring a dict-vector pack is checked against: `authorA` for
+/// [`authorship_key`] and `pack` for [`packaging_key`].
+#[must_use]
+pub fn keyring() -> FastMap<String, VerifyingKey> {
+    FastMap::from_iter([
+        ("authorA".to_string(), authorship_key().verifying_key()),
+        ("pack".to_string(), packaging_key().verifying_key()),
+    ])
+}
+
+/// The fixed packaging signing key (`kid` "pack") `25b-streamable-compacted.gts`
+/// is packaged with — the MANDATORY streamable-compaction ordering/packaging
+/// signature (GTS-SPEC §10.1), never frame authorship. Deliberately a DIFFERENT
+/// key from [`packaging_key`]: distinct frozen corpora should not share signing
+/// key material even when both are fixed maintainer constants. The generator
+/// (`src/bin/gen_streamable_vectors.rs`) and the drift guard
+/// (`tests/streamable_vectors.rs`) both take it from here.
+#[must_use]
+pub fn streamable_packaging_key() -> SigningKey {
+    SigningKey::from_bytes(&[11u8; 32])
 }
 
 /// A fixed, signed GTS source: 40 content-blob frames of repeated structure

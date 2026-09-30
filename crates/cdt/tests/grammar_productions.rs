@@ -4,10 +4,13 @@
 //! One test per SEP-0009 production, one per PurRDF superset production, one per
 //! ill-formed shape, and the canonical round-trip for every language-direction case.
 
+mod support;
+
 use purrdf_cdt::{
     CdtEntry, CdtError, CdtKey, CdtLiteral, CdtTerm, CdtValue, TextDirection, XSD_BOOLEAN,
     XSD_DECIMAL, XSD_DOUBLE, XSD_INTEGER, XSD_STRING, parse_list, parse_map,
 };
+use support::{composite, triple};
 
 /// The items of a value that must be a list.
 fn items(value: &CdtValue) -> &[CdtTerm] {
@@ -21,17 +24,6 @@ fn entries(value: &CdtValue) -> &[CdtEntry] {
 
 fn list_items(lexical: &str) -> Vec<CdtTerm> {
     items(&parse_list(lexical).expect("the lexical form is well formed")).to_vec()
-}
-
-/// A composite element, refused by the constructor only when it would break one of
-/// the crate's two bounds — which no fixture in this file does.
-fn composite(value: CdtValue) -> CdtTerm {
-    CdtTerm::composite(value).expect("the fixture is within every bound")
-}
-
-/// A triple-term element, under the same standing as [`composite`].
-fn triple(subject: CdtTerm, predicate: CdtTerm, object: CdtTerm) -> CdtTerm {
-    CdtTerm::triple(subject, predicate, object).expect("the fixture is within every bound")
 }
 
 // ── [1] List ::= '[' (NonEmptyListContent)? ']' ────────────────────────────────

@@ -28,10 +28,10 @@
 //! `parseType="Triple"` instead — so the reifier test deliberately uses the annotation
 //! syntax to drive the overlay/projection path.)
 
-use std::process::{Command, Output, Stdio};
+mod support;
+use support::{purrdf, run, stderr, stdout_utf8 as stdout, write_file};
 
-/// The path to the built `purrdf` binary this integration test target links against.
-const PURRDF: &str = env!("CARGO_BIN_EXE_purrdf");
+use std::process::{Output, Stdio};
 
 /// A default-graph fixture with rich term shapes (an IRI object and a plain literal),
 /// enough to drive SELECT / ASK / CONSTRUCT / DESCRIBE over `example.org`.
@@ -43,33 +43,6 @@ const DATA_TTL: &str = concat!(
     "ex:alice ex:knows ex:bob .\n",
     "ex:alice ex:name \"Alice\" .\n",
 );
-
-/// A `Command` for the built `purrdf` binary.
-fn purrdf() -> Command {
-    Command::new(PURRDF)
-}
-
-/// Run `purrdf` with `args`, returning the captured [`Output`].
-fn run(args: &[&str]) -> Output {
-    purrdf().args(args).output().expect("spawn purrdf")
-}
-
-/// stdout of an [`Output`] as a `String`.
-fn stdout(out: &Output) -> String {
-    String::from_utf8(out.stdout.clone()).expect("utf-8 stdout")
-}
-
-/// stderr of an [`Output`] as a `String`, for diagnostics + ledger assertions.
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
-}
-
-/// Write `contents` to `dir/name` and return the path as an owned string.
-fn write_file(dir: &std::path::Path, name: &str, contents: &str) -> String {
-    let p = dir.join(name);
-    std::fs::write(&p, contents).expect("write fixture");
-    p.to_str().expect("utf-8 path").to_owned()
-}
 
 /// The SAME SELECT over (a) a Turtle file and (b) an mmap'd `.purrpck` pack built from
 /// identical data yields byte-identical, non-vacuous results — file/pack query parity.

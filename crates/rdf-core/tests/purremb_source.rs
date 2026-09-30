@@ -3,19 +3,13 @@
 
 //! Exact-source, certified-RDF, and source-ordinal mismatch separation.
 
-use purrdf_core::purremb_fixture::Identities;
+use purrdf_core::purremb_fixture::{Identities, read_u64, reseal, section_span};
 use purrdf_core::{
-    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, ContentDigest, CorpusTarget,
-    DimensionalityPolicy, DistanceMetric, EmbeddingBuilder, EmbeddingError,
-    EmbeddingFamilyContract, EmbeddingTarget, EmbeddingView, MatrixInput, MatrixRow, PackView,
+    CanonicalMetadataInput, CertifiedPurrpckSource, ContentDigest, CorpusTarget, EmbeddingBuilder,
+    EmbeddingError, EmbeddingTarget, EmbeddingView, MatrixInput, MatrixRow, PackView,
     PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, RdfDatasetTarget, RdfTermTarget,
-    SourceVerificationMode, TargetSet, TermValue, VectorDtype, derive_artifact_root,
-    verify_embedding, verify_embedding_source,
+    SourceVerificationMode, TargetSet, TermValue, verify_embedding, verify_embedding_source,
 };
-use sha2::{Digest as _, Sha256};
-
-const HEADER_LENGTH: usize = 128;
-const DIRECTORY_ENTRY_LENGTH: usize = 64;
 const SECTION_SOURCE: u32 = 1;
 const SECTION_TARGETS: u32 = 3;
 
@@ -27,26 +21,6 @@ struct Fixture {
 }
 
 const FX: Identities = Identities::at("https://example.org/source/");
-
-fn contract() -> EmbeddingFamilyContract {
-    EmbeddingFamilyContract {
-        model: FX.artifact("model"),
-        engine: FX.artifact("engine"),
-        tokenizer: FX.artifact("tokenizer"),
-        execution: FX.stage("execution"),
-        subject_projection: FX.stage("projection"),
-        preprocessing: AppliedStage::NotApplied,
-        chunking: AppliedStage::NotApplied,
-        pooling: FX.stage("pooling"),
-        normalization: AppliedStage::NotApplied,
-        truncation: AppliedStage::NotApplied,
-        dtype: VectorDtype::F32,
-        metric: DistanceMetric::Cosine,
-        dimensionality: DimensionalityPolicy::fixed(1, PrefixPostprocessing::None)
-            .expect("dimension"),
-        extensions: Vec::new(),
-    }
-}
 
 fn fixture(extra_targets: Vec<EmbeddingTarget>) -> Fixture {
     let mut dataset = RdfDatasetBuilder::new();
@@ -66,7 +40,7 @@ fn fixture(extra_targets: Vec<EmbeddingTarget>) -> Fixture {
     .into_target(true)
     .expect("corpus target");
     let set = TargetSet::new(vec![corpus_target.id]).expect("target set");
-    let contract = contract();
+    let contract = FX.cosine_contract("projection", 1);
     let family = contract.derive().expect("family");
     let mut targets = vec![dataset_target.clone(), corpus_target.clone()];
     targets.extend(extra_targets);
@@ -100,47 +74,6 @@ fn fixture(extra_targets: Vec<EmbeddingTarget>) -> Fixture {
         dataset_target,
         corpus_target,
     }
-}
-
-fn read_u32(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("u32"))
-}
-
-fn read_u64(bytes: &[u8], offset: usize) -> u64 {
-    u64::from_le_bytes(bytes[offset..offset + 8].try_into().expect("u64"))
-}
-
-fn directory_entry(bytes: &[u8], kind: u32) -> usize {
-    let count = read_u32(bytes, 20) as usize;
-    (0..count)
-        .map(|index| HEADER_LENGTH + index * DIRECTORY_ENTRY_LENGTH)
-        .find(|offset| read_u32(bytes, *offset) == kind && read_u32(bytes, *offset + 8) == 0)
-        .expect("directory entry")
-}
-
-fn section_span(bytes: &[u8], kind: u32) -> (usize, usize) {
-    let entry = directory_entry(bytes, kind);
-    (
-        read_u64(bytes, entry + 16) as usize,
-        read_u64(bytes, entry + 24) as usize,
-    )
-}
-
-fn reseal(bytes: &mut [u8], kinds: &[u32]) {
-    for &kind in kinds {
-        let entry = directory_entry(bytes, kind);
-        let (offset, length) = section_span(bytes, kind);
-        let digest: [u8; 32] = Sha256::digest(&bytes[offset..offset + length]).into();
-        bytes[entry + 32..entry + 64].copy_from_slice(&digest);
-    }
-    let directory_end = HEADER_LENGTH + read_u32(bytes, 20) as usize * DIRECTORY_ENTRY_LENGTH;
-    let mut header = [0u8; HEADER_LENGTH];
-    header.copy_from_slice(&bytes[..HEADER_LENGTH]);
-    header[64..96].fill(0);
-    let root = derive_artifact_root(&header, &bytes[HEADER_LENGTH..directory_end]);
-    bytes[64..96].copy_from_slice(root.as_bytes());
-    let trailer = read_u64(bytes, 48) as usize;
-    bytes[trailer + 24..trailer + 56].copy_from_slice(root.as_bytes());
 }
 
 #[test]
@@ -188,11 +121,11 @@ fn certified_mode_detects_a_wrong_rdf_claim_after_exact_mode_passes() {
         .expect("ordering-preserving replacement");
 
     let mut artifact = fixture.artifact_bytes.clone();
-    let (source_offset, _) = section_span(&artifact, SECTION_SOURCE);
+    let (source_offset, _) = section_span(&artifact, SECTION_SOURCE, 0);
     artifact[source_offset + 56..source_offset + 88].copy_from_slice(wrong_digest.as_bytes());
     artifact[source_offset + 88..source_offset + 120].copy_from_slice(replacement.id.as_bytes());
 
-    let (targets_offset, _) = section_span(&artifact, SECTION_TARGETS);
+    let (targets_offset, _) = section_span(&artifact, SECTION_TARGETS, 0);
     let target_count = read_u64(&artifact, targets_offset + 8) as usize;
     let record = (0..target_count)
         .map(|index| targets_offset + 64 + index * 96)
@@ -209,7 +142,7 @@ fn certified_mode_detects_a_wrong_rdf_claim_after_exact_mode_passes() {
     assert_eq!(replacement_identity.len(), identity_length);
     artifact[targets_offset + identity_offset..targets_offset + identity_offset + identity_length]
         .copy_from_slice(replacement_identity);
-    reseal(&mut artifact, &[SECTION_SOURCE, SECTION_TARGETS]);
+    reseal(&mut artifact, &[(SECTION_SOURCE, 0), (SECTION_TARGETS, 0)]);
 
     let mut view = EmbeddingView::from_bytes(&artifact).expect("self-consistent forged claim");
     verify_embedding(&mut view).expect("artifact is internally self-consistent");

@@ -33,53 +33,29 @@
 //! configuration, never a minted vocabulary.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_retrieval::{
-    CandidateDomains, Completeness, DecayRule, DomainTag, DuplicatePolicy, ExclusionBasis,
-    ExclusionVerdict, Fixed, FusedRow, FusionError, FusionProfile, FusionStream, FusionTrailer,
-    IndexGeneration, Iri, OrderFidelity, PfAttestation, ProducerReceipt, ProtocolError, RECIP_K,
-    RankFidelity, RankedRow, RankedStream, RowBlock, ScoreInterval, ServiceLevel, StreamContract,
-    Term, TopK, contribution_under, fuse,
+    CandidateDomains, Completeness, DecayRule, DuplicatePolicy, ExclusionBasis, ExclusionVerdict,
+    Fixed, FusedRow, FusionError, FusionProfile, FusionStream, FusionTrailer, IndexGeneration, Iri,
+    OrderFidelity, PfAttestation, ProducerReceipt, ProtocolError, RECIP_K, RankFidelity, RankedRow,
+    RankedStream, RowBlock, ScoreInterval, ServiceLevel, StreamContract, Term, TopK,
+    contribution_under, fuse,
 };
 use purrdf_sparql_eval::{
     BindingPattern, EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
     PropertyFunctionRegistry, RankArithmetic, RankedDeclaration,
 };
 
+#[path = "support/lookup.rs"]
+mod lookup;
+
+use lookup::{domain_tag, profile, strata};
+use purrdf_retrieval::block_on;
+
 fn ex(suffix: &str) -> String {
     format!("http://example.org/{suffix}")
-}
-
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
-
-fn tag(suffix: &str) -> DomainTag {
-    DomainTag::parse(&ex(suffix)).expect("fixture domain tags are valid IRIs")
-}
-
-/// A minimal single-threaded executor. The mocks never actually pend.
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -503,28 +479,15 @@ fn row(rank: u64, item: &str, block: Option<&str>) -> RankedRow<Term> {
         rank,
         contribution_under(decay(), Fixed::ONE, rank).expect("fixture contributions are in range"),
         term(item),
-        block.map_or(RowBlock::Undeclared, |block| RowBlock::Declared(tag(block))),
+        block.map_or(RowBlock::Undeclared, |block| {
+            RowBlock::Declared(domain_tag(block))
+        }),
     )
 }
 
 /// A contract over `domains`, declaring `basis`.
 fn contract(domains: CandidateDomains, basis: ExclusionBasis) -> StreamContract {
     StreamContract::new(DuplicatePolicy::Unique, RankFidelity::EXACT, domains, basis)
-}
-
-fn strata() -> [Iri; 2] {
-    [iri(&ex("stratum/left")), iri(&ex("stratum/right"))]
-}
-
-fn profile() -> FusionProfile {
-    FusionProfile::with_decay(
-        strata()
-            .into_iter()
-            .map(|stratum| (stratum, Fixed::ONE))
-            .collect(),
-        decay(),
-    )
-    .expect("the fixture profile is valid")
 }
 
 /// Fuse the two scripted streams at `top_k`.
@@ -556,7 +519,7 @@ const SHARED: &str = "domain/shared";
 fn sharer(rows: Vec<RankedRow<Term>>) -> ScriptedStream {
     ScriptedStream::new(
         contract(
-            CandidateDomains::within([tag(SHARED)]),
+            CandidateDomains::within([domain_tag(SHARED)]),
             ExclusionBasis::Membership,
         ),
         rows,
@@ -645,7 +608,7 @@ fn calling_a_candidate_possible_outside_the_declared_domain_is_refused() {
     let people_only = || {
         ScriptedStream::new(
             contract(
-                CandidateDomains::within([tag("domain/people")]),
+                CandidateDomains::within([domain_tag("domain/people")]),
                 ExclusionBasis::Membership,
             ),
             vec![
@@ -754,7 +717,7 @@ fn a_stream_that_declares_no_basis_is_not_asked_and_refuses_if_it_is() {
     let silent = || {
         ScriptedStream::new(
             contract(
-                CandidateDomains::within([tag(SHARED)]),
+                CandidateDomains::within([domain_tag(SHARED)]),
                 ExclusionBasis::Unavailable,
             ),
             vec![row(1, "y1", Some(SHARED)), row(2, "y2", Some(SHARED))],
@@ -796,7 +759,7 @@ fn weighted_rows(items: &[&str], weight: Fixed) -> Vec<RankedRow<Term>> {
                 contribution_under(decay(), weight, rank)
                     .expect("fixture contributions are in range"),
                 term(item),
-                RowBlock::Declared(tag(SHARED)),
+                RowBlock::Declared(domain_tag(SHARED)),
             )
         })
         .collect()
@@ -851,7 +814,7 @@ fn residual_streams(right: Right) -> Vec<(Iri, ScriptedStream)> {
     let [left_iri, right_iri] = strata();
     let left = ScriptedStream::new(
         contract(
-            CandidateDomains::within([tag(SHARED)]),
+            CandidateDomains::within([domain_tag(SHARED)]),
             ExclusionBasis::Unavailable,
         ),
         weighted_rows(&["i", "b"], left_weight()),
@@ -860,7 +823,7 @@ fn residual_streams(right: Right) -> Vec<(Iri, ScriptedStream)> {
         StreamContract::new(
             DuplicatePolicy::Unique,
             right.fidelity,
-            CandidateDomains::within([tag(SHARED)]),
+            CandidateDomains::within([domain_tag(SHARED)]),
             right.basis,
         ),
         weighted_rows(

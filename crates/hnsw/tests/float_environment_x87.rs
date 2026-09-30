@@ -27,16 +27,15 @@
 #[path = "support/purremb.rs"]
 mod purremb;
 
+#[path = "support/fixture.rs"]
+mod fixture;
+use fixture::{bits, knn_invoke, params};
 use std::sync::Arc;
 
 use purrdf_core::DistanceMetric;
-use purrdf_core::distance::{
-    Arithmetic, FloatEnvironmentError, FloatEnvironmentEvidence, Reassociated,
-};
-use purrdf_hnsw::{HnswError, HnswIndex, Params, Ranked};
-use purrdf_sparql_eval::{
-    EmbeddingKnnRelation, EmbeddingSpace, EvalError, KnnGuard, PfArgs, PfRow, PropertyFunction,
-};
+use purrdf_core::distance::{FloatEnvironmentError, FloatEnvironmentEvidence, Reassociated};
+use purrdf_hnsw::{HnswError, HnswIndex, Ranked};
+use purrdf_sparql_eval::{EmbeddingKnnRelation, EmbeddingSpace, EvalError, KnnGuard, PfRow};
 use purrdf_xsd::ieee::x87;
 
 /// The directed rounding-control values: down, up, toward zero.
@@ -69,10 +68,6 @@ impl Drop for Directed {
     }
 }
 
-fn params() -> Params {
-    Params::new(4, 8, 16, 8).expect("valid")
-}
-
 /// Whether `refusal` names the x87 control word holding `word`.
 fn is_rounding_refusal(refusal: &FloatEnvironmentError, word: u16) -> bool {
     matches!(
@@ -92,39 +87,6 @@ fn is_refused(error: &HnswError, word: u16) -> bool {
 
 fn is_refused_eval(error: &EvalError, word: u16) -> bool {
     matches!(error, EvalError::FloatEnvironment(refusal) if is_rounding_refusal(refusal, word))
-}
-
-/// Every row of one kNN invocation seeded at `seed`: the ranked read of depth 3 when
-/// `neighbour` is free, the membership lookup of `neighbour` when it is bound.
-fn knn_invoke<A: Arithmetic>(
-    relation: &EmbeddingKnnRelation<A>,
-    seed: &purrdf_core::TermValue,
-    neighbour: Option<&purrdf_core::TermValue>,
-) -> Result<Vec<PfRow>, EvalError> {
-    let count =
-        purrdf_core::TermValue::typed_literal("3", "http://www.w3.org/2001/XMLSchema#integer");
-    let subject = [neighbour];
-    let object = [Some(seed), neighbour.is_none().then_some(&count), None];
-    let args = PfArgs::new(&subject, &object);
-    let mut cursor = relation.open(&args, None)?;
-    let mut rows = Vec::new();
-    while let Some(row) = cursor.next()? {
-        rows.push(row);
-    }
-    Ok(rows)
-}
-
-/// A batch answer as its rows and distance bits, so equality is bit-identity.
-fn bits(batch: &[Vec<Ranked>]) -> Vec<Vec<(usize, u64)>> {
-    batch
-        .iter()
-        .map(|ranked| {
-            ranked
-                .iter()
-                .map(|scored| (scored.row, scored.distance.to_bits()))
-                .collect()
-        })
-        .collect()
 }
 
 /// What one thread's calls answered.

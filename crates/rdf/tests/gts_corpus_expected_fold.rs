@@ -31,11 +31,14 @@
 //! assertion, so a red run still reports what it measured.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
 
 use purrdf_rdf::gts_dict_vectors::{
     DEFAULT_MODE, expected_fold_json_in_mode, render_expected_json,
 };
+
+#[path = "support/vectors.rs"]
+mod vectors;
+use vectors::vectors_dir;
 
 /// Every vector in the frozen corpus, so an upstream add or remove is loud.
 const VECTOR_COUNT: usize = 39;
@@ -51,10 +54,6 @@ const VECTOR_COUNT: usize = 39;
 /// corpus. `purrdf-gts`'s `frozen_conflicting_reifier_divergence` test pins
 /// both sides in full and documents what must land upstream.
 const KNOWN_DIVERGENCES: [&str; 1] = ["12-conflicting-reifier"];
-
-fn vectors_dir() -> PathBuf {
-    purrdf_testkit::paths::workspace_root().join("vectors")
-}
 
 #[test]
 fn every_frozen_vector_matches_its_committed_expected_fold() {

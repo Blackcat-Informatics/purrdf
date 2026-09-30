@@ -36,74 +36,29 @@
 //! translation) from `RdfDataset`'s own index-permutation choice, which is already
 //! covered elsewhere and is not a page-admission concern.
 
-use purrdf_core::TermBox;
+#[path = "support/paged.rs"]
+mod paged;
+#[path = "support/values.rs"]
+mod values;
+use paged::ready_evidence;
+use purrdf_core::term_fixture::iri;
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use values::to_value;
 
 use purrdf_core::{
     DatasetView, FallibleDatasetView, GlobalTermId, GraphMatch, InMemoryPageProvider, PageId,
-    PageProvider, PagedDataset, PagedQueryError, PagedQueryEvidence, PagedQueryLimits, QuadIds,
-    RdfDataset, RdfDatasetBuilder, TermRef, TermValue, ViewOperationStatus,
+    PageProvider, PagedDataset, PagedQueryLimits, QuadIds, RdfDataset, RdfDatasetBuilder,
+    TermValue, ViewOperationStatus,
 };
-
-/// An `example.org` IRI value.
-fn iri(name: &str) -> TermValue {
-    TermValue::iri(format!("http://example.org/{name}"))
-}
-
-/// Resolve a view id to its dataset-INDEPENDENT `TermValue`, recursing through the
-/// literal datatype and triple components.
-fn to_value<V: DatasetView>(v: &V, id: V::Id) -> TermValue {
-    match v.resolve(id) {
-        TermRef::Iri(s) => TermValue::iri(s),
-        TermRef::Blank { label, scope } => TermValue::Blank {
-            label: label.to_owned(),
-            scope,
-        },
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let datatype = match v.resolve(datatype) {
-                TermRef::Iri(s) => s.to_owned(),
-                other => panic!("literal datatype must resolve to an IRI, got {other:?}"),
-            };
-            TermValue::Literal {
-                lexical_form: lexical.to_owned(),
-                datatype,
-                language: language.map(str::to_owned),
-                direction,
-            }
-        }
-        TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: TermBox::new(to_value(v, s)),
-            p: TermBox::new(to_value(v, p)),
-            o: TermBox::new(to_value(v, o)),
-        },
-    }
-}
-
-fn ready_evidence(
-    status: ViewOperationStatus<PagedQueryError, PagedQueryEvidence>,
-) -> PagedQueryEvidence {
-    match status {
-        ViewOperationStatus::Ready { evidence } => evidence,
-        ViewOperationStatus::Failed { error, .. } => {
-            panic!("expected a ready operation, got: {error}")
-        }
-    }
-}
 
 /// One `(subject predicate object)` triple in the default graph, as its own page.
 fn build_simple_page(subject: &str, predicate: &str, object: &str) -> Arc<RdfDataset> {
-    let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&format!("http://example.org/{subject}"));
-    let p = b.intern_iri(&format!("http://example.org/{predicate}"));
-    let o = b.intern_iri(&format!("http://example.org/{object}"));
-    b.push_quad(s, p, o, None);
-    b.freeze().expect("page freeze")
+    purrdf_core::term_fixture::one_quad(
+        &format!("http://example.org/{subject}"),
+        &format!("http://example.org/{predicate}"),
+        &format!("http://example.org/{object}"),
+    )
 }
 
 /// One `(subject predicate object)` triple in named graph `graph`, as its own page.

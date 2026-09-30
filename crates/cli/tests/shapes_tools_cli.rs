@@ -10,8 +10,10 @@
 //! call `sh:sparqlExpr` with `sh:prefixes`, so each command is exercised over a
 //! shapes graph that carries the vocabulary's own declaration.
 
+mod support;
+use support::{code, run, stderr, stdout, write_file};
+
 use std::path::Path;
-use std::process::{Command, Output};
 
 /// The W3C SHACL 1.2 declaration of `sh:SPARQLExprExpression`, verbatim.
 const SPARQL_EXPR_DECLARATION: &str = r#"
@@ -71,31 +73,6 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
 const DATA: &str = "@prefix ex: <http://example.org/ns#> .\nex:a a ex:Item ; ex:n 1 .\n";
 
 const INTEGER: &str = "<http://www.w3.org/2001/XMLSchema#integer>";
-
-fn run(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_purrdf"))
-        .args(args)
-        .output()
-        .expect("spawn the built purrdf binary")
-}
-
-fn stdout(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
-}
-
-fn code(out: &Output) -> i32 {
-    out.status.code().expect("the process exited normally")
-}
-
-fn write_file(dir: &Path, name: &str, contents: &str) -> String {
-    let path = dir.join(name);
-    std::fs::write(&path, contents).expect("write fixture file");
-    path.to_str().expect("utf-8 temp path").to_owned()
-}
 
 /// The shapes graph: prefixes, the `sh:SPARQLExprExpression` declaration, then `body`.
 fn shapes_file(dir: &Path, body: &str) -> String {

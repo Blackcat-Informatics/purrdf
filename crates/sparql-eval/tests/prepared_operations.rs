@@ -3,12 +3,15 @@
 
 //! Prepared operation execution preserves binding, completeness and shared budgets.
 
+mod support;
+
+use support::three_subjects_one_value;
+
 use std::sync::{Arc, Barrier};
 
 use purrdf_core::{
-    InMemoryPageProvider, PageGeneration, PagedDataset, PagedQueryLimits, RdfDataset,
-    RdfDatasetBuilder, ResourceDimension, SparqlRequest, SparqlResult, StopCause, TermValue,
-    TrippedGovernor,
+    InMemoryPageProvider, PageGeneration, PagedDataset, PagedQueryLimits, ResourceDimension,
+    SparqlRequest, SparqlResult, StopCause, TermValue, TrippedGovernor,
 };
 use purrdf_sparql_eval::governor::GovernorState;
 use purrdf_sparql_eval::{
@@ -19,20 +22,9 @@ use purrdf_sparql_eval::{
 const SELECT: &str =
     "SELECT ?this ?value WHERE { ?this <http://example.org/p> ?value } ORDER BY ?this";
 
-fn data() -> Arc<RdfDataset> {
-    let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("http://example.org/p");
-    let value = builder.intern_iri("http://example.org/value");
-    for name in ["a", "b", "c"] {
-        let subject = builder.intern_iri(&format!("http://example.org/{name}"));
-        builder.push_quad(subject, predicate, value, None);
-    }
-    builder.freeze().unwrap()
-}
-
 fn pages() -> PagedDataset {
     PagedDataset::from_provider(Arc::new(InMemoryPageProvider::with_byte_lengths(
-        vec![(data(), 101)],
+        vec![(three_subjects_one_value(), 101)],
         PageGeneration(7),
     )))
     .unwrap()
@@ -71,7 +63,7 @@ fn equal_results(left: SparqlResult, right: SparqlResult) {
 #[test]
 fn prepared_operations_match_text_with_shacl_prebinding_for_each_result_form() {
     let engine = NativeSparqlEngine::new();
-    let dataset = data();
+    let dataset = three_subjects_one_value();
     let options = QueryOptions::new().with_prebinding(purrdf_sparql_eval::ShaclPrebinding::Applied);
     for query in [
         SELECT,
@@ -307,7 +299,7 @@ fn remote_cancellation_prevents_prepared_fallible_publication() {
 
 #[test]
 fn simultaneously_started_worker_local_engines_share_one_plan_and_fuel_ceiling() {
-    let dataset = data();
+    let dataset = three_subjects_one_value();
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query(SELECT, None).unwrap();
     let measured = metered();

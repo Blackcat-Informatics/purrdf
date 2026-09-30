@@ -871,6 +871,18 @@ impl ToJson for Value {
     }
 }
 
+impl ToJson for Object {
+    fn to_json(&self) -> Value {
+        Value::Object(self.clone())
+    }
+}
+
+impl ToJson for Number {
+    fn to_json(&self) -> Value {
+        Value::Number(self.clone())
+    }
+}
+
 // ── Containers ─────────────────────────────────────────────────────────────
 
 impl<T: FromJson> FromJson for Option<T> {
@@ -921,6 +933,12 @@ impl<T: ToJson> ToJson for Vec<T> {
 impl<T: ToJson> ToJson for [T] {
     fn to_json(&self) -> Value {
         Value::Array(self.iter().map(ToJson::to_json).collect())
+    }
+}
+
+impl<T: ToJson, const N: usize> ToJson for [T; N] {
+    fn to_json(&self) -> Value {
+        self.as_slice().to_json()
     }
 }
 

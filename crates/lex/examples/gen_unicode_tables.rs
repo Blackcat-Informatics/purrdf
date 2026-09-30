@@ -30,6 +30,7 @@
 //! `scripts/check-generated.sh` pipes it through `rustfmt` and compares it
 //! with the committed file.
 
+use purrdf_testkit::ucd::code_point_literal as hex_literal;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
@@ -314,11 +315,6 @@ fn char_literal(point: u32) -> String {
 fn char_slice(list: &[u32]) -> String {
     let parts: Vec<String> = list.iter().map(|&point| char_literal(point)).collect();
     format!("&[{}]", parts.join(", "))
-}
-
-/// A code point as a separated eight-digit hex literal, `0x0001_F600`.
-fn hex_literal(point: u32) -> String {
-    format!("0x{:04X}_{:04X}", point >> 16, point & 0xFFFF)
 }
 
 fn emit_list<I: IntoIterator<Item = String>>(out: &mut String, items: I) {

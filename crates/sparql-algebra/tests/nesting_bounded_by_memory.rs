@@ -15,6 +15,7 @@
 //! its `Debug` form holds once per written level (or a fixed number of times, where a
 //! level builds no node of its own), so a truncated or dropped level fails the count.
 
+use purrdf_testkit::text::nested as wrapped;
 use std::fmt::Write as _;
 
 use purrdf_sparql_algebra::{
@@ -31,11 +32,6 @@ const EX_P: &str = "<http://example.org/p>";
 
 /// The property-function namespace the argument-list family declares.
 const PF_NS: &str = "http://example.org/pf/";
-
-/// `open`, repeated `levels` times, around `core`, closed by `close` as often.
-fn wrapped(open: &str, core: &str, close: &str, levels: usize) -> String {
-    format!("{}{core}{}", open.repeat(levels), close.repeat(levels))
-}
 
 /// What a family's text is parsed as.
 #[derive(Clone, Copy)]

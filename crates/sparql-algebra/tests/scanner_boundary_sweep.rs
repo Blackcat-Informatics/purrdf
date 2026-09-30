@@ -95,23 +95,11 @@ use std::fmt::Write as _;
 
 use purrdf_iri::terminals;
 use purrdf_sparql_algebra::lexer::{tokenize, tokenize_turtle};
+use purrdf_testkit::scalars::{
+    IRIREF_DELIMITERS, Sweep, all_scalars, derived_ranges, iriref_content, run,
+};
 
 // ── The scalar corpus, derived ────────────────────────────────────────────────
-
-/// Every Unicode scalar value, in order.
-fn all_scalars() -> impl Iterator<Item = char> {
-    (0..=0x0010_FFFF_u32).filter_map(char::from_u32)
-}
-
-/// `WS ::= #x20 | #x9 | #xD | #xA` as a scalar test.
-///
-/// The shared production is byte-shaped because every member is ASCII and a byte
-/// test is therefore exact over UTF-8; this file holds decoded scalars, so it
-/// narrows first. `u8::try_from` fails above U+00FF and every Latin-1 scalar it
-/// does yield is outside `WS`, so nothing non-ASCII can alias a member.
-fn is_ws(c: char) -> bool {
-    u8::try_from(c).is_ok_and(terminals::is_ws)
-}
 
 /// A production, named as the grammar names it, paired with the predicate that
 /// decides membership in it.
@@ -121,7 +109,7 @@ type Production = (&'static str, fn(char) -> bool);
 /// that decides membership. The corpus is read off these, so adding a production
 /// here widens the sweep automatically.
 const PRODUCTIONS: [Production; 7] = [
-    ("WS", is_ws),
+    ("WS", terminals::is_ws_char),
     ("PN_CHARS_BASE", terminals::is_pn_chars_base),
     ("PN_CHARS_U", terminals::is_pn_chars_u),
     ("PN_CHARS", terminals::is_pn_chars),
@@ -140,30 +128,6 @@ const NAME_PRODUCTIONS: [Production; 5] = [
     ("VARNAME first scalar", terminals::is_varname_start),
     ("VARNAME later scalar", terminals::is_varname_continue),
 ];
-
-/// The contiguous scalar ranges a predicate admits, read off the **predicate**
-/// rather than off any table it happens to be implemented with.
-///
-/// The surrogate gap is treated as a non-member run, so a production that spanned
-/// it would show here as two ranges. None does, which is itself a fact the
-/// snapshot records.
-fn derived_ranges(admits: fn(char) -> bool) -> Vec<(u32, u32)> {
-    let mut ranges: Vec<(u32, u32)> = Vec::new();
-    for cp in 0..=0x0010_FFFF_u32 {
-        if !char::from_u32(cp).is_some_and(admits) {
-            continue;
-        }
-        match ranges.pop() {
-            Some((lo, hi)) if hi + 1 == cp => ranges.push((lo, cp)),
-            Some(previous) => {
-                ranges.push(previous);
-                ranges.push((cp, cp));
-            }
-            None => ranges.push((cp, cp)),
-        }
-    }
-    ranges
-}
 
 /// The scalars a range table can be wrong at: one below each range, both
 /// endpoints, and one above.
@@ -190,9 +154,6 @@ const INVISIBLES: [char; 6] = [
     '\u{2060}', // WORD JOINER
     '\u{feff}', // ZERO WIDTH NO-BREAK SPACE (byte-order mark)
 ];
-
-/// The nine scalars `[18t] IRIREF` excludes by name, beyond its `#x00-#x20` range.
-const IRIREF_DELIMITERS: [char; 9] = ['<', '>', '"', '{', '}', '|', '^', '`', '\\'];
 
 /// The gated corpus: boundaries, all of Unicode `White_Space`, the invisibles and
 /// the `IRIREF` delimiters.
@@ -274,21 +235,6 @@ fn split(tokens: &[String]) -> Reading {
 
 // ── The sweep table ───────────────────────────────────────────────────────────
 
-/// One production, swept at one position.
-struct Sweep {
-    /// The production and position, cited by grammar number.
-    cited: &'static str,
-    /// The probe text a candidate scalar is dropped into.
-    probe: Box<dyn Fn(char) -> String>,
-    /// Whether the production admits the candidate **at that position**.
-    admits: Box<dyn Fn(char) -> bool>,
-    /// The one-token reading an admitted candidate must produce.
-    joined: Box<dyn Fn(char) -> Reading>,
-    /// The reading a `WS` candidate must produce, where the position has one.
-    /// `None` where `WS` is what the production itself admits.
-    separated: Option<Box<dyn Fn(char) -> Reading>>,
-}
-
 /// `[169s] PN_LOCAL`'s continuation class as SPARQL scans it: `PN_CHARS`, the
 /// `':'` the production names, and `'.'` where a further name character follows.
 ///
@@ -312,15 +258,9 @@ fn pn_local_continue_turtle(c: char) -> bool {
     pn_local_continue(c) || c == '/'
 }
 
-/// `[18t] IRIREF`'s content class: everything above `#x20` that is not one of the
-/// nine delimiters. Non-ASCII is never forbidden raw, U+00A0 included.
-fn iriref_content(c: char) -> bool {
-    u32::from(c) > 0x20 && !IRIREF_DELIMITERS.contains(&c)
-}
-
 /// The sweeps both entry points share — every production Turtle and SPARQL spell
 /// the same way. `pn_local` is the one class that differs, so it is a parameter.
-fn shared_sweeps(pn_local: fn(char) -> bool) -> Vec<Sweep> {
+fn shared_sweeps(pn_local: fn(char) -> bool) -> Vec<Sweep<Reading>> {
     vec![
         Sweep {
             cited: "[168s] PN_PREFIX continuation, under maximal munch",
@@ -367,7 +307,7 @@ fn shared_sweeps(pn_local: fn(char) -> bool) -> Vec<Sweep> {
             probe: Box::new(|c| format!("[{c}]")),
             // `WS` is what this production admits, so there is no separator
             // reading: a scalar that is not `WS` must fail to CLOSE the `ANON`.
-            admits: Box::new(is_ws),
+            admits: Box::new(terminals::is_ws_char),
             joined: Box::new(|_| split(&["Anon".to_owned()])),
             separated: None,
         },
@@ -405,7 +345,7 @@ fn shared_sweeps(pn_local: fn(char) -> bool) -> Vec<Sweep> {
 /// position-dependent, and both directions of getting that wrong are silent. A
 /// head-only class refuses the lawful `?a\u{300}`; a tail-only class accepts the
 /// unlawful `?\u{300}` and turns the path operator into a variable sigil.
-fn varname_sweeps() -> Vec<Sweep> {
+fn varname_sweeps() -> Vec<Sweep<Reading>> {
     vec![
         Sweep {
             cited: "[166s] VARNAME first scalar, through the `?` disambiguation peek",
@@ -425,54 +365,15 @@ fn varname_sweeps() -> Vec<Sweep> {
 }
 
 /// Every SPARQL sweep.
-fn sparql_sweeps() -> Vec<Sweep> {
+fn sparql_sweeps() -> Vec<Sweep<Reading>> {
     let mut sweeps = varname_sweeps();
     sweeps.extend(shared_sweeps(pn_local_continue));
     sweeps
 }
 
 /// Every Turtle sweep. `VARNAME` is absent because Turtle has no `Var`.
-fn turtle_sweeps() -> Vec<Sweep> {
+fn turtle_sweeps() -> Vec<Sweep<Reading>> {
     shared_sweeps(pn_local_continue_turtle)
-}
-
-/// Drive every sweep over every candidate, returning the number of probes run.
-fn run(scan: fn(&str) -> Reading, sweeps: &[Sweep], scalars: &[char]) -> usize {
-    let mut cases = 0;
-    for sweep in sweeps {
-        let cited = sweep.cited;
-        for &c in scalars {
-            let probe = (sweep.probe)(c);
-            let observed = scan(&probe);
-            let joined = (sweep.joined)(c);
-            if (sweep.admits)(c) {
-                assert_eq!(
-                    observed,
-                    joined,
-                    "U+{:04X} is admitted by {cited}, so {probe:?} is ONE token",
-                    u32::from(c)
-                );
-            } else if is_ws(c)
-                && let Some(separated) = sweep.separated.as_ref()
-            {
-                assert_eq!(
-                    observed,
-                    separated(c),
-                    "U+{:04X} is `WS`, so it separates in {probe:?}",
-                    u32::from(c)
-                );
-            } else {
-                assert_ne!(
-                    observed,
-                    joined,
-                    "U+{:04X} is not admitted by {cited}, so {probe:?} must not absorb it",
-                    u32::from(c)
-                );
-            }
-            cases += 1;
-        }
-    }
-    cases
 }
 
 // ── The three derivations the rest of this rests on ───────────────────────────
@@ -524,7 +425,7 @@ fn the_ogham_space_mark_is_the_only_whitespace_name_character() {
     }
     // And the converse, which is what makes the four-member `WS` skip safe: no
     // member of `WS` is a name character in any position.
-    for c in all_scalars().filter(|c| is_ws(*c)) {
+    for c in all_scalars().filter(|c| terminals::is_ws_char(*c)) {
         assert!(
             !terminals::is_pn_chars(c) && !terminals::is_varname_continue(c),
             "U+{:04X} is `WS` and must not also be a name character",
@@ -634,7 +535,7 @@ fn the_corpus_covers_every_boundary_and_all_of_unicode_whitespace() {
 fn the_sparql_scanner_splits_where_the_productions_say() {
     let scalars = probe_scalars();
     let sweeps = sparql_sweeps();
-    let cases = run(sparql, &sweeps, &scalars);
+    let cases = run(sparql, &sweeps, &scalars, terminals::is_ws_char);
     println!(
         "SPARQL: {} scalars x {} sweeps = {cases} probes",
         scalars.len(),
@@ -648,7 +549,7 @@ fn the_sparql_scanner_splits_where_the_productions_say() {
 fn the_turtle_scanner_splits_where_the_productions_say() {
     let scalars = probe_scalars();
     let sweeps = turtle_sweeps();
-    let cases = run(turtle, &sweeps, &scalars);
+    let cases = run(turtle, &sweeps, &scalars, terminals::is_ws_char);
     println!(
         "Turtle: {} scalars x {} sweeps = {cases} probes",
         scalars.len(),
@@ -809,7 +710,7 @@ fn the_lexer_munches_a_language_tag_and_the_parser_validates_it() {
 #[ignore = "the whole 1,114,112-scalar space; the boundary corpus is the gated lane"]
 fn the_full_sparql_scanner_sweep() {
     let scalars: Vec<char> = all_scalars().collect();
-    run(sparql, &sparql_sweeps(), &scalars);
+    run(sparql, &sparql_sweeps(), &scalars, terminals::is_ws_char);
 }
 
 /// Every sweep over every Unicode scalar, Turtle.
@@ -817,5 +718,5 @@ fn the_full_sparql_scanner_sweep() {
 #[ignore = "the whole 1,114,112-scalar space; the boundary corpus is the gated lane"]
 fn the_full_turtle_scanner_sweep() {
     let scalars: Vec<char> = all_scalars().collect();
-    run(turtle, &turtle_sweeps(), &scalars);
+    run(turtle, &turtle_sweeps(), &scalars, terminals::is_ws_char);
 }

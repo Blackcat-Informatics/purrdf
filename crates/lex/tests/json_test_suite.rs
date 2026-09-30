@@ -17,8 +17,8 @@
 //!   surrogate escape refused, numbers kept as lexemes and never range-checked,
 //!   and a container-depth cap that is always explicit.
 
+use purrdf_hash::fixed::hash_one as hash_of;
 use std::collections::BTreeSet;
-use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -145,12 +145,6 @@ fn respelled(value: &Value) -> Value {
         ),
         other => other.clone(),
     }
-}
-
-fn hash_of(value: &Value) -> u64 {
-    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    value.hash(&mut hasher);
-    hasher.finish()
 }
 
 #[test]

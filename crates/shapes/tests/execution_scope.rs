@@ -18,6 +18,10 @@
 //!    back, which is what lets a stack-switching host park one validation and run
 //!    another.
 
+#[path = "support/report.rs"]
+mod report;
+
+use report::focus_nodes;
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -133,17 +137,6 @@ fn sources_over(remote: Arc<RdfDataset>) -> QuerySources {
         )),
         load: None,
     }
-}
-
-/// The focus nodes a report names, sorted.
-fn focus_nodes(report: &ValidationReport) -> Vec<String> {
-    let mut nodes: Vec<String> = report
-        .results
-        .iter()
-        .map(|result| result.focus_node.to_string())
-        .collect();
-    nodes.sort();
-    nodes
 }
 
 /// Validate under an execution scope over `governors` and `sources`, returning the

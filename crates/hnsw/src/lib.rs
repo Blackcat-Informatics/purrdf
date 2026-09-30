@@ -99,6 +99,8 @@ mod select;
 
 pub mod determinism;
 pub mod error;
+#[doc(hidden)]
+pub mod fixture;
 pub mod guard;
 pub mod level;
 pub mod params;

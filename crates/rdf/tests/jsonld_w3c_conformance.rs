@@ -12,7 +12,10 @@ use purrdf_rdf::native_codecs::jsonld::{
     serialize_dataset_to_jsonld_with_options,
 };
 use purrdf_rdf::{canonical_flat_nquads, datasets_isomorphic, parse_dataset};
-use sha2::{Digest, Sha256};
+
+#[path = "support/digest.rs"]
+mod digest;
+use digest::sha256;
 
 const EXPECTED_VECTOR_COUNT: usize = 73;
 const EXPECTED_COMPACTION_VECTOR_COUNT: usize = 13;
@@ -164,13 +167,6 @@ impl CompactionVector {
             expected: text(object, "expected"),
         }
     }
-}
-
-fn sha256(bytes: &[u8]) -> String {
-    // The digest renders itself, the way `rdf12_canon_profile.rs` in this same
-    // test directory already spells it — one idiom for "SHA-256 as lowercase
-    // hex" across the suite rather than a per-file accumulate loop.
-    format!("{}", purrdf_hash::hex::Lower(&Sha256::digest(bytes)))
 }
 
 /// `text` read as JSON, every object's members in name order: JSON-LD gives member

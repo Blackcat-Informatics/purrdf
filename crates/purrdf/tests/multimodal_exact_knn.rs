@@ -36,37 +36,30 @@
 
 use purrdf_core::purremb_fixture::Identities;
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf::hnsw::relation::{HnswRelation, HnswSpace};
 use purrdf::hnsw::{HnswIndex, Params, VectorMatrix};
 use purrdf::retrieval::{
-    AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, ExclusionBasis, Fixed, FusedRow,
-    FusionProfile, Iri, RECIP_K, RankFidelity, RequestTerm, RetrievalRequest, Statistics, Term,
-    TopK, plan, search,
+    AdmissionEnvironment, CandidateDomains, DecayRule, ExclusionBasis, Fixed, FusionProfile, Iri,
+    RECIP_K, RankFidelity, RequestTerm, RetrievalRequest, Statistics, Term, TopK, plan, search,
 };
 use purrdf::sparql::{
     EmbeddingKnnRelation, EmbeddingSpace, ExtensionEnv, InternedOutcome, KnnGuard, KnnObservations,
     NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions, RankedDeclaration, TermKind,
 };
-use purrdf::text::{
-    GraphSelector, SearchObservations, TextIndex, TextIndexConfig, TextSearchRelation,
-};
+use purrdf::text::{SearchObservations, TextSearchRelation};
 use purrdf::{
     AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
     DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract, MatrixInput, MatrixRow,
-    PrefixPostprocessing, ProjectionSpec, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTermTarget,
-    TargetSet, TermValue, VectorDtype,
+    PrefixPostprocessing, ProjectionSpec, RdfDataset, RdfDatasetBuilder, RdfTermTarget, TargetSet,
+    TermValue, VectorDtype,
 };
 
 // ---------------------------------------------------------------------------
 // The host's vocabulary and the fixture's dimensions
 // ---------------------------------------------------------------------------
 
-/// The one predicate the text corpus is indexed over.
-const NOTE: &str = "https://example.org/note";
 /// The IRI this host registers the text relation under.
 const TEXT_PF: &str = "https://example.org/pf/search";
 /// The IRI this host registers the exact nearest-neighbour relation under.
@@ -78,16 +71,18 @@ const HNSW_PF: &str = "https://example.org/pf/neighbours";
 const TEXT_STRATUM: &str = "https://example.org/stratum/lexical";
 /// The stratum this host ranks vector rows within.
 const KNN_STRATUM: &str = "https://example.org/stratum/vector";
-/// The one block both producers declare.
-const SHARED_BLOCK: &str = "https://example.org/domain/shared";
 // The datatype the depth argument is written under — the host's, never invented here.
 use purrdf_xsd::datatype::XSD_INTEGER;
 
-/// The needle the text producer is asked for.
-const NEEDLE: &str = "alpha beta";
+#[path = "support/multimodal.rs"]
+mod multimodal;
 
-/// How many documents the needle reaches, and how many rows the vector space holds.
-const CORPUS: usize = 80;
+use multimodal::{
+    CORPUS, NOTE, dataset, kernel_iri, request_terms, shared_block, text_index, text_rows,
+    vector_term,
+};
+use purrdf::retrieval::block_on;
+use purrdf::retrieval::fixture::{iri, reduce};
 
 /// The vector space's dimensionality.
 const DIMS: usize = 8;
@@ -102,82 +97,9 @@ const K: u32 = RECIP_K as u32;
 /// outside the offer and the pin has a genuine answer in both directions.
 const OFFER: usize = 10;
 
-fn text_subject(at: usize) -> String {
-    format!("https://example.org/doc/text/{at}")
-}
-
-fn vector_term(at: usize) -> String {
-    format!("https://example.org/doc/vec/{at}")
-}
-
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
-
-fn kernel_iri(text: &str) -> purrdf::iri::Iri {
-    purrdf::iri::parse(text).expect("fixture IRIs are valid")
-}
-
-fn shared_block() -> DomainTag {
-    DomainTag::parse(SHARED_BLOCK).expect("the fixture domain tag is a valid IRI")
-}
-
-/// A minimal single-threaded executor. Nothing in this pipeline actually pends.
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // The corpus
 // ---------------------------------------------------------------------------
-
-/// [`CORPUS`] documents the needle reaches, and one document per vector term whose
-/// text shares no term with it — so a text-side lookup about a vector candidate is a
-/// real dictionary search that finds no posting.
-fn text_rows() -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = (0..CORPUS)
-        .map(|at| {
-            (
-                text_subject(at),
-                format!("alpha beta gamma {}", "alpha ".repeat(at % 4 + 1).trim()),
-            )
-        })
-        .collect();
-    out.extend((0..CORPUS).map(|at| (vector_term(at), "zulu yankee xray whiskey".to_owned())));
-    out
-}
-
-fn dataset() -> Arc<RdfDataset> {
-    let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri(NOTE);
-    for (subject, text) in text_rows() {
-        let subject = builder.intern_iri(&subject);
-        let object = builder.intern_literal(RdfLiteral::simple(&text));
-        builder.push_quad(subject, predicate, object, None);
-    }
-    builder.freeze().expect("the fixture dataset is valid")
-}
-
-fn text_index(dataset: &RdfDataset) -> Arc<TextIndex> {
-    let config = TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
-        .expect("the fixture configuration is well formed");
-    Arc::new(TextIndex::from_dataset(dataset, &config).expect("the fixture index builds"))
-}
 
 /// [`CORPUS`] rows of [`DIMS`] components, deterministic, with no zero component.
 fn vectors() -> Vec<Vec<f64>> {
@@ -288,19 +210,6 @@ fn hnsw_space() -> Arc<HnswSpace> {
 // ---------------------------------------------------------------------------
 // The wiring
 // ---------------------------------------------------------------------------
-
-fn request_terms() -> Vec<RequestTerm> {
-    vec![
-        RequestTerm::Lexical {
-            text: NEEDLE.to_owned(),
-            language: None,
-            predicate: Some(iri(NOTE)),
-        },
-        RequestTerm::EntitySeed {
-            entity: Term::new(format!("<{}>", vector_term(0))),
-        },
-    ]
-}
 
 /// Both producers registered, with `basis` written into the declaration each relation
 /// hands out for itself — the only field this function touches.
@@ -413,17 +322,6 @@ struct Measured {
     knn_scans: u64,
     /// Distances those scans computed — its search work.
     knn_scanned_candidates: u64,
-}
-
-fn reduce(row: &FusedRow) -> (Term, Fixed, Vec<(Iri, u64, Fixed)>) {
-    (
-        row.entity.clone(),
-        row.score,
-        row.contributions
-            .iter()
-            .map(|(stratum, rank, contribution)| (stratum.clone(), *rank, *contribution))
-            .collect(),
-    )
 }
 
 fn measure(dataset: &RdfDataset, basis: ExclusionBasis) -> Measured {

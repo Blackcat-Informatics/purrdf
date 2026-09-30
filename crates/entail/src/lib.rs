@@ -223,6 +223,38 @@ impl Regime {
             _ => None,
         }
     }
+
+    /// The regime's name: the last segment of its entailment-regime IRI
+    /// (`Simple`, `RDF`, `RDFS`, `OWL-RL`, `OWL-Direct`, `RIF`, `D`), which
+    /// [`Self::from_iri`] reads back.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Simple => "Simple",
+            Self::Rdf => "RDF",
+            Self::Rdfs => "RDFS",
+            Self::OwlRl => "OWL-RL",
+            Self::OwlDirect => "OWL-Direct",
+            Self::Rif => "RIF",
+            Self::D => "D",
+        }
+    }
+
+    /// The spelling every host accepts for the regime — the CLI's `--regime`, the
+    /// bindings' `Regime.<NAME>`: `simple`, `rdf`, `rdfs`, `owl-rl`, `owl-direct`,
+    /// `rif`, `d`.
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Simple => "simple",
+            Self::Rdf => "rdf",
+            Self::Rdfs => "rdfs",
+            Self::OwlRl => "owl-rl",
+            Self::OwlDirect => "owl-direct",
+            Self::Rif => "rif",
+            Self::D => "d",
+        }
+    }
 }
 
 /// A regime TOGETHER WITH the input that regime is defined by — the parameter

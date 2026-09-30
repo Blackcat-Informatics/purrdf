@@ -384,9 +384,7 @@
 //! instead and ends `"exhausted"`, `"depth_reached"` or `"ceiling_reached"`.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::future::Future;
 use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
 
 use pyo3::create_exception;
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -1047,7 +1045,10 @@ fn run_search(call: &Call, profile: &FusionProfile) -> Result<SearchResult, Stri
         statistics: &call.statistics,
         fusion_profile: None,
     };
-    block_on(crate::retrieval::search(
+    // The ladder's futures are awaited in one task and never cross a thread
+    // boundary, so the retrieval crate's parking executor drives the real async
+    // entry point rather than a second, synchronous one.
+    crate::retrieval::block_on(crate::retrieval::search(
         &call.request,
         &registry,
         &call.statistics,
@@ -1056,32 +1057,6 @@ fn run_search(call: &Call, profile: &FusionProfile) -> Result<SearchResult, Stri
         profile,
     ))
     .map_err(|e| e.to_string())
-}
-
-/// Drive one future to completion on this thread.
-///
-/// The ladder's futures are awaited in a single task and never cross a thread
-/// boundary — `search` documents exactly that on its own `future_not_send`
-/// reasoning — so a parking waker is the whole runtime they need. This binding
-/// therefore drives the real async entry point rather than asking the Rust side
-/// for a second, synchronous one.
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
 }
 
 // ── argument conversion ──────────────────────────────────────────────────────

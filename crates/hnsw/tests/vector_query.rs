@@ -73,7 +73,7 @@ fn held_out(matrix: &VectorMatrix, count: usize, seed: u64) -> Vec<Vec<f64>> {
                 // Drawn from the same generator, so it is in-distribution but held out.
                 let fresh = corpus::embedding_like(
                     CorpusShape::embedding_like(1, dims),
-                    seed ^ (index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+                    seed ^ (index as u64).wrapping_mul(purrdf_hash::mix::GOLDEN_GAMMA),
                 )
                 .expect("generates");
                 fresh.row(0).to_vec()

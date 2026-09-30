@@ -6,6 +6,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 
+#[path = "support/holder.rs"]
+mod holder;
 #[allow(
     dead_code,
     unused_imports,
@@ -16,6 +18,10 @@ use std::error::Error;
 mod json_model;
 #[path = "support/json_text.rs"]
 mod json_text;
+#[path = "support/metaschemas.rs"]
+mod metaschemas;
+#[path = "support/oracle.rs"]
+mod oracle;
 #[path = "support/shacl_lists.rs"]
 mod shacl_lists;
 #[path = "support/shacl_temporal.rs"]
@@ -25,20 +31,11 @@ mod shacl_value_shapes;
 
 use json_model::{Value, json};
 use json_text::read_sorted;
-use purrdf::loss::{LossLedger, check_ledger_sound};
-use purrdf_shapes::json_schema::CompiledSchema;
+use purrdf::loss::check_ledger_sound;
 use purrdf_shapes::{
     ImportedShapes, LinkmlConfig, LinkmlPackage, Namespaces, SchemaDatatypeMap, SchemaImportConfig,
     emit_linkml, import_linkml_package, parse_linkml, write_linkml,
 };
-
-fn compiled(schema: &Value) -> Result<CompiledSchema, purrdf_lex::json::Error> {
-    Ok(CompiledSchema {
-        schema_json: format!("{}\n", json_model::write_pretty(schema)),
-        openapi_json: "{}\n".to_owned(),
-        losses: LossLedger::new(),
-    })
-}
 
 fn config() -> Result<LinkmlConfig, Box<dyn Error>> {
     Ok(LinkmlConfig::new(
@@ -243,9 +240,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let exact_schema = exact_schema();
     let lossy_schema = lossy_schema();
     let renamed_schema = renamed_schema();
-    let exact = emit_linkml(&compiled(&exact_schema)?, &config)?;
-    let lossy = emit_linkml(&compiled(&lossy_schema)?, &config)?;
-    let renamed = emit_linkml(&compiled(&renamed_schema)?, &renamed_config)?;
+    let exact = emit_linkml(&oracle::compiled(&exact_schema)?, &config)?;
+    let lossy = emit_linkml(&oracle::compiled(&lossy_schema)?, &config)?;
+    let renamed = emit_linkml(&oracle::compiled(&renamed_schema)?, &renamed_config)?;
 
     if !exact.losses.is_empty() {
         return Err(format!(
@@ -355,26 +352,28 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // The SHACL list-component fixture (see `support/shacl_lists.rs`): the
     // projected instances of real data and their SHACL verdicts.
-    let list_schema = shacl_lists::compiled()?;
+    let list_schema = shacl_lists::FIXTURE.compiled()?;
     let lists = emit_linkml(&list_schema, &config)?;
     check_ledger_sound(&lists.losses, "json-schema", "linkml-1.11")?;
-    let list_probes = shacl_lists::cases()?
+    let list_probes = shacl_lists::FIXTURE
+        .cases()?
         .into_iter()
         .map(|case| json!({ "label": case.label, "value": case.value, "conforms": case.conforms }))
         .collect::<Vec<_>>();
 
     // The temporal range-bound fixture (see `support/shacl_temporal.rs`).
-    let temporal_schema = shacl_temporal::compiled()?;
+    let temporal_schema = shacl_temporal::FIXTURE.compiled()?;
     let temporal = emit_linkml(&temporal_schema, &config)?;
     check_ledger_sound(&temporal.losses, "json-schema", "linkml-1.11")?;
-    let temporal_probes = shacl_temporal::cases()?
+    let temporal_probes = shacl_temporal::FIXTURE
+        .cases()?
         .into_iter()
         .map(|case| json!({ "label": case.label, "value": case.value, "conforms": case.conforms }))
         .collect::<Vec<_>>();
 
     // The value-position shape-constraint fixture (see
     // `support/shacl_value_shapes.rs`).
-    let value_shape_schema = shacl_value_shapes::compiled()?;
+    let value_shape_schema = shacl_value_shapes::FIXTURE.compiled()?;
     let value_shapes = emit_linkml(&value_shape_schema, &config)?;
     check_ledger_sound(&value_shapes.losses, "json-schema", "linkml-1.11")?;
     let value_shape_probes = shacl_value_shapes::cases()?

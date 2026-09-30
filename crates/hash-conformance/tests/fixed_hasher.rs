@@ -36,6 +36,7 @@
 //!   integers.
 
 use core::hash::{BuildHasher, Hash, Hasher};
+use purrdf_testkit::rng::xoshiro256_bytes;
 
 #[cfg(all(
     any(target_arch = "x86_64", target_arch = "aarch64"),
@@ -50,18 +51,6 @@ use purrdf_testkit::rng::Xoshiro256;
 use purrdf_testkit::vectors::{VectorFile, decode_str, encode_str};
 
 // --- inputs ------------------------------------------------------------------
-
-/// The first `length` bytes of the little-endian `u64` stream of
-/// `Xoshiro256::from_seed(seed)`: the recipe every vector header states.
-fn stream(length: usize, seed: u64) -> Vec<u8> {
-    let mut rng = Xoshiro256::from_seed(seed);
-    let mut bytes = Vec::with_capacity(length + 8);
-    while bytes.len() < length {
-        bytes.extend_from_slice(&rng.next_u64().to_le_bytes());
-    }
-    bytes.truncate(length);
-    bytes
-}
 
 fn one<H: Hasher + Default>(feed: impl FnOnce(&mut H)) -> u64 {
     let mut hasher = H::default();
@@ -124,11 +113,11 @@ fn apply<H: Hasher + Default>(fields: &[&str], terminal: fn(u8, &[u8]) -> u64) -
             h.write_usize(usize::try_from(hex(fields[1])).expect("a 32-bit usize"));
         }),
         "bytes" => {
-            let data = stream(decimal(fields[1]), hex(fields[2]) as u64);
+            let data = xoshiro256_bytes(decimal(fields[1]), hex(fields[2]) as u64);
             one::<H>(|h| h.write(&data))
         }
         "terminal" => {
-            let data = stream(decimal(fields[2]), hex(fields[3]) as u64);
+            let data = xoshiro256_bytes(decimal(fields[2]), hex(fields[3]) as u64);
             terminal(hex(fields[1]) as u8, &data)
         }
         "text" => {
@@ -137,7 +126,7 @@ fn apply<H: Hasher + Default>(fields: &[&str], terminal: fn(u8, &[u8]) -> u64) -
         }
         "chain" => {
             // write_u32(a), write(bytes), write_u8(b), write_u64(c).
-            let data = stream(decimal(fields[2]), hex(fields[3]) as u64);
+            let data = xoshiro256_bytes(decimal(fields[2]), hex(fields[3]) as u64);
             one::<H>(|h| {
                 h.write_u32(hex(fields[1]) as u32);
                 h.write(&data);
@@ -421,7 +410,7 @@ fn mixed_fields_preserve_context() {
         for _ in 0..1 << 16 {
             let prefix = rng.next_u64();
             let suffix = rng.next_u64();
-            let bytes = stream(rng.up_to(65) as usize, rng.next_u64());
+            let bytes = xoshiro256_bytes(rng.up_to(65) as usize, rng.next_u64());
             let hash = |left, right, data: &[u8]| {
                 one::<H>(|h| {
                     h.write_u64(left);
@@ -448,7 +437,7 @@ fn mixed_fields_preserve_context() {
 
 /// A literal byte-array model checks every packing width and unaligned start.
 fn short_packing_preserves_every_byte() {
-    let bytes = stream(64, 0x7061_636b_6279_7465);
+    let bytes = xoshiro256_bytes(64, 0x7061_636b_6279_7465);
     for offset in 0..=32 {
         for len in 0..=16 {
             let input = &bytes[offset..offset + len];

@@ -6,6 +6,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 
+#[path = "support/holder.rs"]
+mod holder;
 #[allow(
     dead_code,
     unused_imports,
@@ -16,6 +18,10 @@ use std::error::Error;
 mod json_model;
 #[path = "support/json_text.rs"]
 mod json_text;
+#[path = "support/metaschemas.rs"]
+mod metaschemas;
+#[path = "support/oracle.rs"]
+mod oracle;
 #[path = "support/shacl_lists.rs"]
 mod shacl_lists;
 #[path = "support/shacl_temporal.rs"]
@@ -26,32 +32,12 @@ mod shacl_value_shapes;
 use json_model::{Value, json};
 use json_text::read_sorted;
 use purrdf::loss::{LossLedger, check_ledger_sound};
-use purrdf_shapes::json_schema::{CompiledSchema, Namespaces};
+use purrdf_shapes::json_schema::CompiledSchema;
 use purrdf_shapes::{
     PYDANTIC_DIALECT, PydanticClassConfig, PydanticConfig, PydanticModuleConfig, PydanticPackage,
-    PydanticPackageTopology, PydanticVersionStamp, SchemaDatatypeMap, SchemaImportConfig,
-    emit_pydantic, import_pydantic_package,
+    PydanticPackageTopology, PydanticVersionStamp, SchemaImportConfig, emit_pydantic,
+    import_pydantic_package,
 };
-
-const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
-
-fn import_config() -> Result<SchemaImportConfig, Box<dyn Error>> {
-    let namespaces = Namespaces::new(
-        "ex",
-        &[("ex".to_owned(), "https://example.org/".to_owned())],
-    )?;
-    let datatypes = SchemaDatatypeMap::new(
-        format!("{XSD}string"),
-        format!("{XSD}boolean"),
-        format!("{XSD}integer"),
-        format!("{XSD}decimal"),
-        format!("{XSD}dateTime"),
-        format!("{XSD}date"),
-        format!("{XSD}time"),
-        format!("{XSD}anyURI"),
-    )?;
-    Ok(SchemaImportConfig::new(namespaces, datatypes))
-}
 
 fn reverse_evidence(
     package: &PydanticPackage,
@@ -222,7 +208,7 @@ fn routed_config(include_empty: bool) -> Result<PydanticConfig, Box<dyn Error>> 
 /// verdicts; the package enforces every list component, so the oracle expects
 /// every probe to agree.
 fn lists_fixture() -> Result<Value, Box<dyn Error>> {
-    let compiled = shacl_lists::compiled()?;
+    let compiled = shacl_lists::FIXTURE.compiled()?;
     let package = emit_pydantic(
         &compiled,
         &PydanticConfig::new(
@@ -236,7 +222,8 @@ fn lists_fixture() -> Result<Value, Box<dyn Error>> {
         .iter()
         .map(|(path, bytes)| String::from_utf8(bytes.clone()).map(|text| (path.clone(), text)))
         .collect::<Result<_, _>>()?;
-    let probes = shacl_lists::cases()?
+    let probes = shacl_lists::FIXTURE
+        .cases()?
         .into_iter()
         .map(|case| json!({ "label": case.label, "value": case.value, "conforms": case.conforms }))
         .collect::<Vec<_>>();
@@ -253,7 +240,7 @@ fn lists_fixture() -> Result<Value, Box<dyn Error>> {
 /// `not` and `contains` are enforced by the generated runtime check over the raw
 /// JSON input, so every probe must agree with its SHACL verdict.
 fn value_shapes_fixture() -> Result<Value, Box<dyn Error>> {
-    let compiled = shacl_value_shapes::compiled()?;
+    let compiled = shacl_value_shapes::FIXTURE.compiled()?;
     let package = emit_pydantic(
         &compiled,
         &PydanticConfig::new(
@@ -284,7 +271,7 @@ fn value_shapes_fixture() -> Result<Value, Box<dyn Error>> {
 /// generated runtime check evaluates over the raw JSON input, so every probe
 /// must agree with its SHACL verdict.
 fn temporal_fixture() -> Result<Value, Box<dyn Error>> {
-    let compiled = shacl_temporal::compiled()?;
+    let compiled = shacl_temporal::FIXTURE.compiled()?;
     let package = emit_pydantic(
         &compiled,
         &PydanticConfig::new(
@@ -298,7 +285,8 @@ fn temporal_fixture() -> Result<Value, Box<dyn Error>> {
         .iter()
         .map(|(path, bytes)| String::from_utf8(bytes.clone()).map(|text| (path.clone(), text)))
         .collect::<Result<_, _>>()?;
-    let probes = shacl_temporal::cases()?
+    let probes = shacl_temporal::FIXTURE
+        .cases()?
         .into_iter()
         .map(|case| json!({ "label": case.label, "value": case.value, "conforms": case.conforms }))
         .collect::<Vec<_>>();
@@ -458,7 +446,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
         &config,
     )?;
-    let reverse = reverse_evidence(&reverse_package, &import_config()?)?;
+    let reverse = reverse_evidence(&reverse_package, &oracle::import_config()?)?;
     let mut routed_reverse_schema = routed_schema.clone();
     routed_reverse_schema["$defs"]
         .as_object_mut()
@@ -472,7 +460,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
         &routed_config(false)?,
     )?;
-    let routed_reverse = reverse_evidence(&routed_reverse_package, &import_config()?)?;
+    let routed_reverse = reverse_evidence(&routed_reverse_package, &oracle::import_config()?)?;
     let observed_losses: BTreeSet<(&str, &str)> = package
         .losses
         .entries()

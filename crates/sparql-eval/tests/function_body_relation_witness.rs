@@ -26,16 +26,16 @@
 //! holds the nodes' types and nothing else, and the single fact that distinguishes
 //! them is a row only the relation can supply.
 
+use purrdf_sparql_eval::fixture::OneRowRelation;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_algebra::ParserOptions;
 use purrdf_sparql_eval::{
-    AggregateRegistry, BindingPattern, EvalError, ExprFnCall, ExtensionEnv, GovernedOutcome,
-    GovernorState, IndexGeneration, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, QueryGovernors, QueryOptions, TypeConstraint,
-    UserFnBody, UserFnParam, UserFunction, UserFunctionRegistry, Volatility,
+    AggregateRegistry, EvalError, ExprFnCall, ExtensionEnv, GovernedOutcome, GovernorState,
+    IndexGeneration, NativeSparqlEngine, PropertyFunctionRegistry, QueryGovernors, QueryOptions,
+    TypeConstraint, UserFnBody, UserFnParam, UserFunction, UserFunctionRegistry,
 };
 
 const EX: &str = "http://example.org/ns#";
@@ -50,70 +50,19 @@ const FN_IRI: &str = "http://example.org/ns#isFlagged";
 /// identifiable rather than merely a count.
 const GENERATION: &str = "flag-index@7";
 
-/// A relation over one fixed row, counting how many times the engine opened it.
-#[derive(Debug)]
-struct FlagRelation {
-    modes: [BindingPattern; 1],
-    opens: Arc<AtomicU64>,
-}
-
-#[derive(Debug)]
-struct FlagCursor {
-    rows: std::vec::IntoIter<PfRow>,
-}
-
-impl PfCursor for FlagCursor {
-    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
-        Ok(self.rows.next())
-    }
-
-    fn generation(&self) -> IndexGeneration {
-        IndexGeneration::declared(GENERATION)
-    }
-}
-
-impl PropertyFunction for FlagRelation {
-    fn volatility(&self) -> Volatility {
-        Volatility::Stable
-    }
-
-    fn arity(&self) -> PfArity {
-        PfArity::new(1, 1)
-    }
-
-    fn modes(&self) -> &[BindingPattern] {
-        &self.modes
-    }
-
-    fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
-        1
-    }
-
-    fn open(
-        &self,
-        _args: &PfArgs<'_>,
-        _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
-        self.opens.fetch_add(1, Ordering::Relaxed);
-        let rows = vec![vec![
-            TermValue::Iri(format!("{EX}ada")),
-            TermValue::Iri(format!("{EX}yes")),
-        ]];
-        Ok(Box::new(FlagCursor {
-            rows: rows.into_iter(),
-        }))
-    }
-}
-
 fn relations() -> (PropertyFunctionRegistry, Arc<AtomicU64>) {
     let opens = Arc::new(AtomicU64::new(0));
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         REL.to_owned(),
-        Arc::new(FlagRelation {
-            modes: [BindingPattern::from_code("ff")],
-            opens: Arc::clone(&opens),
-        }),
+        Arc::new(OneRowRelation::new(
+            vec![
+                TermValue::Iri(format!("{EX}ada")),
+                TermValue::Iri(format!("{EX}yes")),
+            ],
+            GENERATION,
+            Arc::clone(&opens),
+        )),
     );
     (registry, opens)
 }
@@ -424,10 +373,14 @@ fn relations_only(opens: Arc<AtomicU64>) -> PropertyFunctionRegistry {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         REL.to_owned(),
-        Arc::new(FlagRelation {
-            modes: [BindingPattern::from_code("ff")],
+        Arc::new(OneRowRelation::new(
+            vec![
+                TermValue::Iri(format!("{EX}ada")),
+                TermValue::Iri(format!("{EX}yes")),
+            ],
+            GENERATION,
             opens,
-        }),
+        )),
     );
     registry
 }

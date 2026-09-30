@@ -12,6 +12,7 @@
 //! the profile's own bytes, and that reaching for the unranked registration by
 //! mistake fails loudly rather than quietly.
 
+use purrdf_hnsw::fixture::params;
 use std::sync::Arc;
 
 #[path = "support/corpus.rs"]
@@ -32,10 +33,6 @@ use purrdf_sparql_eval::{
 use purrdf_xsd::datatype::XSD_INTEGER;
 const PREDICATE: &str = "https://example.org/pf#nearest";
 const STRATUM: &str = "https://example.org/stratum/vector";
-
-fn params() -> Params {
-    Params::new(4, 8, 16, 8).expect("valid parameters")
-}
 
 /// A small deterministic space. The values are a splitmix walk mapped into
 /// `(-1, 1)`; nothing here reads a clock or an RNG.

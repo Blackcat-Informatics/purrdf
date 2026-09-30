@@ -1,18 +1,30 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The walk over first-party, non-test Rust source, and the symbol index it builds.
+//! The walk over first-party Rust source, and the symbol index it builds.
 //!
 //! Packages are the directories under `crates/` and `bindings/` that hold a
 //! `Cargo.toml`. Each package's library and binary roots (and its `build.rs`) are
 //! parsed and their `mod` declarations followed, exactly as rustc would reach them,
-//! so the module path of every item is the one callers write. What the walk never
-//! enters:
+//! so the module path of every item is the one callers write. So are its test,
+//! bench and example targets — `tests/*.rs`, `tests/*/main.rs`, the same under
+//! `benches/` and `examples/`, and every `[[test]]`, `[[bench]]` and `[[example]]`
+//! path — each a crate of its own, named `<package>::test_crate::<target>` (or
+//! `bench_crate`, `example_crate`): test-support code copied between two test
+//! files is as much a second implementation as a helper copied between two
+//! libraries. Their units are marked as not [`Unit::shipping`]. What the walk
+//! never enters:
 //!
 //! * an item or module under a test-only `#[cfg]` (`test`, or an `all(…)` holding
-//!   it) and every `#[test]` function;
-//! * a file under a `tests/`, `benches/`, `examples/` or `generated/` directory of
-//!   its package, however it is reached.
+//!   it) and every `#[test]` function — a test case is not a helper;
+//! * from a library, binary or build script, a file under a `tests/`, `benches/`
+//!   or `examples/` directory of its package, and from any root a file under
+//!   `generated/` or outside its package, however it is reached.
+//!
+//! A file reached twice — a `tests/support/mod.rs` every test target declares, or
+//! a library file a build script includes through `#[path]` — is one source: its
+//! items are indexed under every path that reaches them, and fingerprinted once,
+//! under the first.
 //!
 //! Every function, constant and static that survives becomes a [`Unit`] with its
 //! fingerprints. Every named item becomes an index entry, and every `use` an alias,
@@ -31,6 +43,14 @@ use crate::normalize::{self, BodyPrint};
 
 /// Directory names whose contents are never shipping source.
 const EXCLUDED_DIRS: [&str; 4] = ["tests", "benches", "examples", "generated"];
+
+/// The target directories whose crates the walk reads as test code, with the
+/// path segment their crates are named under.
+const TEST_TARGETS: [(&str, &str); 3] = [
+    ("tests", "test_crate"),
+    ("benches", "bench_crate"),
+    ("examples", "example_crate"),
+];
 
 /// Where the source comes from: the repository on disk, or an in-memory tree in
 /// the self-test and the unit tests.
@@ -110,7 +130,7 @@ pub(crate) enum UnitKind {
     Constant,
 }
 
-/// One fingerprinted item of shipping source.
+/// One fingerprinted item: of shipping source, or of a test, bench or example.
 #[derive(Clone, Debug)]
 pub(crate) struct Unit {
     /// Its resolved symbol path.
@@ -133,6 +153,9 @@ pub(crate) struct Unit {
     pub(crate) tables: BTreeSet<&'static str>,
     /// Every string literal it holds, decoded, with its 1-based line.
     pub(crate) strings: Vec<(String, usize)>,
+    /// Whether it is shipping source: reached from a library, binary or build
+    /// script root rather than from a test, bench or example target.
+    pub(crate) shipping: bool,
 }
 
 /// One named item in the index.
@@ -188,6 +211,9 @@ pub(crate) struct Workspace {
     /// benches and examples included.
     pub(crate) rule_hits: Vec<crate::rules::RuleHit>,
     pending: Vec<Pending>,
+    /// `(file, byte offset)` of every item already fingerprinted, so a file
+    /// reached twice yields its units once.
+    fingerprinted: BTreeSet<(String, usize)>,
 }
 
 impl Workspace {
@@ -212,16 +238,34 @@ impl Workspace {
             // A virtual manifest has no source of its own.
             return;
         };
-        self.scan_rules(tree, &package, package_dir, package_dir);
-        for (ident, root) in manifest.roots(tree, package_dir, &package) {
-            self.crates.insert(ident.clone());
-            let context = Context {
-                tree,
-                package: &package,
-                package_dir,
-            };
-            let directory = parent_dir(&root);
-            self.walk_file(&context, &root, &ident, &directory);
+        let mut parsed = BTreeMap::new();
+        self.scan_rules(tree, &package, package_dir, package_dir, &mut parsed);
+        let shipping = manifest.roots(tree, package_dir, &package);
+        let test_code = manifest.test_roots(tree, package_dir, &package);
+        for (roots, shipping) in [(shipping, true), (test_code, false)] {
+            for (ident, root) in roots {
+                self.crates.insert(ident.clone());
+                let context = Context {
+                    tree,
+                    package: &package,
+                    package_dir,
+                    shipping,
+                    parsed: &parsed,
+                };
+                let directory = parent_dir(&root);
+                self.walk_file(&context, &root, &ident, &directory);
+            }
+        }
+    }
+
+    /// Keep `unit` unless its item was already fingerprinted through another path
+    /// to the same file; its index in [`Self::units`] when kept.
+    fn keep(&mut self, unit: Unit, offset: usize) -> Option<usize> {
+        if self.fingerprinted.insert((unit.file.clone(), offset)) {
+            self.units.push(unit);
+            Some(self.units.len() - 1)
+        } else {
+            None
         }
     }
 
@@ -229,13 +273,22 @@ impl Workspace {
     /// compiles it: a test's randomly seeded map is as nondeterministic as a
     /// library's. The byte-layout rules read shipping code only: a file under
     /// one of the package's test, bench, example or generated directories is a
-    /// test's independent oracle, not a second implementation.
-    fn scan_rules(&mut self, tree: &dyn Tree, package: &str, package_dir: &str, directory: &str) {
+    /// test's independent oracle, not a second implementation. Every file is
+    /// parsed once: its text and syntax tree are kept in `parsed`, by path, for
+    /// the walk.
+    fn scan_rules(
+        &mut self,
+        tree: &dyn Tree,
+        package: &str,
+        package_dir: &str,
+        directory: &str,
+        parsed: &mut BTreeMap<String, (String, syn::File)>,
+    ) {
         for (name, is_dir) in tree.list(directory) {
             let path = format!("{directory}/{name}");
             if is_dir {
                 if name != "target" && !name.starts_with('.') {
-                    self.scan_rules(tree, package, package_dir, &path);
+                    self.scan_rules(tree, package, package_dir, &path, parsed);
                 }
                 continue;
             }
@@ -249,19 +302,20 @@ impl Workspace {
                 continue;
             };
             match syn::parse_file(&source) {
-                Ok(parsed) => {
+                Ok(file) => {
                     self.rule_hits
-                        .extend(crate::rules::std_default_hasher(package, &path, &parsed));
+                        .extend(crate::rules::std_default_hasher(package, &path, &file));
                     self.rule_hits
-                        .extend(crate::rules::hex_rules(package, &path, &parsed));
+                        .extend(crate::rules::hex_rules(package, &path, &file));
                     self.rule_hits
-                        .extend(crate::rules::lex_rules(package, &path, &parsed));
+                        .extend(crate::rules::lex_rules(package, &path, &file));
                     self.rule_hits
-                        .extend(crate::structure::structure_rules(package, &path, &parsed));
+                        .extend(crate::structure::structure_rules(package, &path, &file));
                     if !is_excluded(package_dir, &path) {
                         self.rule_hits
-                            .extend(crate::layout::layout_rules(package, &path, &parsed));
+                            .extend(crate::layout::layout_rules(package, &path, &file));
                     }
+                    parsed.insert(path, (source, file));
                 }
                 Err(error) => self.errors.push(format!("{path}: {error}")),
             }
@@ -269,24 +323,43 @@ impl Workspace {
     }
 
     fn walk_file(&mut self, context: &Context<'_>, file: &str, module: &str, directory: &str) {
-        if is_excluded(context.package_dir, file) {
+        let excluded = if context.shipping {
+            is_excluded(context.package_dir, file)
+        } else {
+            is_outside_or_generated(context.package_dir, file)
+        };
+        if excluded {
             return;
         }
-        let Some(source) = context.tree.read(file) else {
-            self.errors
-                .push(format!("{file}: declared as a module but not found"));
-            return;
-        };
-        let parsed = match syn::parse_file(&source) {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                self.errors.push(format!("{file}: {error}"));
+        let read;
+        let (source, parsed) = if let Some((source, parsed)) = context.parsed.get(file) {
+            (source, parsed)
+        } else {
+            // A file the package scan did not reach (not a `.rs` name, or under a
+            // hidden directory) is read here; one it could not parse is already
+            // an error.
+            let Some(source) = context.tree.read(file) else {
+                self.errors
+                    .push(format!("{file}: declared as a module but not found"));
                 return;
+            };
+            match syn::parse_file(&source) {
+                Ok(parsed) => {
+                    read = (source, parsed);
+                    (&read.0, &read.1)
+                }
+                Err(error) => {
+                    let error = format!("{file}: {error}");
+                    if !self.errors.contains(&error) {
+                        self.errors.push(error);
+                    }
+                    return;
+                }
             }
         };
         let place = Place {
             file,
-            source: &source,
+            source,
             module,
             directory,
         };
@@ -314,7 +387,10 @@ impl Workspace {
                         &function.attrs,
                         place.module,
                     );
-                    self.units.push(unit);
+                    self.keep(
+                        unit,
+                        function.block.brace_token.span.join().byte_range().start,
+                    );
                 }
                 syn::Item::Const(constant) => {
                     self.constant_unit(
@@ -392,7 +468,7 @@ impl Workspace {
                             block,
                             format!("{owner}::{}", method.sig.ident),
                         );
-                        self.units.push(unit);
+                        self.keep(unit, block.brace_token.span.join().byte_range().start);
                     }
                 }
                 syn::TraitItem::Const(constant) if !is_test_only(&constant.attrs) => {
@@ -423,7 +499,10 @@ impl Workspace {
                         &method.block,
                         String::new(),
                     );
-                    self.units.push(unit);
+                    let unit = self.keep(
+                        unit,
+                        method.block.brace_token.span.join().byte_range().start,
+                    );
                     self.pending.push(Pending {
                         module: place.module.to_owned(),
                         self_type: self_type.clone(),
@@ -435,13 +514,13 @@ impl Workspace {
                             &method.attrs,
                             "",
                         ),
-                        unit: Some(self.units.len() - 1),
+                        unit,
                     });
                 }
                 syn::ImplItem::Const(constant) if !is_test_only(&constant.attrs) => {
                     let mut unit = self.constant(context, place, &constant.ident, &constant.expr);
                     unit.symbol = String::new();
-                    self.units.push(unit);
+                    let unit = self.keep(unit, constant.ident.span().byte_range().start);
                     self.pending.push(Pending {
                         module: place.module.to_owned(),
                         self_type: self_type.clone(),
@@ -453,7 +532,7 @@ impl Workspace {
                             &constant.attrs,
                             "",
                         ),
-                        unit: Some(self.units.len() - 1),
+                        unit,
                     });
                 }
                 _ => {}
@@ -606,6 +685,7 @@ impl Workspace {
             constants,
             tables,
             strings,
+            shipping: context.shipping,
         }
     }
 
@@ -633,6 +713,7 @@ impl Workspace {
             constants,
             tables,
             strings,
+            shipping: context.shipping,
         }
     }
 
@@ -646,7 +727,7 @@ impl Workspace {
     ) {
         let unit = self.constant(context, place, ident, expr);
         self.define(context, place, ident, attrs, place.module);
-        self.units.push(unit);
+        self.keep(unit, ident.span().byte_range().start);
     }
 
     /// Place every impl item under its self type's defining module.
@@ -762,11 +843,15 @@ fn join_path(base: &str, rest: &[&str]) -> String {
     }
 }
 
-/// Which package is being walked.
+/// Which package is being walked, and from which kind of root.
 struct Context<'a> {
     tree: &'a dyn Tree,
     package: &'a str,
     package_dir: &'a str,
+    /// A library, binary or build-script root, not a test, bench or example.
+    shipping: bool,
+    /// Every `.rs` file of the package, by path: its text and syntax tree.
+    parsed: &'a BTreeMap<String, (String, syn::File)>,
 }
 
 /// Where in the source the walk is.
@@ -929,6 +1014,20 @@ fn is_excluded(package_dir: &str, file: &str) -> bool {
         .any(|directory| EXCLUDED_DIRS.contains(directory))
 }
 
+/// Whether `file` sits outside its package or under one of its `generated/`
+/// directories: what a test, bench or example target never reads as its own.
+fn is_outside_or_generated(package_dir: &str, file: &str) -> bool {
+    let Some(inside) = file
+        .strip_prefix(package_dir)
+        .and_then(|rest| rest.strip_prefix('/'))
+    else {
+        return true;
+    };
+    let mut components: Vec<&str> = inside.split('/').collect();
+    components.pop();
+    components.contains(&"generated")
+}
+
 /// The parts of a `Cargo.toml` the walk needs.
 #[derive(Debug, Default)]
 struct Manifest {
@@ -936,6 +1035,9 @@ struct Manifest {
     lib_name: Option<String>,
     lib_path: Option<String>,
     bins: Vec<(Option<String>, Option<String>)>,
+    /// `[[test]]`, `[[bench]]` and `[[example]]` rows: the table name, and the
+    /// row's `name` and `path`.
+    targets: Vec<(String, Option<String>, Option<String>)>,
 }
 
 impl Manifest {
@@ -950,6 +1052,9 @@ impl Manifest {
                 line.clone_into(&mut section);
                 if section == "[[bin]]" {
                     manifest.bins.push((None, None));
+                }
+                if matches!(section.as_str(), "[[test]]" | "[[bench]]" | "[[example]]") {
+                    manifest.targets.push((section.clone(), None, None));
                 }
                 continue;
             }
@@ -976,6 +1081,16 @@ impl Manifest {
                 ("[[bin]]", "path") => {
                     if let Some(bin) = manifest.bins.last_mut() {
                         bin.1 = Some(value.to_owned());
+                    }
+                }
+                ("[[test]]" | "[[bench]]" | "[[example]]", "name" | "path") => {
+                    if let Some(target) = manifest.targets.last_mut() {
+                        let slot = if key == "name" {
+                            &mut target.1
+                        } else {
+                            &mut target.2
+                        };
+                        *slot = Some(value.to_owned());
                     }
                 }
                 _ => {}
@@ -1038,6 +1153,56 @@ impl Manifest {
         }
         roots
     }
+
+    /// `(crate ident, root file)` for every test, bench and example target, in a
+    /// fixed order: the ones Cargo discovers under `tests/`, `benches/` and
+    /// `examples/` (a `*.rs` file, or a directory's `main.rs`), and every
+    /// `[[test]]`, `[[bench]]` and `[[example]]` path.
+    fn test_roots(
+        &self,
+        tree: &dyn Tree,
+        package_dir: &str,
+        package: &str,
+    ) -> Vec<(String, String)> {
+        let package_ident = package.replace('-', "_");
+        let mut roots: BTreeMap<String, String> = BTreeMap::new();
+        for (directory, kind) in TEST_TARGETS {
+            for (name, is_dir) in tree.list(&format!("{package_dir}/{directory}")) {
+                let (target, path) = if is_dir {
+                    (name.clone(), format!("{directory}/{name}/main.rs"))
+                } else if let Some(stem) = name.strip_suffix(".rs") {
+                    (stem.to_owned(), format!("{directory}/{name}"))
+                } else {
+                    continue;
+                };
+                if tree.read(&format!("{package_dir}/{path}")).is_some() {
+                    roots.entry(path).or_insert_with(|| {
+                        format!("{package_ident}::{kind}::{}", target.replace('-', "_"))
+                    });
+                }
+            }
+        }
+        for (section, name, path) in &self.targets {
+            let (directory, kind) = match section.as_str() {
+                "[[test]]" => TEST_TARGETS[0],
+                "[[bench]]" => TEST_TARGETS[1],
+                _ => TEST_TARGETS[2],
+            };
+            let Some(name) = name else { continue };
+            let path = path
+                .clone()
+                .unwrap_or_else(|| format!("{directory}/{name}.rs"));
+            if tree.read(&format!("{package_dir}/{path}")).is_some() {
+                roots.entry(path).or_insert_with(|| {
+                    format!("{package_ident}::{kind}::{}", name.replace('-', "_"))
+                });
+            }
+        }
+        roots
+            .into_iter()
+            .map(|(path, ident)| (ident, format!("{package_dir}/{path}")))
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -1093,8 +1258,65 @@ mod tests {
             ),
             ("crates/a/tests/support.rs", "pub fn helper() {}\n"),
         ]);
-        let names: Vec<&str> = walked.units.iter().map(|unit| unit.name.as_str()).collect();
-        assert_eq!(names, ["shipped", "also_shipped"]);
+        let shipping: Vec<&str> = walked
+            .units
+            .iter()
+            .filter(|unit| unit.shipping)
+            .map(|unit| unit.name.as_str())
+            .collect();
+        assert_eq!(shipping, ["shipped", "also_shipped"]);
+        // The library's `#[path]` into `tests/` is not followed; the file is a test
+        // target of its own, walked as test code.
+        let tests: Vec<&str> = walked
+            .units
+            .iter()
+            .filter(|unit| !unit.shipping)
+            .map(|unit| unit.symbol.as_str())
+            .collect();
+        assert_eq!(tests, ["demo_a::test_crate::support::helper"]);
+    }
+
+    /// Every test, bench and example target is a crate of its own, the declared
+    /// ones included; a file several targets declare is fingerprinted once.
+    #[test]
+    fn test_targets_are_crates_and_a_shared_file_is_one_source() {
+        let walked = workspace(&[
+            (
+                "crates/a/Cargo.toml",
+                "[package]\nname = \"demo-a\"\n[[bench]]\nname = \"speed\"\npath = \"benches/speed/run.rs\"\nharness = false\n",
+            ),
+            ("crates/a/src/lib.rs", "pub fn lib() {}\n"),
+            ("crates/a/tests/one.rs", "mod common;\nfn only_one() {}\n"),
+            (
+                "crates/a/tests/two/main.rs",
+                "#[path = \"../common/mod.rs\"]\nmod common;\n",
+            ),
+            ("crates/a/tests/common/mod.rs", "pub fn shared() {}\n"),
+            ("crates/a/benches/speed/run.rs", "fn main() {}\n"),
+            ("crates/a/examples/demo.rs", "fn main() {}\n"),
+        ]);
+        let mut symbols: Vec<(&str, bool)> = walked
+            .units
+            .iter()
+            .map(|unit| (unit.symbol.as_str(), unit.shipping))
+            .collect();
+        symbols.sort_unstable();
+        assert_eq!(
+            symbols,
+            [
+                ("demo_a::bench_crate::speed::main", false),
+                ("demo_a::example_crate::demo::main", false),
+                ("demo_a::lib", true),
+                ("demo_a::test_crate::one::common::shared", false),
+                ("demo_a::test_crate::one::only_one", false),
+            ]
+        );
+        // The second declaration of the shared file still resolves.
+        assert!(
+            walked
+                .resolve("demo_a::test_crate::two::common::shared")
+                .is_some()
+        );
     }
 
     #[test]

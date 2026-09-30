@@ -188,12 +188,51 @@ impl Xoshiro256 {
     }
 }
 
+/// The first `length` bytes of the little-endian `u64` stream of the
+/// [`Xoshiro256`] seeded at `seed`: the input recipe the frozen vector files of
+/// the digest and codec suites state in their headers.
+#[must_use]
+pub fn xoshiro256_bytes(length: usize, seed: u64) -> Vec<u8> {
+    let mut rng = Xoshiro256::from_seed(seed);
+    le_words(length, || rng.next_u64())
+}
+
+/// The first `length` bytes of the little-endian SplitMix64 `next` stream
+/// ([`splitmix64_next`]) from `seed`.
+#[must_use]
+pub fn splitmix64_bytes(length: usize, seed: u64) -> Vec<u8> {
+    let mut state = seed;
+    le_words(length, || splitmix64_next(&mut state))
+}
+
+/// The first `length` bytes of the words `next` draws, each little-endian.
+fn le_words(length: usize, mut next: impl FnMut() -> u64) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(length + 8);
+    while bytes.len() < length {
+        bytes.extend_from_slice(&next().to_le_bytes());
+    }
+    bytes.truncate(length);
+    bytes
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         LCG64_MMIX_INCREMENT, SplitMix64, Xoshiro256, lcg64_next, signed_unit_stream,
-        xorshift64_next,
+        splitmix64_bytes, splitmix64_next, xorshift64_next, xoshiro256_bytes,
     };
+
+    #[test]
+    fn byte_streams_are_the_little_endian_words_truncated_to_the_length() {
+        let mut rng = Xoshiro256::from_seed(7);
+        let mut words = rng.next_u64().to_le_bytes().to_vec();
+        words.extend_from_slice(&rng.next_u64().to_le_bytes());
+        assert_eq!(xoshiro256_bytes(11, 7), words[..11]);
+        let mut state = 11;
+        let first = splitmix64_next(&mut state).to_le_bytes();
+        assert_eq!(splitmix64_bytes(5, 11), first[..5]);
+        assert_eq!(xoshiro256_bytes(0, 7), []);
+    }
 
     #[test]
     fn below_reduces_the_splitmix64_stream_modulo_the_bound() {

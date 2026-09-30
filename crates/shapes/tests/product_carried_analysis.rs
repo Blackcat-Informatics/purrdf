@@ -47,6 +47,7 @@
 //!
 //! Everything is under `example.org`: PurRDF mints no vocabulary IRIs.
 
+use purrdf_shapes::product_fixture::core_product;
 use std::sync::Arc;
 
 use purrdf::RdfDataset;
@@ -145,14 +146,6 @@ ex:m1 a ex:Other .
 ";
 
 // ── Reading and rebuilding a product from outside the crate ────────────────────
-
-/// Pack `turtle` as a prepared product.
-fn product_of(turtle: &str) -> Vec<u8> {
-    let shapes = parse_shapes(turtle, None).expect("the fixture shapes parse");
-    PreparedShapes::new(Arc::new(shapes))
-        .to_product(&ShapesProfile::CORE)
-        .expect("the fixture is representable as a product")
-}
 
 /// One section's bytes, copied out of a product.
 fn section_of(bytes: &[u8], kind: u32) -> Vec<u8> {
@@ -326,7 +319,7 @@ fn admit(bytes: &[u8]) -> Result<PreparedShapes, ShapesProductError> {
 /// every forgery below a no-op that passed.
 #[test]
 fn the_ast_section_ends_with_the_class_analysis() {
-    let ast = section_of(&product_of(SHAPES), SECTION_AST);
+    let ast = section_of(&core_product(SHAPES), SECTION_AST);
     let tail = ranked_tail(&CLASSES);
 
     assert!(
@@ -368,8 +361,8 @@ fn the_ast_section_ends_with_the_class_analysis() {
 /// confounded with "it fell over".
 #[test]
 fn a_restore_uses_the_carried_analysis_verbatim() {
-    let ghost_product = product_of(SHAPES_WITH_GHOST);
-    let forged = with_catalog_tail(&product_of(SHAPES), &ranked_tail(&CLASSES_WITH_GHOST));
+    let ghost_product = core_product(SHAPES_WITH_GHOST);
+    let forged = with_catalog_tail(&core_product(SHAPES), &ranked_tail(&CLASSES_WITH_GHOST));
     let forged = reframe(
         &forged,
         &section_of(&forged, SECTION_AST),
@@ -400,7 +393,7 @@ fn a_restore_uses_the_carried_analysis_verbatim() {
 /// changed and requires a successful restore that answers like a fresh parse.
 #[test]
 fn an_untouched_repack_still_admits() {
-    let product = product_of(SHAPES);
+    let product = core_product(SHAPES);
     let repacked = reframe(&product, &section_of(&product, SECTION_AST), None);
 
     assert_eq!(
@@ -424,7 +417,7 @@ fn an_untouched_repack_still_admits() {
 /// for a blank cheque.
 #[test]
 fn a_carried_analysis_the_identity_does_not_pin_is_refused() {
-    let forged = with_catalog_tail(&product_of(SHAPES), &ranked_tail(&CLASSES_WITH_GHOST));
+    let forged = with_catalog_tail(&core_product(SHAPES), &ranked_tail(&CLASSES_WITH_GHOST));
 
     let refusal = admit(&forged).expect_err(
         "a carried class analysis that is not the one the product's identity pins must be refused, \
@@ -451,7 +444,7 @@ fn a_carried_analysis_the_identity_does_not_pin_is_refused() {
 #[test]
 fn a_rearranged_analysis_is_refused() {
     let swapped = catalog_tail(&[(CLASSES[0], 1), (CLASSES[1], 0)]);
-    let forged = with_catalog_tail(&product_of(SHAPES), &swapped);
+    let forged = with_catalog_tail(&core_product(SHAPES), &swapped);
 
     let refusal = admit(&forged).expect_err(
         "a class analysis that gives the fixture's own classes each other's binding-row positions \
@@ -478,7 +471,7 @@ fn a_rearranged_analysis_is_refused() {
 /// supplied.
 #[test]
 fn an_analysis_that_is_not_an_arrangement_of_its_own_slots_is_refused() {
-    let product = product_of(SHAPES);
+    let product = core_product(SHAPES);
     for (what, tail) in [
         (
             "a repeated position",
@@ -524,7 +517,7 @@ fn an_analysis_that_is_not_an_arrangement_of_its_own_slots_is_refused() {
 #[test]
 fn a_valid_but_underived_arrangement_is_not_refused_as_malformed() {
     let swapped = catalog_tail(&[(CLASSES[0], 1), (CLASSES[1], 0)]);
-    let refusal = admit(&with_catalog_tail(&product_of(SHAPES), &swapped))
+    let refusal = admit(&with_catalog_tail(&core_product(SHAPES), &swapped))
         .expect_err("a rearranged analysis is still not the pinned one");
 
     assert_ne!(
@@ -554,7 +547,7 @@ fn a_valid_but_underived_arrangement_is_not_refused_as_malformed() {
 #[test]
 fn rebuild_ignores_the_carried_analysis() {
     let undecodable = catalog_tail(&[(CLASSES[0], 0), (CLASSES[1], 0)]);
-    let forged = with_catalog_tail(&product_of(SHAPES), &undecodable);
+    let forged = with_catalog_tail(&core_product(SHAPES), &undecodable);
 
     let refusal = admit(&forged).expect_err("an undecodable class analysis is refused by `admit`");
     assert_eq!(
@@ -592,7 +585,7 @@ fn rebuild_ignores_the_carried_analysis() {
 /// standing check that they have not.
 #[test]
 fn parsing_admitting_and_rebuilding_agree() {
-    let product = product_of(SHAPES);
+    let product = core_product(SHAPES);
     let parsed = expected_report_nt();
 
     let admitted = admit(&product).expect("the product admits in the process that wrote it");

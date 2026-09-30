@@ -33,39 +33,14 @@ const P: &str = "https://example.org/p";
 const O: &str = "https://example.org/o";
 const SAYS: &str = "https://example.org/says";
 
-fn iri(value: &str) -> Term {
-    Term {
-        kind: TermKind::Iri,
-        value: Some(value.to_owned()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
-/// The modern spelling: components in `tt`, no reifier, no statement-layer row.
-fn tt_only_triple_term(spo: (usize, usize, usize)) -> Term {
-    Term {
-        kind: TermKind::Triple,
-        value: Some(String::new()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: Some(spo),
-    }
-}
-
 /// `<s> <says> <<( <s> <p> <o> )>>` with the quoted triple in the `tt` spelling.
 fn tt_only_graph() -> Graph {
     let mut graph = Graph::default();
-    graph.terms.push(iri(S)); // 0
-    graph.terms.push(iri(P)); // 1
-    graph.terms.push(iri(O)); // 2
-    graph.terms.push(iri(SAYS)); // 3
-    graph.terms.push(tt_only_triple_term((0, 1, 2))); // 4
+    graph.terms.push(Term::iri(S)); // 0
+    graph.terms.push(Term::iri(P)); // 1
+    graph.terms.push(Term::iri(O)); // 2
+    graph.terms.push(Term::iri(SAYS)); // 3
+    graph.terms.push(Term::triple_term((0, 1, 2))); // 4
     graph.quads.push((0, 3, 4, None));
     graph.segment_profiles.push("rdf12".to_owned());
     graph
@@ -135,12 +110,12 @@ fn the_flattened_load_path_carries_a_tt_only_triple_term() {
 #[test]
 fn nested_tt_only_triple_terms_survive_to_their_leaves() {
     let mut graph = Graph::default();
-    graph.terms.push(iri(S)); // 0
-    graph.terms.push(iri(P)); // 1
-    graph.terms.push(iri(O)); // 2
-    graph.terms.push(iri(SAYS)); // 3
-    graph.terms.push(tt_only_triple_term((0, 1, 2))); // 4 — inner
-    graph.terms.push(tt_only_triple_term((0, 3, 4))); // 5 — outer
+    graph.terms.push(Term::iri(S)); // 0
+    graph.terms.push(Term::iri(P)); // 1
+    graph.terms.push(Term::iri(O)); // 2
+    graph.terms.push(Term::iri(SAYS)); // 3
+    graph.terms.push(Term::triple_term((0, 1, 2))); // 4 — inner
+    graph.terms.push(Term::triple_term((0, 3, 4))); // 5 — outer
     graph.quads.push((0, 3, 5, None));
 
     let dataset = dataset_from_gts_graph(&graph).expect("nested `tt`-only triple terms fold");
@@ -184,10 +159,10 @@ fn a_quoted_triple_round_trips_through_gts_bytes() {
 #[test]
 fn the_indirect_reifier_spelling_is_left_alone() {
     let mut graph = Graph::default();
-    graph.terms.push(iri(S)); // 0
-    graph.terms.push(iri(P)); // 1
-    graph.terms.push(iri(O)); // 2
-    graph.terms.push(iri("https://example.org/r")); // 3 — the reifier
+    graph.terms.push(Term::iri(S)); // 0
+    graph.terms.push(Term::iri(P)); // 1
+    graph.terms.push(Term::iri(O)); // 2
+    graph.terms.push(Term::iri("https://example.org/r")); // 3 — the reifier
     graph.terms.push(Term {
         kind: TermKind::Triple,
         value: Some(String::new()),

@@ -25,6 +25,10 @@
 //! (`vectors/sparql-cdt/fold/`, `vectors/sparql-cdt/unfold/`), plus the shapes the
 //! corpus leaves unwritten but the grammar admits.
 
+#[path = "support/patterns.rs"]
+mod patterns;
+
+use patterns::where_body;
 use purrdf_sparql_algebra::{
     AggregateExpression, AggregateExpressionError, AggregateFunction, Expression, GraphPattern,
     OrderExpression, Query, SparqlParser, Variable, pattern_to_select_query,
@@ -43,15 +47,6 @@ fn select_pattern(query: &str) -> GraphPattern {
     {
         Query::Select { pattern, .. } => pattern,
         other => panic!("expected a SELECT, got {other:?}"),
-    }
-}
-
-/// Strip exactly one outer `Project` — the `SELECT` scaffold — to recover the body
-/// [`pattern_to_select_query`] consumes and re-produces.
-fn where_body(pattern: &GraphPattern) -> GraphPattern {
-    match pattern {
-        GraphPattern::Project { inner, .. } => (**inner).clone(),
-        other => other.clone(),
     }
 }
 

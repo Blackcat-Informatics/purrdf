@@ -51,6 +51,10 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 mod support;
+use support::{
+    path, purrdf, run, run_with_input as run_with_stdin, stderr, stdout as convert_stdout,
+    write_file,
+};
 
 use purrdf_rdf::JsonLdContextLimits;
 
@@ -104,39 +108,6 @@ const SEED_C: &str = concat!(
     "<<( <http://example.org/s> <http://example.org/p> <http://example.org/o> )>> .\n",
     "<http://example.org/r> <http://example.org/certainty> \"0.9\" .\n",
 );
-
-/// A `Command` for the built `purrdf` binary.
-fn purrdf() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_purrdf"))
-}
-
-/// Run `purrdf` with `args`, returning the captured [`Output`].
-fn run(args: &[&str]) -> Output {
-    purrdf()
-        .args(args)
-        .output()
-        .expect("spawn the built purrdf binary")
-}
-
-/// stderr of an [`Output`] as a `String`, for diagnostics + ledger assertions.
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
-}
-
-/// Join a name onto `dir`, returning it as an owned `String` (the shape [`run`] wants).
-fn path(dir: &Path, name: &str) -> String {
-    dir.join(name)
-        .to_str()
-        .expect("temp path is valid UTF-8")
-        .to_owned()
-}
-
-/// Write `contents` to `dir/name`, returning the path.
-fn write_file(dir: &Path, name: &str, contents: &str) -> String {
-    let p = path(dir, name);
-    std::fs::write(&p, contents).expect("write fixture file");
-    p
-}
 
 /// The RDFC-1.0 canonical N-Quads document of `input` (parsed as `from`), produced BY
 /// THE BINARY via `--canonical`. Byte-equality of two such documents is an isomorphism
@@ -1721,11 +1692,6 @@ fn canonical_refuses_reserved_vocabulary_without_aborting() {
 // is not valid N-Triples. Resolution is now typed, and the CLI supplies the one base a
 // library layer cannot: the input's own RFC-8089 `file://` retrieval IRI (RFC-3986 5.1.3).
 
-/// stdout of an [`Output`] as a `String`.
-fn convert_stdout(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
 /// The `file://` IRI the CLI derives for a fixture path, so assertions stay
 /// machine-independent.
 ///
@@ -2457,11 +2423,6 @@ fn an_rdfxml_qualified_name_refusal_names_whichever_base_is_in_scope() {
         "with nothing in scope the refusal must say so: {}",
         stderr(&bare)
     );
-}
-
-/// Run `purrdf` with `args`, writing `stdin` to the child, and return the captured output.
-fn run_with_stdin(args: &[&str], stdin: &[u8]) -> Output {
-    support::run_with_stdin(purrdf().args(args), stdin)
 }
 
 /// Run `purrdf` with `args` from the working directory `cwd`, so a dot-relative argument

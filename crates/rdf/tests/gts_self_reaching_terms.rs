@@ -28,31 +28,6 @@ use purrdf_rdf::gts_view::GtsFoldView;
 /// The diagnostic code the fold-time refusal reports.
 const SELF_REACHING: &str = "gts-self-reaching-term";
 
-fn iri(value: &str) -> Term {
-    Term {
-        kind: TermKind::Iri,
-        value: Some(value.to_owned()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
-/// A self-describing quoted triple (wire `"tt"`) naming `(s, p, o)` directly.
-fn triple_term(spo: (usize, usize, usize)) -> Term {
-    Term {
-        kind: TermKind::Triple,
-        value: Some(String::new()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: Some(spo),
-    }
-}
-
 /// A quoted triple in the ORIGINAL indirect spelling: it names a reifier id and the
 /// statement layer supplies that id's components.
 fn indirect_triple_term(reifier: usize) -> Term {
@@ -133,7 +108,7 @@ fn a_triple_term_that_names_itself_is_refused() {
     every_door_refuses(
         || {
             let mut graph = Graph::default();
-            graph.terms.push(triple_term((0, 0, 0)));
+            graph.terms.push(Term::triple_term((0, 0, 0)));
             graph
         },
         "a triple term whose components are itself",
@@ -148,9 +123,9 @@ fn two_triple_terms_that_name_each_other_are_refused() {
     every_door_refuses(
         || {
             let mut graph = Graph::default();
-            graph.terms.push(iri("https://example.org/p")); // 0
-            graph.terms.push(triple_term((2, 0, 2))); // 1 — reaches 2
-            graph.terms.push(triple_term((1, 0, 1))); // 2 — reaches 1
+            graph.terms.push(Term::iri("https://example.org/p")); // 0
+            graph.terms.push(Term::triple_term((2, 0, 2))); // 1 — reaches 2
+            graph.terms.push(Term::triple_term((1, 0, 1))); // 2 — reaches 1
             graph
         },
         "a two-step cycle between triple terms",
@@ -177,9 +152,9 @@ fn a_datatype_cycle_through_a_triple_term_is_refused() {
     every_door_refuses(
         || {
             let mut graph = Graph::default();
-            graph.terms.push(iri("https://example.org/p")); // 0
+            graph.terms.push(Term::iri("https://example.org/p")); // 0
             graph.terms.push(literal_with_datatype("x", 2)); // 1 — datatype is the triple
-            graph.terms.push(triple_term((1, 0, 1))); // 2 — reaches the literal
+            graph.terms.push(Term::triple_term((1, 0, 1))); // 2 — reaches the literal
             graph
         },
         "a datatype edge closing a loop through a triple term",
@@ -193,9 +168,9 @@ fn a_reifier_binding_that_reaches_its_own_triple_term_is_refused() {
     every_door_refuses(
         || {
             let mut graph = Graph::default();
-            graph.terms.push(iri("https://example.org/p")); // 0
+            graph.terms.push(Term::iri("https://example.org/p")); // 0
             graph.terms.push(indirect_triple_term(2)); // 1
-            graph.terms.push(iri("https://example.org/r")); // 2 — the reifier
+            graph.terms.push(Term::iri("https://example.org/r")); // 2 — the reifier
             graph.reifiers.push((2, (1, 0, 1), None));
             graph
         },
@@ -211,7 +186,7 @@ fn an_implicit_self_binding_that_reaches_its_own_term_is_refused() {
     every_door_refuses(
         || {
             let mut graph = Graph::default();
-            graph.terms.push(iri("https://example.org/p")); // 0
+            graph.terms.push(Term::iri("https://example.org/p")); // 0
             graph.terms.push(implicit_rf_triple_term()); // 1
             graph.reifiers.push((1, (1, 0, 1), None));
             graph
@@ -227,11 +202,11 @@ fn a_self_reaching_tt_is_refused_even_beside_a_sound_reifier_row() {
     every_door_refuses(
         || {
             let mut graph = Graph::default();
-            graph.terms.push(iri("https://example.org/s")); // 0
-            graph.terms.push(iri("https://example.org/p")); // 1
-            graph.terms.push(iri("https://example.org/o")); // 2
-            graph.terms.push(iri("https://example.org/r")); // 3
-            let mut term = triple_term((4, 1, 2));
+            graph.terms.push(Term::iri("https://example.org/s")); // 0
+            graph.terms.push(Term::iri("https://example.org/p")); // 1
+            graph.terms.push(Term::iri("https://example.org/o")); // 2
+            graph.terms.push(Term::iri("https://example.org/r")); // 3
+            let mut term = Term::triple_term((4, 1, 2));
             term.reifier = Some(3);
             graph.terms.push(term); // 4 — `tt` reaches itself; `rf` would not
             graph.reifiers.push((3, (0, 1, 2), None));
@@ -245,12 +220,12 @@ fn a_self_reaching_tt_is_refused_even_beside_a_sound_reifier_row() {
 /// triple term only in the OBJECT slot, so that is where the inner one sits.
 fn nested_triple_term_graph() -> Graph {
     let mut graph = Graph::default();
-    graph.terms.push(iri("https://example.org/s")); // 0
-    graph.terms.push(iri("https://example.org/p")); // 1
-    graph.terms.push(iri("https://example.org/o")); // 2
-    graph.terms.push(triple_term((0, 1, 2))); // 3 — <<( s p o )>>
-    graph.terms.push(iri("https://example.org/says")); // 4
-    graph.terms.push(triple_term((0, 4, 3))); // 5 — <<( s says <<( s p o )>> )>>
+    graph.terms.push(Term::iri("https://example.org/s")); // 0
+    graph.terms.push(Term::iri("https://example.org/p")); // 1
+    graph.terms.push(Term::iri("https://example.org/o")); // 2
+    graph.terms.push(Term::triple_term((0, 1, 2))); // 3 — <<( s p o )>>
+    graph.terms.push(Term::iri("https://example.org/says")); // 4
+    graph.terms.push(Term::triple_term((0, 4, 3))); // 5 — <<( s says <<( s p o )>> )>>
     graph.quads.push((0, 1, 5, None));
     graph
 }
@@ -283,8 +258,8 @@ fn legitimately_nested_triple_terms_still_construct_and_render() {
 /// A quoted triple naming component id `9`, which no term occupies.
 fn dangling_component_graph() -> Graph {
     let mut graph = Graph::default();
-    graph.terms.push(iri("https://example.org/p")); // 0
-    graph.terms.push(triple_term((9, 0, 9))); // 1 — 9 names no term
+    graph.terms.push(Term::iri("https://example.org/p")); // 0
+    graph.terms.push(Term::triple_term((9, 0, 9))); // 1 — 9 names no term
     graph.quads.push((0, 0, 1, None));
     graph
 }

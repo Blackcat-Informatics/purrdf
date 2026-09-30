@@ -49,10 +49,14 @@
 //! The run is deterministic: a fixed xoshiro256** seed, [`CASES`] cases, and no
 //! on-disk failure persistence.
 
+#[path = "support/terms.rs"]
+mod terms;
+
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
+use terms::ex_ns as iri;
 
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine::parse_shapes;
@@ -340,10 +344,6 @@ struct World {
 }
 
 // ── Terms ──────────────────────────────────────────────────────────────────────
-
-fn iri(local: &str) -> Term {
-    Term::NamedNode(NamedNode::new_unchecked(format!("{EX}{local}")))
-}
 
 fn integer(value: i64) -> Term {
     Term::Literal(Literal::new_typed_literal(

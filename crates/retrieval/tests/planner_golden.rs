@@ -14,8 +14,8 @@ use std::sync::Arc;
 use purrdf_lex::json;
 use purrdf_retrieval::{
     DepthCause, DepthInputs, Iri, Metric, Plan, PlanError, RankFidelity, RegistryId,
-    RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term, TopK, UnservedReason,
-    UnservedTerm, depth_cause, depth_from, plan,
+    RejectionReason, RequestTerm, RetrievalRequest, Statistics, TopK, UnservedReason, UnservedTerm,
+    depth_cause, depth_from, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, ExclusionBasis,
@@ -23,31 +23,22 @@ use purrdf_sparql_eval::{
     RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
+#[path = "support/registry.rs"]
+mod registry;
+
+use purrdf_retrieval::fixture::iri;
+use registry::{
+    ex, kernel_iri, lexical_and_seed_request, lexical_request, lexical_term, ranked, rejection,
+    seed_term,
+};
+
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
-fn ex(suffix: &str) -> String {
-    format!("http://example.org/{suffix}")
-}
-
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
-
-fn kernel_iri(text: &str) -> purrdf_core::Iri {
-    purrdf_core::parse_iri(text).expect("fixture IRIs are valid")
-}
-
-fn lexical_term() -> RequestTerm {
-    RequestTerm::Lexical {
-        text: "quick brown fox".to_owned(),
-        language: Some("en".to_owned()),
-        predicate: Some(iri(&ex("body"))),
-    }
-}
-
-fn vector_term() -> RequestTerm {
+/// The vector term these goldens were recorded with: unlike the shared fixture's,
+/// it names an index hint, and the golden pins that hint.
+fn hinted_vector_term() -> RequestTerm {
     RequestTerm::Vector {
         embedding: vec![0.25, -1.5, 3.0],
         metric: Metric::Cosine,
@@ -55,70 +46,12 @@ fn vector_term() -> RequestTerm {
     }
 }
 
-fn seed_term() -> RequestTerm {
-    RequestTerm::EntitySeed {
-        entity: Term::new("<http://example.org/seed>"),
-    }
-}
-
 fn mixed_request() -> RetrievalRequest {
-    RetrievalRequest::complete(vec![lexical_term(), vector_term(), seed_term()])
-}
-
-fn lexical_request() -> RetrievalRequest {
-    RetrievalRequest::complete(vec![lexical_term()])
+    RetrievalRequest::complete(vec![lexical_term(), hinted_vector_term(), seed_term()])
 }
 
 fn vector_request() -> RetrievalRequest {
-    RetrievalRequest::complete(vec![vector_term()])
-}
-
-/// Each accepted pattern, with the request term's value rendered into the
-/// object-side position. The mocks are arity (1,1) and project `?c0`, so the
-/// candidate is position 0 and a rendered facet binds at position 1.
-///
-/// An unconstrained `TermKind::Any` pattern is the exception: it declares **no**
-/// placement at all, so it is matched by every request term and receives none of
-/// them. Its argument stays free, and the plan reports every term that reached
-/// only this producer — matching a shape is not the same as receiving it.
-fn accepted(patterns: Vec<TermPattern>) -> Vec<AcceptedTerm> {
-    patterns
-        .into_iter()
-        .map(|pattern| {
-            let placements = if pattern == TermPattern::of_kind(TermKind::Any) {
-                Vec::new()
-            } else {
-                vec![TermPlacement {
-                    facet: RequestFacet::Value,
-                    position: 1,
-                    datatype: None,
-                }]
-            };
-            AcceptedTerm {
-                pattern,
-                placements,
-            }
-        })
-        .collect()
-}
-
-/// A ranked declaration, supplied where a producer is registered. `mandatory`
-/// is declared by the host rather than inferred: it states, explicitly, what an
-/// unconstrained `TermKind::Any` pattern used to imply.
-fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedDeclaration {
-    RankedDeclaration {
-        stratum: kernel_iri(stratum),
-        accepted_terms: accepted(patterns),
-        depth_placement: None,
-        candidate_position: 0,
-        duplicates: DuplicatePolicy::Unique,
-        fidelity: RankFidelity::EXACT,
-        arithmetic: RankArithmetic::FloatFree,
-        domains: CandidateDomains::Unrestricted,
-        block_position: None,
-        exclusion: ExclusionBasis::Unavailable,
-        mandatory,
-    }
+    RetrievalRequest::complete(vec![hinted_vector_term()])
 }
 
 /// A mock relation of arity (1,1) declaring `rows` rows per invocation.
@@ -181,11 +114,6 @@ fn pair_registry() -> PropertyFunctionRegistry {
         },
     );
     registry
-}
-
-/// A request of two shapes one producer can hold at once.
-fn lexical_and_seed_request() -> RetrievalRequest {
-    RetrievalRequest::complete(vec![lexical_term(), seed_term()])
 }
 
 /// The mixed registry: one catch-all (`Any`) producer, one
@@ -639,18 +567,6 @@ fn binding<'a>(plan: &'a Plan, producer: &str) -> Option<&'a purrdf_retrieval::P
         .find(|binding| binding.producer == producer)
 }
 
-fn reason(plan: &Plan, producer: &str) -> Option<RejectionReason> {
-    plan.producer_decisions
-        .iter()
-        .find_map(|decision| match decision {
-            purrdf_retrieval::ProducerDecision::Rejected {
-                producer: name,
-                reason,
-            } if name == producer => Some(*reason),
-            _ => None,
-        })
-}
-
 #[test]
 fn lexical_term_matches_a_literal_producer() {
     let plan = plan(&mixed_request(), &mixed_registry(), &fixture_statistics()).expect("plans");
@@ -689,12 +605,12 @@ fn a_vector_term_the_only_acceptor_of_which_places_nothing_is_reported_not_bound
     );
     assert_eq!(unplaced.unserved_evidence(), unplaced.unserved_terms);
     assert_eq!(
-        reason(&unplaced, &ex("pf/literal")),
+        rejection(&unplaced, &ex("pf/literal")),
         Some(RejectionReason::NoAcceptedTerm),
         "the text producer constrains a language a vector cannot carry"
     );
     assert_eq!(
-        reason(&unplaced, &ex("pf/iri")),
+        rejection(&unplaced, &ex("pf/iri")),
         Some(RejectionReason::NoAcceptedTerm)
     );
 
@@ -754,11 +670,11 @@ fn entity_seed_matches_an_iri_producer() {
 fn unmatched_and_unranked_producers_are_rejected() {
     let plan = plan(&mixed_request(), &mixed_registry(), &fixture_statistics()).expect("plans");
     assert_eq!(
-        reason(&plan, &ex("pf/quoted")),
+        rejection(&plan, &ex("pf/quoted")),
         Some(RejectionReason::NoAcceptedTerm)
     );
     assert_eq!(
-        reason(&plan, &ex("pf/not-ranked")),
+        rejection(&plan, &ex("pf/not-ranked")),
         Some(RejectionReason::NotRanked)
     );
 }
@@ -775,7 +691,7 @@ fn language_and_predicate_constraints_are_enforced() {
     // rejects; only the unconstrained `Any` producer matches the term — and it
     // declares no placement, so it receives none of it.
     assert_eq!(
-        reason(&plan, &ex("pf/literal")),
+        rejection(&plan, &ex("pf/literal")),
         Some(RejectionReason::NoAcceptedTerm)
     );
     assert_eq!(
@@ -858,7 +774,7 @@ fn accepting_but_uninvocable_registry() -> PropertyFunctionRegistry {
 }
 
 fn lexical_and_vector_request() -> RetrievalRequest {
-    RetrievalRequest::complete(vec![lexical_term(), vector_term()])
+    RetrievalRequest::complete(vec![lexical_term(), hinted_vector_term()])
 }
 
 #[test]
@@ -910,7 +826,7 @@ fn a_term_every_acceptor_of_which_was_rejected_is_recorded_as_such() {
     .expect("the lexical term still reaches an invocable producer");
 
     assert_eq!(
-        reason(&plan, &ex("pf/any")),
+        rejection(&plan, &ex("pf/any")),
         Some(RejectionReason::UnsatisfiedConstraint),
         "the catch-all accepted the vector term but cannot be invoked for it"
     );
@@ -1219,7 +1135,7 @@ fn an_unconstrained_producer_matches_every_term_and_holds_the_ones_it_places() {
         Vec::<u32>::new()
     );
     assert_eq!(
-        reason(&matched, &ex("pf/any")),
+        rejection(&matched, &ex("pf/any")),
         None,
         "matching is what selected it; placing nothing is not a rejection"
     );
@@ -1649,12 +1565,6 @@ fn the_planner_redeclares_no_seam_declaration_and_reads_no_ambient_state() {
 // 9. The derivation record: every consulted statistic, and only those
 // ---------------------------------------------------------------------------
 
-/// The request both transcript tests plan: one lexical term and one seed, so
-/// the two placing producers each receive exactly one of them.
-fn transcript_request() -> RetrievalRequest {
-    RetrievalRequest::complete(vec![lexical_term(), seed_term()])
-}
-
 /// A provider that reports a selectivity and no cardinality narrows the depth,
 /// so the plan must record the statistic it was narrowed by.
 ///
@@ -1667,7 +1577,7 @@ fn transcript_request() -> RetrievalRequest {
 fn a_selectivity_only_stratum_is_recorded_and_narrows_the_depth() {
     let stratum = iri(&ex("transcript/selectivity-only"));
     let planned = plan(
-        &transcript_request(),
+        &lexical_and_seed_request(),
         &transcript_registry(),
         &transcript_statistics(),
     )
@@ -1740,7 +1650,7 @@ fn a_selectivity_only_stratum_is_recorded_and_narrows_the_depth() {
 #[test]
 fn a_consulted_but_silent_stratum_records_both_statistics_absent() {
     let planned = plan(
-        &transcript_request(),
+        &lexical_and_seed_request(),
         &transcript_registry(),
         &transcript_statistics(),
     )
@@ -1779,7 +1689,7 @@ fn a_consulted_but_silent_stratum_records_both_statistics_absent() {
 #[test]
 fn a_subject_the_provider_reports_but_nothing_consults_is_absent() {
     let planned = plan(
-        &transcript_request(),
+        &lexical_and_seed_request(),
         &transcript_registry(),
         &transcript_statistics(),
     )
@@ -1825,7 +1735,7 @@ fn a_subject_the_provider_reports_but_nothing_consults_is_absent() {
 #[test]
 fn the_record_names_exactly_the_consulted_subjects() {
     let planned = plan(
-        &transcript_request(),
+        &lexical_and_seed_request(),
         &transcript_registry(),
         &transcript_statistics(),
     )
@@ -1880,7 +1790,7 @@ fn the_record_names_exactly_the_consulted_subjects() {
 #[test]
 fn the_snapshot_names_every_stratum_a_depth_was_derived_for() {
     let planned = plan(
-        &transcript_request(),
+        &lexical_and_seed_request(),
         &transcript_registry(),
         &transcript_statistics(),
     )

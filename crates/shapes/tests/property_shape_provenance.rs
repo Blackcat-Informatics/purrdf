@@ -3,7 +3,11 @@
 
 //! Property constraints retain the identity of their declaring RDF shape.
 
+#[path = "support/terms.rs"]
+mod terms;
+
 use std::sync::Arc;
+use terms::example_org as ex;
 
 use purrdf_shapes::data::{GraphFilter, native_quads};
 use purrdf_shapes::engine::{
@@ -22,12 +26,6 @@ const PREFIXES: &str = r"
     @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
     @prefix meta: <http://example.org/meta/> .
 ";
-
-fn ex(local: &str) -> Term {
-    Term::NamedNode(NamedNode::new_unchecked(format!(
-        "http://example.org/{local}"
-    )))
-}
 
 fn dataset(body: &str) -> Arc<::purrdf::RdfDataset> {
     ::purrdf::parse_dataset(format!("{PREFIXES}{body}").as_bytes(), "text/turtle", None)

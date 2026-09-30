@@ -45,7 +45,7 @@
 
 use syn::visit::Visit;
 
-use crate::rules::RuleHit;
+use crate::rules::{RuleHit, Scoped as _};
 
 /// A field written after its own length.
 pub(crate) const LENGTH_PREFIX_FRAME: &str = "rule:length-prefix-frame";
@@ -304,11 +304,7 @@ struct Layout<'a> {
 
 impl Layout<'_> {
     fn hit(&mut self, rule: &'static str, line: usize, detail: String) {
-        let mut symbol = self.file.to_owned();
-        for scope in &self.scope {
-            symbol.push_str("::");
-            symbol.push_str(scope);
-        }
+        let symbol = crate::rules::scoped_symbol(self.file, &self.scope);
         self.hits.push(RuleHit {
             rule,
             package: self.package.to_owned(),
@@ -321,12 +317,6 @@ impl Layout<'_> {
             // holds no copy either.
             home_exempt: rule == LENGTH_PREFIX_FRAME || rule == XOR_FIRST_MISMATCH,
         });
-    }
-
-    fn scoped(&mut self, name: String, walk: impl FnOnce(&mut Self)) {
-        self.scope.push(name);
-        walk(self);
-        self.scope.pop();
     }
 
     /// Walk one function body with its own `xor-first-mismatch` frame, and
@@ -445,6 +435,12 @@ fn slice_array(expr: &syn::Expr) -> bool {
 
 /// The integer type names a `uN::from_le_bytes`/`to_le_bytes` rule accepts.
 const INTEGERS: [&str; 8] = ["u16", "u32", "u64", "u128", "i16", "i32", "i64", "i128"];
+
+impl crate::rules::Scoped for Layout<'_> {
+    fn scope(&mut self) -> &mut Vec<String> {
+        &mut self.scope
+    }
+}
 
 impl<'ast> Visit<'ast> for Layout<'_> {
     fn visit_block(&mut self, node: &'ast syn::Block) {

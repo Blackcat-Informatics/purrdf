@@ -7514,12 +7514,7 @@ fn the_registry_shape_is_pinned() {
                 .iter()
                 .filter(|rule| !implemented(regime).contains(rule))
                 .count();
-            (
-                regime_label(regime),
-                rules(regime).len(),
-                evidenced,
-                unimplemented,
-            )
+            (regime.name(), rules(regime).len(), evidenced, unimplemented)
         })
         .collect();
     assert_eq!(
@@ -7539,20 +7534,6 @@ fn the_registry_shape_is_pinned() {
     for &(_, total, evidenced, unimplemented) in &shape {
         assert_eq!(evidenced, total, "every defined rule must carry evidence");
         assert_eq!(unimplemented, 0, "no defined rule is unimplemented today");
-    }
-}
-
-/// A regime's name, for messages and the shape ratchet. Exhaustive on purpose: a new
-/// `Regime` variant fails to compile here.
-const fn regime_label(regime: Regime) -> &'static str {
-    match regime {
-        Regime::Simple => "Simple",
-        Regime::Rdf => "RDF",
-        Regime::Rdfs => "RDFS",
-        Regime::OwlRl => "OWL-RL",
-        Regime::OwlDirect => "OWL-Direct",
-        Regime::Rif => "RIF",
-        Regime::D => "D",
     }
 }
 

@@ -21,61 +21,10 @@
 //! * every inapplicable flag is refused BY NAME rather than accepted and ignored.
 
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
 mod support;
-
-/// A `Command` for the built `purrdf` binary.
-fn purrdf() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_purrdf"))
-}
-
-/// Run `purrdf` with `args`, returning the captured [`Output`].
-fn run(args: &[&str]) -> Output {
-    purrdf()
-        .args(args)
-        .output()
-        .expect("spawn the built purrdf binary")
-}
-
-/// Run `purrdf` with `args`, writing `stdin_bytes` to its standard input.
-///
-/// A `BrokenPipe` from that write is EXPECTED, not a failure. Several cases here
-/// pipe data to an invocation that is refused at the command line — a `-` stdin
-/// input with no `--from`, say — and those refusals are decided BEFORE stdin is
-/// read, which is the whole point: a malformed request should not require reading
-/// the document first. So the child can exit and close the pipe while the parent
-/// is still writing, and whether it does is a race between two processes.
-///
-/// Panicking on that turned a correct refusal into an intermittently red gate.
-/// Every other write error still panics, and the assertions on exit code, stdout
-/// and stderr are untouched — a child that exited early is judged by what it
-/// returned, exactly as before.
-fn pipe(args: &[&str], stdin_bytes: &str) -> Output {
-    support::run_with_stdin(purrdf().args(args), stdin_bytes.as_bytes())
-}
-
-/// stdout of an [`Output`] as a `String`.
-fn stdout(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
-/// stderr of an [`Output`] as a `String`.
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
-}
-
-/// The exit code of an [`Output`].
-fn code(out: &Output) -> i32 {
-    out.status.code().expect("the process exited normally")
-}
-
-/// Write `contents` to `dir/name`, returning the path as a `String`.
-fn write_file(dir: &Path, name: &str, contents: &str) -> String {
-    let p = dir.join(name);
-    std::fs::write(&p, contents).expect("write fixture file");
-    p.to_str().expect("temp path is valid UTF-8").to_owned()
-}
+use support::{code, pipe, run, stderr, stdout, write_file};
 
 /// A `sh:datatype` shape over `ex:Person`, the smallest shapes graph with one violation to
 /// find and one node to leave alone.

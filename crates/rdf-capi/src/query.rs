@@ -155,12 +155,9 @@ unsafe fn decode_aggregate_namespace(
     aggregate_namespace: *const c_char,
 ) -> Result<Option<AggregateRegistry>, PurrdfError> {
     unsafe {
-        let Some(namespace) = opt_cstr_to_str(aggregate_namespace)? else {
-            return Ok(None);
-        };
-        let mut registry = AggregateRegistry::default();
-        registry.register_statistical_aggregates(namespace);
-        Ok(Some(registry))
+        Ok(purrdf_validate::query::statistical_aggregates(
+            opt_cstr_to_str(aggregate_namespace)?,
+        ))
     }
 }
 

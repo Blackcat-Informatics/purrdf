@@ -20,6 +20,13 @@
 //! Test IRIs live under `example.org`; every `sh:` / `shnex:` / `sparql:` term used
 //! here is defined by the W3C specification that declares it.
 
+#[path = "support/turtle.rs"]
+mod turtle;
+
+#[path = "support/report.rs"]
+mod report;
+
+use report::focus_nodes;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -52,32 +59,14 @@ use purrdf_iri::vocab::sparql::NS as SPARQL_NS;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn load(shapes_ttl: &str) -> Result<purrdf_shapes::shapes::Shapes, String> {
-    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).map_err(String::from)
-}
-
 fn load_error(shapes_ttl: &str) -> String {
-    load(shapes_ttl).expect_err("the shapes graph must be refused at load")
-}
-
-fn data_of(data_ttl: &str) -> Arc<RdfDataset> {
-    parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parses")
+    turtle::load(PREFIXES, shapes_ttl).expect_err("the shapes graph must be refused at load")
 }
 
 fn validate(shapes_ttl: &str, data_ttl: &str) -> ValidationReport {
-    let shapes = load(shapes_ttl).expect("shapes load");
-    validate_dataset_with_shapes_graph(&data_of(data_ttl), &shapes, None).expect("validation runs")
-}
-
-/// The focus nodes a report names, sorted.
-fn focus_nodes(report: &ValidationReport) -> Vec<String> {
-    let mut out: Vec<String> = report
-        .results
-        .iter()
-        .map(|r| r.focus_node.to_string())
-        .collect();
-    out.sort();
-    out
+    let shapes = turtle::load(PREFIXES, shapes_ttl).expect("shapes load");
+    validate_dataset_with_shapes_graph(&turtle::data(PREFIXES, data_ttl), &shapes, None)
+        .expect("validation runs")
 }
 
 fn linked(shapes_ttl: &str) -> purrdf_shapes::shapes::LinkedDeclarations {
@@ -355,7 +344,8 @@ fn a_bodiless_non_builtin_in_the_sh_namespace_is_refused() {
 
 #[test]
 fn the_builtin_sparql_expr_declaration_loads() {
-    let shapes = load(SPARQL_EXPR_DECLARATION).expect("the W3C declaration binds natively");
+    let shapes = turtle::load(PREFIXES, SPARQL_EXPR_DECLARATION)
+        .expect("the W3C declaration binds natively");
     assert!(
         shapes.node_shapes.is_empty(),
         "a declaration is not a shape"
@@ -590,7 +580,7 @@ fn a_query_on_a_builtin_component_itself_is_a_duplicate_definition() {
         error.contains("duplicate definition") && error.contains("MinCountConstraintComponent"),
         "{error}"
     );
-    load(&format!(
+    turtle::load(PREFIXES, &format!(
         "{MIN_COUNT_DECLARATION}
          sh:MinCountConstraintComponent sh:validator [ a sh:SPARQLAskValidator ; sh:ask \"ASK {{ }}\" ] .
          {MIN_COUNT_SHAPE}"
@@ -746,7 +736,7 @@ fn a_prebinding_violation_is_refused_only_where_the_query_executes() {
         vec!["<http://example.org/ns#b>".to_owned()]
     );
     assert_eq!(summary(&with), summary(&without));
-    let lint = lint_report(&format!("{graph}{MIN_COUNT_SHAPE}"));
+    let lint = turtle::lint_of(PREFIXES, &format!("{graph}{MIN_COUNT_SHAPE}"));
     assert_eq!(lint.load_error(), None, "{}", lint.render());
     let unexecuted = lint.unexecuted().expect("the load accepted the graph");
     assert_eq!(unexecuted.len(), 1, "{}", lint.render());
@@ -771,7 +761,12 @@ fn a_prebinding_violation_is_refused_only_where_the_query_executes() {
     );
     assert_eq!(
         lint.findings(),
-        lint_report(&format!("{MIN_COUNT_DECLARATION}{MIN_COUNT_SHAPE}")).findings() + 1
+        turtle::lint_of(
+            PREFIXES,
+            &format!("{MIN_COUNT_DECLARATION}{MIN_COUNT_SHAPE}")
+        )
+        .findings()
+            + 1
     );
     assert!(!lint.is_clean());
 
@@ -816,7 +811,7 @@ fn a_prebinding_violation_is_refused_only_where_the_query_executes() {
         focus_nodes(&report),
         vec!["<http://example.org/ns#a>".to_owned()]
     );
-    let lint = lint_report(&node_use);
+    let lint = turtle::lint_of(PREFIXES, &node_use);
     let unexecuted = lint.unexecuted().expect("the load accepted the graph");
     assert_eq!(unexecuted.len(), 1, "{}", lint.render());
     assert!(
@@ -955,7 +950,8 @@ ex:EqualsOne a sh:ConstraintComponent ;
   sh:parameter [ sh:path ex:one ] ;
   sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (?value = 1) }" ] .
 "#;
-    load(ASK_ONLY).expect("the component with only its ASK validator loads unused");
+    turtle::load(PREFIXES, ASK_ONLY)
+        .expect("the component with only its ASK validator loads unused");
     let report = validate(&format!("{ASK_ONLY}{USE}"), "");
     assert_eq!(
         focus_nodes(&report),
@@ -1016,7 +1012,7 @@ fn a_builtin_component_declared_as_a_function_is_a_kind_mismatch() {
     );
     assert!(error.contains("kind mismatch"), "{error}");
     // Neighbour: the component declared as a component binds.
-    load(MIN_COUNT_DECLARATION).expect("the component declaration binds");
+    turtle::load(PREFIXES, MIN_COUNT_DECLARATION).expect("the component declaration binds");
 }
 
 #[test]
@@ -1024,7 +1020,8 @@ fn a_builtin_function_declared_as_a_component_is_a_kind_mismatch() {
     let error = load_error("shnex:CountExpression a sh:ConstraintComponent .");
     assert!(error.contains("kind mismatch"), "{error}");
     // Neighbour: declared under its own class, it binds.
-    load(
+    turtle::load(
+        PREFIXES,
         "shnex:CountExpression a sh:NamedParameterExpressionFunction ;
            sh:parameter [ sh:path shnex:count ; sh:keyParameter true ] .",
     )
@@ -1040,7 +1037,8 @@ fn a_builtin_declaration_stating_a_foreign_parameter_is_a_signature_mismatch() {
     assert!(error.contains("signature mismatch"), "{error}");
     // Neighbour: a declaration stating FEWER of the built-in's parameters is an
     // incomplete description, not a contradiction, and binds.
-    load(
+    turtle::load(
+        PREFIXES,
         "sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction ;
            sh:parameter [ sh:path sh:sparqlExpr ; sh:keyParameter true ] .",
     )
@@ -1055,7 +1053,7 @@ fn a_builtin_declaration_keying_a_non_key_parameter_is_a_signature_mismatch() {
     );
     assert!(error.contains("signature mismatch"), "{error}");
     // Neighbour: the W3C spelling states sh:prefixes with no sh:keyParameter.
-    load(SPARQL_EXPR_DECLARATION).expect("the W3C declaration binds");
+    turtle::load(PREFIXES, SPARQL_EXPR_DECLARATION).expect("the W3C declaration binds");
 }
 
 #[test]
@@ -1067,7 +1065,8 @@ fn a_builtin_redefined_as_a_sparql_function_is_a_duplicate_definition() {
     );
     assert!(error.contains("duplicate definition"), "{error}");
     // Neighbour: the same SPARQL function under an IRI of its own loads.
-    load(
+    turtle::load(
+        PREFIXES,
         "ex:abs a sh:SPARQLFunction ;
            sh:parameter [ sh:path ex:x ] ;
            sh:select \"SELECT (ABS($x) AS ?r) WHERE {}\" .",
@@ -1241,7 +1240,8 @@ fn the_merged_vocabulary_loads_with_no_shape() {
 
 #[test]
 fn every_call_site_names_what_it_bound_to() {
-    let shapes = load(
+    let shapes = turtle::load(
+        PREFIXES,
         r#"
         ex:f a sh:ListParameterExpressionFunction ;
           sh:parameter [ sh:path shnex:arg0 ] ;
@@ -1310,30 +1310,20 @@ fn every_call_site_names_what_it_bound_to() {
 
 // ── 6. Alternatives are reported, never findings ─────────────────────────────
 
-fn lint_report(shapes_ttl: &str) -> purrdf_shapes::lint::LintReport {
-    let document =
-        purrdf_shapes::text_ingest::parse_turtle_document(&format!("{PREFIXES}{shapes_ttl}"), None)
-            .expect("parses");
-    purrdf_shapes::lint::lint(
-        &document.dataset,
-        &document.prefixes,
-        None,
-        None,
-        &purrdf_shapes::ShapesImports::new(),
-    )
-    .expect("shacl-shacl.ttl loads and validates")
-}
-
 /// `shapes lint` names every alternative a built-in's declaration carries, with the
 /// native implementation superseding it, and counts none as a finding: the report
 /// with the alternatives has exactly the findings of the report without them. A
 /// graph the loader refuses reports `validators unavailable`.
 #[test]
 fn lint_reports_superseded_alternatives_without_findings() {
-    let with = lint_report(&format!(
-        "{MIN_COUNT_DECLARATION}{MIN_COUNT_ALTERNATIVES}{MIN_COUNT_SHAPE}"
-    ));
-    let without = lint_report(&format!("{MIN_COUNT_DECLARATION}{MIN_COUNT_SHAPE}"));
+    let with = turtle::lint_of(
+        PREFIXES,
+        &format!("{MIN_COUNT_DECLARATION}{MIN_COUNT_ALTERNATIVES}{MIN_COUNT_SHAPE}"),
+    );
+    let without = turtle::lint_of(
+        PREFIXES,
+        &format!("{MIN_COUNT_DECLARATION}{MIN_COUNT_SHAPE}"),
+    );
     assert_eq!(with.load_error(), None, "{}", with.render());
     assert_eq!(with.findings(), without.findings());
     assert_eq!(with.alternative_validators().map(<[_]>::len), Some(2));
@@ -1356,10 +1346,13 @@ fn lint_reports_superseded_alternatives_without_findings() {
         "{text}"
     );
     assert!(without.render().contains("validators 0\nunexecuted 0\n"));
-    let refused = lint_report(&format!(
-        "{MIN_COUNT_DECLARATION}
+    let refused = turtle::lint_of(
+        PREFIXES,
+        &format!(
+            "{MIN_COUNT_DECLARATION}
          sh:MinCountConstraintComponent sh:severity sh:Warning ."
-    ));
+        ),
+    );
     assert!(refused.load_error().is_some());
     assert_eq!(refused.alternative_validators(), None);
     assert!(
@@ -1378,7 +1371,8 @@ fn lint_reports_superseded_alternatives_without_findings() {
 /// function and validates, because it never runs.
 #[test]
 fn a_selected_validator_calling_an_unknown_function_fails_validation() {
-    let shapes = load(
+    let shapes = turtle::load(
+        PREFIXES,
         r#"
 ex:C a sh:ConstraintComponent ;
   sh:parameter [ sh:path ex:c ] ;
@@ -1388,7 +1382,7 @@ ex:S a sh:NodeShape ; sh:targetNode ex:a ; ex:c true .
 "#,
     )
     .expect("the validator's query is well-formed");
-    let error = validate_dataset_with_shapes_graph(&data_of(""), &shapes, None)
+    let error = validate_dataset_with_shapes_graph(&turtle::data(PREFIXES, ""), &shapes, None)
         .expect_err("the selected validator cannot run")
         .to_string();
     assert!(

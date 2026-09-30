@@ -974,7 +974,7 @@ impl<'a> LanguageTag<'a> {
     /// assert!(is_well_formed("en-1234"));
     /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
     /// ```
-    pub fn variants(&self) -> impl Iterator<Item = &'a str> {
+    pub fn variants(&self) -> impl Iterator<Item = &'a str> + use<'a> {
         subtags_in(self.sections.variants.map(|span| span.of(self.tag)))
     }
 
@@ -1151,7 +1151,7 @@ impl<'a> LanguageTag<'a> {
     /// assert_eq!(parse("en-US")?.private_use_subtags().count(), 0);
     /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
     /// ```
-    pub fn private_use_subtags(&self) -> impl Iterator<Item = &'a str> {
+    pub fn private_use_subtags(&self) -> impl Iterator<Item = &'a str> + use<'a> {
         subtags_in(
             self.private_use()
                 .and_then(|section| section.get(MARKER_PREFIX_WIDTH..)),
@@ -1597,7 +1597,7 @@ impl LanguageTagBuf {
 
     /// The variant subtags in order of appearance.
     pub fn variants(&self) -> impl Iterator<Item = &str> {
-        subtags_in(self.sections.variants.map(|span| span.of(&self.tag)))
+        self.as_language_tag().variants()
     }
 
     /// The raw extension section, hyphen-joined, when present.
@@ -1625,10 +1625,7 @@ impl LanguageTagBuf {
 
     /// The private-use subtags after the `x`/`X` marker, in order.
     pub fn private_use_subtags(&self) -> impl Iterator<Item = &str> {
-        subtags_in(
-            self.private_use()
-                .and_then(|section| section.get(MARKER_PREFIX_WIDTH..)),
-        )
+        self.as_language_tag().private_use_subtags()
     }
 
     /// This tag rewritten in RFC 5646 §2.1.1 canonical case.

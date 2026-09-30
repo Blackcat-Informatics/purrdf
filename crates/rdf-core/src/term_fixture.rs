@@ -11,11 +11,13 @@
 //! pseudo-random stream is the caller's, so the library takes no test-only
 //! dependency.
 
+use std::cell::Cell;
 use std::sync::Arc;
 
-use crate::ir::{QuadIds, QuadRef, RdfDataset, TermId, TermRef};
+use crate::ir::{QuadIds, QuadRef, RdfDataset, RdfDatasetBuilder, TermId, TermRef};
 use crate::{
-    BlankScope, DatasetView, GraphMatch, RdfStoreCapabilities, RdfTextDirection, TermBox, TermValue,
+    BlankScope, DatasetView, GraphMatch, RdfLiteral, RdfStoreCapabilities, RdfTextDirection,
+    TermBox, TermValue, ViewOperationStatus,
 };
 
 /// Which positions of a generated triple term [`term_value`] may fill with which terms.
@@ -104,6 +106,108 @@ pub fn term_value(
     }
 }
 
+/// The IRI `http://example.org/{name}` as a term value: the fixture IRI every
+/// suite that builds terms by name spells its terms with.
+#[must_use]
+pub fn iri(name: &str) -> TermValue {
+    TermValue::iri(format!("http://example.org/{name}"))
+}
+
+/// One `(subject, predicate, object)` triple of term values, as the page fixtures
+/// take them.
+pub type Triple = (TermValue, TermValue, TermValue);
+
+/// Intern one dataset-independent value into `builder`, triple terms included: the
+/// by-value inverse every paged and packed fixture builds its pages with.
+pub fn intern_value(builder: &mut RdfDatasetBuilder, value: &TermValue) -> TermId {
+    match value {
+        TermValue::Iri(iri) => builder.intern_iri(iri),
+        TermValue::Blank { label, scope } => builder.intern_blank(label, *scope),
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            direction,
+        } => builder.intern_literal(RdfLiteral {
+            lexical_form: lexical_form.clone(),
+            datatype: Some(datatype.clone()),
+            language: language.clone(),
+            direction: *direction,
+        }),
+        TermValue::Triple { s, p, o } => {
+            let s = intern_value(builder, s);
+            let p = intern_value(builder, p);
+            let o = intern_value(builder, o);
+            builder.intern_triple(s, p, o)
+        }
+    }
+}
+
+/// Freeze one page (or a single reference dataset) from `triples`, all in the
+/// default graph.
+///
+/// # Panics
+///
+/// If the builder refuses to freeze the triples.
+#[must_use]
+pub fn build_page(triples: &[Triple]) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    for (s, p, o) in triples {
+        let s = intern_value(&mut builder, s);
+        let p = intern_value(&mut builder, p);
+        let o = intern_value(&mut builder, o);
+        builder.push_quad(s, p, o, None);
+    }
+    builder.freeze().expect("page freeze")
+}
+
+/// The pack bytes of `dataset`: the fixture-to-pack path every pack test builds
+/// its `PackView` from.
+///
+/// # Panics
+///
+/// If the dataset does not pack, which a well-formed fixture always does.
+#[must_use]
+pub fn pack_bytes(dataset: &RdfDataset) -> Vec<u8> {
+    crate::PackBuilder::build_bytes(dataset)
+        .expect("pack build must succeed for a well-formed fixture")
+}
+
+/// The empty dataset: no quad, no graph — the dataset a query answered entirely by
+/// a registered relation or a `VALUES` block is evaluated over.
+///
+/// # Panics
+///
+/// Never: an empty default graph is structurally valid.
+#[must_use]
+pub fn empty_dataset() -> Arc<RdfDataset> {
+    RdfDatasetBuilder::new()
+        .freeze()
+        .expect("an empty default graph is structurally valid")
+}
+
+/// A dataset holding the one default-graph quad `subject predicate object`, each
+/// an absolute IRI: the smallest dataset a query can match a row in.
+#[must_use]
+pub fn one_quad(subject: &str, predicate: &str, object: &str) -> Arc<RdfDataset> {
+    build_page(&[(
+        TermValue::iri(subject),
+        TermValue::iri(predicate),
+        TermValue::iri(object),
+    )])
+}
+
+/// Split `triples` round-robin across `page_count` quad-disjoint pages, so
+/// consecutive triples land on different pages.
+#[must_use]
+pub fn split_pages(triples: &[Triple], page_count: usize) -> Vec<Arc<RdfDataset>> {
+    let mut buckets: Vec<Vec<Triple>> = vec![Vec::new(); page_count];
+    for (index, triple) in triples.iter().enumerate() {
+        buckets[index % page_count].push(triple.clone());
+    }
+    buckets.iter().map(|bucket| build_page(bucket)).collect()
+}
+
 /// A term value nesting `levels` triple terms, each holding the next in its object
 /// slot under the subject `http://example.org/s` and the predicate
 /// `http://example.org/p`, around the innermost object `http://example.org/o`. Built
@@ -186,5 +290,81 @@ impl DatasetView for ForeignDatatypeView {
 
     fn term_count(&self) -> usize {
         self.inner.term_count()
+    }
+}
+
+/// The operational root cause a [`RowBudget`] reports once its rows are spent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProbeFault(pub &'static str);
+
+impl std::fmt::Display for ProbeFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for ProbeFault {}
+
+/// The row budget of a view that faults the way a lazy operational backend does:
+/// once its rows are spent it STOPS YIELDING rather than erroring, so nothing in
+/// the row stream tells the truncation from an honest end, and only the
+/// operational checkpoint ([`Self::status`]) can.
+#[derive(Debug)]
+pub struct RowBudget {
+    rows: Cell<usize>,
+    faulted: Cell<bool>,
+}
+
+impl RowBudget {
+    /// A budget of `rows` ordinary rows.
+    #[must_use]
+    pub const fn new(rows: usize) -> Self {
+        Self {
+            rows: Cell::new(rows),
+            faulted: Cell::new(false),
+        }
+    }
+
+    /// A budget already spent: the view has failed before its first read.
+    #[must_use]
+    pub const fn faulted() -> Self {
+        Self {
+            rows: Cell::new(usize::MAX),
+            faulted: Cell::new(true),
+        }
+    }
+
+    /// Spend one row; `false` (and the view faulted) once none is left.
+    pub fn spend(&self) -> bool {
+        match self.rows.get().checked_sub(1) {
+            Some(left) => {
+                self.rows.set(left);
+                true
+            }
+            None => {
+                self.faulted.set(true);
+                false
+            }
+        }
+    }
+
+    /// `rows` for as long as the budget lasts: the stream simply ends when it runs
+    /// out, and the view is faulted from then on.
+    pub fn take<'a, I: Iterator + 'a>(&'a self, rows: I) -> impl Iterator<Item = I::Item> + 'a {
+        rows.take_while(|_| self.spend())
+    }
+
+    /// The operational checkpoint: `Failed` once a read ran past the budget (or it
+    /// was spent from the start), `Ready` otherwise, with the rows left as evidence.
+    pub fn status(&self) -> ViewOperationStatus<ProbeFault, usize> {
+        let evidence = self.rows.get();
+        if self.faulted.get() {
+            ViewOperationStatus::Failed {
+                error: ProbeFault("the probe view exhausted its row budget"),
+                evidence,
+            }
+        } else {
+            ViewOperationStatus::Ready { evidence }
+        }
     }
 }

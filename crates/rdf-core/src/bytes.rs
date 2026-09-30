@@ -80,8 +80,7 @@ pub fn read_u64_le(bytes: &[u8], offset: usize) -> Option<u64> {
 #[inline]
 #[must_use = "a None is an offset outside the buffer, and nothing was written"]
 pub fn put_u32_le(bytes: &mut [u8], offset: usize, value: u32) -> Option<()> {
-    *bytes.get_mut(offset..)?.first_chunk_mut()? = value.to_le_bytes();
-    Some(())
+    put_le(bytes, offset, value.to_le_bytes())
 }
 
 /// Write `value` little-endian at `offset` of `bytes`; [`None`] (and nothing
@@ -98,7 +97,14 @@ pub fn put_u32_le(bytes: &mut [u8], offset: usize, value: u32) -> Option<()> {
 #[inline]
 #[must_use = "a None is an offset outside the buffer, and nothing was written"]
 pub fn put_u64_le(bytes: &mut [u8], offset: usize, value: u64) -> Option<()> {
-    *bytes.get_mut(offset..)?.first_chunk_mut()? = value.to_le_bytes();
+    put_le(bytes, offset, value.to_le_bytes())
+}
+
+/// Write `encoded` at `offset` of `bytes`; [`None`] (and nothing written) when
+/// fewer than `N` bytes remain there. The one bounded write both widths share.
+#[inline]
+fn put_le<const N: usize>(bytes: &mut [u8], offset: usize, encoded: [u8; N]) -> Option<()> {
+    *bytes.get_mut(offset..)?.first_chunk_mut()? = encoded;
     Some(())
 }
 

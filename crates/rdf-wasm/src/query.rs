@@ -1417,7 +1417,7 @@ impl QueryEngine {
     /// `aggregate_namespace` registers purrdf's first-party statistical aggregate set
     /// (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
     /// `FIRST`, `LAST`, `TOPK`) under that IRI namespace, so the query text can call
-    /// `AGG(<{NAMESPACE}NAME>, args…)` (see `build_aggregates`). `None` (the default)
+    /// `AGG(<{NAMESPACE}NAME>, args…)` (see `purrdf_validate::query::statistical_aggregates`). `None` (the default)
     /// leaves every one of the ten names an ordinary unregistered custom-aggregate IRI.
     ///
     /// # Errors
@@ -1809,19 +1809,6 @@ pub(crate) fn sparql_request<'a>(sparql: &'a str, base: Option<&'a str>) -> Spar
     }
 }
 
-/// Build the statistical-aggregate registry `aggregateNamespace` requests, or `None`
-/// when the JS caller supplied none.
-///
-/// This is the ENTIRE wasm surface for purrdf's first-party statistical aggregate set
-/// (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
-/// `FIRST`, `LAST`, `TOPK` — see `purrdf_sparql_eval::stat_agg`):
-/// `AggregateRegistry::register_statistical_aggregates` takes only an IRI namespace
-/// string, so it crosses the wasm boundary with no callback and no per-aggregate
-/// marshaling. The GENERAL custom-aggregate seam
-/// (`purrdf_sparql_eval::agg_fn::AggregateRegistry::register`, an arbitrary
-/// `init`/`step`/`combine`/`finish` closure) is Rust-host-only and has no string-shaped
-/// surface at all — it cannot cross into JavaScript — and this crate does not attempt to
-/// expose it.
 /// The extension environment a query carrying `aggregates` is interpreted in.
 ///
 /// One value rather than a loose registry, because whether a predicate IRI in a
@@ -1840,13 +1827,6 @@ pub(crate) fn aggregate_env_message(
         aggregates.cloned().unwrap_or(AggregateRegistry::EMPTY),
     )
     .map_err(|e| format!("extension environment: {e}"))
-}
-
-pub(crate) fn build_aggregates(namespace: Option<String>) -> Option<AggregateRegistry> {
-    let namespace = namespace?;
-    let mut registry = AggregateRegistry::default();
-    registry.register_statistical_aggregates(&namespace);
-    Some(registry)
 }
 
 pub(crate) fn query_result_from_sparql(result: SparqlResult) -> Result<QueryResult, JsError> {

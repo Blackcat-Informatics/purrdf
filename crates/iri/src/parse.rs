@@ -14,6 +14,7 @@ use crate::error::{IriError, Result};
 use crate::host::Mode;
 use crate::scan::{
     ByteClass, ByteRun, byte_run_count, byte_runs, count_runs, find_byte, find_byte2, in_runs,
+    needle_table,
 };
 use core::ops::Range;
 use purrdf_lex::percent;
@@ -773,17 +774,6 @@ fn validate_query(s: &str, base_off: usize, mode: Mode) -> Result<()> {
 fn validate_fragment(s: &str, base_off: usize, mode: Mode) -> Result<()> {
     // fragment = *( pchar / "/" / "?" )
     validate_component(s, base_off, COLON | AT | SLASH | QUESTION, false, mode)
-}
-
-/// A class table holding exactly `needles`.
-const fn needle_table(needles: &[u8]) -> [u8; 256] {
-    let mut table = [0_u8; 256];
-    let mut k = 0;
-    while k < needles.len() {
-        table[needles[k] as usize] = 1;
-        k += 1;
-    }
-    table
 }
 
 /// The bytes that end an authority: `/`, `?`, `#`.

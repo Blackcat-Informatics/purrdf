@@ -22,15 +22,19 @@
 //! The drop is also checked for completeness: building and dropping a tree inside one
 //! counting-allocator window leaves no live byte behind.
 
+#[path = "support/patterns.rs"]
+mod patterns;
+
+use patterns::{example as iri, var};
+use purrdf_hash::fixed::hash_one as hash_of;
 use std::fmt::Write as _;
-use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_sparql_algebra::{
     ArithmeticOperator, Chain, Child, Expression, Function, GraphPattern, GroundTerm, GroundTriple,
-    Literal, NamedNode, NamedNodePattern, NonEmpty, PropertyPathExpression, TermPattern,
-    TriplePattern, Variable, pattern_to_select_query,
+    Literal, NamedNodePattern, NonEmpty, PropertyPathExpression, TermPattern, TriplePattern,
+    pattern_to_select_query,
 };
 
 #[global_allocator]
@@ -45,34 +49,16 @@ const STACK: usize = 128 * 1024;
 /// One tree a million levels deep at a time: they are large.
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
-fn var(name: &str) -> Variable {
-    Variable::new(name)
-}
-
-fn iri(local: &str) -> NamedNode {
-    NamedNode::new_unchecked(format!("http://example.org/{local}"))
-}
-
 fn empty() -> GraphPattern {
     GraphPattern::Bgp {
         patterns: Vec::new(),
     }
 }
 
-fn one_triple() -> GraphPattern {
-    GraphPattern::Bgp {
-        patterns: vec![TriplePattern {
-            subject: TermPattern::Variable(var("s")),
-            predicate: NamedNodePattern::NamedNode(iri("p")),
-            object: TermPattern::Variable(var("o")),
-        }],
-    }
-}
-
 fn filtered(expr: Expression) -> GraphPattern {
     GraphPattern::Filter {
         expr,
-        inner: Child::new(one_triple()),
+        inner: Child::new(patterns::triple_bgp("s", iri("p"), "o")),
     }
 }
 
@@ -87,12 +73,6 @@ impl std::fmt::Write for Counted {
         self.bytes += s.len();
         Ok(())
     }
-}
-
-fn hash_of(pattern: &GraphPattern) -> u64 {
-    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    pattern.hash(&mut hasher);
-    hasher.finish()
 }
 
 /// Build the tree `build` makes and walk it every whole-tree way, on a thread whose
@@ -128,7 +108,7 @@ fn walk_every_way(build: fn() -> GraphPattern) -> (usize, usize) {
 
 /// `OPTIONAL` a million times: a `LeftJoin` spine down its left operand.
 fn optional_spine() -> GraphPattern {
-    let mut pattern = one_triple();
+    let mut pattern = patterns::triple_bgp("s", iri("p"), "o");
     for _ in 0..LEVELS {
         pattern = GraphPattern::LeftJoin {
             left: Child::new(pattern),
@@ -141,7 +121,7 @@ fn optional_spine() -> GraphPattern {
 
 /// `{ … } UNION { … }` nested down the second arm.
 fn union_nest() -> GraphPattern {
-    let mut pattern = one_triple();
+    let mut pattern = patterns::triple_bgp("s", iri("p"), "o");
     for _ in 0..LEVELS {
         pattern = GraphPattern::Union {
             arms: Chain::new(empty(), pattern, []),
@@ -152,7 +132,7 @@ fn union_nest() -> GraphPattern {
 
 /// `FILTER EXISTS { FILTER EXISTS { … } }`: patterns and expressions alternating.
 fn exists_nest() -> GraphPattern {
-    let mut pattern = one_triple();
+    let mut pattern = patterns::triple_bgp("s", iri("p"), "o");
     for _ in 0..LEVELS {
         pattern = GraphPattern::Filter {
             expr: Expression::Exists(Child::new(pattern)),

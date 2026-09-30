@@ -17,16 +17,14 @@
 
 use purrdf_core::TermBox;
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CompiledRetrieval, ExecutionError, Iri, Metric, Plan,
-    PlanError, ProducerStatus, RankFidelity, RankedStreamImpl, ReadBound, RejectionReason,
-    RequestTerm, RetrievalRequest, Statistics, StratumUnit, Term, TopK, UnservedReason,
-    UnservedTerm, compile, execute, plan,
+    PlanError, ProducerStatus, RankFidelity, ReadBound, RejectionReason, RequestTerm,
+    RetrievalRequest, Statistics, StratumUnit, Term, TopK, UnservedReason, UnservedTerm, compile,
+    execute, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DepthPlacement, DomainTag, DuplicatePolicy,
@@ -37,23 +35,18 @@ use purrdf_sparql_eval::{
 
 mod common;
 
+#[path = "support/registry.rs"]
+mod registry;
+
+use purrdf_retrieval::block_on;
+use purrdf_retrieval::fixture::iri;
+use registry::{drain, emitted_limit, ex, kernel_iri, rejection, value_at};
+
 use purrdf_core::datatype::XSD_INTEGER;
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
-
-fn ex(suffix: &str) -> String {
-    format!("http://example.org/{suffix}")
-}
-
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
-
-fn kernel_iri(text: &str) -> purrdf_core::Iri {
-    purrdf_core::parse_iri(text).expect("fixture IRIs are valid")
-}
 
 /// One invocation, exactly as the evaluator presented it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -294,14 +287,6 @@ fn alternative(pattern: TermPattern, placements: Vec<TermPlacement>) -> Accepted
     }
 }
 
-fn value_at(position: usize) -> Vec<TermPlacement> {
-    vec![TermPlacement {
-        facet: RequestFacet::Value,
-        position,
-        datatype: None,
-    }]
-}
-
 /// Register `specs` (name -> declaration) and hand back the registry plus each
 /// producer's own invocation log.
 fn registry_of(specs: Vec<(&str, Spec)>) -> (PropertyFunctionRegistry, BTreeMap<String, Log>) {
@@ -470,40 +455,6 @@ fn compile_one(
     units.pop_first().expect("the one unit is present").1
 }
 
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
-}
-
-/// Read an executed stream the way a caller that stopped at `execute` reads it:
-/// one row at a time through the ranked-stream protocol, to exhaustion.
-fn drain(mut stream: RankedStreamImpl<'_>) -> Vec<(u64, Term)> {
-    let mut rows = Vec::new();
-    // The block each row names is not what these assertions are about — every
-    // producer here declares `Unrestricted` and so names none — so it is dropped
-    // by name rather than compared.
-    while let Some((rank, candidate, _block)) =
-        block_on(stream.next()).expect("a materialized stream obeys the protocol")
-    {
-        rows.push((rank, candidate));
-    }
-    rows
-}
-
 /// Run `sparql` through the evaluator with no composition type in the path.
 fn run_query(sparql: &str, registry: &PropertyFunctionRegistry) -> Vec<Vec<Option<TermValue>>> {
     let dataset = RdfDatasetBuilder::new()
@@ -558,20 +509,6 @@ fn any_registry() -> (PropertyFunctionRegistry, BTreeMap<String, Log>) {
             )],
         ),
     )])
-}
-
-/// The rejection reason a plan recorded for `producer`, if it rejected it.
-fn rejection(planned: &Plan, producer: &str) -> Option<RejectionReason> {
-    planned
-        .producer_decisions
-        .iter()
-        .find_map(|decision| match decision {
-            purrdf_retrieval::ProducerDecision::Rejected {
-                producer: name,
-                reason,
-            } if name == producer => Some(*reason),
-            _ => None,
-        })
 }
 
 // ---------------------------------------------------------------------------
@@ -2537,17 +2474,6 @@ fn depths_and_limits(
             (name, (unit.depth(), emitted_limit(&unit.sparql())))
         })
         .collect()
-}
-
-/// The `LIMIT` a unit's outer `SELECT` carries.
-fn emitted_limit(sparql: &str) -> u32 {
-    sparql
-        .rsplit("LIMIT ")
-        .next()
-        .expect("an emitted unit carries a LIMIT")
-        .trim()
-        .parse()
-        .expect("an emitted LIMIT is a number")
 }
 
 #[test]

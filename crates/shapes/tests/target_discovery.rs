@@ -3,10 +3,13 @@
 
 //! SHACL-AF targets identify shapes without an explicit shape type.
 
+#[path = "support/terms.rs"]
+mod terms;
+
 use purrdf_shapes::engine::{parse_shapes, validate_graphs};
 use purrdf_shapes::model::sh;
 use purrdf_shapes::report::Severity;
-use purrdf_shapes::term::{NamedNode, Term};
+use terms::example_org as ex;
 
 const PREFIXES: &str = r"
     @prefix ex: <http://example.org/> .
@@ -30,12 +33,6 @@ const PARAMETERIZED_TARGET: &str = r#"
         sh:select "SELECT ?this WHERE { ?this <http://example.org/kind> $kind . }" .
     ex:Target a ex:ByKind ; ex:kind ex:Kind .
 "#;
-
-fn ex(local: &str) -> Term {
-    Term::NamedNode(NamedNode::new_unchecked(format!(
-        "http://example.org/{local}"
-    )))
-}
 
 fn assert_target_discovery(target: &str) {
     for (constraints, shape_type, component, path, value) in [

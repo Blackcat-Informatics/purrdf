@@ -267,16 +267,6 @@ fn rank_bound(value: &TermValue) -> Result<RankBound, EvalError> {
         .map_or(RankBound::BeyondTheIndex, RankBound::At))
 }
 
-/// The analyzed needle — the terms the index's own pipeline produces for `text`.
-fn analyze(text: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    Analyzer::new().analyze(text, &mut tokens);
-    tokens
-        .into_iter()
-        .map(|token| token.text.into_owned())
-        .collect()
-}
-
 /// Whether `row` agrees with every bound position of the invocation.
 fn agrees(bound: &[Option<TermValue>], row: &[TermValue]) -> bool {
     bound
@@ -1350,7 +1340,7 @@ impl PropertyFunction for TextSearchRelation {
             || args.get(SEARCH_MATCHED).is_some();
         let select_ceiling = if post_rank_filtered { None } else { ceiling };
 
-        let analyzed = analyze(text);
+        let analyzed = Analyzer::new().terms(text);
         let at = match rank {
             RankBound::At(at) => Some(at),
             // `BeyondTheIndex` is answered empty below; `Unbound` bounds nothing.
@@ -1796,7 +1786,7 @@ impl PropertyFunction for TermOccurrenceRelation {
             filter = filter.restricted_to(self.index.partitions_holding_subject(subject));
         }
 
-        let mut analyzed = analyze(text);
+        let mut analyzed = Analyzer::new().terms(text);
         if analyzed.len() > 1 {
             return Err(EvalError::function(format!(
                 "the term at position {OCCURRENCE_TERM} is {text:?}, which analyzes to \

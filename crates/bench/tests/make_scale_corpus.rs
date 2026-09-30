@@ -31,29 +31,18 @@
 //! its own `cargo build --release` — the shards become pure execs of a binary this crate's own
 //! test harness already built, keeping this file fast.
 
+mod support;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
+use support::{scratch, unique_tag, write_executable};
 
 use purrdf_testkit::paths::workspace_root;
 
 /// The path to the built `bench-corpus` binary, reused as `SCALE_BIN` so `make scale-corpus`
 /// never triggers its own release build.
 const BENCH: &str = env!("CARGO_BIN_EXE_bench-corpus");
-
-/// A monotonically increasing counter, so every call to [`unique_tag`] in this process is
-/// distinct even across parallel test threads.
-static UNIQUE: AtomicU64 = AtomicU64::new(0);
-
-/// A filesystem-unique fragment: this process's id plus a monotonic counter.
-fn unique_tag() -> String {
-    format!(
-        "{}-{}",
-        std::process::id(),
-        UNIQUE.fetch_add(1, Ordering::Relaxed)
-    )
-}
 
 /// Runs `make <args>` from the repository root with `SCALE_BIN` pinned to the already-built
 /// binary, returning (exit code, stdout bytes, stderr text).
@@ -234,17 +223,6 @@ fn whole(quads: u64, iris: u64, seed: u64) -> Vec<u8> {
     output.stdout
 }
 
-/// Writes `contents` to `path` and makes it executable, returning `path`.
-fn write_executable(path: PathBuf, contents: &str) -> PathBuf {
-    std::fs::write(&path, contents).expect("write the executable script");
-    let mut permissions = std::fs::metadata(&path)
-        .expect("stat the freshly written script")
-        .permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&path, permissions).expect("make the script executable");
-    path
-}
-
 /// Builds a stand-in for `bench-corpus` that delegates every invocation to the real binary
 /// EXCEPT a single shard of a sharded run, which it refuses.
 ///
@@ -278,13 +256,6 @@ exec "{BENCH}" "$@"
 "#
         ),
     )
-}
-
-/// A scratch directory unique to this process, created and returned.
-fn scratch(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("purrdf-bench-scale-{label}-{}", unique_tag()));
-    std::fs::create_dir_all(&dir).expect("create the scratch directory");
-    dir
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -761,7 +732,7 @@ fn make_scale_corpus_pipe_mode_at_level_one_is_bare_banner_free_only_from_gnu_ma
 
 #[test]
 fn make_scale_corpus_files_mode_fails_loudly_when_a_shard_cannot_be_written() {
-    let out_dir = scratch("failshard-files");
+    let out_dir = scratch("purrdf-bench-scale", "failshard-files");
     let (quads, iris, seed, shards) = (400u64, 40u64, 1_592_642_302u64, 4u64);
     let prefix = format!("purrdf-scale-mixed-v1.seed{seed}.quads{quads}.iris{iris}");
     let shard_one = format!("{prefix}.shard-00001-of-00004.nq");
@@ -818,7 +789,7 @@ fn make_scale_corpus_files_mode_fails_loudly_when_a_shard_cannot_be_written() {
 
 #[test]
 fn make_scale_corpus_stream_mode_fails_when_a_shard_fails() {
-    let dir = scratch("failshard-stream");
+    let dir = scratch("purrdf-bench-scale", "failshard-stream");
     let stand_in = failing_shard_binary(&dir, 1);
 
     let (code, stdout, stderr) = run_make(&[
@@ -861,7 +832,7 @@ fn make_scale_corpus_stream_mode_fails_when_a_shard_fails() {
 
 #[test]
 fn make_scale_corpus_pipe_mode_fails_when_a_shard_fails() {
-    let dir = scratch("failshard-pipe");
+    let dir = scratch("purrdf-bench-scale", "failshard-pipe");
     let stand_in = failing_shard_binary(&dir, 1);
 
     let (code, _stdout, stderr) = run_make(&[
@@ -892,7 +863,7 @@ fn make_scale_corpus_files_mode_sorted_cat_matches_a_direct_whole_run_byte_for_b
     // passed on a run with an entirely missing shard.
     let (quads, iris, seed, shards) = (600u64, 70u64, 42u64, 3u64);
     let expected = whole(quads, iris, seed);
-    let out_dir = scratch("files-identity");
+    let out_dir = scratch("purrdf-bench-scale", "files-identity");
 
     let (code, _stdout, stderr) = run_make(&[
         "scale-corpus",
@@ -960,7 +931,7 @@ fn make_scale_corpus_files_mode_sorted_cat_matches_a_direct_whole_run_byte_for_b
 
 #[test]
 fn make_scale_corpus_scale_bin_is_taken_literally_and_never_resolves_to_another_binary() {
-    let dir = scratch("bin-literal");
+    let dir = scratch("purrdf-bench-scale", "bin-literal");
     let sentinel = dir.join("DECOY_RAN");
 
     // The binary `make`'s expansion used to arrive at. It is a real, executable file, so a lane
@@ -1012,7 +983,7 @@ fn make_scale_corpus_accepts_a_scale_bin_reached_by_symlink_or_a_relative_path()
     // could plausibly have broken. `-f` follows symlinks, which is why a symlink to a real
     // binary must still pass — and a test that only ever passed absolute paths would not notice
     // if it stopped.
-    let dir = scratch("bin-symlink");
+    let dir = scratch("purrdf-bench-scale", "bin-symlink");
     let link = dir.join("purrdf-via-symlink");
     std::os::unix::fs::symlink(BENCH, &link).expect("symlink the real binary");
 
@@ -1096,7 +1067,7 @@ fn make_scale_corpus_accepts_empty_and_absolute_path_knobs() {
     );
 
     // And an ABSOLUTE output path must be honoured verbatim, in files mode.
-    let absolute = scratch("absolute-out");
+    let absolute = scratch("purrdf-bench-scale", "absolute-out");
     let (code, _stdout, stderr) = run_make(&[
         "scale-corpus",
         "SCALE_QUADS=100",
@@ -1144,7 +1115,7 @@ const EMPTY_STRING_SHA256: &str =
 
 #[test]
 fn make_scale_corpus_never_certifies_a_corpus_a_binary_did_not_produce() {
-    let out_dir = scratch("empty-certificate");
+    let out_dir = scratch("purrdf-bench-scale", "empty-certificate");
     for mode in ["stream", "pipe", "files"] {
         let mut args = vec![
             "scale-corpus".to_string(),
@@ -1249,7 +1220,7 @@ fn emit_payload(text: &str) -> String {
 
 #[test]
 fn make_scale_corpus_refuses_a_run_that_produced_less_than_its_manifest_certifies() {
-    let dir = scratch("accounting");
+    let dir = scratch("purrdf-bench-scale", "accounting");
     let row = "<http://example.org/s> <http://example.org/p> <http://example.org/o> .";
 
     // Three ways to produce less than the manifest certifies, each with the phrase the lane must
@@ -1273,7 +1244,7 @@ fn make_scale_corpus_refuses_a_run_that_produced_less_than_its_manifest_certifie
 
     for (label, payload, expected) in &cases {
         let stand_in = valid_manifest_binary(&dir, label, payload);
-        let out_dir = scratch(&format!("accounting-{label}"));
+        let out_dir = scratch("purrdf-bench-scale", &format!("accounting-{label}"));
         for mode in ["stream", "pipe", "files", "sink"] {
             let mut args = vec![
                 "scale-corpus".to_string(),
@@ -1365,8 +1336,8 @@ fn make_scale_corpus_fails_the_shard_when_a_binary_exits_zero_without_writing_it
     // The route that leaves a shard CERTIFICATE beside no shard at all: the corpus write exits 0,
     // creates nothing, and the manifest write after it succeeds. The existence test now runs
     // BETWEEN them, so the certificate is never written; the run-level sweep is the backstop.
-    let dir = scratch("no-file");
-    let out_dir = scratch("no-file-arena");
+    let dir = scratch("purrdf-bench-scale", "no-file");
+    let out_dir = scratch("purrdf-bench-scale", "no-file-arena");
     let stand_in = valid_manifest_binary(&dir, "writes-no-file", ":");
 
     let (code, _stdout, stderr) = run_make(&[
@@ -1406,7 +1377,7 @@ fn make_scale_corpus_leaves_no_shard_manifest_behind_a_failed_run() {
     // A shard manifest is a certificate exactly as the whole-run manifest is, and a failed `files`
     // run used to leave four of them in the arena. `file_shard` removed one only when the corpus
     // WRITE failed, and the EXIT trap swept only the whole-run manifest.
-    let out_dir = scratch("shard-manifest-outlives");
+    let out_dir = scratch("purrdf-bench-scale", "shard-manifest-outlives");
     let (quads, iris, seed, shards) = (2000u64, 200u64, 1_592_642_302u64, 4u64);
     let prefix = format!("purrdf-scale-mixed-v1.seed{seed}.quads{quads}.iris{iris}");
 
@@ -1451,7 +1422,7 @@ fn make_scale_corpus_leaves_no_shard_manifest_behind_a_failed_run() {
 fn make_scale_corpus_keeps_every_shard_manifest_of_a_run_that_succeeded() {
     // The over-refusal counter-check to the test above: a run that DID produce its shards must
     // keep every certificate, because that is the provenance a capture records.
-    let out_dir = scratch("shard-manifest-kept");
+    let out_dir = scratch("purrdf-bench-scale", "shard-manifest-kept");
     let (quads, iris, seed, shards) = (600u64, 70u64, 42u64, 3u64);
 
     let (code, _stdout, stderr) = run_make(&[
@@ -1504,7 +1475,7 @@ fn make_scale_corpus_still_runs_a_legitimately_tiny_corpus() {
     );
 
     for shards in [8u64, 40u64] {
-        let out_dir = scratch(&format!("tiny-but-real-{shards}"));
+        let out_dir = scratch("purrdf-bench-scale", &format!("tiny-but-real-{shards}"));
         let (code, stdout, stderr) = run_make(&[
             "scale-corpus",
             "SCALE_QUADS=1",
@@ -1614,7 +1585,7 @@ fn make_scale_corpus_reproduces_a_whole_run_at_uneven_and_oversized_shard_counts
     // both legitimate configurations and both must still reproduce a whole run byte for byte.
     for (quads, shards) in [(7u64, 3u64), (600, 7), (3, 8), (1, 2)] {
         let expected = whole(quads, 70, 42);
-        let out_dir = scratch(&format!("uneven-{quads}-{shards}"));
+        let out_dir = scratch("purrdf-bench-scale", &format!("uneven-{quads}-{shards}"));
 
         let (code, stdout, stderr) = run_make(&[
             "scale-corpus",
@@ -1682,7 +1653,7 @@ fn make_scale_corpus_reproduces_a_whole_run_at_uneven_and_oversized_shard_counts
 
 #[test]
 fn make_scale_corpus_names_the_knob_when_the_whole_run_manifest_cannot_be_written() {
-    let out_dir = scratch("manifest-unwritable");
+    let out_dir = scratch("purrdf-bench-scale", "manifest-unwritable");
     let (quads, iris, seed) = (2000u64, 200u64, 1_592_642_302u64);
     let prefix = format!("purrdf-scale-mixed-v1.seed{seed}.quads{quads}.iris{iris}");
 
@@ -1733,7 +1704,7 @@ fn make_scale_corpus_names_the_knob_when_the_whole_run_manifest_cannot_be_writte
 
 #[test]
 fn make_scale_corpus_leaves_no_whole_run_manifest_behind_a_failed_run() {
-    let out_dir = scratch("run-manifest-outlives");
+    let out_dir = scratch("purrdf-bench-scale", "run-manifest-outlives");
     let (quads, iris, seed, shards) = (2000u64, 200u64, 1_592_642_302u64, 4u64);
     let prefix = format!("purrdf-scale-mixed-v1.seed{seed}.quads{quads}.iris{iris}");
     let run_manifest = out_dir.join(format!("{prefix}.manifest.json"));
@@ -1779,7 +1750,7 @@ fn make_scale_corpus_leaves_no_whole_run_manifest_behind_a_failed_run() {
 fn make_scale_corpus_keeps_the_whole_run_manifest_of_a_run_that_succeeded() {
     // The over-refusal counter-check to the test above: removing the certificate of a run that
     // DID produce its corpus would destroy the very provenance the lane exists to record.
-    let out_dir = scratch("run-manifest-kept");
+    let out_dir = scratch("purrdf-bench-scale", "run-manifest-kept");
     let (quads, iris, seed, shards) = (600u64, 70u64, 42u64, 3u64);
     let prefix = format!("purrdf-scale-mixed-v1.seed{seed}.quads{quads}.iris{iris}");
 
@@ -1840,7 +1811,7 @@ fn make_scale_corpus_accepts_a_scale_bin_whose_path_is_unusual_but_real() {
     // and a real binary at such a path must RUN — refusing it would be the mirror of executing
     // the wrong one. This also pins that a command-line `SCALE_BIN` beats the environment's,
     // since `run_make` always puts the plain binary in the child's environment.
-    let dir = scratch("bin literal ok");
+    let dir = scratch("purrdf-bench-scale", "bin literal ok");
     for name in ["be$nch-corpus", "bench corpus", "bench-corpus"] {
         let copy = dir.join(name);
         std::fs::copy(BENCH, &copy).expect("copy the real binary to an unusual path");

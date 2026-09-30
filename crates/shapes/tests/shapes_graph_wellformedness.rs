@@ -18,16 +18,14 @@
 //! the path-valued property pairs and `sh:subsetOf` answer as the specification
 //! says.
 
-use std::sync::Arc;
+#[path = "support/turtle.rs"]
+mod turtle;
 
-use purrdf::RdfDataset;
 use purrdf_shapes::engine::{
     parse_shapes, parse_shapes_with_config, validate_dataset_with_shapes_graph,
 };
 use purrdf_shapes::model::BoxRoleVocab;
 use purrdf_shapes::report::ValidationReport;
-use purrdf_shapes::shapes::Shapes;
-use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 
 const PREFIXES: &str = "
 @prefix ex:    <http://example.org/ns#> .
@@ -39,32 +37,11 @@ const PREFIXES: &str = "
 @prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
 ";
 
-fn load(shapes_ttl: &str) -> Result<Shapes, String> {
-    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).map_err(String::from)
-}
-
-#[track_caller]
-fn refused(shapes_ttl: &str, needle: &str) {
-    let error = load(shapes_ttl).expect_err("the shapes graph must be refused at load");
-    assert!(
-        error.contains(needle),
-        "refusal must mention {needle:?}: {error}"
-    );
-}
-
-#[track_caller]
-fn loads(shapes_ttl: &str) -> Shapes {
-    load(shapes_ttl).unwrap_or_else(|error| panic!("the valid neighbour must load: {error}"))
-}
-
-fn data(data_ttl: &str) -> Arc<RdfDataset> {
-    parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parses")
-}
-
 #[track_caller]
 fn validate(shapes_ttl: &str, data_ttl: &str) -> ValidationReport {
-    let shapes = loads(shapes_ttl);
-    validate_dataset_with_shapes_graph(&data(data_ttl), &shapes, None).expect("validation runs")
+    let shapes = turtle::loads_neighbour(PREFIXES, shapes_ttl);
+    validate_dataset_with_shapes_graph(&turtle::data(PREFIXES, data_ttl), &shapes, None)
+        .expect("validation runs")
 }
 
 /// `(focus node, value)` of every result, sorted.
@@ -89,7 +66,8 @@ fn results(report: &ValidationReport) -> Vec<(String, String)> {
 
 #[test]
 fn a_misspelled_parameter_is_refused_and_the_real_one_loads() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:p ; sh:minCont 1 ] .",
         "shacl#minCont",
     );
@@ -105,12 +83,14 @@ fn a_misspelled_parameter_is_refused_and_the_real_one_loads() {
 
 #[test]
 fn an_unknown_term_on_a_node_expression_is_refused_and_an_annotation_loads() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:expression [ sh:count [ sh:path ex:p ] ; sh:countt 1 ] .",
         "shacl#countt",
     );
-    loads(
+    turtle::loads_neighbour(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:expression [ sh:exists [ sh:path ex:p ] ; sh:message \"needs ex:p\" ] .",
     );
@@ -492,21 +472,6 @@ ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
   sh:property [ sh:path ex:p ; sh:minCount 1 ; sh:minLength 2 ] .
 ";
 
-/// The lint report of `shapes_ttl`.
-fn lint_of(shapes_ttl: &str) -> purrdf_shapes::lint::LintReport {
-    let document =
-        purrdf_shapes::text_ingest::parse_turtle_document(&format!("{PREFIXES}{shapes_ttl}"), None)
-            .expect("parses");
-    purrdf_shapes::lint::lint(
-        &document.dataset,
-        &document.prefixes,
-        None,
-        None,
-        &purrdf_shapes::ShapesImports::new(),
-    )
-    .expect("lint runs")
-}
-
 /// The load error of `shapes_ttl`, typed.
 #[track_caller]
 fn load_error(shapes_ttl: &str) -> purrdf_shapes::ShapesError {
@@ -585,7 +550,7 @@ fn ill_formed_declarations_refuse_the_load_whether_or_not_a_shape_reaches_them()
         "{text}"
     );
     // `lint` reports the same refusal in its `load` section, and nothing as unexecuted.
-    let lint = lint_of(&format!("{ILL_FORMED_LIBRARY}{LENGTH_SHAPE}"));
+    let lint = turtle::lint_of(PREFIXES, &format!("{ILL_FORMED_LIBRARY}{LENGTH_SHAPE}"));
     assert!(
         lint.load_error()
             .is_some_and(|error| error.contains("[syntax rule nodeValidator-class]")),
@@ -614,7 +579,7 @@ fn ill_formed_declarations_refuse_the_load_whether_or_not_a_shape_reaches_them()
             ),
         ]
     );
-    let lint = lint_of(&shapes);
+    let lint = turtle::lint_of(PREFIXES, &shapes);
     assert_eq!(lint.load_error(), None, "{}", lint.render());
     assert_eq!(
         lint.unexecuted().map(<[_]>::len),
@@ -702,14 +667,17 @@ fn a_function_body_violating_prebinding_is_refused_only_where_a_call_executes_it
             results(&report),
             vec![("<http://example.org/ns#a>".to_owned(), String::new())]
         );
-        let lint = lint_of(&uncalled);
+        let lint = turtle::lint_of(PREFIXES, &uncalled);
         let unexecuted = lint.unexecuted().expect("the load accepted the graph");
         assert_eq!(unexecuted.len(), 1, "{}", lint.render());
         assert_eq!(
             unexecuted[0].declaration(),
             "the sh:SPARQLFunction <http://example.org/ns#f>, which nothing calls"
         );
-        assert_eq!(lint.findings(), lint_of(LENGTH_SHAPE).findings() + 1);
+        assert_eq!(
+            lint.findings(),
+            turtle::lint_of(PREFIXES, LENGTH_SHAPE).findings() + 1
+        );
     }
 
     let data = r#"ex:a ex:label "A" . ex:b ex:label "B" ; ex:hidden true ."#;
@@ -805,17 +773,20 @@ fn the_af_minus_expression_and_shnex_remove_answer_identically() {
 /// neighbour with `sh:nodes` loads (and is evaluated by the test above).
 #[test]
 fn a_minus_expression_without_sh_nodes_is_refused() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:expression [ sh:exists [ sh:minus ( ex:x ) ] ] .",
         "requires sh:nodes",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:expression [ sh:exists [ sh:minus ( ex:x ) ; shnex:nodes ( ex:x ex:y ) ] ] .",
         "shacl-node-expr#nodes",
     );
-    loads(
+    turtle::loads_neighbour(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:expression [ sh:exists [ sh:minus ( ex:x ) ; sh:nodes ( ex:x ex:y ) ] ] .",
     );
@@ -828,7 +799,8 @@ fn a_minus_expression_without_sh_nodes_is_refused() {
 /// `ex:a`, where the control without `sh:values` reports.
 #[test]
 fn values_on_a_non_iri_path_is_refused_and_on_an_iri_path_it_computes() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:property [ sh:path [ sh:inversePath ex:p ] ; sh:values ex:v ; sh:minCount 1 ] .",
         "Predicate Path",
@@ -857,7 +829,8 @@ fn values_on_a_non_iri_path_is_refused_and_on_an_iri_path_it_computes() {
 /// `sh:datatype xsd:integer`).
 #[test]
 fn default_value_on_a_node_shape_is_refused_and_on_a_property_shape_it_computes() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:defaultValue \"none\" .",
         "node shape",
     );
@@ -879,12 +852,14 @@ fn default_value_on_a_node_shape_is_refused_and_on_a_property_shape_it_computes(
 /// refused, one loads.
 #[test]
 fn two_values_are_refused_and_one_loads() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:property [ sh:path ex:p ; sh:values ex:v, ex:w ] .",
         "at most one value for the property sh:values",
     );
-    loads(
+    turtle::loads_neighbour(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:property [ sh:path ex:p ; sh:values ex:v ] .",
     );
@@ -897,14 +872,16 @@ fn two_values_are_refused_and_one_loads() {
 /// validated, and is refused.
 #[test]
 fn a_parameter_declarations_default_value_loads_and_its_values_is_refused() {
-    loads(
+    turtle::loads_neighbour(
+        PREFIXES,
         "ex:f a sh:SPARQLFunction ;
            sh:parameter [ sh:path ex:x ; sh:datatype xsd:integer ; sh:optional true ;
                           sh:defaultValue 1 ] ;
            sh:returnType xsd:integer ;
            sh:select \"SELECT ((COALESCE($x, 1) * 2) AS ?result) WHERE {}\" .",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:f a sh:SPARQLFunction ;
            sh:parameter [ sh:path ex:x ; sh:datatype xsd:integer ; sh:optional true ;
                           sh:values 1 ] ;
@@ -944,7 +921,8 @@ fn target_where_selects_the_conforming_nodes_and_target_class_the_instances() {
             "<http://example.org/ns#b>".to_owned()
         )]
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetWhere \"not a shape\" ; sh:nodeKind sh:Literal .",
         "shacl#targetWhere> on shape",
     );
@@ -974,11 +952,13 @@ fn shape_class_targets_its_instances_and_a_blank_one_is_refused() {
         vec![("<http://example.org/ns#a>".to_owned(), String::new())]
     );
     assert_eq!(results(&shape_class), results(&spelled_out));
-    refused(
+    turtle::refused(
+        PREFIXES,
         "[] a sh:ShapeClass ; sh:property [ sh:path ex:p ; sh:minCount 1 ] .",
         "ill-formed",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "[] a rdfs:Class, sh:NodeShape ; sh:property [ sh:path ex:p ; sh:minCount 1 ] .",
         "ill-formed",
     );
@@ -1031,11 +1011,13 @@ fn a_reifier_annotation_deactivates_its_constraint_and_a_non_validating_one_load
             "<http://example.org/ns#a>".to_owned()
         )]
     );
-    loads(
+    turtle::loads_neighbour(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:IRI ;
            sh:intent \"a is an IRI\"@en {| sh:formalized true |} .",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:Literal {| sh:minCount 1 |} .",
         "only sh:deactivated, sh:severity and sh:message annotate a constraint",
     );
@@ -1043,12 +1025,16 @@ fn a_reifier_annotation_deactivates_its_constraint_and_a_non_validating_one_load
 
 #[test]
 fn an_entailment_regime_is_refused_and_the_graph_without_it_loads() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:graph sh:entailment <http://www.w3.org/ns/entailment/RDFS> .
          ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:IRI .",
         "entailment regime",
     );
-    loads("ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:IRI .");
+    turtle::loads_neighbour(
+        PREFIXES,
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:IRI .",
+    );
 }
 
 /// `sh:closed` takes an `xsd:boolean` or the IRI `sh:ByTypes` (SHACL 1.2 Core
@@ -1057,7 +1043,8 @@ fn an_entailment_regime_is_refused_and_the_graph_without_it_loads() {
 /// so the neighbour cannot pass by being ignored.
 #[test]
 fn an_other_iri_closed_value_is_refused_and_by_types_evaluates() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:closed ex:ByTypes .",
         "shacl#closed",
     );
@@ -1095,46 +1082,55 @@ fn an_other_iri_closed_value_is_refused_and_by_types_evaluates() {
 
 #[test]
 fn a_non_integer_count_is_refused_and_an_integer_one_loads() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:p ; sh:minCount \"x\" ] .",
         "shacl#minCount",
     );
     // A plain string "1" is as ill-typed as "x": SHACL counts are xsd:integer.
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:p ; sh:minCount \"1\" ] .",
         "shacl#minCount",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:p ; sh:minCount 1.0 ] .",
         "shacl#minCount",
     );
-    loads(
+    turtle::loads_neighbour(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:p ; sh:minCount 1 ] .",
     );
 }
 
 #[test]
 fn a_min_count_on_a_node_shape_is_refused_and_on_a_property_shape_loads() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:minCount 1 .",
         "node shapes cannot have any value",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:uniqueLang true .",
         "node shapes cannot have any value",
     );
-    loads(
+    turtle::loads_neighbour(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:p ; sh:minCount 1 ; sh:uniqueLang true ] .",
     );
 }
 
 #[test]
 fn a_string_closed_flag_is_refused_and_boolean_true_closes() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:closed \"true\" .",
         "shacl#closed",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:closed \"yes\" .",
         "shacl#closed",
     );
@@ -1163,7 +1159,8 @@ fn a_one_valued_boolean_is_well_typed_and_is_not_true() {
     );
     assert!(one.conforms);
     assert!(!true_.conforms);
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:property [ sh:path ex:p ; sh:uniqueLang \"true\" ] .",
         "shacl#uniqueLang",
@@ -1172,7 +1169,8 @@ fn a_one_valued_boolean_is_well_typed_and_is_not_true() {
 
 #[test]
 fn a_string_deactivation_is_refused_and_boolean_true_deactivates() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:Literal ; sh:deactivated \"true\" .",
         "sh:deactivated",
     );
@@ -1190,16 +1188,19 @@ fn a_string_deactivation_is_refused_and_boolean_true_deactivates() {
 
 #[test]
 fn two_flags_and_a_non_literal_pattern_are_refused_and_one_string_pattern_loads() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:property [ sh:path ex:p ; sh:pattern \"^a\" ; sh:flags \"i\", \"x\" ] .",
         "shacl#flags",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:p ; sh:pattern ex:regex ] .",
         "shacl#pattern",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:p ; sh:pattern \"^a\"@en ] .",
         "shacl#pattern",
     );
@@ -1219,36 +1220,46 @@ fn two_flags_and_a_non_literal_pattern_are_refused_and_one_string_pattern_loads(
 
 #[test]
 fn a_literal_node_kind_is_refused_and_the_iri_loads() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind \"IRI\" .",
         "shacl#nodeKind",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind ex:Unknown .",
         "nodeKind",
     );
-    loads("ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:IRI .");
+    turtle::loads_neighbour(
+        PREFIXES,
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:IRI .",
+    );
 }
 
 #[test]
 fn a_literal_class_or_target_is_refused_and_the_iri_loads() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:class \"ex:C\" .",
         "shacl#class",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetClass \"ex:C\" ; sh:nodeKind sh:IRI .",
         "shacl#targetClass",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:severity \"warning\" .",
         "sh:severity",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:message ex:note .",
         "sh:message",
     );
-    loads(
+    turtle::loads_neighbour(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:class ex:C ; sh:severity sh:Warning ;
            sh:message \"one\"@en, \"eins\"@de .",
     );
@@ -1257,16 +1268,20 @@ fn a_literal_class_or_target_is_refused_and_the_iri_loads() {
 #[test]
 fn an_ill_formed_list_is_refused_and_a_well_formed_one_loads() {
     // The cell `_:c` has no rdf:rest, so it is no SHACL list.
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:in _:c . _:c rdf:first ex:x .",
         "well-formed SHACL list",
     );
-    loads("ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:in ( ex:x ) .");
+    turtle::loads_neighbour(
+        PREFIXES,
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:in ( ex:x ) .",
+    );
 }
 
 #[test]
 fn a_path_node_with_a_second_form_is_refused_and_one_form_loads() {
-    refused(
+    turtle::refused(PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:property [ sh:path [ sh:inversePath ex:p ; sh:zeroOrMorePath ex:q ] ; sh:minCount 1 ] .",
         "not a well-formed SHACL path",
@@ -1281,12 +1296,14 @@ fn a_path_node_with_a_second_form_is_refused_and_one_form_loads() {
 
 #[test]
 fn a_member_shape_with_a_path_is_refused_and_a_node_shape_loads() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:property [ sh:path ex:items ; sh:memberShape [ sh:path ex:p ; sh:minCount 1 ] ] .",
         "must be node shapes",
     );
-    loads(
+    turtle::loads_neighbour(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:property [ sh:path ex:items ; sh:memberShape [ sh:nodeKind sh:IRI ] ] .",
     );
@@ -1319,12 +1336,14 @@ fn a_literal_box_role_is_refused_and_an_iri_role_loads() {
 
 #[test]
 fn a_blank_sparql_function_is_refused_and_a_named_one_loads() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "[] a sh:SPARQLFunction ; sh:returnType xsd:integer ;
             sh:select \"SELECT (1 AS ?result) WHERE {}\" .",
         "is not an IRI",
     );
-    loads(
+    turtle::loads_neighbour(
+        PREFIXES,
         "ex:one a sh:SPARQLFunction ; sh:returnType xsd:integer ;
             sh:select \"SELECT (1 AS ?result) WHERE {}\" .",
     );
@@ -1332,19 +1351,23 @@ fn a_blank_sparql_function_is_refused_and_a_named_one_loads() {
 
 #[test]
 fn a_string_rule_deactivation_is_refused_and_boolean_true_deactivates_the_rule() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetClass ex:C ;
            sh:rule [ a sh:TripleRule ; sh:deactivated \"yes\" ;
                      sh:subject sh:this ; sh:predicate ex:q ; sh:object ex:v ] .",
         "sh:deactivated",
     );
     let entail = |flag: &str| {
-        let shapes = loads(&format!(
-            "ex:S a sh:NodeShape ; sh:targetClass ex:C ;
+        let shapes = turtle::loads_neighbour(
+            PREFIXES,
+            &format!(
+                "ex:S a sh:NodeShape ; sh:targetClass ex:C ;
                sh:rule [ a sh:TripleRule ; sh:deactivated {flag} ;
                          sh:subject sh:this ; sh:predicate ex:q ; sh:object ex:v ] ."
-        ));
-        let input = data("ex:a a ex:C .");
+            ),
+        );
+        let input = turtle::data(PREFIXES, "ex:a a ex:C .");
         let entailed = purrdf_shapes::entail_dataset(input.as_ref(), &shapes).expect("rules run");
         purrdf::canonicalize(entailed.as_ref()).nquads
     };
@@ -1384,7 +1407,8 @@ fn a_structured_target_node_is_evaluated_from_the_shape_and_an_iri_is_a_constant
             "<http://example.org/ns#p>".to_owned()
         )]
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode [ sh:pathh ex:p ] ; sh:nodeKind sh:Literal .",
         "shacl#pathh",
     );
@@ -1436,7 +1460,8 @@ fn a_class_list_is_a_disjunction_and_separate_values_a_conjunction() {
         data,
     );
     assert_eq!(conjunction.results.len(), 4);
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:x ; sh:class ( ex:Cat \"Dog\" ) .",
         "non-IRI member",
     );
@@ -1456,7 +1481,8 @@ fn a_datatype_list_is_a_disjunction() {
             "\"3\"^^<http://www.w3.org/2001/XMLSchema#integer>".to_owned()
         )]
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:x ; sh:datatype ( xsd:string 3 ) .",
         "non-IRI member",
     );
@@ -1473,7 +1499,8 @@ fn a_node_kind_list_is_a_disjunction_of_basic_kinds() {
         results(&report),
         vec![("<http://example.org/ns#x>".to_owned(), "\"lit\"".to_owned())]
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:x ; sh:nodeKind ( sh:BlankNodeOrIRI sh:Literal ) .",
         "nodeKind> list",
     );
@@ -1497,7 +1524,8 @@ fn triple_term_is_a_node_kind() {
 
 #[test]
 fn a_datatype_list_projects_to_json_schema_any_of() {
-    let shapes = loads(
+    let shapes = turtle::loads_neighbour(
+        PREFIXES,
         "ex:Thing a sh:NodeShape ; sh:targetClass ex:Thing ;
            sh:property [ sh:path ex:label ; sh:datatype ( xsd:string xsd:integer ) ] .",
     );
@@ -1654,7 +1682,8 @@ fn single_line_false_admits_a_line_break() {
 /// and is honoured.
 #[test]
 fn a_non_boolean_single_line_is_refused_and_a_boolean_loads() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:x ;
            sh:property [ sh:path ex:label ; sh:singleLine \"true\" ] .",
         "singleLine",
@@ -1756,17 +1785,20 @@ fn root_class_list_admits_any_root() {
 /// and IRI-list neighbours load and are honoured (see the tests above).
 #[test]
 fn an_ill_typed_root_class_is_refused_and_iris_load() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:zoo ;
            sh:property [ sh:path ex:holds ; sh:rootClass \"ex:Animal\" ] .",
         "rootClass",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:zoo ;
            sh:property [ sh:path ex:holds ; sh:rootClass ( ex:Animal \"ex:Plant\" ) ] .",
         "rootClass",
     );
-    loads(
+    turtle::loads_neighbour(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:zoo ;
            sh:property [ sh:path ex:holds ; sh:rootClass ( ex:Animal ex:Plant ) ] .",
     );
@@ -1840,10 +1872,13 @@ fn a_failure_inside_some_value_propagates_unless_a_value_conforms() {
     };
     let data_ttl =
         format!("{DUCKS} ex:alice ex:tends ex:eliza . ex:bob ex:tends ex:eliza, ex:donald .");
-    let error =
-        validate_dataset_with_shapes_graph(&data(&data_ttl), &loads(&shapes("ex:alice")), None)
-            .expect_err("a failure with no conforming value node is produced")
-            .to_string();
+    let error = validate_dataset_with_shapes_graph(
+        &turtle::data(PREFIXES, &data_ttl),
+        &turtle::loads_neighbour(PREFIXES, &shapes("ex:alice")),
+        None,
+    )
+    .expect_err("a failure with no conforming value node is produced")
+    .to_string();
     assert!(
         error.contains("64"),
         "the failure is the recursion bound: {error}"
@@ -1869,8 +1904,9 @@ fn an_af_graph_with_functions_rules_and_node_expressions_loads_and_runs() {
             sh:expression [ sh:if [ sh:path ex:flag ] ; sh:then true ; sh:else false ] ;
             sh:sparql [ sh:select \"SELECT $this WHERE { $this ex:amount ?a . FILTER(<http://example.org/ns#tripled>(?a) > 100) }\" ] .
     ";
-    let shapes = loads(shapes_ttl);
-    let input = data(
+    let shapes = turtle::loads_neighbour(PREFIXES, shapes_ttl);
+    let input = turtle::data(
+        PREFIXES,
         "ex:ok a ex:C ; ex:flag true ; ex:amount 10 ; ex:child ex:k1, ex:k2 .
                       ex:bad a ex:C ; ex:flag true ; ex:amount 50 .",
     );
@@ -1915,7 +1951,8 @@ fn a_shape_with_every_non_validating_property_loads_and_validates_unchanged() {
         !bare.conforms,
         "the shape checks something, so equality is not vacuous"
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:name ex:NotText .",
         "shacl#name",
     );
@@ -1973,7 +2010,7 @@ fn iri_valued_property_pairs_answer_as_before() {
     );
     assert!(conforming.conforms, "{:?}", conforming.results);
     // The parsed constraint is the predicate path of the IRI.
-    let parsed = loads(shapes);
+    let parsed = turtle::loads_neighbour(PREFIXES, shapes);
     let property = &parsed.node_shapes[0].property_shapes[0];
     assert!(property.constraints.iter().any(|c| matches!(
         c,
@@ -2103,11 +2140,13 @@ fn subset_of_on_a_node_shape_judges_the_focus_node() {
 /// loads and is evaluated.
 #[test]
 fn a_path_valued_less_than_on_a_node_shape_is_refused_and_on_a_property_shape_loads() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:lessThan ( ex:next ex:start ) .",
         "lessThan",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:lessThanOrEquals ( ex:next ex:start ) .",
         "lessThanOrEquals",
@@ -2131,7 +2170,8 @@ fn a_literal_pair_value_is_refused_and_an_iri_path_loads() {
         "lessThan",
         "lessThanOrEquals",
     ] {
-        refused(
+        turtle::refused(
+            PREFIXES,
             &format!(
                 "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
                    sh:property [ sh:path ex:p ; sh:{parameter} \"ex:q\" ] ."
@@ -2154,7 +2194,8 @@ fn a_literal_pair_value_is_refused_and_an_iri_path_loads() {
 /// is refused as the value of `sh:equals`; a well-formed blank path loads.
 #[test]
 fn a_malformed_blank_pair_path_is_refused_and_a_well_formed_one_loads() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:property [ sh:path ex:p ; sh:equals [ ex:notAPath ex:q ] ] .",
         "equals",
@@ -2174,15 +2215,16 @@ fn a_malformed_blank_pair_path_is_refused_and_a_well_formed_one_loads() {
 /// shape's focus node.
 #[test]
 fn a_literal_sh_shape_value_is_refused_and_an_iri_one_targets() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:nodeKind sh:Literal ; sh:shape \"ex:T\" .",
         "shacl#shape> on shape",
     );
     let shared = "ex:T a sh:NodeShape ; sh:nodeKind sh:Literal .
                   ex:S a sh:NodeShape ; sh:shape ex:T .";
-    let shapes = loads(shared);
-    let report =
-        validate_dataset_with_shapes_graph(&data(shared), &shapes, None).expect("validation runs");
+    let shapes = turtle::loads_neighbour(PREFIXES, shared);
+    let report = validate_dataset_with_shapes_graph(&turtle::data(PREFIXES, shared), &shapes, None)
+        .expect("validation runs");
     assert_eq!(
         results(&report),
         vec![(
@@ -2408,7 +2450,7 @@ fn a_service_in_any_executed_shacl_sparql_query_is_refused() {
            sh:ask \"ASK {{ {} }}\" .{LENGTH_SHAPE}",
         SERVICE.replace("?this", "$node")
     );
-    let lint = lint_of(&uncalled);
+    let lint = turtle::lint_of(PREFIXES, &uncalled);
     let unexecuted = lint.unexecuted().expect("the load accepted the graph");
     assert_eq!(unexecuted.len(), 1, "{}", lint.render());
     assert!(
@@ -2489,8 +2531,8 @@ fn a_select_function_body_with_two_solutions_fails_the_call() {
     };
     let data = "ex:a ex:label \"A\" , \"Alpha\" . ex:control ex:other \"C\" .";
     let error = validate_dataset_with_shapes_graph(
-        &self::data(data),
-        &loads(&shapes("$node <http://example.org/ns#label> ?l")),
+        &turtle::data(PREFIXES, data),
+        &turtle::loads_neighbour(PREFIXES, &shapes("$node <http://example.org/ns#label> ?l")),
         None,
     )
     .expect_err("two solutions give the call no single value");

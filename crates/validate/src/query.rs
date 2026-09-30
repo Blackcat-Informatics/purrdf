@@ -9,12 +9,30 @@
 //! query is computed here, once, so the same query text carries the same
 //! identity whichever host answered it.
 
+use purrdf_sparql_eval::AggregateRegistry;
 use purrdf_sparql_results::{ProvenanceNamespace, ResultProvenance};
 use sha2::{Digest as _, Sha256};
 
 /// The producer label a populated [`provenance`] carries: the evaluator that
 /// answered the query, whichever host called it.
 pub const ENGINE_LABEL: &str = "purrdf-sparql-eval";
+
+/// The statistical-aggregate registry a host's aggregate-namespace setting
+/// requests, or `None` when the host was given no namespace.
+///
+/// `AggregateRegistry::register_statistical_aggregates` takes only an IRI
+/// namespace string, so every host — the command line, the C ABI, the wasm
+/// package and the Python binding — crosses its boundary with one nullable
+/// string and builds the registry here, the same way. The namespace is caller
+/// configuration, never a PurRDF vocabulary: without one, each of the ten names
+/// is an ordinary unregistered custom-aggregate IRI.
+#[must_use]
+pub fn statistical_aggregates(namespace: Option<&str>) -> Option<AggregateRegistry> {
+    let namespace = namespace?;
+    let mut registry = AggregateRegistry::default();
+    registry.register_statistical_aggregates(namespace);
+    Some(registry)
+}
 
 /// The [`ResultProvenance`] a SPARQL-results emission of `query` carries.
 ///

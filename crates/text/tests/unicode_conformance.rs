@@ -13,6 +13,7 @@
 //! The normalization forms are checked against `NormalizationTest.txt` where
 //! they are implemented, in `purrdf-lex`.
 
+use purrdf_testkit::ucd::{code_point as hex, scalar, sequence, unicode_data};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,19 +25,6 @@ fn ucd(name: &str) -> String {
         .join("../iri/unicode/17.0.0")
         .join(name);
     fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {}: {err}", path.display()))
-}
-
-fn hex(text: &str) -> u32 {
-    u32::from_str_radix(text.trim(), 16).unwrap_or_else(|err| panic!("bad hex {text:?}: {err}"))
-}
-
-fn scalar(point: u32) -> char {
-    char::from_u32(point).unwrap_or_else(|| panic!("{point:04X} is not a scalar value"))
-}
-
-/// A space-separated code point sequence as a string.
-fn sequence(field: &str) -> String {
-    field.split_whitespace().map(|p| scalar(hex(p))).collect()
 }
 
 /// The data lines of a UCD property file: `(low, high, value)`.
@@ -52,33 +40,6 @@ fn property_ranges(text: &str) -> Vec<(u32, u32, String)> {
             Some((low, high, value.trim().to_owned()))
         })
         .collect()
-}
-
-/// Every assigned code point and its `UnicodeData.txt` fields, with the
-/// `First`/`Last` ranges expanded.
-fn unicode_data() -> BTreeMap<u32, Vec<String>> {
-    let text = ucd("UnicodeData.txt");
-    let mut out = BTreeMap::new();
-    let mut first: Option<u32> = None;
-    for line in text.lines() {
-        let fields: Vec<String> = line.split(';').map(str::to_owned).collect();
-        let point = hex(&fields[0]);
-        if fields[1].ends_with(", First>") {
-            first = Some(point);
-            continue;
-        }
-        let low = if fields[1].ends_with(", Last>") {
-            first
-                .take()
-                .unwrap_or_else(|| panic!("range end {point:04X} without a start"))
-        } else {
-            point
-        };
-        for p in low..=point {
-            out.insert(p, fields.clone());
-        }
-    }
-    out
 }
 
 #[test]
@@ -163,7 +124,7 @@ fn is_alphanumeric_is_alphabetic_or_a_number_for_every_scalar() {
         .filter(|(_, _, value)| value == "Alphabetic")
         .flat_map(|(low, high, _)| low..=high)
         .collect();
-    for (&point, fields) in &unicode_data() {
+    for (&point, fields) in &unicode_data(&ucd("UnicodeData.txt")) {
         if matches!(fields[2].as_str(), "Nd" | "Nl" | "No") {
             expected.insert(point);
         }

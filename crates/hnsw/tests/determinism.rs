@@ -18,7 +18,7 @@
 //! `determinism-digest` line, and `scripts/check-hnsw-determinism.sh` runs the target
 //! natively, on wasm32 and on wasm32 with `+simd128`, reads the goldens out of this file,
 //! and fails unless every named case reports the same digest on every build and those
-//! digests are the goldens. The digests are computed inside [`without_host_clock_or_entropy`],
+//! digests are the goldens. The digests are computed inside [`without_host_clock_or_entropy`](purrdf_testkit::harness::without_host_clock_or_entropy),
 //! so on wasm32 a build that reached a host clock or entropy source fails by that source's
 //! name. The digest itself is FNV-1a ([`purrdf_hash::fnv`]) over the canonical payload
 //! bytes — see [`purrdf_hnsw::determinism`] — so a moved golden is a serialization defect
@@ -44,7 +44,7 @@ use purrdf_core::DistanceMetric;
 use purrdf_core::distance::{Arithmetic, Exact, Reassociated};
 use purrdf_hnsw::determinism::{CORPUS_ROWS, corpus_len, digest, digest_serial};
 use purrdf_hnsw::{HnswIndex, Params, VectorMatrix};
-use purrdf_testkit::harness::{print_line, without_host_clock_or_entropy};
+use purrdf_testkit::harness::report_digest;
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::ThreadPoolBuilder;
 
@@ -68,21 +68,9 @@ const GOLDEN_DIGEST: u64 = 0xa367_d6c5_8963_1389;
 /// order, and the image header carries the arithmetic field.
 const GOLDEN_SERIAL_DIGEST: u64 = 0xf0b2_fd33_0bcc_fcc7;
 
-/// `compute`'s digest, computed with the host's clocks and entropy withdrawn, and reported
-/// on a `determinism-digest` line under `case`'s name for
-/// `scripts/check-hnsw-determinism.sh` to compare across targets and builds.
-fn reported(case: &str, compute: fn() -> u64) -> u64 {
-    let value = without_host_clock_or_entropy(compute);
-    print_line(&format!(
-        "determinism-digest case={case} digest={value:016x} corpus_len={}",
-        corpus_len()
-    ));
-    value
-}
-
 /// The digest equals the pinned golden, on whichever target and build this runs.
 fn the_digest_is_the_pinned_golden() {
-    let value = reported("the_digest_is_the_pinned_golden", digest);
+    let value = report_digest("the_digest_is_the_pinned_golden", corpus_len(), digest);
     assert_eq!(
         value, GOLDEN_DIGEST,
         "the digest is {value:016x}, golden {GOLDEN_DIGEST:016x}. If another target or \
@@ -135,7 +123,11 @@ fn the_digest_is_identical_under_eight_workers() {
 /// Within-round isolation is load-bearing: a serial insertion, where every node sees all
 /// of its predecessors, produces a different canonical image.
 fn a_serial_insert_builds_a_different_graph() {
-    let serial = reported("a_serial_insert_builds_a_different_graph", digest_serial);
+    let serial = report_digest(
+        "a_serial_insert_builds_a_different_graph",
+        corpus_len(),
+        digest_serial,
+    );
     assert_eq!(
         serial, GOLDEN_SERIAL_DIGEST,
         "the serial-insert digest moved: computed {serial:016x}, golden \
@@ -179,8 +171,9 @@ fn the_digest_is_not_vacuous() {
 /// and a reassociated arithmetic leaking into the exact build would move the digest.
 fn exact_image_golden_unchanged_by_reassociated_surface() {
     assert_eq!(
-        reported(
+        report_digest(
             "exact_image_golden_unchanged_by_reassociated_surface",
+            corpus_len(),
             digest
         ),
         GOLDEN_DIGEST,

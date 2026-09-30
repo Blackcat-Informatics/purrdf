@@ -4,6 +4,7 @@
 //! Adversarial identity, statement-layer, projection and ownership checks.
 
 use purrdf_core::TermBox;
+use purrdf_core::term_fixture::iri;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -24,10 +25,6 @@ const LIST: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List";
 const MAP: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/Map";
 use purrdf_iri::vocab::rdf::REIFIES;
 type Row = (TermValue, TermValue, TermValue, Option<TermValue>);
-
-fn iri(local: &str) -> TermValue {
-    TermValue::iri(format!("http://example.org/{local}"))
-}
 
 fn owned<D: DatasetView>(view: &D, id: D::Id) -> TermValue {
     match view.resolve(id) {

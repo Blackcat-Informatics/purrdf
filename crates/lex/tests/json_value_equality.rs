@@ -6,18 +6,12 @@
 //! unordered, a repeated name pairing its occurrences in document order, `Hash`
 //! consistent with `==`, and `same_text` the spelling-and-order identity.
 
-use std::hash::{Hash, Hasher};
+use purrdf_hash::fixed::hash_one as hash_of;
 
 use purrdf_lex::json::{self, Number, Object, Value};
 
 fn read(text: &str) -> Value {
     json::read(text).expect("JSON")
-}
-
-fn hash_of<T: Hash>(value: &T) -> u64 {
-    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    value.hash(&mut hasher);
-    hasher.finish()
 }
 
 /// `depth` arrays nested inside one another around `leaf`.
@@ -163,7 +157,7 @@ fn equal_values_hash_alike_and_structure_is_part_of_the_hash() {
     );
     assert_ne!(hash_of(&read("0")), hash_of(&read("false")));
     // A `HashSet` deduplicates by value.
-    let set: std::collections::HashSet<Value> = [
+    let set: std::collections::HashSet<Value, purrdf_hash::fixed::FixedState> = [
         "1",
         "1.0",
         "1e0",

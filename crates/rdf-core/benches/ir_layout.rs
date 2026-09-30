@@ -36,6 +36,9 @@
 //! its "index-build cost" is already folded into the build group); this is noted in
 //! the build group rather than benched as a separate index pass.
 
+#[path = "../tests/support/borrowed.rs"]
+mod borrowed;
+use borrowed::term_ref_len;
 use std::sync::Arc;
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, Measurement};
@@ -218,7 +221,7 @@ fn consume_ids(q: QuadIds) -> u64 {
     let mut acc = 0u64;
     for id in [Some(q.s), Some(q.p), Some(q.o), q.g] {
         acc = acc
-            .wrapping_mul(1_099_511_628_211)
+            .wrapping_mul(purrdf_hash::fnv::PRIME)
             .wrapping_add(id.map_or(0xFFFF_FFFF, |_| 1));
     }
     acc
@@ -227,21 +230,10 @@ fn consume_ids(q: QuadIds) -> u64 {
 /// Resolve every position of a quad to a borrowed view and sum borrowed `&str`
 /// lengths — touches resolved content without copying it (no allocation).
 fn resolve_len(ds: &RdfDataset, q: QuadIds) -> usize {
-    term_len(ds.resolve(q.s))
-        + term_len(ds.resolve(q.p))
-        + term_len(ds.resolve(q.o))
-        + q.g.map_or(0, |g| term_len(ds.resolve(g)))
-}
-
-fn term_len(t: TermRef<'_>) -> usize {
-    match t {
-        TermRef::Iri(s) => s.len(),
-        TermRef::Blank { label, .. } => label.len(),
-        TermRef::Literal {
-            lexical, language, ..
-        } => lexical.len() + language.map_or(0, str::len),
-        TermRef::Triple { .. } => 0,
-    }
+    term_ref_len(ds.resolve(q.s))
+        + term_ref_len(ds.resolve(q.p))
+        + term_ref_len(ds.resolve(q.o))
+        + q.g.map_or(0, |g| term_ref_len(ds.resolve(g)))
 }
 
 // ---------------------------------------------------------------------------

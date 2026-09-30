@@ -42,12 +42,14 @@
 //! `http://example.org/geo#`, `http://example.org/geof/` and
 //! `http://example.org/crs/planar`.
 
+mod support;
+
 use std::sync::Arc;
+use support::crs;
 
 use purrdf_core::{
     DatasetView, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
 };
-use purrdf_geo::geom::Crs;
 use purrdf_geo::relation::{GeoIndex, GeoIndexConfig, GraphSelector, register};
 use purrdf_geo::vocab::{GeoVocab, GeoVocabBuilder};
 use purrdf_geo::{GeoTerm, RelationFamily};
@@ -65,8 +67,6 @@ const GEO: &str = "http://example.org/geo#";
 /// The host's `geof:` namespace. Unused by the relation seam, but a `GeoVocab`
 /// carries both, and naming it here keeps the fixture a complete configuration.
 const GEOF: &str = "http://example.org/geof/";
-/// The coordinate reference system every fixture geometry is expressed in.
-const CRS: &str = "http://example.org/crs/planar";
 /// The fixture data namespace.
 const EX: &str = "http://example.org/";
 /// `xsd:string`, for the `ex:name` labels the join test reads.
@@ -224,11 +224,6 @@ fn dataset_of(triples: &[Triple]) -> Arc<RdfDataset> {
     builder
         .freeze()
         .expect("the fixture is a well-formed dataset")
-}
-
-/// The host's coordinate reference system.
-fn crs() -> Crs {
-    Crs::new(CRS).expect("a non-empty IRI")
 }
 
 /// The host's vocabulary.

@@ -40,6 +40,8 @@
 //! `M` sets, would be a statement about two different indexes wearing one corpus, which is
 //! exactly what the task forbids.
 
+#[path = "support/fixture.rs"]
+mod fixture;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -51,7 +53,7 @@ use purrdf_hnsw::{
     HnswIndex, IMPLEMENTATION_ID, IMPLEMENTATION_ID_REASSOCIATED, INDEX_MEDIA_TYPE,
     IndexArithmetic, Params, VectorMatrix, profile,
 };
-use purrdf_sparql_eval::knn::{Kernel, Ranked, best};
+use purrdf_sparql_eval::knn::{Kernel, best};
 use std::fmt::Write as _;
 
 use purrdf_lex::json::{self, Object, Value};
@@ -223,20 +225,6 @@ fn norms_of(matrix: &VectorMatrix) -> Vec<f64> {
         .collect()
 }
 
-/// Every row scored against `query`, in the exact path's order.
-fn exact_scored(matrix: &VectorMatrix, norms: &[f64], query: usize) -> Vec<Ranked> {
-    let exact = Exact::resolve().expect("the test thread runs the default float environment");
-    let vector = matrix.row(query);
-    (0..matrix.rows())
-        .map(|row| Ranked {
-            distance: KERNEL
-                .distance(exact, vector, norms[query], matrix.row(row), norms[row])
-                .expect("the fixture is finite and the kernel keeps it so"),
-            row,
-        })
-        .collect()
-}
-
 /// One run's receipt value plus the two facts the caller asserts on.
 struct Run {
     json: Value,
@@ -292,7 +280,7 @@ fn run_regime_under<A: IndexArithmetic>(
     let mut rank_by_row = vec![usize::MAX; rows];
 
     for query in 0..rows {
-        let mut ordered = exact_scored(&fixture.matrix, norms, query);
+        let mut ordered = fixture::exact_scored(KERNEL, &fixture.matrix, norms, query);
         ordered.sort_unstable();
         let exact_top = best(k, ordered.iter().copied());
 
@@ -797,7 +785,7 @@ fn tied_distances_break_by_row_in_both_paths() {
         // lower row comes first. The index's offer inherits that order, which `run_regime`
         // already asserted row by row; here the tie structure itself is pinned.
         let ordered = {
-            let mut scored = exact_scored(&fixture.matrix, &norms, 0);
+            let mut scored = fixture::exact_scored(KERNEL, &fixture.matrix, &norms, 0);
             scored.sort_unstable();
             scored
         };

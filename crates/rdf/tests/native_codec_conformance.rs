@@ -29,6 +29,7 @@
 //! The harness always prints a per-format and overall summary — nothing is skipped
 //! silently.
 
+use purrdf_gts::files::media_type_for_path;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -129,19 +130,6 @@ fn corpus_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus/w3c")
 }
 
-/// Map a result-file extension to the media type its OWN parser uses (eval results are
-/// N-Triples for triple formats, N-Quads for quad formats).
-fn media_type_for_ext(path: &Path) -> &'static str {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("nt") => "application/n-triples",
-        Some("nq") => "application/n-quads",
-        Some("ttl") => "text/turtle",
-        Some("trig") => "application/trig",
-        Some("rdf") => "application/rdf+xml",
-        other => panic!("unknown result extension {other:?} for {}", path.display()),
-    }
-}
-
 /// Read a manifest's `mf:assumedTestBase` IRI.
 fn assumed_test_base(ds: &RdfDataset) -> String {
     for q in ds.quad_refs() {
@@ -233,7 +221,7 @@ fn enumerate(suite: &Suite, submanifest: &str) -> Vec<Case> {
             (Kind::Eval, Some(result_iri)) => {
                 let result_file = result_iri.rsplit('/').next().unwrap().to_owned();
                 let result_path = dir.join(&result_file);
-                let result_mt = media_type_for_ext(&result_path);
+                let result_mt = media_type_for_path(&result_path);
                 let result_base = format!("{base}{result_file}");
                 (Some(result_path), Some(result_base), Some(result_mt))
             }

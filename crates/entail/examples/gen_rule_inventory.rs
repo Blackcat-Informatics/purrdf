@@ -32,32 +32,6 @@ const ALL_REGIMES: [Regime; 7] = [
     Regime::D,
 ];
 
-/// The regime's display name. Exhaustive over [`Regime`] on purpose.
-fn regime_name(regime: Regime) -> &'static str {
-    match regime {
-        Regime::Simple => "Simple",
-        Regime::Rdf => "RDF",
-        Regime::Rdfs => "RDFS",
-        Regime::OwlRl => "OWL-RL",
-        Regime::OwlDirect => "OWL-Direct",
-        Regime::Rif => "RIF",
-        Regime::D => "D",
-    }
-}
-
-/// The `--regime` / `Regime.<NAME>` spelling every host accepts for `regime`.
-fn regime_token(regime: Regime) -> &'static str {
-    match regime {
-        Regime::Simple => "simple",
-        Regime::Rdf => "rdf",
-        Regime::Rdfs => "rdfs",
-        Regime::OwlRl => "owl-rl",
-        Regime::OwlDirect => "owl-direct",
-        Regime::Rif => "rif",
-        Regime::D => "d",
-    }
-}
-
 /// The specification section each rule-name prefix belongs to.
 ///
 /// This is the one mapping the generator supplies rather than reads, because the crate
@@ -151,8 +125,8 @@ fn render() -> Result<String, String> {
         let _ = writeln!(
             out,
             "| {} | `{}` | {} | {} |",
-            regime_name(regime),
-            regime_token(regime),
+            regime.name(),
+            regime.token(),
             rules(regime).len(),
             implemented(regime).len(),
         );
@@ -191,8 +165,8 @@ fn render() -> Result<String, String> {
                 let _ = writeln!(
                     out,
                     "| {} | `{}` | `{}` |",
-                    regime_name(regime),
-                    regime_token(regime),
+                    regime.name(),
+                    regime.token(),
                     rule.as_str(),
                 );
             }
@@ -208,7 +182,7 @@ fn render() -> Result<String, String> {
         let _ = write!(
             out,
             "\n## {} — {} of {} rules implemented\n\n",
-            regime_name(regime),
+            regime.name(),
             fired.len(),
             defined.len(),
         );

@@ -21,9 +21,7 @@ use purrdf_sparql_eval::{
     PropertyFunctionRegistry, RankArithmetic, RankedDeclaration,
 };
 
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
+use purrdf_retrieval::fixture::iri;
 
 /// Rewrite a plan's snapshot rows through the entries' own construction law.
 ///

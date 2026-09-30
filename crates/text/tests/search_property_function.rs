@@ -24,17 +24,12 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
-};
+use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest};
 use purrdf_sparql_eval::{
     ExtensionEnv, IndexGeneration, NativeSparqlEngine, ParserOptions, PropertyFunctionRegistry,
     QueryGovernors, QueryOptions,
 };
-use purrdf_text::{
-    Fixed, GraphSelector, RankingField, RankingProfile, TextIndex, TextIndexConfig,
-    TextSearchRelation,
-};
+use purrdf_text::{Fixed, RankingField, RankingProfile, TextIndex, TextSearchRelation};
 
 /// The caller-supplied predicate this host calls ranked retrieval by.
 const SEARCH: &str = "http://example.org/pf#search";
@@ -48,57 +43,15 @@ use purrdf_core::datatype::XSD_DECIMAL as DECIMAL;
 // The datatype `?rank` and `?matched` come back as.
 use purrdf_core::datatype::XSD_INTEGER as INTEGER;
 
-// ── rendering ────────────────────────────────────────────────────────────────
+#[path = "support/sparql.rs"]
+mod sparql;
 
-/// One answer cell in an exact, unambiguous textual form.
-///
-/// A plain `xsd:string` renders bare (`"text"`) and every other literal carries
-/// its datatype or tag, so no two distinct terms can render alike.
-fn render(cell: Option<&TermValue>) -> String {
-    match cell {
-        None => "UNBOUND".to_owned(),
-        Some(TermValue::Iri(iri)) => format!("<{iri}>"),
-        Some(TermValue::Blank { label, scope }) => format!("_:{label}/{}", scope.ordinal()),
-        Some(TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            ..
-        }) => match language {
-            Some(tag) => format!("{lexical_form:?}@{tag}"),
-            None if datatype == "http://www.w3.org/2001/XMLSchema#string" => {
-                format!("{lexical_form:?}")
-            }
-            None => format!("{lexical_form:?}^^<{datatype}>"),
-        },
-        Some(TermValue::Triple { s, p, o }) => format!(
-            "<<{} {} {}>>",
-            render(Some(s)),
-            render(Some(p)),
-            render(Some(o))
-        ),
-    }
-}
+use sparql::{answer, solutions, subject, typed};
 
-/// A typed literal cell as [`render`] writes it.
-fn typed(lexical: &str, datatype: &str) -> String {
-    format!("{lexical:?}^^<{datatype}>")
-}
+#[path = "support/index.rs"]
+mod index_fixture;
 
-/// An IRI cell under the fixture namespace, as [`render`] writes it.
-fn subject(local: &str) -> String {
-    format!("<http://example.org/{local}>")
-}
-
-/// The solution rows of `result`, rendered.
-fn solutions(result: &SparqlResult) -> Vec<Vec<String>> {
-    let SparqlResult::Solutions { rows, .. } = result else {
-        panic!("a SELECT answers with solutions, got {result:?}");
-    };
-    rows.iter()
-        .map(|row| row.iter().map(|cell| render(cell.as_ref())).collect())
-        .collect()
-}
+use index_fixture::config as config_over;
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
@@ -115,16 +68,6 @@ fn dataset_of(rows: &[(&str, &str, &str, Option<&str>)]) -> Arc<RdfDataset> {
         builder.push_quad(s, p, o, None);
     }
     builder.freeze().expect("the fixture must validate")
-}
-
-/// The configuration every fixture index is built under: one predicate, every
-/// graph.
-fn config_over(predicates: &[&str]) -> TextIndexConfig {
-    TextIndexConfig::new(
-        predicates.iter().map(|iri| TermValue::iri(*iri)).collect(),
-        GraphSelector::Any,
-    )
-    .expect("the fixture configuration names at least one predicate")
 }
 
 /// A registry with `relation` registered under `iri` — the whole of what a host
@@ -199,31 +142,6 @@ fn ranked() -> (Arc<RdfDataset>, Arc<TextIndex>) {
 }
 
 // ── driving the engine ───────────────────────────────────────────────────────
-
-/// Evaluate `query` against `dataset` with `registry` in scope, on a default
-/// engine — no parser options, so the only reason the predicate is recognized is
-/// the registration itself.
-fn answer(
-    dataset: &RdfDataset,
-    registry: &PropertyFunctionRegistry,
-    query: &str,
-) -> Vec<Vec<String>> {
-    let result = NativeSparqlEngine::new()
-        .query_with_options_view(
-            dataset,
-            SparqlRequest {
-                query,
-                base_iri: None,
-                substitutions: &[],
-            },
-            QueryOptions::new().with_env(
-                &ExtensionEnv::over_relations(registry.clone())
-                    .expect("the fixture declarations read cleanly"),
-            ),
-        )
-        .unwrap_or_else(|error| panic!("the query must evaluate: {error}"));
-    solutions(&result)
-}
 
 /// Evaluate `query` on an engine configured with `options` — the success-side
 /// counterpart of [`refusal`].

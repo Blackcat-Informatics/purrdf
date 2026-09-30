@@ -55,30 +55,6 @@ const REFUSED: &[&str] = &[
     "abcdefghi",
 ];
 
-fn iri(value: &str) -> Term {
-    Term {
-        kind: TermKind::Iri,
-        value: Some(value.to_owned()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
-fn lang_literal(value: &str, lang: &str) -> Term {
-    Term {
-        kind: TermKind::Literal,
-        value: Some(value.to_owned()),
-        datatype: None,
-        lang: Some(lang.to_owned()),
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
 /// The `rdf:dirLangString` form: a literal carrying both halves. The direction
 /// is a *valid* `ltr` throughout — the question these fixtures ask is never
 /// whether a bad direction is caught, but what happens to a good one when the
@@ -102,9 +78,9 @@ fn dir_lang_literal(value: &str, lang: &str) -> Term {
 fn container_with_tag(lang: &str) -> Vec<u8> {
     let mut writer = Writer::new("generic");
     writer.add_terms(&[
-        iri("https://example.org/s"),
-        iri("https://example.org/p"),
-        lang_literal("Purr", lang),
+        Term::iri("https://example.org/s"),
+        Term::iri("https://example.org/p"),
+        Term::lang_literal("Purr", lang),
     ]);
     writer.add_quads(&[(0, 1, 2, None)]);
     writer.into_bytes()
@@ -115,8 +91,8 @@ fn container_with_tag(lang: &str) -> Vec<u8> {
 fn dir_container_with_tag(lang: &str) -> Vec<u8> {
     let mut writer = Writer::new("generic");
     writer.add_terms(&[
-        iri("https://example.org/s"),
-        iri("https://example.org/p"),
+        Term::iri("https://example.org/s"),
+        Term::iri("https://example.org/p"),
         dir_lang_literal("Purr", lang),
     ]);
     writer.add_quads(&[(0, 1, 2, None)]);
@@ -270,8 +246,8 @@ fn a_direction_with_no_tag_at_all_is_left_alone() {
     let mut object = dir_lang_literal("Purr", "en");
     object.lang = None;
     writer.add_terms(&[
-        iri("https://example.org/s"),
-        iri("https://example.org/p"),
+        Term::iri("https://example.org/s"),
+        Term::iri("https://example.org/p"),
         object,
     ]);
     writer.add_quads(&[(0, 1, 2, None)]);

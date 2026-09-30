@@ -39,48 +39,8 @@
 //! and two documents reading stdin is refused rather than mis-read, because a process has one
 //! standard input.
 
-use std::path::Path;
-use std::process::{Command, Output};
-
 mod support;
-
-/// A `Command` for the built `purrdf` binary.
-fn purrdf() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_purrdf"))
-}
-
-/// Run `purrdf` with `args`, returning the captured [`Output`].
-fn run(args: &[&str]) -> Output {
-    purrdf()
-        .args(args)
-        .output()
-        .expect("spawn the built purrdf binary")
-}
-
-/// stdout of an [`Output`] as a `String`.
-fn stdout(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
-/// stderr of an [`Output`] as a `String`.
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
-}
-
-/// Join a name onto `dir`, returning it as an owned `String` (the shape [`run`] wants).
-fn path(dir: &Path, name: &str) -> String {
-    dir.join(name)
-        .to_str()
-        .expect("temp path is valid UTF-8")
-        .to_owned()
-}
-
-/// Write `contents` to `dir/name`, returning the path.
-fn write_file(dir: &Path, name: &str, contents: &str) -> String {
-    let p = path(dir, name);
-    std::fs::write(&p, contents).expect("write fixture file");
-    p
-}
+use support::{path, purrdf, run, stderr, stdout, write_file};
 
 // ── Fixtures ────────────────────────────────────────────────────────────────────
 

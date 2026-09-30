@@ -228,7 +228,9 @@ fn correlated_not_exists(n: usize) -> String {
     )
 }
 
-fn correlated_not_exists_expected(n: usize) -> Answer {
+/// `:s1` at an even depth and `:s2`–`:s4` at an odd one: the answer of every shape whose
+/// levels negate the one inside them (a `NOT EXISTS` chain, a `!` chain).
+fn negated_parity_expected(n: usize) -> Answer {
     if n.is_multiple_of(2) {
         column("s", &["s1"])
     } else {
@@ -245,6 +247,9 @@ fn optional_spine(n: usize) -> String {
     )
 }
 
+/// The answer of [`optional_spine`] at any depth: every subject, `?z` bound for `:s1`
+/// alone. [`uncorrelated_lateral_expected`] is the same two-column table shape holding a
+/// different shape's answer; each is its own shape's oracle.
 fn optional_spine_expected(_: usize) -> Answer {
     pairs(
         ["s", "z"],
@@ -323,14 +328,6 @@ fn nested_negations(n: usize) -> String {
         "SELECT ?s WHERE {{ ?s <{EX}p> ?o FILTER({}(?o = 1)) }}",
         "!".repeat(n)
     )
-}
-
-fn nested_negations_expected(n: usize) -> Answer {
-    if n.is_multiple_of(2) {
-        column("s", &["s1"])
-    } else {
-        column("s", &["s2", "s3", "s4"])
-    }
 }
 
 fn nested_arithmetic(n: usize) -> String {
@@ -447,7 +444,7 @@ fn vectors() -> Vec<Vector> {
         vector(
             "correlated NOT EXISTS",
             correlated_not_exists,
-            correlated_not_exists_expected,
+            negated_parity_expected,
         ),
         vector("OPTIONAL spine", optional_spine, optional_spine_expected),
         vector(
@@ -459,7 +456,7 @@ fn vectors() -> Vec<Vector> {
         vector("parentheses", nested_parentheses, only_s1),
         vector("single-element groups", nested_single_groups, only_s1),
         vector("joined groups", nested_joined_groups, only_s1),
-        vector("negations", nested_negations, nested_negations_expected),
+        vector("negations", nested_negations, negated_parity_expected),
         vector(
             "FILTER arithmetic",
             nested_arithmetic,

@@ -27,6 +27,9 @@
 //!
 //! Fixture IRIs are `example.org`; PurRDF mints none.
 
+#[path = "support/relation.rs"]
+mod relation;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
@@ -129,8 +132,7 @@ fn items() -> Arc<RdfDataset> {
          _:good <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{EX}Item> .\n\
          _:good <{EX}status> \"fine blank\" .\n"
     );
-    purrdf_shapes::text_ingest::parse_ntriples_to_dataset(&triples)
-        .unwrap_or_else(|errors| panic!("fixture data: {}", errors.join("\n")))
+    relation::ntriples(&triples)
 }
 
 /// The four fixture nodes, each by the term id the dataset holds it under.
@@ -179,14 +181,6 @@ impl Nodes {
         );
         nodes
     }
-}
-
-/// The dataset's own id for a term the validation or the relation handed back — the
-/// identity the oracle compares, which keeps two blank nodes apart.
-fn id_in(dataset: &RdfDataset, value: &TermValue, what: &str) -> TermId {
-    dataset
-        .term_id_by_value(value)
-        .unwrap_or_else(|| panic!("{what} {value:?} is a node the dataset holds"))
 }
 
 /// One shape over every item, whose `sh:select` body is `body`.
@@ -265,7 +259,7 @@ fn check(position: &str, body: &str) {
         .iter()
         .map(|result| {
             (
-                id_in(
+                relation::id_in(
                     &dataset,
                     &result.focus_node.to_term_value(),
                     "the focus node",
@@ -296,7 +290,7 @@ fn check(position: &str, body: &str) {
     let mut bound: BTreeMap<TermId, usize> = BTreeMap::new();
     for subject in &seen {
         *bound
-            .entry(id_in(&dataset, subject, "a bound subject"))
+            .entry(relation::id_in(&dataset, subject, "a bound subject"))
             .or_default() += 1;
     }
     let per_node = bound.get(&nodes.iri_bad).copied().unwrap_or_default();

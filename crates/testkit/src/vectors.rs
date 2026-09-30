@@ -136,6 +136,17 @@ pub struct VectorFile<'a> {
 }
 
 impl<'a> VectorFile<'a> {
+    /// [`Self::parse`] a vector file a test embeds, panicking with the reason when
+    /// it does not verify: a tampered or stale fixture is a broken test.
+    ///
+    /// # Panics
+    ///
+    /// When [`Self::parse`] refuses `text`.
+    #[must_use]
+    pub fn load(text: &'a str) -> Self {
+        Self::parse(text).unwrap_or_else(|error| panic!("{error}"))
+    }
+
     /// Parse `text` and verify its `vector-count` and `body-sha256` against
     /// its body.
     pub fn parse(text: &'a str) -> Result<Self, VectorError> {

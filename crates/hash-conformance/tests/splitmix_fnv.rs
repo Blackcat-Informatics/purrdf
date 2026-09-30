@@ -40,6 +40,7 @@
 use purrdf_hash::fnv::{BASIS, fnv1a64, fold};
 use purrdf_hash::mix::{splitmix64_finalize, splitmix64_next, splitmix64_step};
 use purrdf_hash_conformance::iri_corpus;
+use purrdf_testkit::rng::splitmix64_bytes;
 use purrdf_testkit::vectors::{VectorFile, decode_bytes, encode_bytes};
 
 /// Draws recorded per stream and seed.
@@ -164,18 +165,6 @@ fn scalar_block(first: u32, last: u32) -> Vec<u8> {
     bytes
 }
 
-/// The first `length` bytes of the little-endian SplitMix64 `next` stream
-/// from the seed `length`.
-fn stream_bytes(length: usize) -> Vec<u8> {
-    let mut state = length as u64;
-    let mut bytes = Vec::with_capacity(length + 8);
-    while bytes.len() < length {
-        bytes.extend_from_slice(&splitmix64_next(&mut state).to_le_bytes());
-    }
-    bytes.truncate(length);
-    bytes
-}
-
 /// Every FNV-1a input: its kind, its encoded field, and its bytes. A
 /// `scalars` input is spelled `FIRST-LAST` in hexadecimal and stands for the
 /// UTF-8 of every scalar in that range; every other input is its bytes.
@@ -201,7 +190,7 @@ fn fnv_inputs() -> Vec<(&'static str, String, Vec<u8>)> {
         bytes("bytes", iri.into_bytes());
     }
     for length in 0..=256 {
-        bytes("stream", stream_bytes(length));
+        bytes("stream", splitmix64_bytes(length, length as u64));
     }
     for block in 0..=0x10FF_u32 {
         let first = block << 8;

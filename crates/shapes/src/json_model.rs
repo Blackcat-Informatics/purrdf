@@ -17,9 +17,7 @@
 //! read from outside (a document handed in by a caller) is brought to the
 //! same order with [`Value::sort_keys`] at the reader.
 
-use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::collections::BTreeMap;
 
 pub(crate) use purrdf_lex::json::{Number, Object, Value, write_compact, write_pretty};
 
@@ -173,149 +171,9 @@ pub(crate) fn set_member(value: &mut Value, name: &str, member: impl Into<Value>
 }
 
 /// A Rust value's JSON form: the conversion [`json!`] applies to every
-/// interpolated expression.
-pub(crate) trait ToJson {
-    /// This value as JSON.
-    fn to_json(&self) -> Value;
-}
-
-impl ToJson for Value {
-    fn to_json(&self) -> Value {
-        self.clone()
-    }
-}
-
-impl ToJson for Object {
-    fn to_json(&self) -> Value {
-        Value::Object(self.clone())
-    }
-}
-
-impl ToJson for Number {
-    fn to_json(&self) -> Value {
-        Value::Number(self.clone())
-    }
-}
-
-impl ToJson for str {
-    fn to_json(&self) -> Value {
-        Value::from(self)
-    }
-}
-
-impl ToJson for String {
-    fn to_json(&self) -> Value {
-        Value::from(self.as_str())
-    }
-}
-
-impl ToJson for Cow<'_, str> {
-    fn to_json(&self) -> Value {
-        Value::from(self.as_ref())
-    }
-}
-
-impl ToJson for char {
-    fn to_json(&self) -> Value {
-        Value::from(self.to_string())
-    }
-}
-
-impl ToJson for bool {
-    fn to_json(&self) -> Value {
-        Value::Bool(*self)
-    }
-}
-
-impl ToJson for f64 {
-    fn to_json(&self) -> Value {
-        Value::from(*self)
-    }
-}
-
-impl ToJson for f32 {
-    fn to_json(&self) -> Value {
-        Value::from(*self)
-    }
-}
-
-macro_rules! integer_to_json {
-    ($($t:ty),* $(,)?) => {$(
-        impl ToJson for $t {
-            fn to_json(&self) -> Value {
-                Value::from(*self)
-            }
-        }
-    )*};
-}
-
-integer_to_json!(
-    u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize
-);
-
-impl ToJson for () {
-    fn to_json(&self) -> Value {
-        Value::Null
-    }
-}
-
-impl<T: ToJson + ?Sized> ToJson for &T {
-    fn to_json(&self) -> Value {
-        (**self).to_json()
-    }
-}
-
-impl<T: ToJson + ?Sized> ToJson for Box<T> {
-    fn to_json(&self) -> Value {
-        (**self).to_json()
-    }
-}
-
-impl<T: ToJson + ?Sized> ToJson for Arc<T> {
-    fn to_json(&self) -> Value {
-        (**self).to_json()
-    }
-}
-
-impl<T: ToJson> ToJson for Option<T> {
-    fn to_json(&self) -> Value {
-        self.as_ref().map_or(Value::Null, ToJson::to_json)
-    }
-}
-
-impl<T: ToJson> ToJson for [T] {
-    fn to_json(&self) -> Value {
-        Value::Array(self.iter().map(ToJson::to_json).collect())
-    }
-}
-
-impl<T: ToJson, const N: usize> ToJson for [T; N] {
-    fn to_json(&self) -> Value {
-        self.as_slice().to_json()
-    }
-}
-
-impl<T: ToJson> ToJson for Vec<T> {
-    fn to_json(&self) -> Value {
-        self.as_slice().to_json()
-    }
-}
-
-impl<T: ToJson> ToJson for BTreeSet<T> {
-    fn to_json(&self) -> Value {
-        Value::Array(self.iter().map(ToJson::to_json).collect())
-    }
-}
-
-impl<K: AsRef<str>, V: ToJson> ToJson for BTreeMap<K, V> {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            self.iter()
-                .map(|(name, value)| (name.as_ref().to_owned(), value.to_json()))
-                .collect(),
-        )
-    }
-}
+/// interpolated expression. The one conversion `purrdf_lex::json::record`
+/// defines, so a value reads the same whichever crate turns it into JSON.
+pub(crate) use purrdf_lex::json::record::ToJson;
 
 /// Implement [`ToJson`] for types whose public inherent `to_json` is the JSON
 /// form, so they nest inside [`json!`] literals and generic containers.

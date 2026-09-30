@@ -108,6 +108,12 @@ impl Sizer {
     }
 }
 
+/// Arbitrary bytes, fewer than `max_len` of them: the raw input of a
+/// never-panic sweep, bounded to keep each case cheap.
+pub fn bytes(max_len: usize) -> VecStrategy<super::arbitrary::AnyInt<u8>> {
+    vec(super::arbitrary::any::<u8>(), 0..max_len)
+}
+
 /// A `Vec` whose length is in `size` and whose elements come from `element`.
 pub fn vec<S: Strategy>(element: S, size: impl Into<SizeRange>) -> VecStrategy<S> {
     VecStrategy {

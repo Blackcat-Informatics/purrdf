@@ -26,6 +26,7 @@
 //! Run via `make metadata` (writes) or `make check` (verifies). Output goes
 //! to stdout; run with `--locked` per this workspace's convention.
 
+use purrdf_testkit::ucd::code_point_literal as format_codepoint_literal;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
@@ -79,16 +80,6 @@ fn xsd_block_escape_name(ucd_name: &str) -> String {
         escape_name.push(ch);
     }
     escape_name
-}
-
-/// Formats a codepoint as an underscore-grouped 8-hex-digit `u32` literal
-/// (e.g. `0x0010_FFFF`), uniformly for every table row so `clippy::
-/// unreadable_literal` has nothing to flag regardless of magnitude —
-/// `Blocks.txt` ranges from 4-digit (`0x007F`) to 6-digit (`0x10FFFF`)
-/// codepoints, and only the 6-digit ones exceed the lint's un-grouped
-/// threshold.
-fn format_codepoint_literal(codepoint: u32) -> String {
-    format!("0x{:04X}_{:04X}", codepoint >> 16, codepoint & 0xFFFF)
 }
 
 fn main() {

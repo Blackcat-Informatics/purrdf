@@ -201,6 +201,27 @@ pub const fn byte_run_count(table: &[u8; 256]) -> usize {
 /// this module uses.
 ///
 /// The four named scanners ([`find_first_trivia`], [`find_first_iri_body_special`],
+/// The class table holding exactly `needles`: the table a caller with a fixed
+/// needle set hands [`ByteClass::from_table`].
+///
+/// ```
+/// use purrdf_lex::scan::{ByteClass, byte_run_count, needle_table};
+///
+/// const ENDS: [u8; 256] = needle_table(b"/?#");
+/// const CLASS: ByteClass<{ byte_run_count(&ENDS) }> = ByteClass::from_table(ENDS);
+/// assert_eq!(CLASS.find_first(b"host/path"), Some(4));
+/// ```
+#[must_use]
+pub const fn needle_table(needles: &[u8]) -> [u8; 256] {
+    let mut table = [0_u8; 256];
+    let mut k = 0;
+    while k < needles.len() {
+        table[needles[k] as usize] = 1;
+        k += 1;
+    }
+    table
+}
+
 /// [`find_first_json_string_special`], [`find_first_xml_special`]) answer the
 /// classes a *parser* stops at, and those are terminals, spelled here once. A
 /// *writer* stops at classes the grammar does not name — the bytes a given

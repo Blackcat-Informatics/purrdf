@@ -438,12 +438,7 @@ pub(crate) trait ModelWalk {
     ///
     /// [`ProductDimension::DepthLimit`] past [`MAX_DEPTH`].
     fn enter(&mut self) -> Result<(), ShapesProductError> {
-        let depth = self.depth();
-        if *depth >= MAX_DEPTH {
-            return Err(depth_limit());
-        }
-        *depth += 1;
-        Ok(())
+        crate::product::ast::open_level(self.depth(), depth_limit)
     }
 
     /// Close one nesting level.

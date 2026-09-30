@@ -18,16 +18,19 @@
 //! committed AST snapshot pins — and generated trees that reach every node kind and
 //! variant, including shapes the parser never builds (hand-built algebra is public).
 
+#[path = "support/patterns.rs"]
+mod patterns;
+
+use patterns::example as nn;
+use purrdf_hash::fixed::hash_one as hash_of;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use purrdf_sparql_algebra::{
     AggregateExpression, AggregateFunction, ArithmeticOperator, BlankNode, Chain, Child,
-    Expression, Function, GraphPattern, GroundTerm, GroundTriple, Literal, NamedNode,
-    NamedNodePattern, NegatedPathElement, NonEmpty, OrderExpression, ParserOptions,
-    PropertyFunctionCall, PropertyPathExpression, Query, SparqlParser, TermPattern, TriplePattern,
-    Variable,
+    Expression, Function, GraphPattern, GroundTerm, GroundTriple, Literal, NamedNodePattern,
+    NegatedPathElement, NonEmpty, OrderExpression, ParserOptions, PropertyFunctionCall,
+    PropertyPathExpression, Query, SparqlParser, TermPattern, TriplePattern, Variable,
 };
 use purrdf_testkit::prop::prelude::*;
 
@@ -455,12 +458,6 @@ fn m_ground(g: &GroundTerm) -> mirror::GroundTerm {
     }
 }
 
-fn hash_of<T: Hash>(value: &T) -> u64 {
-    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    value.hash(&mut hasher);
-    hasher.finish()
-}
-
 /// Every single-tree check: both `Debug` forms byte-identical to the mirror's, and a
 /// copy whose mirror equals the original's, equal and hashing equally to it.
 fn assert_single(p: &GraphPattern) {
@@ -581,10 +578,6 @@ fn every_corpus_tree_matches_the_derived_reference() {
 }
 
 // ── generated trees ──────────────────────────────────────────────────────────────────
-
-fn nn(local: &str) -> NamedNode {
-    NamedNode::new_unchecked(format!("http://example.org/{local}"))
-}
 
 fn leaf_term() -> impl Strategy<Value = TermPattern> {
     prop_oneof![

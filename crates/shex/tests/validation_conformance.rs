@@ -21,6 +21,9 @@
 //! * **XFAIL**: genuine engine gaps, listed exactly (name + reason). A
 //!   passing xfail fails the harness (a stale ledger is a test error).
 
+#[path = "support/corpus.rs"]
+mod corpus;
+
 use purrdf_core::FastMap;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -56,15 +59,11 @@ const MF: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#";
 const SHT: &str = "http://www.w3.org/ns/shacl/test-suite#";
 use purrdf_iri::vocab::rdf::NS as RDF;
 
-fn corpus_dir() -> PathBuf {
-    purrdf_testkit::paths::workspace_root().join("vectors/shexTest")
-}
-
 fn url_to_path(url: &str) -> PathBuf {
     let rest = url
         .strip_prefix(CORPUS_URL)
         .unwrap_or_else(|| panic!("URL outside the vendored corpus: {url}"));
-    corpus_dir().join(rest)
+    corpus::shex_test().join(rest)
 }
 
 // ── manifest access ─────────────────────────────────────────────────────────
@@ -75,7 +74,7 @@ struct Manifest {
 
 impl Manifest {
     fn load() -> Self {
-        let path = corpus_dir().join("validation/manifest.ttl");
+        let path = corpus::shex_test().join("validation/manifest.ttl");
         let text = fs::read_to_string(&path).expect("read validation manifest");
         let ds = parse_dataset(
             text.as_bytes(),

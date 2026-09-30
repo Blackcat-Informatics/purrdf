@@ -28,11 +28,14 @@
 //! Timing is deliberately not a gate. Correctness and exact receipts are asserted before
 //! the harness samples; this target only reports the price of those guarantees.
 
+#[path = "../tests/support/mod.rs"]
+mod support;
+
+use support::result_size;
+
 use std::sync::Arc;
 
-use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlResult, TermValue,
-};
+use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, ResourceDimension, TermValue};
 use purrdf_sparql_eval::{
     CancellationFlag, EvalOptions, GovernedOutcome, NativeSparqlEngine, PreparedQuery,
     QueryGovernors, QueryOptions,
@@ -74,14 +77,6 @@ fn ring_dataset(nodes: usize) -> Arc<RdfDataset> {
     builder.freeze().expect("freeze path-scaling dataset")
 }
 
-fn result_rows(result: &SparqlResult) -> usize {
-    match result {
-        SparqlResult::Solutions { rows, .. } => rows.len(),
-        SparqlResult::Graph(graph) => graph.quad_count(),
-        SparqlResult::Boolean(value) => usize::from(*value),
-    }
-}
-
 fn run_plain(
     engine: &NativeSparqlEngine,
     dataset: &Arc<RdfDataset>,
@@ -90,7 +85,7 @@ fn run_plain(
     let result = engine
         .query_prepared(dataset, prepared, &[], QueryOptions::EMPTY)
         .expect("benchmark query evaluates");
-    result_rows(&result)
+    result_size(&result)
 }
 
 fn run_governed(
@@ -112,7 +107,7 @@ fn run_governed(
     let GovernedOutcome::Complete { result, .. } = outcome else {
         panic!("benchmark ceilings are unreachable");
     };
-    (result_rows(&result), fuel)
+    (result_size(&result), fuel)
 }
 
 fn bench_governed_query(c: &mut Bench) {

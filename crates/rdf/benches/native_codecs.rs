@@ -246,7 +246,7 @@ fn bench_serialize_nquads(c: &mut Bench) {
                         statement_layer: StatementLayer::PerFormatCapability,
                         jsonld_options: None,
                     },
-                    &mut Discard,
+                    &mut std::io::sink(),
                 )
                 .expect("serialize");
                 black_box(report.bytes_written);
@@ -254,20 +254,6 @@ fn bench_serialize_nquads(c: &mut Bench) {
         });
     }
     group.finish();
-}
-
-/// A writer that keeps nothing, so a streamed arm measures the emitter rather than
-/// the bench's own accumulation of what it produced.
-struct Discard;
-
-impl std::io::Write for Discard {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
 }
 
 /// Pre-change expanded JSON-LD parse/serialize timing over one deterministic RDF 1.2

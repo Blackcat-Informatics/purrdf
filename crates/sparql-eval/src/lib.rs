@@ -145,6 +145,8 @@ pub mod scratch;
 // Per-service context for the SERVICE seam: the capability/credential/header policy a
 // host attaches to individual endpoints, and the two resolvers built on it.
 pub mod execution;
+#[doc(hidden)]
+pub mod fixture;
 pub mod service;
 mod service_endpoints;
 pub mod solution;

@@ -3,72 +3,22 @@
 
 //! Fail-closed PURREMB framing, integrity, and deep-corruption coverage.
 
-use purrdf_core::{
-    EmbeddingError, EmbeddingView, PURREMB_HEADER_LENGTH, SECTION_CONTRACTS, SECTION_MATRICES,
-    SECTION_MATRIX_DATA, SECTION_RELATIONS, SECTION_TARGET_SETS, SECTION_TARGETS,
-    SECTION_TOKEN_SPANS, derive_artifact_root, verify_embedding,
+use purrdf_core::purremb_fixture::{
+    directory_entry, put_u32, put_u64, read_u32, read_u64, reseal, section_span,
 };
-use sha2::{Digest as _, Sha256};
+use purrdf_core::{
+    EmbeddingError, EmbeddingView, PURREMB_DIRECTORY_ENTRY_LENGTH, PURREMB_HEADER_LENGTH,
+    SECTION_CONTRACTS, SECTION_MATRICES, SECTION_MATRIX_DATA, SECTION_RELATIONS,
+    SECTION_TARGET_SETS, SECTION_TARGETS, SECTION_TOKEN_SPANS, verify_embedding,
+};
 
-const DIRECTORY_ENTRY_LENGTH: usize = 64;
+const DIRECTORY_ENTRY_LENGTH: usize = PURREMB_DIRECTORY_ENTRY_LENGTH as usize;
 
 fn golden() -> Vec<u8> {
     std::fs::read(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/goldens/purremb_v1.bin"),
     )
     .expect("checked-in PURREMB golden")
-}
-
-fn read_u32(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("u32 field"))
-}
-
-fn read_u64(bytes: &[u8], offset: usize) -> u64 {
-    u64::from_le_bytes(bytes[offset..offset + 8].try_into().expect("u64 field"))
-}
-
-fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
-    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-}
-
-fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
-    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
-}
-
-fn directory_entry(bytes: &[u8], kind: u32, instance: u32) -> usize {
-    let count = usize::try_from(read_u32(bytes, 20)).expect("section count");
-    (0..count)
-        .map(|index| PURREMB_HEADER_LENGTH as usize + index * DIRECTORY_ENTRY_LENGTH)
-        .find(|offset| read_u32(bytes, *offset) == kind && read_u32(bytes, *offset + 8) == instance)
-        .expect("section directory entry")
-}
-
-fn section_span(bytes: &[u8], kind: u32, instance: u32) -> (usize, usize) {
-    let entry = directory_entry(bytes, kind, instance);
-    let offset = usize::try_from(read_u64(bytes, entry + 16)).expect("section offset");
-    let length = usize::try_from(read_u64(bytes, entry + 24)).expect("section length");
-    (offset, length)
-}
-
-fn reseal(bytes: &mut [u8], sections: &[(u32, u32)]) {
-    for &(kind, instance) in sections {
-        let entry = directory_entry(bytes, kind, instance);
-        let (offset, length) = section_span(bytes, kind, instance);
-        let digest: [u8; 32] = Sha256::digest(&bytes[offset..offset + length]).into();
-        bytes[entry + 32..entry + 64].copy_from_slice(&digest);
-    }
-    let count = usize::try_from(read_u32(bytes, 20)).expect("section count");
-    let directory_end = PURREMB_HEADER_LENGTH as usize + count * DIRECTORY_ENTRY_LENGTH;
-    let mut header = [0u8; PURREMB_HEADER_LENGTH as usize];
-    header.copy_from_slice(&bytes[..PURREMB_HEADER_LENGTH as usize]);
-    header[64..96].fill(0);
-    let root = derive_artifact_root(
-        &header,
-        &bytes[PURREMB_HEADER_LENGTH as usize..directory_end],
-    );
-    bytes[64..96].copy_from_slice(root.as_bytes());
-    let trailer = usize::try_from(read_u64(bytes, 48)).expect("trailer offset");
-    bytes[trailer + 24..trailer + 56].copy_from_slice(root.as_bytes());
 }
 
 fn assert_structural_error(bytes: &[u8]) {

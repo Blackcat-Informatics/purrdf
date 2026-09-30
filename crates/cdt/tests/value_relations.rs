@@ -3,7 +3,10 @@
 
 //! The SEP-0009 equality and ordering relations, and the syntactic total order.
 
+mod support;
+
 use core::cmp::Ordering;
+use support::{composite, triple};
 
 use purrdf_cdt::{
     CdtEntry, CdtKey, CdtLiteral, CdtTerm, CdtTypeErrorKind, CdtValue, list_equal, list_less_than,
@@ -29,17 +32,6 @@ fn entries(lexical: &str) -> Vec<CdtEntry> {
         .expect("the lexical form is well formed")
         .into_map()
         .expect("parse_map yields a map")
-}
-
-/// A composite element, refused by the constructor only when it would break one of
-/// the crate's two bounds — which no fixture in this file does.
-fn composite(value: CdtValue) -> CdtTerm {
-    CdtTerm::composite(value).expect("the fixture is within every bound")
-}
-
-/// A triple-term element, under the same standing as [`composite`].
-fn triple(subject: CdtTerm, predicate: CdtTerm, object: CdtTerm) -> CdtTerm {
-    CdtTerm::triple(subject, predicate, object).expect("the fixture is within every bound")
 }
 
 // ── list-equal ────────────────────────────────────────────────────────────────

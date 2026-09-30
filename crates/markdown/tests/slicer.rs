@@ -5,7 +5,10 @@
 //! law, the concordance, identity, and the goldens a declared profile
 //! reproduces byte for byte.
 
+mod support;
+
 use std::collections::{BTreeMap, BTreeSet};
+use support::{SLICE_BASE, v};
 
 use purrdf_core::embedding::{
     AppliedStage, ChunkingContractId, CorpusTarget, DocumentTarget, EmbeddingError, TargetId,
@@ -30,14 +33,9 @@ const GUIDE_ID: &str = "https://example.org/doc/field-guide";
 const GUIDE_GOLDEN: &str = include_str!("fixtures/field-guide.nt");
 /// The same, with a canon base declared.
 const GUIDE_GOLDEN_CANON: &str = include_str!("fixtures/field-guide.canon.nt");
-const SLICE_BASE: &str = "https://example.org/slice/";
 const PROFILE_NAME: &str = "example-slice-md-v1";
 const CANON_BASE: &str = "https://example.org/canon#";
 const TITLE: &str = "A Field Guide to the Marrow Archipelago";
-
-fn v() -> Vocabulary {
-    Vocabulary::under(SLICE_BASE).expect("a vocabulary")
-}
 
 /// The declared profile: the goldens are minted under it.
 fn v1() -> Profile {

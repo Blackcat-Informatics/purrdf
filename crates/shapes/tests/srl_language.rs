@@ -7,26 +7,19 @@
 //!
 //! Every refusal is paired with a valid neighbour whose observable differs.
 
+#[path = "support/terms.rs"]
+mod terms;
+
 use std::fmt::Write as _;
 use std::sync::Arc;
+use terms::example_org as iri;
+use terms::integer as int;
 
 use purrdf::RdfDataset;
 use purrdf_shapes::srl::{self, InferOptions, SrlError};
-use purrdf_shapes::term::{Literal, NamedNode, Term};
+use purrdf_shapes::term::{NamedNode, Term};
 
 const EX: &str = "http://example.org/";
-use purrdf_xsd::datatype::XSD_INTEGER;
-
-fn iri(local: &str) -> Term {
-    Term::NamedNode(NamedNode::from(format!("{EX}{local}").as_str()))
-}
-
-fn int(value: i64) -> Term {
-    Term::Literal(Literal::new_typed_literal(
-        value.to_string(),
-        NamedNode::from(XSD_INTEGER),
-    ))
-}
 
 fn data(ttl: &str) -> Arc<RdfDataset> {
     purrdf::parse_dataset(

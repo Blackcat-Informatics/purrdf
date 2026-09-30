@@ -32,15 +32,19 @@
 //!
 //! [`QueryGovernors::UNBOUNDED`]: purrdf_sparql_eval::QueryGovernors::UNBOUNDED
 
+mod support;
+
+use purrdf_sparql_conformance::run::query_eval_parser_options;
+use support::suite_manifests;
+
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, SparqlRequest, SparqlResult};
 use purrdf_sparql_conformance::manifest::{ExpectedResult, SparqlTestCase, TestKind};
 use purrdf_sparql_eval::{
-    AggregateRegistry, EvalOptions, GovernedOutcome, NativeSparqlEngine, ParserOptions,
-    QueryGovernors, QueryOptions, StandpointPredicates,
+    AggregateRegistry, EvalOptions, GovernedOutcome, NativeSparqlEngine, QueryGovernors,
+    QueryOptions, StandpointPredicates,
 };
 
 /// Build the per-case statistical-aggregate registry `case.aggregate_namespace`
@@ -62,18 +66,6 @@ const BASE: &str = "http://purrdf.test/manifest/";
 
 /// The extension-function namespace the conformance harness configures.
 const EXT_NS: &str = "https://example.org/ext/";
-
-/// The parse-time namespace declarations the conformance harness configures, shared
-/// with every [`purrdf_sparql_eval::ExtensionEnv`] built below so the engine-level
-/// and per-call halves of the seam can never disagree about which predicates are
-/// calls.
-fn parser_options() -> ParserOptions {
-    ParserOptions {
-        extension_fn_namespaces: vec![EXT_NS.to_owned()],
-        property_fn_namespaces: vec![purrdf_sparql_conformance::run::REL_NS.to_owned()],
-        property_fn_iris: Vec::new(),
-    }
-}
 
 /// An engine configured exactly as the conformance harness configures it, so a case that
 /// passes there is evaluable here.
@@ -133,22 +125,6 @@ fn render(result: &SparqlResult) -> String {
     }
 }
 
-/// Recursively list every `manifest.ttl` under `suite/`.
-fn discover_manifests(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                out.extend(discover_manifests(&path));
-            } else if path.file_name().and_then(|n| n.to_str()) == Some("manifest.ttl") {
-                out.push(path);
-            }
-        }
-    }
-    out
-}
-
 /// The ungoverned answer for one case, or the diagnostic that prevented one.
 fn ungoverned(
     engine: &NativeSparqlEngine,
@@ -160,7 +136,7 @@ fn ungoverned(
     // The declared parser options and both registries together, as the one
     // environment the query text is read against.
     let env = purrdf_sparql_eval::ExtensionEnv::new(
-        parser_options(),
+        query_eval_parser_options(),
         purrdf_sparql_conformance::run::harness_relations().clone(),
         aggregates.map_or_else(|| AggregateRegistry::EMPTY, Clone::clone),
     )
@@ -173,8 +149,7 @@ fn ungoverned(
 
 #[test]
 fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("suite");
-    let manifests = discover_manifests(&root);
+    let manifests = suite_manifests();
     assert!(
         manifests.len() >= 10,
         "suite inventory shrank: found only {} manifests",
@@ -231,7 +206,7 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
             // arm and to the relation on the other. Naming the environment once makes
             // that disagreement unrepresentable.
             let governed_env = purrdf_sparql_eval::ExtensionEnv::new(
-                parser_options(),
+                query_eval_parser_options(),
                 purrdf_sparql_conformance::run::harness_relations().clone(),
                 case_aggregates
                     .as_ref()

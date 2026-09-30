@@ -399,6 +399,7 @@ mod document;
 mod embedding;
 mod error;
 mod execute;
+mod executor;
 mod fixed;
 mod fuse;
 mod fusion_profile;
@@ -430,6 +431,9 @@ mod statistics;
 #[doc = include_str!("../PRODUCER-CONTRACT.md")]
 pub mod producer_contract {}
 
+#[doc(hidden)]
+pub mod fixture;
+
 pub use admission::{AdmissionEnvironment, AdmissionError, BoundMode};
 pub use compile::{
     CompiledRetrieval, PlannedResolution, ReadSchedule, StratumUnit, UnitError, compile,
@@ -440,6 +444,7 @@ pub use execute::{
     ExecutionError, ExecutionResult, RankedStreamImpl, StratumStream, StreamEnding, execute,
     execute_within,
 };
+pub use executor::block_on;
 pub use fuse::{FusionResult, TopK, fuse};
 pub use fusion_profile::{DecayRule, FusionProfile, TieBreak};
 pub use fusion_stream::{

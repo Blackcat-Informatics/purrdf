@@ -34,45 +34,10 @@
 //! * `--loss-ledger`/`--jsonld-options` are refused rather than silently ignored, since
 //!   clap makes both global and this subcommand produces neither a ledger nor RDF.
 
-use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
 mod support;
-
-/// A `Command` for the built `purrdf` binary.
-fn purrdf() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_purrdf"))
-}
-
-/// Run `purrdf` with `args`, returning the captured [`Output`].
-fn run(args: &[&str]) -> Output {
-    purrdf()
-        .args(args)
-        .output()
-        .expect("spawn the built purrdf binary")
-}
-
-/// stdout of an [`Output`] as a `String`.
-fn stdout(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
-/// stderr of an [`Output`] as a `String`.
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
-}
-
-/// The exit code of an [`Output`].
-fn code(out: &Output) -> i32 {
-    out.status.code().expect("the process exited normally")
-}
-
-/// Write `contents` to `dir/name`, returning the path.
-fn write_file(dir: &Path, name: &str, contents: &str) -> String {
-    let p = dir.join(name);
-    std::fs::write(&p, contents).expect("write fixture file");
-    p.to_str().expect("temp path is valid UTF-8").to_owned()
-}
+use support::{code, purrdf, run, stderr, stdout, write_file};
 
 /// The seventeen-triple equivalence-over-untyped-restrictions ontology, verbatim — see
 /// `crates/validate/tests/dl_consistency_search_budget.rs`.

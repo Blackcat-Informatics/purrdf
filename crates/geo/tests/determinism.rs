@@ -22,7 +22,7 @@
 //! reasoning in between.
 //!
 //! The digest is computed inside
-//! [`without_host_clock_or_entropy`], so on wasm32 a digest that reached a host
+//! [`without_host_clock_or_entropy`](purrdf_testkit::harness::without_host_clock_or_entropy), so on wasm32 a digest that reached a host
 //! clock or entropy source fails by that source's name rather than agreeing by
 //! accident.
 //!
@@ -37,7 +37,7 @@
 //! interesting part of the problem.
 
 use purrdf_geo::determinism::{corpus_len, digest};
-use purrdf_testkit::harness::{print_line, without_host_clock_or_entropy};
+use purrdf_testkit::harness::report_digest;
 
 /// The pinned cross-target digest.
 ///
@@ -46,21 +46,9 @@ use purrdf_testkit::harness::{print_line, without_host_clock_or_entropy};
 /// the native assertion and the wasm assertion cannot drift apart.
 const GOLDEN_DIGEST: u64 = 0x9667_c2ee_2cd3_ad4b;
 
-/// The digest, computed with the host's clocks and entropy withdrawn, and
-/// reported on a `determinism-digest` line under `case`'s name for
-/// `scripts/check-geo-determinism.sh` to compare across targets.
-fn reported_digest(case: &str) -> u64 {
-    let value = without_host_clock_or_entropy(digest);
-    print_line(&format!(
-        "determinism-digest case={case} digest={value:016x} corpus_len={}",
-        corpus_len()
-    ));
-    value
-}
-
 /// The digest equals the pinned golden, on whichever target this runs.
 fn the_digest_is_the_pinned_golden() {
-    let value = reported_digest("the_digest_is_the_pinned_golden");
+    let value = report_digest("the_digest_is_the_pinned_golden", corpus_len(), digest);
     assert_eq!(
         value, GOLDEN_DIGEST,
         "the determinism digest moved: computed {value:016x}, golden {GOLDEN_DIGEST:016x}. \
@@ -73,7 +61,11 @@ fn the_digest_is_the_pinned_golden() {
 /// The digest is a pure function of the crate's source: no clock, no address, no
 /// allocation order, no map iteration.
 fn the_digest_does_not_move_between_runs() {
-    let first = reported_digest("the_digest_does_not_move_between_runs");
+    let first = report_digest(
+        "the_digest_does_not_move_between_runs",
+        corpus_len(),
+        digest,
+    );
     for run in 0..64 {
         assert_eq!(digest(), first, "run {run} diverged from the first");
     }

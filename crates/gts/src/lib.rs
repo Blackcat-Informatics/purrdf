@@ -75,6 +75,8 @@ pub mod event_stream;
 pub use visual_hashing as emojihash;
 pub mod examples;
 pub mod files;
+#[doc(hidden)]
+pub mod fixture;
 pub mod from_tar;
 pub mod mmr;
 pub mod model;

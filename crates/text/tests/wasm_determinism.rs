@@ -107,22 +107,12 @@ fn corpus_index() -> TextIndex {
     .expect("the fixture index must build")
 }
 
-/// The analyzed needle for `text`, exactly as a query would supply it.
-fn needle(text: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    Analyzer::new().analyze(text, &mut tokens);
-    tokens
-        .into_iter()
-        .map(|token| token.text.into_owned())
-        .collect()
-}
-
 /// The ranking, as `(document local name, score lexical)` in emission order.
 fn ranked() -> Vec<(String, String)> {
     let index = corpus_index();
     select(
         &index,
-        &needle("quick brown"),
+        &Analyzer::new().terms("quick brown"),
         &PartitionFilter::unconstrained(),
         None,
         None,

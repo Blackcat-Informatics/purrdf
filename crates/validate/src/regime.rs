@@ -173,15 +173,7 @@ const INPUT_MEDIA_TYPE: &str = "application/n-quads";
 /// The CLI spelling of `regime` — the left inverse of [`parse_regime`].
 #[must_use]
 pub const fn regime_name(regime: Regime) -> &'static str {
-    match regime {
-        Regime::Simple => "simple",
-        Regime::Rdf => "rdf",
-        Regime::Rdfs => "rdfs",
-        Regime::OwlRl => "owl-rl",
-        Regime::OwlDirect => "owl-direct",
-        Regime::Rif => "rif",
-        Regime::D => "d",
-    }
+    regime.token()
 }
 
 /// Parse a regime from its CLI spelling (`simple`, `rdf`, `rdfs`, `owl-rl`,

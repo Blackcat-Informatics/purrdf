@@ -10,12 +10,9 @@
 //! verdict is SHACL validation's (checked here to be the compiled schema's too).
 
 use std::error::Error;
-use std::fmt::Write as _;
 
-use purrdf_lex::json::Value;
-use purrdf_shapes::engine::{parse_shapes, validate_dataset_with_shapes_graph};
-use purrdf_shapes::json_schema::{CompiledSchema, Namespaces, compile};
-use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
+use crate::holder::{Case, Fixture};
+use crate::metaschemas::metaschemas;
 
 const PREFIXES: &str = r"
     @prefix sh:  <http://www.w3.org/ns/shacl#> .
@@ -60,85 +57,31 @@ pub(crate) const VARIANTS: [(&str, &str, &str); 9] = [
     ("not-integer", "ex:not", "5"),
 ];
 
-/// The namespace table every oracle compiles and projects with.
-pub(crate) fn namespaces() -> Result<Namespaces, Box<dyn Error>> {
-    Ok(Namespaces::new(
-        "ex",
-        &[("ex".to_owned(), "https://example.org/".to_owned())],
-    )?)
-}
+/// The fixture: its shapes graph, base values and variants.
+pub(crate) const FIXTURE: Fixture = Fixture {
+    prefixes: PREFIXES,
+    shapes: SHAPES,
+    base: &BASE,
+    variants: &VARIANTS,
+};
 
-/// The shapes graph compiled to JSON Schema.
-pub(crate) fn compiled() -> Result<CompiledSchema, Box<dyn Error>> {
-    let shapes = parse_shapes(&format!("{PREFIXES}{SHAPES}"), None)?;
-    Ok(compile(&shapes, &namespaces()?)?)
-}
-
-/// One data variant: its label, projected `Holder` node, and SHACL verdict.
-pub(crate) struct Case {
-    pub(crate) label: &'static str,
-    pub(crate) value: Value,
-    pub(crate) conforms: bool,
-}
-
-/// Every variant, projected and validated, its verdict checked to be the
-/// compiled JSON Schema's.
+/// Every variant, projected and validated, each checked to be judged by the
+/// compiled schema exactly as SHACL judged it.
 pub(crate) fn cases() -> Result<Vec<Case>, Box<dyn Error>> {
-    let shapes = parse_shapes(&format!("{PREFIXES}{SHAPES}"), None)?;
-    let namespaces = namespaces()?;
-    let schema = purrdf_lex::json::read(&compiled()?.schema_json)?;
+    let schema = purrdf_lex::json::read(&FIXTURE.compiled()?.schema_json)?;
     let location = "mem:///value-shapes.schema.json";
     let mut registry = purrdf_jsonschema::Registry::with_metaschemas(metaschemas());
     registry.add_resource(location, schema)?;
     let holder = registry.compile(&format!("{location}#/$defs/Holder"))?;
-    VARIANTS
-        .iter()
-        .map(|&(label, property, replacement)| {
-            let mut data = format!("{PREFIXES}\nex:h a ex:Holder");
-            for (key, value) in BASE {
-                let value = if key == property { replacement } else { value };
-                write!(data, " ; {key} {value}")?;
-            }
-            data.push_str(" .\n");
-            let dataset =
-                parse_turtle_to_dataset(&data, None).map_err(|errors| format!("{errors:?}"))?;
-            let report = validate_dataset_with_shapes_graph(&dataset, &shapes, None)?;
-            let projected = purrdf_shapes::instance::project_graph(&dataset, &namespaces);
-            let value = projected["@graph"]
-                .as_array()
-                .and_then(|nodes| {
-                    nodes
-                        .iter()
-                        .find(|node| node["@id"] == "https://example.org/h")
-                })
-                .cloned()
-                .ok_or("the Holder node is projected")?;
-            if holder.is_valid(&value)? != report.conforms {
-                return Err(format!(
-                    "value-shape variant {label:?}: the compiled schema disagrees with SHACL"
-                )
-                .into());
-            }
-            Ok(Case {
-                label,
-                value,
-                conforms: report.conforms,
-            })
-        })
-        .collect()
-}
-
-fn metaschemas() -> &'static purrdf_jsonschema::Metaschemas {
-    static SET: std::sync::OnceLock<purrdf_jsonschema::Metaschemas> = std::sync::OnceLock::new();
-    SET.get_or_init(|| {
-        purrdf_jsonschema::Metaschemas::new(
-            purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
-                .iter()
-                .map(|&(uri, text)| {
-                    let document = purrdf_lex::json::read(text).expect("meta-schema JSON");
-                    (uri, document)
-                }),
-        )
-        .expect("the draft 2020-12 meta-schemas")
-    })
+    let cases = FIXTURE.cases()?;
+    for case in &cases {
+        if holder.is_valid(&case.value)? != case.conforms {
+            return Err(format!(
+                "value-shape variant {:?}: the compiled schema disagrees with SHACL",
+                case.label
+            )
+            .into());
+        }
+    }
+    Ok(cases)
 }

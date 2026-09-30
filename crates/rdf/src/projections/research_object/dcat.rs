@@ -4,8 +4,8 @@
 use super::ResearchObjectRoles;
 use super::jsonld::{JsonLdProfileConfig, JsonLdProfileVocabulary};
 use super::jsonld::{
-    ProfileReader, id_object, insert_values, item_pointer, keyword_object, text_object,
-    typed_object, validate_data_path,
+    LossRecorder as _, ProfileReader, id_object, insert_values, item_pointer, keyword_object,
+    text_object, typed_object, validate_data_path,
 };
 use std::collections::{BTreeMap, BTreeSet};
 

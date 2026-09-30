@@ -42,7 +42,7 @@ use wasm_bindgen::prelude::*;
 use crate::async_query::{AsyncCounters, AsyncOperationKind, add_ms, now_ms};
 use crate::protocol::not_acceptable_message;
 use crate::query::{
-    GovernorArgs, NegotiatedValue, aggregate_env_message, build_aggregates, negotiable_result_kind,
+    GovernorArgs, NegotiatedValue, aggregate_env_message, negotiable_result_kind,
     serialize_configured_graph, serialize_query_result, sparql_request,
 };
 use crate::shacl::{
@@ -521,7 +521,11 @@ fn ungoverned_query(
 fn governed_env(
     aggregate_namespace: Option<String>,
 ) -> Result<purrdf_sparql_eval::ExtensionEnv, JobError> {
-    aggregate_env_message(build_aggregates(aggregate_namespace).as_ref())
+    // The ENTIRE wasm surface for the first-party statistical aggregate set: one
+    // namespace string crosses the boundary, with no callback and no per-aggregate
+    // marshaling; the general custom-aggregate seam is Rust-host-only.
+    let aggregates = purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
+    aggregate_env_message(aggregates.as_ref())
         .map_err(|message| JobError::message(EXTENSION_CODE, message))
 }
 

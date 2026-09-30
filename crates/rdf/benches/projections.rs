@@ -11,18 +11,17 @@ use std::sync::Arc;
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_rdf::{
-    CsvwAction, CsvwConfig, CsvwContext, CsvwDatatype, CsvwInput, CsvwMode, CsvwTermsCardinality,
+    CsvwAction, CsvwConfig, CsvwContext, CsvwInput, CsvwMode, CsvwTermsCardinality,
     CsvwTermsColumn, CsvwTermsConfig, CsvwTermsGraphSelection, CsvwTermsIdentityColumn,
     CsvwTermsLimits, CsvwTermsSelector, CsvwTermsTable, CsvwTermsValueMode, CsvwVocabulary,
     DcatRdfConfig, DcatRdfMappingConfig, DcatRdfSource, LiftProfile, LpgConfig, LpgExecutionLimits,
     LpgIriSelection, LpgNamedGraphSelection, LpgPackageProjection, LpgProgress, LpgScope,
-    LpgStreamProjection, NativeRdfFormat, OboGraphsConfig, OboGraphsVocabulary, OboMetadataRoles,
-    OboOwlRoles, OboRdfRoles, ProjectionArtifactSink, ProjectionConfig, ProjectionError,
-    ProjectionLimits, ProjectionProfile, ProjectionTerm, RdfDataset, RdfDatasetBuilder, RdfLiteral,
-    ResearchObjectConfig, RoCrateAssets, SkosClassRoles, SkosConfig, SkosDocumentationRoles,
-    SkosGraphSelection, SkosLabelRoles, SkosRelationRoles, SkosSourceRoles, SkosTargetRoles,
-    lift_archive, parse_dataset, project_archive, project_archive_with_assets, project_csvw_exact,
-    project_csvw_terms, project_lpg, project_lpg_csv, project_lpg_csv_to_sink, project_lpg_cypher,
+    LpgStreamProjection, NativeRdfFormat, ProjectionArtifactSink, ProjectionConfig,
+    ProjectionError, ProjectionLimits, ProjectionProfile, ProjectionTerm, RdfDataset,
+    RdfDatasetBuilder, RdfLiteral, ResearchObjectConfig, RoCrateAssets, SkosClassRoles, SkosConfig,
+    SkosGraphSelection, SkosSourceRoles, SkosTargetRoles, lift_archive, parse_dataset,
+    project_archive, project_archive_with_assets, project_csvw_exact, project_csvw_terms,
+    project_lpg, project_lpg_csv, project_lpg_csv_to_sink, project_lpg_cypher,
     project_lpg_cypher_to_sink, project_lpg_graphml, project_lpg_graphml_to_sink,
     project_neo4j_csv, project_neo4j_csv_to_sink, project_obo_graphs, project_okf_terms,
     project_research_object, project_skos, read_csvw, read_csvw_exact, read_lpg_csv,
@@ -30,6 +29,13 @@ use purrdf_rdf::{
     write_lpg_graphml, write_neo4j_csv,
 };
 use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
+
+#[path = "../tests/support/projection_configs.rs"]
+mod projection_configs;
+use projection_configs::{
+    csvw_config, csvw_datatype, limits, obo_config, skos_documentation_roles, skos_label_roles,
+    skos_relation_roles,
+};
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -138,7 +144,6 @@ const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const RDFS: &str = "http://www.w3.org/2000/01/rdf-schema#";
 const OWL: &str = "http://www.w3.org/2002/07/owl#";
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
-const OBO: &str = "http://www.geneontology.org/formats/oboInOwl#";
 const SKOS_SOURCE: &str = "https://example.org/bench/source-skos#";
 const SKOS_TARGET: &str = "http://www.w3.org/2004/02/skos/core#";
 const ROWS: usize = 200;
@@ -182,10 +187,6 @@ const RESEARCH_CONFIGS: [(ProjectionProfile, LiftProfile, &[u8]); 5] = [
         ),
     ),
 ];
-
-fn limits() -> ProjectionLimits {
-    ProjectionLimits::new(64, 16_000_000, 64_000_000, 72_000_000, 16).expect("limits")
-}
 
 fn lpg_limits() -> ProjectionLimits {
     ProjectionLimits::new(64, 128_000_000, 512_000_000, 576_000_000, 16).expect("LPG limits")
@@ -363,19 +364,6 @@ fn scoped_lpg_config() -> LpgConfig {
     ))
 }
 
-fn csvw_config() -> CsvwConfig {
-    CsvwConfig::new(
-        format!("{EX}csvw-metadata"),
-        CsvwContext::new(format!("{EX}csvw-context"), BTreeMap::default()).expect("context"),
-        format!("{EX}csvw-group"),
-        CsvwVocabulary::new("http://www.w3.org/ns/csvw#", RDF, RDFS, XSD).expect("CSVW vocabulary"),
-        CsvwMode::Standard,
-        limits(),
-        100_000,
-    )
-    .expect("CSVW config")
-}
-
 /// Rows of the URI-template read: every row expands three templates.
 const TEMPLATE_ROWS: usize = 2_000;
 
@@ -427,23 +415,6 @@ fn csvw_template_package() -> (CsvwConfig, CsvwInput) {
     )
     .expect("CSVW input");
     (config, input)
-}
-
-fn csvw_datatype(base: impl Into<String>) -> CsvwDatatype {
-    CsvwDatatype {
-        id: None,
-        base: base.into(),
-        format: None,
-        length: None,
-        min_length: None,
-        max_length: None,
-        minimum: None,
-        maximum: None,
-        min_inclusive: None,
-        max_inclusive: None,
-        min_exclusive: None,
-        max_exclusive: None,
-    }
 }
 
 fn csvw_terms_config(graph_selection: CsvwTermsGraphSelection) -> CsvwTermsConfig {
@@ -498,7 +469,7 @@ fn csvw_terms_config(graph_selection: CsvwTermsGraphSelection) -> CsvwTermsConfi
     )
     .expect("terms table");
     CsvwTermsConfig::new(
-        csvw_config(),
+        csvw_config(EX, 100_000),
         "csvw-metadata.json",
         graph_selection,
         vec![table],
@@ -514,61 +485,6 @@ fn scoped_csvw_terms_config() -> CsvwTermsConfig {
     )
 }
 
-fn obo_config() -> OboGraphsConfig {
-    let rdf = OboRdfRoles::new(
-        format!("{RDF}type"),
-        format!("{RDF}reifies"),
-        format!("{RDF}first"),
-        format!("{RDF}rest"),
-        format!("{RDF}nil"),
-        format!("{XSD}string"),
-        format!("{XSD}boolean"),
-    )
-    .expect("RDF roles");
-    let owl = OboOwlRoles::new(
-        format!("{RDFS}label"),
-        format!("{RDFS}comment"),
-        format!("{RDFS}subClassOf"),
-        format!("{RDFS}subPropertyOf"),
-        format!("{RDFS}domain"),
-        format!("{RDFS}range"),
-        format!("{OWL}Ontology"),
-        format!("{OWL}Class"),
-        format!("{OWL}NamedIndividual"),
-        format!("{OWL}ObjectProperty"),
-        format!("{OWL}AnnotationProperty"),
-        format!("{OWL}DatatypeProperty"),
-        format!("{OWL}equivalentClass"),
-        format!("{OWL}intersectionOf"),
-        format!("{OWL}Restriction"),
-        format!("{OWL}onProperty"),
-        format!("{OWL}someValuesFrom"),
-        format!("{OWL}allValuesFrom"),
-        format!("{OWL}propertyChainAxiom"),
-        format!("{OWL}deprecated"),
-    )
-    .expect("OWL roles");
-    let metadata = OboMetadataRoles::new(
-        format!("{EX}definition"),
-        format!("{OBO}hasExactSynonym"),
-        format!("{OBO}hasBroadSynonym"),
-        format!("{OBO}hasNarrowSynonym"),
-        format!("{OBO}hasRelatedSynonym"),
-        format!("{OBO}hasSynonymType"),
-        format!("{OBO}hasDbXref"),
-        format!("{OBO}inSubset"),
-        format!("{OWL}versionInfo"),
-    )
-    .expect("OBO metadata roles");
-    OboGraphsConfig::new(
-        format!("{EX}ontology"),
-        OboGraphsVocabulary::new(rdf, owl, metadata).expect("OBO vocabulary"),
-        limits(),
-        20_000,
-    )
-    .expect("OBO config")
-}
-
 fn skos_class_roles(prefix: &str) -> SkosClassRoles {
     SkosClassRoles::new(
         format!("{RDF}type"),
@@ -576,46 +492,6 @@ fn skos_class_roles(prefix: &str) -> SkosClassRoles {
         format!("{prefix}ConceptScheme"),
     )
     .expect("SKOS classes")
-}
-
-fn skos_label_roles(prefix: &str) -> SkosLabelRoles {
-    SkosLabelRoles::new(
-        format!("{prefix}prefLabel"),
-        format!("{prefix}altLabel"),
-        format!("{prefix}hiddenLabel"),
-        format!("{prefix}notation"),
-    )
-    .expect("SKOS labels")
-}
-
-fn skos_documentation_roles(prefix: &str) -> SkosDocumentationRoles {
-    SkosDocumentationRoles::new(
-        format!("{prefix}note"),
-        format!("{prefix}changeNote"),
-        format!("{prefix}definition"),
-        format!("{prefix}editorialNote"),
-        format!("{prefix}example"),
-        format!("{prefix}historyNote"),
-        format!("{prefix}scopeNote"),
-    )
-    .expect("SKOS documentation")
-}
-
-fn skos_relation_roles(prefix: &str) -> SkosRelationRoles {
-    SkosRelationRoles::new(
-        format!("{prefix}broader"),
-        format!("{prefix}narrower"),
-        format!("{prefix}related"),
-        format!("{prefix}closeMatch"),
-        format!("{prefix}exactMatch"),
-        format!("{prefix}broadMatch"),
-        format!("{prefix}narrowMatch"),
-        format!("{prefix}relatedMatch"),
-        format!("{prefix}inScheme"),
-        format!("{prefix}hasTopConcept"),
-        format!("{prefix}topConceptOf"),
-    )
-    .expect("SKOS relations")
 }
 
 fn skos_config() -> SkosConfig {
@@ -680,10 +556,10 @@ fn benchmark(c: &mut Bench) {
         parse_dataset(OKF_TERMS_SOURCE, "application/trig", None).expect("OKF terms dataset");
     let lpg_config = lpg_config();
     let scoped_lpg_config = scoped_lpg_config();
-    let csvw_config = csvw_config();
+    let csvw_config = csvw_config(EX, 100_000);
     let csvw_terms_all_config = csvw_terms_config(CsvwTermsGraphSelection::All);
     let csvw_terms_scoped_config = scoped_csvw_terms_config();
-    let obo_config = obo_config();
+    let obo_config = obo_config(EX);
     let skos_config = skos_config();
     let okf_terms_config = ProjectionConfig::from_json(OKF_TERMS_CONFIG).expect("OKF terms config");
     let ProjectionConfig::OkfTerms(okf_terms_mapping) = &okf_terms_config else {

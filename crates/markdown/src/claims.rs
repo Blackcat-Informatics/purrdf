@@ -84,7 +84,7 @@ pub fn render(document: &Document<'_>) -> Vec<Claim> {
                 &contract,
                 span.start,
                 span.end,
-                &ContentDigest::of(&source.as_bytes()[span.start as usize..span.end as usize]),
+                &ContentDigest::of(&source.as_bytes()[span.range()]),
             )
         })
         .collect();
@@ -239,7 +239,7 @@ fn citation_edges<'d>(
     let mut out: BTreeMap<usize, Vec<CitationEdge<'d>>> = BTreeMap::new();
     for row in document.citations() {
         let span = row.span();
-        let line = &source[span.start as usize..span.end as usize];
+        let line = &source[span.range()];
         // Minted before the node is addressed, because the node is
         // addressed *by* them: what a reifier reifies is part of what it
         // is, so one row read under two canon bases — or under two
@@ -332,7 +332,7 @@ fn section_claim(
     };
     let span = s.span();
     let heading_span = s.heading_span();
-    let heading_line = &source[heading_span.start as usize..heading_span.end as usize];
+    let heading_line = &source[heading_span.range()];
     let mut lines = vec![
         triple(me, crate::RDF_TYPE, &iri(class)),
         triple(me, &v.in_document, &iri(document_id)),

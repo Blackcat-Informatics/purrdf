@@ -131,6 +131,8 @@
 //! [`QueryGovernors::METERED`]: purrdf_sparql_eval::QueryGovernors::METERED
 //! [`QueryExplanation::ledger`]: purrdf_sparql_eval::QueryExplanation::ledger
 
+use purrdf::viz::stable_hash_hex;
+use purrdf_gts::files::media_type_for_path;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -966,21 +968,10 @@ fn registered_custom_aggregate() -> AggregateRegistry {
 // Running a case
 // ---------------------------------------------------------------------------
 
-/// The media type a case's data extension selects. Driven off the extension rather than
-/// recorded in the manifest, so a fixture cannot be listed under a syntax it is not
-/// written in.
-fn media_type_for(path: &Path) -> &'static str {
-    match path.extension().and_then(|extension| extension.to_str()) {
-        Some("ttl") => "text/turtle",
-        Some("trig") => "application/trig",
-        other => panic!("unhandled corpus data extension {other:?} for {path:?}"),
-    }
-}
-
 fn load_dataset(case: &Case) -> Arc<RdfDataset> {
     let path = corpus_root().join(&case.data);
     let bytes = std::fs::read(&path).unwrap_or_else(|error| panic!("read {path:?}: {error}"));
-    purrdf::parse_dataset(&bytes, media_type_for(&path), None)
+    purrdf::parse_dataset(&bytes, media_type_for_path(&path), None)
         .unwrap_or_else(|error| panic!("{} data must parse: {error}", case.name))
 }
 
@@ -2955,11 +2946,6 @@ fn fuel_sweep_points(total: u64) -> Vec<u64> {
     points.into_iter().collect()
 }
 
-/// FNV-1a, 64-bit ([`purrdf_hash::fnv`]): a fixed digest for a sweep point's rows.
-fn fnv1a(text: &str) -> String {
-    format!("{:016x}", purrdf_hash::fnv::fnv1a64(text.as_bytes()))
-}
-
 /// The per-node ledger of `case`'s metered explanation, wired to the same seam
 /// [`observe`] wires: every algebra node in pre-order, with the fuel it charged at each
 /// charge point, the rows it committed and the largest bag it held.
@@ -3066,7 +3052,7 @@ fn render_sweep_point(observation: &Observation, fuel: u64) -> String {
         out,
         "{} rows={rows} quads={quads} digest={} | {} | posts={} invocations={} pulls={}",
         observation.outcome,
-        fnv1a(answer_rows(&answer)),
+        stable_hash_hex(answer_rows(&answer)),
         observation
             .spend
             .trim_end()

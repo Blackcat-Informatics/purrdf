@@ -22,7 +22,7 @@ use purrdf_ed25519::{Signature, VerifyingKey};
 use purrdf_lex::json;
 use purrdf_testkit::paths::workspace_root;
 
-fn unhex(text: &str) -> Vec<u8> {
+fn hex_field(text: &str) -> Vec<u8> {
     purrdf_hash::hex::decode(text).expect("hex field")
 }
 
@@ -54,11 +54,11 @@ fn every_wycheproof_ed25519_case() {
     let mut failures = Vec::new();
 
     for group in groups {
-        let key = unhex(group["publicKey"]["pk"].as_str().expect("pk"));
+        let key = hex_field(group["publicKey"]["pk"].as_str().expect("pk"));
         for case in group["tests"].as_array().expect("tests") {
             let id = case["tcId"].as_number().unwrap().as_u64().unwrap();
-            let message = unhex(case["msg"].as_str().expect("msg"));
-            let signature = unhex(case["sig"].as_str().expect("sig"));
+            let message = hex_field(case["msg"].as_str().expect("msg"));
+            let signature = hex_field(case["sig"].as_str().expect("sig"));
             let got = accepts(&key, &message, &signature);
             let result = case["result"].as_str().expect("result");
             for flag in case["flags"].as_array().expect("flags") {

@@ -25,8 +25,7 @@ use super::canon::PyCanonicalizationAlgorithm;
 use super::io::{PyRdfFormat, dataset_from_quads_verbatim, parse_quads_and_prefixes, read_input};
 use super::quad_store::PyQuadStore;
 use super::query::{
-    EngineConfig, build_aggregates, build_engine, build_relations, collect_relations,
-    engine_parser_options,
+    EngineConfig, build_engine, build_relations, collect_relations, engine_parser_options,
 };
 use super::term::{PyQuad, extract_graph_name, rdf_quad_to_values, rdf_quad_to_values_scoped};
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
@@ -316,7 +315,8 @@ impl PyStore {
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
             let registry = build_relations(specs, &dataset)?;
-            let aggregates = build_aggregates(aggregate_namespace);
+            let aggregates =
+                purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
             let engine = build_engine(config);
             super::prepared::prepare(
                 store_handle,

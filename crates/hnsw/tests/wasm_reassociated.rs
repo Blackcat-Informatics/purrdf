@@ -141,11 +141,6 @@ fn foreign_wasm_codes() -> &'static [(u32, &'static str)] {
     return &[(6, "wasm-simd128"), (7, "wasm-scalar")];
 }
 
-/// The reassociated arithmetic this thread resolves, held independently of any index.
-fn resolved() -> Resolved<Reassociated> {
-    Reassociated::resolve().expect("the default float environment is the IEEE one")
-}
-
 /// The recorded image code of `image`.
 fn recorded_code(image: &[u8]) -> u32 {
     u32::from_le_bytes(image[CODE_AT..CODE_AT + 4].try_into().expect("four bytes"))
@@ -227,7 +222,8 @@ fn assert_searches_match_oracle(
 }
 
 fn the_image_records_the_path_and_shape_this_build_was_made_for() {
-    let arithmetic = resolved();
+    let arithmetic =
+        Reassociated::resolve().expect("the default float environment is the IEEE one");
     assert!(
         expected_paths().contains(&arithmetic.path()),
         "this build resolves {}, not a path it was made for",
@@ -277,7 +273,8 @@ fn the_image_records_the_path_and_shape_this_build_was_made_for() {
 }
 
 fn the_image_decodes_verifies_and_searches_as_the_kernel_ranks() {
-    let arithmetic = resolved();
+    let arithmetic =
+        Reassociated::resolve().expect("the default float environment is the IEEE one");
     for (metric, kernel) in metrics() {
         let built = purrdf_hnsw::build::<Reassociated>(matrix(), &metric, params())
             .expect("the fixture builds");
@@ -313,7 +310,14 @@ fn a_payload_one_distance_bit_away_does_not_verify() {
     assert_ne!(tampered.canonical_image(), index.canonical_image());
     // The perturbed payload records this build's path and shape, so its rebuild compiles to
     // the code that built the original: a payload that is not its rebuild is `false`.
-    assert_eq!(recorded_code(&image), code_of(resolved().path()));
+    assert_eq!(
+        recorded_code(&image),
+        code_of(
+            Reassociated::resolve()
+                .expect("the default float environment is the IEEE one")
+                .path()
+        )
+    );
     assert_eq!(recorded_shape(&image), BuildShape::here());
     let verdict = tampered.verify_rebuild();
     assert!(
@@ -329,7 +333,11 @@ fn a_payload_one_distance_bit_away_does_not_verify() {
 }
 
 fn an_image_recorded_on_another_wasm_path_is_refused_by_name() {
-    let here = code_of(resolved().path());
+    let here = code_of(
+        Reassociated::resolve()
+            .expect("the default float environment is the IEEE one")
+            .path(),
+    );
     let index =
         purrdf_hnsw::build::<Reassociated>(matrix(), &DistanceMetric::SquaredEuclidean, params())
             .expect("the fixture builds");

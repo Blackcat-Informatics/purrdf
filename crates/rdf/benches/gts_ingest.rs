@@ -29,6 +29,7 @@
 //! and the ingest report's scratch peak. They are not OS resident set size, which
 //! the harness cannot measure and this bench does not pretend to.
 
+use purrdf_core::view_fixture::{Observation, observe};
 use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -43,105 +44,9 @@ use purrdf_rdf::{
 };
 use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
-/// Every field name an observation line must carry. The presence guard reads this
-/// list, so a renamed field fails the bench instead of silently narrowing the
-/// record a reader is relying on.
-const OBSERVATION_FIELDS: [&str; 10] = [
-    "shape=",
-    "variant=",
-    "profile=",
-    "elapsed_ns=",
-    "peak_accounted_bytes=",
-    "retained_bytes=",
-    "incremental_bytes=",
-    "copies=",
-    "freezes=",
-    "materializations=",
-];
-
 /// The typed-handle payload a stage pins. The kernel never reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Stage(usize);
-
-/// The build profile this run was taken under.
-///
-/// Derived, never asserted as a literal: a debug-profile figure is not comparable
-/// with a release one, and a hardcoded `release` would quietly claim it was. The
-/// line is a record, so it has to say which of the two it is.
-fn build_profile() -> &'static str {
-    if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    }
-}
-
-/// The four accounting families one measured variant reports.
-#[derive(Debug, Clone, Copy, Default)]
-struct Observation {
-    peak_accounted_bytes: usize,
-    retained_bytes: usize,
-    incremental_bytes: usize,
-    copies: usize,
-    freezes: usize,
-    materializations: usize,
-}
-
-impl Observation {
-    /// The carrier's own accounting report, the ingestion's scratch peak, and any
-    /// bytes a materialization froze outside the ledger.
-    ///
-    /// `SnapshotBuilder::ingest_totals` reports `scratch_bytes` as a high-water
-    /// figure already, so the sum is a peak of accounted bytes rather than a
-    /// running total. `frozen_bytes` is what the `flat` variant's `materialize()`
-    /// copied into a dataset the retention ledger never sees: charging it here is
-    /// the only way the flat path's memory shows up at all, since `retained_bytes`
-    /// is by construction the LEDGER's deduplicated figure and stays comparable
-    /// across the three variants.
-    fn new(report: &ViewAccountingReport, scratch_bytes: usize, frozen_bytes: usize) -> Self {
-        Self {
-            peak_accounted_bytes: report
-                .total_accounted_bytes()
-                .saturating_add(scratch_bytes)
-                .saturating_add(frozen_bytes),
-            retained_bytes: report
-                .retained
-                .retained_payload_bytes
-                .saturating_add(report.retained.memo_bytes),
-            incremental_bytes: report.incremental_auxiliary_bytes,
-            copies: report.incremental_work.copied_rows,
-            freezes: report.incremental_work.freezes,
-            materializations: report.incremental_work.materializations,
-        }
-    }
-}
-
-/// Print one observation line, self-asserting that every named field survived the
-/// formatting. This is the acceptance mechanism: it runs in the harness's `--test`
-/// smoke mode too, so a shape that stopped reporting fails the bench.
-fn observe(shape: &str, variant: &str, elapsed: Duration, observed: Observation) {
-    let line = format!(
-        "observation shape={shape} variant={variant} profile={profile} \
-         elapsed_ns={elapsed} peak_accounted_bytes={peak} retained_bytes={retained} \
-         incremental_bytes={incremental} copies={copies} freezes={freezes} \
-         materializations={materializations}",
-        profile = build_profile(),
-        elapsed = elapsed.as_nanos(),
-        peak = observed.peak_accounted_bytes,
-        retained = observed.retained_bytes,
-        incremental = observed.incremental_bytes,
-        copies = observed.copies,
-        freezes = observed.freezes,
-        materializations = observed.materializations,
-    );
-    for field in OBSERVATION_FIELDS {
-        assert!(
-            line.contains(field),
-            "the observation line lost {field:?}: {line}"
-        );
-    }
-    println!("{line}");
-}
 
 // ---------------------------------------------------------------------------
 // The shapes and the three ingest surfaces
@@ -246,6 +151,23 @@ fn delta_carrier(shape: &IngestShape, limits: ViewLimits) -> PipelineViewBundle<
     carrier
 }
 
+/// The carrier's own accounting report, the ingestion's scratch peak, and any bytes
+/// a materialization froze outside the ledger.
+///
+/// `SnapshotBuilder::ingest_totals` reports `scratch_bytes` as a high-water figure
+/// already, so the sum is a peak of accounted bytes rather than a running total.
+/// `frozen_bytes` is what the `flat` variant's `materialize()` copied into a dataset
+/// the retention ledger never sees: charging it here is the only way the flat
+/// path's memory shows up at all, since `retained_bytes` is by construction the
+/// LEDGER's deduplicated figure and stays comparable across the three variants.
+fn observation(
+    report: &ViewAccountingReport,
+    scratch_bytes: usize,
+    frozen_bytes: usize,
+) -> Observation {
+    Observation::from_report(report, scratch_bytes.saturating_add(frozen_bytes))
+}
+
 /// `materialize()` then ingest the frozen result through the flat surface. The
 /// freeze is deliberately inside the measurement: it is the price of this choice.
 fn run_flat(shape: &IngestShape, limits: ViewLimits) -> (Observation, Vec<u8>) {
@@ -256,7 +178,7 @@ fn run_flat(shape: &IngestShape, limits: ViewLimits) -> (Observation, Vec<u8>) {
         .add_dataset_scoped(&frozen, Some(SELECTED), Some("base"))
         .expect("the materialized carrier ingests flat");
     let bytes = emitted(&builder);
-    let observed = Observation::new(
+    let observed = observation(
         &carrier.accounting(),
         builder.ingest_totals().scratch_bytes,
         frozen.rdf_payload_bytes(),
@@ -273,7 +195,7 @@ fn run_view(shape: &IngestShape, limits: ViewLimits) -> (Observation, Vec<u8>) {
         .expect("the composed carrier ingests");
     let bytes = emitted(&builder);
     // Nothing was frozen to publish this, so no out-of-ledger copy is charged.
-    let observed = Observation::new(
+    let observed = observation(
         &carrier.accounting(),
         builder.ingest_totals().scratch_bytes,
         0,
@@ -290,7 +212,7 @@ fn run_delta(shape: &IngestShape, limits: ViewLimits) -> (Observation, Vec<u8>) 
         .expect("the delta carrier ingests");
     let bytes = emitted(&builder);
     // Nothing was frozen to publish this, so no out-of-ledger copy is charged.
-    let observed = Observation::new(
+    let observed = observation(
         &carrier.accounting(),
         builder.ingest_totals().scratch_bytes,
         0,

@@ -28,6 +28,7 @@ pub(crate) fn isomorphic_groups(workspace: &Workspace) -> Vec<Group> {
     for (index, unit) in workspace.units.iter().enumerate() {
         if let Some(print) = &unit.print
             && print.tokens >= MIN_TOKENS
+            && print.shim.is_none()
         {
             by_print
                 .entry(print.structural.as_str())
@@ -357,7 +358,7 @@ fn vocabulary_matches(job: &Job, workspace: &Workspace, variants: &BTreeSet<Stri
     }
     let mut found = Vec::new();
     for unit in &workspace.units {
-        if under(&unit.symbol, &modules) {
+        if !unit.shipping || under(&unit.symbol, &modules) {
             continue;
         }
         for (literal, line) in &unit.strings {
@@ -416,7 +417,7 @@ fn home_literal_matches(
     }
     let mut found = Vec::new();
     for unit in &workspace.units {
-        if is_home(&unit.symbol) {
+        if !unit.shipping || is_home(&unit.symbol) {
             continue;
         }
         for (literal, line) in &unit.strings {
@@ -505,7 +506,8 @@ fn unit_json(unit: &Unit) -> Json {
             .with("symbol", &unit.symbol)
             .with("package", &unit.package)
             .with("file", &unit.file)
-            .with("line", unit.line),
+            .with("line", unit.line)
+            .with("shipping", unit.shipping),
     )
 }
 

@@ -4,28 +4,16 @@
 //! End-to-end `project`/`lift` carrier coverage over the built CLI.
 
 use std::path::Path;
-use std::process::{Command, Output};
 
 mod support;
+use support::{run, run_with_input as run_with_stdin};
 
 use purrdf_lex::json;
 use purrdf_rdf::{ProjectionConfig, ProjectionPackage};
 use sha2::{Digest, Sha256};
 
-const PURRDF: &str = env!("CARGO_BIN_EXE_purrdf");
 const ATTACHED_ARCHIVE_SHA256: &str =
     "d714b63370b0026a28281f605794520fd4d1bc388ae8e5fdd367c5152cb95f6b";
-
-fn run(args: &[&str]) -> Output {
-    Command::new(PURRDF)
-        .args(args)
-        .output()
-        .expect("spawn purrdf")
-}
-
-fn run_with_stdin(args: &[&str], stdin: &[u8]) -> Output {
-    support::run_with_stdin(Command::new(PURRDF).args(args), stdin)
-}
 
 fn write(path: &Path, bytes: &[u8]) -> String {
     std::fs::write(path, bytes).expect("write fixture");

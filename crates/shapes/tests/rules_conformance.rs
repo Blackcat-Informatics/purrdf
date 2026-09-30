@@ -49,12 +49,17 @@
 //! not a papered-over bug). It prints the scoreboard line `RULES: passed {n}
 //! total {n}` (scraped by the conformance matrix).
 
+#[path = "support/report.rs"]
+mod report;
+
+use report::merge;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use purrdf::{RdfDataset, RdfDatasetBuilder, canonicalize};
+use purrdf::{RdfDataset, canonicalize};
 use purrdf_shapes::data::ShaclData;
+use purrdf_shapes::shacl_corpora::file_iri;
 use purrdf_shapes::shapes::from_dataset_with_prefixes;
 use purrdf_shapes::{apply_rules, engine, text_ingest};
 
@@ -73,10 +78,6 @@ const TOTAL_CASES: usize = 20;
 const XFAIL: &[(&str, &str)] = &[];
 
 // ── IRI / parse helpers ────────────────────────────────────────────────────────
-
-fn file_iri(path: &Path) -> String {
-    format!("file://{}", path.display())
-}
 
 /// A parsed input fixture: the frozen dataset and the document prefix map the codec
 /// recorded while parsing it.
@@ -100,16 +101,6 @@ fn parse_input(path: &Path, text: &str) -> Result<ParsedInput, String> {
 }
 
 // ── Expected-graph reconstruction ──────────────────────────────────────────────
-
-/// Merge the projected base with the parsed derived-delta graph into one frozen
-/// dataset (`base ⊎ expected-derived`). `push_dataset` standardizes blank labels
-/// apart per source, so the two graphs' blanks never collide.
-fn merge(base: &RdfDataset, derived: &RdfDataset) -> Result<Arc<RdfDataset>, String> {
-    let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(base);
-    builder.push_dataset(derived);
-    builder.freeze().map_err(|e| e.to_string())
-}
 
 // ── One case ───────────────────────────────────────────────────────────────────
 

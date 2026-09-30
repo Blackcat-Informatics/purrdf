@@ -26,64 +26,22 @@
 //!   one page re-materializes exactly that one page (not all pages), and a second
 //!   identical run adds no hits (the per-page `OnceLock` cache).
 
+mod support;
+use purrdf_core::term_fixture::{Triple, build_page, iri};
 use std::sync::Arc;
+use support::solutions;
 
 use purrdf_core::{
     CountingDemandProvider, DatasetView, GraphMatch, InMemoryPageProvider, PagedDataset,
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlResult, TermId, TermValue,
+    RdfDataset, TermValue,
 };
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 
 // ── shared fixture helpers ─────────────────────────────────────────────────────
 
-/// An `example.org` IRI value.
-fn iri(name: &str) -> TermValue {
-    TermValue::iri(format!("http://example.org/{name}"))
-}
-
 /// An `xsd:integer` typed literal (numeric so `FILTER(?age >= 18)` compares by value).
 fn xsd_int(n: &str) -> TermValue {
     TermValue::typed_literal(n, "http://www.w3.org/2001/XMLSchema#integer")
-}
-
-/// Intern one dataset-independent value into a builder, recursing for triple terms.
-fn intern_value(b: &mut RdfDatasetBuilder, v: &TermValue) -> TermId {
-    match v {
-        TermValue::Iri(s) => b.intern_iri(s),
-        TermValue::Blank { label, scope } => b.intern_blank(label, *scope),
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => b.intern_literal(RdfLiteral {
-            lexical_form: lexical_form.clone(),
-            datatype: Some(datatype.clone()),
-            language: language.clone(),
-            direction: *direction,
-        }),
-        TermValue::Triple { s, p, o } => {
-            let s = intern_value(b, s);
-            let p = intern_value(b, p);
-            let o = intern_value(b, o);
-            b.intern_triple(s, p, o)
-        }
-    }
-}
-
-type Triple = (TermValue, TermValue, TermValue);
-
-/// Freeze one page (or the single reference dataset) from `(s, p, o)` triples in the
-/// default graph.
-fn build_page(triples: &[Triple]) -> Arc<RdfDataset> {
-    let mut b = RdfDatasetBuilder::new();
-    for (s, p, o) in triples {
-        let s = intern_value(&mut b, s);
-        let p = intern_value(&mut b, p);
-        let o = intern_value(&mut b, o);
-        b.push_quad(s, p, o, None);
-    }
-    b.freeze().expect("page freeze")
 }
 
 /// Wrap eagerly-built pages in an in-memory provider and seal them into a
@@ -91,16 +49,6 @@ fn build_page(triples: &[Triple]) -> Arc<RdfDataset> {
 fn paged_over(pages: Vec<Arc<RdfDataset>>) -> PagedDataset {
     let provider = Arc::new(InMemoryPageProvider::new(pages));
     PagedDataset::from_provider(provider).expect("seal pages")
-}
-
-/// Destructure a `SparqlResult` into `(variables, rows)`, panicking on any other shape.
-fn solutions(result: SparqlResult) -> (Vec<String>, Vec<Vec<Option<TermValue>>>) {
-    match result {
-        SparqlResult::Solutions {
-            variables, rows, ..
-        } => (variables, rows),
-        other => panic!("expected solutions, got {other:?}"),
-    }
 }
 
 // ── Test A — direct evaluation, byte-identical result parity ────────────────────

@@ -99,6 +99,10 @@
 //! cleanly (the gap got fixed and nobody removed the ledger row) fails the
 //! sweep rather than sitting stale.
 
+#[path = "support/patterns.rs"]
+mod patterns;
+
+use patterns::where_body;
 use purrdf_sparql_algebra::Child;
 use std::path::{Path, PathBuf};
 
@@ -202,26 +206,6 @@ fn collect_doc_examples(dir: &Path) -> Vec<(String, String)> {
         }
     }
     out
-}
-
-/// A query's WHERE-body pattern, whichever [`Query`] variant it is.
-fn query_pattern(q: &Query) -> &GraphPattern {
-    match q {
-        Query::Select { pattern, .. }
-        | Query::Construct { pattern, .. }
-        | Query::Describe { pattern, .. }
-        | Query::Ask { pattern, .. } => pattern,
-    }
-}
-
-/// Strip exactly one outer `Project` (the `SELECT` scaffold) to recover the
-/// WHERE body — the shape [`pattern_to_select_query`] consumes and always
-/// re-produces on re-parse (see this file's module doc's "Method" section).
-fn where_body(p: &GraphPattern) -> GraphPattern {
-    match p {
-        GraphPattern::Project { inner, .. } => (**inner).clone(),
-        other => other.clone(),
-    }
 }
 
 /// Left-linearize every `Join` spine in `p` — the ONE permitted modulo this
@@ -373,7 +357,7 @@ fn flatten_join<'a>(p: &'a GraphPattern, out: &mut Vec<&'a GraphPattern>) {
 /// violation (`pattern_to_select_query`'s own re-parse yielding something
 /// other than `Query::Select`, which its own doc guarantees never happens).
 fn roundtrip(original: &Query) -> Result<(), String> {
-    let body = where_body(query_pattern(original));
+    let body = where_body(original.pattern());
     let text = pattern_to_select_query(&body);
     let reparsed = SparqlParser::new()
         .parse_query(&text)

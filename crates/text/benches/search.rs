@@ -207,16 +207,6 @@ fn configuration() -> TextIndexConfig {
         .expect("one IRI predicate is a well-formed configuration")
 }
 
-/// The analyzed needle for `text`, exactly as a query would supply it.
-fn needle(text: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    Analyzer::new().analyze(text, &mut tokens);
-    tokens
-        .into_iter()
-        .map(|token| token.text.into_owned())
-        .collect()
-}
-
 fn benchmark(criterion: &mut Bench) {
     let dataset = corpus();
     let config = configuration();
@@ -225,7 +215,7 @@ fn benchmark(criterion: &mut Bench) {
     // A common term, a middling one and a rare one, so the three candidate lists
     // the ranker unions differ in length by orders of magnitude and the three
     // inverse document frequencies are genuinely far apart.
-    let query = needle("term0000 term0512 term0800");
+    let query = Analyzer::new().terms("term0000 term0512 term0800");
     let partition = PartitionKey::new(None, None);
     let filter = PartitionFilter::unconstrained();
 

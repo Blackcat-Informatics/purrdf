@@ -32,16 +32,16 @@
 //! `sh:` predicate; `sht:compliance` is a triple outside the SHACL namespaces, which
 //! a shapes graph may carry and which changes nothing.
 
+#[path = "support/turtle.rs"]
+mod turtle;
+
 use std::sync::Arc;
 
-use purrdf::{RdfDataset, canonicalize};
-use purrdf_shapes::engine::{parse_shapes, validate_dataset_with_shapes_graph};
+use purrdf::canonicalize;
 use purrdf_shapes::entail_dataset;
 use purrdf_shapes::report::ValidationReport;
-use purrdf_shapes::shapes::Shapes;
 use purrdf_shapes::spec::census::{Role, Site, TermClass, classify};
 use purrdf_shapes::spec::declared_terms;
-use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 
 const PREFIXES: &str = "
 @prefix ex:     <http://example.org/ns#> .
@@ -52,25 +52,6 @@ const PREFIXES: &str = "
 @prefix sht:    <http://www.w3.org/ns/shacl-test#> .
 @prefix xsd:    <http://www.w3.org/2001/XMLSchema#> .
 ";
-
-fn load(shapes_ttl: &str) -> Result<Shapes, String> {
-    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).map_err(String::from)
-}
-
-#[track_caller]
-fn loads(shapes_ttl: &str) -> Shapes {
-    load(shapes_ttl).unwrap_or_else(|error| panic!("the shapes graph must load: {error}"))
-}
-
-fn data(data_ttl: &str) -> Arc<RdfDataset> {
-    parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parses")
-}
-
-#[track_caller]
-fn validate(shapes_ttl: &str, data_ttl: &str) -> ValidationReport {
-    validate_dataset_with_shapes_graph(&data(data_ttl), &loads(shapes_ttl), None)
-        .expect("validation runs")
-}
 
 /// `(focus node, value, component)` of every result, sorted.
 fn results(report: &ValidationReport) -> Vec<(String, String, String)> {
@@ -94,7 +75,11 @@ fn results(report: &ValidationReport) -> Vec<(String, String, String)> {
 /// The RDFC-1.0 canonical N-Quads of `entail_dataset(data, shapes)`.
 #[track_caller]
 fn entail(shapes_ttl: &str, data_ttl: &str) -> String {
-    let entailed = entail_dataset(data(data_ttl).as_ref(), &loads(shapes_ttl)).expect("rules run");
+    let entailed = entail_dataset(
+        turtle::data(PREFIXES, data_ttl).as_ref(),
+        &turtle::loads(PREFIXES, shapes_ttl),
+    )
+    .expect("rules run");
     canonicalize(entailed.as_ref()).nquads
 }
 
@@ -120,13 +105,15 @@ use purrdf_iri::vocab::sh::MIN_COUNT_CONSTRAINT_COMPONENT as SH_MIN_COUNT;
 #[test]
 fn values_adds_the_expression_output_to_the_path_values() {
     let data = "ex:a a ex:C ; ex:p 3 ; ex:q 4 .  ex:b a ex:C ; ex:q 5 .";
-    let with = validate(
+    let with = turtle::validate(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetClass ex:C ;
            sh:property [ sh:path ex:p ; sh:values [ sh:path ex:q ] ;
                          sh:minCount 1 ; sh:maxCount 1 ] .",
         data,
     );
-    let without = validate(
+    let without = turtle::validate(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetClass ex:C ;
            sh:property [ sh:path ex:p ; sh:minCount 1 ; sh:maxCount 1 ] .",
         data,
@@ -148,7 +135,8 @@ fn values_adds_the_expression_output_to_the_path_values() {
 /// `sh:datatype xsd:string` and reported with its computed value.
 #[test]
 fn values_is_evaluated_at_the_focus_node_and_its_output_is_checked() {
-    let report = validate(
+    let report = turtle::validate(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetClass ex:Rectangle ;
            sh:property [ sh:path ex:area ; sh:datatype xsd:string ;
              sh:values [ sparql:multiply ( [ shnex:pathValues ex:width ]
@@ -178,12 +166,14 @@ fn values_is_evaluated_at_the_focus_node_and_its_output_is_checked() {
 #[test]
 fn default_value_applies_only_when_the_value_set_is_empty() {
     let data = "ex:a a ex:C .  ex:b a ex:C ; ex:p 3 .";
-    let with = validate(
+    let with = turtle::validate(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetClass ex:C ;
            sh:property [ sh:path ex:p ; sh:datatype xsd:integer ; sh:defaultValue \"none\" ] .",
         data,
     );
-    let without = validate(
+    let without = turtle::validate(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetClass ex:C ;
            sh:property [ sh:path ex:p ; sh:datatype xsd:integer ] .",
         data,
@@ -202,7 +192,8 @@ fn default_value_applies_only_when_the_value_set_is_empty() {
 /// so it gets the default — and only `ex:b` fails `sh:datatype xsd:integer`.
 #[test]
 fn default_value_is_not_added_when_values_produced_a_node() {
-    let report = validate(
+    let report = turtle::validate(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetClass ex:C ;
            sh:property [ sh:path ex:p ; sh:datatype xsd:integer ;
                          sh:values [ sh:path ex:q ] ; sh:defaultValue \"none\" ] .",
@@ -250,9 +241,9 @@ fn a_parameter_declarations_default_value_is_documentation() {
         )
     };
     let data = "ex:a ex:p 1 .";
-    let declared = validate(&shapes("; sh:defaultValue 1", ""), data);
-    let undeclared = validate(&shapes("", ""), data);
-    let explicit = validate(&shapes("; sh:defaultValue 1", "1"), data);
+    let declared = turtle::validate(PREFIXES, &shapes("; sh:defaultValue 1", ""), data);
+    let undeclared = turtle::validate(PREFIXES, &shapes("", ""), data);
+    let explicit = turtle::validate(PREFIXES, &shapes("; sh:defaultValue 1", "1"), data);
     assert_eq!(results(&declared).len(), 1, "{:?}", results(&declared));
     assert_eq!(declared.to_ntriples(), undeclared.to_ntriples());
     assert!(results(&explicit).is_empty(), "{:?}", results(&explicit));
@@ -366,7 +357,11 @@ fn a_derived_triple_a_rule_also_infers_is_kept() {
 /// N-Quads do not show.
 #[track_caller]
 fn reification(shapes_ttl: &str, data_ttl: &str) -> (usize, usize) {
-    let entailed = entail_dataset(data(data_ttl).as_ref(), &loads(shapes_ttl)).expect("rules run");
+    let entailed = entail_dataset(
+        turtle::data(PREFIXES, data_ttl).as_ref(),
+        &turtle::loads(PREFIXES, shapes_ttl),
+    )
+    .expect("rules run");
     let reifiers: Vec<purrdf::TermId> = entailed.reifiers().map(|(reifier, _)| reifier).collect();
     let annotations = reifiers
         .iter()
@@ -423,16 +418,16 @@ fn a_deleted_derived_triple_takes_its_reifier_with_it() {
 /// so a literal names none and is refused; the IRI neighbour loads.
 #[test]
 fn a_literal_expected_predicate_is_refused_and_an_iri_loads() {
-    let error = load(&rectangle_shapes(
-        "; sh:expectedPredicate \"ex:area\"",
-        "; sh:defaultValue 1",
-    ))
+    let error = turtle::load(
+        PREFIXES,
+        &rectangle_shapes("; sh:expectedPredicate \"ex:area\"", "; sh:defaultValue 1"),
+    )
     .expect_err("a literal sh:expectedPredicate names no predicate");
     assert!(error.contains("sh:expectedPredicate"), "{error}");
-    loads(&rectangle_shapes(
-        "; sh:expectedPredicate ex:area",
-        "; sh:defaultValue 1",
-    ));
+    turtle::loads(
+        PREFIXES,
+        &rectangle_shapes("; sh:expectedPredicate ex:area", "; sh:defaultValue 1"),
+    );
 }
 
 // ── compliance ────────────────────────────────────────────────────────────────
@@ -451,13 +446,15 @@ fn sh_compliance_is_not_a_shacl_term_and_is_refused() {
             .contains(iri),
         "the vendored SHACL 1.2 vocabularies declare no sh:compliance"
     );
-    let error = load(
+    let error = turtle::load(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:compliance sht:SPARQL ;
            sh:property [ sh:path ex:p ; sh:minCount 1 ] .",
     )
     .expect_err("an unknown sh: predicate on a shape is refused");
     assert!(error.contains("shacl#compliance"), "{error}");
-    let report = validate(
+    let report = turtle::validate(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:property [ sh:path ex:p ; sh:minCount 1 ] .",
         "ex:b ex:p 1 .",
@@ -478,12 +475,14 @@ fn sht_compliance_is_manifest_metadata_and_changes_nothing() {
     let shape = "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
                    sh:property [ sh:path ex:p ; sh:minCount 1 ] .";
     let data = "ex:a ex:p 1 .";
-    let with = validate(
+    let with = turtle::validate(
+        PREFIXES,
         &format!("{shape} ex:test sht:compliance sht:SPARQL, sht:NodeExpr ."),
         data,
     );
-    let without = validate(shape, data);
-    let changed = validate(
+    let without = turtle::validate(PREFIXES, shape, data);
+    let changed = turtle::validate(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:property [ sh:path ex:p ; sh:minCount 2 ] .",
         data,
@@ -500,7 +499,8 @@ fn sht_compliance_is_manifest_metadata_and_changes_nothing() {
 /// computed values, reports none.
 #[test]
 fn function_resolution_reports_the_calls_inside_computed_values() {
-    let computed = loads(
+    let computed = turtle::loads(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:property ex:P .
          ex:P sh:path ex:p ;
@@ -523,7 +523,8 @@ fn function_resolution_reports_the_calls_inside_computed_values() {
         owners("http://www.w3.org/ns/sparql#iri"),
         vec![format!("sh:defaultValue on {}", ex("P"))]
     );
-    let constant = loads(
+    let constant = turtle::loads(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:property [ sh:path ex:p ; sh:values 2 ; sh:defaultValue ex:none ] .",
     );
@@ -536,14 +537,15 @@ fn function_resolution_reports_the_calls_inside_computed_values() {
 #[test]
 fn extension_usage_reads_the_sparql_inside_computed_values() {
     let relation = "http://example.org/ns#related";
-    let computed = loads(
+    let computed = turtle::loads(PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:property [ sh:path ex:p ;
              sh:values [ sh:select \"SELECT ?v WHERE { $this <http://example.org/ns#related> ?v }\" ] ] .",
     );
     let usage = computed.extension_usage(purrdf_sparql_eval::ExtensionEnv::empty());
     assert!(usage.data().contains(relation), "{usage:?}");
-    let path = loads(
+    let path = turtle::loads(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:property [ sh:path ex:p ; sh:values [ sh:path ex:related ] ] .",
     );
@@ -565,7 +567,7 @@ fn a_prepared_product_carries_computed_values() {
         "{} ex:RectangleShape-area sh:datatype xsd:string .",
         rectangle_shapes("; sh:expectedPredicate ex:area", "; sh:defaultValue 1")
     );
-    let fresh = PreparedShapes::new(Arc::new(loads(&shapes_ttl)));
+    let fresh = PreparedShapes::new(Arc::new(turtle::loads(PREFIXES, &shapes_ttl)));
     let bytes = fresh
         .to_product(&ShapesProfile::CORE)
         .expect("the shapes graph packs");
@@ -575,7 +577,7 @@ fn a_prepared_product_carries_computed_values() {
         .expect("the product admits");
     let report = |prepared: &PreparedShapes| {
         prepared
-            .bind_shared_dataset(data(RECTANGLES))
+            .bind_shared_dataset(turtle::data(PREFIXES, RECTANGLES))
             .expect("the data graph binds")
             .validate()
             .expect("validation runs")
@@ -590,9 +592,12 @@ fn a_prepared_product_carries_computed_values() {
     assert_eq!(fresh_report.to_ntriples(), report(&restored).to_ntriples());
     let entail_with = |prepared: &PreparedShapes| {
         canonicalize(
-            entail_dataset(data(RECTANGLES).as_ref(), prepared.shapes())
-                .expect("rules run")
-                .as_ref(),
+            entail_dataset(
+                turtle::data(PREFIXES, RECTANGLES).as_ref(),
+                prepared.shapes(),
+            )
+            .expect("rules run")
+            .as_ref(),
         )
         .nquads
     };

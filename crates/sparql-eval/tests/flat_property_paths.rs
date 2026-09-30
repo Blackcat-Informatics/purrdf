@@ -24,26 +24,18 @@
 //! refusal and one level under answers, and a 2 000-step chain crosses a `SERVICE`
 //! as forwarded text that re-parses in the in-process endpoint.
 
+mod support;
+
+use support::local_dataset;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, SparqlRequest};
+use purrdf_core::{RdfDataset, RdfDiagnostic, SparqlRequest};
 use purrdf_core::{SparqlResult, TermValue};
 use purrdf_sparql_eval::{InProcessServiceResolver, NativeSparqlEngine, QueryOptions};
 
 const EX: &str = "http://example.org/";
-
-/// A dataset of `(subject, predicate, object)` local names under [`EX`].
-fn dataset_of<'a>(triples: impl IntoIterator<Item = (String, String, &'a str)>) -> Arc<RdfDataset> {
-    let mut builder = RdfDatasetBuilder::new();
-    for (s, p, o) in triples {
-        let s = builder.intern_iri(&format!("{EX}{s}"));
-        let p = builder.intern_iri(&format!("{EX}{p}"));
-        let o = builder.intern_iri(&format!("{EX}{o}"));
-        builder.push_quad(s, p, o, None);
-    }
-    builder.freeze().expect("the fixture dataset")
-}
 
 /// Evaluate `query` against `data`, with an in-process `SERVICE` endpoint `<svc>`
 /// serving the same dataset.
@@ -98,7 +90,7 @@ fn row(cells: &[&str]) -> Vec<String> {
 /// `n{i} p{i} n{i+1}` for `i` in `0..len`: a chain whose every hop has its own
 /// predicate, so the one path `p0/p1/…/p{k-1}` connects `n0` to `n{k}` and nothing else.
 fn chain(len: usize) -> Arc<RdfDataset> {
-    dataset_of((0..len).map(|i| {
+    local_dataset((0..len).map(|i| {
         (
             format!("n{i}"),
             format!("p{i}"),
@@ -172,7 +164,9 @@ fn a_five_thousand_step_sequence_answers_the_one_pair_it_connects() {
 /// `s a{k} o{k % 7}` for every `k` in `0..2 500`: an arm naming `a{k}` reaches
 /// `o{k % 7}`.
 fn fan() -> Arc<RdfDataset> {
-    dataset_of((0..2_500).map(|k| ("s".to_owned(), format!("a{k}"), leak(format!("o{}", k % 7)))))
+    local_dataset(
+        (0..2_500).map(|k| ("s".to_owned(), format!("a{k}"), leak(format!("o{}", k % 7)))),
+    )
 }
 
 /// The 5 000 arms `a{k % 2 500}` for `k` in `0..arms`: every predicate twice, so every
@@ -239,7 +233,7 @@ fn a_five_thousand_arm_alternative_is_the_bag_union_of_its_arms() {
 /// A small graph with parallel derivations (`x0 p x1 p x3` and `x0 p x2 p x3`), cycles,
 /// a self loop and edges of both predicates in both directions.
 fn diamond() -> Arc<RdfDataset> {
-    dataset_of(
+    local_dataset(
         [
             ("x0", "p", "x1"),
             ("x0", "p", "x2"),
@@ -432,7 +426,7 @@ fn every_short_flat_alternative_is_its_nested_chain_and_its_union() {
 /// A chain whose hops are written five ways by position: `n{i} p{i} n{i+1}` for most
 /// `i`, and `n{i+1} r{i} n{i}` where the step is an inverse.
 fn zigzag(len: usize) -> Arc<RdfDataset> {
-    dataset_of((0..len).map(|i| {
+    local_dataset((0..len).map(|i| {
         if i % 5 == 1 {
             (
                 format!("n{}", i + 1),

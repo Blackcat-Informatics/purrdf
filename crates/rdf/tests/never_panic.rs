@@ -22,32 +22,29 @@
 use purrdf_rdf::{NativeRdfFormat, parse_dataset};
 use purrdf_testkit::prop::prelude::*;
 
-/// Raw arbitrary bytes, bounded to keep parsing cheap.
-fn arbitrary_bytes() -> impl Strategy<Value = Vec<u8>> {
-    prop::collection::vec(any::<u8>(), 0..4096)
-}
-
 /// Structure-aware text: a random interleaving of real RDF/Turtle fragments and
 /// noise, so the generator reaches deep parser states (prefix tables, quoted
 /// triples, blank-node scopes) instead of bouncing off the lexer immediately.
 fn structured_turtle() -> impl Strategy<Value = String> {
-    let fragments: Vec<&'static str> = vec![
-        "@prefix ex: <https://example.org/> .\n",
-        "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n",
-        "ex:a ex:b ex:c .\n",
-        "ex:a ex:b \"lit\"@en .\n",
-        "ex:a ex:b \"42\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n",
-        "<<ex:a ex:b ex:c>> ex:d ex:e .\n",
-        "ex:a ex:b [ ex:c ex:d ] .\n",
-        "_:b0 ex:p _:b1 .\n",
-        "ex:a ex:b ex:c, ex:d ;\n  ex:e ex:f .\n",
-        "\u{0}\u{1}\u{7f}",
-        "<not a valid iri> . . ;;",
-        "@prefix",
-        "\"unterminated",
-    ];
-    prop::collection::vec(prop::sample::select(fragments), 0..24).prop_map(|parts| parts.concat())
+    prop::sample::interleaved(TURTLE_FRAGMENTS.to_vec(), 24)
 }
+
+/// The fragments [`structured_turtle`] interleaves.
+const TURTLE_FRAGMENTS: [&str; 13] = [
+    "@prefix ex: <https://example.org/> .\n",
+    "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n",
+    "ex:a ex:b ex:c .\n",
+    "ex:a ex:b \"lit\"@en .\n",
+    "ex:a ex:b \"42\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n",
+    "<<ex:a ex:b ex:c>> ex:d ex:e .\n",
+    "ex:a ex:b [ ex:c ex:d ] .\n",
+    "_:b0 ex:p _:b1 .\n",
+    "ex:a ex:b ex:c, ex:d ;\n  ex:e ex:f .\n",
+    "\u{0}\u{1}\u{7f}",
+    "<not a valid iri> . . ;;",
+    "@prefix",
+    "\"unterminated",
+];
 
 prop_test! {
     #![prop_config(Config { cases: 256, ..Config::default() })]
@@ -55,7 +52,7 @@ prop_test! {
     /// The native `parse_dataset` codec (every text format) must never panic on
     /// arbitrary bytes — `Ok`/`Err` is fine, a panic is a failure.
     #[test]
-    fn native_parse_never_panics(data in arbitrary_bytes()) {
+    fn native_parse_never_panics(data in prop::collection::bytes(4096)) {
         parse_every_text_format(&data);
     }
 
@@ -68,13 +65,13 @@ prop_test! {
     /// The GTS container reader must never panic on arbitrary bytes, with or
     /// without multi-segment support.
     #[test]
-    fn gts_read_graph_never_panics(data in arbitrary_bytes()) {
+    fn gts_read_graph_never_panics(data in prop::collection::bytes(4096)) {
         read_gts(&data);
     }
 
     /// The SSSOM TSV parser must never panic on arbitrary text.
     #[test]
-    fn sssom_parse_tsv_never_panics(data in arbitrary_bytes()) {
+    fn sssom_parse_tsv_never_panics(data in prop::collection::bytes(4096)) {
         parse_sssom(&data);
     }
 
@@ -100,7 +97,7 @@ prop_test! {
     }
 
     #[test]
-    fn statements_transforms_never_panic_raw(data in arbitrary_bytes()) {
+    fn statements_transforms_never_panic_raw(data in prop::collection::bytes(4096)) {
         transform_statements(&data);
     }
 }
@@ -140,7 +137,7 @@ fn transform_statements(data: &[u8]) {
 
 /// Counterexamples found by an earlier property run, kept as ordinary tests: the
 /// choice sequence (hex, as a failing property prints it) that makes
-/// [`arbitrary_bytes`] generate the input, and the input itself. The test proves the
+/// [`prop::collection::bytes`] generate the input, and the input itself. The test proves the
 /// sequence still decodes to exactly those bytes, then runs every byte-driven
 /// frontend over them. The first is the shrunk counterexample — `"0"` followed by
 /// U+00C0 — and the second is the input its seed generated before shrinking.
@@ -151,7 +148,7 @@ fn byte_regressions_decode_to_their_inputs_and_panic_no_frontend() {
         ("013901d2018500", &[57, 210, 133]),
     ];
     for (hex, bytes) in REGRESSIONS {
-        let data = prop::replay(&arbitrary_bytes(), hex);
+        let data = prop::replay(&prop::collection::bytes(4096), hex);
         assert_eq!(data, bytes, "{hex} decodes to its input");
         parse_every_text_format(&data);
         read_gts(&data);

@@ -27,73 +27,25 @@ use purrdf_gts::writer::Writer;
 
 // -- fixtures ----------------------------------------------------------------
 
-fn iri(value: &str) -> Term {
-    Term {
-        kind: TermKind::Iri,
-        value: Some(value.to_owned()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
-fn plain_literal(value: &str) -> Term {
-    Term {
-        kind: TermKind::Literal,
-        value: Some(value.to_owned()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
-fn lang_literal(value: &str, lang: &str) -> Term {
-    Term {
-        kind: TermKind::Literal,
-        value: Some(value.to_owned()),
-        datatype: None,
-        lang: Some(lang.to_owned()),
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
-fn blank(label: &str) -> Term {
-    Term {
-        kind: TermKind::Bnode,
-        value: Some(label.to_owned()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
 /// A blank-free two-segment fixture: IRIs + literals + quads across two
 /// independently-rooted segments.
 fn two_segment_rdf_fixture() -> Vec<u8> {
     let mut a = Writer::new("generic");
     a.add_terms(&[
-        iri("http://example.org/a/s"),
-        iri("http://example.org/a/p"),
-        plain_literal("alpha"),
-        iri("http://example.org/name"),
-        lang_literal("Purr", "en"),
+        Term::iri("http://example.org/a/s"),
+        Term::iri("http://example.org/a/p"),
+        Term::literal("alpha", None),
+        Term::iri("http://example.org/name"),
+        Term::lang_literal("Purr", "en"),
     ]);
     a.add_quads(&[(0, 1, 2, None), (0, 3, 4, None)]);
     let mut data = a.to_bytes();
 
     let mut b = Writer::new("generic");
     b.add_terms(&[
-        iri("http://example.org/b/s"),
-        iri("http://example.org/b/p"),
-        plain_literal("beta"),
+        Term::iri("http://example.org/b/s"),
+        Term::iri("http://example.org/b/p"),
+        Term::literal("beta", None),
     ]);
     b.add_quads(&[(0, 1, 2, None)]);
     data.extend_from_slice(&b.to_bytes());
@@ -366,18 +318,18 @@ fn bridge_events_equal_offline_read() {
 fn per_segment_blank_scopes_are_distinct() {
     let mut a = Writer::new("generic");
     a.add_terms(&[
-        iri("http://example.org/a/s"),
-        iri("http://example.org/a/p"),
-        blank("b0"),
+        Term::iri("http://example.org/a/s"),
+        Term::iri("http://example.org/a/p"),
+        Term::blank("b0"),
     ]);
     a.add_quads(&[(0, 1, 2, None)]);
     let mut data = a.to_bytes();
 
     let mut b = Writer::new("generic");
     b.add_terms(&[
-        iri("http://example.org/b/s"),
-        iri("http://example.org/b/p"),
-        blank("b0"),
+        Term::iri("http://example.org/b/s"),
+        Term::iri("http://example.org/b/p"),
+        Term::blank("b0"),
     ]);
     b.add_quads(&[(0, 1, 2, None)]);
     data.extend_from_slice(&b.to_bytes());
@@ -627,11 +579,11 @@ fn incremental_reindex_from_diff_fetch() {
 fn graph_scoped_reifier_is_hard_error() {
     let mut w = Writer::new("generic");
     w.add_terms(&[
-        iri("http://example.org/s"),
-        iri("http://example.org/p"),
-        iri("http://example.org/o"),
-        iri("http://example.org/g"),
-        iri("http://example.org/reifier"),
+        Term::iri("http://example.org/s"),
+        Term::iri("http://example.org/p"),
+        Term::iri("http://example.org/o"),
+        Term::iri("http://example.org/g"),
+        Term::iri("http://example.org/reifier"),
     ]);
     // reifier id 4 binds (0,1,2) in named graph 3.
     let binding: Vec<purrdf_gts::model::ReifierRow> = vec![(4, (0, 1, 2), Some(3))];
@@ -677,9 +629,9 @@ fn graph_scoped_reifier_is_hard_error() {
 fn dangling_term_ref_real_bytes_is_err() {
     let mut w = Writer::new("generic");
     w.add_terms(&[
-        iri("http://example.org/s"),
-        iri("http://example.org/p"),
-        iri("http://example.org/o"),
+        Term::iri("http://example.org/s"),
+        Term::iri("http://example.org/p"),
+        Term::iri("http://example.org/o"),
     ]);
     // Object id 99 was never introduced by any `term` event in this segment.
     w.add_quads(&[(0, 1, 99, None)]);
@@ -734,9 +686,9 @@ fn dangling_term_ref_is_err() {
     let mut sink = CollectSink::default();
     let mut resolver = SegmentResolver::new(EventEmitter::new(&mut sink));
 
-    resolver.term(0, 0, &iri("http://example.org/s"));
-    resolver.term(0, 1, &iri("http://example.org/p"));
-    resolver.term(0, 2, &iri("http://example.org/o"));
+    resolver.term(0, 0, &Term::iri("http://example.org/s"));
+    resolver.term(0, 1, &Term::iri("http://example.org/p"));
+    resolver.term(0, 2, &Term::iri("http://example.org/o"));
     // Quad references gts id 99, which no `term` event ever introduced.
     resolver.quad(0, (0, 1, 99, None));
 
@@ -761,7 +713,7 @@ fn dangling_term_ref_is_err() {
 /// the sink and, per the bounded-memory fix, clearing `reifier_bindings` and
 /// `remaps` — before this segment starts accumulating anything of its own.
 fn open_bounded_memory_segment(resolver: &mut SegmentResolver<EventEmitter<'_>>, seg: usize) {
-    resolver.term(seg, 0, &iri(&format!("http://example.org/seg{seg}/s")));
+    resolver.term(seg, 0, &Term::iri(format!("http://example.org/seg{seg}/s")));
 }
 
 /// Feed the REST of segment `seg` (4 more IRI terms, one quad, and two
@@ -771,10 +723,18 @@ fn open_bounded_memory_segment(resolver: &mut SegmentResolver<EventEmitter<'_>>,
 /// (`http://example.org/seg{seg}/...`) so no cross-segment id reuse could
 /// accidentally mask a leak as "the same entry, re-seen".
 fn fill_bounded_memory_segment(resolver: &mut SegmentResolver<EventEmitter<'_>>, seg: usize) {
-    resolver.term(seg, 1, &iri(&format!("http://example.org/seg{seg}/p")));
-    resolver.term(seg, 2, &iri(&format!("http://example.org/seg{seg}/o")));
-    resolver.term(seg, 3, &iri(&format!("http://example.org/seg{seg}/r1")));
-    resolver.term(seg, 4, &iri(&format!("http://example.org/seg{seg}/r2")));
+    resolver.term(seg, 1, &Term::iri(format!("http://example.org/seg{seg}/p")));
+    resolver.term(seg, 2, &Term::iri(format!("http://example.org/seg{seg}/o")));
+    resolver.term(
+        seg,
+        3,
+        &Term::iri(format!("http://example.org/seg{seg}/r1")),
+    );
+    resolver.term(
+        seg,
+        4,
+        &Term::iri(format!("http://example.org/seg{seg}/r2")),
+    );
     resolver.quad(seg, (0, 1, 2, None));
     resolver.reifier(seg, (3, (0, 1, 2), None));
     resolver.reifier(seg, (4, (0, 1, 2), None));

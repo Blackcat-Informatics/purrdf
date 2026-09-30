@@ -32,19 +32,16 @@
 //! Fixtures use `example.org` throughout; every IRI is fixture configuration.
 
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDomains, CompiledRetrieval, DecayRule, DomainTag,
     DuplicatePolicy, ExclusionVerdict, ExecutionError, ExecutionResult, Fixed, FusedRow,
-    FusionError, FusionProfile, FusionTrailer, Iri, ProducerStatus, ProtocolError, RECIP_K,
-    RankFidelity, RankedStreamAdapter, ReadSchedule, RequestTerm, RetrievalRequest, Statistics,
-    StratumUnit, StreamContract, Term, TopK, UnitError, compile, contribution_under,
-    execute_within, fuse, plan,
+    FusionError, FusionTrailer, Iri, ProducerStatus, ProtocolError, RECIP_K, RankFidelity,
+    RankedStreamAdapter, ReadSchedule, RequestTerm, RetrievalRequest, Statistics, StratumUnit,
+    StreamContract, Term, TopK, UnitError, compile, contribution_under, execute_within, fuse, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, EvalError, ExclusionBasis, IndexGeneration, PfArgs, PfArity,
@@ -53,6 +50,13 @@ use purrdf_sparql_eval::{
 };
 
 mod common;
+
+#[path = "support/lookup.rs"]
+mod lookup;
+
+use lookup::{producer_iri, profile, scored, strata};
+use purrdf_retrieval::block_on;
+use purrdf_retrieval::fixture::iri;
 
 const TOP_K: TopK = TopK::new(5);
 const ROWS: u64 = 400;
@@ -63,38 +67,7 @@ fn ex(suffix: &str) -> String {
     format!("http://example.org/{suffix}")
 }
 
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
-
-/// A minimal single-threaded executor. The producers never pend.
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
-}
-
 const PREDICATES: [&str; 2] = ["title", "body"];
-
-fn strata() -> [Iri; 2] {
-    [iri(&ex("stratum/left")), iri(&ex("stratum/right"))]
-}
-
-fn producer_iri(predicate: &str) -> String {
-    ex(&format!("pf/{predicate}"))
-}
 
 // ---------------------------------------------------------------------------
 // The producers: lazy, counted, and answering point lookups off their own IRIs.
@@ -136,6 +109,13 @@ struct Generations {
 ///
 /// Where `moves` is given and set, a bound call asked for `"lazy dog"@en` answers
 /// from `gen-8`: the index behind that one call moved after the ranked read.
+///
+/// It and [`Reads`] are this file's own mock, not `multimodal_read_bound`'s: that
+/// one's producer also holds fewer candidates than it declares, reads in reverse,
+/// reports work and a service level, and its `Reads` counts work beside rows. The
+/// few accessors the two mocks spell alike (`Reads::rows`, `generation`,
+/// `rows_per_invocation`) read each mock's own fields; sharing them would mean
+/// merging two mocks whose behaviour each test depends on differing.
 struct CountingProducer {
     arity: PfArity,
     modes: Vec<BindingPattern>,
@@ -412,17 +392,6 @@ const fn decay() -> DecayRule {
     DecayRule::ReciprocalRank { k: RECIP_K as u32 }
 }
 
-fn profile() -> FusionProfile {
-    FusionProfile::with_decay(
-        strata()
-            .into_iter()
-            .map(|stratum| (stratum, Fixed::ONE))
-            .collect(),
-        decay(),
-    )
-    .expect("the fixture profile is valid")
-}
-
 fn request() -> RetrievalRequest {
     let terms = PREDICATES
         .into_iter()
@@ -627,14 +596,6 @@ fn measured(
     measure(exclusion, None, text, schedule).expect("the fixture fuses")
 }
 
-fn answer(measured: &Measured) -> Vec<(String, Fixed)> {
-    measured
-        .rows
-        .iter()
-        .map(|row| (row.entity.as_str().to_owned(), row.score))
-        .collect()
-}
-
 fn ceiling_at(rank: u64) -> ProducerStatus {
     ProducerStatus::CeilingReached {
         bound: contribution_under(decay(), Fixed::ONE, rank).expect("in range"),
@@ -740,8 +701,8 @@ fn a_supplied_one_call_text_is_looked_up_exactly_as_the_rendered_unit_is() {
     assert_eq!(full.reads, both(vec![ROWS]), "the reference reads in full");
     assert_eq!(on_demand.rows, full.rows, "the materialised read's answer");
     assert_eq!(
-        answer(&on_demand),
-        answer(&drained),
+        scored(&on_demand.rows),
+        scored(&drained.rows),
         "and the drained control's"
     );
 }
@@ -945,21 +906,21 @@ fn a_filter_over_the_call_is_looked_up_and_read_on_demand_and_its_unavailable_ne
     // The answer.
     let removed = format!("<{}>", ex("left/entity000000"));
     assert!(
-        answer(&control)
+        scored(&control.rows)
             .iter()
             .any(|(entity, _)| *entity == removed),
         "the control names the filtered candidate"
     );
     assert!(
-        answer(&on_demand)
+        scored(&on_demand.rows)
             .iter()
             .all(|(entity, _)| *entity != removed),
         "the filtered candidate is gone"
     );
     assert_eq!(on_demand.rows, full.rows, "the materialised read's answer");
     assert_eq!(
-        answer(&on_demand),
-        shifted_left(answer(&control), 1),
+        scored(&on_demand.rows),
+        shifted_left(scored(&control.rows), 1),
         "the left stream's candidates move up one rank, every score stands"
     );
 
@@ -975,7 +936,11 @@ fn a_filter_over_the_call_is_looked_up_and_read_on_demand_and_its_unavailable_ne
         BTreeMap::from([(left, ROWS - 1), (right, ROWS)]),
         "every row ranked but the one the FILTER dropped"
     );
-    assert_eq!(answer(&drained), answer(&on_demand), "to the same answer");
+    assert_eq!(
+        scored(&drained.rows),
+        scored(&on_demand.rows),
+        "to the same answer"
+    );
 }
 
 /// **The configuration whose producers name the same candidates, through a `FILTER`
@@ -1029,10 +994,10 @@ fn the_shared_candidate_configuration_through_a_filter_reads_on_demand() {
     assert_eq!(on_demand.rows, full.rows, "to the same answer");
     let removed = format!("<{}>", ex("shared/entity000000"));
     assert!(
-        answer(&unfiltered)
+        scored(&unfiltered.rows)
             .iter()
             .any(|(entity, _)| *entity == removed)
-            && answer(&on_demand)
+            && scored(&on_demand.rows)
                 .iter()
                 .all(|(entity, _)| *entity != removed),
         "the removed candidate leads the unfiltered answer and is gone from this one"
@@ -1089,8 +1054,8 @@ fn a_filter_removing_many_leading_rows_counts_ranks_after_the_filter() {
     );
     assert_eq!(on_demand.rows, full.rows, "the materialised read's answer");
     assert_eq!(
-        answer(&on_demand),
-        shifted_left(answer(&control), 10),
+        scored(&on_demand.rows),
+        shifted_left(scored(&control.rows), 10),
         "the left stream's candidates move up ten ranks, every score stands"
     );
 }
@@ -1179,8 +1144,8 @@ fn a_join_of_calls_is_looked_up_through_each_call_and_answers_as_its_drained_nei
         "the join is materialised under either schedule"
     );
     assert_eq!(
-        answer(&looked_up),
-        answer(&drained),
+        scored(&looked_up.rows),
+        scored(&drained.rows),
         "the answer the run with no lookups gives, entity for entity and score for score"
     );
 }
@@ -1270,8 +1235,8 @@ fn a_second_calls_lookup_from_a_moved_index_is_refused_and_one_at_the_pinned_gen
         "and its answers shortened the read"
     );
     assert_eq!(
-        answer(&stable),
-        answer(&control),
+        scored(&stable.rows),
+        scored(&control.rows),
         "without moving the answer"
     );
 }
@@ -1866,11 +1831,11 @@ fn a_group_by_condition_rebinding_the_candidate_is_refused_and_its_neighbours_an
         ReadSchedule::Materialised,
     );
     assert!(
-        answer(&swapped)
+        scored(&swapped.rows)
             .iter()
             .any(|(entity, _)| *entity == format!("<{intruder}>")),
         "the computed column holds the intruder: {:?}",
-        answer(&swapped)
+        scored(&swapped.rows)
     );
 
     let keyed = |predicate: &str| {
@@ -1920,8 +1885,8 @@ fn a_group_by_condition_rebinding_the_candidate_is_refused_and_its_neighbours_an
             "{name}: the full read drains"
         );
         assert_eq!(
-            answer(&looked_up),
-            answer(&full),
+            scored(&looked_up.rows),
+            scored(&full.rows),
             "{name}: the full read's answer"
         );
         assert_eq!(
@@ -2010,10 +1975,14 @@ fn a_union_of_calls_asks_every_branch_and_answers_as_the_full_read() {
         "with no basis it drains"
     );
     assert_eq!(drained.fused_lookups(), both(0));
-    assert_eq!(answer(&looked_up), answer(&full), "the full read's answer");
     assert_eq!(
-        answer(&looked_up),
-        answer(&plain),
+        scored(&looked_up.rows),
+        scored(&full.rows),
+        "the full read's answer"
+    );
+    assert_eq!(
+        scored(&looked_up.rows),
+        scored(&plain.rows),
         "the one-call text's answer"
     );
     assert_eq!(looked_up.trailer.exactness, full.trailer.exactness);
@@ -2336,8 +2305,8 @@ fn every_admitted_supplied_shape_answers_with_its_lookups_as_the_full_read_witho
             ReadSchedule::Materialised,
         );
         assert_eq!(
-            answer(&looked_up),
-            answer(&full),
+            scored(&looked_up.rows),
+            scored(&full.rows),
             "{name}: the answer with lookups is the full read's"
         );
         assert_eq!(
@@ -2394,8 +2363,8 @@ fn every_admitted_supplied_shape_answers_with_its_lookups_as_the_full_read_witho
         )
         .unwrap_or_else(|error| panic!("{name}, shared candidates: fuses without: {error:?}"));
         assert_eq!(
-            answer(&looked_up),
-            answer(&full),
+            scored(&looked_up.rows),
+            scored(&full.rows),
             "{name}, shared candidates: the full read's answer"
         );
         assert_eq!(

@@ -29,33 +29,24 @@
 
 #![allow(clippy::doc_markdown, reason = "prose names targets, not items")]
 
-use purrdf_core::purremb_fixture::Identities;
+#[path = "support/knn_space.rs"]
+mod knn_space;
+
+use knn_space::{EX, space};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use purrdf_core::distance::{Arithmetic, Path};
-use purrdf_core::{
-    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
-    DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract, MatrixInput, MatrixRow,
-    PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, RdfTermTarget, TargetSet, TermValue,
-    VectorDtype,
-};
-use purrdf_sparql_eval::knn::{Bound, Bounded, Exact, Reassociated, Resolved, Selected};
-use purrdf_sparql_eval::{
-    EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, PfArgs, PropertyFunction,
-};
+use purrdf_core::{DistanceMetric, TermValue};
+use purrdf_sparql_eval::knn::{Bound, Bounded, Exact, Reassociated, Selected};
+use purrdf_sparql_eval::{EmbeddingKnnRelation, Kernel, PfArgs, PropertyFunction};
 
 // A seeded splitmix64 stream of values in `[-1, 1)`, none of them exactly
 // representable as short decimals, so every product and partial sum rounds.
 use purrdf_testkit::rng::signed_unit_stream as stream;
 
-/// The reassociated arithmetic on this target.
-fn resolved() -> Resolved<Reassociated> {
-    Reassociated::resolve().expect("the default float environment is the IEEE one")
-}
-
 fn the_reassociated_path_is_the_one_this_build_was_made_for() {
-    let fast = resolved();
+    let fast = Reassociated::resolve().expect("the default float environment is the IEEE one");
     #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
     assert_eq!(fast.path(), Path::WasmSimd128);
     #[cfg(all(target_arch = "wasm32", not(target_feature = "simd128")))]
@@ -90,7 +81,7 @@ fn the_reassociated_path_is_the_one_this_build_was_made_for() {
 }
 
 fn the_reassociated_distance_is_within_the_error_bound_of_the_exact_one() {
-    let fast = resolved();
+    let fast = Reassociated::resolve().expect("the default float environment is the IEEE one");
     let exact_handle = Exact::resolve().expect("the default float environment");
     for (len, seed) in [(6_usize, 1_u64), (64, 2), (70, 3), (200, 4), (1_024, 5)] {
         let a = stream(len, seed);
@@ -175,7 +166,7 @@ fn the_reassociated_distance_is_within_the_error_bound_of_the_exact_one() {
 }
 
 fn the_reassociated_distance_refuses_an_overflow() {
-    let fast = resolved();
+    let fast = Reassociated::resolve().expect("the default float environment is the IEEE one");
     let huge = vec![1e300_f64; 70];
     let negative = vec![-1e300_f64; 70];
     assert_eq!(
@@ -200,90 +191,6 @@ fn the_reassociated_distance_refuses_an_overflow() {
             .is_some_and(f64::is_finite),
         "the valid neighbour ranks"
     );
-}
-
-/// The fixture's data namespace.
-const EX: &str = "https://example.org/d/";
-
-const FX: Identities = Identities::at("https://example.org/");
-
-/// Encode `rows` as a sealed PURREMB artifact under `metric` and open it as a queryable
-/// space.
-fn space(rows: &[(String, Vec<f64>)], metric: DistanceMetric) -> EmbeddingSpace {
-    let dimension = u32::try_from(rows[0].1.len()).expect("small");
-    let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
-    let (source, _) = CertifiedPurrpckSource::from_dataset(&dataset).expect("source pack");
-
-    let mut targets = Vec::with_capacity(rows.len());
-    let mut bindings = Vec::with_capacity(rows.len());
-    for (local, _) in rows {
-        let text = format!("{EX}{local}");
-        let target = RdfTermTarget::Iri(text.clone())
-            .into_target(true, None)
-            .expect("term target");
-        bindings.push((target.id, TermValue::iri(text)));
-        targets.push(target);
-    }
-    let set = TargetSet::new(targets.iter().map(|t| t.id).collect()).expect("target set");
-    let mut declared = targets;
-    declared.push(source.dataset_target(true).expect("dataset target"));
-    declared.sort_unstable_by_key(|target| target.id);
-
-    let contract = EmbeddingFamilyContract {
-        model: FX.artifact("model"),
-        engine: FX.artifact("engine"),
-        tokenizer: FX.artifact("tokenizer"),
-        execution: FX.stage("execution"),
-        subject_projection: FX.stage("projection"),
-        preprocessing: AppliedStage::NotApplied,
-        chunking: AppliedStage::NotApplied,
-        pooling: FX.stage("pooling"),
-        normalization: AppliedStage::NotApplied,
-        truncation: AppliedStage::NotApplied,
-        dtype: VectorDtype::F64,
-        metric,
-        dimensionality: DimensionalityPolicy::fixed(dimension, PrefixPostprocessing::None)
-            .expect("fixed dimensions"),
-        extensions: Vec::new(),
-    };
-    let family = contract.derive().expect("family");
-    let projection = ProjectionSpec::derive(family.id, dimension, PrefixPostprocessing::None);
-    let vector_space = projection.vector_space_id;
-
-    let matrix = MatrixInput {
-        family_id: family.id,
-        target_set_id: set.id,
-        stored_dimension: dimension,
-        rows: rows
-            .iter()
-            .zip(&bindings)
-            .map(|((_, values), (target, _))| MatrixRow::new(*target, values.clone()))
-            .collect(),
-        projections: vec![projection],
-    };
-    let metadata = CanonicalMetadataInput {
-        source,
-        family_contracts: vec![contract],
-        targets: declared,
-        target_sets: vec![set.clone()],
-        relations: Vec::new(),
-        token_spans: Vec::new(),
-        external_bindings: Vec::new(),
-        indexes: Vec::new(),
-        extensions: Vec::new(),
-    };
-    let mut builder = EmbeddingBuilder::from_typed_metadata(metadata);
-    builder.add_f64_matrix(matrix);
-    let encoded = builder.build().expect("encoded artifact");
-
-    EmbeddingSpace::from_artifact(
-        &encoded.bytes,
-        set.id,
-        vector_space,
-        bindings,
-        KnnGuard::new(64, 8).expect("positive bounds"),
-    )
-    .expect("the space opens")
 }
 
 /// Every neighbour `relation` ranks for the seed `query`, by local name, with its
@@ -338,7 +245,11 @@ fn the_reassociated_relation_constructs_and_ranks_within_the_error_bound_of_the_
         let fast = fast.expect("checked above");
         assert_eq!(
             fast.selected().map(Selected::path),
-            Some(resolved().path()),
+            Some(
+                Reassociated::resolve()
+                    .expect("the default float environment is the IEEE one")
+                    .path()
+            ),
             "the relation runs the path this build resolves"
         );
         for (query, _) in &rows {
@@ -355,7 +266,9 @@ fn the_reassociated_relation_constructs_and_ranks_within_the_error_bound_of_the_
                     (exact_distance - fast_distance).abs() <= bound,
                     "{metric:?} {query} -> {neighbour} on {}: exact {exact_distance}, \
                      reassociated {fast_distance}",
-                    resolved().path()
+                    Reassociated::resolve()
+                        .expect("the default float environment is the IEEE one")
+                        .path()
                 );
             }
         }

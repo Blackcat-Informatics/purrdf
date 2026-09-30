@@ -161,6 +161,61 @@ pub struct Term {
 }
 
 impl Term {
+    /// A term of `kind` carrying `value` and no other column: the one spelling of
+    /// the seven-field literal every constructor below starts from.
+    fn bare(kind: TermKind, value: String) -> Self {
+        Self {
+            kind,
+            value: Some(value),
+            datatype: None,
+            lang: None,
+            direction: None,
+            reifier: None,
+            triple: None,
+        }
+    }
+
+    /// An IRI term.
+    #[must_use]
+    pub fn iri(value: impl Into<String>) -> Self {
+        Self::bare(TermKind::Iri, value.into())
+    }
+
+    /// A blank-node term with the scope-local `label`.
+    #[must_use]
+    pub fn blank(label: impl Into<String>) -> Self {
+        Self::bare(TermKind::Bnode, label.into())
+    }
+
+    /// A literal with lexical form `value`, typed by the term id `datatype` when
+    /// one is given.
+    #[must_use]
+    pub fn literal(value: impl Into<String>, datatype: Option<usize>) -> Self {
+        Self {
+            datatype,
+            ..Self::bare(TermKind::Literal, value.into())
+        }
+    }
+
+    /// A language-tagged literal.
+    #[must_use]
+    pub fn lang_literal(value: impl Into<String>, lang: impl Into<String>) -> Self {
+        Self {
+            lang: Some(lang.into()),
+            ..Self::bare(TermKind::Literal, value.into())
+        }
+    }
+
+    /// A self-describing quoted triple (wire `"tt"`) naming its `(s, p, o)` term
+    /// ids directly, with no reifier.
+    #[must_use]
+    pub fn triple_term(spo: Triple3) -> Self {
+        Self {
+            triple: Some(spo),
+            ..Self::bare(TermKind::Triple, String::new())
+        }
+    }
+
     /// Apply `f` to every TERM ID this term carries, leaving value-bearing
     /// columns untouched.
     ///

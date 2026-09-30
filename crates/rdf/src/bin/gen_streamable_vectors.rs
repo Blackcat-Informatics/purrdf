@@ -44,28 +44,17 @@
 
 use std::path::Path;
 
-use purrdf_ed25519::SigningKey;
 use purrdf_gts::compact::DictPlan;
 use purrdf_rdf::capture_support::corpus_repo_root;
 use purrdf_rdf::gts_certify::compact_and_certify;
-use purrdf_rdf::gts_dict_vectors::{expected_fold_json, render_expected_json};
+use purrdf_rdf::gts_dict_vectors::{
+    expected_fold_json, render_expected_json, streamable_packaging_key,
+};
 
 /// The rewrite time recorded as `stream:timestamp` — matches
 /// `gen_dict_vectors::TIMESTAMP` so every frozen corpus vector authored under
 /// this task series shares one fixed authoring instant.
 const TIMESTAMP: &str = "2026-01-01T00:00:00Z";
-
-/// The fixed packaging signing key (`kid` "pack") `25b-streamable-compacted.gts`
-/// is packaged with — the MANDATORY streamable-compaction ordering/packaging
-/// signature (GTS-SPEC §10.1), never frame authorship (the source's own
-/// authorship signatures, signed under whatever key `25-streamable-source.gts`
-/// carries, ride through untouched as carried-forward detached-signature
-/// provenance). Deliberately a DIFFERENT key from `gen_dict_vectors`'
-/// `packaging_key` ([3u8; 32]/[7u8; 32]): distinct frozen corpora should not
-/// share signing key material even when both are fixed maintainer constants.
-fn packaging_key() -> SigningKey {
-    SigningKey::from_bytes(&[11u8; 32])
-}
 
 fn vectors_dir() -> std::path::PathBuf {
     corpus_repo_root().join("vectors")
@@ -95,7 +84,7 @@ fn main() {
         DictPlan::undicted(),
         TIMESTAMP,
         false,
-        (packaging_key(), "pack".to_string()),
+        (streamable_packaging_key(), "pack".to_string()),
     )
     .expect("streamable compaction over the frozen 25-streamable-source succeeds");
     write_vector(&vectors_dir.join("25b-streamable-compacted.gts"), &pack);

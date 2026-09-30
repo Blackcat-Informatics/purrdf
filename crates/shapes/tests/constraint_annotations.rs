@@ -16,11 +16,13 @@
 //! fails rather than passing by coincidence. Every refusal sits beside the valid
 //! neighbour it must not catch.
 
+#[path = "support/turtle.rs"]
+mod turtle;
+
 use std::sync::Arc;
 
-use purrdf::RdfDataset;
 use purrdf_shapes::engine::{
-    PreparedShapes, ValidationOptions, parse_shapes, validate_dataset_with_shapes_graph,
+    PreparedShapes, ValidationOptions, validate_dataset_with_shapes_graph,
 };
 use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};
 use purrdf_shapes::report::{
@@ -28,7 +30,6 @@ use purrdf_shapes::report::{
 };
 use purrdf_shapes::shapes::Shapes;
 use purrdf_shapes::term::{Literal, NamedNode, Term};
-use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 
 const PREFIXES: &str = "
 @prefix ex:   <http://example.org/ns#> .
@@ -38,36 +39,15 @@ const PREFIXES: &str = "
 @prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
 ";
 
-fn load(shapes_ttl: &str) -> Result<Shapes, String> {
-    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).map_err(String::from)
-}
-
-#[track_caller]
-fn loads(shapes_ttl: &str) -> Shapes {
-    load(shapes_ttl).unwrap_or_else(|error| panic!("the shapes graph must load: {error}"))
-}
-
-#[track_caller]
-fn refused(shapes_ttl: &str, needle: &str) {
-    let error = load(shapes_ttl).expect_err("the shapes graph must be refused at load");
-    assert!(
-        error.contains(needle),
-        "refusal must mention {needle:?}: {error}"
-    );
-}
-
-fn data(data_ttl: &str) -> Arc<RdfDataset> {
-    parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parses")
-}
-
 #[track_caller]
 fn validate_with(shapes: &Shapes, data_ttl: &str) -> ValidationReport {
-    validate_dataset_with_shapes_graph(&data(data_ttl), shapes, None).expect("validation runs")
+    validate_dataset_with_shapes_graph(&turtle::data(PREFIXES, data_ttl), shapes, None)
+        .expect("validation runs")
 }
 
 #[track_caller]
 fn validate(shapes_ttl: &str, data_ttl: &str) -> ValidationReport {
-    validate_with(&loads(shapes_ttl), data_ttl)
+    validate_with(&turtle::loads(PREFIXES, shapes_ttl), data_ttl)
 }
 
 fn sh(local: &str) -> String {
@@ -382,13 +362,18 @@ fn conflicting_reifier_annotations_are_refused_and_agreeing_ones_load() {
              _:r2 rdf:reifies <<( ex:S sh:nodeKind sh:Literal )>> ; sh:severity {b} ."
         )
     };
-    refused(&two_reifiers("sh:Warning", "sh:Info"), "two severities");
+    turtle::refused(
+        PREFIXES,
+        &two_reifiers("sh:Warning", "sh:Info"),
+        "two severities",
+    );
     assert_eq!(
         rows(&validate(&two_reifiers("sh:Warning", "sh:Warning"), "")),
         vec![row("NodeKindConstraintComponent", "Warning", &[])]
     );
 
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:Literal .
          _:r1 rdf:reifies <<( ex:S sh:nodeKind sh:Literal )>> ; sh:deactivated true .
          _:r2 rdf:reifies <<( ex:S sh:nodeKind sh:Literal )>> ; sh:deactivated false .",
@@ -405,7 +390,8 @@ fn conflicting_reifier_annotations_are_refused_and_agreeing_ones_load() {
         .is_empty()
     );
 
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:Literal .
          _:r1 rdf:reifies <<( ex:S sh:nodeKind sh:Literal )>> ; sh:message \"one\" .
          _:r2 rdf:reifies <<( ex:S sh:nodeKind sh:Literal )>> ; sh:message \"two\" .",
@@ -439,7 +425,11 @@ fn conflicting_reifier_annotations_are_refused_and_agreeing_ones_load() {
                  sh:qualifiedMinCount 1 {{| sh:severity sh:Info |}} ] ."
         )
     };
-    refused(&qualified("{| sh:severity sh:Warning |}"), "two severities");
+    turtle::refused(
+        PREFIXES,
+        &qualified("{| sh:severity sh:Warning |}"),
+        "two severities",
+    );
     // … and when they agree, the constraint takes the one severity.
     assert_eq!(
         rows(&validate(&qualified("{| sh:severity sh:Info |}"), "")),
@@ -450,15 +440,18 @@ fn conflicting_reifier_annotations_are_refused_and_agreeing_ones_load() {
 /// A value of the wrong kind is refused, and the right kind beside it loads.
 #[test]
 fn an_ill_typed_annotation_value_is_refused_and_a_well_typed_one_applies() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:Literal {| sh:deactivated \"yes\" |} .",
         "must be an xsd:boolean literal",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:Literal {| sh:severity \"Warning\" |} .",
         "must be an IRI",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:Literal {| sh:message ex:m |} .",
         "must be an xsd:string",
     );
@@ -481,11 +474,13 @@ fn an_ill_typed_annotation_value_is_refused_and_a_well_typed_one_applies() {
 /// they are refused; on a parameter statement they apply.
 #[test]
 fn an_annotation_on_a_non_parameter_statement_is_refused_and_on_a_parameter_applies() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a {| sh:deactivated true |} ; sh:nodeKind sh:Literal .",
         "is not a constraint parameter",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:Literal ;
            rdfs:label \"S\" {| sh:severity sh:Warning |} .",
         "is not a constraint parameter",
@@ -533,7 +528,8 @@ fn an_annotation_on_an_unasserted_triple_term_changes_nothing() {
 /// exactly as the fresh parse does.
 #[test]
 fn annotations_survive_the_prepared_product() {
-    let shapes = loads(
+    let shapes = turtle::loads(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:nodeKind sh:Literal {| sh:severity sh:Debug ; sh:message \"debug\" |} ;
            sh:property [ sh:path ex:p ; sh:minCount 1 {| sh:severity sh:Trace |} ;
@@ -584,7 +580,8 @@ fn debug_and_trace_results_conform_by_default_and_warning_does_not() {
 /// nothing for the default (which is what "no triples" means), the set otherwise.
 #[test]
 fn a_warning_only_report_follows_the_set_and_echoes_it() {
-    let mut shapes = loads(
+    let mut shapes = turtle::loads(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:severity sh:Warning ; sh:nodeKind sh:Literal .",
     );
     let default_report = validate_with(&shapes, "");
@@ -619,7 +616,8 @@ fn a_warning_only_report_follows_the_set_and_echoes_it() {
 /// set; a custom severity blocks conformance only when the set names it.
 #[test]
 fn debug_and_custom_severities_block_only_when_listed() {
-    let mut debug = loads(
+    let mut debug = turtle::loads(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:severity sh:Debug ; sh:nodeKind sh:Literal .",
     );
     assert!(validate_with(&debug, "").conforms);
@@ -627,7 +625,8 @@ fn debug_and_custom_severities_block_only_when_listed() {
     assert!(!validate_with(&debug, "").conforms);
 
     let advisory = Severity::Other(NamedNode::from("http://example.org/ns#Advisory"));
-    let mut custom = loads(
+    let mut custom = turtle::loads(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:severity ex:Advisory ; sh:nodeKind sh:Literal .",
     );
     assert!(
@@ -661,7 +660,7 @@ fn nested_conformance_checks_judge_against_the_same_set() {
         outer_rows(&validate(&node("sh:Warning"), "")),
         vec![sh("NodeConstraintComponent")]
     );
-    let mut relaxed = loads(&node("sh:Warning"));
+    let mut relaxed = turtle::loads(PREFIXES, &node("sh:Warning"));
     relaxed.set_validation_options(disallowing(&[Severity::Violation]));
     assert_eq!(
         outer_rows(&validate_with(&relaxed, "")),
@@ -689,7 +688,8 @@ fn nested_conformance_checks_judge_against_the_same_set() {
 /// A preparation restored from a product takes a request's set.
 #[test]
 fn a_restored_preparation_takes_the_request_set() {
-    let shapes = loads(
+    let shapes = turtle::loads(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:severity sh:Warning ; sh:nodeKind sh:Literal .",
     );
     let product = PreparedShapes::new(Arc::new(shapes))
@@ -703,7 +703,7 @@ fn a_restored_preparation_takes_the_request_set() {
     };
     let validate_prepared = |prepared: &PreparedShapes| {
         prepared
-            .bind_shared_dataset(data(""))
+            .bind_shared_dataset(turtle::data(PREFIXES, ""))
             .expect("binds")
             .validate()
             .expect("validates")

@@ -17,6 +17,9 @@
 //! Both halves are executed: the relation that declares a shortfall is refused, and
 //! the same relation declaring nothing validates to a report.
 
+#[path = "support/relation.rs"]
+mod relation;
+
 use std::sync::Arc;
 
 use purrdf::RdfDataset;
@@ -135,8 +138,7 @@ fn people() -> Arc<RdfDataset> {
         "<{EX}p0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{EX}Person> .\n\
          <{EX}p1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{EX}Person> .\n"
     );
-    purrdf_shapes::text_ingest::parse_ntriples_to_dataset(&triples)
-        .unwrap_or_else(|errors| panic!("fixture data: {}", errors.join("\n")))
+    relation::ntriples(&triples)
 }
 
 /// Validate the fixture with `relations` installed, on the governed lane.

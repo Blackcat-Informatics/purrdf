@@ -166,7 +166,7 @@ fn required_header_literal(
     let mut values = BTreeSet::new();
     for record in records {
         if &record.graph != config.header_graph()
-            || iri(&record.subject) != Some(config.header_subject_iri())
+            || record.subject.as_iri() != Some(config.header_subject_iri())
             || record.predicate != predicate
         {
             continue;
@@ -235,7 +235,7 @@ fn analyze_data(
             .or_default()
             .record(record, "VoID property partition")?;
         if record.predicate == config.source_roles().rdf_type() {
-            let Some(class) = iri(&record.object) else {
+            let Some(class) = record.object.as_iri() else {
                 return Err(ProjectionError::integrity(
                     "VoID rdf:type object in a selected data graph must be an IRI",
                 ));
@@ -321,12 +321,12 @@ fn analyze_linksets(
         .iter()
         .filter(|record| &record.graph == config.alignment_graph())
     {
-        let Some(subject) = iri(&record.subject) else {
+        let Some(subject) = record.subject.as_iri() else {
             return Err(ProjectionError::integrity(
                 "VoID alignment subject must be an IRI",
             ));
         };
-        let Some(object) = iri(&record.object) else {
+        let Some(object) = record.object.as_iri() else {
             return Err(ProjectionError::integrity(
                 "VoID alignment object must be an IRI",
             ));
@@ -441,7 +441,7 @@ fn collect_external_links<'records, 'config>(
     let mut output = BTreeMap::<&str, BTreeSet<&str>>::new();
     for record in records {
         if &record.graph != config.metadata_graph()
-            || iri(&record.subject) != Some(config.header_subject_iri())
+            || record.subject.as_iri() != Some(config.header_subject_iri())
         {
             continue;
         }
@@ -450,7 +450,7 @@ fn collect_external_links<'records, 'config>(
         }) else {
             continue;
         };
-        let Some(object) = iri(&record.object) else {
+        let Some(object) = record.object.as_iri() else {
             return Err(ProjectionError::integrity(format!(
                 "VoID external-link source predicate `{}` requires an IRI object",
                 record.predicate
@@ -691,13 +691,6 @@ fn generated_iri(config: &VoidConfig, local: &str, label: &str) -> Result<String
 
 fn count_u64(value: usize, label: &str) -> Result<u64, ProjectionError> {
     u64::try_from(value).map_err(|_| ProjectionError::limit(format!("{label} count exceeds u64")))
-}
-
-fn iri(term: &ProjectionTerm) -> Option<&str> {
-    let ProjectionTerm::Iri { value } = term else {
-        return None;
-    };
-    Some(value)
 }
 
 #[cfg(test)]

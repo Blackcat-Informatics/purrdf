@@ -277,42 +277,6 @@ impl TermBuilder {
     }
 }
 
-fn iri_term(value: &str) -> Term {
-    Term {
-        kind: TermKind::Iri,
-        value: Some(value.to_string()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
-fn literal_term(value: &str, datatype: Option<usize>) -> Term {
-    Term {
-        kind: TermKind::Literal,
-        value: Some(value.to_string()),
-        datatype,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
-fn bnode_term(label: &str) -> Term {
-    Term {
-        kind: TermKind::Bnode,
-        value: Some(label.to_string()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
 fn safe_archive_path(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("empty archive path".to_string());
@@ -769,16 +733,16 @@ pub fn pack_to_writer<W: Write>(sources: &[&Path], mut output: W) -> Result<(), 
     let mut w = Writer::new("files");
 
     let shared = vec![
-        iri_term(&(FILES_NS.to_string() + "FileEntry")),
-        iri_term(&(FILES_NS.to_string() + "path")),
-        iri_term(&(FILES_NS.to_string() + "digest")),
-        iri_term(&(FILES_NS.to_string() + "size")),
-        iri_term(&(FILES_NS.to_string() + "mode")),
-        iri_term(&(FILES_NS.to_string() + "modified")),
-        iri_term(&(FILES_NS.to_string() + "mediaType")),
-        iri_term(RDF_TYPE),
-        iri_term(XSD_INTEGER),
-        iri_term(XSD_DATETIME),
+        Term::iri(FILES_NS.to_string() + "FileEntry"),
+        Term::iri(FILES_NS.to_string() + "path"),
+        Term::iri(FILES_NS.to_string() + "digest"),
+        Term::iri(FILES_NS.to_string() + "size"),
+        Term::iri(FILES_NS.to_string() + "mode"),
+        Term::iri(FILES_NS.to_string() + "modified"),
+        Term::iri(FILES_NS.to_string() + "mediaType"),
+        Term::iri(RDF_TYPE),
+        Term::iri(XSD_INTEGER),
+        Term::iri(XSD_DATETIME),
     ];
     w.add_terms(&shared);
     let file_entry_id: usize = 0;
@@ -799,13 +763,13 @@ pub fn pack_to_writer<W: Write>(sources: &[&Path], mut output: W) -> Result<(), 
 
     for (idx, entry) in entries.iter().enumerate() {
         let entry_label = format!("f{idx}");
-        let entry_term = bnode_term(&entry_label);
-        let path_term = literal_term(&entry.relpath, None);
-        let digest_term = literal_term(&entry.digest, None);
-        let size_term = literal_term(&entry.size.to_string(), Some(xsd_integer_id));
-        let mode_term = literal_term(&entry.mode.to_string(), Some(xsd_integer_id));
-        let modified_term = literal_term(&entry.modified, Some(xsd_datetime_id));
-        let media_term = literal_term(&entry.media_type, None);
+        let entry_term = Term::blank(&entry_label);
+        let path_term = Term::literal(&entry.relpath, None);
+        let digest_term = Term::literal(&entry.digest, None);
+        let size_term = Term::literal(entry.size.to_string(), Some(xsd_integer_id));
+        let mode_term = Term::literal(entry.mode.to_string(), Some(xsd_integer_id));
+        let modified_term = Term::literal(&entry.modified, Some(xsd_datetime_id));
+        let media_term = Term::literal(&entry.media_type, None);
 
         let base = shared.len() + file_terms.len();
         file_terms.extend(vec![
@@ -1230,17 +1194,17 @@ pub fn read_entries(graph: &Graph) -> Result<BTreeMap<String, FileEntry>, String
             path: path.clone(),
             kind,
             digest: fields.get("digest").cloned(),
-            size: parse_optional_u64(fields, "size")?,
-            mode: parse_optional_u32(fields, "mode")?,
+            size: parse_optional_integer(fields, "size")?,
+            mode: parse_optional_integer(fields, "mode")?,
             modified: fields.get("modified").cloned(),
             media_type: fields.get("mediaType").cloned(),
             link_target: fields.get("linkTarget").cloned(),
-            uid: parse_optional_u64(fields, "uid")?,
-            gid: parse_optional_u64(fields, "gid")?,
+            uid: parse_optional_integer(fields, "uid")?,
+            gid: parse_optional_integer(fields, "gid")?,
             user_name: fields.get("userName").cloned(),
             group_name: fields.get("groupName").cloned(),
-            dev_major: parse_optional_u64(fields, "devMajor")?,
-            dev_minor: parse_optional_u64(fields, "devMinor")?,
+            dev_major: parse_optional_integer(fields, "devMajor")?,
+            dev_minor: parse_optional_integer(fields, "devMinor")?,
             xattrs: read_xattrs(*s, &direct, &xattr_links)?,
             pax_records: read_pax_records(*s, &direct, &pax_links)?,
             data: None,
@@ -1319,23 +1283,21 @@ fn read_pax_records(
     Ok(out)
 }
 
-fn parse_optional_u64(fields: &BTreeMap<String, String>, key: &str) -> Result<Option<u64>, String> {
+/// The integer at `key`, when present: `size`, `uid` and the device numbers
+/// are `u64`, `mode` is `u32`.
+fn parse_optional_integer<T>(
+    fields: &BTreeMap<String, String>,
+    key: &str,
+) -> Result<Option<T>, String>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
     fields
         .get(key)
         .map(|value| {
             value
-                .parse::<u64>()
-                .map_err(|err| format!("invalid files:{key} integer {value:?}: {err}"))
-        })
-        .transpose()
-}
-
-fn parse_optional_u32(fields: &BTreeMap<String, String>, key: &str) -> Result<Option<u32>, String> {
-    fields
-        .get(key)
-        .map(|value| {
-            value
-                .parse::<u32>()
+                .parse::<T>()
                 .map_err(|err| format!("invalid files:{key} integer {value:?}: {err}"))
         })
         .transpose()

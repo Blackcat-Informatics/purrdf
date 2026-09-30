@@ -55,6 +55,8 @@ pub mod path;
 pub(crate) mod plan;
 pub(crate) mod prebinding;
 pub mod product;
+#[doc(hidden)]
+pub mod product_fixture;
 pub mod provenance;
 pub mod pydantic;
 pub mod report;

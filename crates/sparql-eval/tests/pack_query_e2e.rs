@@ -21,20 +21,19 @@
 //! resulting `SparqlResult::Solutions` are asserted equal (variables equal, and rows
 //! equal after sorting, since SPARQL `SELECT` without `ORDER BY` yields a bag).
 
+mod support;
+use purrdf_core::term_fixture::iri;
+use purrdf_core::term_fixture::pack_bytes as build_pack_bytes;
 use std::sync::Arc;
+use support::solutions;
 
 use purrdf_core::{
-    BlankScope, DatasetView, PackBuilder, PackView, RdfDataset, RdfDatasetBuilder, RdfLiteral,
-    RdfTextDirection, SparqlResult, TermValue,
+    BlankScope, DatasetView, PackView, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection,
+    SparqlResult, TermValue,
 };
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 
 // ── shared fixture ───────────────────────────────────────────────────────────────
-
-/// An `example.org` IRI value.
-fn iri(name: &str) -> TermValue {
-    TermValue::iri(format!("http://example.org/{name}"))
-}
 
 /// Build the rich fixture `RdfDataset`: default graph (with a two-hop `knows` join
 /// chain, a term used as both predicate and subject, every literal shape, a scoped
@@ -136,11 +135,6 @@ fn build_fixture() -> Arc<RdfDataset> {
     b.freeze().expect("fixture dataset must validate")
 }
 
-/// Build the pack bytes for `dataset` and open a `PackView` over them.
-fn build_pack_bytes(dataset: &RdfDataset) -> Vec<u8> {
-    PackBuilder::build_bytes(dataset).expect("pack build must succeed for a well-formed fixture")
-}
-
 // ── engine harness ───────────────────────────────────────────────────────────────
 
 /// Prepare and evaluate `query` over any [`DatasetView`] backend through the
@@ -153,17 +147,6 @@ fn run<D: DatasetView + Sync>(dataset: &D, query: &str) -> SparqlResult {
     engine
         .query_prepared_view(dataset, &prepared, &[], QueryOptions::EMPTY)
         .expect("query")
-}
-
-/// Destructure a `SparqlResult` into `(variables, rows)`, panicking on any other
-/// shape.
-fn solutions(result: SparqlResult) -> (Vec<String>, Vec<Vec<Option<TermValue>>>) {
-    match result {
-        SparqlResult::Solutions {
-            variables, rows, ..
-        } => (variables, rows),
-        other => panic!("expected solutions, got {other:?}"),
-    }
 }
 
 /// A deterministic sort key for a solution row (`TermValue` is not `Ord`; its

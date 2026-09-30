@@ -31,10 +31,8 @@
 
 use purrdf_core::purremb_fixture::Identities;
 use std::collections::{BTreeMap, BTreeSet};
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_core::distance::Arithmetic;
 use purrdf_core::{
@@ -72,6 +70,13 @@ const TEXT_STRATUM: &str = "https://example.org/stratum/lexical";
 const KNN_STRATUM: &str = "https://example.org/stratum/neighbour";
 // The datatype this host renders a neighbour count with.
 use purrdf_core::datatype::XSD_INTEGER;
+
+#[path = "support/registry.rs"]
+mod registry;
+
+use purrdf_retrieval::block_on;
+use purrdf_retrieval::fixture::iri;
+use registry::{entities, kernel_iri};
 /// The reciprocal-rank smoothing constant this host fuses under.
 const K: u32 = 60;
 /// The row bound this host asks for. Fused enumeration is top-k by
@@ -82,14 +87,6 @@ const TOP_K: TopK = TopK::new(16);
 
 fn ex(local: &str) -> String {
     format!("https://example.org/{local}")
-}
-
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
-
-fn kernel_iri(text: &str) -> purrdf_core::Iri {
-    purrdf_core::parse_iri(text).expect("fixture IRIs are valid")
 }
 
 // ---------------------------------------------------------------------------
@@ -391,25 +388,6 @@ fn profile() -> FusionProfile {
 // ---------------------------------------------------------------------------
 // A minimal single-threaded executor
 // ---------------------------------------------------------------------------
-
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Reading the answer
@@ -1146,19 +1124,10 @@ fn answer_under_the_declared_contract(
     }
 }
 
-/// The candidates of an answer, in final order.
-fn candidates(result: &SearchResult) -> Vec<String> {
-    result
-        .rows
-        .iter()
-        .map(|row| row.entity.as_str().to_owned())
-        .collect()
-}
-
 /// Every candidate of `result` is distinct, compared against a set rather than
 /// by eye.
 fn assert_candidates_are_distinct(result: &SearchResult) {
-    let emitted = candidates(result);
+    let emitted = entities(result);
     let distinct: BTreeSet<&str> = emitted.iter().map(String::as_str).collect();
     assert_eq!(
         distinct.len(),
@@ -1270,12 +1239,12 @@ fn the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat
     );
     assert_candidates_are_distinct(&result);
     assert_eq!(
-        candidates(&result).len(),
+        entities(&result).len(),
         4,
         "four documents, four candidates"
     );
     assert_eq!(
-        candidates(&result)
+        entities(&result)
             .iter()
             .filter(|candidate| *candidate == &format!("<{}>", ex("hub")))
             .count(),
@@ -1290,7 +1259,7 @@ fn the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat
         let single =
             answer_under_the_declared_contract(&lexical_request(term), &registry, &data, &profile);
         assert!(
-            candidates(&single).contains(&format!("<{}>", ex("hub"))),
+            entities(&single).contains(&format!("<{}>", ex("hub"))),
             "{term} alone reaches ex:hub, so the full needle matched it through {term} too"
         );
         assert_candidates_are_distinct(&single);
@@ -1721,7 +1690,7 @@ fn the_sole_text_producer_over_one_document_still_returns_that_document() {
         "one document is one row of declared depth"
     );
     assert_eq!(
-        candidates(&result),
+        entities(&result),
         vec![format!("<{}>", ex("only"))],
         "the document the index holds is the answer"
     );
@@ -1840,9 +1809,9 @@ fn a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness() {
     // truncated one — so it reaches the answer through no stratum at all,
     // because the needle does not match its text either.
     assert!(
-        !candidates(&declared).contains(&format!("<{}>", ex("d"))),
+        !entities(&declared).contains(&format!("<{}>", ex("d"))),
         "the fixture is genuinely short: {:?}",
-        candidates(&declared)
+        entities(&declared)
     );
 
     // And the answer says so, where a consumer looks.
@@ -1914,7 +1883,7 @@ fn a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores() {
         "every stratum was exhaustive and whole, and the answer may say so"
     );
     assert!(
-        candidates(&whole).contains(&format!("<{}>", ex("d"))),
+        entities(&whole).contains(&format!("<{}>", ex("d"))),
         "including the document the truncated space above could not name"
     );
     for stratum in [TEXT_STRATUM, KNN_STRATUM] {

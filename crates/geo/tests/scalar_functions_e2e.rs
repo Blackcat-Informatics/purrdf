@@ -43,12 +43,18 @@
 //! geometry-type namespace are all the caller's, so the fixtures name
 //! `http://example.org/...` throughout and never an OGC IRI.
 
+mod support;
+
+// `CRS` is deliberately used for BOTH the default WKT system and the GeoJSON system: the
+// last test compares a WKT literal against a GeoJSON literal denoting the same geometry,
+// and `purrdf-geo` reprojects nothing, so the comparison is only meaningful if the caller
+// has declared the two serializations to share a system.
 use std::sync::Arc;
+use support::{CRS, crs};
 
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
 };
-use purrdf_geo::geom::Crs;
 use purrdf_geo::vocab::{GeoVocab, GeoVocabBuilder};
 use purrdf_geo::{GeoTerm, functions};
 use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, UserFunctionRegistry};
@@ -61,14 +67,6 @@ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, UserFun
 const GEO: &str = "http://example.org/geo#";
 /// The host's `geof:` namespace.
 const GEOF: &str = "http://example.org/geof/";
-/// The one coordinate reference system in play.
-///
-/// Deliberately used for BOTH the default WKT system and the GeoJSON system: the
-/// last test compares a WKT literal against a GeoJSON literal denoting the same
-/// geometry, and `purrdf-geo` reprojects nothing, so the comparison is only
-/// meaningful if the caller has declared the two serializations to share a
-/// system.
-const CRS: &str = "http://example.org/crs/planar";
 /// A second system, named only as the argument of the unimplemented
 /// `geof:transform`.
 const CRS_OTHER: &str = "http://example.org/crs/other";
@@ -107,11 +105,6 @@ const MALFORMED: &str = "POINT(1";
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
-
-/// The host's coordinate reference system.
-fn crs() -> Crs {
-    Crs::new(CRS).expect("a non-empty IRI")
-}
 
 /// A fully declared vocabulary: one system, its unit, the metre, and the Simple
 /// Features namespace `geof:geometryType` answers from.

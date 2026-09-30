@@ -23,6 +23,10 @@
 //! Schema validator, that each projection accepts and rejects what SHACL
 //! validation does.
 
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "../examples/support/metaschemas.rs"]
+mod metaschemas;
+
 use std::collections::BTreeMap;
 
 use purrdf_lex::json::Value;
@@ -362,9 +366,14 @@ fn owned3(rows: &[(&str, &str, &str)]) -> Vec<(String, String, String)> {
 
 /// The declaration of the exported TypeScript type `name`, through its `;`.
 fn ts_type(ts: &str, name: &str) -> Option<String> {
-    let start = ts.find(&format!("export type {name} = "))?;
-    let block = &ts[start..];
-    Some(block[..block.find(";\n\n").expect("declaration end") + 2].to_owned())
+    declaration(ts, &format!("export type {name} = "), ";\n\n")
+}
+
+/// The declaration in `source` that starts at `head` and runs to the first
+/// `end` after it, keeping `end`'s first two bytes; `None` when `head` is absent.
+fn declaration(source: &str, head: &str, end: &str) -> Option<String> {
+    let block = &source[source.find(head)?..];
+    Some(block[..block.find(end).expect("declaration end") + 2].to_owned())
 }
 
 /// The Pydantic field whose alias is `alias`, when the model has one.
@@ -376,9 +385,7 @@ fn py_field(py: &str, alias: &str) -> Option<String> {
 
 /// The GraphQL object type `name`, when the SDL declares one.
 fn gql_type(gql: &str, name: &str) -> Option<String> {
-    let start = gql.find(&format!("type {name} {{\n"))?;
-    let block = &gql[start..];
-    Some(block[..block.find("\n}\n").expect("type end") + 2].to_owned())
+    declaration(gql, &format!("type {name} {{\n"), "\n}\n")
 }
 
 /// Every `$comment` the compiled `Holder` definition carries (its own and each
@@ -3212,22 +3219,7 @@ fn linkml_projects_reifier_severity() {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod observed {
-    fn metaschemas() -> &'static purrdf_jsonschema::Metaschemas {
-        static SET: std::sync::OnceLock<purrdf_jsonschema::Metaschemas> =
-            std::sync::OnceLock::new();
-        SET.get_or_init(|| {
-            purrdf_jsonschema::Metaschemas::new(
-                purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
-                    .iter()
-                    .map(|&(uri, text)| {
-                        let document: Value =
-                            purrdf_lex::json::read(text).expect("meta-schema JSON");
-                        (uri, document)
-                    }),
-            )
-            .expect("the draft 2020-12 meta-schemas")
-        })
-    }
+    use super::metaschemas::metaschemas;
     use super::*;
     use purrdf_shapes::engine::{parse_shapes, validate_dataset_with_shapes_graph};
 

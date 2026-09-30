@@ -3,18 +3,11 @@
 
 //! Process-boundary tests for the SPARQL UPDATE pipeline and its atomic governor trip.
 
-use std::process::{Command, Output};
+mod support;
+use support::run;
 
-const PURRDF: &str = env!("CARGO_BIN_EXE_purrdf");
 const INSERT: &str =
     "INSERT DATA { <http://example.org/new> <http://example.org/p> <http://example.org/value> }";
-
-fn run(args: &[&str]) -> Output {
-    Command::new(PURRDF)
-        .args(args)
-        .output()
-        .expect("spawn purrdf")
-}
 
 fn fixture(dir: &std::path::Path) -> String {
     let path = dir.join("input.ttl");

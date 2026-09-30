@@ -203,6 +203,17 @@ pub enum Query {
 }
 
 impl Query {
+    /// The query's `WHERE`-body pattern, whichever query form it is.
+    #[must_use]
+    pub const fn pattern(&self) -> &GraphPattern {
+        match self {
+            Self::Select { pattern, .. }
+            | Self::Construct { pattern, .. }
+            | Self::Describe { pattern, .. }
+            | Self::Ask { pattern, .. } => pattern,
+        }
+    }
+
     /// The query's `FROM` / `FROM NAMED` dataset clause (empty = the store default).
     pub fn dataset(&self) -> &QueryDataset {
         self.prologue().0

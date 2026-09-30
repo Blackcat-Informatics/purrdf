@@ -809,6 +809,12 @@ fn take_token<'a>(tokens: &mut [Spanned<'a>], pos: &mut usize) -> Option<Token<'
     token
 }
 
+/// The token at `pos` of a lexed statement or document, if the cursor has not run
+/// past its end: the one lookahead the line cursor and the document parser share.
+fn token_at<'t, 'a>(tokens: &'t [Spanned<'a>], pos: usize) -> Option<&'t Token<'a>> {
+    tokens.get(pos).map(|spanned| &spanned.token)
+}
+
 /// A cursor over one line's lexer tokens, parsing N-Triples/N-Quads terms.
 ///
 /// The cursor OWNS its token buffer (discarded after the line is parsed), so
@@ -850,7 +856,7 @@ impl<'a> TokenCursor<'a> {
     }
 
     fn peek(&self) -> Option<&Token<'a>> {
-        self.tokens.get(self.pos).map(|s| &s.token)
+        token_at(&self.tokens, self.pos)
     }
 
     /// Consume the current token, MOVING it out of the owned buffer (a cheap
@@ -2238,11 +2244,11 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     }
 
     fn peek(&self) -> Option<&Token<'a>> {
-        self.tokens.get(self.pos).map(|s| &s.token)
+        token_at(&self.tokens, self.pos)
     }
 
     fn peek2(&self) -> Option<&Token<'a>> {
-        self.tokens.get(self.pos + 1).map(|s| &s.token)
+        token_at(&self.tokens, self.pos + 1)
     }
 
     /// Consume the current token, MOVING it out of the owned buffer (a cheap

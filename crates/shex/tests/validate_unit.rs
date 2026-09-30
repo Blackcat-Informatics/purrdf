@@ -62,10 +62,6 @@ fn check(
 
 const S1: &str = "http://a.example/S1";
 
-fn iri(v: &str) -> TermValue {
-    TermValue::iri(v)
-}
-
 // ── node-constraint families ────────────────────────────────────────────────
 
 #[test]
@@ -88,19 +84,19 @@ fn node_kind_families() {
         ),
     ]);
     let schema = "<S1> { <p1> IRI }";
-    assert!(check(schema, &data, iri("http://a.example/s1"), S1).is_ok());
-    assert!(check(schema, &data, iri("http://a.example/s2"), S1).is_err());
-    assert!(check(schema, &data, iri("http://a.example/s3"), S1).is_err());
+    assert!(check(schema, &data, TermValue::iri("http://a.example/s1"), S1).is_ok());
+    assert!(check(schema, &data, TermValue::iri("http://a.example/s2"), S1).is_err());
+    assert!(check(schema, &data, TermValue::iri("http://a.example/s3"), S1).is_err());
     let schema = "<S1> { <p1> BNODE }";
-    assert!(check(schema, &data, iri("http://a.example/s2"), S1).is_ok());
-    assert!(check(schema, &data, iri("http://a.example/s1"), S1).is_err());
+    assert!(check(schema, &data, TermValue::iri("http://a.example/s2"), S1).is_ok());
+    assert!(check(schema, &data, TermValue::iri("http://a.example/s1"), S1).is_err());
     let schema = "<S1> { <p1> LITERAL }";
-    assert!(check(schema, &data, iri("http://a.example/s3"), S1).is_ok());
-    assert!(check(schema, &data, iri("http://a.example/s2"), S1).is_err());
+    assert!(check(schema, &data, TermValue::iri("http://a.example/s3"), S1).is_ok());
+    assert!(check(schema, &data, TermValue::iri("http://a.example/s2"), S1).is_err());
     let schema = "<S1> { <p1> NONLITERAL }";
-    assert!(check(schema, &data, iri("http://a.example/s1"), S1).is_ok());
-    assert!(check(schema, &data, iri("http://a.example/s2"), S1).is_ok());
-    assert!(check(schema, &data, iri("http://a.example/s3"), S1).is_err());
+    assert!(check(schema, &data, TermValue::iri("http://a.example/s1"), S1).is_ok());
+    assert!(check(schema, &data, TermValue::iri("http://a.example/s2"), S1).is_ok());
+    assert!(check(schema, &data, TermValue::iri("http://a.example/s3"), S1).is_err());
 }
 
 #[test]
@@ -117,8 +113,9 @@ fn datatype_requires_lexical_validity() {
         T::L(RdfLiteral::typed("4.2", xsd_int)),
     )]);
     let schema = "<S1> { <p1> <http://www.w3.org/2001/XMLSchema#integer> }";
-    assert!(check(schema, &good, iri("http://a.example/s1"), S1).is_ok());
-    let err = check(schema, &bad, iri("http://a.example/s1"), S1).expect_err("ill-formed");
+    assert!(check(schema, &good, TermValue::iri("http://a.example/s1"), S1).is_ok());
+    let err =
+        check(schema, &bad, TermValue::iri("http://a.example/s1"), S1).expect_err("ill-formed");
     assert!(err.contains("ill-formed"), "reason: {err}");
 }
 
@@ -134,7 +131,7 @@ fn string_facets_count_scalar_values() {
         check(
             "<S1> { <p1> LITERAL LENGTH 2 }",
             &data,
-            iri("http://a.example/s1"),
+            TermValue::iri("http://a.example/s1"),
             S1
         )
         .is_ok()
@@ -143,7 +140,7 @@ fn string_facets_count_scalar_values() {
         check(
             "<S1> { <p1> LITERAL LENGTH 3 }",
             &data,
-            iri("http://a.example/s1"),
+            TermValue::iri("http://a.example/s1"),
             S1
         )
         .is_err()
@@ -152,7 +149,7 @@ fn string_facets_count_scalar_values() {
         check(
             "<S1> { <p1> LITERAL MINLENGTH 2 MAXLENGTH 2 }",
             &data,
-            iri("http://a.example/s1"),
+            TermValue::iri("http://a.example/s1"),
             S1
         )
         .is_ok()
@@ -170,7 +167,7 @@ fn pattern_facet_is_partial_match() {
         check(
             "<S1> { <p1> LITERAL /bc/ }",
             &data,
-            iri("http://a.example/s1"),
+            TermValue::iri("http://a.example/s1"),
             S1
         )
         .is_ok()
@@ -179,7 +176,7 @@ fn pattern_facet_is_partial_match() {
         check(
             "<S1> { <p1> LITERAL /^bc$/ }",
             &data,
-            iri("http://a.example/s1"),
+            TermValue::iri("http://a.example/s1"),
             S1
         )
         .is_err()
@@ -188,7 +185,7 @@ fn pattern_facet_is_partial_match() {
         check(
             "<S1> { <p1> LITERAL /^ABCD$/i }",
             &data,
-            iri("http://a.example/s1"),
+            TermValue::iri("http://a.example/s1"),
             S1
         )
         .is_ok()
@@ -244,7 +241,7 @@ fn pattern_facet_xsd_dialect_through_shexj() {
             &schema,
             &data,
             &[(
-                iri("http://a.example/s1"),
+                TermValue::iri("http://a.example/s1"),
                 ShapeSelector::Label(S1.to_owned()),
             )],
         );
@@ -307,7 +304,7 @@ fn numeric_facets_promote_across_types() {
         check(
             "<S1> { <p1> MININCLUSIVE 4 }",
             &data,
-            iri("http://a.example/s1"),
+            TermValue::iri("http://a.example/s1"),
             S1
         )
         .is_ok()
@@ -316,7 +313,7 @@ fn numeric_facets_promote_across_types() {
         check(
             "<S1> { <p1> MINEXCLUSIVE 4.5 }",
             &data,
-            iri("http://a.example/s1"),
+            TermValue::iri("http://a.example/s1"),
             S1
         )
         .is_err()
@@ -325,7 +322,7 @@ fn numeric_facets_promote_across_types() {
         check(
             "<S1> { <p1> MAXINCLUSIVE 4.5 }",
             &data,
-            iri("http://a.example/s1"),
+            TermValue::iri("http://a.example/s1"),
             S1
         )
         .is_ok()
@@ -334,7 +331,7 @@ fn numeric_facets_promote_across_types() {
         check(
             "<S1> { <p1> TOTALDIGITS 2 }",
             &data,
-            iri("http://a.example/s1"),
+            TermValue::iri("http://a.example/s1"),
             S1
         )
         .is_ok()
@@ -343,7 +340,7 @@ fn numeric_facets_promote_across_types() {
         check(
             "<S1> { <p1> FRACTIONDIGITS 0 }",
             &data,
-            iri("http://a.example/s1"),
+            TermValue::iri("http://a.example/s1"),
             S1
         )
         .is_err()
@@ -369,7 +366,7 @@ fn facets_apply_to_iri_and_bnode_lexical_forms() {
         check(
             "<S1> { <p1> LENGTH 19 }",
             &data,
-            iri("http://a.example/s1"),
+            TermValue::iri("http://a.example/s1"),
             S1
         )
         .is_ok()
@@ -379,7 +376,7 @@ fn facets_apply_to_iri_and_bnode_lexical_forms() {
         check(
             "<S1> { <p1> LENGTH 5 }",
             &data,
-            iri("http://a.example/s2"),
+            TermValue::iri("http://a.example/s2"),
             S1
         )
         .is_ok()
@@ -388,7 +385,7 @@ fn facets_apply_to_iri_and_bnode_lexical_forms() {
         check(
             "<S1> { <p1> LENGTH 4 }",
             &data,
-            iri("http://a.example/s2"),
+            TermValue::iri("http://a.example/s2"),
             S1
         )
         .is_err()
@@ -405,7 +402,7 @@ fn value_set_stems_and_exclusions() {
         check(
             schema,
             &data("http://a.example/v1"),
-            iri("http://a.example/s1"),
+            TermValue::iri("http://a.example/s1"),
             S1
         )
         .is_ok()
@@ -414,7 +411,7 @@ fn value_set_stems_and_exclusions() {
         check(
             schema,
             &data("http://b.example/v1"),
-            iri("http://a.example/s1"),
+            TermValue::iri("http://a.example/s1"),
             S1
         )
         .is_err()
@@ -425,7 +422,7 @@ fn value_set_stems_and_exclusions() {
         check(
             schema,
             &data("http://a.example/v2"),
-            iri("http://a.example/s1"),
+            TermValue::iri("http://a.example/s1"),
             S1
         )
         .is_ok()
@@ -434,7 +431,7 @@ fn value_set_stems_and_exclusions() {
         check(
             schema,
             &data("http://a.example/v1"),
-            iri("http://a.example/s1"),
+            TermValue::iri("http://a.example/s1"),
             S1
         )
         .is_err()
@@ -443,7 +440,7 @@ fn value_set_stems_and_exclusions() {
         check(
             schema,
             &data("http://a.example/w9"),
-            iri("http://a.example/s1"),
+            TermValue::iri("http://a.example/s1"),
             S1
         )
         .is_err()
@@ -460,12 +457,52 @@ fn language_stems_use_rfc4647_basic_filtering() {
         )])
     };
     let schema = "<S1> { <p1> [ @fr~ ] }";
-    assert!(check(schema, &data("fr"), iri("http://a.example/s1"), S1).is_ok());
-    assert!(check(schema, &data("fr-BE"), iri("http://a.example/s1"), S1).is_ok());
-    assert!(check(schema, &data("frc"), iri("http://a.example/s1"), S1).is_err());
+    assert!(
+        check(
+            schema,
+            &data("fr"),
+            TermValue::iri("http://a.example/s1"),
+            S1
+        )
+        .is_ok()
+    );
+    assert!(
+        check(
+            schema,
+            &data("fr-BE"),
+            TermValue::iri("http://a.example/s1"),
+            S1
+        )
+        .is_ok()
+    );
+    assert!(
+        check(
+            schema,
+            &data("frc"),
+            TermValue::iri("http://a.example/s1"),
+            S1
+        )
+        .is_err()
+    );
     let schema = "<S1> { <p1> [ @~ - @fr-be ] }";
-    assert!(check(schema, &data("fr"), iri("http://a.example/s1"), S1).is_ok());
-    assert!(check(schema, &data("fr-BE"), iri("http://a.example/s1"), S1).is_err());
+    assert!(
+        check(
+            schema,
+            &data("fr"),
+            TermValue::iri("http://a.example/s1"),
+            S1
+        )
+        .is_ok()
+    );
+    assert!(
+        check(
+            schema,
+            &data("fr-BE"),
+            TermValue::iri("http://a.example/s1"),
+            S1
+        )
+        .is_err()
+    );
 }
 
 // ── EXTRA / CLOSED corners ──────────────────────────────────────────────────
@@ -486,14 +523,14 @@ fn extra_tolerates_failing_and_vapid_values() {
     ]);
     // Without EXTRA the non-matching value fails …
     let schema = "<S1> { <p1> [ <http://a.example/v1> ] }";
-    assert!(check(schema, &data, iri("http://a.example/s1"), S1).is_err());
+    assert!(check(schema, &data, TermValue::iri("http://a.example/s1"), S1).is_err());
     // … with EXTRA it is tolerated.
     let schema = "<S1> EXTRA <p1> { <p1> [ <http://a.example/v1> ] }";
-    assert!(check(schema, &data, iri("http://a.example/s1"), S1).is_ok());
+    assert!(check(schema, &data, TermValue::iri("http://a.example/s1"), S1).is_ok());
     // Vapid EXTRA: EXTRA never diverts an arc that MATCHES the constraint
     // (spec §5.2), so two `.`-matching values still break cardinality {1,1}.
     let schema = "<S1> EXTRA <p1> CLOSED { <p1> . }";
-    assert!(check(schema, &data, iri("http://a.example/s1"), S1).is_err());
+    assert!(check(schema, &data, TermValue::iri("http://a.example/s1"), S1).is_err());
 }
 
 #[test]
@@ -510,11 +547,19 @@ fn closed_forbids_unmentioned_predicates() {
             T::I("http://a.example/o2"),
         ),
     ]);
-    assert!(check("<S1> { <p1> . }", &data, iri("http://a.example/s1"), S1).is_ok());
+    assert!(
+        check(
+            "<S1> { <p1> . }",
+            &data,
+            TermValue::iri("http://a.example/s1"),
+            S1
+        )
+        .is_ok()
+    );
     let err = check(
         "<S1> CLOSED { <p1> . }",
         &data,
-        iri("http://a.example/s1"),
+        TermValue::iri("http://a.example/s1"),
         S1,
     )
     .expect_err("closed");
@@ -557,7 +602,7 @@ fn recursion_over_a_linked_list() {
         check(
             schema,
             &data,
-            iri("http://a.example/l1"),
+            TermValue::iri("http://a.example/l1"),
             "http://a.example/List"
         )
         .is_ok()
@@ -584,7 +629,7 @@ fn recursion_over_a_linked_list() {
         check(
             schema,
             &broken,
-            iri("http://a.example/l1"),
+            TermValue::iri("http://a.example/l1"),
             "http://a.example/List"
         )
         .is_err()
@@ -607,7 +652,7 @@ fn cyclic_data_conforms_coinductively() {
             T::I("http://a.example/s1"),
         ),
     ]);
-    assert!(check(schema, &data, iri("http://a.example/s1"), S1).is_ok());
+    assert!(check(schema, &data, TermValue::iri("http://a.example/s1"), S1).is_ok());
 }
 
 // ── OneOf / EachOf with repeated predicates ─────────────────────────────────
@@ -629,7 +674,7 @@ fn eachof_partition_with_repeated_predicates() {
             T::I("http://a.example/v2"),
         ),
     ]);
-    assert!(check(schema, &data, iri("http://a.example/s1"), S1).is_ok());
+    assert!(check(schema, &data, TermValue::iri("http://a.example/s1"), S1).is_ok());
     let bad = dataset(&[
         (
             T::I("http://a.example/s1"),
@@ -642,7 +687,7 @@ fn eachof_partition_with_repeated_predicates() {
             T::I("http://a.example/v3"),
         ),
     ]);
-    assert!(check(schema, &bad, iri("http://a.example/s1"), S1).is_err());
+    assert!(check(schema, &bad, TermValue::iri("http://a.example/s1"), S1).is_err());
 }
 
 #[test]
@@ -661,13 +706,13 @@ fn oneof_choice_with_group_repetition() {
             T::I("http://a.example/v2"),
         ),
     ]);
-    assert!(check(schema, &data, iri("http://a.example/s1"), S1).is_ok());
+    assert!(check(schema, &data, TermValue::iri("http://a.example/s1"), S1).is_ok());
     let short = dataset(&[(
         T::I("http://a.example/s1"),
         "http://a.example/p1",
         T::I("http://a.example/v1"),
     )]);
-    assert!(check(schema, &short, iri("http://a.example/s1"), S1).is_err());
+    assert!(check(schema, &short, TermValue::iri("http://a.example/s1"), S1).is_err());
 }
 
 // ── inverse triple constraints ──────────────────────────────────────────────
@@ -680,12 +725,12 @@ fn inverse_triple_constraint_matches_arcs_in() {
         "http://a.example/p1",
         T::I("http://a.example/s1"),
     )]);
-    assert!(check(schema, &data, iri("http://a.example/s1"), S1).is_ok());
+    assert!(check(schema, &data, TermValue::iri("http://a.example/s1"), S1).is_ok());
     // No incoming arc → cardinality failure.
-    assert!(check(schema, &data, iri("http://a.example/parent"), S1).is_err());
+    assert!(check(schema, &data, TermValue::iri("http://a.example/parent"), S1).is_err());
     // Arcs-in never violate CLOSED (it constrains arcs-out only).
     let closed = "<S1> CLOSED { ^<p1> IRI }";
-    assert!(check(closed, &data, iri("http://a.example/s1"), S1).is_ok());
+    assert!(check(closed, &data, TermValue::iri("http://a.example/s1"), S1).is_ok());
 }
 
 // ── boolean algebra, START, detached focus, EXTERNAL ────────────────────────
@@ -698,7 +743,15 @@ fn boolean_algebra_and_start() {
         "http://a.example/p1",
         T::I("http://a.example/o1"),
     )]);
-    assert!(check(schema, &data, iri("http://a.example/s1"), "START").is_ok());
+    assert!(
+        check(
+            schema,
+            &data,
+            TermValue::iri("http://a.example/s1"),
+            "START"
+        )
+        .is_ok()
+    );
     let both = dataset(&[
         (
             T::I("http://a.example/s1"),
@@ -711,7 +764,15 @@ fn boolean_algebra_and_start() {
             T::I("http://a.example/o2"),
         ),
     ]);
-    assert!(check(schema, &both, iri("http://a.example/s1"), "START").is_err());
+    assert!(
+        check(
+            schema,
+            &both,
+            TermValue::iri("http://a.example/s1"),
+            "START"
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -722,9 +783,25 @@ fn detached_focus_validates_against_empty_neighbourhood() {
         T::I("http://a.example/y"),
     )]);
     // Empty shape: any node (even one absent from the data) conforms.
-    assert!(check("<S1> { }", &data, iri("http://a.example/dummy"), S1).is_ok());
+    assert!(
+        check(
+            "<S1> { }",
+            &data,
+            TermValue::iri("http://a.example/dummy"),
+            S1
+        )
+        .is_ok()
+    );
     // A required triple constraint refutes a detached node.
-    assert!(check("<S1> { <p1> . }", &data, iri("http://a.example/dummy"), S1).is_err());
+    assert!(
+        check(
+            "<S1> { <p1> . }",
+            &data,
+            TermValue::iri("http://a.example/dummy"),
+            S1
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -736,7 +813,7 @@ fn external_shapes_use_the_resolver_hook() {
         T::I("http://a.example/o1"),
     )]);
     let map = [(
-        iri("http://a.example/s1"),
+        TermValue::iri("http://a.example/s1"),
         ShapeSelector::Label("http://a.example/Sext".to_owned()),
     )];
     // Without a resolver the EXTERNAL shape fails.

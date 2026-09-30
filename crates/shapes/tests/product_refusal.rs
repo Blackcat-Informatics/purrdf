@@ -42,6 +42,10 @@
 //! checks that come after it. Raw byte edits are used only where the claim IS
 //! about the envelope (a section digest, the container digest, the trailer).
 
+#[path = "support/report.rs"]
+mod report;
+
+use report::report_nt;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
@@ -267,20 +271,6 @@ fn rebuild(bytes: &[u8]) -> Result<PreparedShapes, ShapesProductError> {
 /// Open and certify `bytes`.
 fn certify(bytes: &[u8]) -> Result<(), ShapesProductError> {
     ShapesProduct::open(bytes)?.certify()
-}
-
-/// Validate `data` with `prepared` and render the report's canonical N-Triples.
-///
-/// The report's RDF form is the comparison surface rather than a field-by-field
-/// walk: two restores are equal exactly when the graphs they produce are the same
-/// bytes.
-fn report_nt(prepared: &PreparedShapes, data: &Arc<RdfDataset>) -> String {
-    prepared
-        .bind_shared_dataset(Arc::clone(data))
-        .expect("binding the data graph")
-        .validate()
-        .expect("validation runs")
-        .to_ntriples()
 }
 
 /// The report the PLAIN fixture produces when it is parsed rather than restored —

@@ -994,7 +994,7 @@ fn collect_dropped_reifiers(
     // in subject position, so the reifier it names is not dropped.
     let mut template_vars: BTreeSet<String> = BTreeSet::new();
     for quad in template {
-        collect_triple_pattern_vars(&quad.triple, &mut template_vars);
+        quad.triple.collect_variable_names(&mut template_vars);
         if let Some(NamedNodePattern::Variable(v)) = &quad.graph {
             template_vars.insert(v.as_str().to_owned());
         }
@@ -1079,41 +1079,6 @@ fn collect_where_triples<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a Triple
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. }
             | GraphPattern::Group { inner, .. } => pending.push(inner),
-        }
-    }
-}
-
-/// Collect the variable names mentioned in a triple pattern, descending into nested
-/// quoted-triple terms in subject/object position.
-fn collect_triple_pattern_vars(tp: &TriplePattern, out: &mut BTreeSet<String>) {
-    collect_term_pattern_vars(&tp.subject, out);
-    if let NamedNodePattern::Variable(v) = &tp.predicate {
-        out.insert(v.as_str().to_owned());
-    }
-    collect_term_pattern_vars(&tp.object, out);
-}
-
-/// Collect the variable names mentioned in a term pattern, a quoted triple term's
-/// positions included.
-///
-/// The walk keeps its own work list, so a term nested to any depth costs no more
-/// machine stack. `out` is a set, so the order the positions are visited in leaves
-/// no trace: a quoted triple's predicate variable is recorded when the triple is
-/// reached, its subject and object as their positions come up.
-fn collect_term_pattern_vars(term: &TermPattern, out: &mut BTreeSet<String>) {
-    let mut pending: Vec<&TermPattern> = vec![term];
-    while let Some(term) = pending.pop() {
-        match term {
-            TermPattern::Variable(v) => {
-                out.insert(v.as_str().to_owned());
-            }
-            TermPattern::Triple(t) => {
-                if let NamedNodePattern::Variable(v) = &t.predicate {
-                    out.insert(v.as_str().to_owned());
-                }
-                pending.extend([&t.object, &t.subject]);
-            }
-            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
         }
     }
 }

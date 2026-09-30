@@ -18,6 +18,11 @@
 //!
 //! Report-only, `make bench` lane only — excluded from `make check`.
 
+#[path = "../tests/support/mod.rs"]
+mod support;
+
+use support::fan_out;
+
 use std::sync::Arc;
 
 use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
@@ -31,14 +36,12 @@ const ENDPOINT_BASE: &str = "http://ex/ep";
 /// Local graph: `:row{i} :endpoint <http://ex/ep{i}>` for i in 0..n — so the left
 /// pattern `?x :endpoint ?g` yields n rows, each binding `?g` to a distinct endpoint.
 fn local_dataset(n: usize) -> Arc<RdfDataset> {
-    let mut b = RdfDatasetBuilder::new();
-    let endpoint = b.intern_iri("http://ex/endpoint");
-    for i in 0..n {
-        let row = b.intern_iri(&format!("http://ex/row{i}"));
-        let ep = b.intern_iri(&format!("{ENDPOINT_BASE}{i}"));
-        b.push_quad(row, endpoint, ep, None);
-    }
-    b.freeze().expect("freeze local")
+    fan_out(
+        n,
+        "http://ex/endpoint",
+        |i| format!("http://ex/row{i}"),
+        |i| format!("{ENDPOINT_BASE}{i}"),
+    )
 }
 
 /// One endpoint graph: `:s :name "ep{i}"`.

@@ -18,11 +18,11 @@
 //!   file left behind.
 
 use std::path::Path;
-use std::process::{Command, Output};
 
 mod support;
+use support::{path, run, run_with_input as run_with_stdin, stderr, write_file};
 
-use purrdf_gts::model::{Term, TermKind};
+use purrdf_gts::model::Term;
 use purrdf_gts::writer::Writer;
 
 /// A default-graph N-Triples fixture. Shares one quad with [`SEED_RIGHT`] (so the union
@@ -48,49 +48,6 @@ const SEED_THIRD_TRIG: &str = concat!(
     "<http://example.org/third> <http://example.org/p> \"third\" .\n",
     "<http://example.org/g> { <http://example.org/gs> <http://example.org/gp> \"g\" . }\n",
 );
-
-/// A `Command` for the built `purrdf` binary.
-fn purrdf() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_purrdf"))
-}
-
-/// Run `purrdf` with `args`, returning the captured [`Output`].
-fn run(args: &[&str]) -> Output {
-    purrdf()
-        .args(args)
-        .output()
-        .expect("spawn the built purrdf binary")
-}
-
-/// Run `purrdf args` with `stdin_bytes` piped to standard input.
-///
-/// The stdin writer runs on its own thread so the parent can drain stdout/stderr
-/// concurrently. Writing a whole compressed payload inline before reading the child's
-/// output would deadlock the moment the child's output fills the OS pipe buffer — which
-/// is invisible with a tiny fixture and real with a large one.
-fn run_with_stdin(args: &[&str], stdin_bytes: &[u8]) -> Output {
-    support::run_with_stdin(purrdf().args(args), stdin_bytes)
-}
-
-/// stderr of an [`Output`] as a `String`, for diagnostics + refusal assertions.
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
-}
-
-/// Join a name onto `dir`, returning it as an owned `String`.
-fn path(dir: &Path, name: &str) -> String {
-    dir.join(name)
-        .to_str()
-        .expect("temp path is valid UTF-8")
-        .to_owned()
-}
-
-/// Write `contents` to `dir/name`, returning the path.
-fn write_file(dir: &Path, name: &str, contents: &str) -> String {
-    let p = path(dir, name);
-    std::fs::write(&p, contents).expect("write fixture file");
-    p
-}
 
 /// Write raw `bytes` to `dir/name`, returning the path.
 fn write_bytes(dir: &Path, name: &str, bytes: &[u8]) -> String {
@@ -128,42 +85,16 @@ fn zstd(payload: &[u8]) -> Vec<u8> {
 // GTS fixtures
 // --------------------------------------------------------------------------------
 
-/// A GTS IRI term.
-fn gts_iri(value: &str) -> Term {
-    Term {
-        kind: TermKind::Iri,
-        value: Some(value.to_owned()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
-/// A GTS blank-node term.
-fn gts_blank(label: &str) -> Term {
-    Term {
-        kind: TermKind::Bnode,
-        value: Some(label.to_owned()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
 /// One GTS segment carrying `(:s :p object)`, `(_:label :kind object)`, and one inline
 /// blob. Both segments of [`two_segment_gts`] use the SAME blank label deliberately.
 fn gts_segment(object: &str, blank_label: &str, blob: &[u8]) -> Vec<u8> {
     let mut writer = Writer::new("purrdf.gts");
     writer.add_terms(&[
-        gts_iri("http://example.org/s"),
-        gts_iri("http://example.org/p"),
-        gts_iri(object),
-        gts_blank(blank_label),
-        gts_iri("http://example.org/kind"),
+        Term::iri("http://example.org/s"),
+        Term::iri("http://example.org/p"),
+        Term::iri(object),
+        Term::blank(blank_label),
+        Term::iri("http://example.org/kind"),
     ]);
     writer.add_quads(&[(0, 1, 2, None), (3, 4, 2, None)]);
     writer.add_blob(blob, Some("text/plain"), None);

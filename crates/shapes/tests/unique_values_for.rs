@@ -21,15 +21,19 @@
 //!
 //! Fixture IRIs are under `example.org`: PurRDF mints no vocabulary IRIs.
 
+#[path = "support/turtle.rs"]
+mod turtle;
+
+#[path = "support/terms.rs"]
+mod terms;
+
 use std::sync::Arc;
+use terms::ex_ns as ex_term;
 
 use purrdf::ir::ViewLimits;
-use purrdf::{DatasetMut, MutableDataset, QuadValues, RdfDataset, TermValue};
-use purrdf_shapes::engine::{PreparedShapes, parse_shapes, validate_dataset_with_shapes_graph};
+use purrdf::{DatasetMut, MutableDataset, QuadValues, TermValue};
+use purrdf_shapes::engine::PreparedShapes;
 use purrdf_shapes::report::ValidationReport;
-use purrdf_shapes::shapes::Shapes;
-use purrdf_shapes::term::{NamedNode, Term};
-use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 
 const PREFIXES: &str = "
 @prefix ex:   <http://example.org/ns#> .
@@ -42,31 +46,8 @@ const EX: &str = "http://example.org/ns#";
 use purrdf_iri::vocab::sh::NODE_CONSTRAINT_COMPONENT as NODE;
 use purrdf_iri::vocab::sh::UNIQUE_VALUES_FOR_CONSTRAINT_COMPONENT as UNIQUE;
 
-fn load(shapes_ttl: &str) -> Result<Shapes, String> {
-    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).map_err(String::from)
-}
-
-#[track_caller]
-fn loads(shapes_ttl: &str) -> Shapes {
-    load(shapes_ttl).unwrap_or_else(|error| panic!("the shapes graph must load: {error}"))
-}
-
-fn data(data_ttl: &str) -> Arc<RdfDataset> {
-    parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parses")
-}
-
-#[track_caller]
-fn validate(shapes_ttl: &str, data_ttl: &str) -> ValidationReport {
-    validate_dataset_with_shapes_graph(&data(data_ttl), &loads(shapes_ttl), None)
-        .expect("validation runs")
-}
-
 fn ex(local: &str) -> String {
     format!("<{EX}{local}>")
-}
-
-fn ex_term(local: &str) -> Term {
-    Term::NamedNode(NamedNode::new_unchecked(format!("{EX}{local}")))
 }
 
 /// `(focus node, component, result path, value)` of every result, sorted.
@@ -104,7 +85,8 @@ const RECORD_SHAPE: &str =
 /// a target makes neither violate.
 #[test]
 fn every_target_sharing_a_value_is_reported_and_a_non_target_is_not_compared() {
-    let report = validate(
+    let report = turtle::validate(
+        PREFIXES,
         RECORD_SHAPE,
         "ex:r1 a ex:Record ; ex:id \"One\" .
          ex:unrelated ex:id \"One\" .
@@ -113,7 +95,8 @@ fn every_target_sharing_a_value_is_reported_and_a_non_target_is_not_compared() {
     );
     assert_eq!(rows(&report), vec![node_result("r2"), node_result("r3")]);
     // Control: the same graph with distinct ids conforms.
-    let control = validate(
+    let control = turtle::validate(
+        PREFIXES,
         RECORD_SHAPE,
         "ex:r1 a ex:Record ; ex:id \"One\" .
          ex:unrelated ex:id \"One\" .
@@ -128,20 +111,23 @@ fn every_target_sharing_a_value_is_reported_and_a_non_target_is_not_compared() {
 /// twice does.
 #[test]
 fn literal_matching_is_exact() {
-    let distinct = validate(
+    let distinct = turtle::validate(
+        PREFIXES,
         RECORD_SHAPE,
         "ex:a a ex:Record ; ex:id \"04\"^^xsd:byte .
          ex:b a ex:Record ; ex:id \"4\"^^xsd:integer .",
     );
     assert!(distinct.conforms, "{:?}", distinct.results);
-    let same = validate(
+    let same = turtle::validate(
+        PREFIXES,
         RECORD_SHAPE,
         "ex:a a ex:Record ; ex:id \"4\"^^xsd:integer .
          ex:b a ex:Record ; ex:id \"4\"^^xsd:integer .",
     );
     assert_eq!(rows(&same), vec![node_result("a"), node_result("b")]);
     // A language tag is part of the term too.
-    let tagged = validate(
+    let tagged = turtle::validate(
+        PREFIXES,
         RECORD_SHAPE,
         "ex:a a ex:Record ; ex:id \"x\"@en .
          ex:b a ex:Record ; ex:id \"x\" .",
@@ -156,9 +142,10 @@ fn literal_matching_is_exact() {
 fn a_node_with_no_values_for_any_property_gets_no_result() {
     let shapes = "ex:S a sh:NodeShape ; sh:targetClass ex:Concept ;
                     sh:uniqueValuesFor ( ex:notation ex:scheme ) .";
-    let empty = validate(shapes, "ex:a a ex:Concept . ex:b a ex:Concept .");
+    let empty = turtle::validate(PREFIXES, shapes, "ex:a a ex:Concept . ex:b a ex:Concept .");
     assert!(empty.conforms, "{:?}", empty.results);
-    let shared = validate(
+    let shared = turtle::validate(
+        PREFIXES,
         shapes,
         "ex:a a ex:Concept ; ex:notation \"A1\" . ex:b a ex:Concept ; ex:notation \"A1\" .",
     );
@@ -174,7 +161,8 @@ fn a_node_with_no_values_for_any_property_gets_no_result() {
 fn a_list_of_properties_compares_the_whole_tuple() {
     let shapes = "ex:S a sh:NodeShape ; sh:targetClass ex:Concept ;
                     sh:uniqueValuesFor ( ex:notation ex:scheme ) .";
-    let report = validate(
+    let report = turtle::validate(
+        PREFIXES,
         shapes,
         "ex:a a ex:Concept ; ex:notation \"A1\" ; ex:scheme ex:S1 .
          ex:b a ex:Concept ; ex:notation \"A1\" ; ex:scheme ex:S2 .
@@ -182,7 +170,8 @@ fn a_list_of_properties_compares_the_whole_tuple() {
     );
     assert_eq!(rows(&report), vec![node_result("b"), node_result("c")]);
     // A single-IRI value keyed on ex:notation alone makes all three collide.
-    let single = validate(
+    let single = turtle::validate(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetClass ex:Concept ; sh:uniqueValuesFor ex:notation .",
         "ex:a a ex:Concept ; ex:notation \"A1\" ; ex:scheme ex:S1 .
          ex:b a ex:Concept ; ex:notation \"A1\" ; ex:scheme ex:S2 .
@@ -198,7 +187,8 @@ fn a_list_of_properties_compares_the_whole_tuple() {
 /// against `{x}` is no collision, `{x, y}` against `{y, x}` is.
 #[test]
 fn values_are_compared_as_whole_sets() {
-    let report = validate(
+    let report = turtle::validate(
+        PREFIXES,
         RECORD_SHAPE,
         "ex:a a ex:Record ; ex:id \"x\", \"y\" .
          ex:b a ex:Record ; ex:id \"x\" .
@@ -215,11 +205,15 @@ fn an_ill_typed_parameter_is_refused_and_iris_load() {
         "ex:S a sh:NodeShape ; sh:targetClass ex:Record ; sh:uniqueValuesFor \"ex:id\" .",
         "ex:S a sh:NodeShape ; sh:targetClass ex:Record ; sh:uniqueValuesFor ( ex:id \"ex:code\" ) .",
     ] {
-        let error = load(shapes).expect_err("a literal property is refused");
+        let error = turtle::load(PREFIXES, shapes).expect_err("a literal property is refused");
         assert!(error.contains("uniqueValuesFor"), "{error}");
     }
-    loads("ex:S a sh:NodeShape ; sh:targetClass ex:Record ; sh:uniqueValuesFor ex:id .");
-    loads(
+    turtle::loads(
+        PREFIXES,
+        "ex:S a sh:NodeShape ; sh:targetClass ex:Record ; sh:uniqueValuesFor ex:id .",
+    );
+    turtle::loads(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetClass ex:Record ; sh:uniqueValuesFor ( ex:id ex:code ) .",
     );
 }
@@ -231,7 +225,8 @@ fn an_ill_typed_parameter_is_refused_and_iris_load() {
 fn a_property_shape_compares_its_value_nodes_with_its_targets() {
     let shapes = "ex:PS a sh:PropertyShape ; sh:targetClass ex:Holder ;
                     sh:path ex:item ; sh:uniqueValuesFor ex:id .";
-    let report = validate(
+    let report = turtle::validate(
+        PREFIXES,
         shapes,
         "ex:h a ex:Holder ; ex:id \"X\" ; ex:item ex:i1, ex:i2 .
          ex:i1 ex:id \"X\" .
@@ -241,7 +236,8 @@ fn a_property_shape_compares_its_value_nodes_with_its_targets() {
         rows(&report),
         vec![(ex("h"), UNIQUE.to_owned(), ex("item"), ex("i1"))]
     );
-    let control = validate(
+    let control = turtle::validate(
+        PREFIXES,
         shapes,
         "ex:h a ex:Holder ; ex:id \"X\" ; ex:item ex:i1, ex:i2 .
          ex:i1 ex:id \"Z\" .
@@ -257,7 +253,8 @@ fn a_property_shape_compares_its_value_nodes_with_its_targets() {
 fn a_shape_reached_through_sh_node_keeps_its_own_targets() {
     let shapes = "ex:Inner a sh:NodeShape ; sh:targetClass ex:Record ; sh:uniqueValuesFor ex:id .
                   ex:Outer a sh:NodeShape ; sh:targetNode ex:x ; sh:node ex:Inner .";
-    let report = validate(
+    let report = turtle::validate(
+        PREFIXES,
         shapes,
         "ex:r a ex:Record ; ex:id \"A\" .
          ex:x ex:id \"A\" .",
@@ -266,7 +263,8 @@ fn a_shape_reached_through_sh_node_keeps_its_own_targets() {
         rows(&report),
         vec![(ex("x"), NODE.to_owned(), String::new(), ex("x"))]
     );
-    let control = validate(
+    let control = turtle::validate(
+        PREFIXES,
         shapes,
         "ex:r a ex:Record ; ex:id \"A\" .
          ex:x ex:id \"B\" .",
@@ -279,7 +277,8 @@ fn a_shape_reached_through_sh_node_keeps_its_own_targets() {
 /// with — the component reads nothing and reports nothing, whatever the data.
 #[test]
 fn a_property_shape_without_targets_has_nothing_to_collide_with() {
-    let report = validate(
+    let report = turtle::validate(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetClass ex:Holder ;
            sh:property [ sh:path ex:item ; sh:uniqueValuesFor ex:id ] .",
         "ex:h a ex:Holder ; ex:id \"X\" ; ex:item ex:i1, ex:i2 .
@@ -294,9 +293,10 @@ fn a_property_shape_without_targets_has_nothing_to_collide_with() {
 /// focus node, whose id is unique, conforms through the same request.
 #[test]
 fn the_prepared_focus_node_apis_compare_against_the_full_target_set() {
-    let prepared = PreparedShapes::new(Arc::new(loads(RECORD_SHAPE)));
+    let prepared = PreparedShapes::new(Arc::new(turtle::loads(PREFIXES, RECORD_SHAPE)));
     let validator = prepared
-        .bind_dataset(&data(
+        .bind_dataset(&turtle::data(
+            PREFIXES,
             "ex:alice a ex:Record ; ex:id \"A\" .
              ex:bob a ex:Record ; ex:id \"A\" .
              ex:carl a ex:Record ; ex:id \"C\" .",
@@ -332,8 +332,9 @@ fn the_prepared_focus_node_apis_compare_against_the_full_target_set() {
 /// re-validating exactly the expansion must report her.
 #[test]
 fn changing_one_focus_nodes_value_revalidates_another() {
-    let prepared = PreparedShapes::new(Arc::new(loads(RECORD_SHAPE)));
-    let base = data(
+    let prepared = PreparedShapes::new(Arc::new(turtle::loads(PREFIXES, RECORD_SHAPE)));
+    let base = turtle::data(
+        PREFIXES,
         "ex:alice a ex:Record ; ex:id \"A\" .
          ex:bob a ex:Record ; ex:id \"B\" .",
     );

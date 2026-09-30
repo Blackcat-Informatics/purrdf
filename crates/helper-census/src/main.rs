@@ -1,10 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! `helper-census` — the structural census of the workspace's shipping Rust.
+//! `helper-census` — the structural census of the workspace's Rust: shipping
+//! code, and the test, bench and example targets whose support code is copied as
+//! readily.
 //!
 //! It finds functionality written more than once: function bodies that are the
-//! same algorithm under different names and constants (clone types 1 and 2), thin
+//! same algorithm under different names, constants and borrow spellings (clone
+//! types 1 and 2, and the value-form near misses of type 3), thin
 //! forwarders that forward to the same place, integer constants compared by value
 //! whatever their spelling, and hex-digit tables. It reads `helpers-ledger.toml`,
 //! which names the one home of each job and the sanctioned variants, and reports
@@ -23,6 +26,7 @@ mod toml;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use crate::normalize::MIN_TOKENS;
 use crate::source::{Disk, Memory, Tree, Workspace};
 
 /// The CLI contract, printed by `--help` and beside every argument error.
@@ -363,6 +367,247 @@ fn distinct_cases() -> Vec<(&'static str, bool)> {
     ]
 }
 
+/// The seeded near-miss workspace: copies that differ only in how they hold
+/// their values, a test helper copied between two test files, and a copy below
+/// the old thirty-token floor — each of which must be grouped — beside the
+/// neighbours of each that must not be.
+fn near_miss_tree() -> Memory {
+    const RULE_PATH: &str = "use std::collections::{BTreeMap, BTreeSet, VecDeque};
+/// The shortest rule path, over rule indices.
+pub fn shortest_rule_path(depends: &BTreeMap<usize, BTreeSet<usize>>, from: usize, to: usize) -> Option<Vec<usize>> {
+    let mut parent: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut queue: VecDeque<usize> = VecDeque::from([from]);
+    let mut seen: BTreeSet<usize> = BTreeSet::from([from]);
+    while let Some(node) = queue.pop_front() {
+        if node == to {
+            let mut path = vec![node];
+            let mut cursor = node;
+            while cursor != from {
+                cursor = parent[&cursor];
+                path.push(cursor);
+            }
+            path.reverse();
+            return Some(path);
+        }
+        for &next in depends.get(&node).into_iter().flatten() {
+            if seen.insert(next) {
+                parent.insert(next, node);
+                queue.push_back(next);
+            }
+        }
+    }
+    None
+}
+/// A comment line or a blank one.
+pub fn skipped(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.is_empty() || trimmed.starts_with('#')
+}
+/// The same shape, another comment marker: another table.
+pub fn skipped_ini(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.is_empty() || trimmed.starts_with(';')
+}
+/// A state machine's stop reason.
+pub enum Run { Stopped { tripped: u8, partial: Vec<u8> }, Running }
+impl Run {
+    /// The governor that tripped.
+    pub fn tripped(&self) -> Option<u8> {
+        match self {
+            Self::Stopped { tripped, .. } => Some(*tripped),
+            Self::Running => None,
+        }
+    }
+    /// The partial answers: the same shape over another field.
+    pub fn partial(&self) -> Option<&Vec<u8>> {
+        match self {
+            Self::Stopped { partial, .. } => Some(partial),
+            Self::Running => None,
+        }
+    }
+}
+/// Canonical decomposition, then composition.
+pub fn nfc(text: &str) -> String {
+    collect(text, |next| Decompose::<false, _>::new(Compose::new(next)), |stage| stage.into_next())
+}
+/// Compatibility decomposition, then composition: a const argument apart.
+pub fn nfkc(text: &str) -> String {
+    collect(text, |next| Decompose::<true, _>::new(Compose::new(next)), |stage| stage.into_next())
+}
+";
+    const DEPENDENCY_PATH: &str = "use std::collections::{BTreeMap, BTreeSet, VecDeque};
+/// The shortest dependency path, over predicate symbols.
+pub fn shortest_dependency_path<'a>(depends: &'a BTreeMap<String, BTreeSet<String>>, from: &'a str, to: &str) -> Option<Vec<&'a str>> {
+    let mut parent: BTreeMap<&str, &str> = BTreeMap::new();
+    let mut queue: VecDeque<&str> = VecDeque::from([from]);
+    let mut seen: BTreeSet<&str> = BTreeSet::from([from]);
+    while let Some(node) = queue.pop_front() {
+        if node == to {
+            // Walk the parent chain back to `from`, then reverse it.
+            let mut path = vec![node];
+            let mut cursor = node;
+            while cursor != from {
+                cursor = parent[cursor];
+                path.push(cursor);
+            }
+            path.reverse();
+            return Some(path);
+        }
+        for next in depends.get(node).into_iter().flatten() {
+            if seen.insert(next.as_str()) {
+                parent.insert(next.as_str(), node);
+                queue.push_back(next.as_str());
+            }
+        }
+    }
+    None
+}
+/// A comment line or a blank one, retyped under other names.
+pub fn is_comment(text: &str) -> bool {
+    let rest = text.trim();
+    rest.is_empty() || rest.starts_with('#')
+}
+";
+    const WRITE_FILE: &str = "use std::path::Path;
+mod support;
+fn write_file(dir: &Path, name: &str, contents: &str) -> String {
+    let path = dir.join(name);
+    std::fs::write(&path, contents).expect(\"write fixture\");
+    path.to_str().expect(\"utf-8 path\").to_owned()
+}
+#[test]
+fn case() { let _ = write_file(Path::new(\"/tmp\"), \"a\", \"b\"); support::shared(); }
+";
+    const WRITE_FILE_AGAIN: &str = "use std::path::Path;
+mod support;
+fn write_fixture(root: &Path, file: &str, text: &str) -> String {
+    let target = root.join(file);
+    std::fs::write(&target, text).expect(\"write the fixture\");
+    target.to_str().expect(\"a UTF-8 path\").to_owned()
+}
+#[test]
+fn other_case() { let _ = write_fixture(Path::new(\"/tmp\"), \"a\", \"b\"); support::shared(); }
+";
+    const SUPPORT: &str = "/// Shared by every test target that declares it: one source, not two.
+pub fn shared() -> u64 {
+    let mut total = 0_u64;
+    for step in 0..16_u64 {
+        total = total.wrapping_mul(31).wrapping_add(step);
+    }
+    total
+}
+";
+    let files = [
+        (
+            "crates/delta/Cargo.toml",
+            "[package]\nname = \"fixture-delta\"\n",
+        ),
+        ("crates/delta/src/lib.rs", RULE_PATH),
+        ("crates/delta/tests/one.rs", WRITE_FILE),
+        ("crates/delta/tests/two.rs", WRITE_FILE_AGAIN),
+        ("crates/delta/tests/support/mod.rs", SUPPORT),
+        (
+            "crates/epsilon/Cargo.toml",
+            "[package]\nname = \"fixture-epsilon\"\n",
+        ),
+        ("crates/epsilon/src/lib.rs", DEPENDENCY_PATH),
+    ];
+    Memory {
+        files: files
+            .into_iter()
+            .map(|(path, text)| (path.to_owned(), text.to_owned()))
+            .collect(),
+    }
+}
+
+/// The near-miss cases: each seeded copy is one group with its original, and
+/// no neighbour joins a group.
+fn near_miss_cases() -> Vec<(&'static str, bool)> {
+    let workspace = Workspace::walk(&near_miss_tree());
+    let groups: Vec<Vec<&str>> = census::isomorphic_groups(&workspace)
+        .iter()
+        .map(|group| {
+            let mut members: Vec<&str> = group
+                .members
+                .iter()
+                .map(|&index| workspace.units[index].symbol.as_str())
+                .collect();
+            members.sort_unstable();
+            members
+        })
+        .collect();
+    let grouped = |symbol: &str| groups.iter().flatten().any(|member| *member == symbol);
+    let small = census::isomorphic_groups(&workspace)
+        .iter()
+        .find(|group| {
+            group
+                .members
+                .iter()
+                .any(|&index| workspace.units[index].name == "skipped")
+        })
+        .map_or(0, |group| group.tokens);
+    let findings = ledger::parse("").map_or_else(
+        |error| vec![error],
+        |ledger| census::check_findings(&workspace, &ledger),
+    );
+    vec![
+        (
+            "the near-miss fixture walks cleanly",
+            workspace.errors.is_empty(),
+        ),
+        (
+            "two breadth-first searches that differ only in `&next`/`parent[&cursor]` against `next.as_str()`/`parent[cursor]` are one group",
+            groups.contains(&vec![
+                "fixture_delta::shortest_rule_path",
+                "fixture_epsilon::shortest_dependency_path",
+            ]),
+        ),
+        (
+            "a helper copied between two tests/ files is one group",
+            groups.contains(&vec![
+                "fixture_delta::test_crate::one::write_file",
+                "fixture_delta::test_crate::two::write_fixture",
+            ]),
+        ),
+        (
+            "a copy below the old thirty-token floor is one group",
+            groups.contains(&vec![
+                "fixture_delta::skipped",
+                "fixture_epsilon::is_comment",
+            ]) && (MIN_TOKENS..30).contains(&small),
+        ),
+        (
+            "a support module every test target declares is one source, not a group",
+            !grouped("fixture_delta::test_crate::one::support::shared")
+                && workspace
+                    .units
+                    .iter()
+                    .filter(|unit| unit.name == "shared")
+                    .count()
+                    == 1,
+        ),
+        (
+            "a small body of the same shape with a different constant is another table",
+            !grouped("fixture_delta::skipped_ini"),
+        ),
+        (
+            "two accessors of the same shape over different fields are not grouped",
+            !grouped("fixture_delta::Run::tripped") && !grouped("fixture_delta::Run::partial"),
+        ),
+        (
+            "a const generic argument is kept: `::<true, _>` and `::<false, _>` are not grouped",
+            !grouped("fixture_delta::nfc") && !grouped("fixture_delta::nfkc"),
+        ),
+        (
+            "--check fails on exactly the three seeded near-miss groups",
+            findings.len() == 3
+                && findings
+                    .iter()
+                    .all(|finding| finding.starts_with("isomorphic bodies")),
+        ),
+    ]
+}
+
 /// One seeded case: its name and whether it held.
 fn self_test_cases() -> Vec<(&'static str, bool)> {
     let tree: &dyn Tree = &fixture_tree();
@@ -422,11 +667,11 @@ fn self_test_cases() -> Vec<(&'static str, bool)> {
                 .any(|symbol| *symbol == "fixture_beta::count"),
         ),
         (
-            "test-only code and tests/ files are never walked",
-            !workspace
-                .units
-                .iter()
-                .any(|unit| unit.name == "fnv_again" || unit.file.contains("/tests/")),
+            "test-only code is never walked, and a tests/ file is walked as a test crate of its own",
+            !workspace.units.iter().any(|unit| unit.name == "fnv_again")
+                && workspace.units.iter().any(|unit| {
+                    unit.symbol == "fixture_beta::test_crate::copy::fnv1a" && !unit.shipping
+                }),
         ),
         (
             "the home resolves to its package",
@@ -444,21 +689,29 @@ fn self_test_cases() -> Vec<(&'static str, bool)> {
                     .iter()
                     .any(|(symbol, _)| *symbol == "fixture_beta::digits::NOT_DIGITS"),
         ),
-        ("--count counts both copies", census::copies(&found) == 2),
         (
-            "--check reports the unsanctioned group and both copies",
-            census::check_findings(&workspace, &plain).len() == 3,
+            "a forbidden constant in a tests/ file is a copy too",
+            matched.contains(&("fixture_beta::test_crate::copy::fnv1a", false)),
+        ),
+        (
+            "--count counts all three copies",
+            census::copies(&found) == 3,
+        ),
+        (
+            "--check reports the unsanctioned group and all three copies",
+            census::check_findings(&workspace, &plain).len() == 4,
         ),
         (
             "an isomorphic variant row sanctions its group",
-            census::check_findings(&workspace, &isomorphic).len() == 2,
+            census::check_findings(&workspace, &isomorphic).len() == 3,
         ),
         (
             "a forbidden variant row removes its copy from the count",
-            copies_with_forbidden_variant == 1,
+            copies_with_forbidden_variant == 2,
         ),
     ];
     cases.extend(distinct_cases());
+    cases.extend(near_miss_cases());
     cases
 }
 

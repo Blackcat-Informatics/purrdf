@@ -81,10 +81,8 @@
 //! `tests/multimodal_exclusion_lookup.rs`.
 
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::hint::black_box;
 use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 use purrdf_testkit::rng::signed_unit_next_nonzero;
@@ -100,37 +98,17 @@ use purrdf::sparql::{KnnGuard, PropertyFunctionRegistry, RankedDeclaration, Term
 use purrdf::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 use purrdf::{DistanceMetric, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 
+#[path = "../tests/support/multimodal.rs"]
+mod multimodal;
+
+use multimodal::kernel_iri;
+use purrdf::retrieval::block_on;
+use purrdf::retrieval::fixture::{iri, shared_block};
+
 /// The fixture namespace. A bench mints no vocabulary of its own, and a
 /// reserved-for-documentation authority is the only one it may put in a term.
 fn ex(suffix: &str) -> String {
     format!("http://example.org/{suffix}")
-}
-
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
-
-fn kernel_iri(text: &str) -> purrdf::iri::Iri {
-    purrdf::iri::parse(text).expect("fixture IRIs are valid")
-}
-
-/// A single-threaded executor; nothing here ever pends.
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
 }
 
 /// The needle every text producer here is searched for.
@@ -161,11 +139,6 @@ const LOOKUP_ROWS: usize = 2_000;
 /// The smoothing constant every fusion profile here decays by.
 fn recip_k() -> u32 {
     u32::try_from(RECIP_K).expect("the smoothing constant fits")
-}
-
-/// The one shared domain tag configurations B and C declare on both producers.
-fn shared_block() -> DomainTag {
-    DomainTag::parse(&ex("domain/shared")).expect("the fixture domain tag is a valid IRI")
 }
 
 /// Statistics that narrow nothing: each stratum holds exactly what its fixture built.

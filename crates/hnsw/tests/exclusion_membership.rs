@@ -28,6 +28,9 @@
 //! Fixtures use `example.org` throughout; every IRI below is fixture configuration, never
 //! a minted vocabulary.
 
+#[path = "support/fixture.rs"]
+mod fixture;
+use fixture::{params, seeded_matrix};
 use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
@@ -54,22 +57,6 @@ const ROWS: usize = 32;
 /// neither half of the agreement is vacuous.
 const STRANGERS: usize = 24;
 
-fn params() -> Params {
-    Params::new(4, 8, 16, 8).expect("the fixture parameters are valid")
-}
-
-/// A deterministic fixture matrix. Nothing here reads a clock or an RNG.
-fn matrix(rows: usize, dims: usize) -> VectorMatrix {
-    let mut state = 0x51DE_0000_1234_ABCD_u64;
-    let mut data = Vec::with_capacity(rows * dims);
-    for _ in 0..rows * dims {
-        data.push(purrdf_testkit::rng::signed_unit_step_nonzero(
-            &mut state, 0.25,
-        ));
-    }
-    VectorMatrix::new(rows, dims, data).expect("the fixture matrix is valid")
-}
-
 /// The fixture's whole term universe: the terms the space holds, then the strangers.
 fn universe() -> Vec<TermValue> {
     (0..ROWS + STRANGERS)
@@ -79,7 +66,7 @@ fn universe() -> Vec<TermValue> {
 
 /// A space over the first [`ROWS`] terms of the universe, at beam width `ef_search`.
 fn space_at(ef_search: usize) -> (VectorMatrix, Arc<HnswSpace>) {
-    let vectors = matrix(ROWS, 4);
+    let vectors = seeded_matrix(ROWS, 4, 0x51DE_0000_1234_ABCD, Some(0.25));
     let index = HnswIndex::build(
         vectors.clone(),
         &DistanceMetric::SquaredEuclidean,
@@ -106,7 +93,7 @@ const WIDE: usize = 150;
 /// A reassociated space over the first [`ROWS`] terms of the universe, [`WIDE`]
 /// components per row, at the widest beam the fixture admits, beside its matrix.
 fn reassociated_space() -> (VectorMatrix, Arc<HnswSpace<Reassociated>>) {
-    let vectors = matrix(ROWS, WIDE);
+    let vectors = seeded_matrix(ROWS, WIDE, 0x51DE_0000_1234_ABCD, Some(0.25));
     let index = purrdf_hnsw::build::<Reassociated>(
         vectors.clone(),
         &DistanceMetric::SquaredEuclidean,

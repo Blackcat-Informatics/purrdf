@@ -20,6 +20,7 @@ mod support {
     pub(crate) mod unicode_inputs;
 }
 
+use purrdf_testkit::ucd::code_point as hex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
@@ -32,10 +33,6 @@ use support::unicode_inputs;
 fn read(relative: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
     fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {}: {err}", path.display()))
-}
-
-fn hex(text: &str) -> u32 {
-    u32::from_str_radix(text.trim(), 16).unwrap_or_else(|err| panic!("bad hex {text:?}: {err}"))
 }
 
 /// The `C` and `F` mappings of one `CaseFolding.txt`.

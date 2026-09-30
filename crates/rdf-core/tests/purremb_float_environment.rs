@@ -29,7 +29,7 @@
 
 use purrdf_core::distance::control::Mxcsr;
 use purrdf_core::distance::{Arithmetic as _, Exact, FloatEnvironmentError};
-use purrdf_core::purremb_fixture::Identities;
+use purrdf_core::purremb_fixture::{Identities, reference_norm};
 use purrdf_core::{
     AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
     DistanceMetric, EmbeddingBuilder, EmbeddingError, EmbeddingFamilyContract, EmbeddingView,
@@ -51,32 +51,6 @@ fn is_ftz(error: &EmbeddingError) -> bool {
 /// a flushing thread returns as `+0` -- and the writer would then refuse a row that has a
 /// direction as a zero norm.
 const ROW: [f64; 2] = [3e-310, 4e-310];
-
-/// PURREMB §13.2's scaled L2 fold, transcribed from the specification's written order.
-/// `black_box` keeps it from being folded at compile time under the default environment.
-fn reference_norm(values: &[f64]) -> f64 {
-    let mut scale = 0.0_f64;
-    let mut ssq = 1.0_f64;
-    for &value in core::hint::black_box(values) {
-        let value = value.abs();
-        if value == 0.0 {
-            continue;
-        }
-        if scale < value {
-            let ratio = scale / value;
-            let square = ratio * ratio;
-            let product = ssq * square;
-            ssq = 1.0 + product;
-            scale = value;
-        } else {
-            let ratio = value / scale;
-            let square = ratio * ratio;
-            ssq += square;
-        }
-    }
-    let root = ssq.sqrt();
-    core::hint::black_box(scale) * root
-}
 
 const FX: Identities = Identities::at("https://example.org/");
 

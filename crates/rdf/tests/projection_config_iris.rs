@@ -42,16 +42,18 @@
 //!   JSON. Its members are keywords and term definitions, not all of which are IRIs. The
 //!   table that actually mints IRIs — `context.definitions` — is gated, one value at a time.
 
-use std::collections::BTreeMap;
-
 use purrdf_lex::json::{self, Value};
 
 use purrdf_rdf::{
-    CsvwConfig, CsvwContext, CsvwMode, CsvwVocabulary, LpgConfig, LpgExecutionLimits, LpgScope,
-    OboGraphsConfig, OboGraphsVocabulary, OboMetadataRoles, OboOwlRoles, OboRdfRoles,
-    ProjectionConfig, ProjectionLimits, ProjectionProfile, SkosClassRoles, SkosConfig,
-    SkosDocumentationRoles, SkosGraphSelection, SkosLabelRoles, SkosRelationRoles, SkosSourceRoles,
-    SkosTargetRoles,
+    LpgConfig, LpgExecutionLimits, LpgScope, ProjectionConfig, ProjectionProfile, SkosClassRoles,
+    SkosConfig, SkosGraphSelection, SkosSourceRoles, SkosTargetRoles,
+};
+
+#[path = "support/projection_configs.rs"]
+mod projection_configs;
+use projection_configs::{
+    csvw_config, limits, obo_config, skos_documentation_roles, skos_label_roles,
+    skos_relation_roles,
 };
 
 /// The vocabulary prefixes the constructed configurations name. Test-fixture IRIs only —
@@ -59,10 +61,6 @@ use purrdf_rdf::{
 /// exactly as it would be by a real caller.
 const EX: &str = "https://example.org/";
 const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const RDFS: &str = "http://www.w3.org/2000/01/rdf-schema#";
-const OWL: &str = "http://www.w3.org/2002/07/owl#";
-const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
-const OBO: &str = "http://www.geneontology.org/formats/oboInOwl#";
 const SKOS: &str = "http://www.w3.org/2004/02/skos/core#";
 
 /// The nine profiles whose configuration ships as a JSON fixture.
@@ -122,8 +120,8 @@ fn config_for(profile: ProjectionProfile) -> Vec<u8> {
         ProjectionProfile::Neo4jCsv => ProjectionConfig::Neo4jCsv(lpg_config()),
         ProjectionProfile::OpenCypher => ProjectionConfig::OpenCypher(lpg_config()),
         ProjectionProfile::Graphml => ProjectionConfig::Graphml(lpg_config()),
-        ProjectionProfile::CsvwExact => ProjectionConfig::CsvwExact(csvw_config()),
-        ProjectionProfile::OboGraphs => ProjectionConfig::OboGraphs(Box::new(obo_config())),
+        ProjectionProfile::CsvwExact => ProjectionConfig::CsvwExact(csvw_config(EX, 20_000)),
+        ProjectionProfile::OboGraphs => ProjectionConfig::OboGraphs(Box::new(obo_config(EX))),
         ProjectionProfile::Skos => ProjectionConfig::Skos(Box::new(skos_config())),
         // Every remaining profile is covered by a shipped fixture, returned above. The arm is
         // written out rather than a wildcard so adding a profile is a compile error here.
@@ -142,10 +140,6 @@ fn config_for(profile: ProjectionProfile) -> Vec<u8> {
     config.to_json().expect("serialize the constructed config")
 }
 
-fn limits() -> ProjectionLimits {
-    ProjectionLimits::new(64, 16_000_000, 64_000_000, 72_000_000, 16).expect("limits")
-}
-
 fn lpg_config() -> LpgConfig {
     LpgConfig::new(
         format!("{EX}type"),
@@ -154,74 +148,6 @@ fn lpg_config() -> LpgConfig {
         LpgExecutionLimits::new(100_000, 100_000, 100_000, 100_000).expect("execution limits"),
     )
     .expect("LPG config")
-}
-
-fn csvw_config() -> CsvwConfig {
-    CsvwConfig::new(
-        format!("{EX}csvw-metadata"),
-        CsvwContext::new(format!("{EX}csvw-context"), BTreeMap::default()).expect("CSVW context"),
-        format!("{EX}csvw-group"),
-        CsvwVocabulary::new("http://www.w3.org/ns/csvw#", RDF, RDFS, XSD).expect("CSVW vocabulary"),
-        CsvwMode::Standard,
-        limits(),
-        20_000,
-    )
-    .expect("CSVW config")
-}
-
-fn obo_config() -> OboGraphsConfig {
-    let rdf = OboRdfRoles::new(
-        format!("{RDF}type"),
-        format!("{RDF}reifies"),
-        format!("{RDF}first"),
-        format!("{RDF}rest"),
-        format!("{RDF}nil"),
-        format!("{XSD}string"),
-        format!("{XSD}boolean"),
-    )
-    .expect("OBO RDF roles");
-    let owl = OboOwlRoles::new(
-        format!("{RDFS}label"),
-        format!("{RDFS}comment"),
-        format!("{RDFS}subClassOf"),
-        format!("{RDFS}subPropertyOf"),
-        format!("{RDFS}domain"),
-        format!("{RDFS}range"),
-        format!("{OWL}Ontology"),
-        format!("{OWL}Class"),
-        format!("{OWL}NamedIndividual"),
-        format!("{OWL}ObjectProperty"),
-        format!("{OWL}AnnotationProperty"),
-        format!("{OWL}DatatypeProperty"),
-        format!("{OWL}equivalentClass"),
-        format!("{OWL}intersectionOf"),
-        format!("{OWL}Restriction"),
-        format!("{OWL}onProperty"),
-        format!("{OWL}someValuesFrom"),
-        format!("{OWL}allValuesFrom"),
-        format!("{OWL}propertyChainAxiom"),
-        format!("{OWL}deprecated"),
-    )
-    .expect("OBO OWL roles");
-    let metadata = OboMetadataRoles::new(
-        format!("{EX}definition"),
-        format!("{OBO}hasExactSynonym"),
-        format!("{OBO}hasBroadSynonym"),
-        format!("{OBO}hasNarrowSynonym"),
-        format!("{OBO}hasRelatedSynonym"),
-        format!("{OBO}hasSynonymType"),
-        format!("{OBO}hasDbXref"),
-        format!("{OBO}inSubset"),
-        format!("{OWL}versionInfo"),
-    )
-    .expect("OBO metadata roles");
-    OboGraphsConfig::new(
-        format!("{EX}ontology"),
-        OboGraphsVocabulary::new(rdf, owl, metadata).expect("OBO vocabulary"),
-        limits(),
-        20_000,
-    )
-    .expect("OBO config")
 }
 
 fn skos_class_roles() -> SkosClassRoles {
@@ -233,53 +159,13 @@ fn skos_class_roles() -> SkosClassRoles {
     .expect("SKOS classes")
 }
 
-fn skos_label_roles() -> SkosLabelRoles {
-    SkosLabelRoles::new(
-        format!("{SKOS}prefLabel"),
-        format!("{SKOS}altLabel"),
-        format!("{SKOS}hiddenLabel"),
-        format!("{SKOS}notation"),
-    )
-    .expect("SKOS labels")
-}
-
-fn skos_documentation_roles() -> SkosDocumentationRoles {
-    SkosDocumentationRoles::new(
-        format!("{SKOS}note"),
-        format!("{SKOS}changeNote"),
-        format!("{SKOS}definition"),
-        format!("{SKOS}editorialNote"),
-        format!("{SKOS}example"),
-        format!("{SKOS}historyNote"),
-        format!("{SKOS}scopeNote"),
-    )
-    .expect("SKOS documentation")
-}
-
-fn skos_relation_roles() -> SkosRelationRoles {
-    SkosRelationRoles::new(
-        format!("{SKOS}broader"),
-        format!("{SKOS}narrower"),
-        format!("{SKOS}related"),
-        format!("{SKOS}closeMatch"),
-        format!("{SKOS}exactMatch"),
-        format!("{SKOS}broadMatch"),
-        format!("{SKOS}narrowMatch"),
-        format!("{SKOS}relatedMatch"),
-        format!("{SKOS}inScheme"),
-        format!("{SKOS}hasTopConcept"),
-        format!("{SKOS}topConceptOf"),
-    )
-    .expect("SKOS relations")
-}
-
 fn skos_config() -> SkosConfig {
     let roles = || {
         (
             skos_class_roles(),
-            skos_label_roles(),
-            skos_documentation_roles(),
-            skos_relation_roles(),
+            skos_label_roles(SKOS),
+            skos_documentation_roles(SKOS),
+            skos_relation_roles(SKOS),
         )
     };
     let (classes, labels, documentation, relations) = roles();

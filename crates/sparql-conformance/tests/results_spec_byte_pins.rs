@@ -45,32 +45,16 @@
 //! — it cannot hide behind model equality, because nothing here decodes the
 //! writer's own output before asserting on it.
 
-use std::path::{Path, PathBuf};
+mod support;
 
-use purrdf_core::{RdfDatasetBuilder, SparqlResult};
+use support::{as_solutions, suite_root};
+
 use purrdf_sparql_results::{ResultProvenance, from_json, from_xml, to_json, to_xml};
-
-/// The `suite/` directory of this crate.
-fn suite_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("suite")
-}
 
 /// Read a fixture's raw bytes from `suite/<rel>`.
 fn read_fixture(rel: &str) -> Vec<u8> {
     let path = suite_root().join(rel);
     std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
-}
-
-/// Wrap decoded `SELECT` solutions as the model-level [`SparqlResult`] the
-/// writer functions take.
-fn as_solutions(parsed: purrdf_sparql_results::ParsedSolutions) -> SparqlResult {
-    SparqlResult::Solutions {
-        variables: parsed.variables,
-        rows: parsed.rows,
-        aux: RdfDatasetBuilder::new()
-            .freeze()
-            .expect("an empty dataset always freezes"),
-    }
 }
 
 /// JSON base direction: re-serializing the vendored W3C

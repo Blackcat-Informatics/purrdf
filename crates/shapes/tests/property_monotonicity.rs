@@ -95,11 +95,6 @@ fn arb_fact() -> impl Strategy<Value = Fact> {
     ]
 }
 
-/// 64 cases, or `PURRDF_PROP_CASES` when set.
-fn config() -> Config {
-    Config::with_cases(prop::cases_from_env(64))
-}
-
 /// Non-vacuity guard: the shapes must actually fire, otherwise the monotonicity
 /// property would pass trivially on always-empty reports.
 #[test]
@@ -113,7 +108,7 @@ fn shapes_detect_violations() {
 }
 
 prop_test! {
-    #![prop_config(config())]
+    #![prop_config(Config::with_env_cases(64))]
 
     /// Adding data never removes a violation in the monotone fragment.
     #[test]

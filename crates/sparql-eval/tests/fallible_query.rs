@@ -3,14 +3,18 @@
 
 //! Public completeness-boundary tests for fallible SPARQL execution.
 
+mod support;
+
+use support::local_dataset;
+use support::solutions;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use purrdf_core::{
     InMemoryPageProvider, PackBuilder, PackView, PageFault, PageGeneration, PageId,
     PageMaterialization, PageProvider, PagedDataset, PagedQueryError, PagedQueryEvidence,
-    PagedQueryLimits, RdfDataset, RdfDatasetBuilder, SparqlRequest, SparqlResult, StopCause,
-    TermValue,
+    PagedQueryLimits, RdfDataset, SparqlRequest, SparqlResult, StopCause, TermValue,
 };
 use purrdf_sparql_eval::{
     ExtensionEnv, FallibleSparqlError, MemoryRelation, NativeSparqlEngine,
@@ -20,18 +24,7 @@ use purrdf_sparql_eval::{
 type CompleteSolutions = (Vec<String>, Vec<Vec<Option<TermValue>>>, PagedQueryEvidence);
 
 fn page() -> Arc<RdfDataset> {
-    build_page(&[("s", "p", "o")])
-}
-
-fn build_page(triples: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
-    let mut builder = RdfDatasetBuilder::new();
-    for &(subject, predicate, object) in triples {
-        let subject = builder.intern_iri(&format!("http://example.org/{subject}"));
-        let predicate = builder.intern_iri(&format!("http://example.org/{predicate}"));
-        let object = builder.intern_iri(&format!("http://example.org/{object}"));
-        builder.push_quad(subject, predicate, object, None);
-    }
-    builder.freeze().expect("valid page")
+    local_dataset([("s", "p", "o")])
 }
 
 fn request(query: &str) -> SparqlRequest<'_> {
@@ -323,8 +316,8 @@ impl PageProvider for FaultingProvider {
 
 fn two_page_faulting_dataset(fault: ScriptedFault) -> PagedDataset {
     let pages = vec![
-        build_page(&[("a", "p", "b")]),
-        build_page(&[("b", "q", "c")]),
+        local_dataset([("a", "p", "b")]),
+        local_dataset([("b", "q", "c")]),
     ];
     PagedDataset::from_provider(Arc::new(FaultingProvider::new(
         pages,
@@ -343,15 +336,6 @@ fn one_page_faulting_dataset(fault: ScriptedFault) -> PagedDataset {
         fault,
     )))
     .expect("fault is armed only after the successful seal")
-}
-
-fn solution_parts(result: SparqlResult) -> (Vec<String>, Vec<Vec<Option<TermValue>>>) {
-    match result {
-        SparqlResult::Solutions {
-            variables, rows, ..
-        } => (variables, rows),
-        other => panic!("expected solutions, got: {other:?}"),
-    }
 }
 
 #[test]
@@ -415,8 +399,8 @@ fn every_required_query_form_and_operator_propagates_page_failure() {
 #[test]
 fn production_query_budget_boundaries_are_exact_and_distinct() {
     let pages = [
-        build_page(&[("a", "p", "b")]),
-        build_page(&[("b", "q", "c")]),
+        local_dataset([("a", "p", "b")]),
+        local_dataset([("b", "q", "c")]),
     ];
     let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::with_byte_lengths(
         vec![(pages[0].clone(), 10), (pages[1].clone(), 20)],
@@ -430,7 +414,7 @@ fn production_query_budget_boundaries_are_exact_and_distinct() {
     let exact = engine
         .query_fallible_view(&exact_view, query, QueryOptions::EMPTY)
         .expect("equality with both ceilings is admitted");
-    assert_eq!(solution_parts(exact.result).1.len(), 2);
+    assert_eq!(solutions(exact.result).1.len(), 2);
     assert_eq!(exact.evidence.requested_pages, vec![PageId(0), PageId(1)]);
     assert_eq!(exact.evidence.consumed_pages, 2);
     assert_eq!(exact.evidence.consumed_bytes, 30);
@@ -576,17 +560,14 @@ fn operational_failure_taxonomy_is_not_an_empty_answer() {
             QueryOptions::EMPTY,
         )
         .expect("genuinely empty query is complete");
-    assert_eq!(
-        solution_parts(empty.result).1,
-        [] as [Vec<Option<TermValue>>; 0]
-    );
+    assert_eq!(solutions(empty.result).1, [] as [Vec<Option<TermValue>>; 0]);
 }
 
 #[test]
 fn identical_executions_have_identical_results_status_and_evidence() {
     let pages = [
-        build_page(&[("a", "p", "b")]),
-        build_page(&[("b", "q", "c")]),
+        local_dataset([("a", "p", "b")]),
+        local_dataset([("b", "q", "c")]),
     ];
     let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::with_byte_lengths(
         vec![(pages[0].clone(), 10), (pages[1].clone(), 20)],
@@ -606,7 +587,7 @@ fn identical_executions_have_identical_results_status_and_evidence() {
         let complete = engine
             .query_fallible_view(&view, query, QueryOptions::EMPTY)
             .expect("identical complete execution");
-        let (variables, rows) = solution_parts(complete.result);
+        let (variables, rows) = solutions(complete.result);
         let current = (variables, rows, complete.evidence);
         if let Some(expected) = &expected_success {
             assert_eq!(&current, expected);
@@ -646,8 +627,8 @@ fn identical_executions_have_identical_results_status_and_evidence() {
 #[test]
 fn cold_and_warm_bgp_planning_have_identical_demand_paging_evidence() {
     let pages = [
-        build_page(&[("a", "p", "x"), ("y", "q", "b")]),
-        build_page(&[
+        local_dataset([("a", "p", "x"), ("y", "q", "b")]),
+        local_dataset([
             ("c0", "r", "d0"),
             ("c1", "r", "d1"),
             ("c2", "r", "d2"),
@@ -674,7 +655,7 @@ fn cold_and_warm_bgp_planning_have_identical_demand_paging_evidence() {
         let complete = engine
             .query_fallible_view(&view, query, QueryOptions::EMPTY)
             .expect("complete empty execution");
-        let (_, rows) = solution_parts(complete.result);
+        let (_, rows) = solutions(complete.result);
         assert_eq!(rows, [] as [Vec<Option<TermValue>>; 0]);
         assert_eq!(complete.evidence.requested_pages, vec![PageId(0)]);
         assert_eq!(complete.evidence.consumed_pages, 1);
@@ -692,7 +673,7 @@ fn cold_and_warm_bgp_planning_have_identical_demand_paging_evidence() {
 
 #[test]
 fn resident_and_pack_views_keep_the_ordinary_byte_identical_result_path() {
-    let resident = build_page(&[("a", "p", "b"), ("b", "q", "c")]);
+    let resident = local_dataset([("a", "p", "b"), ("b", "q", "c")]);
     let pack_bytes = PackBuilder::build_bytes(&resident).expect("build pack");
     let pack = PackView::from_bytes(&pack_bytes).expect("open pack");
     let engine = NativeSparqlEngine::new();
@@ -707,8 +688,8 @@ fn resident_and_pack_views_keep_the_ordinary_byte_identical_result_path() {
         .query_prepared_view(&pack, &prepared, &[], QueryOptions::EMPTY)
         .expect("pack infallible query");
     assert_eq!(
-        solution_parts(resident_result),
-        solution_parts(pack_result),
+        solutions(resident_result),
+        solutions(pack_result),
         "ordinary resident and immutable-pack results remain exactly identical"
     );
 }
@@ -761,7 +742,7 @@ fn query_fallible_view_dispatches_a_registered_relation_with_options() {
     let complete = engine
         .query_fallible_view(&view, request(RELATION_QUERY), options)
         .expect("a registered relation's call evaluates through the fallible entry");
-    let (variables, rows) = solution_parts(complete.result);
+    let (variables, rows) = solutions(complete.result);
     assert_eq!(variables, vec!["a", "b"]);
     assert_eq!(
         rows.len(),
@@ -806,5 +787,5 @@ fn query_prepared_fallible_view_with_a_mismatched_registry_is_refused_and_the_ma
     let complete = engine
         .query_prepared_fallible_view(&view, &matched, &[], options)
         .expect("a plan and options that agree on the registry evaluate");
-    assert_eq!(solution_parts(complete.result).1.len(), 1);
+    assert_eq!(solutions(complete.result).1.len(), 1);
 }

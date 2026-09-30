@@ -23,12 +23,15 @@
 //! sub-select below carries `ORDER BY` before `LIMIT 1`, per the SEP's own
 //! examples.
 
+mod support;
+
+use support::{Row, render_cell, row, run_prefixed, sorted_rows};
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use purrdf_core::{
-    BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest,
-    SparqlResult, TermValue,
+    BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
 };
 use purrdf_sparql_algebra::SparqlParser;
 use purrdf_sparql_eval::{GovernedOutcome, NativeSparqlEngine, QueryGovernors, QueryOptions};
@@ -159,62 +162,6 @@ fn request(query: &str) -> SparqlRequest<'_> {
     }
 }
 
-fn run(ds: &Arc<RdfDataset>, query_body: &str) -> SparqlResult {
-    let text = format!("{PFX}{query_body}");
-    NativeSparqlEngine::new()
-        .query(ds, request(&text))
-        .unwrap_or_else(|e| panic!("query failed: {e:?}\nquery: {text}"))
-}
-
-/// Render one bound cell the way [`row`]/[`rows`] key it: `<iri>` for an IRI, the
-/// bare lexical form for a literal (every literal fixture value here is a plain
-/// string, so the lexical form alone disambiguates), `_:label` for a blank node,
-/// `UNBOUND` for `None`.
-fn cell(value: Option<&TermValue>) -> String {
-    match value {
-        None => "UNBOUND".to_owned(),
-        Some(TermValue::Iri(i)) => format!("<{i}>"),
-        Some(TermValue::Literal { lexical_form, .. }) => lexical_form.clone(),
-        Some(TermValue::Blank { label, .. }) => format!("_:{label}"),
-        Some(other) => format!("{other:?}"),
-    }
-}
-
-type Row = BTreeMap<String, String>;
-
-/// A SELECT result's rows as variable-name-keyed maps, SORTED — every assertion
-/// in this file compares solutions as a set (SPARQL's multiset order is
-/// unspecified outside an explicit top-level `ORDER BY`, which none of these
-/// queries use), never by column or row position.
-fn rows(result: &SparqlResult) -> Vec<Row> {
-    let SparqlResult::Solutions {
-        variables, rows, ..
-    } = result
-    else {
-        panic!("expected a SELECT result, got {result:?}");
-    };
-    let mut out: Vec<Row> = rows
-        .iter()
-        .map(|row| {
-            variables
-                .iter()
-                .cloned()
-                .zip(row.iter().map(|c| cell(c.as_ref())))
-                .collect()
-        })
-        .collect();
-    out.sort();
-    out
-}
-
-/// Build one expected row from `(variable, rendered-value)` pairs.
-fn row(pairs: &[(&str, &str)]) -> Row {
-    pairs
-        .iter()
-        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-        .collect()
-}
-
 /// Sort a hand-written expected row set the same way [`rows`] sorts the actual
 /// one, so `assert_eq!` compares two SETS rather than two SEQUENCES.
 fn expect(mut rows: Vec<Row>) -> Vec<Row> {
@@ -233,13 +180,14 @@ fn expect(mut rows: Vec<Row>) -> Vec<Row> {
 #[test]
 fn lateral_subselect_star_is_top_1_per_group() {
     let ds = dataset();
-    let lateral = run(
+    let lateral = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :p ?o \
          LATERAL { SELECT * { ?s rdfs:label ?label } ORDER BY ?label LIMIT 1 } }",
     );
     assert_eq!(
-        rows(&lateral),
+        sorted_rows(&lateral, render_cell),
         expect(vec![
             row(&[
                 ("s", "<https://example.org/lateral#a>"),
@@ -255,13 +203,14 @@ fn lateral_subselect_star_is_top_1_per_group() {
         "each subject gets its OWN top-1 label — :z has none and drops (inner-join semantics)"
     );
 
-    let control = run(
+    let control = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :p ?o \
          { SELECT * { ?s rdfs:label ?label } ORDER BY ?label LIMIT 1 } }",
     );
     assert_eq!(
-        rows(&control),
+        sorted_rows(&control, render_cell),
         expect(vec![row(&[
             ("s", "<https://example.org/lateral#a>"),
             ("o", "<https://example.org/lateral#oa>"),
@@ -272,8 +221,8 @@ fn lateral_subselect_star_is_top_1_per_group() {
     );
 
     assert_ne!(
-        rows(&lateral),
-        rows(&control),
+        sorted_rows(&lateral, render_cell),
+        sorted_rows(&control, render_cell),
         "LATERAL and a plain join over the identical sub-select text must disagree \
          — this IS the laterality the parser now makes writable"
     );
@@ -290,13 +239,14 @@ fn lateral_subselect_star_is_top_1_per_group() {
 #[test]
 fn lateral_subselect_nonprojected_var_is_not_correlated() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :p ?o \
          LATERAL { SELECT ?label { ?s rdfs:label ?label } ORDER BY ?label LIMIT 1 } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, render_cell),
         expect(vec![
             row(&[
                 ("s", "<https://example.org/lateral#a>"),
@@ -318,14 +268,15 @@ fn lateral_subselect_nonprojected_var_is_not_correlated() {
          row, :z included — the sub-select never saw ?s"
     );
 
-    let star = run(
+    let star = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :p ?o \
          LATERAL { SELECT * { ?s rdfs:label ?label } ORDER BY ?label LIMIT 1 } }",
     );
     assert_ne!(
-        rows(&result),
-        rows(&star),
+        sorted_rows(&result, render_cell),
+        sorted_rows(&star, render_cell),
         "projecting ?s (the star form) vs not (this form) must disagree — the \
          scoping oracle for Project-boundary narrowing"
     );
@@ -338,13 +289,14 @@ fn lateral_subselect_nonprojected_var_is_not_correlated() {
 #[test]
 fn lateral_optional_rhs_pads_labelless_subject() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :p ?o \
          LATERAL { OPTIONAL { SELECT * { ?s rdfs:label ?label } ORDER BY ?label LIMIT 1 } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, render_cell),
         expect(vec![
             row(&[
                 ("s", "<https://example.org/lateral#a>"),
@@ -373,9 +325,9 @@ fn lateral_optional_rhs_pads_labelless_subject() {
 #[test]
 fn lateral_shared_variable_is_injected_as_constant() {
     let ds = dataset();
-    let result = run(&ds, "SELECT * { ?s :p ?o LATERAL { ?s :q ?qval } }");
+    let result = run_prefixed(&ds, PFX, "SELECT * { ?s :p ?o LATERAL { ?s :q ?qval } }");
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, render_cell),
         expect(vec![row(&[
             ("s", "<https://example.org/lateral#a>"),
             ("o", "<https://example.org/lateral#oa>"),
@@ -394,12 +346,13 @@ fn lateral_shared_variable_is_injected_as_constant() {
 #[test]
 fn lateral_union_rhs_substitutes_both_branches() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :p ?o LATERAL { { ?s :q ?x } UNION { ?s :hasChild ?x } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, render_cell),
         expect(vec![
             row(&[
                 ("s", "<https://example.org/lateral#a>"),
@@ -434,13 +387,14 @@ fn lateral_union_rhs_substitutes_both_branches() {
 #[test]
 fn nested_lateral_reenters_the_substitution_guard() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :p ?o \
          LATERAL { ?s :hasChild ?c LATERAL { ?c :name ?n } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, render_cell),
         expect(vec![
             row(&[
                 ("s", "<https://example.org/lateral#a>"),
@@ -504,13 +458,14 @@ fn nested_lateral_reenters_the_substitution_guard() {
 #[test]
 fn lateral_graph_rhs_is_scoped_per_row() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT ?r ?g ?label { ?r :usesGraph ?g . ?r :hasSubject ?s \
          LATERAL { GRAPH ?g { SELECT * { ?s rdfs:label ?label } ORDER BY ?label LIMIT 1 } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, render_cell),
         expect(vec![
             row(&[
                 ("r", "<https://example.org/lateral#r1>"),
@@ -538,9 +493,13 @@ fn lateral_graph_rhs_is_scoped_per_row() {
 #[test]
 fn lateral_path_rhs_is_correlated() {
     let ds = dataset();
-    let result = run(&ds, "SELECT * { ?s :p ?o LATERAL { ?s :hasChild+ ?d } }");
+    let result = run_prefixed(
+        &ds,
+        PFX,
+        "SELECT * { ?s :p ?o LATERAL { ?s :hasChild+ ?d } }",
+    );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, render_cell),
         expect(vec![
             row(&[
                 ("s", "<https://example.org/lateral#a>"),
@@ -570,12 +529,13 @@ fn lateral_path_rhs_is_correlated() {
 #[test]
 fn lateral_literal_bound_variable_is_injected() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s rdfs:label ?label LATERAL { ?tag :tagged ?label } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, render_cell),
         expect(vec![
             row(&[
                 ("s", "<https://example.org/lateral#a>"),
@@ -601,12 +561,13 @@ fn lateral_literal_bound_variable_is_injected() {
 #[test]
 fn lateral_predicate_position_is_injected() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :usesPred ?pred LATERAL { ?s ?pred ?val } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, render_cell),
         expect(vec![row(&[
             ("s", "<https://example.org/lateral#a>"),
             ("pred", "<https://example.org/lateral#p>"),
@@ -624,12 +585,13 @@ fn lateral_predicate_position_is_injected() {
 #[test]
 fn lateral_values_rhs_joins_per_row() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :p ?o LATERAL { VALUES ?tag { \"x\" \"y\" } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, render_cell),
         expect(vec![
             row(&[
                 ("s", "<https://example.org/lateral#a>"),
@@ -674,9 +636,13 @@ fn lateral_values_rhs_joins_per_row() {
 #[test]
 fn lateral_bind_rhs_shared_var() {
     let ds = dataset();
-    let result = run(&ds, "SELECT * { ?s :p ?o LATERAL { BIND(?o AS ?o2) } }");
+    let result = run_prefixed(
+        &ds,
+        PFX,
+        "SELECT * { ?s :p ?o LATERAL { BIND(?o AS ?o2) } }",
+    );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, render_cell),
         expect(vec![
             row(&[
                 ("s", "<https://example.org/lateral#a>"),
@@ -732,7 +698,7 @@ fn lateral_truncation_commits_per_left_row() {
     else {
         panic!("METERED bounds nothing, so this must complete");
     };
-    let full = rows(&result);
+    let full = sorted_rows(&result, render_cell);
     assert_eq!(full.len(), 4, "2 labels each for :a and :b, none for :z");
     let spend = evidence.consumed.get(purrdf_core::ResourceDimension::Fuel);
     assert!(spend > 0, "evaluating LATERAL is not free");
@@ -782,7 +748,9 @@ fn lateral_truncation_commits_per_left_row() {
             .expect("?s is projected");
         let mut by_subject: BTreeMap<String, usize> = BTreeMap::new();
         for r in rows {
-            *by_subject.entry(cell(r[s_index].as_ref())).or_insert(0) += 1;
+            *by_subject
+                .entry(render_cell(r[s_index].as_ref()))
+                .or_insert(0) += 1;
         }
         for (s, count) in &by_subject {
             assert_eq!(
@@ -812,8 +780,9 @@ fn lateral_truncation_commits_per_left_row() {
 #[test]
 fn lateral_rhs_schema_union_is_stable() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :p ?o LATERAL { ?s rdfs:label ?label } }",
     );
     let SparqlResult::Solutions { variables, .. } = &result else {
@@ -825,7 +794,7 @@ fn lateral_rhs_schema_union_is_stable() {
          output schema (the union AC2's rejected parenthetical would have \
          denied): got {variables:?}"
     );
-    let rendered = rows(&result);
+    let rendered = sorted_rows(&result, render_cell);
     assert!(
         rendered
             .iter()
@@ -841,12 +810,13 @@ fn lateral_rhs_schema_union_is_stable() {
 #[test]
 fn lateral_minus_rhs_disjoint_domain_not_flipped() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :p ?o LATERAL { ?s :q :c MINUS { ?s :q :c } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, render_cell),
         Vec::<Row>::new(),
         "MINUS must see the SAME domain on both sides (the substituted leaf \
          keeps its ?s column rather than being rewritten to a bare constant), \
@@ -866,12 +836,13 @@ fn lateral_minus_rhs_disjoint_domain_not_flipped() {
 #[test]
 fn exists_inside_lateral_rhs_correlates() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :p ?o LATERAL { FILTER EXISTS { ?s :q :c } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, render_cell),
         expect(vec![row(&[
             ("s", "<https://example.org/lateral#a>"),
             ("o", "<https://example.org/lateral#oa>")
@@ -893,13 +864,14 @@ fn exists_inside_lateral_rhs_correlates() {
 #[test]
 fn lateral_inside_exists_pattern_evaluates() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT ?s ?o { ?s :p ?o \
          FILTER EXISTS { LATERAL { SELECT * { ?s rdfs:label ?label } ORDER BY ?label LIMIT 1 } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, render_cell),
         expect(vec![
             row(&[
                 ("s", "<https://example.org/lateral#a>"),
@@ -954,12 +926,13 @@ fn lateral_spine_parses_at_any_length_and_evaluates_where_the_stack_holds_it() {
 
     purrdf_stack::on_stack(256 * 1024 * 1024, || {
         let ds = dataset();
-        let answered = run(
+        let answered = run_prefixed(
             &ds,
+            PFX,
             &lateral_spine(300, "LATERAL { ?s :q ?c } ").replace(PFX, ""),
         );
         assert_eq!(
-            rows(&answered),
+            sorted_rows(&answered, render_cell),
             expect(vec![row(&[
                 ("s", "<https://example.org/lateral#a>"),
                 ("o", "<https://example.org/lateral#c>"),
@@ -969,12 +942,13 @@ fn lateral_spine_parses_at_any_length_and_evaluates_where_the_stack_holds_it() {
             ])]),
             "a 300-link spine answers its one row"
         );
-        let unmatched = run(
+        let unmatched = run_prefixed(
             &ds,
+            PFX,
             &lateral_spine(300, "LATERAL { ?s :q :missing } ").replace(PFX, ""),
         );
         assert!(
-            rows(&unmatched).is_empty(),
+            sorted_rows(&unmatched, render_cell).is_empty(),
             "the same spine ending in a link that matches nothing answers no row"
         );
     })
@@ -1002,11 +976,12 @@ fn lateral_spine_parses_at_any_length_and_evaluates_where_the_stack_holds_it() {
 #[test]
 fn lateral_bnode_bound_variable_in_a_filter() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :hasAnon ?bn LATERAL { ?s :p ?o FILTER(BOUND(?bn)) } }",
     );
-    let solutions = rows(&result);
+    let solutions = sorted_rows(&result, render_cell);
     assert_eq!(
         solutions.len(),
         1,
@@ -1035,8 +1010,9 @@ fn lateral_bnode_bound_variable_in_a_filter() {
 #[test]
 fn lateral_triple_term_bound_variable_in_a_filter() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { \
          ?r1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?tt \
          LATERAL { \
@@ -1044,7 +1020,7 @@ fn lateral_triple_term_bound_variable_in_a_filter() {
            FILTER(sameTerm(?tt, ?x)) \
          } }",
     );
-    let solutions = rows(&result);
+    let solutions = sorted_rows(&result, render_cell);
     assert_eq!(
         solutions.len(),
         1,

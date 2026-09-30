@@ -12,9 +12,11 @@
 //! executable exactly the way an operator invokes it, so every assertion here pins the shipped
 //! surface rather than a library call that merely resembles it.
 
+mod support;
+
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
+use support::unique_tag;
 
 use purrdf_bench::{CLASS_MIX_PER_MILLE, CORPUS_PROFILE_ID, CorpusSpec, ROW_MIX_PER_MILLE};
 
@@ -62,21 +64,6 @@ fn whole(quads: u64, iris: u64, seed: u64) -> Vec<u8> {
     ]);
     assert_eq!(code, 0, "the whole run must succeed; stderr:\n{err}");
     out
-}
-
-/// A monotonically increasing counter, so every call to [`unique_tag`] in this process is
-/// distinct even across parallel test threads.
-static UNIQUE: AtomicU64 = AtomicU64::new(0);
-
-/// A filesystem-unique fragment: this process's id plus a monotonic counter. Parallel test
-/// threads within one `cargo test` run (and separate runs, which get different process ids)
-/// never collide on the same name.
-fn unique_tag() -> String {
-    format!(
-        "{}-{}",
-        std::process::id(),
-        UNIQUE.fetch_add(1, Ordering::Relaxed)
-    )
 }
 
 /// A path under the OS temp dir, unique per call and tagged with `test_name` so a leftover

@@ -21,9 +21,9 @@ use pyo3::types::{PyCapsule, PyDict};
 use super::io::{PyRdfFormat, PySerializeLoss, dump_quads_with_loss};
 use super::query::{
     EngineConfig, GovernorArgs, PyCancellationToken, PyEntailmentQueryOutcome, PyQueryOutcome,
-    PyUpdateOutcome, build_aggregates, build_engine, build_relations, collect_relations,
-    engine_parser_options, materialize_entailment_outcome, materialize_outcome,
-    materialize_results, materialize_update_outcome, registry_over, run_governed,
+    PyUpdateOutcome, build_engine, build_relations, collect_relations, engine_parser_options,
+    materialize_entailment_outcome, materialize_outcome, materialize_results,
+    materialize_update_outcome, registry_over, run_governed,
 };
 use super::store::PyQuadIter;
 use super::term::{PyVariable, extract_term, rdf_term_to_value, values_to_rdf_quad};
@@ -72,7 +72,7 @@ impl PyQuadStore {
     /// (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
     /// `FIRST`, `LAST`, `TOPK`) under that IRI, so the query text can call
     /// `AGG(<{NAMESPACE}NAME>, args…)` (see
-    /// [`build_aggregates`](super::query::build_aggregates)). Unset (the default)
+    /// [`statistical_aggregates`](purrdf_validate::query::statistical_aggregates)). Unset (the default)
     /// leaves every one of the ten names an ordinary unregistered custom-aggregate IRI.
     #[pyo3(signature = (
         query,
@@ -120,7 +120,8 @@ impl PyQuadStore {
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
             let registry = build_relations(specs, &dataset)?;
-            let aggregates = build_aggregates(aggregate_namespace);
+            let aggregates =
+                purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
             let parser_options = engine_parser_options(&config);
             let engine = build_engine(config);
             engine
@@ -235,7 +236,8 @@ impl PyQuadStore {
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
             let registry = build_relations(specs, &dataset)?;
-            let aggregates = build_aggregates(aggregate_namespace);
+            let aggregates =
+                purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
             let parser_options = engine_parser_options(&config);
             let engine = build_engine(config);
             engine
@@ -399,7 +401,8 @@ impl PyQuadStore {
             };
             let parser_options = engine_parser_options(&config);
             let engine = build_engine(config);
-            let aggregates = build_aggregates(aggregate_namespace);
+            let aggregates =
+                purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
             query_with_entailment_closure_governed(
                 &engine,
                 &dataset,
@@ -485,7 +488,8 @@ impl PyQuadStore {
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
             let registry = build_relations(specs, &dataset)?;
-            let aggregates = build_aggregates(aggregate_namespace);
+            let aggregates =
+                purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
             let parser_options = engine_parser_options(&config);
             let engine = build_engine(config);
             engine
@@ -586,7 +590,8 @@ impl PyQuadStore {
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
             let registry = build_relations(specs, &dataset)?;
-            let aggregates = build_aggregates(aggregate_namespace);
+            let aggregates =
+                purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
             let parser_options = engine_parser_options(&config);
             let outcome = build_engine(config)
                 .update_governed(

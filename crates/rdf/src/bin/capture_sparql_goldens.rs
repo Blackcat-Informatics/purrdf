@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use purrdf_core::SparqlEngine;
 use purrdf_rdf::capture_support::{
     collect_corpus_files, corpus_repo_root, is_deferred_construct, is_multi_query_file,
-    is_nondeterministic, row_key,
+    is_nondeterministic, solutions_golden,
 };
 use purrdf_rdf::{
     BlankScope, NativeRdfFormat, RdfDataset, SparqlRequest, SparqlResult, TermRef, TermValue,
@@ -223,22 +223,6 @@ fn write_result_golden(stem: &Path, result: &SparqlResult, tally: &mut Tally) {
     }
 }
 
-/// Render a SELECT result as a deterministic golden: first line is the tab-joined
-/// variable list (preserving query projection order), then the SORTED `row_key`
-/// lines (a deterministic multiset — solution row order is not contractual).
-fn solutions_golden(variables: &[String], rows: &[Vec<Option<TermValue>>]) -> String {
-    let mut out = String::new();
-    out.push_str(&variables.join("\t"));
-    out.push('\n');
-    let mut keys: Vec<String> = rows.iter().map(|r| row_key(r)).collect();
-    keys.sort();
-    for k in keys {
-        out.push_str(&k);
-        out.push('\n');
-    }
-    out
-}
-
 // ---------------------------------------------------------------------------
 // Substitution goldens.
 // ---------------------------------------------------------------------------
@@ -386,12 +370,9 @@ fn expect_solutions<'a>(
     result: &'a SparqlResult,
     name: &str,
 ) -> (&'a [String], &'a [Vec<Option<TermValue>>]) {
-    match result {
-        SparqlResult::Solutions {
-            variables, rows, ..
-        } => (variables, rows),
-        other => panic!("substitution {name}: expected SELECT solutions, got {other:?}"),
-    }
+    result
+        .solutions()
+        .unwrap_or_else(|| panic!("substitution {name}: expected SELECT solutions, got {result:?}"))
 }
 
 // ---------------------------------------------------------------------------

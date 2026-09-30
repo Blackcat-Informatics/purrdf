@@ -16,7 +16,10 @@ use purrdf_rdf::viz::{
 };
 use purrdf_rdf::{RdfTextDirection, TermValue};
 
-const EX: &str = "https://example.org/";
+#[path = "../tests/support/viz_terms.rs"]
+mod viz_terms;
+use viz_terms::{EX, iri};
+
 const PROV: &str = "http://www.w3.org/ns/prov#";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -150,8 +153,13 @@ fn ordinary_shared() -> VizGraphInput {
             quad("carol", "reportsTo", iri("dana"), "facts"),
             quad("bob", "reportsTo", iri("dana"), "facts"),
             quad("dana", "mentors", iri("alice"), "facts"),
-            quad("alice", "name", literal("Alice A."), "labels"),
-            quad("bob", "name", literal("Bob B."), "labels"),
+            quad(
+                "alice",
+                "name",
+                TermValue::simple_literal("Alice A."),
+                "labels",
+            ),
+            quad("bob", "name", TermValue::simple_literal("Bob B."), "labels"),
         ],
         ..VizGraphInput::default()
     }
@@ -197,7 +205,7 @@ fn asserted_reified() -> VizGraphInput {
             annotation(
                 "observation-42",
                 "observedAt",
-                literal("2026-07-10T08:30:00Z"),
+                TermValue::simple_literal("2026-07-10T08:30:00Z"),
                 "observations",
             ),
             annotation(
@@ -270,7 +278,7 @@ fn nested_dialect() -> VizGraphInput {
                 graph_name: Some(iri("audit")),
             },
             VizInputQuad {
-                subject: literal("generalized subject"),
+                subject: TermValue::simple_literal("generalized subject"),
                 predicate: format!("{EX}describes"),
                 object: iri("extension-case"),
                 graph_name: Some(iri("extensions")),
@@ -284,7 +292,7 @@ fn nested_dialect() -> VizGraphInput {
         annotations: vec![annotation(
             "meta-claim",
             "nestingNote",
-            literal("inner proposition is quoted, not independently asserted"),
+            TermValue::simple_literal("inner proposition is quoted, not independently asserted"),
             "provenance",
         )],
     }
@@ -373,19 +381,6 @@ fn triple(subject: &str, predicate: &str, object: TermValue) -> TermValue {
         s: TermBox::new(iri(subject)),
         p: TermBox::new(TermValue::Iri(format!("{EX}{predicate}"))),
         o: TermBox::new(object),
-    }
-}
-
-fn iri(local: &str) -> TermValue {
-    TermValue::Iri(format!("{EX}{local}"))
-}
-
-fn literal(value: &str) -> TermValue {
-    TermValue::Literal {
-        lexical_form: value.to_owned(),
-        datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
-        language: None,
-        direction: None,
     }
 }
 

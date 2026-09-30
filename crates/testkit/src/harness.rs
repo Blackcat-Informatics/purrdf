@@ -575,6 +575,19 @@ pub fn print_line(line: &str) {
     platform::print_raw(&text);
 }
 
+/// A determinism digest: `compute` run with every host clock and entropy source
+/// withdrawn ([`without_host_clock_or_entropy`]), reported on one
+/// `determinism-digest case=<case> digest=<16 hex digits> corpus_len=<n>` line
+/// ([`print_line`]) for the cross-target determinism scripts to compare, and
+/// returned. `corpus_len` is the size of the corpus the digest covers.
+pub fn report_digest(case: &str, corpus_len: usize, compute: impl FnOnce() -> u64) -> u64 {
+    let value = without_host_clock_or_entropy(compute);
+    print_line(&format!(
+        "determinism-digest case={case} digest={value:016x} corpus_len={corpus_len}"
+    ));
+    value
+}
+
 /// Run `computation` with every host clock and entropy source withdrawn, and
 /// return its value.
 ///

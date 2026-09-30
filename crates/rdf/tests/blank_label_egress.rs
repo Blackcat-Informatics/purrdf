@@ -26,14 +26,17 @@
 //!    `(label "a.s1", scope 0)` serialize to DISTINCT labels and re-parse as
 //!    two nodes: the scoped pair as its envelope, the literal label verbatim.
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use purrdf_rdf::blank_label::{LabelAlphabet, encode_blank_label, is_valid_label};
 use purrdf_rdf::{
-    BlankScope, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, SerializeGraph, TermRef,
+    BlankScope, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, SerializeGraph,
     datasets_isomorphic, parse_dataset, serialize_dataset,
 };
+
+#[path = "support/blank_identity.rs"]
+mod blank_identity;
+use blank_identity::blank_nodes;
 
 /// One quad whose subject is a blank node with the given raw label at the
 /// DEFAULT scope.
@@ -44,20 +47,6 @@ fn blank_subject_dataset(label: &str) -> Arc<RdfDataset> {
     let o = b.intern_iri("https://example.org/o");
     b.push_quad(s, p, o, None);
     b.freeze().expect("dataset freezes")
-}
-
-/// The distinct blank `(label, scope)` pairs among a dataset's quad subjects
-/// and objects.
-fn blank_nodes(ds: &RdfDataset) -> BTreeSet<(String, u32)> {
-    let mut blanks = BTreeSet::new();
-    for quad in ds.quads() {
-        for id in [quad.s, quad.o] {
-            if let TermRef::Blank { label, scope } = ds.resolve(id) {
-                blanks.insert((label.to_owned(), scope.ordinal()));
-            }
-        }
-    }
-    blanks
 }
 
 /// The hostile-label table. Every entry is a label some producer can hand the

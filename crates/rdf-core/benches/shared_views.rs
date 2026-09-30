@@ -28,6 +28,7 @@
 //! them is asserted once per shape before anything is timed; that assertion is
 //! about CONTENT, not speed, and no magnitude is claimed anywhere here either.
 
+use purrdf_core::view_fixture::{Observation, observe, round_trip_delta};
 use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -246,119 +247,32 @@ const CARRIER_G2: &str = "http://example.org/carrier/base-2";
 /// Declared by the base and left empty — a leaf with no rows behind it.
 const CARRIER_DECLARED: &str = "http://example.org/carrier/declared";
 
-/// Every field name an observation line must carry. The presence guard reads
-/// this list, so a renamed field fails the bench instead of silently narrowing
-/// the record a reader is relying on.
-const OBSERVATION_FIELDS: [&str; 10] = [
-    "shape=",
-    "variant=",
-    "profile=",
-    "elapsed_ns=",
-    "peak_accounted_bytes=",
-    "retained_bytes=",
-    "incremental_bytes=",
-    "copies=",
-    "freezes=",
-    "materializations=",
-];
-
 /// The typed-handle payload a stage pins. The kernel never reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Stage(usize);
 
-/// The build profile this run was taken under.
+/// The same report, with the three work figures replaced by what ONE measured
+/// call charged.
 ///
-/// Derived, never asserted as a literal: a debug-profile figure is not comparable
-/// with a release one, and a hardcoded `release` would quietly claim it was. The
-/// line is a record, so it has to say which of the two it is.
-fn build_profile() -> &'static str {
-    if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
+/// A view's `ViewWork` is cumulative from its construction, so reporting it
+/// verbatim would credit the pack call with the composition's own copies. The
+/// question this group asks is what the OUTPUT conversion costs, so the
+/// counters are read either side of the single call and only the difference
+/// is reported — which is also what makes "the view path froze nothing" a
+/// statement the line can actually carry.
+fn from_report_with_work_delta(
+    report: &ViewAccountingReport,
+    before: ViewWork,
+    after: ViewWork,
+) -> Observation {
+    Observation {
+        copies: after.copied_rows.saturating_sub(before.copied_rows),
+        freezes: after.freezes.saturating_sub(before.freezes),
+        materializations: after
+            .materializations
+            .saturating_sub(before.materializations),
+        ..Observation::from_report(report, 0)
     }
-}
-
-/// The four accounting families one measured variant reports, in the units the
-/// carrier itself keeps. `peak_accounted_bytes` is the ledger's deduplicated
-/// retention plus this view's own incremental charge — an ACCOUNTED figure, not
-/// an allocator or RSS measurement.
-#[derive(Debug, Clone, Copy, Default)]
-struct Observation {
-    peak_accounted_bytes: usize,
-    retained_bytes: usize,
-    incremental_bytes: usize,
-    copies: usize,
-    freezes: usize,
-    materializations: usize,
-}
-
-impl Observation {
-    /// The view carrier's own report, read verbatim.
-    fn from_report(report: &ViewAccountingReport) -> Self {
-        Self {
-            peak_accounted_bytes: report.total_accounted_bytes(),
-            retained_bytes: report
-                .retained
-                .retained_payload_bytes
-                .saturating_add(report.retained.memo_bytes),
-            incremental_bytes: report.incremental_auxiliary_bytes,
-            copies: report.incremental_work.copied_rows,
-            freezes: report.incremental_work.freezes,
-            materializations: report.incremental_work.materializations,
-        }
-    }
-
-    /// The same report, with the three work figures replaced by what ONE measured
-    /// call charged.
-    ///
-    /// A view's `ViewWork` is cumulative from its construction, so reporting it
-    /// verbatim would credit the pack call with the composition's own copies. The
-    /// question this group asks is what the OUTPUT conversion costs, so the
-    /// counters are read either side of the single call and only the difference
-    /// is reported — which is also what makes "the view path froze nothing" a
-    /// statement the line can actually carry.
-    fn from_report_with_work_delta(
-        report: &ViewAccountingReport,
-        before: ViewWork,
-        after: ViewWork,
-    ) -> Self {
-        Self {
-            copies: after.copied_rows.saturating_sub(before.copied_rows),
-            freezes: after.freezes.saturating_sub(before.freezes),
-            materializations: after
-                .materializations
-                .saturating_sub(before.materializations),
-            ..Self::from_report(report)
-        }
-    }
-}
-
-/// Print one observation line, self-asserting that every named field survived
-/// the formatting. This is the acceptance mechanism: it runs in the harness's
-/// `--test` smoke mode too, so a shape that stopped reporting fails the bench.
-fn observe(shape: &str, variant: &str, elapsed: Duration, observed: Observation) {
-    let line = format!(
-        "observation shape={shape} variant={variant} profile={profile} \
-         elapsed_ns={elapsed} peak_accounted_bytes={peak} retained_bytes={retained} \
-         incremental_bytes={incremental} copies={copies} freezes={freezes} \
-         materializations={materializations}",
-        profile = build_profile(),
-        elapsed = elapsed.as_nanos(),
-        peak = observed.peak_accounted_bytes,
-        retained = observed.retained_bytes,
-        incremental = observed.incremental_bytes,
-        copies = observed.copies,
-        freezes = observed.freezes,
-        materializations = observed.materializations,
-    );
-    for field in OBSERVATION_FIELDS {
-        assert!(
-            line.contains(field),
-            "the observation line lost {field:?}: {line}"
-        );
-    }
-    println!("{line}");
 }
 
 /// A largish deterministic base: two quad-bearing named graphs, default-graph
@@ -420,24 +334,6 @@ fn carrier_contribution(graph: &str, space: usize, rows: usize) -> Arc<RdfDatase
     b.freeze().expect("the carrier contribution freezes")
 }
 
-/// A delta whose EFFECTIVE content is exactly `base`'s, reached through a real
-/// mutation round trip so the delta machinery is genuinely in the read path.
-fn carrier_delta(base: &Arc<RdfDataset>) -> Arc<DeltaDatasetView> {
-    let mut mutable = MutableDataset::new(Arc::clone(base));
-    let scratch = QuadValues::triple(
-        TermValue::iri("http://example.org/scratch"),
-        TermValue::iri("http://example.org/p"),
-        TermValue::iri("http://example.org/o"),
-    );
-    assert!(
-        mutable
-            .insert(scratch.clone())
-            .expect("the scratch row inserts")
-    );
-    assert!(mutable.remove(&scratch), "and is taken back out again");
-    Arc::new(mutable.snapshot_view().expect("the delta publishes"))
-}
-
 /// One measured shape: a base, the stages folded onto it in order, and how many
 /// further readers of the same base follow.
 #[derive(Debug)]
@@ -457,7 +353,7 @@ impl CarrierShape {
         consumers: usize,
     ) -> Self {
         let base = carrier_base(groups);
-        let delta = carrier_delta(&base);
+        let delta = round_trip_delta(&base, "http://example.org/");
         Self {
             name,
             base,
@@ -595,7 +491,7 @@ fn run_view(shape: &CarrierShape, limits: ViewLimits) -> Observation {
             );
         }
     }
-    Observation::from_report(&carrier.accounting())
+    Observation::from_report(&carrier.accounting(), 0)
 }
 
 /// The DELTA carrier: the same stage plan, but the composed root is a delta
@@ -640,7 +536,7 @@ fn run_delta(shape: &CarrierShape, limits: ViewLimits) -> Observation {
             );
         }
     }
-    Observation::from_report(&carrier.accounting())
+    Observation::from_report(&carrier.accounting(), 0)
 }
 
 fn carrier_propagation(c: &mut Bench) {
@@ -811,8 +707,7 @@ fn run_pack_view(view: &CompositeDatasetView, owners: &[Arc<RdfDataset>]) -> Obs
     let bytes = PackBuilder::build_view_bytes(view).expect("the view packs without materializing");
     let after = view.stats().work;
     black_box(bytes.len());
-    let observed =
-        Observation::from_report_with_work_delta(&ledger.report(&view.stats()), before, after);
+    let observed = from_report_with_work_delta(&ledger.report(&view.stats()), before, after);
     // The guards hold the ledger's registrations open across the report above;
     // dropping them here is what makes that ordering explicit rather than
     // incidental to where the binding happens to fall out of scope.

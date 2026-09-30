@@ -10,17 +10,13 @@
 
 use purrdf_core::FastSet;
 use purrdf_core::TermBox;
+use purrdf_core::term_fixture::iri;
 use std::collections::BTreeSet;
 
 use purrdf_core::ir::pack::bits::{IntVector, IntVectorRef, RankSelectRef};
 use purrdf_core::ir::pack::dict::{PackDict, PackTermId};
 use purrdf_core::ir::pack::triples::{PackTriplesError, Triples, TriplesRef};
 use purrdf_core::{BlankScope, GraphMatch, RdfDataset, RdfDatasetBuilder, TermId, TermValue};
-
-/// An `example.org` IRI value.
-fn iri(name: &str) -> TermValue {
-    TermValue::iri(format!("http://example.org/{name}"))
-}
 
 /// One resolved quad, in dataset-independent `TermValue` form (the comparable
 /// unit both the brute-force oracle and the triples-codec query reduce to).

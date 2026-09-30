@@ -207,6 +207,37 @@ pub(super) fn validate_data_path(path: &str, what: &str) -> Result<(), Projectio
     Ok(())
 }
 
+/// Where a research-object reader records the losses of its artifact: the one
+/// place an unsupported value and an unknown member become ledger entries, for
+/// the JSON-LD profiles and the Frictionless descriptor alike.
+pub(super) trait LossRecorder {
+    /// Record the contract loss `code` at `pointer`.
+    fn loss(&mut self, code: &'static str, pointer: &str);
+
+    /// Record the value at `pointer` as unsupported and dropped.
+    fn unsupported(&mut self, pointer: &str) {
+        self.loss(LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED, pointer);
+    }
+
+    /// Record every member left in `object` as unknown and dropped.
+    fn record_unknowns(&mut self, object: &Object, parent: &str) {
+        for member in object.keys() {
+            self.loss(
+                LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
+                &json_pointer(parent, member),
+            );
+        }
+    }
+}
+
+/// A profile reader records into its own ledgers, located in its artifact.
+impl<T: ProfileReader + ?Sized> LossRecorder for T {
+    fn loss(&mut self, code: &'static str, pointer: &str) {
+        let (ledger, contract) = self.ledgers();
+        record_loss(ledger, contract, code, Self::ARTIFACT, pointer);
+    }
+}
+
 /// A JSON-LD research-object profile reader.
 ///
 /// A profile supplies its vocabulary lookup, its ledgers and how it reads a
@@ -244,27 +275,6 @@ pub(super) trait ProfileReader {
         value: &Value,
         pointer: &str,
     ) -> Result<Option<ResearchValue>, ProjectionError>;
-
-    /// Record the contract loss `code` at `pointer`.
-    fn loss(&mut self, code: &'static str, pointer: &str) {
-        let (ledger, contract) = self.ledgers();
-        record_loss(ledger, contract, code, Self::ARTIFACT, pointer);
-    }
-
-    /// Record the value at `pointer` as unsupported and dropped.
-    fn unsupported(&mut self, pointer: &str) {
-        self.loss(LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED, pointer);
-    }
-
-    /// Record every member left in `object` as unknown and dropped.
-    fn record_unknowns(&mut self, object: &Object, parent: &str) {
-        for member in object.keys() {
-            self.loss(
-                LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
-                &json_pointer(parent, member),
-            );
-        }
-    }
 
     /// Take the member bound to `role` out of `object` as its items: an array
     /// is its items (their order is dropped, and recorded as lost when there

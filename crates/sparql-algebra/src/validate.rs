@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use crate::walk::NodeRef;
 use crate::{
     AggregateExpression, Expression, Function, GraphPattern, GroundTerm, Literal, NamedNodePattern,
-    ParseError, PropertyPathExpression, Query, Result, TermPattern, Variable,
+    ParseError, PropertyPathExpression, Query, Result, TermPattern, TriplePattern, Variable,
 };
 
 /// A term position that may hold a triple term: the one shape the nesting count
@@ -69,6 +69,61 @@ impl TermPattern {
     #[must_use]
     pub fn triple_term_nesting(&self) -> usize {
         triple_term_nesting(self)
+    }
+
+    /// Call `visit` on every variable this term mentions, a quoted triple term's own
+    /// positions included — subject, predicate and object, at every depth. A
+    /// variable mentioned twice is visited twice.
+    ///
+    /// The one variable walk over a term pattern every analysis shares. It keeps its
+    /// own work list, so a term nested to any depth needs no more machine stack, and
+    /// a term that is not a triple term is answered without allocating.
+    pub fn for_each_variable<'a>(&'a self, mut visit: impl FnMut(&'a Variable)) {
+        let mut pending = match self {
+            Self::Variable(variable) => return visit(variable),
+            Self::Triple(_) => vec![self],
+            Self::NamedNode(_) | Self::BlankNode(_) | Self::Literal(_) => return,
+        };
+        while let Some(term) = pending.pop() {
+            match term {
+                Self::Variable(variable) => visit(variable),
+                Self::Triple(triple) => {
+                    if let NamedNodePattern::Variable(variable) = &triple.predicate {
+                        visit(variable);
+                    }
+                    pending.push(&triple.object);
+                    pending.push(&triple.subject);
+                }
+                Self::NamedNode(_) | Self::BlankNode(_) | Self::Literal(_) => {}
+            }
+        }
+    }
+
+    /// Add every variable this term mentions to `out`, a quoted triple term's own
+    /// positions included (see [`Self::for_each_variable`]).
+    pub fn collect_variables(&self, out: &mut impl Extend<Variable>) {
+        self.for_each_variable(|variable| out.extend([variable.clone()]));
+    }
+
+    /// Add the name of every variable this term mentions to `out`, a quoted triple
+    /// term's own positions included (see [`Self::for_each_variable`]).
+    pub fn collect_variable_names(&self, out: &mut BTreeSet<String>) {
+        self.for_each_variable(|variable| {
+            out.insert(variable.as_str().to_owned());
+        });
+    }
+}
+
+impl TriplePattern {
+    /// Add the name of every variable this triple pattern mentions to `out`: its
+    /// subject's and object's (quoted triple terms included) and a variable
+    /// predicate.
+    pub fn collect_variable_names(&self, out: &mut BTreeSet<String>) {
+        self.subject.collect_variable_names(out);
+        if let NamedNodePattern::Variable(variable) = &self.predicate {
+            out.insert(variable.as_str().to_owned());
+        }
+        self.object.collect_variable_names(out);
     }
 }
 

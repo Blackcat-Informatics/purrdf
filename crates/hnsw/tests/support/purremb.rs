@@ -17,20 +17,17 @@
 use purrdf_core::IndexGuardView;
 use purrdf_core::distance::Reassociated;
 use purrdf_core::distance::{Arithmetic, Exact};
-use purrdf_core::purremb_fixture::Identities;
+use purrdf_core::purremb_fixture::{Identities, reseal, section_span};
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, CanonicalMetadataInput, CertifiedPurrpckSource, ContentDigest,
-    DerivedIndex, DimensionalityPolicy, DistanceMetric, EffectivePrefix, EmbeddingBuilder,
-    EmbeddingFamily, EmbeddingFamilyContract, EmbeddingTarget, EmbeddingView, ExtensionTarget,
+    AppliedStage, ArtifactIdentity, CanonicalMetadataInput, CertifiedPurrpckSource, DerivedIndex,
+    DimensionalityPolicy, DistanceMetric, EffectivePrefix, EmbeddingBuilder, EmbeddingFamily,
+    EmbeddingFamilyContract, EmbeddingTarget, EmbeddingView, ExtensionTarget,
     IndexBuildDeterminism, IndexCoordinates, IndexGuardContract, IndexLossContract,
-    IndexPayloadStorage, MatrixInput, MatrixRow, PURREMB_HEADER_LENGTH, PrefixPostprocessing,
-    RdfDatasetBuilder, SECTION_INDEX_PAYLOAD, TargetId, TargetSet, TargetSetId, TermValue,
-    VectorDtype, VectorSpaceId, derive_artifact_root, verify_embedding,
+    IndexPayloadStorage, MatrixInput, MatrixRow, PrefixPostprocessing, RdfDatasetBuilder,
+    SECTION_INDEX_PAYLOAD, TargetId, TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
+    verify_embedding,
 };
 use purrdf_hnsw::{HnswIndex, IndexArithmetic, Params, VectorMatrix, guard, level::splitmix64};
-
-/// Directory entry length in the PURREMB v1 framing.
-const DIRECTORY_ENTRY_LENGTH: usize = 64;
 
 /// One fixture context: everything needed to rebuild the artifact with a different index.
 struct Context {
@@ -417,52 +414,3 @@ const FX: Identities = Identities {
     stage_payload: &[1, 2],
     ..Identities::at("https://example.org/index/")
 };
-
-// ---------------------------------------------------------------------------
-// Framing helpers, shared with `crates/rdf-core/tests/purremb_indexes.rs`
-// ---------------------------------------------------------------------------
-
-fn read_u32(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("u32 field"))
-}
-
-fn read_u64(bytes: &[u8], offset: usize) -> u64 {
-    u64::from_le_bytes(bytes[offset..offset + 8].try_into().expect("u64 field"))
-}
-
-fn directory_entry(bytes: &[u8], kind: u32, instance: u32) -> usize {
-    let count = usize::try_from(read_u32(bytes, 20)).expect("section count");
-    (0..count)
-        .map(|index| PURREMB_HEADER_LENGTH as usize + index * DIRECTORY_ENTRY_LENGTH)
-        .find(|offset| read_u32(bytes, *offset) == kind && read_u32(bytes, *offset + 8) == instance)
-        .expect("section directory entry")
-}
-
-fn section_span(bytes: &[u8], kind: u32, instance: u32) -> (usize, usize) {
-    let entry = directory_entry(bytes, kind, instance);
-    (
-        usize::try_from(read_u64(bytes, entry + 16)).expect("section offset"),
-        usize::try_from(read_u64(bytes, entry + 24)).expect("section length"),
-    )
-}
-
-fn reseal(bytes: &mut [u8], sections: &[(u32, u32)]) {
-    for &(kind, instance) in sections {
-        let entry = directory_entry(bytes, kind, instance);
-        let (offset, length) = section_span(bytes, kind, instance);
-        let digest = ContentDigest::of(&bytes[offset..offset + length]);
-        bytes[entry + 32..entry + 64].copy_from_slice(digest.as_bytes());
-    }
-    let count = usize::try_from(read_u32(bytes, 20)).expect("section count");
-    let directory_end = PURREMB_HEADER_LENGTH as usize + count * DIRECTORY_ENTRY_LENGTH;
-    let mut header = [0u8; PURREMB_HEADER_LENGTH as usize];
-    header.copy_from_slice(&bytes[..PURREMB_HEADER_LENGTH as usize]);
-    header[64..96].fill(0);
-    let root = derive_artifact_root(
-        &header,
-        &bytes[PURREMB_HEADER_LENGTH as usize..directory_end],
-    );
-    bytes[64..96].copy_from_slice(root.as_bytes());
-    let trailer = usize::try_from(read_u64(bytes, 48)).expect("trailer offset");
-    bytes[trailer + 24..trailer + 56].copy_from_slice(root.as_bytes());
-}

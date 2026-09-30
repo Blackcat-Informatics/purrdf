@@ -18,9 +18,12 @@
 //! unless the valid neighbour is executed too — and two defects in this file's own
 //! subject matter were caught exactly that way rather than by reading.
 
+mod support;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use support::write_executable;
 
 use purrdf_testkit::paths::workspace_root;
 
@@ -1287,17 +1290,6 @@ fn a_capture_is_read_only_when_there_is_something_to_read() {
     );
 
     let _ = std::fs::remove_dir_all(&root);
-}
-
-/// Writes `contents` to `path`, makes it executable, and returns `path`.
-fn write_executable(path: PathBuf, contents: &str) -> PathBuf {
-    std::fs::write(&path, contents).expect("write the executable script");
-    let mut permissions = std::fs::metadata(&path)
-        .expect("stat the freshly written script")
-        .permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&path, permissions).expect("make the script executable");
-    path
 }
 
 #[test]

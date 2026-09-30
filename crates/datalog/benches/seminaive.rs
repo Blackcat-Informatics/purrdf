@@ -47,13 +47,13 @@ fn surface(name: &str) -> String {
     format!("<{EX}{name}>")
 }
 
-fn var(name: &str) -> ClauseTerm {
-    ClauseTerm::var(name)
-}
-
 /// `subject predicate object` with both terminals as variables.
 fn atom(subject: &str, predicate: &str, object: &str) -> ClauseAtom {
-    ClauseAtom::positive(var(subject), format!("{EX}{predicate}"), var(object))
+    ClauseAtom::positive(
+        ClauseTerm::var(subject),
+        format!("{EX}{predicate}"),
+        ClauseTerm::var(object),
+    )
 }
 
 /// Run one program to fixpoint, panicking rather than reporting a partial answer —
@@ -110,21 +110,9 @@ fn frame_rules(pairs: usize) -> Vec<DlClause> {
     )]
 }
 
-fn frame_store(pairs: usize) -> RelationStore {
-    let mut store = RelationStore::new();
-    for i in 0..pairs {
-        store.insert(
-            &surface(&format!("n{i}")),
-            &surface("p"),
-            &surface(&format!("n{}", i + 1)),
-            RelationStore::DEFAULT_GRAPH,
-        );
-    }
-    store
-}
-
-/// `edge` chain of `n` links, closed transitively — `n * (n + 1) / 2` derived facts
-/// over `n` rounds.
+/// The `p` chain `n0 -> n1 -> … -> n{n}` of `n` links: the frame the join benches
+/// walk, and the base the closure benches close transitively into `n * (n + 1) / 2`
+/// derived facts over `n` rounds.
 fn chain_store(n: usize) -> RelationStore {
     let mut store = RelationStore::new();
     for i in 0..n {
@@ -162,7 +150,7 @@ fn fanout(c: &mut Bench) {
 fn frame_width(c: &mut Bench) {
     let mut group = c.benchmark_group("seminaive_frame_width");
     for pairs in [2_usize, 6, 12] {
-        let store = frame_store(pairs);
+        let store = chain_store(pairs);
         group.bench_with_input(BenchmarkId::from_parameter(pairs), &pairs, |bch, _| {
             bch.iter(|| run(frame_rules(pairs), store.clone()));
         });

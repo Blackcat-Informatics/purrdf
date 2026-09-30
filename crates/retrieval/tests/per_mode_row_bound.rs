@@ -46,16 +46,14 @@ use purrdf_sparql_eval::{
 
 mod common;
 
+use purrdf_retrieval::fixture::iri;
+
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
 fn ex(suffix: &str) -> String {
     format!("http://example.org/{suffix}")
-}
-
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
 }
 
 const DOCS: &str = "stratum/docs";

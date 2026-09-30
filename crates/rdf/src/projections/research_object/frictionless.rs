@@ -1,14 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use super::jsonld::validate_data_path;
+use super::jsonld::{LossRecorder, validate_data_path};
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::loss::{
     LOSS_RESEARCH_INLINE_PAYLOAD_DROPPED, LOSS_RESEARCH_LITERAL_FIDELITY_DROPPED,
     LOSS_RESEARCH_LOCAL_ID_RESOLVED, LOSS_RESEARCH_ORDER_DROPPED,
-    LOSS_RESEARCH_PROFILE_FIELD_DROPPED, LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
-    LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED,
+    LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
 };
 use purrdf_core::{
     DatasetView, LossLedger, rdf_to_research_object_loss_ledger, research_object_to_rdf_loss_ledger,
@@ -703,6 +702,18 @@ struct DecodedContributors {
     publishers: Vec<String>,
 }
 
+impl LossRecorder for FrictionlessDecoder<'_> {
+    fn loss(&mut self, code: &'static str, pointer: &str) {
+        record_loss(
+            self.ledger,
+            self.contract,
+            code,
+            FRICTIONLESS_ARTIFACT,
+            pointer,
+        );
+    }
+}
+
 impl FrictionlessDecoder<'_> {
     fn decode(mut self, value: Value) -> Result<ResearchObjectModel, ProjectionError> {
         let Owned::Object(mut root) = into_owned(value) else {
@@ -1254,29 +1265,6 @@ impl FrictionlessDecoder<'_> {
         }
     }
 
-    fn record_unknowns(&mut self, object: &Object, parent: &str) {
-        for member in object.keys() {
-            self.loss(
-                LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
-                &json_pointer(parent, member),
-            );
-        }
-    }
-
-    fn unsupported(&mut self, pointer: &str) {
-        self.loss(LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED, pointer);
-    }
-
-    fn loss(&mut self, code: &'static str, pointer: &str) {
-        record_loss(
-            self.ledger,
-            self.contract,
-            code,
-            FRICTIONLESS_ARTIFACT,
-            pointer,
-        );
-    }
-
     fn shape(&self, message: impl Into<String>, pointer: &str) -> ProjectionError {
         ProjectionError::integrity(message).at_path(format!("{FRICTIONLESS_ARTIFACT}{pointer}"))
     }
@@ -1333,6 +1321,9 @@ mod tests {
     use crate::projections::{
         ProjectionLimits, RESEARCH_ROLES, ResearchObjectIdentity, ResearchObjectPolicy,
         ResearchObjectRoles,
+    };
+    use purrdf_core::loss::{
+        LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED,
     };
 
     const INPUT: &[u8] = include_bytes!(

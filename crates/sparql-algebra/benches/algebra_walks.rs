@@ -34,8 +34,9 @@
 //! Report-only, `cargo bench -p purrdf-sparql-algebra --bench algebra_walks` (the
 //! `make bench` lane) — excluded from `make check`. No timing is asserted.
 
+use purrdf_hash::fixed::hash_one as hash_of;
+use purrdf_testkit::text::nested;
 use std::fmt::Write as _;
-use std::hash::{Hash, Hasher};
 
 use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser, pattern_to_select_query};
 use purrdf_testkit::bench::{BatchSize, Bench, bench_group, bench_main, black_box};
@@ -44,11 +45,6 @@ const EX: &str = "http://example.org/";
 
 /// The heights every deep tree is measured at.
 const DEEP_LEVELS: &[usize] = &[64, 512, 100_000];
-
-/// `open` written `n` times around `core`, closed by `close` written `n` times.
-fn nested(open: &str, core: &str, close: &str, n: usize) -> String {
-    format!("{}{core}{}", open.repeat(n), close.repeat(n))
-}
 
 /// The deep trees at `n` levels, as `(bench id, query text)`.
 fn deep_queries(n: usize) -> [(String, String); 3] {
@@ -114,12 +110,6 @@ fn serialized_pattern(query: &Query) -> &GraphPattern {
         GraphPattern::Project { inner, .. } => inner,
         other => other,
     }
-}
-
-fn hash_of(query: &Query) -> u64 {
-    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    query.hash(&mut hasher);
-    hasher.finish()
 }
 
 /// `text`, parsed.

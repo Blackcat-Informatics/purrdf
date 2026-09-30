@@ -392,11 +392,7 @@ fn type_arguments(segment: &syn::PathSegment) -> usize {
 
 impl StdHashMapRule<'_> {
     fn hit(&mut self, span: proc_macro2::Span, detail: String) {
-        let mut symbol = self.file.to_owned();
-        for scope in &self.scope {
-            symbol.push_str("::");
-            symbol.push_str(scope);
-        }
+        let symbol = scoped_symbol(self.file, &self.scope);
         self.hits.push(RuleHit {
             rule: STD_DEFAULT_HASHER,
             package: self.package.to_owned(),
@@ -455,21 +451,51 @@ impl StdHashMapRule<'_> {
             None => ident.ends_with("Map") || ident.ends_with("Set"),
         }
     }
+}
 
+/// A hit's symbol: its file and the names of its enclosing items, `::`-joined.
+pub(crate) fn scoped_symbol(file: &str, scope: &[String]) -> String {
+    let mut symbol = file.to_owned();
+    for name in scope {
+        symbol.push_str("::");
+        symbol.push_str(name);
+    }
+    symbol
+}
+
+/// A visitor that places each hit in its enclosing items.
+pub(crate) trait Scoped: Sized {
+    /// The names of the items enclosing the current node, outermost first.
+    fn scope(&mut self) -> &mut Vec<String>;
+
+    /// Walk beneath the item `name` with it pushed onto the scope.
     fn scoped(&mut self, name: String, walk: impl FnOnce(&mut Self)) {
-        self.scope.push(name);
+        self.scope().push(name);
         walk(self);
-        self.scope.pop();
+        self.scope().pop();
+    }
+}
+
+impl Scoped for StdHashMapRule<'_> {
+    fn scope(&mut self) -> &mut Vec<String> {
+        &mut self.scope
+    }
+}
+
+impl Scoped for HexRules<'_> {
+    fn scope(&mut self) -> &mut Vec<String> {
+        &mut self.scope
     }
 }
 
 /// `Visit` methods that name their scope: each pushes the item's name onto the
-/// visitor's `scope` for the walk beneath it, which is how a rule hit is placed
-/// in its enclosing items. Every scoping visitor spells its methods here.
+/// visitor's [`Scoped::scope`] for the walk beneath it, which is how a rule hit
+/// is placed in its enclosing items. Every scoping visitor spells its methods
+/// here.
 macro_rules! scoped_visits {
     ($lt:lifetime; $($method:ident($ty:ty) => |$node:ident| $name:expr;)+) => {$(
         fn $method(&mut self, $node: &$lt $ty) {
-            self.scoped($name, |this| syn::visit::$method(this, $node));
+            Scoped::scoped(self, $name, |this| syn::visit::$method(this, $node));
         }
     )+};
 }
@@ -580,11 +606,7 @@ struct HexRules<'a> {
 
 impl HexRules<'_> {
     fn hit(&mut self, rule: &'static str, line: usize, detail: String) {
-        let mut symbol = self.file.to_owned();
-        for scope in &self.scope {
-            symbol.push_str("::");
-            symbol.push_str(scope);
-        }
+        let symbol = scoped_symbol(self.file, &self.scope);
         self.hits.push(RuleHit {
             rule,
             package: self.package.to_owned(),
@@ -594,12 +616,6 @@ impl HexRules<'_> {
             detail,
             home_exempt: rule == HEX_TABLE,
         });
-    }
-
-    fn scoped(&mut self, name: String, walk: impl FnOnce(&mut Self)) {
-        self.scope.push(name);
-        walk(self);
-        self.scope.pop();
     }
 
     fn repeated(&mut self, walk: impl FnOnce(&mut Self)) {
@@ -777,11 +793,7 @@ impl LexRules<'_> {
         if self.in_test > 0 {
             return;
         }
-        let mut symbol = self.file.to_owned();
-        for scope in &self.scope {
-            symbol.push_str("::");
-            symbol.push_str(scope);
-        }
+        let symbol = scoped_symbol(self.file, &self.scope);
         self.hits.push(RuleHit {
             rule,
             package: self.package.to_owned(),

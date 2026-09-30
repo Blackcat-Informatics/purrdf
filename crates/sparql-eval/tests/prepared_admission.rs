@@ -10,11 +10,15 @@
 //! read-only accessor and no setter. The tests that depended on the removed
 //! mutability say so in place, with what coverage (if any) survives it and where.
 
+mod support;
+
+use support::ask;
+
 use purrdf_core::{RdfDatasetBuilder, SparqlResult};
 use purrdf_sparql_algebra::Child;
 use purrdf_sparql_algebra::{
     Expression, GraphPattern, GroundTerm, GroundTriple, Literal, NamedNode, ParserOptions,
-    PropertyFunctionCall, PropertyPathExpression, Query, QueryDataset, TermPattern, Variable,
+    PropertyFunctionCall, PropertyPathExpression, TermPattern, Variable,
 };
 use purrdf_sparql_eval::governor::GovernorState;
 use purrdf_sparql_eval::{
@@ -22,15 +26,6 @@ use purrdf_sparql_eval::{
     PropertyFunctionRegistry, QueryGovernors, QueryOptions,
 };
 use std::sync::Arc;
-
-fn ask(pattern: GraphPattern) -> Query {
-    Query::Ask {
-        pattern,
-        dataset: QueryDataset::default(),
-        base_iri: None,
-        version: None,
-    }
-}
 
 fn named() -> GroundTerm {
     GroundTerm::NamedNode(NamedNode::new("http://example.org/value").unwrap())

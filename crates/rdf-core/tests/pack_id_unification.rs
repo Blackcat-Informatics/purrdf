@@ -28,15 +28,11 @@
 //! in EVERY position the id occurs.
 
 use purrdf_core::FastSet;
+use purrdf_core::term_fixture::iri;
 
 use purrdf_core::ir::pack::dict::PackDict;
 use purrdf_core::ir::pack::triples::{Triples, TriplesRef};
 use purrdf_core::{GraphMatch, RdfDataset, RdfDatasetBuilder, TermValue};
-
-/// An `example.org` IRI value.
-fn iri(name: &str) -> TermValue {
-    TermValue::iri(format!("http://example.org/{name}"))
-}
 
 /// One resolved quad, in dataset-independent `TermValue` form.
 type ValueQuad = (TermValue, TermValue, TermValue, Option<TermValue>);

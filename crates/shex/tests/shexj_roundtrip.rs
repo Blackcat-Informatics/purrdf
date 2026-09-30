@@ -16,8 +16,10 @@
 //! the resolved absolute IRIs, so the reparse leg would need no base at all —
 //! it is given the same one so the two legs differ in nothing but the bytes.
 
+#[path = "support/corpus.rs"]
+mod corpus;
+
 use std::fs;
-use std::path::PathBuf;
 
 use purrdf_shex::{parse_shexj, to_shexj};
 
@@ -66,10 +68,6 @@ const MUST_ROUND_TRIP: &[&str] = &[
 /// ledger in `syntax_conformance.rs`), each with a reason.
 const XFAIL_ROUND_TRIP: &[(&str, &str)] = &[];
 
-fn corpus() -> PathBuf {
-    purrdf_testkit::paths::workspace_root().join("vectors/shexTest/schemas")
-}
-
 /// The retrieval IRI of a vendored corpus document (RFC-3986 §5.1.3).
 fn document_url(name: &str) -> String {
     format!("{CORPUS_URL}{name}.json")
@@ -91,7 +89,7 @@ fn round_trip(name: &str, source: &str) -> Result<(), String> {
 
 #[test]
 fn ground_truth_corpus_round_trips() {
-    let dir = corpus();
+    let dir = corpus::schemas();
     let mut names: Vec<String> = fs::read_dir(&dir)
         .expect("read schemas dir")
         .filter_map(|entry| {
@@ -141,7 +139,7 @@ fn diverse_documents_round_trip() {
         MUST_ROUND_TRIP.len() >= 20,
         "the diverse must-pass list must stay at 20+ documents"
     );
-    let dir = corpus();
+    let dir = corpus::schemas();
     for name in MUST_ROUND_TRIP {
         let path = dir.join(format!("{name}.json"));
         let source =

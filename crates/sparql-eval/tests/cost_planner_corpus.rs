@@ -7,33 +7,14 @@
 //! — lives in the `bgp` unit tests; this corpus confirms the full public path evaluates
 //! skewed multi-join shapes correctly and that repeated runs reuse the order cache.
 
+mod support;
+
+use support::{row_count, skewed_star};
+
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, SparqlEngine, SparqlRequest, SparqlResult};
 use purrdf_sparql_eval::NativeSparqlEngine;
-
-/// A skewed star: one hub linked to `N` leaves per predicate, for the
-/// `(name, N)` pairs given. The per-predicate cardinalities are deliberately uneven so
-/// the join order materially changes the intermediate-result sizes.
-fn skewed_star(spec: &[(&str, usize)]) -> Arc<RdfDataset> {
-    let mut b = RdfDatasetBuilder::new();
-    let hub = b.intern_iri("http://ex/hub");
-    for &(name, count) in spec {
-        let pred = b.intern_iri(&format!("http://ex/{name}"));
-        for i in 0..count {
-            let leaf = b.intern_iri(&format!("http://ex/{name}{i}"));
-            b.push_quad(hub, pred, leaf, None);
-        }
-    }
-    b.freeze().expect("freeze")
-}
-
-fn rows(result: SparqlResult) -> usize {
-    match result {
-        SparqlResult::Solutions { rows, .. } => rows.len(),
-        other => panic!("expected solutions, got {other:?}"),
-    }
-}
 
 const STAR_QUERY: &str = "SELECT ?a ?b ?c ?d WHERE { \
      ?s <http://ex/hot> ?a . ?s <http://ex/warm> ?b . \
@@ -59,7 +40,7 @@ fn skewed_star_join_evaluates_exactly() {
     let ds = skewed_star(&[("hot", 20), ("warm", 10), ("mid", 5), ("rare", 1)]);
     let engine = NativeSparqlEngine::new();
     // 20 (hot) × 10 (warm) × 5 (mid) × 1 (rare).
-    assert_eq!(rows(query(&engine, &ds, STAR_QUERY)), 20 * 10 * 5);
+    assert_eq!(row_count(&query(&engine, &ds, STAR_QUERY)), 20 * 10 * 5);
 }
 
 /// The same query, run repeatedly against the same dataset, returns the same exact
@@ -70,7 +51,7 @@ fn repeated_runs_are_stable_under_the_order_cache() {
     let engine = NativeSparqlEngine::new();
     let expected = 12 * 7 * 3; // × 1 (rare)
     for _ in 0..3 {
-        assert_eq!(rows(query(&engine, &ds, STAR_QUERY)), expected);
+        assert_eq!(row_count(&query(&engine, &ds, STAR_QUERY)), expected);
     }
 }
 
@@ -102,5 +83,5 @@ fn six_pattern_chain_evaluates_end_to_end() {
          ?v0 <http://ex/hot> ?v1 . ?v1 <http://ex/hot> ?v2 . ?v2 <http://ex/hot> ?v3 . \
          ?v3 <http://ex/hot> ?v4 . ?v4 <http://ex/hot> ?v5 . ?v5 <http://ex/hot> ?v6 }";
     // Exactly one 6-hop path exists (n0→…→n6); the fan-out branches dead-end at hop 1.
-    assert_eq!(rows(query(&engine, &ds, q)), 1);
+    assert_eq!(row_count(&query(&engine, &ds, q)), 1);
 }

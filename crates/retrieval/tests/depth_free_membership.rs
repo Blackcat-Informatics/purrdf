@@ -22,72 +22,28 @@
 //! Fixtures use `example.org` throughout; every IRI below is fixture
 //! configuration, never a minted vocabulary.
 
-use std::future::Future;
+use purrdf_core::term_fixture::empty_dataset;
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_core::binding_pattern::BindingPattern;
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, Fixed,
-    FusionProfile, Iri, RECIP_K, RankFidelity, RequestTerm, RetrievalRequest, SearchResult,
-    Statistics, TopK, search,
+    AdmissionEnvironment, CandidateDomains, DomainTag, DuplicatePolicy, Iri, RankFidelity,
+    RequestTerm, SearchResult, Statistics, search,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, DepthPlacement, EvalError, ExclusionBasis, IndexGeneration, PfArgs, PfArity,
-    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankArithmetic, RankedDeclaration,
-    RequestFacet, ServiceLevel, TermKind, TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, DepthPlacement, ExclusionBasis, PfArity, PropertyFunctionRegistry,
+    RankArithmetic, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
 };
 
-/// How many rows each producer ranks.
-const ROWS: u64 = 400;
+#[path = "support/lookup.rs"]
+mod lookup;
 
-/// The answer size every search here asks for.
-const TOP_K: TopK = TopK::new(5);
-
-/// The two request terms, one per stratum.
-const PREDICATES: [&str; 2] = ["title", "body"];
-
-/// Each stratum's candidates are minted under its own prefix, so no candidate is
-/// held by both: every lookup of the other stratum's candidate is an exclusion.
-const PREFIXES: [&str; 2] = ["left/", "right/"];
-
-fn ex(suffix: &str) -> String {
-    format!("http://example.org/{suffix}")
-}
-
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
-
-fn producer_iri(predicate: &str) -> String {
-    ex(&format!("pf/{predicate}"))
-}
-
-fn strata() -> [Iri; 2] {
-    [iri(&ex("stratum/left")), iri(&ex("stratum/right"))]
-}
-
-/// A minimal single-threaded executor. The producers never pend.
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
-}
+use lookup::{
+    PREDICATES, PREFIXES, Producer, ROWS, asked, ex, expected_entities, producer_iri, profile,
+    request, strata,
+};
+use purrdf_retrieval::block_on;
 
 /// Where a producer takes its per-stratum depth, if it takes one at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,100 +60,6 @@ impl Shape {
             Self::Depth => PfArity::new(1, 2),
             Self::NoDepth => PfArity::new(1, 1),
         }
-    }
-}
-
-/// A producer ranking `{prefix}entity{index:06}` for every index below [`ROWS`],
-/// whose candidate-bound call answers from the candidate IRI's own prefix.
-///
-/// Every invocation's mode is recorded, so a test reads exactly how many lookups
-/// the search asked and in which mode, from the producer's side.
-struct Producer {
-    arity: PfArity,
-    modes: Vec<BindingPattern>,
-    prefix: &'static str,
-    asked: Arc<Mutex<Vec<String>>>,
-}
-
-impl PropertyFunction for Producer {
-    fn volatility(&self) -> Volatility {
-        Volatility::Stable
-    }
-
-    fn arity(&self) -> PfArity {
-        self.arity
-    }
-
-    fn modes(&self) -> &[BindingPattern] {
-        &self.modes
-    }
-
-    fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
-        if mode.is_bound(0) { 1 } else { ROWS }
-    }
-
-    fn open(
-        &self,
-        args: &PfArgs<'_>,
-        _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
-        self.asked
-            .lock()
-            .expect("the fixture's record is never poisoned")
-            .push(args.mode().code());
-        let bound: Vec<Option<TermValue>> =
-            args.flattened().map(Option::<&TermValue>::cloned).collect();
-        // Every free position but the candidate's is echoed back as a fixture
-        // value: nothing reads it, and a free position must still carry a term.
-        let fill = |position: usize| {
-            bound[position]
-                .clone()
-                .unwrap_or_else(|| TermValue::iri(ex("unread")))
-        };
-        let tail: Vec<TermValue> = (1..bound.len()).map(fill).collect();
-        let row = |candidate: TermValue| {
-            let mut row = vec![candidate];
-            row.extend(tail.iter().cloned());
-            row
-        };
-        let rows: Vec<PfRow> = match bound[0].clone() {
-            Some(candidate) => {
-                let held = matches!(
-                    &candidate,
-                    TermValue::Iri(held) if held.as_str().starts_with(&ex(self.prefix))
-                );
-                if held {
-                    vec![row(candidate)]
-                } else {
-                    Vec::new()
-                }
-            }
-            None => (0..ROWS)
-                .map(|index| {
-                    row(TermValue::iri(format!(
-                        "{}entity{index:06}",
-                        ex(self.prefix)
-                    )))
-                })
-                .collect(),
-        };
-        Ok(Box::new(Rows(rows.into_iter())))
-    }
-}
-
-struct Rows(std::vec::IntoIter<PfRow>);
-
-impl PfCursor for Rows {
-    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
-        Ok(self.0.next())
-    }
-
-    fn generation(&self) -> IndexGeneration {
-        IndexGeneration::Undeclared
-    }
-
-    fn service_level(&self) -> ServiceLevel {
-        ServiceLevel::Undeclared
     }
 }
 
@@ -314,37 +176,6 @@ impl Statistics for FixtureStatistics {
     }
 }
 
-fn request() -> RetrievalRequest {
-    RetrievalRequest::bounded(
-        PREDICATES
-            .into_iter()
-            .map(|predicate| RequestTerm::Lexical {
-                text: "quick brown fox".to_owned(),
-                language: Some("en".to_owned()),
-                predicate: Some(iri(&ex(predicate))),
-            })
-            .collect(),
-        TOP_K,
-    )
-}
-
-fn profile() -> FusionProfile {
-    FusionProfile::with_decay(
-        strata()
-            .into_iter()
-            .map(|stratum| (stratum, Fixed::ONE))
-            .collect(),
-        DecayRule::ReciprocalRank { k: RECIP_K as u32 },
-    )
-    .expect("the fixture profile is valid")
-}
-
-fn empty_dataset() -> Arc<RdfDataset> {
-    RdfDatasetBuilder::new()
-        .freeze()
-        .expect("an empty default graph is structurally valid")
-}
-
 /// What one search answered, and what its producers were asked.
 #[derive(Debug, PartialEq, Eq)]
 struct Searched {
@@ -391,28 +222,6 @@ fn searched(shape: Shape, modes: &[&str], exclusion: ExclusionBasis) -> Searched
         entities,
         asked: counts.into_iter().collect(),
     }
-}
-
-fn asked(pairs: &[(&str, usize)]) -> Vec<(String, usize)> {
-    pairs
-        .iter()
-        .map(|(code, count)| ((*code).to_owned(), *count))
-        .collect()
-}
-
-/// The five entities every search here answers, as the fusion spells a term:
-/// both strata's first three, fused under equal weights, cut to five.
-fn expected_entities() -> Vec<String> {
-    [
-        "left/entity000000",
-        "right/entity000000",
-        "left/entity000001",
-        "right/entity000001",
-        "left/entity000002",
-    ]
-    .into_iter()
-    .map(|suffix| format!("<{}>", ex(suffix)))
-    .collect()
 }
 
 /// **A basis whose only point mode binds the depth is refused at registration,

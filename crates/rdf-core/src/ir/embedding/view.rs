@@ -591,7 +591,7 @@ impl<'a> MatrixView<'a> {
         {
             return None;
         }
-        native_f32(self.row_bytes(row).ok()?)
+        native_floats(self.row_bytes(row).ok()?)
     }
 
     /// Native aligned `f64` row after full verification, when the host permits it.
@@ -603,7 +603,7 @@ impl<'a> MatrixView<'a> {
         {
             return None;
         }
-        native_f64(self.row_bytes(row).ok()?)
+        native_floats(self.row_bytes(row).ok()?)
     }
 }
 
@@ -770,7 +770,7 @@ impl<'a> EffectiveMatrixView<'a> {
             && cfg!(target_endian = "little")
             && self.matrix.dtype().ok()? == VectorDtype::F32
             && self.projection.postprocessing().ok()? == PrefixPostprocessing::None)
-            .then(|| native_f32(self.raw_prefix_bytes(row).ok()?))?
+            .then(|| native_floats(self.raw_prefix_bytes(row).ok()?))?
     }
 
     /// Native stored `f64` prefix after full verification when no postprocessing applies.
@@ -780,7 +780,7 @@ impl<'a> EffectiveMatrixView<'a> {
             && cfg!(target_endian = "little")
             && self.matrix.dtype().ok()? == VectorDtype::F64
             && self.projection.postprocessing().ok()? == PrefixPostprocessing::None)
-            .then(|| native_f64(self.raw_prefix_bytes(row).ok()?))?
+            .then(|| native_floats(self.raw_prefix_bytes(row).ok()?))?
     }
 }
 
@@ -4597,23 +4597,22 @@ fn finish_norm(
     Ok(norm)
 }
 
-fn native_f32(bytes: &[u8]) -> Option<&[f32]> {
-    if !bytes.len().is_multiple_of(size_of::<f32>()) {
-        return None;
-    }
-    // SAFETY: every bit pattern is a valid `f32`; `align_to` reports any
-    // unaligned prefix or incomplete suffix instead of constructing a bad view.
-    let (prefix, native, suffix) = unsafe { bytes.align_to::<f32>() };
-    (prefix.is_empty() && suffix.is_empty()).then_some(native)
-}
+/// The float element types a native row view may reinterpret bytes as: types for
+/// which every bit pattern is a valid value. Private, so no other type can join.
+trait NativeFloat: Copy {}
 
-fn native_f64(bytes: &[u8]) -> Option<&[f64]> {
-    if !bytes.len().is_multiple_of(size_of::<f64>()) {
+impl NativeFloat for f32 {}
+impl NativeFloat for f64 {}
+
+/// `bytes` as a slice of `T` in place, when it is whole elements and aligned.
+fn native_floats<T: NativeFloat>(bytes: &[u8]) -> Option<&[T]> {
+    if !bytes.len().is_multiple_of(size_of::<T>()) {
         return None;
     }
-    // SAFETY: every bit pattern is a valid `f64`; `align_to` reports any
-    // unaligned prefix or incomplete suffix instead of constructing a bad view.
-    let (prefix, native, suffix) = unsafe { bytes.align_to::<f64>() };
+    // SAFETY: `T` is `f32` or `f64` (the private `NativeFloat`), for which every bit pattern is a
+    // valid value; `align_to` reports any unaligned prefix or incomplete suffix
+    // instead of constructing a bad view.
+    let (prefix, native, suffix) = unsafe { bytes.align_to::<T>() };
     (prefix.is_empty() && suffix.is_empty()).then_some(native)
 }
 

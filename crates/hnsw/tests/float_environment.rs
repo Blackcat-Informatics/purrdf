@@ -32,6 +32,9 @@
 #[path = "support/purremb.rs"]
 mod purremb;
 
+#[path = "support/fixture.rs"]
+mod fixture;
+use fixture::{bits, knn_invoke, params};
 use std::sync::Arc;
 
 use purrdf_core::DistanceMetric;
@@ -40,16 +43,11 @@ use purrdf_core::distance::{
     Arithmetic, Bound, Bounded, Exact, FloatEnvironmentError, FloatEnvironmentEvidence, Measure,
     Reassociated, RecordedPathError, Resolved, RowsRef,
 };
-use purrdf_hnsw::{
-    HnswError, HnswIndex, Kernel, Params, Ranked, VectorMatrix, guard, relation::HnswSpace,
-};
+use purrdf_core::purremb_fixture::reference_norm;
+use purrdf_hnsw::{HnswError, HnswIndex, Kernel, Ranked, VectorMatrix, guard, relation::HnswSpace};
 use purrdf_sparql_eval::{
     EmbeddingKnnRelation, EmbeddingSpace, EvalError, KnnGuard, PfArgs, PfRow, PropertyFunction,
 };
-
-fn params() -> Params {
-    Params::new(4, 8, 16, 8).expect("valid")
-}
 
 /// Whether `refusal` is the flush-to-zero refusal this target reports for an FTZ thread:
 /// the MXCSR by name where it is read, and the probe's flushed-result row where not.
@@ -292,39 +290,6 @@ fn every_reassociated_entry_point_refuses_a_flushing_environment_and_answers_the
     assert_eq!(index.search_vector(&query, 4).expect("searches").len(), 4);
     assert!(guard::verify_rebuild(&selected, &matrix, &params()).expect("verifies"));
     assert!(open().is_ok());
-}
-
-/// Every row of one kNN invocation seeded at `seed`: the ranked read of depth `k` when
-/// `neighbour` is free, the membership lookup of `neighbour` when it is bound.
-fn knn_invoke<A: Arithmetic>(
-    relation: &EmbeddingKnnRelation<A>,
-    seed: &purrdf_core::TermValue,
-    neighbour: Option<&purrdf_core::TermValue>,
-) -> Result<Vec<PfRow>, EvalError> {
-    let count =
-        purrdf_core::TermValue::typed_literal("3", "http://www.w3.org/2001/XMLSchema#integer");
-    let subject = [neighbour];
-    let object = [Some(seed), neighbour.is_none().then_some(&count), None];
-    let args = PfArgs::new(&subject, &object);
-    let mut cursor = relation.open(&args, None)?;
-    let mut rows = Vec::new();
-    while let Some(row) = cursor.next()? {
-        rows.push(row);
-    }
-    Ok(rows)
-}
-
-/// A batch answer as its rows and distance bits, so equality is bit-identity.
-fn bits(batch: &[Vec<Ranked>]) -> Vec<Vec<(usize, u64)>> {
-    batch
-        .iter()
-        .map(|ranked| {
-            ranked
-                .iter()
-                .map(|scored| (scored.row, scored.distance.to_bits()))
-                .collect()
-        })
-        .collect()
 }
 
 /// What one thread's calls answered, every compute entry that runs on a shared index or
@@ -696,35 +661,6 @@ fn every_pair_entry_point_needs_a_handle_a_flushing_thread_cannot_obtain() {
 /// only the final product `scale · √ssq` is subnormal, and a thread that flushes subnormal
 /// results returns `+0` for it.
 const SUBNORMAL_ROW: [f64; 2] = [3e-310, 4e-310];
-
-/// PURREMB §13.2's scaled L2 fold, transcribed from the specification's written order:
-/// the reference every public norm entry point is held to, and the arithmetic a flushed
-/// thread is shown to run differently. No handle, so it can be run where none can be
-/// obtained; `black_box` keeps the compiler from folding it at compile time, under the
-/// default environment, instead of on the thread under test.
-fn reference_norm(values: &[f64]) -> f64 {
-    let mut scale = 0.0_f64;
-    let mut ssq = 1.0_f64;
-    for &value in core::hint::black_box(values) {
-        let value = value.abs();
-        if value == 0.0 {
-            continue;
-        }
-        if scale < value {
-            let ratio = scale / value;
-            let square = ratio * ratio;
-            let product = ssq * square;
-            ssq = 1.0 + product;
-            scale = value;
-        } else {
-            let ratio = value / scale;
-            let square = ratio * ratio;
-            ssq += square;
-        }
-    }
-    let root = ssq.sqrt();
-    core::hint::black_box(scale) * root
-}
 
 #[test]
 fn every_norm_entry_point_needs_the_exact_handle_a_flushing_thread_cannot_obtain() {

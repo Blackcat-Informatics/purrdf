@@ -10,6 +10,7 @@
 //! cases run natively under `cargo test` and on wasm32-unknown-unknown in
 //! Node (`make wasm-test`, baseline and `+simd128`).
 
+use purrdf_testkit::rng::{splitmix64_bytes, xoshiro256_bytes};
 use std::io::{Read, Write};
 
 use purrdf_deflate::backend::Backend;
@@ -23,16 +24,6 @@ use purrdf_hash::dispatch::{assert_required_available, host_advertises};
 use purrdf_testkit::rng::Xoshiro256;
 
 // --- Inputs ------------------------------------------------------------------
-
-fn random_bytes(len: usize, seed: u64) -> Vec<u8> {
-    let mut rng = Xoshiro256::from_seed(seed);
-    let mut out = Vec::with_capacity(len + 8);
-    while out.len() < len {
-        out.extend_from_slice(&rng.next_u64().to_le_bytes());
-    }
-    out.truncate(len);
-    out
-}
 
 fn text(len: usize, seed: u64) -> Vec<u8> {
     const WORDS: [&str; 16] = [
@@ -85,7 +76,7 @@ fn inputs() -> Vec<(String, Vec<u8>)> {
     for (i, &size) in SIZES.iter().enumerate() {
         let seed = 0x5EED_0000 + i as u64;
         all.push((format!("text/{size}"), text(size, seed)));
-        all.push((format!("random/{size}"), random_bytes(size, seed)));
+        all.push((format!("random/{size}"), xoshiro256_bytes(size, seed)));
         all.push((format!("tokens/{size}"), repeated_token(size, seed)));
     }
     all.push(("zeros/100000".into(), vec![0; 100_000]));
@@ -302,7 +293,7 @@ fn encoder_output_is_independent_of_write_chunking() {
 fn every_kernel_path_encodes_and_decodes_the_same_bytes() {
     let data = [
         text(90_000, 3),
-        random_bytes(20_000, 4),
+        xoshiro256_bytes(20_000, 4),
         repeated_token(90_000, 5),
     ]
     .concat();
@@ -607,7 +598,7 @@ fn fifteen_bit_codes_decode() {
 }
 
 fn distance_32768_with_length_258_decodes() {
-    let pattern = random_bytes(32_768, 77);
+    let pattern = xoshiro256_bytes(32_768, 77);
     let mut bits = Bits::default();
     stored(&mut bits, &pattern, false);
     bits.header(true, 1);
@@ -833,7 +824,7 @@ fn length_symbols_286_287_refused_285_accepted() {
 }
 
 fn distance_symbols_30_31_refused_29_accepted() {
-    let pattern = random_bytes(30_000, 8);
+    let pattern = xoshiro256_bytes(30_000, 8);
     let build = |symbol: u32| {
         let mut bits = Bits::default();
         stored(&mut bits, &pattern, false);
@@ -1211,7 +1202,7 @@ fn copy_kernels_match_portable() {
                 .chain([1, 2, 3, 15, 16, 17, 31, 32, 33, 258])
             {
                 let prefix = 80;
-                let mut base = random_bytes(prefix + len + slack, rng.next_u64());
+                let mut base = xoshiro256_bytes(prefix + len + slack, rng.next_u64());
                 let mut expected = base.clone();
                 for i in prefix..prefix + len {
                     expected[i] = expected[i - dist];
@@ -1234,7 +1225,7 @@ fn match_length_kernels_match_portable() {
     let mut rng = Xoshiro256::from_seed(0x1E);
     for backend in Backend::all_available() {
         for len in 0..=258usize {
-            let a = random_bytes(len, rng.next_u64());
+            let a = xoshiro256_bytes(len, rng.next_u64());
             for mismatch in [0, len / 3, len / 2, len.saturating_sub(1), len] {
                 let mut b = a.clone();
                 if mismatch < len {
@@ -1265,18 +1256,6 @@ fn split_base() -> Vec<u8> {
     (0..40_u8)
         .map(|i| i.wrapping_mul(37).wrapping_add(11))
         .collect()
-}
-
-/// The first `len` bytes of the little-endian SplitMix64 `next` stream from
-/// the seed `len`.
-fn stream_bytes(len: usize) -> Vec<u8> {
-    let mut state = len as u64;
-    let mut out = Vec::with_capacity(len + 8);
-    while out.len() < len {
-        out.extend_from_slice(&purrdf_hash::mix::splitmix64_next(&mut state).to_le_bytes());
-    }
-    out.truncate(len);
-    out
 }
 
 /// The mismatch positions of a `window` of `len` bytes: the start, a third,
@@ -1318,7 +1297,7 @@ fn match_length_input(kind: &str, spec: &str) -> (Vec<u8>, Vec<u8>) {
             (a[..split].to_vec(), a)
         }
         ("window", &[len, at]) => {
-            let a = stream_bytes(len);
+            let a = splitmix64_bytes(len, len as u64);
             let mut b = a.clone();
             if at < len {
                 b[at] ^= 1 << (at % 8);
@@ -1487,7 +1466,7 @@ fn record_match_length_vectors_when_asked() {
 fn hash_kernels_match_portable() {
     for backend in Backend::all_available() {
         for len in 4..300usize {
-            let data = random_bytes(len, len as u64);
+            let data = xoshiro256_bytes(len, len as u64);
             for start in [0, 1, 5] {
                 if start + 4 > len {
                     continue;
@@ -1552,7 +1531,7 @@ fn the_selected_path_is_available() {
 
 fn gzip_vector_sink_preserves_prefix_and_member_checks() {
     let first = text(65537, 91);
-    let second = random_bytes(131_073, 92);
+    let second = xoshiro256_bytes(131_073, 92);
     let mut encoded = gzip::compress(&first, Level::DEFAULT);
     encoded.extend_from_slice(&gzip::compress(&[], Level::DEFAULT));
     encoded.extend_from_slice(&gzip::compress(&second, Level::DEFAULT));

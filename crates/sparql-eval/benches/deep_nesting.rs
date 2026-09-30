@@ -40,6 +40,7 @@
 //! Report-only, `cargo bench -p purrdf-sparql-eval --bench deep_nesting` (the
 //! `make bench` lane) — excluded from `make check`. No timing is asserted.
 
+use purrdf_testkit::text::nested;
 use std::hint::black_box;
 use std::sync::Arc;
 
@@ -76,11 +77,6 @@ fn dataset() -> Arc<RdfDataset> {
         }
     }
     builder.freeze().expect("the deep-nesting dataset")
-}
-
-/// `open` written `n` times around `core`, closed by `close` written `n` times.
-fn nested(open: &str, core: &str, close: &str, n: usize) -> String {
-    format!("{}{core}{}", open.repeat(n), close.repeat(n))
 }
 
 /// One nesting construct: its bench id and its query text at a depth.

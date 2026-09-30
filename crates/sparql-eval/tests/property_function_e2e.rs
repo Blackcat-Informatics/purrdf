@@ -9,6 +9,10 @@
 //! byte-exactly. Nothing here reaches into the crate: a seam whose stages only line up
 //! from inside is a seam a host cannot use.
 
+mod support;
+
+use support::with_env;
+
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -69,15 +73,6 @@ fn relations() -> ExtensionEnv {
 
 /// A dataset holding one unrelated triple: the answers below come from the relation,
 /// and this is what makes that observable rather than merely stated.
-fn dataset() -> Arc<RdfDataset> {
-    let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(&format!("{EX}unrelated"));
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let o = builder.intern_iri(&format!("{EX}o"));
-    builder.push_quad(s, p, o, None);
-    builder.freeze().expect("freeze fixture")
-}
-
 fn variable(name: &str) -> TermPattern {
     TermPattern::Variable(Variable::new(name.to_owned()))
 }
@@ -125,7 +120,7 @@ fn a_configured_predicate_parses_to_a_call_and_answers_from_the_injected_relatio
     //    not also have to configure the parser for it.
     let result = NativeSparqlEngine::new()
         .query_with_options_view(
-            &*dataset(),
+            &*support::unrelated_quad(),
             SparqlRequest {
                 query: QUERY,
                 base_iri: None,
@@ -241,7 +236,7 @@ fn the_same_text_without_the_namespace_is_an_ordinary_triple_pattern() {
     // And it answers from the graph, which holds no such triple.
     let result = NativeSparqlEngine::new()
         .query(
-            &dataset(),
+            &support::unrelated_quad(),
             SparqlRequest {
                 query: QUERY,
                 base_iri: None,
@@ -447,10 +442,6 @@ fn env_of(relations: PropertyFunctionRegistry) -> ExtensionEnv {
     ExtensionEnv::over_relations(relations).expect("the fixture declarations read cleanly")
 }
 
-fn with_relations(env: &ExtensionEnv) -> QueryOptions<'_> {
-    QueryOptions::new().with_env(env)
-}
-
 /// Render a solution result as `[[iri, iri], ..]` for comparison.
 fn rows_of(result: &SparqlResult) -> Vec<Vec<String>> {
     let SparqlResult::Solutions { rows, .. } = result else {
@@ -477,13 +468,13 @@ fn rows_of(result: &SparqlResult) -> Vec<Vec<String>> {
 fn a_governed_query_answers_from_the_relation_and_charges_it() {
     let engine = NativeSparqlEngine::new();
     let registry = relations();
-    let dataset = dataset();
+    let dataset = support::unrelated_quad();
 
     let outcome = engine
         .query_governed(
             &dataset,
             request(GOVERNED_QUERY),
-            with_relations(&registry),
+            with_env(&registry),
             &QueryGovernors::METERED,
         )
         .expect("the call resolves and evaluates under governors");
@@ -509,7 +500,7 @@ fn a_governed_query_answers_from_the_relation_and_charges_it() {
     // charge points that are unreachable from an entry with no registry — a run that
     // silently degraded the call to a BGP triple would spend zero at both.
     let explanation = engine
-        .explain_query_with_options(&dataset, GOVERNED_QUERY, None, with_relations(&registry))
+        .explain_query_with_options(&dataset, GOVERNED_QUERY, None, with_env(&registry))
         .expect("explain");
     let invocations: u64 = explanation
         .ledger()
@@ -544,14 +535,14 @@ fn a_governed_query_answers_from_the_relation_and_charges_it() {
 fn a_governed_relation_query_trips_one_unit_below_its_metered_spend() {
     let engine = NativeSparqlEngine::new();
     let registry = relations();
-    let dataset = dataset();
+    let dataset = support::unrelated_quad();
 
     let measure = |governors: &QueryGovernors| {
         engine
             .query_governed(
                 &dataset,
                 request(GOVERNED_QUERY),
-                with_relations(&registry),
+                with_env(&registry),
                 governors,
             )
             .expect("a governor trip is an outcome, never an error")
@@ -596,9 +587,9 @@ fn a_governed_entry_refuses_a_declared_huge_relation_on_a_small_cell_ceiling() {
 
     let outcome = NativeSparqlEngine::new()
         .query_governed(
-            &dataset(),
+            &support::unrelated_quad(),
             request(GOVERNED_QUERY),
-            with_relations(&env_of(registry)),
+            with_env(&env_of(registry)),
             &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(8),
         )
         .expect("a refusal is an outcome, never an error");
@@ -639,13 +630,13 @@ fn a_governed_entry_refuses_a_declared_huge_relation_on_a_small_cell_ceiling() {
 fn the_governed_entry_cannot_silently_drop_a_registered_relation() {
     let engine = NativeSparqlEngine::new();
     let registry = relations();
-    let dataset = dataset();
+    let dataset = support::unrelated_quad();
 
     let answered = engine
         .query_governed(
             &dataset,
             request(GOVERNED_QUERY),
-            with_relations(&registry),
+            with_env(&registry),
             &QueryGovernors::METERED,
         )
         .expect("evaluates");
@@ -688,7 +679,7 @@ fn the_governed_entry_cannot_silently_drop_a_registered_relation() {
 fn the_per_call_and_operation_governed_entries_spend_identically() {
     let engine = NativeSparqlEngine::new();
     let registry = relations();
-    let dataset = dataset();
+    let dataset = support::unrelated_quad();
 
     let GovernedOutcome::Complete {
         evidence: per_call, ..
@@ -696,7 +687,7 @@ fn the_per_call_and_operation_governed_entries_spend_identically() {
         .query_governed(
             &dataset,
             request(GOVERNED_QUERY),
-            with_relations(&registry),
+            with_env(&registry),
             &QueryGovernors::METERED,
         )
         .expect("evaluates")
@@ -712,7 +703,7 @@ fn the_per_call_and_operation_governed_entries_spend_identically() {
         .query_governed_in_operation(
             &*dataset,
             request(GOVERNED_QUERY),
-            with_relations(&registry),
+            with_env(&registry),
             &state,
         )
         .expect("evaluates")
@@ -739,7 +730,7 @@ fn the_per_call_and_operation_governed_entries_spend_identically() {
 fn a_plan_prepared_without_the_registry_is_refused_when_evaluated_with_it() {
     let engine = NativeSparqlEngine::new();
     let registry = relations();
-    let dataset = dataset();
+    let dataset = support::unrelated_quad();
 
     let stale = engine
         .prepare_query(GOVERNED_QUERY, None)
@@ -748,7 +739,7 @@ fn a_plan_prepared_without_the_registry_is_refused_when_evaluated_with_it() {
         &*dataset,
         &stale,
         &[],
-        with_relations(&registry),
+        with_env(&registry),
         &QueryGovernors::METERED,
     );
     let error = refused.expect_err("a plan/registry disagreement must be a diagnostic");
@@ -756,14 +747,14 @@ fn a_plan_prepared_without_the_registry_is_refused_when_evaluated_with_it() {
 
     // Prepared under the SAME options, the very same text runs and answers.
     let matched = engine
-        .prepare_query_with_options(GOVERNED_QUERY, None, with_relations(&registry))
+        .prepare_query_with_options(GOVERNED_QUERY, None, with_env(&registry))
         .expect("the registry-aware parse lowers the predicate to a call");
     let GovernedOutcome::Complete { result, .. } = engine
         .query_prepared_governed_view(
             &*dataset,
             &matched,
             &[],
-            with_relations(&registry),
+            with_env(&registry),
             &QueryGovernors::METERED,
         )
         .expect("evaluates")
@@ -793,7 +784,7 @@ fn a_plan_prepared_without_the_registry_is_refused_when_evaluated_with_it() {
 fn query_with_source_view_dispatches_a_registered_relation_with_options() {
     let engine = NativeSparqlEngine::new();
     let registry = relations();
-    let dataset = dataset();
+    let dataset = support::unrelated_quad();
     let source = purrdf_sparql_eval::InProcessServiceResolver::new();
 
     let result = engine
@@ -801,7 +792,7 @@ fn query_with_source_view_dispatches_a_registered_relation_with_options() {
             &*dataset,
             request(GOVERNED_QUERY),
             &source,
-            with_relations(&registry),
+            with_env(&registry),
         )
         .expect("a registered relation's outer-pattern call evaluates through the federated entry");
 
@@ -820,12 +811,12 @@ fn query_with_source_view_dispatches_a_registered_relation_with_options() {
 fn query_prepared_with_a_mismatched_registry_is_refused_and_the_matched_registry_answers() {
     let engine = NativeSparqlEngine::new();
     let registry = relations();
-    let dataset = dataset();
+    let dataset = support::unrelated_quad();
 
     let stale = engine
         .prepare_query(GOVERNED_QUERY, None)
         .expect("the text parses as ordinary data with no registry in scope");
-    let refused = engine.query_prepared(&dataset, &stale, &[], with_relations(&registry));
+    let refused = engine.query_prepared(&dataset, &stale, &[], with_env(&registry));
     let error = refused.expect_err(
         "a plan/registry disagreement must be a diagnostic, not a \
                                      silent empty-bag answer",
@@ -836,10 +827,10 @@ fn query_prepared_with_a_mismatched_registry_is_refused_and_the_matched_registry
     // relation — never from the graph, which holds no `rel:memberOf` triple to have
     // matched instead.
     let matched = engine
-        .prepare_query_with_options(GOVERNED_QUERY, None, with_relations(&registry))
+        .prepare_query_with_options(GOVERNED_QUERY, None, with_env(&registry))
         .expect("the registry-aware parse lowers the predicate to a call");
     let result = engine
-        .query_prepared(&dataset, &matched, &[], with_relations(&registry))
+        .query_prepared(&dataset, &matched, &[], with_env(&registry))
         .expect("a plan and options that agree on the registry evaluate");
     assert_eq!(rows_of(&result).len(), 3);
 }
@@ -887,18 +878,13 @@ fn a_plan_prepared_under_one_relation_registry_refuses_to_execute_under_a_differ
          reproduction of the declaration-only fingerprint gap"
     );
 
-    let dataset = dataset();
+    let dataset = support::unrelated_quad();
     let prepared = engine
-        .prepare_query_with_options(GOVERNED_QUERY, None, with_relations(&registry_a))
+        .prepare_query_with_options(GOVERNED_QUERY, None, with_env(&registry_a))
         .expect("registry A admits and lowers the predicate to a call");
 
     let error = engine
-        .query_prepared(
-            &dataset,
-            &prepared,
-            &[],
-            with_relations(&env_of(registry_b)),
-        )
+        .query_prepared(&dataset, &prepared, &[], with_env(&env_of(registry_b)))
         .expect_err(
             "a plan prepared under registry A must be REFUSED under registry B, never silently \
              executed against B's different relation",
@@ -912,7 +898,7 @@ fn a_plan_prepared_under_one_relation_registry_refuses_to_execute_under_a_differ
     // The non-regression twin: the SAME registry instance at both prepare and
     // execute must still work.
     let result = engine
-        .query_prepared(&dataset, &prepared, &[], with_relations(&registry_a))
+        .query_prepared(&dataset, &prepared, &[], with_env(&registry_a))
         .expect("the SAME registry instance must be accepted at execution");
     assert_eq!(rows_of(&result).len(), 3);
 }
@@ -942,11 +928,11 @@ const CHECK_QUERY: &str = "PREFIX ex: <https://example.org/d/>\n\
 fn an_update_where_inserts_exactly_the_relations_rows() {
     let engine = NativeSparqlEngine::new();
     let registry = relations();
-    let mut ds = dataset();
+    let mut ds = support::unrelated_quad();
     let before = ds.quad_count();
 
     engine
-        .update_with_options(&mut ds, request(UPDATE_TEXT), with_relations(&registry))
+        .update_with_options(&mut ds, request(UPDATE_TEXT), with_env(&registry))
         .expect("the call resolves, evaluates, and the mutation applies");
 
     assert_eq!(
@@ -981,12 +967,12 @@ fn a_governed_update_where_charges_the_relation_and_trips_on_fuel() {
     let registry = relations();
 
     let run = |governors: &QueryGovernors| -> (Arc<RdfDataset>, GovernedUpdateOutcome) {
-        let mut ds = dataset();
+        let mut ds = support::unrelated_quad();
         let outcome = engine
             .update_governed(
                 &mut ds,
                 request(UPDATE_TEXT),
-                with_relations(&registry),
+                with_env(&registry),
                 governors,
             )
             .expect("a governor trip is an outcome, never an update error");
@@ -999,7 +985,7 @@ fn a_governed_update_where_charges_the_relation_and_trips_on_fuel() {
     };
     assert_eq!(
         metered_ds.quad_count(),
-        dataset().quad_count() + 3,
+        support::unrelated_quad().quad_count() + 3,
         "the metered run applied exactly the relation's rows"
     );
     let spend = evidence.consumed.get(ResourceDimension::Fuel);
@@ -1021,7 +1007,7 @@ fn a_governed_update_where_charges_the_relation_and_trips_on_fuel() {
     // A trip applies nothing: the base handed to this run is untouched.
     assert_eq!(
         short_ds.quad_count(),
-        dataset().quad_count(),
+        support::unrelated_quad().quad_count(),
         "a tripped UPDATE must not have inserted any of the relation's rows"
     );
 }
@@ -1036,7 +1022,7 @@ fn an_update_where_call_with_no_registry_hard_errors_precisely() {
     let env =
         ExtensionEnv::over_options(options()).expect("environment over declared parser options");
     let engine = NativeSparqlEngine::new();
-    let mut ds = dataset();
+    let mut ds = support::unrelated_quad();
     let before = ds.quad_count();
 
     let error = engine

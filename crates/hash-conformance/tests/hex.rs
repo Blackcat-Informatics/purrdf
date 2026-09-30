@@ -26,7 +26,7 @@ use purrdf_hash::hex::{
     decode_canonical, encode, encode_into, encode_to_slice, encode_upper, encode_upper_into,
     encode_upper_to_slice, nibble, nibble_canonical,
 };
-use purrdf_testkit::rng::Xoshiro256;
+use purrdf_testkit::rng::xoshiro256_bytes;
 use purrdf_testkit::vectors::{VectorFile, decode_str};
 
 /// The frozen encoding table: every length 0..=64 from every first byte.
@@ -416,7 +416,7 @@ fn inputs_across_the_length_switch_and_chunk_seams_render_whole() {
         1000,
         4096 + 7,
     ] {
-        let data = input(len, len as u64);
+        let data = xoshiro256_bytes(len, len as u64);
         let lower = portable(&data, false);
         let upper = portable(&data, true);
         assert_eq!(Lower(&data).to_string(), lower, "length {len}");
@@ -433,7 +433,7 @@ fn inputs_across_the_length_switch_and_chunk_seams_render_whole() {
 /// the same text as a `str`, including across chunk seams, in both cases.
 fn formatter_options_match_str() {
     for len in [0, 1, 3, 32, 200] {
-        let data = input(len, 7);
+        let data = xoshiro256_bytes(len, 7);
         for (upper, text) in [
             (false, portable(&data, false)),
             (true, portable(&data, true)),
@@ -455,7 +455,7 @@ fn formatter_options_match_str() {
 /// A slice too short for the rendering is refused, writing nothing; the
 /// exactly-sized neighbour and a longer buffer are written.
 fn encode_to_slice_refuses_a_short_output_beside_the_exact_one() {
-    let data = input(40, 3);
+    let data = xoshiro256_bytes(40, 3);
     for wrong in [0, 1, 79] {
         let mut out = vec![0xAAu8; wrong];
         assert_eq!(
@@ -490,7 +490,7 @@ fn encode_to_slice_refuses_a_short_output_beside_the_exact_one() {
 /// A backend refuses an output that is not exactly twice the input, writing
 /// nothing, beside the exactly-sized neighbour it accepts.
 fn backend_encode_refuses_a_missized_output() {
-    let data = input(40, 3);
+    let data = xoshiro256_bytes(40, 3);
     for backend in HexBackend::all_available() {
         let mut exact = vec![0u8; 80];
         assert_eq!(backend.encode(&data, &mut exact), Some(()));
@@ -507,7 +507,7 @@ fn backend_encode_refuses_a_missized_output() {
 /// Every available path against the portable one, at every length 0..=256,
 /// every input and output offset 0..16 into their buffers, in both cases.
 fn every_path_matches_portable() {
-    let source = input(256 + 16, 0x5eed);
+    let source = xoshiro256_bytes(256 + 16, 0x5eed);
     let mut out_buffer = vec![0u8; 2 * 256 + 16];
     let mut ran = Vec::new();
     for backend in HexBackend::all_available() {
@@ -660,16 +660,6 @@ fn portable(bytes: &[u8], upper: bool) -> String {
     };
     encode(HexBackend::Portable, bytes, &mut out).expect("the portable path is always available");
     String::from_utf8(out).expect("digits are ASCII")
-}
-
-fn input(length: usize, seed: u64) -> Vec<u8> {
-    let mut rng = Xoshiro256::from_seed(seed);
-    let mut bytes = Vec::with_capacity(length + 8);
-    while bytes.len() < length {
-        bytes.extend_from_slice(&rng.next_u64().to_le_bytes());
-    }
-    bytes.truncate(length);
-    bytes
 }
 
 purrdf_testkit::harness_main!(

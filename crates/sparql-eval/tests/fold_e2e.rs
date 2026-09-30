@@ -30,11 +30,9 @@
 //! corpus under `vectors/sparql-cdt/fold/`; the named corpus case each one
 //! mirrors is given in its doc comment.
 
-use std::sync::Arc;
+use purrdf_core::term_fixture::empty_dataset;
 
-use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
-};
+use purrdf_core::{SparqlEngine, SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::NativeSparqlEngine;
 
 const PROLOGUE: &str = "PREFIX cdt: <http://w3id.org/awslabs/neptune/SPARQL-CDTs/>\n\
@@ -48,11 +46,6 @@ const PROLOGUE: &str = "PREFIX cdt: <http://w3id.org/awslabs/neptune/SPARQL-CDTs
 /// asserts on the VALUE uses `=` and does not care.
 fn canon_int(lexical: u32) -> String {
     format!("\"{lexical}\"^^<http://www.w3.org/2001/XMLSchema#integer>")
-}
-
-/// An empty default graph — every case's data comes from its own `VALUES` block.
-fn empty_dataset() -> Arc<RdfDataset> {
-    RdfDatasetBuilder::new().freeze().expect("empty dataset")
 }
 
 /// Evaluate one `ASK` (with the CDT/XSD prologue prepended) and answer its boolean.

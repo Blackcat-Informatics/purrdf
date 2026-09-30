@@ -199,12 +199,18 @@ fn validate_annotated(
     meta.map_or(Ok(()), |meta| meta.validate(depth, config))
 }
 
+/// Normalize an annotated value's xrefs and metadata: the one law property
+/// values, synonyms and xrefs share.
+fn normalize_annotated(xrefs: &mut Vec<String>, meta: Option<&mut OboMeta>) {
+    normalize_strings(xrefs);
+    if let Some(meta) = meta {
+        meta.normalize();
+    }
+}
+
 impl OboPropertyValue {
     fn normalize(&mut self) {
-        normalize_strings(&mut self.xrefs);
-        if let Some(meta) = &mut self.meta {
-            meta.normalize();
-        }
+        normalize_annotated(&mut self.xrefs, self.meta.as_deref_mut());
     }
 
     fn validate(&self, depth: usize, config: &OboGraphsConfig) -> Result<(), ProjectionError> {
@@ -220,10 +226,7 @@ impl OboPropertyValue {
 
 impl OboSynonym {
     fn normalize(&mut self) {
-        normalize_strings(&mut self.xrefs);
-        if let Some(meta) = &mut self.meta {
-            meta.normalize();
-        }
+        normalize_annotated(&mut self.xrefs, self.meta.as_deref_mut());
     }
 
     fn validate(&self, depth: usize, config: &OboGraphsConfig) -> Result<(), ProjectionError> {
@@ -239,10 +242,7 @@ impl OboSynonym {
 
 impl OboXref {
     fn normalize(&mut self) {
-        normalize_strings(&mut self.xrefs);
-        if let Some(meta) = &mut self.meta {
-            meta.normalize();
-        }
+        normalize_annotated(&mut self.xrefs, self.meta.as_deref_mut());
     }
 
     fn validate(&self, depth: usize, config: &OboGraphsConfig) -> Result<(), ProjectionError> {

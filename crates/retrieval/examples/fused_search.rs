@@ -76,9 +76,7 @@
 
 use purrdf_core::purremb_fixture::Identities;
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_core::{
     AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
@@ -96,6 +94,8 @@ use purrdf_sparql_eval::{
     PropertyFunctionRegistry, ServiceLevel, TermKind,
 };
 use purrdf_text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
+
+use purrdf_retrieval::block_on;
 
 /// The predicate the lexical corpus is indexed over.
 const NOTE: &str = "https://example.org/note";
@@ -443,30 +443,6 @@ impl Statistics for NoStatistics {
 
     fn selectivity_ppm(&self, _subject: &Iri, _term: &RequestTerm) -> Option<u64> {
         None
-    }
-}
-
-/// Drive one future to completion on this thread.
-///
-/// The ladder's futures are awaited in a single task and never cross a thread
-/// boundary, so a parking waker is the whole runtime they need; a host that
-/// already has an executor awaits `search` on that instead.
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
     }
 }
 

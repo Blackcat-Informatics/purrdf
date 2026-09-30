@@ -3,8 +3,8 @@
 
 use super::ResearchObjectRoles;
 use super::jsonld::{
-    ProfileReader, compact_text, compact_texts, id_object, insert_values, item_pointer,
-    typed_object, validate_data_path,
+    LossRecorder as _, ProfileReader, compact_text, compact_texts, id_object, insert_values,
+    item_pointer, typed_object, validate_data_path,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;

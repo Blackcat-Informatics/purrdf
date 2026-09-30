@@ -158,11 +158,7 @@ fn list_literal(text: &str) -> Option<bool> {
 
 impl Structure<'_> {
     fn hit(&mut self, rule: &'static str, line: usize, detail: &str) {
-        let mut symbol = self.file.to_owned();
-        for scope in &self.scope {
-            symbol.push_str("::");
-            symbol.push_str(scope);
-        }
+        let symbol = crate::rules::scoped_symbol(self.file, &self.scope);
         self.hits.push(RuleHit {
             rule,
             package: self.package.to_owned(),

@@ -11,6 +11,10 @@
 //! neighbouring case that drives the same counter above zero, so the zero cannot be
 //! satisfied vacuously.
 
+mod support;
+
+use support::row_count;
+
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -172,14 +176,6 @@ fn names(result: &SparqlResult) -> Vec<Option<String>> {
     }
 }
 
-/// The solution rows of `result`.
-fn rows(result: &SparqlResult) -> usize {
-    match result {
-        SparqlResult::Solutions { rows, .. } => rows.len(),
-        other => panic!("expected solutions, got {other:?}"),
-    }
-}
-
 /// A `SELECT` whose `SERVICE` clause targets `endpoint`.
 fn service_query(endpoint: &str, silent: bool) -> String {
     let silent = if silent { "SILENT " } else { "" };
@@ -210,7 +206,7 @@ fn an_in_process_service_is_answered_without_the_network_transport_being_touched
     let result =
         run(&router, &service_query(LOCAL_EP, false)).expect("the in-process service answers");
     assert_eq!(
-        rows(&result),
+        row_count(&result),
         1,
         "the answer came from the in-memory dataset"
     );
@@ -225,7 +221,7 @@ fn an_in_process_service_is_answered_without_the_network_transport_being_touched
     // counter moves. Without this, `posts() == 0` would also pass for a router that
     // never resolved anything.
     let result = run(&router, &service_query(NET_EP, false)).expect("the fallback answers");
-    assert_eq!(rows(&result), 1);
+    assert_eq!(row_count(&result), 1);
     assert_eq!(
         spy.posts(),
         1,
@@ -261,7 +257,7 @@ fn withholding_the_network_capability_prevents_the_exchange_rather_than_discardi
         ));
     let result = run(&allowed, &service_query(NET_EP, false))
         .expect("granting Network must let the very same query through");
-    assert_eq!(rows(&result), 1);
+    assert_eq!(row_count(&result), 1);
     assert_eq!(spy.posts(), 1);
 }
 
@@ -313,7 +309,7 @@ fn a_catalog_gates_a_service_nested_inside_a_forwarded_body_too() {
         ),
     )
     .expect("a nested service that IS catalogued must resolve normally");
-    assert_eq!(rows(&result), 1);
+    assert_eq!(row_count(&result), 1);
 }
 
 // ── The SILENT contract ──────────────────────────────────────────────────────────
@@ -328,7 +324,7 @@ fn silent_swallows_an_unreachable_endpoint_through_both_resolvers() {
     let result = run(&unreachable, &service_query(NET_EP, true))
         .expect("SILENT swallows an unreachable endpoint");
     assert_eq!(
-        rows(&result),
+        row_count(&result),
         1,
         "the join identity leaves the surrounding query unchanged"
     );
@@ -340,7 +336,7 @@ fn silent_swallows_an_unreachable_endpoint_through_both_resolvers() {
     let empty = InProcessServiceResolver::new();
     let result =
         run(&empty, &service_query(LOCAL_EP, true)).expect("SILENT swallows a missing endpoint");
-    assert_eq!(rows(&result), 1);
+    assert_eq!(row_count(&result), 1);
     run(&empty, &service_query(LOCAL_EP, false))
         .expect_err("without SILENT the same failure aborts the query");
 }

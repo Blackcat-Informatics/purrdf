@@ -14,11 +14,9 @@ use purrdf_rdf::viz::{
 };
 use purrdf_testkit::bench::{Bench, bench_group, bench_main, black_box};
 
-const EX: &str = "https://example.org/";
-
-fn iri(local: &str) -> TermValue {
-    TermValue::Iri(format!("{EX}{local}"))
-}
+#[path = "../tests/support/viz_terms.rs"]
+mod viz_terms;
+use viz_terms::{EX, iri};
 
 fn input() -> VizGraphInput {
     let mut quads = Vec::new();

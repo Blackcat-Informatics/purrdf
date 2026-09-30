@@ -10,6 +10,10 @@
 //! into the crate's internals: a surface whose stages only line up from inside is a
 //! surface a host cannot use.
 
+mod support;
+
+use support::with_env;
+
 use purrdf_core::purremb_fixture::Identities;
 use purrdf_testkit::rng::{LCG64_MMIX_INCREMENT, lcg64_next};
 use std::collections::BTreeSet;
@@ -18,14 +22,13 @@ use std::sync::Arc;
 use purrdf_core::{
     AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
     DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract, MatrixInput, MatrixRow,
-    PrefixPostprocessing, ProjectionSpec, RdfDataset, RdfDatasetBuilder, RdfTermTarget,
-    SparqlRequest, SparqlResult, TargetId, TargetSet, TargetSetId, TermValue, VectorDtype,
-    VectorSpaceId,
+    PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, RdfTermTarget, SparqlRequest,
+    SparqlResult, TargetId, TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
 };
 use purrdf_sparql_eval::{
     ChargePoint, EmbeddingKnnRelation, EmbeddingSpace, ExtensionEnv, GovernedOutcome,
     IndexGeneration, KnnGuard, NativeSparqlEngine, NodeCharges, PropertyFunctionRegistry,
-    QueryGovernors, QueryOptions, ResourceDimension,
+    QueryGovernors, ResourceDimension,
 };
 
 /// The data namespace of the fixture terms.
@@ -168,25 +171,12 @@ fn registry(rows: &[(&str, Vec<f64>)]) -> ExtensionEnv {
 
 /// A dataset holding one unrelated triple: the answers come from the embedding space, and
 /// this is what makes that observable rather than merely stated.
-fn dataset() -> Arc<RdfDataset> {
-    let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(&format!("{EX}unrelated"));
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let o = builder.intern_iri(&format!("{EX}o"));
-    builder.push_quad(s, p, o, None);
-    builder.freeze().expect("freeze fixture")
-}
-
 fn request(query: &str) -> SparqlRequest<'_> {
     SparqlRequest {
         query,
         base_iri: None,
         substitutions: &[],
     }
-}
-
-fn with_relations(env: &ExtensionEnv) -> QueryOptions<'_> {
-    QueryOptions::new().with_env(env)
 }
 
 /// Render a solution result as `[[neighbour local name, distance lexical], ..]`.
@@ -210,7 +200,7 @@ fn rows_of(result: &SparqlResult) -> Vec<Vec<String>> {
 /// Answer `query` against `relations`, ungoverned.
 fn answer(query: &str, env: &ExtensionEnv) -> SparqlResult {
     NativeSparqlEngine::new()
-        .query_with_options_view(&*dataset(), request(query), with_relations(env))
+        .query_with_options_view(&*support::unrelated_quad(), request(query), with_env(env))
         .expect("the call resolves and evaluates")
 }
 
@@ -275,7 +265,7 @@ fn a_neighbour_joins_back_to_the_graph_by_basic_graph_pattern() {
                  }\n";
     let relations = registry(&points());
     let result = NativeSparqlEngine::new()
-        .query_with_options_view(&*graph, request(query), with_relations(&relations))
+        .query_with_options_view(&*graph, request(query), with_env(&relations))
         .expect("evaluate");
     assert_eq!(rows_of(&result), vec![vec!["beta".to_owned()]]);
 }
@@ -329,9 +319,9 @@ fn the_answer_is_byte_identical_across_two_independently_built_artifacts() {
     // And across repeated runs on ONE engine, so the plan cache is exercised rather than
     // avoided.
     let engine = NativeSparqlEngine::new();
-    let data = dataset();
+    let data = support::unrelated_quad();
     let once = engine
-        .query_with_options_view(&*data, request(QUERY), with_relations(&forward))
+        .query_with_options_view(&*data, request(QUERY), with_env(&forward))
         .expect("evaluate");
     let baseline = purrdf_sparql_results::to_json(
         &once,
@@ -342,7 +332,7 @@ fn the_answer_is_byte_identical_across_two_independently_built_artifacts() {
     .bytes;
     for _ in 0..16 {
         let again = engine
-            .query_with_options_view(&*data, request(QUERY), with_relations(&forward))
+            .query_with_options_view(&*data, request(QUERY), with_env(&forward))
             .expect("evaluate");
         assert_eq!(
             purrdf_sparql_results::to_json(
@@ -372,9 +362,9 @@ fn the_governor_charges_the_search_in_proportion_to_the_candidates_it_examined()
 
     let outcome = engine
         .query_governed(
-            &dataset(),
+            &support::unrelated_quad(),
             request(QUERY),
-            with_relations(&relations),
+            with_env(&relations),
             &QueryGovernors::METERED,
         )
         .expect("the call resolves and evaluates under governors");
@@ -388,7 +378,12 @@ fn the_governor_charges_the_search_in_proportion_to_the_candidates_it_examined()
     assert_eq!(rows_of(&result).len(), 3);
 
     let explanation = engine
-        .explain_query_with_options(&dataset(), QUERY, None, with_relations(&relations))
+        .explain_query_with_options(
+            &support::unrelated_quad(),
+            QUERY,
+            None,
+            with_env(&relations),
+        )
         .expect("explain");
     let at = |point: ChargePoint| -> u64 {
         explanation
@@ -441,7 +436,7 @@ fn the_search_charge_follows_the_space_size_rather_than_the_rows_returned() {
     let engine = NativeSparqlEngine::new();
     let measure = |env: &ExtensionEnv| {
         let explanation = engine
-            .explain_query_with_options(&dataset(), one_row, None, with_relations(env))
+            .explain_query_with_options(&support::unrelated_quad(), one_row, None, with_env(env))
             .expect("explain");
         let at = |point: ChargePoint| -> u64 {
             explanation
@@ -481,9 +476,9 @@ fn a_fuel_ceiling_one_unit_below_the_metered_spend_trips() {
     let measure = |governors: &QueryGovernors| {
         engine
             .query_governed(
-                &dataset(),
+                &support::unrelated_quad(),
                 request(QUERY),
-                with_relations(&relations),
+                with_env(&relations),
                 governors,
             )
             .expect("a governor trip is an outcome, never an error")
@@ -523,9 +518,9 @@ fn a_declared_row_bound_lets_a_cell_ceiling_admit_the_call_rather_than_refuse_it
     let relations = registry(&points());
     let outcome = NativeSparqlEngine::new()
         .query_governed(
-            &dataset(),
+            &support::unrelated_quad(),
             request(QUERY),
-            with_relations(&relations),
+            with_env(&relations),
             &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(64),
         )
         .expect("evaluate");
@@ -761,14 +756,14 @@ fn one_artifact_under_one_binding_attests_one_generation() {
         ExtensionEnv::over_relations(relations).expect("the fixture declarations read cleanly");
     let engine = NativeSparqlEngine::new();
     let prepared = engine
-        .prepare_query_with_options(QUERY, None, with_relations(&relations))
+        .prepare_query_with_options(QUERY, None, with_env(&relations))
         .expect("the query prepares against the registry");
     let outcome = engine
         .query_prepared_governed_view(
-            &*dataset(),
+            &*support::unrelated_quad(),
             &prepared,
             &[],
-            with_relations(&relations),
+            with_env(&relations),
             &QueryGovernors::UNBOUNDED,
         )
         .expect("a governed run of a valid query is an outcome, never an error");

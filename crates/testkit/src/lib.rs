@@ -40,6 +40,14 @@
 //!   xorshift64 and 64-bit LCG recurrences pinned test fixtures are built on.
 //! * [`paths`] — the workspace root, resolved from the `[workspace]` manifest
 //!   rather than by counting `..`, and the Rust sources under a directory.
+//! * [`scalars`] — boundary sweeps of a scanner over Unicode scalars: the
+//!   corpus read off a membership predicate, the shared `IRIREF` content
+//!   oracle, and the three-valued check of where a token stops.
+//! * [`text`] — generated parser input (a construct nested to any depth) and a
+//!   child process's output read as UTF-8.
+//! * [`ucd`] — readers for the Unicode Character Database's text files: a
+//!   hexadecimal code point field, a code point sequence, and `UnicodeData.txt`
+//!   with its ranges expanded.
 //!
 //! Its one first-party dependency is `purrdf-hash`, the zero-dependency root,
 //! whose own tests and benches do not use this crate; `layers.toml` allows no
@@ -65,8 +73,11 @@ pub mod jsonschema_metaschemas;
 pub mod paths;
 pub mod prop;
 pub mod rng;
+pub mod scalars;
 #[cfg(not(target_arch = "wasm32"))]
 mod temp;
+pub mod text;
+pub mod ucd;
 pub mod vectors;
 
 #[cfg(not(target_arch = "wasm32"))]

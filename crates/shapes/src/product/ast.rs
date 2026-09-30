@@ -375,6 +375,20 @@ fn depth_limit() -> ShapesProductError {
     )
 }
 
+/// Open one nesting level of a walk whose live depth is `depth`, refusing with
+/// `refusal` past [`MAX_DEPTH`]: the one bound the encoder, the decoder and the
+/// model walks share.
+pub(crate) fn open_level(
+    depth: &mut u32,
+    refusal: fn() -> ShapesProductError,
+) -> Result<(), ShapesProductError> {
+    if *depth >= MAX_DEPTH {
+        return Err(refusal());
+    }
+    *depth += 1;
+    Ok(())
+}
+
 /// Translate a `pack::bits` decoding failure into an admission refusal.
 ///
 /// `pub(crate)` because the product's identity section reads the same LEB128
@@ -479,11 +493,7 @@ impl AstWriter {
 
     /// Open one level of recursion, refusing past [`MAX_DEPTH`].
     fn enter(&mut self) -> Result<(), ShapesProductError> {
-        if self.depth >= MAX_DEPTH {
-            return Err(depth_limit());
-        }
-        self.depth += 1;
-        Ok(())
+        open_level(&mut self.depth, depth_limit)
     }
 
     /// Close one level of recursion.
@@ -1602,11 +1612,7 @@ impl<'a> AstReader<'a> {
 
     /// Open one level of recursion, refusing past [`MAX_DEPTH`].
     fn enter(&mut self) -> Result<(), ShapesProductError> {
-        if self.depth >= MAX_DEPTH {
-            return Err(depth_limit());
-        }
-        self.depth += 1;
-        Ok(())
+        open_level(&mut self.depth, depth_limit)
     }
 
     /// Close one level of recursion.

@@ -75,6 +75,11 @@ fn dataset_of(rows: &[(&str, &str)]) -> Arc<RdfDataset> {
 }
 
 /// The configuration every fixture index is built under.
+///
+/// It spells the same `TextIndexConfig::new` call as `purrdf-retrieval`'s
+/// `real_producers` fixture, over a different predicate (this file's `NOTE` is
+/// `http://example.org/note`, that one's is `https://…`): two fixtures of two
+/// crates' tests, each over its own corpus, not one helper written twice.
 fn config() -> TextIndexConfig {
     TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
         .expect("the fixture configuration is well formed")

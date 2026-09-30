@@ -190,6 +190,9 @@ struct Outcome {
     invocations: Vec<String>,
 }
 
+/// A result cell rendered through this file's [`key_of`] (`UNBOUND` when unbound).
+/// `correlated_call_arguments.rs` spells the same forwarder over its own `key_of`, which
+/// keys IRIs, blank nodes and triple terms differently, so the two are not one helper.
 fn render(cell: Option<&TermValue>) -> String {
     cell.map_or_else(|| "UNBOUND".to_owned(), key_of)
 }
@@ -997,17 +1000,13 @@ struct Pairs {
 fn pair_table() -> Vec<(TermValue, TermValue)> {
     PAIR_TABLE
         .iter()
-        .map(|&(input, output)| (simple_literal(input), simple_literal(output)))
+        .map(|&(input, output)| {
+            (
+                TermValue::simple_literal(input),
+                TermValue::simple_literal(output),
+            )
+        })
         .collect()
-}
-
-fn simple_literal(text: &str) -> TermValue {
-    TermValue::Literal {
-        lexical_form: text.to_owned(),
-        datatype: "http://www.w3.org/2001/XMLSchema#string".into(),
-        language: None,
-        direction: None,
-    }
 }
 
 impl PropertyFunction for Pairs {
@@ -1771,19 +1770,19 @@ fn aggregate_table() -> Vec<(TermValue, TermValue)> {
     let x = format!("{EX}x");
     let y = format!("{EX}y");
     [
-        (simple_literal("alpha"), "alpha/1"),
-        (simple_literal("alpha"), "alpha/2"),
-        (simple_literal("beta"), "beta/1"),
+        (TermValue::simple_literal("alpha"), "alpha/1"),
+        (TermValue::simple_literal("alpha"), "alpha/2"),
+        (TermValue::simple_literal("beta"), "beta/1"),
         (TermValue::iri(x), "x/1"),
         (TermValue::iri(y), "y/1"),
         (TermValue::typed_literal("3", XSD_INTEGER), "3/1"),
         (TermValue::typed_literal("4", XSD_INTEGER), "4/1"),
         (TermValue::typed_literal("1.5", XSD_DECIMAL), "1.5/1"),
         (TermValue::typed_literal("4", XSD_DECIMAL), "4.0/1"),
-        (simple_literal("delta"), "delta/1"),
+        (TermValue::simple_literal("delta"), "delta/1"),
     ]
     .into_iter()
-    .map(|(input, output)| (input, simple_literal(output)))
+    .map(|(input, output)| (input, TermValue::simple_literal(output)))
     .collect()
 }
 
@@ -1927,7 +1926,7 @@ type Shape = (
 #[test]
 fn newly_admitted_substituted_and_aggregate_shapes_answer_the_bottom_up_join() {
     let call = format!("?q <{PAIRS}> ?out");
-    let alpha = || vec![("q".to_owned(), simple_literal("alpha"))];
+    let alpha = || vec![("q".to_owned(), TermValue::simple_literal("alpha"))];
     let none = Vec::new;
     let each_left_row = |out: &[&str]| -> Vec<(String, String)> {
         let mut expected: Vec<(String, String)> = (0..3)
@@ -2171,7 +2170,7 @@ fn group_key_shapes() -> Vec<(String, Vec<(String, String)>)> {
 
 /// `?q = "alpha"`, the substitution the `GROUP BY` shapes run under.
 fn alpha_substitution() -> Vec<(String, TermValue)> {
-    vec![("q".to_owned(), simple_literal("alpha"))]
+    vec![("q".to_owned(), TermValue::simple_literal("alpha"))]
 }
 
 /// **A `GROUP BY` whose key is the substituted variable is entered by the rewrite.**

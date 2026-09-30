@@ -142,6 +142,10 @@ pub struct SparqlRequest<'a> {
     pub substitutions: &'a [(String, TermValue)],
 }
 
+/// One solution of a [`SparqlResult::Solutions`] sequence: the binding for each
+/// projected variable, in projection order (`None` = unbound).
+pub type SolutionRow = Vec<Option<TermValue>>;
+
 /// Materialized SPARQL result model independent of any concrete query engine.
 #[derive(Debug, Clone)]
 pub enum SparqlResult {
@@ -178,6 +182,33 @@ impl SparqlResult {
             Self::Solutions { .. } => "select",
             Self::Boolean(_) => "ask",
             Self::Graph(_) => "construct",
+        }
+    }
+
+    /// The projected variables and the rows of a solution sequence, or `None` for a
+    /// graph or boolean result.
+    #[must_use]
+    pub fn solutions(&self) -> Option<(&[String], &[SolutionRow])> {
+        match self {
+            Self::Solutions {
+                variables, rows, ..
+            } => Some((variables, rows)),
+            Self::Graph(_) | Self::Boolean(_) => None,
+        }
+    }
+
+    /// The projected variables and the rows of a solution sequence, taken out of the
+    /// result; any other result is handed back unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns `self` when it is a graph or boolean result.
+    pub fn into_solutions(self) -> Result<(Vec<String>, Vec<SolutionRow>), Self> {
+        match self {
+            Self::Solutions {
+                variables, rows, ..
+            } => Ok((variables, rows)),
+            other @ (Self::Graph(_) | Self::Boolean(_)) => Err(other),
         }
     }
 }

@@ -37,29 +37,23 @@
 //! Every IRI below is this test's own, in the host's role. PurRDF mints no vocabulary.
 
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf::hnsw::relation::{HnswObservations, HnswRelation, HnswSpace};
 use purrdf::hnsw::{HnswIndex, Params, VectorMatrix};
 use purrdf::retrieval::{
-    AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, ExclusionBasis, Fixed, FusedRow,
-    FusionProfile, Iri, OrderFidelity, RECIP_K, RankFidelity, RequestTerm, RetrievalRequest,
-    Statistics, Term, TopK, compile, execute, plan, search,
+    AdmissionEnvironment, CandidateDomains, DecayRule, ExclusionBasis, Fixed, FusionProfile, Iri,
+    OrderFidelity, RECIP_K, RankFidelity, RequestTerm, RetrievalRequest, Statistics, Term, TopK,
+    compile, execute, plan, search,
 };
 use purrdf::sparql::{KnnGuard, PropertyFunctionRegistry, RankedDeclaration, TermKind};
-use purrdf::text::{
-    GraphSelector, SearchObservations, TextIndex, TextIndexConfig, TextSearchRelation,
-};
-use purrdf::{DistanceMetric, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
+use purrdf::text::{SearchObservations, TextSearchRelation};
+use purrdf::{DistanceMetric, RdfDataset, TermValue};
 
 // ---------------------------------------------------------------------------
 // The host's vocabulary and the fixture's dimensions
 // ---------------------------------------------------------------------------
 
-/// The one predicate the text corpus is indexed over.
-const NOTE: &str = "https://example.org/note";
 /// The IRI this host registers the text relation under.
 const TEXT_PF: &str = "https://example.org/pf/search";
 /// The IRI this host registers the vector relation under.
@@ -68,22 +62,18 @@ const VECTOR_PF: &str = "https://example.org/pf/neighbours";
 const TEXT_STRATUM: &str = "https://example.org/stratum/lexical";
 /// The stratum this host ranks vector rows within.
 const VECTOR_STRATUM: &str = "https://example.org/stratum/vector";
-/// The one block both producers declare. Sharing it is what removes the planner's merge
-/// argument and leaves finality as the only thing that can end the read.
-const SHARED_BLOCK: &str = "https://example.org/domain/shared";
 // The datatype the depth argument is written under — the host's, never invented here.
 use purrdf_xsd::datatype::XSD_INTEGER;
 
-/// The needle the text producer is asked for.
-const NEEDLE: &str = "alpha beta";
+#[path = "support/multimodal.rs"]
+mod multimodal;
 
-/// How many documents the needle reaches, and how many rows the vector space holds.
-///
-/// Deep enough that a drained read and a licensed one are genuinely different numbers —
-/// a candidate one of two block-sharing streams named has to outlast twice its own
-/// weight, which under reciprocal-rank decay is deep — and small enough that the graph
-/// still builds inside a test suite.
-const CORPUS: usize = 80;
+use multimodal::{
+    CORPUS, NOTE, dataset, kernel_iri, request_terms, shared_block, text_index, text_rows,
+    text_subject, vector_term,
+};
+use purrdf::retrieval::block_on;
+use purrdf::retrieval::fixture::{iri, reduce};
 
 /// The vector space's dimensionality.
 const DIMS: usize = 8;
@@ -95,103 +85,9 @@ const TOP_K: TopK = TopK::new(5);
 /// constant rather than written twice.
 const K: u32 = RECIP_K as u32;
 
-/// The subject of the `at`-th text document.
-fn text_subject(at: usize) -> String {
-    format!("https://example.org/doc/text/{at}")
-}
-
-/// The term the `at`-th vector row stands for.
-fn vector_term(at: usize) -> String {
-    format!("https://example.org/doc/vec/{at}")
-}
-
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
-
-fn kernel_iri(text: &str) -> purrdf::iri::Iri {
-    purrdf::iri::parse(text).expect("fixture IRIs are valid")
-}
-
-fn shared_block() -> DomainTag {
-    DomainTag::parse(SHARED_BLOCK).expect("the fixture domain tag is a valid IRI")
-}
-
-/// A minimal single-threaded executor. Nothing in this pipeline actually pends.
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // The corpus
 // ---------------------------------------------------------------------------
-
-/// The `(subject, text)` rows the inverted index is built from.
-///
-/// [`CORPUS`] documents the needle reaches, under the text subject prefix — and one
-/// document per *vector* term whose text shares no term with the needle. The second group
-/// is what makes a text-side lookup a real dictionary search: the index really holds a
-/// document of that subject, so the relation must binary-search its term dictionary for
-/// each needle term and find no posting, which is exactly the case a naive implementation
-/// would answer by ranking the partition.
-///
-/// Those documents are never candidates. A document carrying no needle term is in no
-/// candidate set at any depth, so the two strata's candidates stay disjoint.
-fn text_rows() -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = (0..CORPUS)
-        .map(|at| {
-            (
-                text_subject(at),
-                // The repeated term varies the term frequency, so the documents do not
-                // all score the same and the ranking is a ranking rather than a
-                // tie-break order.
-                format!("alpha beta gamma {}", "alpha ".repeat(at % 4 + 1).trim()),
-            )
-        })
-        .collect();
-    out.extend((0..CORPUS).map(|at| (vector_term(at), "zulu yankee xray whiskey".to_owned())));
-    out
-}
-
-/// The dataset every stage runs against.
-///
-/// The property-function calls this file compiles read nothing out of it — a ranked
-/// producer answers from its own index — but it is the dataset the text index was built
-/// from, which is the wiring a host actually has.
-fn dataset() -> Arc<RdfDataset> {
-    let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri(NOTE);
-    for (subject, text) in text_rows() {
-        let subject = builder.intern_iri(&subject);
-        let object = builder.intern_literal(RdfLiteral::simple(&text));
-        builder.push_quad(subject, predicate, object, None);
-    }
-    builder.freeze().expect("the fixture dataset is valid")
-}
-
-/// The inverted index: one predicate, every graph, untagged literals in the default
-/// graph — so exactly one partition, which is what
-/// `TextSearchRelation::ranked_declaration` requires.
-fn text_index(dataset: &RdfDataset) -> Arc<TextIndex> {
-    let config = TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
-        .expect("the fixture configuration is well formed");
-    Arc::new(TextIndex::from_dataset(dataset, &config).expect("the fixture index builds"))
-}
 
 /// The vector space: [`CORPUS`] rows, named by the vector terms and by **no text
 /// subject**.
@@ -225,25 +121,6 @@ fn vector_space() -> Arc<HnswSpace> {
 // ---------------------------------------------------------------------------
 // The wiring
 // ---------------------------------------------------------------------------
-
-/// The request: one lexical term for the text producer, one entity seed for the vector
-/// producer.
-///
-/// The seed is a term the space holds a row for — this producer searches *from* a term
-/// whose vector it already has — and it is a vector term, so it is on the vector side of
-/// the disjoint split like every other row of that space.
-fn request_terms() -> Vec<RequestTerm> {
-    vec![
-        RequestTerm::Lexical {
-            text: NEEDLE.to_owned(),
-            language: None,
-            predicate: Some(iri(NOTE)),
-        },
-        RequestTerm::EntitySeed {
-            entity: Term::new(format!("<{}>", vector_term(0))),
-        },
-    ]
-}
 
 /// Both producers registered, with `basis` written into the declaration each relation
 /// hands out for itself.
@@ -415,23 +292,6 @@ impl Measured {
     fn ranks_pulled(&self) -> u64 {
         self.text_ranks + self.vector_ranks
     }
-}
-
-/// One fused row reduced to what two runs must agree on.
-///
-/// The threshold witness is deliberately left out: it records the global threshold in
-/// force when the row was certified, and certifying a row earlier — which is the whole
-/// point of an exclusion lookup — legitimately moves it. The candidate, the score and the
-/// provenance are the answer.
-fn reduce(row: &FusedRow) -> (Term, Fixed, Vec<(Iri, u64, Fixed)>) {
-    (
-        row.entity.clone(),
-        row.score,
-        row.contributions
-            .iter()
-            .map(|(stratum, rank, contribution)| (stratum.clone(), *rank, *contribution))
-            .collect(),
-    )
 }
 
 /// Run the request once under `basis` and measure it.

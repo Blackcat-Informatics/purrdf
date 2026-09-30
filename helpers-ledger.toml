@@ -78,6 +78,16 @@
 #               carry documentation.
 #   reason    = the reason, in one or two sentences.
 #
+# The census walks shipping code and every test, bench and example target (each a
+# crate named `<package>::test_crate::<target>`, `bench_crate`, `example_crate`); a
+# file several targets declare is fingerprinted once, under the first. A body is
+# compared in its value form: borrows, derefs, `ref`, the value adapters
+# (`.as_str()`, `.clone()`, `.to_owned()`, …), a full-range reindex, `let` type
+# annotations and type-only turbofishes are dropped, local names are renamed and
+# field names kept; a body of 20 to 29 tokens is compared with its literals
+# verbatim, a longer one with them abstracted. Names, constants and fingerprints
+# of a job apply to test code too; the literal rules read shipping code only.
+#
 # [[distinct]] — a set of items that share a body or forwarder shape and share no
 # job, so no [[job.variant]] can name them. Each row sanctions exactly one group:
 # the census group of its `kind` whose member set EQUALS `members`. A group that
@@ -1249,9 +1259,9 @@ names = ['^(repo_root)$']
 
 [[job]]
 id = "query-host-plumbing"
-summary = "What every host (CLI, C ABI, wasm, Python) shares around a query: its provenance record, its governor ceilings and the results-format name"
+summary = "What every host (CLI, C ABI, wasm, Python) shares around a query: its provenance record, its governor ceilings, the results-format name and the statistical-aggregate registry its namespace setting requests"
 home = "purrdf_validate::governors::from_parts"
-entry_points = ["purrdf_validate::query::provenance", "purrdf_validate::governors::from_update_parts", "purrdf_sparql_results::SparqlResultsFormat::from_name"]
+entry_points = ["purrdf_validate::query::provenance", "purrdf_validate::governors::from_update_parts", "purrdf_sparql_results::SparqlResultsFormat::from_name", "purrdf_validate::query::statistical_aggregates"]
 spec = "SPARQL 1.1 Protocol section 2.1 (results formats by media type) and the governor ceilings purrdf_validate::governors documents"
 vectors = []
 bench = []
@@ -1262,7 +1272,7 @@ enforced = true
 [job.forbidden]
 constants = []
 fingerprints = []
-names = ['^(build_query_provenance|validate_update_governors|resolve_results_format)$']
+names = ['^(build_query_provenance|validate_update_governors|resolve_results_format|build_aggregates|build_aggregate_registry)$']
 
 [[job]]
 id = "ed25519"
@@ -1443,7 +1453,7 @@ enforced = true
 
 [job.forbidden]
 constants = []
-fingerprints = ["body:a7d79d50415357e5"]
+fingerprints = ["body:c4507d4c291794b4"]
 names = []
 
 [[job]]
@@ -1499,76 +1509,6 @@ names = ["^(rule|infer)_options$", "^run_rules_(dispatch|for_host)$"]
 
 [[distinct]]
 members = [
-    "purrdf_core::distance::build_identity::compiler_text",
-    "purrdf_core::build_script::build_identity::compiler_text",
-]
-kind = "body"
-criterion = "layering"
-anchor = "purrdf_core::distance::build_identity"
-reason = "The build script compiles the library's own `distance/build_identity.rs` through `#[path]`, because a build script cannot link the crate it builds; the two members are one source compiled twice, so the text a build records and the text the encoder computes cannot drift."
-
-[[distinct]]
-members = [
-    "purrdf_core::distance::build_identity::Flags::features",
-    "purrdf_core::build_script::build_identity::Flags::features",
-]
-kind = "body"
-criterion = "layering"
-anchor = "purrdf_core::distance::build_identity"
-reason = "The build script compiles the library's own `distance/build_identity.rs` through `#[path]`, because a build script cannot link the crate it builds; the two members are one source compiled twice, so the text a build records and the text the encoder computes cannot drift."
-
-[[distinct]]
-members = [
-    "purrdf_core::distance::build_identity::target_cpu",
-    "purrdf_core::build_script::build_identity::target_cpu",
-]
-kind = "body"
-criterion = "layering"
-anchor = "purrdf_core::distance::build_identity"
-reason = "The build script compiles the library's own `distance/build_identity.rs` through `#[path]`, because a build script cannot link the crate it builds; the two members are one source compiled twice, so the text a build records and the text the encoder computes cannot drift."
-
-[[distinct]]
-members = [
-    "purrdf_core::distance::build_identity::Flags::set",
-    "purrdf_core::build_script::build_identity::Flags::set",
-]
-kind = "body"
-criterion = "layering"
-anchor = "purrdf_core::distance::build_identity"
-reason = "The build script compiles the library's own `distance/build_identity.rs` through `#[path]`, because a build script cannot link the crate it builds; the two members are one source compiled twice, so the text a build records and the text the encoder computes cannot drift."
-
-[[distinct]]
-members = [
-    "purrdf_core::distance::build_identity::Flags::of",
-    "purrdf_core::build_script::build_identity::Flags::of",
-]
-kind = "body"
-criterion = "layering"
-anchor = "purrdf_core::distance::build_identity"
-reason = "The build script compiles the library's own `distance/build_identity.rs` through `#[path]`, because a build script cannot link the crate it builds; the two members are one source compiled twice, so the text a build records and the text the encoder computes cannot drift."
-
-[[distinct]]
-members = [
-    "purrdf_core::distance::build_identity::currently",
-    "purrdf_core::build_script::build_identity::currently",
-]
-kind = "body"
-criterion = "layering"
-anchor = "purrdf_core::distance::build_identity"
-reason = "The build script compiles the library's own `distance/build_identity.rs` through `#[path]`, because a build script cannot link the crate it builds; the two members are one source compiled twice, so the text a build records and the text the encoder computes cannot drift."
-
-[[distinct]]
-members = [
-    "purrdf_core::distance::build_identity::version_line",
-    "purrdf_core::build_script::build_identity::version_line",
-]
-kind = "shim"
-criterion = "layering"
-anchor = "purrdf_core::distance::build_identity"
-reason = "The build script compiles the library's own `distance/build_identity.rs` through `#[path]`, because a build script cannot link the crate it builds; the two members are one source compiled twice, so the text a build records and the text the encoder computes cannot drift."
-
-[[distinct]]
-members = [
     "purrdf_gts::model::Graph::reifier",
     "purrdf_rdf::native_codecs::ser_model::SerGraph::reifier",
 ]
@@ -1596,16 +1536,6 @@ kind = "body"
 criterion = "b"
 anchor = "purrdf_shapes::constraints::ValueNode"
 reason = "A value node's `Foreign` arm keeps a node-expression term verbatim even when the dataset interns it, while a focus node is `Foreign` only when the dataset does not intern its term; the two enums share arms, not a guarantee, so each keeps its own accessor."
-
-[[distinct]]
-members = [
-    "purrdf_text::index::TextIndex::field_postings",
-    "purrdf_text::index::TextIndex::postings",
-]
-kind = "body"
-criterion = "b"
-anchor = "purrdf_text::index::TextIndex::field_postings"
-reason = "Both project the one shared posting walk, `partition_postings`: one yields the per-predicate frequencies BM25F field scoring reads, the other the token positions phrase and proximity matching read."
 
 [[distinct]]
 members = [
@@ -1868,6 +1798,646 @@ criterion = "a"
 anchor = "purrdf_hash::arch::x86_64::hex_encode"
 reason = "Per-architecture safe entries, each around its own module's base16 kernel (SSSE3 on x86_64, NEON on aarch64), each a symbol scripts/simd-asm-manifest.toml pins."
 
+[[distinct]]
+members = [
+    "purrdf_retrieval::test_crate::boundary::ScriptedStream::next",
+    "purrdf_retrieval::test_crate::wasm_determinism::ScriptedStream::next",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_retrieval::test_crate::wasm_determinism::ScriptedStream"
+reason = "Two different mock streams: wasm_determinism's states its contract and attestation per fixture and always ends exhausted, boundary's states one contract and ends with the receipt its script names; only the one-line pop in `next` is spelled alike, and merging them would change what each test's mock does."
+
+[[distinct]]
+members = [
+    "purrdf_retrieval::test_crate::boundary::LazyStream::exclusion",
+    "purrdf_retrieval::test_crate::boundary::ScriptedStream::exclusion",
+    "purrdf_retrieval::test_crate::fusion_frontier_alloc::LazyStream::exclusion",
+    "purrdf_retrieval::test_crate::multimodal_read_bound::ScriptedStream::exclusion",
+    "purrdf_retrieval::test_crate::wasm_determinism::ScriptedStream::exclusion",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_retrieval::RankedStream::exclusion"
+reason = "RankedStream::exclusion deliberately has no default (its documentation says why), so every stream type that declares no exclusion basis must spell the one honest body, `Err(ExclusionUnavailable)`; these are five different mock stream types, each answering the required method for itself."
+
+[[distinct]]
+members = [
+    "purrdf_retrieval::test_crate::multimodal_read_bound::Reads::rows",
+    "purrdf_retrieval::test_crate::supplied_exclusion_lookup::Reads::rows",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_retrieval::test_crate::supplied_exclusion_lookup::CountingProducer"
+reason = "Each file's Reads and CountingProducer is its own mock (multimodal_read_bound's also counts work, holds fewer rows than it declares, reads in reverse and reports a service level; supplied_exclusion_lookup's answers `everything` lookups and moves its generation); the accessor reads each mock's own counters."
+
+[[distinct]]
+members = [
+    "purrdf_retrieval::test_crate::multimodal_read_bound::CountingProducer::generation",
+    "purrdf_retrieval::test_crate::supplied_exclusion_lookup::CountingProducer::generation",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_retrieval::test_crate::supplied_exclusion_lookup::CountingProducer"
+reason = "Two different mock producers' own generation accessor over their own `generations` field; sharing it would mean merging two mocks whose behaviour each test depends on differing."
+
+[[distinct]]
+members = [
+    "purrdf_retrieval::test_crate::multimodal_read_bound::CountingProducer::rows_per_invocation",
+    "purrdf_retrieval::test_crate::supplied_exclusion_lookup::CountingProducer::rows_per_invocation",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_retrieval::test_crate::supplied_exclusion_lookup::CountingProducer"
+reason = "The required PropertyFunction::rows_per_invocation of two different mock producers, each declaring its own ROWS; the mocks differ in holdings, order, work and lookup answers, so they are not one fixture."
+
+[[distinct]]
+members = [
+    "purrdf_retrieval::test_crate::real_producers::text_config",
+    "purrdf_text::test_crate::determinism::config",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_text::test_crate::determinism::config"
+reason = "Two crates' fixtures over different predicates (text's NOTE is http://example.org/note, retrieval's is https://example.org/note) that happen to share a constant's name and the TextIndex config spelling; the values differ, so neither can call the other."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::test_crate::product_refusal::certify",
+    "purrdf_validate::product::certify_shapes_product",
+]
+kind = "shim"
+criterion = "layering"
+anchor = "purrdf_validate::product::certify_shapes_product"
+reason = "purrdf-validate depends on purrdf-shapes, so the shapes crate's own product-codec tests cannot reach the host wrapper without a dev-dependency back-edge; both are the one-line forward to ShapesProduct::open(..)?.certify(), and the test exercises the shapes crate's codec, not the host surface."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::test_crate::product_refusal::rebuild",
+    "purrdf_validate::product::rebuild_shapes_product",
+]
+kind = "shim"
+criterion = "layering"
+anchor = "purrdf_validate::product::rebuild_shapes_product"
+reason = "purrdf-validate sits above purrdf-shapes; the shapes crate's product-refusal tests spell the same forward to ShapesProduct::rebuild under the empty host against the codec they test, which they cannot reach through the host crate without a dependency back-edge."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::test_crate::product_refusal::admit_expecting",
+    "purrdf_validate::product::admit_shapes_product_expecting",
+]
+kind = "shim"
+criterion = "layering"
+anchor = "purrdf_validate::product::admit_shapes_product_expecting"
+reason = "purrdf-validate sits above purrdf-shapes; the shapes crate's product-refusal tests spell the same forward to ShapesProduct::admit_expecting under the empty host against the codec they test, which they cannot reach through the host crate without a dependency back-edge."
+
+[[distinct]]
+members = [
+    "purrdf_shex::shapemap::is_string_literal_content",
+    "purrdf_shex::test_crate::scanner_boundary_sweep::string_literal_content",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_shex::test_crate::scanner_boundary_sweep::string_literal_content"
+reason = "The sweep's STRING_LITERAL2 content class is a deliberate independent transcription of the production the shape-map scanner implements; where the two must agree scalar for scalar the sweep is a table oracle, which calling the scanner's own predicate would destroy."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_eval::test_crate::flat_property_paths::Step::path",
+    "purrdf_sparql_eval::test_crate::flat_property_paths::Step::triple",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_eval::test_crate::flat_property_paths::Step"
+reason = "Two renderings of one generated step: its property-path text and its §18.4 triple pattern between two terms. Same four-arm shape, different output grammar; each generated query needs both."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_eval::test_crate::recursion_free::optional_spine_expected",
+    "purrdf_sparql_eval::test_crate::recursion_free::uncorrelated_lateral_expected",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_eval::test_crate::recursion_free::optional_spine_expected"
+reason = "Each is the oracle for a different generated shape (an OPTIONAL spine, an uncorrelated LATERAL nest); they share the two-column table shape and hold different expected answers."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_eval::bench_crate::cost_based_bgp_planner::support::iri",
+    "purrdf_sparql_eval::test_crate::embedding_knn_e2e::iri",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_sparql_eval::test_crate::embedding_knn_e2e::iri"
+reason = "Same spelling over different namespaces: the shared support mints under http://example.org/, the k-NN fixture under https://example.org/d/, which its artifact targets and query prefixes are written against."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_conformance::test_crate::governor_corpus::CorpusSumAggregate::arity",
+    "purrdf_sparql_eval::test_crate::property_function_value_sources::FirstLiteral::arity",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_sparql_eval::test_crate::property_function_value_sources::FirstLiteral"
+reason = "The required CustomAggregate::arity of two unrelated fixture aggregates (a corpus SUM, a first-literal picker) in different packages; each declares its own single-argument arity."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_eval::construct::graph_triple_count",
+    "purrdf_sparql_eval::test_crate::governed_query::statement_count",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_sparql_eval::test_crate::governed_query::statement_count"
+reason = "The test deliberately writes the answer-cap denomination out from the caller's side rather than borrowing the evaluator's count, so a governor that came to count something else is caught from outside instead of agreeing by construction."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_eval::test_crate::correlated_call_arguments::render_q",
+    "purrdf_sparql_eval::test_crate::property_function_value_sources::render",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_sparql_eval::test_crate::property_function_value_sources::render"
+reason = "Same spelling, different targets: each forwards to its own file's key_of, and the two key_of functions key IRIs, blank nodes and triple terms differently."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::test_crate::backend_seam_streams::dataset",
+    "purrdf_rdf::test_crate::sink_contract::dataset",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_rdf::test_crate::backend_seam_streams::dataset"
+reason = "Two streaming fixtures with their own row text: the backend-seam one pads every row to cross the drain window from a single call, the sink-contract one tags rows so several datasets in one test stay distinguishable. Merging them would change the bytes each test streams and asserts."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::native_codecs::serialize::blank_label_alphabet",
+    "purrdf_rdf::test_crate::blank_label_egress::emitted_alphabet",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_rdf::test_crate::blank_label_egress::emitted_alphabet"
+reason = "The test restates the per-format blank-label alphabet independently of the serializer's table, on purpose, so the egress matrix cross-checks it; calling the shipping table would grade the table against itself."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::bench_crate::native_codecs::nquads_fixture",
+    "purrdf_rdf::bench_crate::native_codecs::nquads_fixture_escape_heavy",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_rdf::bench_crate::native_codecs::nquads_fixture_escape_heavy"
+reason = "Two different benchmark inputs: clean numeric literals exercise the escape fast path's clean-run copy, escape-laden literals exercise its boundary branch. Only the loop shape is shared."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::bench_crate::projections::push_iri",
+    "purrdf_rdf::projections::util::push_iri_triple",
+]
+kind = "body"
+criterion = "layering"
+anchor = "purrdf_rdf::projections::util::push_iri_triple"
+reason = "The bench is a separate crate that reaches only purrdf-rdf's public API, and the four-line builder helper is crate-private projection plumbing, not public surface."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::native_codecs::jsonld::expand::graph_quad",
+    "purrdf_rdf::test_crate::property_roundtrip::diff_quad_from_parts",
+]
+kind = "body"
+criterion = "layering"
+anchor = "purrdf_rdf::test_crate::property_roundtrip::diff_quad_from_parts"
+reason = "The JSON-LD expander's quad-in-optional-graph helper is private to the expander; the property test builds its generated quads through the public RdfQuad API and cannot reach it."
+
+[[distinct]]
+members = [
+    "purrdf_gts::example_crate::streaming_sink_bench::CountingEventSink::close_scope",
+    "purrdf_gts::test_crate::event_bridge::CollectSink::close_scope",
+    "purrdf_gts::test_crate::event_bridge::IndexSink::annotation",
+    "purrdf_gts::test_crate::event_bridge::IndexSink::close_scope",
+    "purrdf_gts::test_crate::event_bridge::IndexSink::quad",
+    "purrdf_gts::test_crate::event_bridge::IndexSink::reifier",
+    "purrdf_gts::test_crate::event_bridge::IndexSink::term",
+    "purrdf_gts::test_crate::language_tag_gate::LiteralCapture::annotation",
+    "purrdf_gts::test_crate::language_tag_gate::LiteralCapture::close_scope",
+    "purrdf_gts::test_crate::language_tag_gate::LiteralCapture::quad",
+    "purrdf_gts::test_crate::language_tag_gate::LiteralCapture::reifier",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_gts::event_stream::GtsEventSink"
+reason = "Required RdfEventSink methods of four different test and example sink types, each answering its own no-op Continue; the trait has no default for them, so every sink type must spell its own."
+
+[[distinct]]
+members = [
+    "purrdf_gts::example_crate::streaming_sink_bench::CountingEventSink::open_scope",
+    "purrdf_gts::test_crate::event_bridge::IndexSink::open_scope",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_gts::event_stream::GtsEventSink"
+reason = "Required RdfEventSink::open_scope of two different sink types that both stay in the default scope; the trait has no default for it."
+
+[[distinct]]
+members = [
+    "purrdf_iri::test_crate::property::extension",
+    "purrdf_iri::test_crate::property::private_use",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_iri::test_crate::property::private_use"
+reason = "Two RFC 5646 productions (extension: a non-x singleton and 2-8 character subtags; privateuse: the x marker and 1-8 character subtags) generated by the same prefix-plus-subtags shape; the regexes are the grammar and differ."
+
+[[distinct]]
+members = [
+    "purrdf_core::bench_crate::pack_index_compare::pack_index::FoqIndexes::predicate_count",
+    "purrdf_core::bench_crate::pack_index_compare::pack_index::WaveletIndexes::predicate_count",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_core::bench_crate::pack_index_compare::pack_index::WaveletIndexes"
+reason = "The two arms of the index-encoding comparison: each finds the predicate's positions in its own encoding (posting lists vs a wavelet matrix), and keeping them as separate methods lets each arm of the benchmark measure only its own index with no shared dispatch."
+
+[[distinct]]
+members = [
+    "purrdf_testkit::test_crate::prop::BuggyStack::init",
+    "purrdf_testkit::test_crate::prop::GoodStack::init",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_testkit::test_crate::prop::GoodStack"
+reason = "Each system under test constructs itself from the model state as SystemUnderTest requires; the property test exists to run a defective and a correct implementation side by side, so they are two types by design."
+
+[[distinct]]
+members = [
+    "purrdf_alloc_probe::widen_u64",
+    "purrdf_core::bench_crate::purremb::fixture::usize_to_u64",
+]
+kind = "shim"
+criterion = "layering"
+anchor = "purrdf_alloc_probe::widen_u64"
+reason = "Both spell the std saturating conversion u64::try_from(n).unwrap_or(u64::MAX): the probe's is private to its allocation ledger, the bench's converts counts to throughput; a shared home would mean publishing a one-expression std idiom from the allocator probe."
+
+[[distinct]]
+members = [
+    "purrdf_core::ir::composite::owned_value",
+    "purrdf_core::test_crate::pack_dataset_view::values::to_value",
+]
+kind = "shim"
+criterion = "layering"
+anchor = "purrdf_core::ir::composite::owned_value"
+reason = "Both forward to the one implementation, DatasetView::term_value, with the same expect; owned_value is crate-private and unreachable from integration tests, so the tests' support module forwards to the public trait method itself."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::test_crate::blank_focus_relation_prebinding::bodies",
+    "purrdf_sparql_eval::bench_crate::regex_eval::queries",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_eval::bench_crate::regex_eval::queries"
+reason = "Two unrelated tables of three (name, query text) pairs: the SHACL test's three pushdown-unreachable positions and the bench's three measured regex shapes. They share only the array-of-format! shape; the queries are the data each measures."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::test_crate::gts_codec_hygiene::render",
+    "purrdf_shapes::report::annotations_sort_key",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_shapes::report::annotations_sort_key"
+reason = "The shared shape is the map-format-join idiom only: one renders a hygiene test's violation list as indented markdown lines, the other builds a SHACL result's annotation sort key with record separators. Different formats, different jobs."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_algebra::test_crate::ast_snapshot::Form::label",
+    "purrdf_sparql_eval::protocol::OperationKind::as_str",
+]
+kind = "body"
+criterion = "layering"
+anchor = "purrdf_sparql_eval::protocol::OperationKind::as_str"
+reason = "The AST snapshot test labels each golden entry by the grammar it was read with; the protocol's operation kind lives in purrdf-sparql-eval, above purrdf-sparql-algebra, which its tests cannot depend on. They share the two words SPARQL itself names the forms with."
+
+[[distinct]]
+members = [
+    "purrdf_retrieval::bench_crate::on_demand_read::Producer::arity",
+    "purrdf_retrieval::test_crate::on_demand_receipt::IndexedProducer::arity",
+    "purrdf_retrieval::test_crate::seed_whitespace::Silent::arity",
+    "purrdf_shapes::test_crate::blank_focus_relation_prebinding::SelfRelation::arity",
+    "purrdf_shapes::test_crate::conformance_memo::AskCountingRelation::arity",
+    "purrdf_shapes::test_crate::exists_relation_prebinding::Approved::arity",
+    "purrdf_shapes::test_crate::product_refusal::EmptyRelation::arity",
+    "purrdf_shapes::test_crate::relation_incompleteness::AttestingRelation::arity",
+    "purrdf_sparql_conformance::mode_restricted::BoundSubjectLookup::arity",
+    "purrdf_sparql_conformance::test_crate::governor_corpus::ScriptedRelation::arity",
+    "purrdf_sparql_eval::fixture::OneRowRelation::arity",
+    "purrdf_sparql_eval::bench_crate::relation_attestation_alloc::IndexedRelation::arity",
+    "purrdf_sparql_eval::test_crate::call_cursor::Ranked::arity",
+    "purrdf_sparql_eval::test_crate::correlated_call_arguments::Table::arity",
+    "purrdf_sparql_eval::test_crate::prepared_parameters::Related::arity",
+    "purrdf_sparql_eval::test_crate::prepared_parameters::Owns::arity",
+    "purrdf_sparql_eval::test_crate::property_function_e2e::DeclaredHugeRelation::arity",
+    "purrdf_sparql_eval::test_crate::property_function_value_sources::Expand::arity",
+    "purrdf_sparql_eval::test_crate::property_function_value_sources::Pairs::arity",
+    "purrdf_sparql_eval::test_crate::ranked_retrieval_fingerprint::FixtureRelation::arity",
+    "purrdf_sparql_eval::test_crate::relation_witness::AttestingRelation::arity",
+    "purrdf_sparql_eval::test_crate::request_substitution_feasibility::Table::arity",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_sparql_eval::PropertyFunction::arity"
+reason = "PropertyFunction::arity is a required method with no default: every relation type declares its own positional arity. These are twenty-two different relation types (test and bench mocks, the conformance harness's bound-subject lookup, the one-row fixture) that each happen to take one subject and one object argument."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::shacl_corpora::CorpusRelation::arity",
+    "purrdf_sparql_eval::test_crate::prepared_admission::SubjectBoundRelation::arity",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_sparql_eval::PropertyFunction::arity"
+reason = "The required PropertyFunction::arity of two different relation types (the SHACL corpus relation and an admission-test mock), each declaring its own one-to-one arity; spelt through fully qualified paths, so they group apart from the other one-to-one relations."
+
+[[distinct]]
+members = [
+    "purrdf_retrieval::test_crate::exclusion_lookup::DeclaredRelation::open",
+    "purrdf_retrieval::test_crate::planner_golden::MockProducer::open",
+    "purrdf_shapes::test_crate::product_refusal::EmptyRelation::open",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_sparql_eval::PropertyFunction::open"
+reason = "PropertyFunction::open is a required method: three different mock relations each open their own file's empty cursor (`EmptyCursor` is a distinct type in each test), because what each test exercises is the declaration, never the rows."
+
+[[distinct]]
+members = [
+    "purrdf::test_crate::blank_label_injectivity::parse",
+    "purrdf_rdf::test_crate::blank_label_injectivity::parse",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_rdf::parse_dataset"
+reason = "Each test parses its N-Triples probe through its own crate's public entry: the facade test proves the query-visible half of the blank-label contract through purrdf's re-export, the codec test the document-level half through purrdf-rdf; the parse itself is the one home both name."
+
+[[distinct]]
+members = [
+    "purrdf_entail::entails::homomorphism::index_key",
+    "purrdf_sparql_eval::test_crate::options_sources::render",
+]
+kind = "shim"
+criterion = "layering"
+anchor = "purrdf_entail::entails::homomorphism::index_key"
+reason = "The entailment checker's homomorphism index key is private to purrdf-entail, which sits above purrdf-sparql-eval; the evaluator's test renders terms for comparison with the same IRI-else-Debug spelling and cannot reach it."
+
+[[distinct]]
+members = [
+    "purrdf_hash::crc32::Crc32::checksum",
+    "purrdf_hash::md5::Md5::digest",
+    "purrdf_hash::sha1::Sha1::digest",
+    "purrdf_hash::sha3::Sha3::digest",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_hash::Digest"
+reason = "Each algorithm's typed one-shot (`new`, `update`, `finalize`) over its own hasher, returning its own output type (a `u32` CRC, a 16-, 20- or 28-to-64-byte array); the object-safe `Digest` trait that serves run-time choice cannot return those types, so the one-shot is spelt per algorithm."
+
+[[distinct]]
+members = [
+    "purrdf_hash::backend::Crc32Backend::checksum",
+    "purrdf_hash::backend::Sha1Backend::digest",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_hash::backend::Sha1Backend::digest"
+reason = "Each backend enum's one-shot pinned to its own kernel path, over its own hasher type and output type (a SHA-1 array, a CRC-32 `u32`); they share only the new-update-finalize idiom every hasher has."
+
+[[distinct]]
+members = [
+    "purrdf_lex::cbor::value::Value::as_array",
+    "purrdf_lex::cbor::value::Value::as_array_mut",
+    "purrdf_lex::json::value::Value::as_array",
+    "purrdf_lex::json::value::Value::as_array_mut",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_lex::cbor::value::Value"
+reason = "The shared and the exclusive borrow of the array variant, on the CBOR data model (RFC 8949) and on the JSON one (RFC 8259) — two enums with different variant sets; Rust spells `&` and `&mut` accessors separately and each enum answers for its own variant."
+
+[[distinct]]
+members = [
+    "purrdf_lex::cbor::value::Value::as_map",
+    "purrdf_lex::cbor::value::Value::as_map_mut",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_lex::cbor::value::Value"
+reason = "The shared and the exclusive borrow of one variant: Rust spells a `&` and a `&mut` accessor separately, and each is the whole of its job."
+
+[[distinct]]
+members = [
+    "purrdf_lex::json::value::Value::as_object",
+    "purrdf_lex::json::value::Value::as_object_mut",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_lex::json::value::Value"
+reason = "The shared and the exclusive borrow of one variant: Rust spells a `&` and a `&mut` accessor separately, and each is the whole of its job."
+
+[[distinct]]
+members = [
+    "purrdf_lex::cbor::value::Value::as_bool",
+    "purrdf_lex::json::value::Value::as_bool",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_lex::cbor::value::Value"
+reason = "The boolean accessor of two data models' own value enums (RFC 8949 CBOR, RFC 8259 JSON), each matching its own variant; the enums differ in every other variant and cannot share a type."
+
+[[distinct]]
+members = [
+    "purrdf_core::lookaside::RdfMetadataValue::as_text",
+    "purrdf_lex::cbor::value::Value::as_text",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_core::lookaside::RdfMetadataValue"
+reason = "The text accessor of two unrelated enums — a CBOR data item and a lookaside metadata value — each matching its own `Text` variant; they share a one-arm match, not a job."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_algebra::algebra::GraphPattern::as_property_function",
+    "purrdf_sparql_algebra::algebra::GraphPattern::as_property_function_mut",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_algebra::algebra::GraphPattern"
+reason = "The shared and the exclusive borrow of one variant: Rust spells a `&` and a `&mut` accessor separately, and each is the whole of its job."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_algebra::algebra::OrderExpression::expression",
+    "purrdf_sparql_algebra::algebra::OrderExpression::expression_mut",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_algebra::algebra::OrderExpression"
+reason = "The shared and the exclusive borrow of the ordered expression: Rust spells a `&` and a `&mut` accessor separately, and each is the whole of its job."
+
+[[distinct]]
+members = [
+    "purrdf_shex::parser::Parser::peek_kw",
+    "purrdf_shapes::srl::syntax::SrlParser::at_kw",
+    "purrdf_sparql_algebra::parser::Parser::peek_kw",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_shex::lexer::tokenize"
+reason = "Each grammar's own parser cursor over its own token enum (ShExC, SRL, SPARQL have different terminals, so each crate runs its own lexer): the case-insensitive keyword test matches that grammar's `Token::Word` and shares only its spelling with the others."
+
+[[distinct]]
+members = [
+    "purrdf_shex::parser::Parser::eat_kw",
+    "purrdf_sparql_algebra::parser::Parser::eat_kw",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_shex::lexer::tokenize"
+reason = "Each grammar's own parser cursor over its own token enum (ShExC and SPARQL have different terminals): consuming a keyword advances that parser's own position over that grammar's tokens."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::native_codecs::text_parse::DocParser::eat",
+    "purrdf_shapes::srl::syntax::SrlParser::eat",
+    "purrdf_sparql_algebra::parser::Parser::eat",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_shex::lexer::tokenize"
+reason = "Each grammar's own parser cursor (Turtle/TriG, SRL, SPARQL) advancing over its own token enum; the grammars' terminals differ, so the token types and the cursors do too, and the three share only the consume-on-match spelling."
+
+[[distinct]]
+members = [
+    "purrdf_geo::wkt::Cursor::eat",
+    "purrdf_jsonschema::ecma::Parser::eat",
+    "purrdf_shex::parser::Parser::eat",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_shex::lexer::tokenize"
+reason = "Three scanners over three alphabets — WKT bytes, ECMA-262 pattern characters, ShExC tokens — each consuming its own unit on a match; nothing but the consume-on-match spelling is shared."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::srl::syntax::SrlParser::peek",
+    "purrdf_shex::parser::Parser::peek",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_shex::lexer::tokenize"
+reason = "Each grammar's own parser cursor (SRL, ShExC) looking at its own token enum; the grammars' terminals differ, so the token types do too."
+
+[[distinct]]
+members = [
+    "purrdf_shex::error::ShexError::locate",
+    "purrdf_sparql_algebra::error::ParseError::locate",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_algebra::error::ParseError::locate"
+reason = "Each error type's public `locate` API over its own byte offset; the line-and-column arithmetic is the one `purrdf_iri::LineIndex` both call, and what remains is each type's own forward to it."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_eval::expr::string_arg_value",
+    "purrdf_sparql_eval::expr::string_arg_value_owned",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_eval::expr::string_arg_value_owned"
+reason = "The by-value twin moves the lexical form and language out of a `TermValue` the caller is about to drop instead of cloning them, which its documentation states saves two `String` clones per evaluated string argument; the borrowed one serves callers that keep the value."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_eval::knn::metric::Kernel::distance_bounded",
+    "purrdf_sparql_eval::knn::metric::Kernel::distance_bounded_reassociated",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_eval::knn::metric::Kernel::distance_bounded_reassociated"
+reason = "Two entry points typed by arithmetic contract: one takes the exact handle, the other the reassociated one, so a caller cannot reach a reassociated fold through the exact door; both forward to the one bounded kernel."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::projections::csvw::model::CsvwTableDirection::from",
+    "purrdf_rdf::projections::csvw::model::CsvwTextDirection::from",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_rdf::projections::csvw::model::CsvwTableDirection"
+reason = "CSVW defines a column's `textDirection` (auto, ltr, rtl, inherit) and a table's `tableDirection` (auto, ltr, rtl) as two properties with different value sets; each enum maps an RDF base direction into its own."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_conformance::owl2::GradedCase::ledgered",
+    "purrdf_sparql_conformance::owl2_rl::GradedCase::ledgered",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_conformance::ledger::LedgeredCase"
+reason = "Each corpus's `GradedCase` adapts its own gap enum (OWL 2 or OWL 2 RL) to the shared `LedgeredCase` trait, where the counting lives once; the adapter is the per-type seam, not a second implementation."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::shapes::ClosedTypeIndex::entries",
+    "purrdf_sparql_eval::witness::RelationWitness::iter",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_eval::witness::RelationWitness::iter"
+reason = "Two unrelated types' ordered iterators over their own maps (closed-by-types properties, relation attestations), each borrowing its value in the form its callers read; they share an iterator-adapter shape, not a job."
+
+[[distinct]]
+members = [
+    "purrdf_native::py_store::query::PyQueryQuads::serialize",
+    "purrdf_native::py_store::query::PyQueryTriples::serialize",
+]
+kind = "body"
+criterion = "layering"
+anchor = "purrdf_native::py_store::query::PyQueryQuads"
+reason = "PyO3 exposes a method only through each class's own `#[pymethods]` block, so the triple and the quad result classes each declare `serialize`; both forward to the one `serialize_bytes`."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::projections::research_object::model::ResearchValue::as_iri",
+    "purrdf_rdf::projections::term::ProjectionTerm::as_iri",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_rdf::projections::term::ProjectionTerm::as_iri"
+reason = "The IRI accessor of two different enums — a projection term and a research-object value — each matching its own `Iri` variant; they share a one-arm match, not a job."
+
+[[distinct]]
+members = [
+    "purrdf_core::bytes::put_u32_le",
+    "purrdf_core::bytes::put_u64_le",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_core::bytes::put_u64_le"
+reason = "The typed public entry points of the one bounded little-endian write (`put_le`): each fixes the width its callers write, and both forward to the same private kernel."
+
+[[distinct]]
+members = [
+    "purrdf_entail::Regime::name",
+    "purrdf_entail::Regime::token",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_entail::Regime::token"
+reason = "Two spellings of the regime set: `name` is the last segment of the SPARQL entailment-regime IRI (`OWL-RL`), which `from_iri` reads back, and `token` is the lowercase host spelling (`owl-rl`) every CLI and binding accepts; the same match over different string tables."
+
 [[job]]
 id = "seeded-permutation"
 summary = "A deterministic, unbiased Fisher-Yates permutation of a slice from a seed, for order-independence tests"
@@ -2008,3 +2578,24 @@ enforced = true
 constants = []
 fingerprints = ["rule:reifier-quad-new"]
 names = []
+
+[[job]]
+id = "term-pattern-variables"
+summary = "The variables a SPARQL term or triple pattern mentions, quoted triple terms included, over one work-list walk every analysis shares"
+home = "purrdf_sparql_algebra::TermPattern::for_each_variable"
+entry_points = [
+    "purrdf_sparql_algebra::TermPattern::collect_variables",
+    "purrdf_sparql_algebra::TermPattern::collect_variable_names",
+    "purrdf_sparql_algebra::TriplePattern::collect_variable_names",
+]
+spec = "SPARQL 1.2 section 18.2 (term and triple patterns, RDF 1.2 triple terms in subject and object position): every variable of a pattern, at every triple-term depth, without recursion"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(collect_)?(term|triple)_pattern_var(s|iable|iables)$']

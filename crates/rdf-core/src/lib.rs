@@ -153,7 +153,7 @@ pub mod xsd_regex;
 
 pub use backend::{
     RdfParseRequest, RdfParserBackend, RdfSerializeRequest, RdfSerializer, SerializeGraph,
-    SparqlEngine, SparqlRequest, SparqlResult, TermFactory,
+    SolutionRow, SparqlEngine, SparqlRequest, SparqlResult, TermFactory,
 };
 pub use bundle::{
     ArtifactIndex, ArtifactRecord, BundleError, RdfBundle, SegmentUnitMap, UnitCatalog,
@@ -299,7 +299,7 @@ pub use turtle_render::render as render_canonical_turtle;
 pub mod prelude {
     pub use crate::backend::{
         RdfParseRequest, RdfParserBackend, RdfSerializeRequest, RdfSerializer, SerializeGraph,
-        SparqlEngine, SparqlRequest, SparqlResult, TermFactory,
+        SolutionRow, SparqlEngine, SparqlRequest, SparqlResult, TermFactory,
     };
     pub use crate::dataset_view::{DatasetView, GraphMatch, TermLookupError};
     pub use crate::diagnostic::{RdfDiagnostic, RdfLocation, RdfSeverity};
@@ -324,3 +324,5 @@ pub use ir::{
 pub mod purremb_fixture;
 #[doc(hidden)]
 pub mod term_fixture;
+#[doc(hidden)]
+pub mod view_fixture;

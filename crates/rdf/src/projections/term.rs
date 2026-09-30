@@ -68,6 +68,14 @@ impl ProjectionTerm {
         }
     }
 
+    /// The IRI this term is, if it is one.
+    pub(crate) fn as_iri(&self) -> Option<&str> {
+        let Self::Iri { value } = self else {
+            return None;
+        };
+        Some(value)
+    }
+
     /// Whether this term is an RDF 1.2 triple term.
     pub(crate) const fn is_triple(&self) -> bool {
         matches!(self, Self::Triple { .. })

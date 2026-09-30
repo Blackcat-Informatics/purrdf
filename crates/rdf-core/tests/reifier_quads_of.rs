@@ -22,54 +22,16 @@
 //! the frozen sort order nor the id order, so the runs are contiguous because of the
 //! freeze sort, not by accident of push order.
 
-use purrdf_core::TermBox;
+#[path = "support/values.rs"]
+mod values;
+use purrdf_core::term_fixture::iri;
 use std::sync::Arc;
+use values::to_value;
 
 use purrdf_core::{
     DatasetView, InMemoryPageProvider, PackBuilder, PackView, PagedDataset, PagedQueryLimits,
-    QuadIds, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue,
+    QuadIds, RdfDataset, RdfDatasetBuilder, TermId, TermValue,
 };
-
-/// An `example.org` IRI value.
-fn iri(name: &str) -> TermValue {
-    TermValue::iri(format!("http://example.org/{name}"))
-}
-
-/// Resolve a view id to its dataset-INDEPENDENT [`TermValue`], recursing through a
-/// literal's datatype and a triple term's components. Generic over any
-/// [`DatasetView`] so the same routine reads every backend under test (they mint
-/// unrelated id spaces, so raw ids are not comparable across them).
-fn to_value<V: DatasetView>(v: &V, id: V::Id) -> TermValue {
-    match v.resolve(id) {
-        TermRef::Iri(s) => TermValue::iri(s),
-        TermRef::Blank { label, scope } => TermValue::Blank {
-            label: label.to_owned(),
-            scope,
-        },
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let datatype = match v.resolve(datatype) {
-                TermRef::Iri(s) => s.to_owned(),
-                other => panic!("literal datatype must resolve to an IRI, got {other:?}"),
-            };
-            TermValue::Literal {
-                lexical_form: lexical.to_owned(),
-                datatype,
-                language: language.map(str::to_owned),
-                direction,
-            }
-        }
-        TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: TermBox::new(to_value(v, s)),
-            p: TermBox::new(to_value(v, p)),
-            o: TermBox::new(to_value(v, o)),
-        },
-    }
-}
 
 /// One virtual reifier quad rendered as dataset-independent values, so rows from two
 /// different id spaces can be compared.

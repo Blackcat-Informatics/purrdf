@@ -13,12 +13,14 @@
 //! every `sh:` / `shnex:` term used here is defined by the specification named in
 //! the test's doc comment.
 
+#[path = "support/turtle.rs"]
+mod turtle;
+
 use std::sync::Arc;
 
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine::{parse_shapes, validate_graphs};
-use purrdf_shapes::expression::{NodeExpr, RecursionGuard, eval_node_expr};
-use purrdf_shapes::shapes::Constraint;
+use purrdf_shapes::expression::{RecursionGuard, eval_node_expr};
 use purrdf_shapes::term::Term;
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 
@@ -32,32 +34,11 @@ const PREFIXES: &str = r"
 @prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
 ";
 
-/// Parse `shapes_ttl` and return the single `sh:expression` node expression it
-/// declares — the production parse path, not a test-only constructor.
-fn expression_of(shapes_ttl: &str) -> NodeExpr {
-    let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).expect("shapes parse");
-    let mut found: Vec<NodeExpr> = shapes
-        .node_shapes
-        .iter()
-        .flat_map(|shape| &shape.constraints)
-        .filter_map(|c| match c {
-            Constraint::Expression { expr, .. } => Some(expr.clone()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        found.len(),
-        1,
-        "the fixture must declare exactly one sh:expression"
-    );
-    found.remove(0)
-}
-
 /// Evaluate the fixture's `sh:expression` over `data_ttl` from focus node
 /// `ex:<focus>`, returning the output nodes in the order the evaluator produced
 /// them (rendered canonically so ordering assertions are exact).
 fn outputs(data_ttl: &str, shapes_ttl: &str, focus: &str) -> Vec<String> {
-    let expr = expression_of(shapes_ttl);
+    let expr = turtle::expression_of(PREFIXES, shapes_ttl);
     let data: Arc<_> =
         parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parse");
     let shapes_ds: Arc<_> = parse_turtle_to_dataset(&format!("{PREFIXES}{shapes_ttl}"), None)
@@ -89,7 +70,7 @@ fn ex(local: &str) -> String {
 #[test]
 fn triple_term_expression_yields_a_triple_term() {
     let shapes = "ex:S a sh:NodeShape ; sh:expression <<( ex:s ex:p ex:o )>> .";
-    let expr = expression_of(shapes);
+    let expr = turtle::expression_of(PREFIXES, shapes);
     let data: Arc<_> = parse_turtle_to_dataset(PREFIXES, None).expect("data parse");
     let store = ShaclData::new(Arc::clone(&data), Arc::clone(&data), None);
     let focus = Term::NamedNode(purrdf_shapes::term::NamedNode::new_unchecked(
@@ -116,7 +97,8 @@ fn triple_term_expression_yields_a_triple_term() {
 /// an IRI or a blank reifier.
 #[test]
 fn a_triple_term_flows_through_the_expression_language_as_a_value() {
-    let expr = expression_of(
+    let expr = turtle::expression_of(
+        PREFIXES,
         "ex:S a sh:NodeShape ;
              sh:expression [ shnex:concat ( [ shnex:pathValues ex:says ] ex:tail ) ] .",
     );
@@ -273,7 +255,8 @@ fn path_values_walks_from_a_computed_focus() {
 /// §4.1.4: "If `N` has more than 1 member, an evaluation failure is reported."
 #[test]
 fn path_values_multi_valued_focus_is_a_failure() {
-    let expr = expression_of(
+    let expr = turtle::expression_of(
+        PREFIXES,
         "ex:S a sh:NodeShape ;
              sh:expression [ shnex:pathValues ex:q ; shnex:focusNode [ shnex:pathValues ex:p ] ] .",
     );
@@ -1201,7 +1184,8 @@ fn conforms_to_shape_accepts_a_computed_shape_argument() {
 /// since the IRI came out of the data.
 #[test]
 fn a_computed_shape_argument_that_names_no_shape_is_an_error() {
-    let expr = expression_of(
+    let expr = turtle::expression_of(
+        PREFIXES,
         "ex:Real a sh:NodeShape ; sh:nodeKind sh:IRI .
          ex:S a sh:NodeShape ;
              sh:expression [ shnex:conformsToShape (
@@ -1242,7 +1226,8 @@ fn conforms_to_shape_still_refuses_a_named_shape_that_does_not_exist() {
 /// check against, and one producing none has no shape at all.
 #[test]
 fn a_computed_shape_argument_must_produce_exactly_one_iri() {
-    let expr = expression_of(
+    let expr = turtle::expression_of(
+        PREFIXES,
         "ex:Real a sh:NodeShape ; sh:nodeKind sh:IRI .
          ex:S a sh:NodeShape ;
              sh:expression [ shnex:conformsToShape (
@@ -1273,7 +1258,7 @@ fn a_computed_shape_argument_must_produce_exactly_one_iri() {
 /// As [`outputs`], but returning the evaluation failure instead of asserting its
 /// absence.
 fn try_outputs(data_ttl: &str, shapes_ttl: &str, focus: &str) -> Result<Vec<String>, String> {
-    let expr = expression_of(shapes_ttl);
+    let expr = turtle::expression_of(PREFIXES, shapes_ttl);
     let data: Arc<_> =
         parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parse");
     let shapes_ds: Arc<_> = parse_turtle_to_dataset(&format!("{PREFIXES}{shapes_ttl}"), None)

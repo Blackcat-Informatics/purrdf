@@ -22,13 +22,16 @@ use std::sync::Arc;
 use purrdf_core::ContentIdScheme;
 use purrdf_rdf::gts_compose::SnapshotBuilder;
 use purrdf_rdf::{
-    BlankScope, CanonError, CanonHash, CompositeDatasetView, CompositeSource, RESERVED_NAMESPACE,
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection, TermId, TermPosition,
-    ViewCanonError, ViewLimits, blank_count_view, canonical_flat_nquads, canonicalize_with,
-    check_admissible_flat_view, flat_dataset_from_quads, flat_rdf_quads_from_dataset,
-    parse_dataset, try_canonicalize_flat_graph_view, try_canonicalize_flat_view,
-    try_canonicalize_view,
+    BlankScope, CanonError, CanonHash, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder,
+    RdfLiteral, RdfTextDirection, TermId, TermPosition, ViewCanonError, blank_count_view,
+    canonical_flat_nquads, canonicalize_with, check_admissible_flat_view, flat_dataset_from_quads,
+    flat_rdf_quads_from_dataset, parse_dataset, try_canonicalize_flat_graph_view,
+    try_canonicalize_flat_view, try_canonicalize_view,
 };
+
+#[path = "support/blank_identity.rs"]
+mod blank_identity;
+use blank_identity::composite_over;
 
 /// The caller-supplied derivation-predicate IRI (no fabricated vocabulary: this is
 /// configuration, spelled under `example.org` per the test-fixture rule).
@@ -127,16 +130,6 @@ fn content_addressing_does_not_perturb_serialized_bytes() {
         bytes_b.as_bytes(),
         "content-addressing changed the serialized bytes:\n--- plain ---\n{bytes_a}\n--- addressed ---\n{bytes_b}"
     );
-}
-
-/// A single-source composite view over `dataset`, in an explicitly SHARED blank
-/// identity space so the view reports the source's own `(label, scope)` pairs.
-fn composite_over(dataset: &Arc<RdfDataset>) -> CompositeDatasetView {
-    CompositeDatasetView::from_shared_sources(
-        vec![CompositeSource::new(Arc::clone(dataset))],
-        ViewLimits::default(),
-    )
-    .expect("a single retained source composes")
 }
 
 /// LITERAL NORMALIZATION IS A BYTE TRAP, and the two GTS ingestion surfaces must

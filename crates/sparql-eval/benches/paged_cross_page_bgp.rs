@@ -33,13 +33,18 @@
 //! Report-only, `cargo bench -p purrdf-sparql-eval --bench paged_cross_page_bgp` (the
 //! `make bench` lane) — excluded from `make check`.
 
+#[path = "../tests/support/mod.rs"]
+mod support;
+
+use purrdf_core::term_fixture::{Triple, build_page, intern_value, split_pages};
+use support::iri;
+
 use std::sync::Arc;
 
 use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
 use purrdf_core::{
-    DatasetView, InMemoryPageProvider, PagedDataset, RdfDataset, RdfDatasetBuilder, RdfLiteral,
-    TermId, TermValue,
+    DatasetView, InMemoryPageProvider, PagedDataset, RdfDataset, RdfDatasetBuilder, TermValue,
 };
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 
@@ -54,35 +59,6 @@ const PAGE_COUNT: usize = 6;
 
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 const EX: &str = "http://example.org/";
-
-type Triple = (TermValue, TermValue, TermValue);
-
-/// An `example.org` IRI value.
-fn iri(name: &str) -> TermValue {
-    TermValue::iri(format!("{EX}{name}"))
-}
-
-/// Intern one dataset-independent value into a builder (no triple terms needed here,
-/// so this is the non-recursive subset of the sibling paged-backend test helper).
-fn intern_value(b: &mut RdfDatasetBuilder, v: &TermValue) -> TermId {
-    match v {
-        TermValue::Iri(s) => b.intern_iri(s),
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => b.intern_literal(RdfLiteral {
-            lexical_form: lexical_form.clone(),
-            datatype: Some(datatype.clone()),
-            language: language.clone(),
-            direction: *direction,
-        }),
-        TermValue::Blank { .. } | TermValue::Triple { .. } => {
-            unreachable!("bench corpus contains only IRIs and literals")
-        }
-    }
-}
 
 /// Build the corpus: for each entity `i`, `personI knows person(i+1)`, `personI name
 /// "NameI"`, `personI age xsd:integer(18 + i % 60)` — a ring of `knows` edges plus a
@@ -103,30 +79,6 @@ fn corpus() -> Vec<Triple> {
         triples.push((s, iri("age"), age));
     }
     triples
-}
-
-/// Freeze one page (or the single reference dataset) from `(s, p, o)` triples in the
-/// default graph.
-fn build_page(triples: &[Triple]) -> Arc<RdfDataset> {
-    let mut b = RdfDatasetBuilder::new();
-    for (s, p, o) in triples {
-        let s = intern_value(&mut b, s);
-        let p = intern_value(&mut b, p);
-        let o = intern_value(&mut b, o);
-        b.push_quad(s, p, o, None);
-    }
-    b.freeze().expect("page freeze")
-}
-
-/// Round-robin split `triples` across `page_count` quad-disjoint pages, so a single
-/// entity's three triples (pushed consecutively by [`corpus`]) land on DIFFERENT
-/// pages — the cross-page join condition this bench exists to measure.
-fn split_pages(triples: &[Triple], page_count: usize) -> Vec<Arc<RdfDataset>> {
-    let mut buckets: Vec<Vec<Triple>> = vec![Vec::new(); page_count];
-    for (i, t) in triples.iter().enumerate() {
-        buckets[i % page_count].push(t.clone());
-    }
-    buckets.iter().map(|b| build_page(b)).collect()
 }
 
 /// The representative 3-pattern BGP join + numeric `FILTER`: entities known by some

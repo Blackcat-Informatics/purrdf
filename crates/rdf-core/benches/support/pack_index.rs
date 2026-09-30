@@ -206,6 +206,8 @@ impl PostingIndex {
     }
 }
 
+/// The posting-list encoding of the predicate and object columns: one arm of the index
+/// comparison.
 #[derive(Debug, Clone)]
 pub(crate) struct FoqIndexes {
     predicates: PostingIndex,
@@ -450,6 +452,12 @@ impl WaveletMatrix {
     }
 }
 
+/// The wavelet-matrix encoding of the same columns: the other arm of the comparison.
+///
+/// Its `predicate_count` sums the same adjacency ranges as [`FoqIndexes`]' but finds the
+/// predicate's positions in its own encoding. The two stay separate methods on separate
+/// types so each arm of the benchmark measures only its own index, with no shared dispatch
+/// in between.
 #[derive(Debug, Clone)]
 pub(crate) struct WaveletIndexes {
     predicates: WaveletMatrix,

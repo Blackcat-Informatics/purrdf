@@ -7,10 +7,10 @@
 
 use purrdf_core::FastMap;
 
-use purrdf_ed25519::SigningKey;
 use purrdf_gts::compact::{DictPlan, DictStrategy, detached_signature_proof};
+use purrdf_gts::fixture::{fixed_key, object_literal};
 use purrdf_gts::mmr;
-use purrdf_gts::model::{Term, TermKind};
+use purrdf_gts::model::Term;
 use purrdf_gts::reader::read;
 use purrdf_gts::stream;
 use purrdf_gts::wire;
@@ -24,48 +24,6 @@ use purrdf_rdf::gts_certify::{
 
 const TIMESTAMP: &str = "2026-01-01T00:00:00Z";
 
-/// A fixed, deterministic Ed25519 signing key (RFC 8032 signing is
-/// deterministic per key + message, so tests stay byte-reproducible).
-fn fixed_key(byte: u8) -> SigningKey {
-    SigningKey::from_bytes(&[byte; 32])
-}
-
-fn iri_term(value: String) -> Term {
-    Term {
-        kind: TermKind::Iri,
-        value: Some(value),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
-fn literal_term(value: String) -> Term {
-    Term {
-        kind: TermKind::Literal,
-        value: Some(value),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
-fn blank_term(label: &str) -> Term {
-    Term {
-        kind: TermKind::Bnode,
-        value: Some(label.to_string()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
 /// A source GTS file carrying real RDF content — `n` `example.org` claims
 /// (`<s{i}> <p> "claim {i}"`), authored as one signed terms frame and one
 /// signed quads frame — so every frame a streamable compaction turns into
@@ -77,19 +35,19 @@ fn source_with_content(byte: u8, kid: &str, n: u32, mutate: Option<u32>) -> Vec<
     let mut w = Writer::new("purrdf.gts");
     w.sign_with(fixed_key(byte), kid);
 
-    let mut terms = vec![iri_term("https://example.org/p".to_string())];
+    let mut terms = vec![Term::iri("https://example.org/p".to_string())];
     let p = 0usize;
     let mut quads = Vec::new();
     for i in 0..n {
         let s = terms.len();
-        terms.push(iri_term(format!("https://example.org/s{i}")));
+        terms.push(Term::iri(format!("https://example.org/s{i}")));
         let o = terms.len();
         let text = if mutate == Some(i) {
             format!("MUTATED claim {i}")
         } else {
             format!("claim {i}")
         };
-        terms.push(literal_term(text));
+        terms.push(Term::literal(text, None));
         quads.push((s, p, o, None));
     }
     w.add_terms(&terms);
@@ -103,14 +61,14 @@ fn source_with_content_and_blobs(byte: u8, kid: &str, quad_n: u32, blob_n: u32) 
     let mut w = Writer::new("purrdf.gts");
     w.sign_with(fixed_key(byte), kid);
 
-    let mut terms = vec![iri_term("https://example.org/p".to_string())];
+    let mut terms = vec![Term::iri("https://example.org/p".to_string())];
     let p = 0usize;
     let mut quads = Vec::new();
     for i in 0..quad_n {
         let s = terms.len();
-        terms.push(iri_term(format!("https://example.org/s{i}")));
+        terms.push(Term::iri(format!("https://example.org/s{i}")));
         let o = terms.len();
-        terms.push(literal_term(format!("claim {i}")));
+        terms.push(Term::literal(format!("claim {i}"), None));
         quads.push((s, p, o, None));
     }
     w.add_terms(&terms);
@@ -158,12 +116,12 @@ fn poison_symmetric_source(byte: u8, kid: &str, n: usize) -> Vec<u8> {
     let mut w = Writer::new("purrdf.gts");
     w.sign_with(fixed_key(byte), kid);
 
-    let mut terms = vec![iri_term("https://example.org/p".to_string())];
+    let mut terms = vec![Term::iri("https://example.org/p".to_string())];
     let p = 0usize;
     let mut blanks = Vec::with_capacity(n);
     for i in 0..n {
         blanks.push(terms.len());
-        terms.push(blank_term(&format!("e{i}")));
+        terms.push(Term::blank(format!("e{i}")));
     }
     let mut quads = Vec::with_capacity(n * n);
     for &a in &blanks {
@@ -193,16 +151,16 @@ fn large_non_symmetric_source(byte: u8, kid: &str, pairs: u32) -> Vec<u8> {
     let mut w = Writer::new("purrdf.gts");
     w.sign_with(fixed_key(byte), kid);
 
-    let mut terms = vec![iri_term("https://example.org/p".to_string())];
+    let mut terms = vec![Term::iri("https://example.org/p".to_string())];
     let p = 0usize;
     let mut quads = Vec::new();
     for i in 0..pairs {
         let anchor = terms.len();
-        terms.push(iri_term(format!("https://example.org/anchor{i}")));
+        terms.push(Term::iri(format!("https://example.org/anchor{i}")));
         let x = terms.len();
-        terms.push(blank_term(&format!("x{i}")));
+        terms.push(Term::blank(format!("x{i}")));
         let y = terms.len();
-        terms.push(blank_term(&format!("y{i}")));
+        terms.push(Term::blank(format!("y{i}")));
         quads.push((x, p, y, None));
         quads.push((y, p, x, None));
         quads.push((x, p, anchor, None));
@@ -408,7 +366,7 @@ fn accretive_tail_after_pack_chains_cleanly_across_the_seam() {
         .clone();
     let pre_terms = pack_graph.terms.len();
 
-    let tail_term = iri_term("https://example.org/tail-node".to_string());
+    let tail_term = Term::iri("https://example.org/tail-node".to_string());
     let composite = append_tail_terms_frame(&pack, &pack_head, &tail_term);
     assert_ne!(
         composite, pack,
@@ -471,7 +429,7 @@ fn torn_tail_prev_breaks_seam_chain_ok_without_erroring() {
     torn_prev[last] ^= 0xFF;
     assert_ne!(torn_prev, pack_head);
 
-    let tail_term = iri_term("https://example.org/tail-node".to_string());
+    let tail_term = Term::iri("https://example.org/tail-node".to_string());
     let composite = append_tail_terms_frame(&pack, &torn_prev, &tail_term);
 
     let composite_graph = read(&composite, true, None);
@@ -608,7 +566,7 @@ fn source_with_rotated_authors(
     n_b: u32,
 ) -> Vec<u8> {
     let mut w = Writer::new("purrdf.gts");
-    w.add_terms(&[iri_term("https://example.org/p".to_string())]);
+    w.add_terms(&[Term::iri("https://example.org/p".to_string())]);
     let p = 0usize;
     let mut next_id = 1usize;
 
@@ -617,10 +575,10 @@ fn source_with_rotated_authors(
     let mut quads_a = Vec::new();
     for i in 0..n_a {
         let s = next_id;
-        terms_a.push(iri_term(format!("https://example.org/a{i}")));
+        terms_a.push(Term::iri(format!("https://example.org/a{i}")));
         next_id += 1;
         let o = next_id;
-        terms_a.push(literal_term(format!("claim-a {i}")));
+        terms_a.push(Term::literal(format!("claim-a {i}"), None));
         next_id += 1;
         quads_a.push((s, p, o, None));
     }
@@ -632,10 +590,10 @@ fn source_with_rotated_authors(
     let mut quads_b = Vec::new();
     for i in 0..n_b {
         let s = next_id;
-        terms_b.push(iri_term(format!("https://example.org/b{i}")));
+        terms_b.push(Term::iri(format!("https://example.org/b{i}")));
         next_id += 1;
         let o = next_id;
-        terms_b.push(literal_term(format!("claim-b {i}")));
+        terms_b.push(Term::literal(format!("claim-b {i}"), None));
         next_id += 1;
         quads_b.push((s, p, o, None));
     }
@@ -643,18 +601,6 @@ fn source_with_rotated_authors(
     w.add_quads(&quads_b);
 
     w.into_bytes()
-}
-
-/// The literal value of the object of the first quad using `predicate_iri`.
-fn object_literal(g: &purrdf_gts::model::Graph, predicate_iri: &str) -> Option<String> {
-    let p = g
-        .terms
-        .iter()
-        .position(|t| t.value.as_deref() == Some(predicate_iri))?;
-    g.quads
-        .iter()
-        .find(|&&(_, pred, _, _)| pred == p)
-        .and_then(|&(_, _, o, _)| g.terms[o].value.clone())
 }
 
 #[test]
@@ -830,12 +776,12 @@ fn source_with_term_suppression(byte: u8, kid: &str, suppress: bool) -> Vec<u8> 
     let mut w = Writer::new("purrdf.gts");
     w.sign_with(fixed_key(byte), kid);
     w.add_terms(&[
-        iri_term("https://example.org/s".to_string()), // 0
-        iri_term("https://example.org/p".to_string()), // 1
-        iri_term("https://example.org/secret-o".to_string()), // 2
-        iri_term("https://example.org/s2".to_string()), // 3
-        iri_term("https://example.org/p2".to_string()), // 4
-        literal_term("public claim".to_string()),      // 5
+        Term::iri("https://example.org/s".to_string()), // 0
+        Term::iri("https://example.org/p".to_string()), // 1
+        Term::iri("https://example.org/secret-o".to_string()), // 2
+        Term::iri("https://example.org/s2".to_string()), // 3
+        Term::iri("https://example.org/p2".to_string()), // 4
+        Term::literal("public claim".to_string(), None), // 5
     ]);
     w.add_quads(&[(0, 1, 2, None), (3, 4, 5, None)]);
     if suppress {
@@ -854,12 +800,12 @@ fn source_with_quad_suppression(byte: u8, kid: &str, suppress: bool) -> Vec<u8> 
     let mut w = Writer::new("purrdf.gts");
     w.sign_with(fixed_key(byte), kid);
     w.add_terms(&[
-        iri_term("https://example.org/s".to_string()), // 0
-        iri_term("https://example.org/p".to_string()), // 1
-        iri_term("https://example.org/secret-o".to_string()), // 2
-        iri_term("https://example.org/s2".to_string()), // 3
-        iri_term("https://example.org/p2".to_string()), // 4
-        literal_term("public claim".to_string()),      // 5
+        Term::iri("https://example.org/s".to_string()), // 0
+        Term::iri("https://example.org/p".to_string()), // 1
+        Term::iri("https://example.org/secret-o".to_string()), // 2
+        Term::iri("https://example.org/s2".to_string()), // 3
+        Term::iri("https://example.org/p2".to_string()), // 4
+        Term::literal("public claim".to_string(), None), // 5
     ]);
     w.add_quads(&[(0, 1, 2, None), (3, 4, 5, None)]);
     if suppress {
@@ -1102,11 +1048,11 @@ fn source_with_manifestation_typed_content(byte: u8, kid: &str, mutate: bool) ->
     w.sign_with(fixed_key(byte), kid);
     let name = if mutate { "Mallory" } else { "Alice" };
     w.add_terms(&[
-        blank_term("contentNode"),                        // 0
-        iri_term(RDF_TYPE.to_string()),                   // 1
-        iri_term(stream::MANIFESTATION.to_string()),      // 2
-        iri_term("https://example.org/name".to_string()), // 3
-        literal_term(name.to_string()),                   // 4
+        Term::blank("contentNode"),                        // 0
+        Term::iri(RDF_TYPE.to_string()),                   // 1
+        Term::iri(stream::MANIFESTATION.to_string()),      // 2
+        Term::iri("https://example.org/name".to_string()), // 3
+        Term::literal(name.to_string(), None),             // 4
     ]);
     w.add_quads(&[
         (0, 1, 2, None), // _:contentNode rdf:type stream:Manifestation (CONTENT, not provenance)

@@ -24,10 +24,14 @@ use std::sync::Arc;
 
 use purrdf_rdf::gts_compose::{GtsIngestError, SnapshotBuilder};
 use purrdf_rdf::{
-    BlankScope, CompositeDatasetView, CompositeSource, RdfDataset, RdfDatasetBuilder,
-    SerializeGraph, TermRef, ViewLimits, canonicalize, parse_dataset, serialize_dataset,
+    BlankScope, RdfDataset, RdfDatasetBuilder, SerializeGraph, canonicalize, parse_dataset,
+    serialize_dataset,
 };
 use purrdf_testkit::prop::prelude::*;
+
+#[path = "support/blank_identity.rs"]
+mod blank_identity;
+use blank_identity::{blank_nodes, composite_over};
 
 const NTRIPLES: &str = "application/n-triples";
 
@@ -56,20 +60,6 @@ fn serialize(dataset: &RdfDataset) -> String {
     let bytes = serialize_dataset(dataset, NTRIPLES, SerializeGraph::Dataset)
         .expect("every dataset serializes");
     String::from_utf8(bytes).expect("native text output is UTF-8")
-}
-
-/// The distinct blank `(label, scope)` pairs a dataset holds, read straight off
-/// the IR.
-fn blank_nodes(dataset: &RdfDataset) -> BTreeSet<(String, u32)> {
-    let mut blanks = BTreeSet::new();
-    for quad in dataset.quads() {
-        for id in [quad.s, quad.o] {
-            if let TermRef::Blank { label, scope } = dataset.resolve(id) {
-                blanks.insert((label.to_owned(), scope.ordinal()));
-            }
-        }
-    }
-    blanks
 }
 
 #[test]
@@ -216,16 +206,6 @@ fn blank_subject(label: &str) -> Arc<RdfDataset> {
     ))
 }
 
-/// A single-source composite view in an explicitly SHARED blank identity space,
-/// so the view reports the source's own `(label, scope)` pairs unchanged.
-fn view_over(dataset: &Arc<RdfDataset>) -> CompositeDatasetView {
-    CompositeDatasetView::from_shared_sources(
-        vec![CompositeSource::new(Arc::clone(dataset))],
-        ViewLimits::default(),
-    )
-    .expect("a single retained source composes")
-}
-
 /// The GTS snapshot's scoped blank encoding `"{scope}-{label}"` is NOT injective
 /// over `(scope, label)`, and the non-injectivity is not cosmetic.
 ///
@@ -240,10 +220,10 @@ fn view_over(dataset: &Arc<RdfDataset>) -> CompositeDatasetView {
 fn the_snapshot_blank_wire_encoding_refuses_a_collision_it_cannot_represent() {
     let mut builder = SnapshotBuilder::new();
     let _ = builder
-        .add_view_scoped(&view_over(&blank_subject("b-c")), None, Some("a"))
+        .add_view_scoped(&composite_over(&blank_subject("b-c")), None, Some("a"))
         .expect("the first key mints its row");
     let err = builder
-        .add_view_scoped(&view_over(&blank_subject("c")), None, Some("a-b"))
+        .add_view_scoped(&composite_over(&blank_subject("c")), None, Some("a-b"))
         .expect_err("the colliding key must be refused, not silently merged");
     match &err {
         GtsIngestError::BlankWireCollision {
@@ -277,7 +257,7 @@ fn neighbouring_scoped_blank_labels_still_ingest_and_stay_distinct() {
     let mut builder = SnapshotBuilder::new();
     for (scope, label) in cases {
         let _ = builder
-            .add_view_scoped(&view_over(&blank_subject(label)), None, scope)
+            .add_view_scoped(&composite_over(&blank_subject(label)), None, scope)
             .unwrap_or_else(|err| panic!("({scope:?}, {label:?}) must ingest: {err}"));
     }
     let rendered = format!("{:?}", builder.snapshot_payload());
@@ -311,7 +291,7 @@ fn two_ingestion_orders_of_scoped_blank_sources_agree_byte_for_byte() {
         for index in order {
             let (dataset, scope) = &sources[index];
             let _ = builder
-                .add_view_scoped(&view_over(dataset), None, Some(scope))
+                .add_view_scoped(&composite_over(dataset), None, Some(scope))
                 .expect("each independently scoped source ingests");
         }
         builder

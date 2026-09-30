@@ -33,8 +33,9 @@
 //! bytes REQUIRES a `CANON_PROFILE_VERSION` increment. The three-step friction is the
 //! point — it makes an accidental golden refresh impossible to mistake for a no-op.
 
+use purrdf_gts::files::media_type_for_path;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use purrdf_rdf::{
     CANON_CORPUS_DIGEST, CANON_PRESENTATION_FLAT_ASSERTION_ID,
@@ -126,22 +127,11 @@ fn load_manifest() -> Vec<Case> {
     cases
 }
 
-/// The media type a case's extension selects. Driven off the extension rather than
-/// recorded in the manifest so a case cannot be listed under a syntax it is not
-/// written in.
-fn media_type_for(path: &Path) -> &'static str {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("trig") => "application/trig",
-        Some("ttl") => "text/turtle",
-        other => panic!("unhandled corpus input extension {other:?} for {path:?}"),
-    }
-}
-
 /// The canonical bytes for a case, or its refusal rendered in the manifest's
 /// discriminant spelling.
 fn run_case(case: &Case) -> Result<String, String> {
     let bytes = std::fs::read(&case.file).unwrap_or_else(|e| panic!("read {:?}: {e}", case.file));
-    let dataset = parse_dataset(&bytes, media_type_for(&case.file), None)
+    let dataset = parse_dataset(&bytes, media_type_for_path(&case.file), None)
         .unwrap_or_else(|e| panic!("{} must parse: {e}", case.rel));
     match try_canonicalize_with(&dataset, CanonHash::Sha256) {
         Ok(canonicalized) => Ok(canonicalized.nquads),
@@ -716,7 +706,7 @@ fn no_corpus_golden_leaks_the_reserved_namespace_under_the_flat_presentation() {
         }
         let bytes =
             std::fs::read(&case.file).unwrap_or_else(|e| panic!("read {:?}: {e}", case.file));
-        let dataset = parse_dataset(&bytes, media_type_for(&case.file), None)
+        let dataset = parse_dataset(&bytes, media_type_for_path(&case.file), None)
             .unwrap_or_else(|e| panic!("{} must parse: {e}", case.rel));
         let flat = try_canonicalize_flat_view(&*dataset, CanonHash::Sha256).unwrap_or_else(|e| {
             panic!(

@@ -6,7 +6,9 @@
 
 The ledger names, for each job the workspace implements once, its home, what it
 replaces, and the sanctioned second implementations (variants). This gate runs
-``crates/helper-census`` over the workspace's shipping Rust and fails on:
+``crates/helper-census`` over the workspace's Rust — shipping code and every
+test, bench and example target, whose support code is as much a second
+implementation when copied — and fails on:
 
 * a ``home`` or ``entry_points`` path that does not resolve to a defined item;
 * a variant whose symbol does not resolve, or does not live in its ``file``;
@@ -1184,7 +1186,7 @@ UNICODE_FIXTURE_FILES = {
         "pub fn unicode_versions() -> [(u8, u8, u8); 1] { [(17, 0, 0)] }\n"
         "pub const NFC: &str = \"nfc\";\n"
     ),
-    "crates/user/tests/it.rs": "fn nfc(text: &str) -> String { text.to_owned() }\n",
+    "crates/user/tests/it.rs": "fn nfc(text: &str) -> String { text.to_owned() } // POSITIVE\n",
 }
 
 
@@ -1214,7 +1216,7 @@ def unicode_fixture_cases() -> list[tuple[str, bool]]:
     home = {match["symbol"] for match in job["matches"] if match["in_home"]}
     return [
         ("every seeded normalization copy and second Unicode-version authority is reported", expected <= copies),
-        ("a longer name, a plural, a constant and a test-only helper are not", copies <= expected),
+        ("a longer name, a plural and a constant are not; a copy in a tests/ file is", copies <= expected),
         ("the pinned Unicode version is the sanctioned variant, not a copy", variants == {"fixture_core::blocks::unicode_version"}),
         ("the home's own entry points are the home's", home == {"fixture_lex::unicode::nfc", "fixture_lex::unicode::ccc"}),
         ("each copy counts against the enforced job", job["copies"] == len(expected)),
@@ -1315,7 +1317,9 @@ def mismatch_rule_fixture_cases() -> list[tuple[str, bool]]:
 # ledger rows so the fixture drives the very patterns the gate enforces. Every line
 # marked for a job must be reported against it and nothing else may be: the shim and
 # home names that stand beside the copies, a longer name that merely begins with a
-# forbidden one, the same names inside the home crate, and the names in test code.
+# forbidden one, the same names inside the home crate, and the names in a
+# `#[cfg(test)]` module. A name in a tests/ file is test-support code the census
+# walks, and is a copy like any other.
 TERM_JOBS = {"term-conversion": "// TERM-CONVERSION", "term-constructor": "// TERM-CONSTRUCTOR"}
 
 TERM_FIXTURE_FILES = {
@@ -1345,7 +1349,12 @@ TERM_FIXTURE_FILES = {
         "    fn rdf_term_to_term_value() {}\n"
         "}\n"
     ),
-    "crates/user/tests/it.rs": "fn bool_term() {}\nfn owned_value() {}\n#[test]\nfn pins() { bool_term(); owned_value(); }\n",
+    "crates/user/tests/it.rs": (
+        "fn bool_term() {} // TERM-CONSTRUCTOR\n"
+        "fn owned_value() {} // TERM-CONVERSION\n"
+        "#[test]\n"
+        "fn pins() { bool_term(); owned_value(); }\n"
+    ),
 }
 
 
@@ -1389,10 +1398,10 @@ def term_rule_fixture_cases() -> list[tuple[str, bool]]:
         found = index["jobs"][job]
         copies = {(match["file"], match["line"]) for match in found["matches"] if not match["in_home"]}
         home = {(match["file"], match["line"]) for match in found["matches"] if match["in_home"]}
-        cases.append((f"every seeded {job} copy in shipping code is reported", lines <= copies))
+        cases.append((f"every seeded {job} copy, in shipping code and in a tests/ file, is reported", lines <= copies))
         cases.append(
             (
-                f"the {job} neighbours (shims, longer names, test code) are not reported",
+                f"the {job} neighbours (shims, longer names, #[cfg(test)] items) are not reported",
                 copies <= lines,
             )
         )
@@ -1522,6 +1531,119 @@ def distinct_fixture_cases() -> list[tuple[str, bool]]:
         (
             "a [[distinct]] row whose anchor carries no documentation fails",
             len(undocumented) == 1 and "carries no documentation" in undocumented[0],
+        ),
+    ]
+
+
+# A seeded near-miss workspace, run through the real census: the datalog
+# shortest-path pair that differs only in its borrow spellings (`&next`,
+# `parent[&cursor]` against `next.as_str()`, `parent[cursor]`), a test helper
+# copied between two tests/ files, and a copy under the old thirty-token floor
+# must each be one unsanctioned group; the neighbours (the same small shape over
+# another constant, two accessors over different fields) must not be grouped.
+NEAR_MISS_FIXTURE_FILES = {
+    "crates/delta/Cargo.toml": '[package]\nname = "fixture-delta"\n',
+    "crates/delta/src/lib.rs": (
+        "use std::collections::{BTreeMap, BTreeSet, VecDeque};\n"
+        "pub fn shortest_rule_path(depends: &BTreeMap<usize, BTreeSet<usize>>, from: usize, to: usize) -> Option<Vec<usize>> {\n"
+        "    let mut parent: BTreeMap<usize, usize> = BTreeMap::new();\n"
+        "    let mut queue: VecDeque<usize> = VecDeque::from([from]);\n"
+        "    let mut seen: BTreeSet<usize> = BTreeSet::from([from]);\n"
+        "    while let Some(node) = queue.pop_front() {\n"
+        "        if node == to {\n"
+        "            let mut path = vec![node];\n"
+        "            let mut cursor = node;\n"
+        "            while cursor != from { cursor = parent[&cursor]; path.push(cursor); }\n"
+        "            path.reverse();\n"
+        "            return Some(path);\n"
+        "        }\n"
+        "        for &next in depends.get(&node).into_iter().flatten() {\n"
+        "            if seen.insert(next) { parent.insert(next, node); queue.push_back(next); }\n"
+        "        }\n"
+        "    }\n"
+        "    None\n"
+        "}\n"
+        "pub fn skipped(line: &str) -> bool { let trimmed = line.trim(); trimmed.is_empty() || trimmed.starts_with('#') }\n"
+        "pub fn skipped_ini(line: &str) -> bool { let trimmed = line.trim(); trimmed.is_empty() || trimmed.starts_with(';') }\n"
+        "pub enum Run { Stopped { tripped: u8, partial: Vec<u8> }, Running }\n"
+        "impl Run {\n"
+        "    pub fn tripped(&self) -> Option<u8> { match self { Self::Stopped { tripped, .. } => Some(*tripped), Self::Running => None } }\n"
+        "    pub fn partial(&self) -> Option<&Vec<u8>> { match self { Self::Stopped { partial, .. } => Some(partial), Self::Running => None } }\n"
+        "}\n"
+    ),
+    "crates/delta/tests/one.rs": (
+        "use std::path::Path;\n"
+        "fn write_file(dir: &Path, name: &str, contents: &str) -> String {\n"
+        "    let path = dir.join(name);\n"
+        '    std::fs::write(&path, contents).expect("write fixture");\n'
+        '    path.to_str().expect("utf-8 path").to_owned()\n'
+        "}\n"
+    ),
+    "crates/delta/tests/two.rs": (
+        "use std::path::Path;\n"
+        "fn write_fixture(root: &Path, file: &str, text: &str) -> String {\n"
+        "    let target = root.join(file);\n"
+        '    std::fs::write(&target, text).expect("write the fixture");\n'
+        '    target.to_str().expect("a UTF-8 path").to_owned()\n'
+        "}\n"
+    ),
+    "crates/epsilon/Cargo.toml": '[package]\nname = "fixture-epsilon"\n',
+    "crates/epsilon/src/lib.rs": (
+        "use std::collections::{BTreeMap, BTreeSet, VecDeque};\n"
+        "pub fn shortest_dependency_path<'a>(depends: &'a BTreeMap<String, BTreeSet<String>>, from: &'a str, to: &str) -> Option<Vec<&'a str>> {\n"
+        "    let mut parent: BTreeMap<&str, &str> = BTreeMap::new();\n"
+        "    let mut queue: VecDeque<&str> = VecDeque::from([from]);\n"
+        "    let mut seen: BTreeSet<&str> = BTreeSet::from([from]);\n"
+        "    while let Some(node) = queue.pop_front() {\n"
+        "        if node == to {\n"
+        "            let mut path = vec![node];\n"
+        "            let mut cursor = node;\n"
+        "            while cursor != from { cursor = parent[cursor]; path.push(cursor); }\n"
+        "            path.reverse();\n"
+        "            return Some(path);\n"
+        "        }\n"
+        "        for next in depends.get(node).into_iter().flatten() {\n"
+        "            if seen.insert(next.as_str()) { parent.insert(next.as_str(), node); queue.push_back(next.as_str()); }\n"
+        "        }\n"
+        "    }\n"
+        "    None\n"
+        "}\n"
+        "pub fn is_comment(text: &str) -> bool { let rest = text.trim(); rest.is_empty() || rest.starts_with('#') }\n"
+    ),
+}
+
+NEAR_MISS_GROUPS = [
+    ["fixture_delta::shortest_rule_path", "fixture_epsilon::shortest_dependency_path"],
+    ["fixture_delta::test_crate::one::write_file", "fixture_delta::test_crate::two::write_fixture"],
+    ["fixture_delta::skipped", "fixture_epsilon::is_comment"],
+]
+
+
+def near_miss_fixture_cases() -> list[tuple[str, bool]]:
+    """Run the census over the seeded near-miss workspace and judge its groups."""
+    with tempfile.TemporaryDirectory(prefix="helper-census-near-miss-") as directory:
+        root = Path(directory)
+        for relative, text in NEAR_MISS_FIXTURE_FILES.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        (root / "helpers-ledger.toml").write_text("", encoding="utf-8")
+        try:
+            index = json.loads(run_census("--index", root=root))
+        except (CensusError, json.JSONDecodeError) as exc:
+            return [(f"the census runs over the seeded near-miss workspace ({exc})", False)]
+    groups = [sorted(group["members"]) for group in index["groups"]]
+    findings = group_findings({}, index)
+    grouped = {member for group in groups for member in group}
+    return [
+        (
+            "the datalog pair, a test helper copied between tests/ files and a sub-30-token copy are each one group",
+            all(sorted(expected) in groups for expected in NEAR_MISS_GROUPS),
+        ),
+        ("each seeded near-miss group fails the gate", len(findings) == len(NEAR_MISS_GROUPS)),
+        (
+            "the same small shape over another constant, and accessors of different fields, are not grouped",
+            not grouped & {"fixture_delta::skipped_ini", "fixture_delta::Run::tripped", "fixture_delta::Run::partial"},
         ),
     ]
 
@@ -1717,6 +1839,7 @@ def self_test() -> int:
     cases.extend(unicode_fixture_cases())
     cases.extend(mismatch_rule_fixture_cases())
     cases.extend(term_rule_fixture_cases())
+    cases.extend(near_miss_fixture_cases())
 
     failed = 0
     for name, held in cases:

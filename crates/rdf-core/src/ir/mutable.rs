@@ -810,6 +810,24 @@ pub struct QuadValues {
 }
 
 impl QuadValues {
+    /// Every row of `dataset`'s RDF surface — the plain quads and BOTH statement
+    /// tables (reifier and annotation rows) — as owned value-quads, in table order:
+    /// what a copy of the dataset through [`DatasetMut`] is seeded with.
+    #[must_use]
+    pub fn surface_of(dataset: &RdfDataset) -> Vec<Self> {
+        dataset
+            .quads()
+            .chain(dataset.reifier_quads())
+            .chain(dataset.annotation_quads())
+            .map(|quad| Self {
+                s: dataset.term_value(quad.s),
+                p: dataset.term_value(quad.p),
+                o: dataset.term_value(quad.o),
+                g: quad.g.map(|graph| dataset.term_value(graph)),
+            })
+            .collect()
+    }
+
     /// A convenience constructor for a default-graph quad.
     #[must_use]
     pub fn triple(s: TermValue, p: TermValue, o: TermValue) -> Self {

@@ -23,19 +23,8 @@ use purrdf_hash::hex::encode;
 use purrdf_hash::md5::Md5;
 use purrdf_hash::sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512};
 use purrdf_hash::{Backend, Digest};
-use purrdf_testkit::rng::Xoshiro256;
+use purrdf_testkit::rng::xoshiro256_bytes;
 use purrdf_testkit::vectors::VectorFile;
-
-/// The recipe every file's header states.
-fn input(length: usize, seed: u64) -> Vec<u8> {
-    let mut rng = Xoshiro256::from_seed(seed);
-    let mut bytes = Vec::with_capacity(length + 8);
-    while bytes.len() < length {
-        bytes.extend_from_slice(&rng.next_u64().to_le_bytes());
-    }
-    bytes.truncate(length);
-    bytes
-}
 
 /// Replays `text`, answering each record with `digest` of its input. `digest`
 /// receives the input and a split point in `0..=input.len()`.
@@ -45,7 +34,7 @@ fn replay(name: &str, text: &str, mut digest: impl FnMut(&[u8], usize) -> String
         .replay(2, |fields| {
             let length: usize = fields[0].parse().expect("a decimal length");
             let seed = u64::from_str_radix(fields[1], 16).expect("a hexadecimal seed");
-            let data = input(length, seed);
+            let data = xoshiro256_bytes(length, seed);
             let split = (seed as usize) % (length + 1);
             vec![digest(&data, split)]
         })

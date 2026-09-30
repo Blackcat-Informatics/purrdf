@@ -13,13 +13,14 @@
 //!
 //! Fixture IRIs are under `example.org`: PurRDF mints no vocabulary IRIs.
 
+#[path = "support/turtle.rs"]
+mod turtle;
+
 use std::sync::Arc;
 
-use purrdf::RdfDataset;
 use purrdf_shapes::engine::{parse_shapes, validate_dataset_with_shapes_graph};
 use purrdf_shapes::report::ValidationReport;
 use purrdf_shapes::shapes::Shapes;
-use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 
 const PREFIXES: &str = "
 @prefix ex:    <http://example.org/ns#> .
@@ -35,12 +36,8 @@ fn shapes(shapes_ttl: &str) -> Shapes {
         .unwrap_or_else(|error| panic!("the shapes graph must load: {error}"))
 }
 
-fn data(data_ttl: &str) -> Arc<RdfDataset> {
-    parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parses")
-}
-
 fn validate(shapes_ttl: &str, data_ttl: &str) -> ValidationReport {
-    validate_dataset_with_shapes_graph(&data(data_ttl), &shapes(shapes_ttl), None)
+    validate_dataset_with_shapes_graph(&turtle::data(PREFIXES, data_ttl), &shapes(shapes_ttl), None)
         .expect("validation runs")
 }
 
@@ -216,7 +213,8 @@ fn a_sh_shape_statement_can_name_a_shape_reached_only_through_another() {
 /// statement: the blank shape is then not top-level at all.
 #[test]
 fn a_sh_shape_statement_in_a_shared_graph_can_name_a_blank_shape() {
-    let named = data(
+    let named = turtle::data(
+        PREFIXES,
         "ex:Outer a sh:NodeShape ; sh:node _:inner .
          _:inner sh:nodeKind sh:Literal .
          ex:a sh:shape _:inner .",
@@ -225,7 +223,8 @@ fn a_sh_shape_statement_in_a_shared_graph_can_name_a_blank_shape() {
     let report =
         validate_dataset_with_shapes_graph(&named, &parsed, None).expect("validation runs");
     assert_eq!(focus_nodes(&report), vec![ex("a")]);
-    let unnamed = data(
+    let unnamed = turtle::data(
+        PREFIXES,
         "ex:Outer a sh:NodeShape ; sh:node _:inner .
          _:inner sh:nodeKind sh:Literal .",
     );
@@ -292,7 +291,8 @@ fn a_rule_fires_at_an_explicit_shape_target() {
     );
     let entail = |data_ttl: &str| {
         let entailed =
-            purrdf_shapes::entail_dataset(data(data_ttl).as_ref(), &shapes).expect("rules run");
+            purrdf_shapes::entail_dataset(turtle::data(PREFIXES, data_ttl).as_ref(), &shapes)
+                .expect("rules run");
         purrdf::canonicalize(entailed.as_ref()).nquads
     };
     let fired = "<http://example.org/ns#a> <http://example.org/ns#q> <http://example.org/ns#v>";
@@ -519,7 +519,9 @@ fn a_candidate_is_checked_against_a_sparql_target_by_its_select() {
           sh:select \"SELECT ?this WHERE { ?this <http://example.org/ns#p> ?o } ORDER BY ?this LIMIT 1\" ] .";
     let data_ttl = "ex:a ex:p 1 . ex:b ex:p 2 .";
     let prepared = purrdf_shapes::engine::PreparedShapes::new(Arc::new(shapes(shapes_ttl)));
-    let validator = prepared.bind_dataset(&data(data_ttl)).expect("binds");
+    let validator = prepared
+        .bind_dataset(&turtle::data(PREFIXES, data_ttl))
+        .expect("binds");
     let candidates = ["a", "b"].map(|local| {
         purrdf_shapes::term::Term::NamedNode(purrdf_shapes::term::NamedNode::from(
             format!("http://example.org/ns#{local}").as_str(),
@@ -551,7 +553,9 @@ fn bounded(
     candidates: &[purrdf_shapes::term::Term],
 ) -> Vec<String> {
     let prepared = purrdf_shapes::engine::PreparedShapes::new(Arc::new(shapes(shapes_ttl)));
-    let validator = prepared.bind_dataset(&data(data_ttl)).expect("binds");
+    let validator = prepared
+        .bind_dataset(&turtle::data(PREFIXES, data_ttl))
+        .expect("binds");
     focus_nodes(
         &validator
             .validate_focus_nodes(candidates)
@@ -615,7 +619,9 @@ fn an_inconsistent_ask_and_select_are_refused_on_the_candidate_path() {
     let candidates = candidates(["a", "b"]);
 
     let prepared = purrdf_shapes::engine::PreparedShapes::new(Arc::new(shapes(&with_ask)));
-    let validator = prepared.bind_dataset(&data(data_ttl)).expect("binds");
+    let validator = prepared
+        .bind_dataset(&turtle::data(PREFIXES, data_ttl))
+        .expect("binds");
     let refused = validator
         .validate_focus_nodes(&candidates)
         .expect_err("the ASK and the SELECT disagree about ex:a");
@@ -654,7 +660,9 @@ fn an_inconsistent_ask_and_select_are_refused_on_the_candidate_path() {
 fn a_consistent_ask_and_select_validate_on_the_candidate_path() {
     let data_ttl = "ex:a ex:p 1 . ex:b ex:p 2 . ex:c ex:p 1 .";
     let prepared = purrdf_shapes::engine::PreparedShapes::new(Arc::new(shapes(CONSISTENT_ASK)));
-    let validator = prepared.bind_dataset(&data(data_ttl)).expect("binds");
+    let validator = prepared
+        .bind_dataset(&turtle::data(PREFIXES, data_ttl))
+        .expect("binds");
     let report = validator
         .validate_focus_nodes(&candidates(["a", "b", "c", "ghost"]))
         .expect("a consistent pair is confirmed for every candidate");

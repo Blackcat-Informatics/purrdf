@@ -960,25 +960,25 @@ fn collect_vars(mut pending: Vec<VarNode<'_>>, out: &mut DetHashSet<Variable>) {
                 match pattern {
                     GraphPattern::Bgp { patterns } => {
                         for tp in patterns {
-                            term_pattern_vars(&tp.subject, out);
+                            tp.subject.collect_variables(out);
                             if let NamedNodePattern::Variable(v) = &tp.predicate {
                                 out.insert(v.clone());
                             }
-                            term_pattern_vars(&tp.object, out);
+                            tp.object.collect_variables(out);
                         }
                     }
                     GraphPattern::Path {
                         subject, object, ..
                     } => {
-                        term_pattern_vars(subject, out);
-                        term_pattern_vars(object, out);
+                        subject.collect_variables(out);
+                        object.collect_variables(out);
                     }
                     GraphPattern::Values { variables, .. } => {
                         out.extend(variables.iter().cloned());
                     }
                     GraphPattern::PropertyFunction(call) => {
                         for term in call.subject_args.iter().chain(&call.object_args) {
-                            term_pattern_vars(term, out);
+                            term.collect_variables(out);
                         }
                     }
                     GraphPattern::Graph { name, inner } => {
@@ -1085,29 +1085,6 @@ fn collect_vars(mut pending: Vec<VarNode<'_>>, out: &mut DetHashSet<Variable>) {
                     }
                 }
             }
-        }
-    }
-}
-
-/// Collect the variables a term pattern mentions, its quoted triples' own component
-/// positions included, over a work list of the positions still to be read.
-fn term_pattern_vars(term: &purrdf_sparql_algebra::TermPattern, out: &mut DetHashSet<Variable>) {
-    use purrdf_sparql_algebra::{NamedNodePattern, TermPattern};
-
-    let mut pending: purrdf_core::SmallVec<[_; 8]> = purrdf_core::smallvec![term];
-    while let Some(term) = pending.pop() {
-        match term {
-            TermPattern::Variable(variable) => {
-                out.insert(variable.clone());
-            }
-            TermPattern::Triple(triple) => {
-                if let NamedNodePattern::Variable(variable) = &triple.predicate {
-                    out.insert(variable.clone());
-                }
-                pending.push(&triple.object);
-                pending.push(&triple.subject);
-            }
-            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
         }
     }
 }
@@ -2551,11 +2528,11 @@ fn substitute_pattern_impl(
         GraphPattern::Bgp { patterns } => {
             let mut vars = DetHashSet::default();
             for tp in patterns {
-                term_pattern_vars(&tp.subject, &mut vars);
+                tp.subject.collect_variables(&mut vars);
                 if let purrdf_sparql_algebra::NamedNodePattern::Variable(v) = &tp.predicate {
                     vars.insert(v.clone());
                 }
-                term_pattern_vars(&tp.object, &mut vars);
+                tp.object.collect_variables(&mut vars);
             }
             let leaf = boxed_and_mapped(
                 GraphPattern::Bgp {
@@ -2572,8 +2549,8 @@ fn substitute_pattern_impl(
             object,
         } => {
             let mut vars = DetHashSet::default();
-            term_pattern_vars(subject, &mut vars);
-            term_pattern_vars(object, &mut vars);
+            subject.collect_variables(&mut vars);
+            object.collect_variables(&mut vars);
             let leaf = boxed_and_mapped(
                 GraphPattern::Path {
                     subject: subject.clone(),
@@ -10491,7 +10468,7 @@ mod walk_tests {
 
     use super::{
         Deferral, FreeVars, expr_vars, ground_term_from_term_value, pattern_all_vars,
-        pattern_vars_outside, term_pattern_vars,
+        pattern_vars_outside,
     };
     use crate::DetHashSet;
 
@@ -11140,7 +11117,7 @@ mod walk_tests {
             assert_eq!(sorted(&ours), sorted(&expected), "seed {seed}: {expr:?}");
 
             let mut ours = DetHashSet::default();
-            term_pattern_vars(&term, &mut ours);
+            term.collect_variables(&mut ours);
             let mut expected = DetHashSet::default();
             reference_term_pattern_vars(&term, &mut expected);
             assert_eq!(sorted(&ours), sorted(&expected), "seed {seed}: {term:?}");
@@ -11191,7 +11168,7 @@ mod walk_tests {
                 let mut expr_vars_found = DetHashSet::default();
                 expr_vars(&expr, &mut expr_vars_found);
                 let mut term_vars = DetHashSet::default();
-                term_pattern_vars(&term, &mut term_vars);
+                term.collect_variables(&mut term_vars);
                 (
                     sorted(&pattern_vars),
                     sorted(&expr_vars_found),

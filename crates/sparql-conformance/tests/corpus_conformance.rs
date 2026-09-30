@@ -10,6 +10,7 @@
 //! the library itself: native RDF loading, graph/solution comparison, property paths,
 //! EXISTS evaluation, CONSTRUCT canonicalization, and `$this` substitution.
 
+use purrdf::capture_support::solutions_golden;
 use std::path::{Path, PathBuf};
 
 use purrdf::{NativeRdfFormat, canonicalize, parse_dataset};
@@ -20,26 +21,6 @@ fn goldens_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("goldens")
-}
-
-/// The stable, order-insensitive key for a solution row.
-fn row_key(row: &[Option<TermValue>]) -> String {
-    format!("{row:?}")
-}
-
-/// Render a SELECT result as a deterministic golden: projection variables on line
-/// one, then sorted row Debug keys.
-fn solutions_golden(variables: &[String], rows: &[Vec<Option<TermValue>>]) -> String {
-    let mut out = String::new();
-    out.push_str(&variables.join("\t"));
-    out.push('\n');
-    let mut keys: Vec<String> = rows.iter().map(|r| row_key(r)).collect();
-    keys.sort();
-    for k in keys {
-        out.push_str(&k);
-        out.push('\n');
-    }
-    out
 }
 
 const CORE_DATA_TTL: &str = r#"
