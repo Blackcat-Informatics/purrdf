@@ -276,7 +276,7 @@ impl MetadataLoader<'_> {
                     ProjectionError::package(format!("CSVW schema resource `{iri}` is absent"))
                 })?;
                 let value: Value =
-                    super::super::json_codec::read_document(bytes).map_err(|error| {
+                    purrdf_lex::json::record::read_document(bytes).map_err(|error| {
                         ProjectionError::syntax(format!("invalid CSVW schema JSON: {error}"))
                             .at_path(&iri)
                     })?;
@@ -662,7 +662,7 @@ impl MetadataLoader<'_> {
                     ProjectionError::package(format!("CSVW dialect resource `{iri}` is absent"))
                 })?;
                 let value: Value =
-                    super::super::json_codec::read_document(bytes).map_err(|error| {
+                    purrdf_lex::json::record::read_document(bytes).map_err(|error| {
                         ProjectionError::syntax(format!("invalid CSVW dialect JSON: {error}"))
                             .at_path(&iri)
                     })?;
@@ -1065,7 +1065,7 @@ impl MetadataLoader<'_> {
         let bytes = self.input.get(iri).ok_or_else(|| {
             ProjectionError::package(format!("CSVW metadata resource `{iri}` is absent"))
         })?;
-        let value: Value = super::super::json_codec::read_document(bytes)
+        let value: Value = purrdf_lex::json::record::read_document(bytes)
             .map_err(|error| {
                 ProjectionError::syntax(format!("invalid CSVW metadata JSON: {error}"))
             })

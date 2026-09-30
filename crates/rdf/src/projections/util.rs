@@ -5,8 +5,8 @@ use std::fmt::Write as _;
 
 use sha2::{Digest, Sha256};
 
-use super::json_codec::ToJson;
 use super::{ProjectionError, ProjectionLimits};
+use purrdf_lex::json::record::ToJson;
 
 /// `value` as compact JSON, refused past the artifact byte limit.
 ///

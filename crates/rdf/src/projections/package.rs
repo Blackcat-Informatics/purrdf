@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use purrdf_lex::json::{Object, Value};
 
 use super::ProjectionError;
-use super::json_codec::{Fields, FromJson, JsonError, ToJson};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
 
 /// Maximum artifact path length accepted by the portable package profile.
 const MAX_ARTIFACT_PATH_BYTES: usize = 4_096;
@@ -118,8 +118,8 @@ impl ProjectionLimits {
 }
 
 impl FromJson for ProjectionLimits {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct ProjectionLimits")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct ProjectionLimits")?;
         let max_artifacts = fields.required("max_artifacts")?;
         let max_artifact_bytes = fields.required("max_artifact_bytes")?;
         let max_total_bytes = fields.required("max_total_bytes")?;
@@ -502,7 +502,7 @@ mod tests {
 
     #[test]
     fn limits_deserialize_through_validation() {
-        use super::super::json_codec::{from_slice, to_vec};
+        use purrdf_lex::json::record::{from_slice, to_vec};
 
         let good = to_vec(&limits());
         assert_eq!(

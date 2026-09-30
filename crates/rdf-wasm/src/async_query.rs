@@ -231,6 +231,7 @@ use std::time::Duration;
 
 use purrdf::{JsonLdSerializeOptions, RdfDataset, parse_dataset};
 use purrdf_core::SparqlResult;
+use purrdf_lex::json::record::{DecodeError, FromJson, Record};
 use purrdf_lex::json::{self, Value};
 use purrdf_sparql_eval::protocol::FailureCode;
 use purrdf_sparql_eval::remote_http::DEFAULT_TIMEOUT;
@@ -247,7 +248,6 @@ use wasm_bindgen::prelude::*;
 
 use crate::codec::resolve_media_type;
 use crate::dataset::{Dataset, UpdateClaim};
-use crate::json_options::{self, Record};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::operation::{
     ClosureInputs, JobError, JobOutcome, JobRun, OPTIONS_CODE, OperationInput, SHACL_REFUSAL_CODE,
@@ -4033,7 +4033,7 @@ pub struct ServiceCatalog {
 }
 
 /// One service profile document: a closed record of camelCase members
-/// ([`crate::json_options`]); `capabilities` is required.
+/// ([`purrdf_lex::json::record`]); `capabilities` is required.
 #[derive(Debug)]
 struct ProfileJson {
     capabilities: Vec<String>,
@@ -4043,37 +4043,21 @@ struct ProfileJson {
     timeout_ms: Option<u64>,
 }
 
-impl ProfileJson {
-    fn from_json(value: &Value) -> Result<Self, String> {
-        let record = Record::closed(
-            value,
-            "service profile",
-            &[
-                "capabilities",
-                "headers",
-                "credential",
-                "userAgent",
-                "timeoutMs",
-            ],
-        )?;
-        Ok(Self {
-            capabilities: record.required(
-                "capabilities",
-                "an array of strings",
-                json_options::strings,
-            )?,
-            headers: record.optional("headers", "an array", |value| Some(value.clone()))?,
-            credential: match value.get("credential") {
-                None | Some(Value::Null) => None,
-                Some(credential) => Some(CredentialJson::from_json(credential)?),
-            },
-            user_agent: record.optional("userAgent", "a string", json_options::string)?,
-            timeout_ms: record.optional(
-                "timeoutMs",
-                "an integer from 0 to 18446744073709551615",
-                json_options::integer::<u64>,
-            )?,
-        })
+impl FromJson for ProfileJson {
+    /// `headers` is carried as written, member order and repeats included, for the
+    /// header check to read.
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut record = Record::new(value, "an object")?;
+        let profile = Self {
+            capabilities: record.required("capabilities")?,
+            headers: record
+                .optional_with("headers", |headers| Ok::<_, DecodeError>(headers.clone()))?,
+            credential: record.optional("credential")?,
+            user_agent: record.optional("userAgent")?,
+            timeout_ms: record.optional("timeoutMs")?,
+        };
+        record.deny_unknown()?;
+        Ok(profile)
     }
 }
 
@@ -4083,14 +4067,15 @@ struct CredentialJson {
     value: String,
 }
 
-impl CredentialJson {
-    fn from_json(value: &Value) -> Result<Self, String> {
-        let record = Record::closed(value, "service profile credential", &["header", "value"])?;
-        let text = |value: &Value| json_options::string(value).ok_or_else(String::new);
-        Ok(Self {
-            header: record.required("header", "a string", text)?,
-            value: record.required("value", "a string", text)?,
-        })
+impl FromJson for CredentialJson {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut record = Record::new(value, "a credential object")?;
+        let credential = Self {
+            header: record.required("header")?,
+            value: record.required("value")?,
+        };
+        record.deny_unknown()?;
+        Ok(credential)
     }
 }
 
@@ -4127,7 +4112,8 @@ fn check_header(name: &str, value: &str) -> Result<(), String> {
 /// Parse one service profile document.
 fn parse_profile(json: &str) -> Result<ServiceProfile, String> {
     let document = json::read(json).map_err(|error| format!("service profile: {error}"))?;
-    let profile = ProfileJson::from_json(&document)?;
+    let profile =
+        ProfileJson::from_json(&document).map_err(|error| format!("service profile: {error}"))?;
     let mut capabilities = ServiceCapabilities::NONE;
     for name in &profile.capabilities {
         let capability = match name.as_str() {

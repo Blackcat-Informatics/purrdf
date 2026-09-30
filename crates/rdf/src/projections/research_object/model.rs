@@ -5,9 +5,9 @@ use std::collections::BTreeSet;
 
 use purrdf_lex::json::{Object, Value};
 
-use super::super::json_codec::{ToJson, sorted_last_wins};
 use super::super::{ProjectionDirection, ProjectionError, validate_absolute_iri};
 use super::ResearchObjectPolicy;
+use purrdf_lex::json::record::{ToJson, sorted_last_wins};
 
 /// RDF literal identity retained by the common research-object model.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

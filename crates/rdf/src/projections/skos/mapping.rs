@@ -930,11 +930,11 @@ mod tests {
 
     use super::*;
     use crate::native_codecs::parse_dataset;
-    use crate::projections::json_codec::{self, ToJson};
     use crate::projections::{
         ProjectionErrorKind, ProjectionLimits, SkosClassRoles, SkosDocumentationRoles,
         SkosLabelRoles, SkosSourceRoles, SkosTargetRoles,
     };
+    use purrdf_lex::json::record::{self, ToJson};
 
     const SOURCE: &str = "https://source.example/";
     const TARGET: &str = "https://target.example/";
@@ -1522,7 +1522,7 @@ mod tests {
             .as_object_mut()
             .expect("class roles")
             .remove("rdf_type");
-        assert!(<SkosConfig as json_codec::FromJson>::from_json(&value).is_err());
+        assert!(<SkosConfig as record::FromJson>::from_json(&value).is_err());
 
         let ambiguous = SkosLabelRoles::new(
             format!("{SOURCE}same"),

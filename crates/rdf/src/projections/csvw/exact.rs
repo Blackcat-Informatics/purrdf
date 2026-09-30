@@ -14,13 +14,13 @@ use purrdf_core::{
 };
 use purrdf_lex::json::{Object, Value};
 
-use super::super::json_codec::ToJson;
 use super::super::util::canonical_json_bounded;
 use super::super::{
     ProjectionDirection, ProjectionError, ProjectionLimits, ProjectionPackage, ProjectionTerm,
     stable_identifier,
 };
 use super::CsvwConfig;
+use purrdf_lex::json::record::ToJson;
 
 use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 const METADATA_PATH: &str = "csvw-metadata.json";

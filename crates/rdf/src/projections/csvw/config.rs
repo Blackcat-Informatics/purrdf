@@ -8,8 +8,9 @@ use purrdf_lex::json::{Object, Value};
 
 use crate::native_codecs::jsonld::CompiledJsonLdContext;
 
-use super::super::json_codec::{Fields, FromJson, JsonError, ToJson, json_string_enum};
 use super::super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
+use purrdf_lex::json_string_enum;
 
 /// RDF conversion mode defined by the CSVW Recommendation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,8 +103,8 @@ impl CsvwVocabulary {
 }
 
 impl FromJson for CsvwVocabulary {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct CsvwVocabulary")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct CsvwVocabulary")?;
         let csvw: String = fields.required("csvw_namespace")?;
         let rdf: String = fields.required("rdf_namespace")?;
         let rdfs: String = fields.required("rdfs_namespace")?;
@@ -217,8 +218,8 @@ impl CsvwContext {
 }
 
 impl FromJson for CsvwContext {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct CsvwContext")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct CsvwContext")?;
         let iri: String = fields.required("iri")?;
         let prefixes = fields.required("prefixes")?;
         fields.deny_unknown()?;
@@ -336,8 +337,8 @@ impl CsvwConfig {
 }
 
 impl FromJson for CsvwConfig {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct CsvwConfig")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct CsvwConfig")?;
         let metadata_base_iri: String = fields.required("metadata_base_iri")?;
         let context = fields.required("context")?;
         let table_group_iri: String = fields.required("table_group_iri")?;
@@ -472,9 +473,9 @@ mod tests {
             100,
         )
         .expect("config");
-        let json = super::super::super::json_codec::to_vec(&config);
+        let json = purrdf_lex::json::record::to_vec(&config);
         assert_eq!(
-            super::super::super::json_codec::from_slice::<CsvwConfig>(&json).expect("reparse"),
+            purrdf_lex::json::record::from_slice::<CsvwConfig>(&json).expect("reparse"),
             config
         );
         assert!(

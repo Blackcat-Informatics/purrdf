@@ -81,9 +81,9 @@ use purrdf::viz::{
 
 use crate::codec::{resolve_format, resolve_media_type};
 use crate::convert::{quad_to_quad_values, quad_values_to_quad};
-use crate::json_options::{Record, integer, records, string, strings};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::term::{Quad, Term, TermInner};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record};
 
 /// Lower an optional pattern [`Term`] to an optional [`TermValue`] (None = wildcard).
 ///
@@ -102,7 +102,8 @@ fn pattern_value(term: Option<&Term>) -> Result<Option<TermValue>, JsError> {
 }
 
 /// The visualization options a JS caller passes as JSON text: a closed record of
-/// camelCase members, every one optional ([`crate::json_options`]).
+/// camelCase members, every one optional, read as strict records
+/// ([`purrdf_lex::json::record`]).
 #[derive(Debug, Default)]
 struct VisualOptions {
     mode: Option<String>,
@@ -126,12 +127,13 @@ struct VisualVocabularyMapping {
     namespace: String,
 }
 
-impl VisualVocabularyMapping {
-    fn from_json(value: &Value) -> Result<Self, String> {
-        let record = Record::open(value, "visualization vocabulary mapping")?;
+impl FromJson for VisualVocabularyMapping {
+    /// An open record: members other than `prefix` and `namespace` are not read.
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut record = Record::new(value, "a vocabulary mapping object")?;
         Ok(Self {
-            prefix: record.required("prefix", "a string", string_member)?,
-            namespace: record.required("namespace", "a string", string_member)?,
+            prefix: record.required("prefix")?,
+            namespace: record.required("namespace")?,
         })
     }
 }
@@ -147,13 +149,15 @@ struct VisualRoleRule {
     role: String,
 }
 
-impl VisualRoleRule {
-    fn from_json(value: &Value) -> Result<Self, String> {
-        let record = Record::closed(value, "visualization role rule", &["predicateIri", "role"])?;
-        Ok(Self {
-            predicate_iri: record.required("predicateIri", "a string", string_member)?,
-            role: record.required("role", "a string", string_member)?,
-        })
+impl FromJson for VisualRoleRule {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut record = Record::new(value, "a role rule object")?;
+        let rule = Self {
+            predicate_iri: record.required("predicateIri")?,
+            role: record.required("role")?,
+        };
+        record.deny_unknown()?;
+        Ok(rule)
     }
 }
 
@@ -168,35 +172,20 @@ struct VisualLayoutOptions {
     max_node_width: Option<i32>,
 }
 
-impl VisualLayoutOptions {
-    fn from_json(value: &Value) -> Result<Self, String> {
-        let record = Record::closed(
-            value,
-            "visualization layout options",
-            &[
-                "margin",
-                "rankSpacing",
-                "nodeSpacing",
-                "componentSpacing",
-                "componentWrapWidth",
-                "crossingSweeps",
-                "maxNodeWidth",
-            ],
-        )?;
-        let i32_member = |name: &str| record.optional(name, "a 32-bit integer", integer::<i32>);
-        Ok(Self {
-            margin: i32_member("margin")?,
-            rank_spacing: i32_member("rankSpacing")?,
-            node_spacing: i32_member("nodeSpacing")?,
-            component_spacing: i32_member("componentSpacing")?,
-            component_wrap_width: i32_member("componentWrapWidth")?,
-            crossing_sweeps: record.optional(
-                "crossingSweeps",
-                "a non-negative 32-bit integer",
-                integer::<u32>,
-            )?,
-            max_node_width: i32_member("maxNodeWidth")?,
-        })
+impl FromJson for VisualLayoutOptions {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut record = Record::new(value, "a layout options object")?;
+        let layout = Self {
+            margin: record.optional("margin")?,
+            rank_spacing: record.optional("rankSpacing")?,
+            node_spacing: record.optional("nodeSpacing")?,
+            component_spacing: record.optional("componentSpacing")?,
+            component_wrap_width: record.optional("componentWrapWidth")?,
+            crossing_sweeps: record.optional("crossingSweeps")?,
+            max_node_width: record.optional("maxNodeWidth")?,
+        };
+        record.deny_unknown()?;
+        Ok(layout)
     }
 }
 
@@ -207,24 +196,17 @@ struct VisualSvgOptions {
     title: Option<String>,
 }
 
-impl VisualSvgOptions {
-    fn from_json(value: &Value) -> Result<Self, String> {
-        let record = Record::closed(
-            value,
-            "visualization SVG options",
-            &["embedMetadata", "includeStyles", "title"],
-        )?;
-        Ok(Self {
-            embed_metadata: record.optional("embedMetadata", "a boolean", Value::as_bool)?,
-            include_styles: record.optional("includeStyles", "a boolean", Value::as_bool)?,
-            title: record.optional("title", "a string", string)?,
-        })
+impl FromJson for VisualSvgOptions {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut record = Record::new(value, "an SVG options object")?;
+        let svg = Self {
+            embed_metadata: record.optional("embedMetadata")?,
+            include_styles: record.optional("includeStyles")?,
+            title: record.optional("title")?,
+        };
+        record.deny_unknown()?;
+        Ok(svg)
     }
-}
-
-/// A present string member, for [`Record::required`] and [`Record::defaulted`].
-fn string_member(value: &Value) -> Result<String, String> {
-    string(value).ok_or_else(String::new)
 }
 
 impl VisualOptions {
@@ -239,49 +221,29 @@ impl VisualOptions {
         )
     }
 
+    /// The options record, a refusal named `visualization options: …`.
     fn from_json(value: &Value) -> Result<Self, String> {
-        let record = Record::closed(
-            value,
-            "visualization options",
-            &[
-                "mode",
-                "focus",
-                "roleRules",
-                "vocabulary",
-                "graph",
-                "graphs",
-                "labelPolicy",
-                "maxStatements",
-                "maxTerms",
-                "tableFields",
-                "layout",
-                "svg",
-            ],
-        )?;
-        let usize_member =
-            |name: &str| record.optional(name, "a non-negative integer", integer::<usize>);
-        Ok(Self {
-            mode: record.optional("mode", "a string", string)?,
-            focus: record.optional("focus", "a string", string)?,
-            role_rules: record.defaulted("roleRules", "an array of role rules", |value| {
-                records(value, VisualRoleRule::from_json)
-            })?,
-            vocabulary: record.defaulted(
-                "vocabulary",
-                "an array of vocabulary mappings",
-                |value| records(value, VisualVocabularyMapping::from_json),
-            )?,
-            graph: record.optional("graph", "a string", string)?,
-            graphs: record.defaulted("graphs", "an array of strings", strings)?,
-            label_policy: record.optional("labelPolicy", "a string", string)?,
-            max_statements: usize_member("maxStatements")?,
-            max_terms: usize_member("maxTerms")?,
-            table_fields: record.optional("tableFields", "an array of strings", |value| {
-                strings(value).ok()
-            })?,
-            layout: record.defaulted("layout", "an object", VisualLayoutOptions::from_json)?,
-            svg: record.defaulted("svg", "an object", VisualSvgOptions::from_json)?,
-        })
+        Self::read(value).map_err(|error| format!("visualization options: {error}"))
+    }
+
+    fn read(value: &Value) -> Result<Self, DecodeError> {
+        let mut record = Record::new(value, "an object")?;
+        let options = Self {
+            mode: record.optional("mode")?,
+            focus: record.optional("focus")?,
+            role_rules: record.defaulted("roleRules")?,
+            vocabulary: record.defaulted("vocabulary")?,
+            graph: record.optional("graph")?,
+            graphs: record.defaulted("graphs")?,
+            label_policy: record.optional("labelPolicy")?,
+            max_statements: record.optional("maxStatements")?,
+            max_terms: record.optional("maxTerms")?,
+            table_fields: record.optional("tableFields")?,
+            layout: record.defaulted("layout")?,
+            svg: record.defaulted("svg")?,
+        };
+        record.deny_unknown()?;
+        Ok(options)
     }
 
     fn into_engine_options(self) -> Result<(VizSpec, VizRenderOptions), JsError> {

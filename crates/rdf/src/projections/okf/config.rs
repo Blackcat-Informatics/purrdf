@@ -5,9 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_lex::json::{Object, Value};
 
-use super::super::json_codec::{Fields, FromJson, JsonError, ToJson, json_string_enum};
 use super::super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
 use crate::native_codecs::okf::{MAX_OKF_BUNDLE_BYTES, MAX_OKF_DOCUMENT_BYTES, MAX_OKF_DOCUMENTS};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
+use purrdf_lex::json_string_enum;
 
 /// Stable unified-projection profile name for caller-curated OKF bundles.
 pub const OKF_TERMS_PROFILE: &str = "okf-terms";
@@ -1090,8 +1091,8 @@ fn tagged(kind: &str) -> Object {
 }
 
 impl FromJson for OkfGraphSelection {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "internally tagged enum OkfGraphSelection")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum OkfGraphSelection")?;
         let selection = match fields.tag("kind", &["all", "include"])? {
             "all" => Self::All,
             _ => Self::Include {
@@ -1119,8 +1120,8 @@ impl ToJson for OkfGraphSelection {
 }
 
 impl FromJson for OkfConceptSelector {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct OkfConceptSelector")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct OkfConceptSelector")?;
         let selector = Self {
             type_predicate: fields.optional("type_predicate")?,
             any_types: fields.required("any_types")?,
@@ -1147,8 +1148,8 @@ impl ToJson for OkfConceptSelector {
 }
 
 impl FromJson for OkfCategory {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct OkfCategory")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct OkfCategory")?;
         let category = Self {
             directory: fields.required("directory")?,
             document_type: fields.required("document_type")?,
@@ -1175,8 +1176,8 @@ impl ToJson for OkfCategory {
 }
 
 impl FromJson for OkfPathStrategy {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "internally tagged enum OkfPathStrategy")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum OkfPathStrategy")?;
         let strategy =
             match fields.tag("kind", &["subject-local-name", "predicate", "stable-hash"])? {
                 "subject-local-name" => Self::SubjectLocalName,
@@ -1209,8 +1210,8 @@ impl ToJson for OkfPathStrategy {
 }
 
 impl FromJson for OkfValueMode {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "internally tagged enum OkfValueMode")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum OkfValueMode")?;
         let mode = match fields.tag(
             "kind",
             &["text", "iri", "boolean", "integer", "decimal", "date-time"],
@@ -1243,8 +1244,8 @@ impl ToJson for OkfValueMode {
 }
 
 impl FromJson for OkfFieldMapping {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct OkfFieldMapping")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct OkfFieldMapping")?;
         let mapping = Self {
             predicates: fields.required("predicates")?,
             cardinality: fields.required("cardinality")?,
@@ -1267,8 +1268,8 @@ impl ToJson for OkfFieldMapping {
 }
 
 impl FromJson for OkfResourceMapping {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "internally tagged enum OkfResourceMapping")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum OkfResourceMapping")?;
         let resource = match fields.tag("kind", &["omit", "subject", "predicate"])? {
             "omit" => Self::Omit,
             "subject" => Self::Subject,
@@ -1292,8 +1293,8 @@ impl ToJson for OkfResourceMapping {
 }
 
 impl FromJson for OkfFrontmatterMappings {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct OkfFrontmatterMappings")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct OkfFrontmatterMappings")?;
         let mappings = Self {
             title: fields.optional("title")?,
             description: fields.optional("description")?,
@@ -1322,8 +1323,8 @@ impl ToJson for OkfFrontmatterMappings {
 }
 
 impl FromJson for OkfBodyValueMode {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "internally tagged enum OkfBodyValueMode")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum OkfBodyValueMode")?;
         let mode = match fields.tag("kind", &["text", "markdown-literal"])? {
             "text" => Self::Text {
                 rendering: fields.required("rendering")?,
@@ -1345,8 +1346,8 @@ impl ToJson for OkfBodyValueMode {
 }
 
 impl FromJson for OkfBodySection {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct OkfBodySection")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct OkfBodySection")?;
         let section = Self {
             heading: fields.optional("heading")?,
             predicates: fields.required("predicates")?,
@@ -1371,8 +1372,8 @@ impl ToJson for OkfBodySection {
 }
 
 impl FromJson for OkfLinkSection {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct OkfLinkSection")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct OkfLinkSection")?;
         let section = Self {
             heading: fields.optional("heading")?,
             predicates: fields.required("predicates")?,
@@ -1401,8 +1402,8 @@ impl ToJson for OkfLinkSection {
 }
 
 impl FromJson for OkfIndexConfig {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct OkfIndexConfig")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct OkfIndexConfig")?;
         let index = Self {
             root_heading: fields.required("root_heading")?,
             categories_heading: fields.required("categories_heading")?,
@@ -1428,8 +1429,8 @@ impl ToJson for OkfIndexConfig {
 
 impl FromJson for OkfGenerationConfig {
     /// Every member, then [`OkfGenerationConfig::new`]'s whole-profile checks.
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct OkfGenerationConfig")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct OkfGenerationConfig")?;
         let graph_selection = fields.required("graph_selection")?;
         let categories = fields.required("categories")?;
         let path_strategy = fields.required("path_strategy")?;
@@ -1553,8 +1554,8 @@ fn validate_single_line(value: &str, role: &str) -> Result<(), ProjectionError> 
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::json_codec::{from_slice, to_vec};
     use super::*;
+    use purrdf_lex::json::record::{from_slice, to_vec};
 
     const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
     const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";

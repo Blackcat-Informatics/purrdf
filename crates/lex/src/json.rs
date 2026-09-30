@@ -46,6 +46,9 @@
 //!   members in the object's order, numbers as their lexemes, strings in one
 //!   spelling. [`Value::sort_keys`] reorders members by name for a caller whose
 //!   bytes were pinned while its members lived in a sorted map.
+//! * **One record law.** [`record`] decodes a [`Value`] into a caller's type:
+//!   strict records, closed string vocabularies and the scalar and container
+//!   conversions, refusing in one set of words with a JSON Pointer.
 //!
 //! ```rust
 //! use purrdf_lex::json::{self, Object, Value};
@@ -65,6 +68,7 @@
 mod error;
 mod number;
 mod read;
+pub mod record;
 mod value;
 mod write;
 

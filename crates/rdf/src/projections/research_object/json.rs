@@ -13,9 +13,9 @@ use crate::native_codecs::jsonld::{
     CompiledJsonLdContext, parse_jsonld, serialize_dataset_to_jsonld,
 };
 
-use super::super::json_codec::{Fields, FromJson, JsonError, ToJson, sorted_last_wins};
 use super::super::{ProjectionError, ProjectionLimits, ProjectionPackage, validate_absolute_iri};
 use super::{ResearchObjectConfig, ResearchObjectModel};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson, sorted_last_wins};
 
 /// Caller-owned, locally interpreted JSON-LD context.
 ///
@@ -126,8 +126,8 @@ impl OfflineJsonLdContext {
 }
 
 impl FromJson for OfflineJsonLdContext {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct OfflineJsonLdContext")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct OfflineJsonLdContext")?;
         let context: Value = fields.required("value")?;
         let definitions = fields.required("definitions")?;
         fields.deny_unknown()?;

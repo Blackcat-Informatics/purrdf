@@ -374,7 +374,7 @@ impl<'a> Projector<'a> {
                 )));
             }
             rows.push(
-                super::super::json_codec::read_document(lexical.as_bytes()).map_err(|error| {
+                purrdf_lex::json::record::read_document(lexical.as_bytes()).map_err(|error| {
                     ProjectionError::syntax(format!(
                         "parse inline row JSON for record set `{id}`: {error}"
                     ))
@@ -868,7 +868,7 @@ pub fn lift_research_object(
             )?;
         }
         for checksum in &resource.checksums {
-            let key = super::super::json_codec::to_vec(&(resource.id.as_str(), checksum));
+            let key = purrdf_lex::json::record::to_vec(&(resource.id.as_str(), checksum));
             let local = stable_identifier("checksum", &key)?;
             let checksum_id = config.identity().resolve_relative(&local)?;
             push_relation(
@@ -1116,7 +1116,7 @@ fn term_label(term: &ProjectionTerm) -> String {
         ProjectionTerm::Blank { label, scope } => format!("_:{scope}:{label}"),
         ProjectionTerm::Literal { lexical, .. } => format!("literal:{lexical}"),
         ProjectionTerm::Triple { .. } => {
-            purrdf_lex::json::write_compact(&super::super::json_codec::ToJson::to_json(term))
+            purrdf_lex::json::write_compact(&purrdf_lex::json::record::ToJson::to_json(term))
         }
     }
 }

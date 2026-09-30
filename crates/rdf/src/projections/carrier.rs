@@ -10,7 +10,6 @@ use std::sync::Arc;
 use purrdf_core::{DatasetView, LossLedger, RdfDataset};
 use purrdf_lex::json::{Object, Value};
 
-use super::json_codec::{Fields, FromJson, JsonError, ToJson};
 use super::{
     CroissantConfig, CsvwConfig, CsvwTermsConfig, DataCiteConfig, DcatConfig, DcatRdfConfig,
     FrictionlessConfig, LpgConfig, LpgProgressObserver, LpgStreamProjection, OboGraphsConfig,
@@ -24,6 +23,7 @@ use super::{
     read_croissant, read_csvw_exact, read_datacite, read_dcat, read_frictionless, read_lpg_csv,
     read_lpg_cypher, read_lpg_graphml, read_neo4j_csv, read_ro_crate,
 };
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
 
 const OBO_GRAPHS_PATH: &str = "obo-graphs.json";
 const SKOS_PATH: &str = "skos.ttl";
@@ -298,7 +298,7 @@ impl ProjectionConfig {
     /// profile, an unknown field, or an invalid nested mandatory policy.
     pub fn from_json(bytes: &[u8]) -> Result<Self, ProjectionError> {
         purrdf_lex::json::read_slice(bytes, purrdf_lex::json::Limits::DEFAULT)
-            .map_err(JsonError::from)
+            .map_err(DecodeError::from)
             .and_then(|value| config_from_json(&value))
             .map_err(|error| {
                 ProjectionError::syntax(format!("parse projection configuration JSON: {error}"))
@@ -641,12 +641,12 @@ impl ToJson for LiftProfile {
 
 /// `{"profile": …, "config": …}`: the profile's spelling and its
 /// configuration, and no other member.
-fn config_from_json(value: &Value) -> Result<ProjectionConfig, JsonError> {
+fn config_from_json(value: &Value) -> Result<ProjectionConfig, DecodeError> {
     let spellings: Vec<&str> = ProjectionProfile::ALL
         .iter()
         .map(|profile| profile.as_str())
         .collect();
-    let mut fields = Fields::new(value, "adjacently tagged enum ProjectionConfig")?;
+    let mut fields = Record::new(value, "adjacently tagged enum ProjectionConfig")?;
     let tag = fields.tag("profile", &spellings)?;
     let profile = ProjectionProfile::ALL
         .iter()
@@ -655,7 +655,7 @@ fn config_from_json(value: &Value) -> Result<ProjectionConfig, JsonError> {
         .expect("the tag names a listed profile");
     let config = fields
         .raw("config")?
-        .ok_or_else(|| JsonError::missing_field("config"))?;
+        .ok_or_else(|| DecodeError::missing_field("config"))?;
     fields.deny_unknown()?;
     Ok(match profile {
         ProjectionProfile::LpgCsv => ProjectionConfig::LpgCsv(FromJson::from_json(config)?),
