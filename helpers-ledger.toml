@@ -1312,7 +1312,7 @@ names = ['^(curie_prefix_of|namespace_and_local|split_iri_local)$']
 id = "media-type-by-extension"
 summary = "The media type a file extension names: the GTS files profile (tar entries carry no media type), slice artifacts, the slice RDF loader and the SPARQL conformance data-file loaders"
 home = "purrdf_gts::files::media_type_for_extension"
-entry_points = ["purrdf_gts::files::media_type_for_path"]
+entry_points = ["purrdf_gts::files::media_type_for_path", "purrdf_gts::files::media_type_for_path_among"]
 spec = "IANA media type registry; the RDF syntax types the native codecs register"
 vectors = []
 bench = []
@@ -1335,7 +1335,7 @@ file = "crates/slice/src/rdf_query.rs"
 detector = "forbidden"
 criterion = "b"
 anchor = "purrdf_slice::rdf_query::rdf_media_type_for_path"
-reason = "A thin filter over the home: it keeps the home's answer where it names a native RDF syntax and routes everything else to Turtle, which the loader needs and the shared table cannot say. It holds no extension table."
+reason = "A thin call of the home's purrdf_gts::files::media_type_for_path_among: it names the native RDF syntaxes the loader accepts and Turtle as the fallback, which the loader needs and the shared table cannot say. It holds no extension table and no filter loop; the SPARQL conformance data_media_type calls the same filter."
 
 [[job]]
 id = "datalog-shortest-path"
@@ -1353,6 +1353,23 @@ enforced = true
 constants = []
 fingerprints = []
 names = ['^(shortest_rule_path|shortest_dependency_path)$']
+
+[[job]]
+id = "datalog-stratum-relaxation"
+summary = "The stratum relaxation (a head sits at its body's stratum, one higher across a negative or aggregating edge) that the predicate stratification and the rule-schedule layering both run"
+home = "purrdf_datalog::paths::relax_strata"
+entry_points = []
+spec = "the standard stratification: the least assignment with stratum(head) >= stratum(body) + [edge is negative], terminating exactly when no closed edge sits in a cycle"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(relax_strata|relax_strata_.*|stratum_relaxation|relax_stratum)$']
 
 [[job]]
 id = "rif-seminaive-fixpoint"

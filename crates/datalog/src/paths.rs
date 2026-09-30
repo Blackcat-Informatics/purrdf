@@ -45,6 +45,45 @@ pub(crate) fn shortest_path<K: Ord + Clone>(
     None
 }
 
+/// The stratum relaxation every stratification in this crate runs: for each edge
+/// `(head, body, closed)` the head's stratum must reach the body's, plus one when the edge
+/// is `closed` (negative or aggregating), repeated until no stratum moves.
+///
+/// `get` and `set` read and write the caller's stratum store (a vector over rule indices,
+/// a map over predicate symbols), so the one loop serves both. `max_passes` bounds the
+/// passes: `None` runs to the fixpoint (the caller has proved it terminates), `Some(n)`
+/// gives up after `n` passes that still moved something. Returns whether it reached the
+/// fixpoint, so `false` means a closed edge sits inside a cycle.
+pub(crate) fn relax_strata<S, K, I>(
+    state: &mut S,
+    edges: impl Fn() -> I,
+    get: impl Fn(&S, &K) -> usize,
+    mut set: impl FnMut(&mut S, &K, usize),
+    max_passes: Option<usize>,
+) -> bool
+where
+    I: IntoIterator<Item = (K, K, bool)>,
+{
+    let mut passes = 0usize;
+    loop {
+        let mut changed = false;
+        for (head, body, closed) in edges() {
+            let need = get(state, &body) + usize::from(closed);
+            if get(state, &head) < need {
+                set(state, &head, need);
+                changed = true;
+            }
+        }
+        if !changed {
+            return true;
+        }
+        passes += 1;
+        if max_passes.is_some_and(|limit| passes > limit) {
+            return false;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

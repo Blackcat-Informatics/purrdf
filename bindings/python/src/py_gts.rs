@@ -993,7 +993,7 @@ fn feedback_bundle_native(
     Ok(PyBytes::new(py, &bytes).unbind())
 }
 
-fn rdf_format(format: PyRdfFormat) -> NativeRdfFormat {
+pub(crate) fn rdf_format(format: PyRdfFormat) -> NativeRdfFormat {
     format.to_native()
 }
 

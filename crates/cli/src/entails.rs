@@ -120,7 +120,8 @@ use purrdf_validate::regime::{
 };
 
 use crate::argv_documents::{
-    ImportPair, ImportRole, import_readers, parse_import_pairs, refuse_shared_stdin,
+    ImportPair, ImportRole, import_document_legs, import_readers, parse_import_pairs,
+    refuse_shared_stdin,
 };
 use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget, ReportTarget, refuse_document_flags};
 use crate::error::CliError;
@@ -411,18 +412,12 @@ fn refuse_unconsumable_base(
     if let Question::Conclusion { path, .. } = question {
         documents.push((path, "the --conclusion document".to_owned()));
     }
-    for spec in options.imports {
-        if let Some((iri, path)) = crate::premise_imports::split_import(spec)
-            && !iri.is_empty()
-            && !path.is_empty()
-        {
-            documents.push((path, format!("the --import {iri} document")));
-        }
-    }
-
     let mut resolved = Vec::with_capacity(documents.len());
     for (path, role) in &documents {
-        resolved.push((format::resolve(options.from, path)?, role.as_str()));
+        resolved.push((format::resolve(options.from, path)?, role.clone()));
+    }
+    for (_path, format, role) in import_document_legs(options.imports, options.from)? {
+        resolved.push((format, role));
     }
     let legs: Vec<format::BaseUse<'_>> = resolved
         .iter()

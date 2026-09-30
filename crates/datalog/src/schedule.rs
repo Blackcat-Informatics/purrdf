@@ -72,7 +72,7 @@ use crate::cache::{self, ContractHash};
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
 use crate::guard::{GuardEvaluator, Negation};
 use crate::id::RowId;
-use crate::paths::shortest_path;
+use crate::paths::{relax_strata, shortest_path};
 use crate::plan::RulePlan;
 use crate::seminaive::{
     Delta, EvalError, EvalOptions, Evaluation, FixpointState, JoinStrategy, RoundExecution,
@@ -761,17 +761,13 @@ pub fn stratify_dependency_graph(
 
     // The specification's relaxation; it terminates because the condition holds.
     let mut stratum = vec![0usize; rule_count];
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for (&(p, q), &closed) in edges {
-            let need = if closed { stratum[q] + 1 } else { stratum[q] };
-            if stratum[p] < need {
-                stratum[p] = need;
-                changed = true;
-            }
-        }
-    }
+    relax_strata(
+        &mut stratum,
+        || edges.iter().map(|(&(p, q), &closed)| (p, q, closed)),
+        |levels, &rule| levels[rule],
+        |levels, &rule, level| levels[rule] = level,
+        None,
+    );
     let top = stratum.iter().copied().max().unwrap_or(0);
     let layers = (0..=top)
         .filter(|level| stratum.contains(level))

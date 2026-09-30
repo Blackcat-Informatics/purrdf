@@ -274,10 +274,10 @@ impl SigningKey {
         prefix.copy_from_slice(&h[32..]);
         // B has order L, so [s]B = [s mod L]B.
         let scalar = Scalar::from_bytes_mod_order(&clamped);
-        let bytes = Point::mul_base(&scalar).encode();
+        let point = Point::mul_base(&scalar);
+        let bytes = point.encode();
         ct::wipe(&mut h);
         ct::wipe(&mut clamped);
-        let point = Point::decode(&bytes).expect("a multiple of B encodes canonically");
         Self {
             seed: *seed,
             scalar,

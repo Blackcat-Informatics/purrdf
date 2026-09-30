@@ -35,7 +35,9 @@ use purrdf_entail::{ImportMap, Materialization};
 use purrdf_rdf::SourceFormat;
 use purrdf_validate::regime::MaterializeLimits;
 
-use crate::argv_documents::{ImportRole, import_readers, parse_import_pairs, refuse_shared_stdin};
+use crate::argv_documents::{
+    ImportRole, import_document_legs, import_readers, parse_import_pairs, refuse_shared_stdin,
+};
 use crate::cli::{CliRdfFormat, ReportTarget};
 use crate::error::CliError;
 use crate::format;
@@ -129,19 +131,10 @@ impl PremiseImports {
         specs: &[String],
         from: Option<CliRdfFormat>,
     ) -> Result<Vec<(SourceFormat, String)>, CliError> {
-        let mut legs = Vec::new();
-        for spec in specs {
-            if let Some((iri, path)) = split_import(spec)
-                && !iri.is_empty()
-                && !path.is_empty()
-            {
-                legs.push((
-                    format::resolve(from, path)?,
-                    format!("the --import {iri} document"),
-                ));
-            }
-        }
-        Ok(legs)
+        Ok(import_document_legs(specs, from)?
+            .into_iter()
+            .map(|(_path, format, role)| (format, role))
+            .collect())
     }
 
     /// Close `view` under `plan` together with its `owl:imports` closure, surfacing the

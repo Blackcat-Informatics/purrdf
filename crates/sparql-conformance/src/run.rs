@@ -227,17 +227,16 @@ pub fn load_dataset(case: &SparqlTestCase) -> Result<Arc<RdfDataset>, String> {
 /// `purrdf::parse_dataset` (TriG, N-Quads, N-Triples, RDF/XML) and routes
 /// everything else to Turtle.
 pub(crate) fn data_media_type(path: &std::path::Path) -> &'static str {
-    let guessed = purrdf_gts::files::media_type_for_path(path);
-    [
-        purrdf::NativeRdfFormat::TriG,
-        purrdf::NativeRdfFormat::NQuads,
-        purrdf::NativeRdfFormat::NTriples,
-        purrdf::NativeRdfFormat::RdfXml,
-    ]
-    .into_iter()
-    .map(purrdf::NativeRdfFormat::media_type)
-    .find(|media_type| *media_type == guessed)
-    .unwrap_or_else(|| purrdf::NativeRdfFormat::Turtle.media_type())
+    purrdf_gts::files::media_type_for_path_among(
+        path,
+        &[
+            purrdf::NativeRdfFormat::TriG.media_type(),
+            purrdf::NativeRdfFormat::NQuads.media_type(),
+            purrdf::NativeRdfFormat::NTriples.media_type(),
+            purrdf::NativeRdfFormat::RdfXml.media_type(),
+        ],
+        purrdf::NativeRdfFormat::Turtle.media_type(),
+    )
 }
 
 /// The per-file base IRI a `qt:data`/`qt:graphData` Turtle file is parsed

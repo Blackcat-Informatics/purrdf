@@ -431,6 +431,26 @@ pub fn media_type_for_path(path: &Path) -> &'static str {
         .map_or("application/octet-stream", media_type_for_extension)
 }
 
+/// [`media_type_for_path`] restricted to an accepted list: the guessed media type where
+/// `accepted` names it, `fallback` for every other path.
+///
+/// A loader that feeds one family of codecs (the native RDF syntaxes) keeps the shared
+/// table's answer where it names a syntax the loader can read and routes the rest to the
+/// fallback, so the loader holds its list and never a second extension table.
+#[must_use]
+pub fn media_type_for_path_among(
+    path: &Path,
+    accepted: &[&'static str],
+    fallback: &'static str,
+) -> &'static str {
+    let guessed = media_type_for_path(path);
+    accepted
+        .iter()
+        .copied()
+        .find(|media_type| *media_type == guessed)
+        .unwrap_or(fallback)
+}
+
 fn write_blob_pub_map<W: Write>(
     writer: &mut W,
     digest: &str,

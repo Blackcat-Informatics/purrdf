@@ -61,6 +61,7 @@ use crate::binding_pattern::BindingPattern;
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, NonDatalogClause};
 use crate::guard::Negation;
 use crate::id::TermId;
+use crate::paths::relax_strata;
 use crate::store::Bound;
 
 // ── Stratification ──────────────────────────────────────────────────────────────
@@ -130,24 +131,21 @@ pub fn stratify(rules: &[DlClause]) -> Option<BTreeMap<String, usize>> {
 
     let mut stratum: BTreeMap<String, usize> = preds.iter().map(|p| (p.clone(), 0usize)).collect();
 
-    let n = preds.len();
-    for _pass in 0..=n {
-        let mut changed = false;
-        for (head, body, negative) in &edges {
-            let body_s = stratum[body];
-            let need = if *negative { body_s + 1 } else { body_s };
-            let head_s = stratum[head];
-            if head_s < need {
-                stratum.insert(head.clone(), need);
-                changed = true;
-            }
-        }
-        if !changed {
-            return Some(stratum);
-        }
-    }
     // Still relaxing after n + 1 passes ⇒ a negative edge sits in a cycle.
-    None
+    let settled = relax_strata(
+        &mut stratum,
+        || {
+            edges
+                .iter()
+                .map(|(head, body, negative)| (head.clone(), body.clone(), *negative))
+        },
+        |levels, predicate| levels[predicate],
+        |levels, predicate, level| {
+            levels.insert(predicate.clone(), level);
+        },
+        Some(preds.len()),
+    );
+    settled.then_some(stratum)
 }
 
 /// The predicate symbols of `rules` and the dependency edges

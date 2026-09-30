@@ -20,11 +20,11 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
 
+use crate::py_gts::rdf_format;
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs, serialize_frozen};
 use crate::py_store::PyRdfFormat;
 use crate::{
-    CanonHash, NativeRdfFormat, RdfDataset, RdfLookaside, ViewCanonError, gts_write,
-    try_canonicalize_flat_view,
+    CanonHash, RdfDataset, RdfLookaside, ViewCanonError, gts_write, try_canonicalize_flat_view,
 };
 
 /// A Python handle to a frozen [`RdfDataset`].
@@ -166,10 +166,6 @@ fn read_bytes(data: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
         return Ok(text.to_str()?.as_bytes().to_vec());
     }
     Err(PyValueError::new_err("data must be bytes or str"))
-}
-
-fn rdf_format(format: PyRdfFormat) -> NativeRdfFormat {
-    format.to_native()
 }
 
 // PyRdfDataset is registered via `py_gts::register`; no standalone `register` here

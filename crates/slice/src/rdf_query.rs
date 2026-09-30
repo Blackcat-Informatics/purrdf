@@ -926,16 +926,15 @@ use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 /// its answer where it names a native RDF syntax (`.nt` → N-Triples, `.nq` →
 /// N-Quads, `.trig` → TriG) and routes everything else to Turtle.
 pub(crate) fn rdf_media_type_for_path(path: &Path) -> &'static str {
-    let guessed = purrdf_gts::files::media_type_for_path(path);
-    [
-        NativeRdfFormat::NTriples,
-        NativeRdfFormat::NQuads,
-        NativeRdfFormat::TriG,
-    ]
-    .into_iter()
-    .map(NativeRdfFormat::media_type)
-    .find(|media_type| *media_type == guessed)
-    .unwrap_or_else(|| NativeRdfFormat::Turtle.media_type())
+    purrdf_gts::files::media_type_for_path_among(
+        path,
+        &[
+            NativeRdfFormat::NTriples.media_type(),
+            NativeRdfFormat::NQuads.media_type(),
+            NativeRdfFormat::TriG.media_type(),
+        ],
+        NativeRdfFormat::Turtle.media_type(),
+    )
 }
 
 #[cfg(test)]

@@ -17,11 +17,40 @@
 
 use purrdf_iri::{BaseScope, IriError};
 
+use crate::cli::CliRdfFormat;
 use crate::error::{CliError, argv_iri_refusal};
+use crate::format;
+use purrdf_rdf::SourceFormat;
 
 /// Whether a path names standard input.
 pub(crate) fn is_stdin(path: &str) -> bool {
     path == "-"
+}
+
+/// The documents an `--import IRI=FILE` argument list names, each with its resolved source
+/// format and the role a diagnostic names it by (`the --import IRI document`).
+///
+/// A spec with no `=`, or with an empty half, names no document here: the readers of
+/// [`parse_import_pairs`] refuse it with the operator-facing message, so this is only the
+/// format-resolution leg over the well-formed specs.
+pub(crate) fn import_document_legs(
+    specs: &[String],
+    from: Option<CliRdfFormat>,
+) -> Result<Vec<(&str, SourceFormat, String)>, CliError> {
+    let mut legs = Vec::new();
+    for spec in specs {
+        if let Some((iri, path)) = crate::premise_imports::split_import(spec)
+            && !iri.is_empty()
+            && !path.is_empty()
+        {
+            legs.push((
+                path,
+                format::resolve(from, path)?,
+                format!("the --import {iri} document"),
+            ));
+        }
+    }
+    Ok(legs)
 }
 
 /// One decided `--import IRI=FILE` argument.
