@@ -13,8 +13,7 @@ use super::super::{
     escape_cypher_identifier, escape_cypher_string,
 };
 use super::carrier_util::{
-    BoundedText, LpgTextWriter, require_canonical_package, required_artifact,
-    validate_package_bounds, write_manifest,
+    BoundedText, LpgTextWriter, require_canonical_package, validate_package_bounds, write_manifest,
 };
 use super::csv::{LpgPackageProjection, native_labels, property_token, relationship_token};
 use super::mapping::{LpgProjection, project_lpg, project_lpg_with_progress};
@@ -163,18 +162,18 @@ pub fn read_lpg_cypher(
 ) -> Result<LpgGraph, ProjectionError> {
     validate_package_bounds(package, config.limits())?;
     let schema_version = super::carrier_util::read_manifest(
-        required_artifact(package, MANIFEST_PATH)?,
+        package.required(MANIFEST_PATH)?,
         PROFILE,
         config,
         MANIFEST_PATH,
     )?;
-    let graph = LpgGraph::from_canonical_json(required_artifact(package, LPG_PATH)?, config)?;
+    let graph = LpgGraph::from_canonical_json(package.required(LPG_PATH)?, config)?;
     if graph.schema_version != schema_version {
         return Err(ProjectionError::integrity(
             "openCypher manifest and canonical LPG schema versions disagree",
         ));
     }
-    let actual = required_artifact(package, CYPHER_PATH)?;
+    let actual = package.required(CYPHER_PATH)?;
     std::str::from_utf8(actual).map_err(|error| {
         ProjectionError::syntax(format!("openCypher is not UTF-8: {error}")).at_path(CYPHER_PATH)
     })?;

@@ -176,29 +176,11 @@ pub struct CsvwDatatype {
     pub max_exclusive: Option<Value>,
 }
 
-impl FromJson for CsvwNumericFormat {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct CsvwNumericFormat")?;
-        let format = Self {
-            pattern: fields.optional("pattern")?,
-            decimal_char: fields.required("decimal_char")?,
-            group_char: fields.optional("group_char")?,
-        };
-        fields.deny_unknown()?;
-        Ok(format)
-    }
-}
-
-impl ToJson for CsvwNumericFormat {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("pattern", self.pattern.to_json())
-                .with("decimal_char", self.decimal_char.to_json())
-                .with("group_char", self.group_char.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(CsvwNumericFormat as "struct CsvwNumericFormat" {
+    "pattern" => pattern: optional,
+    "decimal_char" => decimal_char: required,
+    "group_char" => group_char: optional,
+});
 
 impl FromJson for CsvwDatatypeFormat {
     /// `{"kind": "pattern" | "numeric", "value": …}`; other members are ignored.
@@ -226,47 +208,20 @@ impl ToJson for CsvwDatatypeFormat {
     }
 }
 
-impl FromJson for CsvwDatatype {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct CsvwDatatype")?;
-        let datatype = Self {
-            id: fields.optional("id")?,
-            base: fields.required("base")?,
-            format: fields.optional("format")?,
-            length: fields.optional("length")?,
-            min_length: fields.optional("min_length")?,
-            max_length: fields.optional("max_length")?,
-            minimum: fields.optional("minimum")?,
-            maximum: fields.optional("maximum")?,
-            min_inclusive: fields.optional("min_inclusive")?,
-            max_inclusive: fields.optional("max_inclusive")?,
-            min_exclusive: fields.optional("min_exclusive")?,
-            max_exclusive: fields.optional("max_exclusive")?,
-        };
-        fields.deny_unknown()?;
-        Ok(datatype)
-    }
-}
-
-impl ToJson for CsvwDatatype {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("id", self.id.to_json())
-                .with("base", self.base.as_str())
-                .with("format", self.format.to_json())
-                .with("length", self.length.to_json())
-                .with("min_length", self.min_length.to_json())
-                .with("max_length", self.max_length.to_json())
-                .with("minimum", self.minimum.to_json())
-                .with("maximum", self.maximum.to_json())
-                .with("min_inclusive", self.min_inclusive.to_json())
-                .with("max_inclusive", self.max_inclusive.to_json())
-                .with("min_exclusive", self.min_exclusive.to_json())
-                .with("max_exclusive", self.max_exclusive.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(CsvwDatatype as "struct CsvwDatatype" {
+    "id" => id: optional,
+    "base" => base: required,
+    "format" => format: optional,
+    "length" => length: optional,
+    "min_length" => min_length: optional,
+    "max_length" => max_length: optional,
+    "minimum" => minimum: optional,
+    "maximum" => maximum: optional,
+    "min_inclusive" => min_inclusive: optional,
+    "max_inclusive" => max_inclusive: optional,
+    "min_exclusive" => min_exclusive: optional,
+    "max_exclusive" => max_exclusive: optional,
+});
 
 /// Properties inherited by table, schema, and column descriptions.
 #[derive(Debug, Clone, PartialEq, Eq)]

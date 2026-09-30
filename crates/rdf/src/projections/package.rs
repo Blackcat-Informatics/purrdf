@@ -1,12 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use crate::projections::util::byte_entries;
 use std::collections::BTreeMap;
 
-use purrdf_lex::json::{Object, Value};
-
 use super::ProjectionError;
-use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
 
 /// Maximum artifact path length accepted by the portable package profile.
 const MAX_ARTIFACT_PATH_BYTES: usize = 4_096;
@@ -117,37 +115,21 @@ impl ProjectionLimits {
     }
 }
 
-impl FromJson for ProjectionLimits {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct ProjectionLimits")?;
-        let max_artifacts = fields.required("max_artifacts")?;
-        let max_artifact_bytes = fields.required("max_artifact_bytes")?;
-        let max_total_bytes = fields.required("max_total_bytes")?;
-        let max_archive_bytes = fields.required("max_archive_bytes")?;
-        let max_term_depth = fields.required("max_term_depth")?;
-        fields.deny_unknown()?;
-        Ok(Self::new(
-            max_artifacts,
-            max_artifact_bytes,
-            max_total_bytes,
-            max_archive_bytes,
-            max_term_depth,
-        )?)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for ProjectionLimits as "struct ProjectionLimits" {
+    "max_artifacts" => max_artifacts: required,
+    "max_artifact_bytes" => max_artifact_bytes: required,
+    "max_total_bytes" => max_total_bytes: required,
+    "max_archive_bytes" => max_archive_bytes: required,
+    "max_term_depth" => max_term_depth: required,
+} => ProjectionLimits::new);
 
-impl ToJson for ProjectionLimits {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("max_artifacts", self.artifact_count)
-                .with("max_artifact_bytes", self.artifact_bytes)
-                .with("max_total_bytes", self.total_bytes)
-                .with("max_archive_bytes", self.archive_bytes)
-                .with("max_term_depth", self.term_depth),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for ProjectionLimits {
+    "max_artifacts" => artifact_count,
+    "max_artifact_bytes" => artifact_bytes,
+    "max_total_bytes" => total_bytes,
+    "max_archive_bytes" => archive_bytes,
+    "max_term_depth" => term_depth,
+});
 
 /// A deterministic, validated, filesystem-free projection artifact package.
 ///
@@ -277,11 +259,20 @@ impl ProjectionPackage {
         self.artifacts.get(path).map(Vec::as_slice)
     }
 
+    /// Bytes of the artifact at `path`, which a reader requires.
+    ///
+    /// # Errors
+    ///
+    /// Returns a package error located at `path` when the package holds no
+    /// such artifact.
+    pub(crate) fn required(&self, path: &str) -> Result<&[u8], ProjectionError> {
+        self.get(path)
+            .ok_or_else(|| ProjectionError::package("required artifact is missing").at_path(path))
+    }
+
     /// Artifacts in deterministic lexical path order.
     pub fn artifacts(&self) -> impl ExactSizeIterator<Item = (&str, &[u8])> {
-        self.artifacts
-            .iter()
-            .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+        byte_entries(&self.artifacts)
     }
 
     /// Number of artifacts.

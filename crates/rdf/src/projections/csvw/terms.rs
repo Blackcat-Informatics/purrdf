@@ -3,10 +3,11 @@
 
 //! Caller-declared, deterministic RDF term inventories in CSVW.
 
-use crate::projections::source_rows::{
-    SourceAnnotation, SourceQuad, SourceReifier, source_identifier,
-};
-use std::borrow::Cow;
+use super::super::selection::{GraphSelection, SubjectSelector};
+use super::table::table_fragment_iri;
+use crate::projections::loss::record_row_loss;
+use crate::projections::source_rows::{SourceAnnotation, SourceQuad, SourceReifier};
+use crate::projections::util::reject_duplicates;
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::loss::{
@@ -17,8 +18,7 @@ use purrdf_core::loss::{
     LOSS_CSVW_TERMS_SUBJECT_UNSELECTED,
 };
 use purrdf_core::{
-    DatasetView, LossEntry, LossLedger, RdfLocation, RdfTextDirection, check_ledger_sound,
-    rdf_to_csvw_terms_loss_ledger,
+    DatasetView, LossLedger, RdfTextDirection, check_ledger_sound, rdf_to_csvw_terms_loss_ledger,
 };
 use purrdf_lex::json::{Object, Value};
 
@@ -40,155 +40,10 @@ use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
 pub const CSVW_TERMS_PROFILE: &str = "csvw-terms";
 
 /// Explicit RDF graph scope used to discover rows and column values.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CsvwTermsGraphSelection {
-    /// Read the default graph and every declared named graph.
-    All,
-    /// Read exactly the named graph identities and default-graph flag supplied here.
-    Include {
-        /// Whether default-graph quads are in scope.
-        default_graph: bool,
-        /// Exact named-graph IRIs in scope.
-        named_graphs: BTreeSet<String>,
-    },
-}
-
-impl CsvwTermsGraphSelection {
-    /// Construct and validate an exact graph selection.
-    ///
-    /// # Errors
-    ///
-    /// Returns a configuration error for a relative named-graph IRI or an empty scope.
-    pub fn include(
-        default_graph: bool,
-        named_graphs: BTreeSet<String>,
-    ) -> Result<Self, ProjectionError> {
-        let selection = Self::Include {
-            default_graph,
-            named_graphs,
-        };
-        selection.validate()?;
-        Ok(selection)
-    }
-
-    fn validate(&self) -> Result<(), ProjectionError> {
-        if let Self::Include {
-            default_graph,
-            named_graphs,
-        } = self
-        {
-            if !default_graph && named_graphs.is_empty() {
-                return Err(ProjectionError::configuration(
-                    "CSVW terms graph selection must include at least one graph",
-                ));
-            }
-            for graph in named_graphs {
-                validate_absolute_iri(graph, "CSVW terms named graph")?;
-            }
-        }
-        Ok(())
-    }
-}
+pub type CsvwTermsGraphSelection = GraphSelection;
 
 /// Caller-supplied RDF-type and subject-namespace membership test for one table.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CsvwTermsSelector {
-    type_predicate: Option<String>,
-    any_types: BTreeSet<String>,
-    all_types: BTreeSet<String>,
-    none_types: BTreeSet<String>,
-    iri_prefixes: BTreeSet<String>,
-}
-
-impl CsvwTermsSelector {
-    /// Construct a validated table selector.
-    ///
-    /// Empty type sets mean that type membership does not constrain the table. Empty
-    /// IRI prefixes mean that every IRI subject is eligible. A type predicate is
-    /// required exactly when at least one type constraint is present.
-    ///
-    /// # Errors
-    ///
-    /// Returns a configuration error for incomplete, contradictory, or relative IRI
-    /// policy.
-    pub fn new(
-        type_predicate: Option<String>,
-        any_types: BTreeSet<String>,
-        all_types: BTreeSet<String>,
-        none_types: BTreeSet<String>,
-        iri_prefixes: BTreeSet<String>,
-    ) -> Result<Self, ProjectionError> {
-        let selector = Self {
-            type_predicate,
-            any_types,
-            all_types,
-            none_types,
-            iri_prefixes,
-        };
-        selector.validate()?;
-        Ok(selector)
-    }
-
-    /// RDF type predicate used by the membership test.
-    pub fn type_predicate(&self) -> Option<&str> {
-        self.type_predicate.as_deref()
-    }
-
-    /// Types of which at least one must be present, when non-empty.
-    pub const fn any_types(&self) -> &BTreeSet<String> {
-        &self.any_types
-    }
-
-    /// Types all of which must be present.
-    pub const fn all_types(&self) -> &BTreeSet<String> {
-        &self.all_types
-    }
-
-    /// Types none of which may be present.
-    pub const fn none_types(&self) -> &BTreeSet<String> {
-        &self.none_types
-    }
-
-    /// Allowed subject-IRI prefixes; empty means every IRI.
-    pub const fn iri_prefixes(&self) -> &BTreeSet<String> {
-        &self.iri_prefixes
-    }
-
-    fn validate(&self) -> Result<(), ProjectionError> {
-        let has_type_constraints =
-            !(self.any_types.is_empty() && self.all_types.is_empty() && self.none_types.is_empty());
-        if has_type_constraints != self.type_predicate.is_some() {
-            return Err(ProjectionError::configuration(
-                "CSVW terms selector requires type_predicate exactly when type constraints are present",
-            ));
-        }
-        if let Some(predicate) = &self.type_predicate {
-            validate_absolute_iri(predicate, "CSVW terms type predicate")?;
-        }
-        for (role, values) in [
-            ("any type", &self.any_types),
-            ("all type", &self.all_types),
-            ("excluded type", &self.none_types),
-        ] {
-            for value in values {
-                validate_absolute_iri(value, &format!("CSVW terms {role}"))?;
-            }
-        }
-        if self
-            .none_types
-            .iter()
-            .any(|value| self.any_types.contains(value) || self.all_types.contains(value))
-        {
-            return Err(ProjectionError::configuration(
-                "CSVW terms selector cannot both require and exclude the same type",
-            ));
-        }
-        for prefix in &self.iri_prefixes {
-            validate_absolute_iri(prefix, "CSVW terms subject IRI prefix")?;
-        }
-        Ok(())
-    }
-}
+pub type CsvwTermsSelector = SubjectSelector;
 
 /// Visible subject-identity column shared by every row in one table.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -711,92 +566,11 @@ impl CsvwTermsConfig {
     }
 }
 
-/// The tags of [`CsvwTermsGraphSelection`].
-const GRAPH_SELECTION_KINDS: &[&str] = &["all", "include"];
-
-impl FromJson for CsvwTermsGraphSelection {
-    /// `{"kind": "all"}` or `{"kind": "include", …}`; any other member is refused.
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "internally tagged enum CsvwTermsGraphSelection")?;
-        let selection = if fields.tag("kind", GRAPH_SELECTION_KINDS)? == "all" {
-            Self::All
-        } else {
-            Self::Include {
-                default_graph: fields.required("default_graph")?,
-                named_graphs: fields.required("named_graphs")?,
-            }
-        };
-        fields.deny_unknown()?;
-        Ok(selection)
-    }
-}
-
-impl ToJson for CsvwTermsGraphSelection {
-    fn to_json(&self) -> Value {
-        Value::Object(match self {
-            Self::All => Object::new().with("kind", "all"),
-            Self::Include {
-                default_graph,
-                named_graphs,
-            } => Object::new()
-                .with("kind", "include")
-                .with("default_graph", *default_graph)
-                .with("named_graphs", named_graphs.to_json()),
-        })
-    }
-}
-
-impl FromJson for CsvwTermsSelector {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct CsvwTermsSelector")?;
-        let selector = Self {
-            type_predicate: fields.optional("type_predicate")?,
-            any_types: fields.required("any_types")?,
-            all_types: fields.required("all_types")?,
-            none_types: fields.required("none_types")?,
-            iri_prefixes: fields.required("iri_prefixes")?,
-        };
-        fields.deny_unknown()?;
-        Ok(selector)
-    }
-}
-
-impl ToJson for CsvwTermsSelector {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("type_predicate", self.type_predicate.to_json())
-                .with("any_types", self.any_types.to_json())
-                .with("all_types", self.all_types.to_json())
-                .with("none_types", self.none_types.to_json())
-                .with("iri_prefixes", self.iri_prefixes.to_json()),
-        )
-    }
-}
-
-impl FromJson for CsvwTermsIdentityColumn {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct CsvwTermsIdentityColumn")?;
-        let column = Self {
-            name: fields.required("name")?,
-            titles: fields.required("titles")?,
-            datatype: fields.required("datatype")?,
-        };
-        fields.deny_unknown()?;
-        Ok(column)
-    }
-}
-
-impl ToJson for CsvwTermsIdentityColumn {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("name", self.name.as_str())
-                .with("titles", self.titles.to_json())
-                .with("datatype", self.datatype.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(CsvwTermsIdentityColumn as "struct CsvwTermsIdentityColumn" {
+    "name" => name: required,
+    "titles" => titles: required,
+    "datatype" => datatype: required,
+});
 
 /// The tags of [`CsvwTermsValueMode`].
 const VALUE_MODE_KINDS: &[&str] = &["iri", "literal"];
@@ -870,121 +644,45 @@ impl ToJson for CsvwTermsCardinality {
     }
 }
 
-impl FromJson for CsvwTermsColumn {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct CsvwTermsColumn")?;
-        let column = Self {
-            name: fields.required("name")?,
-            titles: fields.required("titles")?,
-            predicate: fields.required("predicate")?,
-            value_mode: fields.required("value_mode")?,
-            cardinality: fields.required("cardinality")?,
-            required: fields.required("required")?,
-        };
-        fields.deny_unknown()?;
-        Ok(column)
-    }
-}
+purrdf_lex::json_record!(CsvwTermsColumn as "struct CsvwTermsColumn" {
+    "name" => name: required,
+    "titles" => titles: required,
+    "predicate" => predicate: required,
+    "value_mode" => value_mode: required,
+    "cardinality" => cardinality: required,
+    "required" => required: required,
+});
 
-impl ToJson for CsvwTermsColumn {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("name", self.name.as_str())
-                .with("titles", self.titles.to_json())
-                .with("predicate", self.predicate.as_str())
-                .with("value_mode", self.value_mode.to_json())
-                .with("cardinality", self.cardinality.to_json())
-                .with("required", self.required),
-        )
-    }
-}
+purrdf_lex::json_record!(CsvwTermsTable as "struct CsvwTermsTable" {
+    "name" => name: required,
+    "table_url" => table_url: required,
+    "artifact_path" => artifact_path: required,
+    "selector" => selector: required,
+    "identity" => identity: required,
+    "columns" => columns: required,
+});
 
-impl FromJson for CsvwTermsTable {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct CsvwTermsTable")?;
-        let table = Self {
-            name: fields.required("name")?,
-            table_url: fields.required("table_url")?,
-            artifact_path: fields.required("artifact_path")?,
-            selector: fields.required("selector")?,
-            identity: fields.required("identity")?,
-            columns: fields.required("columns")?,
-        };
-        fields.deny_unknown()?;
-        Ok(table)
-    }
-}
+purrdf_lex::json_record!(CsvwTermsLimits as "struct CsvwTermsLimits" {
+    "max_rows" => rows: required,
+    "max_values" => values: required,
+    "max_values_per_cell" => values_per_cell: required,
+});
 
-impl ToJson for CsvwTermsTable {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("name", self.name.as_str())
-                .with("table_url", self.table_url.as_str())
-                .with("artifact_path", self.artifact_path.as_str())
-                .with("selector", self.selector.to_json())
-                .with("identity", self.identity.to_json())
-                .with("columns", self.columns.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl FromJson for CsvwTermsConfig as "struct CsvwTermsConfig" {
+    "csvw" => csvw: required,
+    "metadata_path" => metadata_path: required::<String>,
+    "graph_selection" => graph_selection: required,
+    "tables" => tables: required,
+    "execution_limits" => execution_limits: required,
+} => CsvwTermsConfig::new);
 
-impl FromJson for CsvwTermsLimits {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct CsvwTermsLimits")?;
-        let limits = Self {
-            rows: fields.required("max_rows")?,
-            values: fields.required("max_values")?,
-            values_per_cell: fields.required("max_values_per_cell")?,
-        };
-        fields.deny_unknown()?;
-        Ok(limits)
-    }
-}
-
-impl ToJson for CsvwTermsLimits {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("max_rows", self.rows)
-                .with("max_values", self.values)
-                .with("max_values_per_cell", self.values_per_cell),
-        )
-    }
-}
-
-impl FromJson for CsvwTermsConfig {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct CsvwTermsConfig")?;
-        let csvw = fields.required("csvw")?;
-        let metadata_path: String = fields.required("metadata_path")?;
-        let graph_selection = fields.required("graph_selection")?;
-        let tables = fields.required("tables")?;
-        let execution_limits = fields.required("execution_limits")?;
-        fields.deny_unknown()?;
-        Ok(Self::new(
-            csvw,
-            metadata_path,
-            graph_selection,
-            tables,
-            execution_limits,
-        )?)
-    }
-}
-
-impl ToJson for CsvwTermsConfig {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("csvw", self.csvw.to_json())
-                .with("metadata_path", self.metadata_path.as_str())
-                .with("graph_selection", self.graph_selection.to_json())
-                .with("tables", self.tables.to_json())
-                .with("execution_limits", self.execution_limits.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for CsvwTermsConfig {
+    "csvw" => csvw,
+    "metadata_path" => metadata_path,
+    "graph_selection" => graph_selection,
+    "tables" => tables,
+    "execution_limits" => execution_limits,
+});
 
 /// Deterministic execution counts for one curated terms projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1053,25 +751,31 @@ impl<'a> TermsProjector<'a> {
 
         let mut named_graphs = Vec::new();
         for graph in view.named_graphs() {
-            named_graphs.push(resolve_term(view, graph, config, &mut cache)?);
+            named_graphs.push(ProjectionTerm::resolve_cached(
+                view,
+                graph,
+                config.limits(),
+                &mut cache,
+            )?);
         }
         named_graphs.sort();
         reject_duplicates(&named_graphs, "named graph declarations")?;
 
         let mut quads = Vec::new();
         for quad in view.quads() {
-            let subject = resolve_term(view, quad.s, config, &mut cache)?;
+            let subject =
+                ProjectionTerm::resolve_cached(view, quad.s, config.limits(), &mut cache)?;
             let ProjectionTerm::Iri { value: predicate } =
-                resolve_term(view, quad.p, config, &mut cache)?
+                ProjectionTerm::resolve_cached(view, quad.p, config.limits(), &mut cache)?
             else {
                 return Err(ProjectionError::integrity(
                     "RDF dataset view exposed a non-IRI predicate",
                 ));
             };
-            let object = resolve_term(view, quad.o, config, &mut cache)?;
+            let object = ProjectionTerm::resolve_cached(view, quad.o, config.limits(), &mut cache)?;
             let graph = quad
                 .g
-                .map(|id| resolve_term(view, id, config, &mut cache))
+                .map(|id| ProjectionTerm::resolve_cached(view, id, config.limits(), &mut cache))
                 .transpose()?;
             quads.push(SourceQuad {
                 subject,
@@ -1085,8 +789,9 @@ impl<'a> TermsProjector<'a> {
 
         let mut reifiers = Vec::new();
         for row in view.reifier_quads() {
-            let reifier = resolve_term(view, row.s, config, &mut cache)?;
-            let statement = resolve_term(view, row.o, config, &mut cache)?;
+            let reifier = ProjectionTerm::resolve_cached(view, row.s, config.limits(), &mut cache)?;
+            let statement =
+                ProjectionTerm::resolve_cached(view, row.o, config.limits(), &mut cache)?;
             if !matches!(statement, ProjectionTerm::Triple { .. }) {
                 return Err(ProjectionError::integrity(
                     "RDF dataset view exposed a reifier binding to a non-triple term",
@@ -1094,7 +799,7 @@ impl<'a> TermsProjector<'a> {
             }
             let graph = row
                 .g
-                .map(|id| resolve_term(view, id, config, &mut cache))
+                .map(|id| ProjectionTerm::resolve_cached(view, id, config.limits(), &mut cache))
                 .transpose()?;
             reifiers.push(SourceReifier {
                 reifier,
@@ -1107,18 +812,18 @@ impl<'a> TermsProjector<'a> {
 
         let mut annotations = Vec::new();
         for row in view.annotation_quads() {
-            let reifier = resolve_term(view, row.s, config, &mut cache)?;
+            let reifier = ProjectionTerm::resolve_cached(view, row.s, config.limits(), &mut cache)?;
             let ProjectionTerm::Iri { value: predicate } =
-                resolve_term(view, row.p, config, &mut cache)?
+                ProjectionTerm::resolve_cached(view, row.p, config.limits(), &mut cache)?
             else {
                 return Err(ProjectionError::integrity(
                     "RDF dataset view exposed a non-IRI annotation predicate",
                 ));
             };
-            let object = resolve_term(view, row.o, config, &mut cache)?;
+            let object = ProjectionTerm::resolve_cached(view, row.o, config.limits(), &mut cache)?;
             let graph = row
                 .g
-                .map(|id| resolve_term(view, id, config, &mut cache))
+                .map(|id| ProjectionTerm::resolve_cached(view, id, config.limits(), &mut cache))
                 .transpose()?;
             annotations.push(SourceAnnotation {
                 reifier,
@@ -1313,7 +1018,11 @@ impl<'a> TermsProjector<'a> {
                 rows.push(CsvwRow {
                     number,
                     source_number: number,
-                    url: row_url(&declaration.table_url, number)?,
+                    url: table_fragment_iri(
+                        &declaration.table_url,
+                        &format!("row={number}"),
+                        "CSVW terms",
+                    )?,
                     titles: vec![subject.to_owned()],
                     cells,
                 });
@@ -1431,9 +1140,14 @@ impl<'a> TermsProjector<'a> {
         index: usize,
         code: &'static str,
     ) -> Result<(), ProjectionError> {
-        let subject = source_identifier("CsvwTermsQuad", &self.quads[index])?;
-        self.record_loss(code, "csvw-terms:quad", subject);
-        Ok(())
+        record_row_loss(
+            &mut self.ledger,
+            &self.contract,
+            code,
+            "csvw-terms:quad",
+            "CsvwTermsQuad",
+            &self.quads[index],
+        )
     }
 
     fn record_named_graph_loss(
@@ -1441,9 +1155,14 @@ impl<'a> TermsProjector<'a> {
         index: usize,
         code: &'static str,
     ) -> Result<(), ProjectionError> {
-        let subject = source_identifier("CsvwTermsGraph", &self.named_graphs[index])?;
-        self.record_loss(code, "csvw-terms:named-graph", subject);
-        Ok(())
+        record_row_loss(
+            &mut self.ledger,
+            &self.contract,
+            code,
+            "csvw-terms:named-graph",
+            "CsvwTermsGraph",
+            &self.named_graphs[index],
+        )
     }
 
     fn record_reifier_loss(
@@ -1451,9 +1170,14 @@ impl<'a> TermsProjector<'a> {
         index: usize,
         code: &'static str,
     ) -> Result<(), ProjectionError> {
-        let subject = source_identifier("CsvwTermsReifier", &self.reifiers[index])?;
-        self.record_loss(code, "csvw-terms:reifier", subject);
-        Ok(())
+        record_row_loss(
+            &mut self.ledger,
+            &self.contract,
+            code,
+            "csvw-terms:reifier",
+            "CsvwTermsReifier",
+            &self.reifiers[index],
+        )
     }
 
     fn record_annotation_loss(
@@ -1461,27 +1185,14 @@ impl<'a> TermsProjector<'a> {
         index: usize,
         code: &'static str,
     ) -> Result<(), ProjectionError> {
-        let subject = source_identifier("CsvwTermsAnnotation", &self.annotations[index])?;
-        self.record_loss(code, "csvw-terms:annotation", subject);
-        Ok(())
-    }
-
-    fn record_loss(&mut self, code: &'static str, logical: &str, subject: String) {
-        let template = self
-            .contract
-            .entries()
-            .iter()
-            .find(|entry| entry.code == code)
-            .expect("runtime CSVW terms code must exist in the closed contract");
-        self.ledger.record(LossEntry {
-            code: Cow::Borrowed(code),
-            from: template.from.clone(),
-            to: template.to.clone(),
-            note: template.note.clone(),
-            location: Some(Box::new(
-                RdfLocation::logical(logical).with_subject(subject),
-            )),
-        });
+        record_row_loss(
+            &mut self.ledger,
+            &self.contract,
+            code,
+            "csvw-terms:annotation",
+            "CsvwTermsAnnotation",
+            &self.annotations[index],
+        )
     }
 }
 
@@ -1490,33 +1201,33 @@ fn selector_matches(
     subject: &str,
     predicates: &BTreeMap<String, BTreeSet<ProjectionTerm>>,
 ) -> bool {
-    if !selector.iri_prefixes.is_empty()
+    if !selector.iri_prefixes().is_empty()
         && !selector
-            .iri_prefixes
+            .iri_prefixes()
             .iter()
             .any(|prefix| subject.starts_with(prefix))
     {
         return false;
     }
-    let Some(type_predicate) = selector.type_predicate.as_ref() else {
+    let Some(type_predicate) = selector.type_predicate() else {
         return true;
     };
     let Some(types) = predicates.get(type_predicate) else {
-        return selector.any_types.is_empty() && selector.all_types.is_empty();
+        return selector.any_types().is_empty() && selector.all_types().is_empty();
     };
-    let mut any_matched = selector.any_types.is_empty();
-    let mut all_remaining = selector.all_types.len();
+    let mut any_matched = selector.any_types().is_empty();
+    let mut all_remaining = selector.all_types().len();
     for term in types {
         let ProjectionTerm::Iri { value } = term else {
             continue;
         };
-        if selector.none_types.contains(value.as_str()) {
+        if selector.none_types().contains(value.as_str()) {
             return false;
         }
-        if !any_matched && selector.any_types.contains(value.as_str()) {
+        if !any_matched && selector.any_types().contains(value.as_str()) {
             any_matched = true;
         }
-        if selector.all_types.contains(value.as_str()) {
+        if selector.all_types().contains(value.as_str()) {
             all_remaining -= 1;
         }
     }
@@ -1783,40 +1494,8 @@ fn canonical_dialect() -> CsvwDialect {
     }
 }
 
-fn row_url(table_url: &str, source_number: usize) -> Result<String, ProjectionError> {
-    let base = purrdf_iri::parse(table_url)
-        .map_err(|error| ProjectionError::term(format!("invalid CSVW terms table URL: {error}")))?;
-    base.resolve(&format!("#row={source_number}"))
-        .map(|iri| iri.as_str().to_owned())
-        .map_err(|error| ProjectionError::term(format!("invalid CSVW terms row URL: {error}")))
-}
-
 fn direction_to_csvw(direction: ProjectionDirection) -> CsvwTextDirection {
     RdfTextDirection::from(direction).into()
-}
-
-fn resolve_term<D: DatasetView>(
-    view: &D,
-    id: D::Id,
-    config: &CsvwTermsConfig,
-    cache: &mut BTreeMap<D::Id, ProjectionTerm>,
-) -> Result<ProjectionTerm, ProjectionError> {
-    if let Some(term) = cache.get(&id) {
-        return Ok(term.clone());
-    }
-    let term = ProjectionTerm::from_view(view, id, config.limits())?;
-    let _ = term.to_canonical_json(config.limits())?;
-    cache.insert(id, term.clone());
-    Ok(term)
-}
-
-fn reject_duplicates<T: Ord>(values: &[T], description: &str) -> Result<(), ProjectionError> {
-    if values.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err(ProjectionError::integrity(format!(
-            "dataset view exposed duplicate {description}"
-        )));
-    }
-    Ok(())
 }
 
 fn validate_datatype(datatype: &CsvwDatatype) -> Result<(), ProjectionError> {

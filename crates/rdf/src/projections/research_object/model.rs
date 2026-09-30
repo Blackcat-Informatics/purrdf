@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use crate::projections::util::reject_duplicate_keys;
 use std::collections::BTreeSet;
 
 use purrdf_lex::json::{Object, Value};
@@ -90,6 +91,15 @@ impl ResearchValue {
         let value = value.into();
         validate_absolute_iri(&value, "research-object value IRI")?;
         Ok(Self::Iri { value })
+    }
+
+    /// The value's lexical form: the IRI of a reference, the lexical form of
+    /// a literal.
+    pub fn lexical(&self) -> &str {
+        match self {
+            Self::Iri { value } => value,
+            Self::Text(value) => &value.value,
+        }
     }
 
     /// Borrow the IRI value, when this is an IRI reference.
@@ -425,15 +435,10 @@ impl ToJson for ResearchValue {
     }
 }
 
-impl ToJson for ResearchChecksum {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("algorithm", self.algorithm.to_json())
-                .with("value", self.value.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for ResearchChecksum {
+    "algorithm" => algorithm,
+    "value" => value,
+});
 
 fn normalize_dataset(dataset: &mut ResearchDataset) -> Result<(), ProjectionError> {
     sort_dedup(&mut dataset.titles);
@@ -501,12 +506,9 @@ fn reject_duplicate_ids<T>(
     id: impl Fn(&T) -> &String,
     description: &str,
 ) -> Result<(), ProjectionError> {
-    if values.windows(2).any(|pair| id(&pair[0]) == id(&pair[1])) {
-        return Err(ProjectionError::integrity(format!(
-            "research-object model contains duplicate {description} identity"
-        )));
-    }
-    Ok(())
+    reject_duplicate_keys(values, id, || {
+        format!("research-object model contains duplicate {description} identity")
+    })
 }
 
 fn ids<T>(values: &[T], id: impl Fn(&T) -> &String) -> BTreeSet<String> {

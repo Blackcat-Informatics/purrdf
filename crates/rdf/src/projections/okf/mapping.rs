@@ -1,16 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use crate::projections::loss::record_logical_loss;
 use crate::projections::source_rows::{
     SourceAnnotation, SourceQuad, SourceReifier, source_identifier,
 };
-use std::borrow::Cow;
+use crate::projections::util::reject_duplicates;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use purrdf_core::{
-    DatasetView, LossEntry, LossLedger, RdfLocation, check_ledger_sound, rdf_to_okf_loss_ledger,
-};
+use purrdf_core::{DatasetView, LossLedger, check_ledger_sound, rdf_to_okf_loss_ledger};
 use purrdf_lex::json_escape::{JsonEscapes, push_string};
 use purrdf_xsd::XsdValue;
 
@@ -88,19 +87,21 @@ struct Frontmatter {
     extensions: BTreeMap<String, YamlField>,
 }
 
+/// The text of a frontmatter field that is a YAML string scalar.
+fn scalar_text(field: Option<&YamlField>) -> Option<&str> {
+    match field {
+        Some(YamlField::Scalar(YamlScalar::String(value))) => Some(value),
+        _ => None,
+    }
+}
+
 impl Frontmatter {
     fn title_text(&self) -> Option<&str> {
-        match &self.title {
-            Some(YamlField::Scalar(YamlScalar::String(value))) => Some(value),
-            _ => None,
-        }
+        scalar_text(self.title.as_ref())
     }
 
     fn description_text(&self) -> Option<&str> {
-        match &self.description {
-            Some(YamlField::Scalar(YamlScalar::String(value))) => Some(value),
-            _ => None,
-        }
+        scalar_text(self.description.as_ref())
     }
 }
 
@@ -156,25 +157,31 @@ impl<'a> Projector<'a> {
 
         let mut named_graphs = Vec::new();
         for graph in view.named_graphs() {
-            named_graphs.push(resolve_term(view, graph, config, &mut cache)?);
+            named_graphs.push(ProjectionTerm::resolve_cached(
+                view,
+                graph,
+                config.limits(),
+                &mut cache,
+            )?);
         }
         named_graphs.sort();
         reject_duplicates(&named_graphs, "named graph declarations")?;
 
         let mut quads = Vec::new();
         for quad in view.quads() {
-            let subject = resolve_term(view, quad.s, config, &mut cache)?;
+            let subject =
+                ProjectionTerm::resolve_cached(view, quad.s, config.limits(), &mut cache)?;
             let ProjectionTerm::Iri { value: predicate } =
-                resolve_term(view, quad.p, config, &mut cache)?
+                ProjectionTerm::resolve_cached(view, quad.p, config.limits(), &mut cache)?
             else {
                 return Err(ProjectionError::integrity(
                     "RDF dataset view exposed a non-IRI predicate",
                 ));
             };
-            let object = resolve_term(view, quad.o, config, &mut cache)?;
+            let object = ProjectionTerm::resolve_cached(view, quad.o, config.limits(), &mut cache)?;
             let graph = quad
                 .g
-                .map(|id| resolve_term(view, id, config, &mut cache))
+                .map(|id| ProjectionTerm::resolve_cached(view, id, config.limits(), &mut cache))
                 .transpose()?;
             quads.push(SourceQuad {
                 subject,
@@ -188,8 +195,9 @@ impl<'a> Projector<'a> {
 
         let mut reifiers = Vec::new();
         for row in view.reifier_quads() {
-            let reifier = resolve_term(view, row.s, config, &mut cache)?;
-            let statement = resolve_term(view, row.o, config, &mut cache)?;
+            let reifier = ProjectionTerm::resolve_cached(view, row.s, config.limits(), &mut cache)?;
+            let statement =
+                ProjectionTerm::resolve_cached(view, row.o, config.limits(), &mut cache)?;
             if !matches!(statement, ProjectionTerm::Triple { .. }) {
                 return Err(ProjectionError::integrity(
                     "RDF dataset view exposed a reifier binding to a non-triple term",
@@ -197,7 +205,7 @@ impl<'a> Projector<'a> {
             }
             let graph = row
                 .g
-                .map(|id| resolve_term(view, id, config, &mut cache))
+                .map(|id| ProjectionTerm::resolve_cached(view, id, config.limits(), &mut cache))
                 .transpose()?;
             reifiers.push(SourceReifier {
                 reifier,
@@ -210,18 +218,18 @@ impl<'a> Projector<'a> {
 
         let mut annotations = Vec::new();
         for row in view.annotation_quads() {
-            let reifier = resolve_term(view, row.s, config, &mut cache)?;
+            let reifier = ProjectionTerm::resolve_cached(view, row.s, config.limits(), &mut cache)?;
             let ProjectionTerm::Iri { value: predicate } =
-                resolve_term(view, row.p, config, &mut cache)?
+                ProjectionTerm::resolve_cached(view, row.p, config.limits(), &mut cache)?
             else {
                 return Err(ProjectionError::integrity(
                     "RDF dataset view exposed a non-IRI annotation predicate",
                 ));
             };
-            let object = resolve_term(view, row.o, config, &mut cache)?;
+            let object = ProjectionTerm::resolve_cached(view, row.o, config.limits(), &mut cache)?;
             let graph = row
                 .g
-                .map(|id| resolve_term(view, id, config, &mut cache))
+                .map(|id| ProjectionTerm::resolve_cached(view, id, config.limits(), &mut cache))
                 .transpose()?;
             annotations.push(SourceAnnotation {
                 reifier,
@@ -731,45 +739,57 @@ impl<'a> Projector<'a> {
     fn record_source_losses(&mut self) -> Result<(), ProjectionError> {
         for index in 0..self.named_graphs.len() {
             let subject = source_identifier("OkfTermsGraph", &self.named_graphs[index])?;
-            self.record_loss(LOSS_NAMED_GRAPH_DROPPED, "okf-terms:named-graph", subject);
+            record_logical_loss(
+                &mut self.ledger,
+                &self.contract,
+                LOSS_NAMED_GRAPH_DROPPED,
+                "okf-terms:named-graph",
+                subject,
+            );
         }
         for index in 0..self.quads.len() {
             if self.quads[index].graph.is_some() {
                 let subject = source_identifier("OkfTermsQuad", &self.quads[index])?;
-                self.record_loss(LOSS_NAMED_GRAPH_DROPPED, "okf-terms:quad", subject);
+                record_logical_loss(
+                    &mut self.ledger,
+                    &self.contract,
+                    LOSS_NAMED_GRAPH_DROPPED,
+                    "okf-terms:quad",
+                    subject,
+                );
             }
             if !self.consumed_quads[index] {
                 let subject = source_identifier("OkfTermsQuad", &self.quads[index])?;
-                self.record_loss(LOSS_NON_PROFILE_QUAD_DROPPED, "okf-terms:quad", subject);
+                record_logical_loss(
+                    &mut self.ledger,
+                    &self.contract,
+                    LOSS_NON_PROFILE_QUAD_DROPPED,
+                    "okf-terms:quad",
+                    subject,
+                );
             }
         }
         for index in 0..self.reifiers.len() {
             let subject = source_identifier("OkfTermsReifier", &self.reifiers[index])?;
-            self.record_loss(LOSS_REIFIER_DROPPED, "okf-terms:reifier", subject);
+            record_logical_loss(
+                &mut self.ledger,
+                &self.contract,
+                LOSS_REIFIER_DROPPED,
+                "okf-terms:reifier",
+                subject,
+            );
         }
         for index in 0..self.annotations.len() {
             let subject = source_identifier("OkfTermsAnnotation", &self.annotations[index])?;
-            self.record_loss(LOSS_ANNOTATION_DROPPED, "okf-terms:annotation", subject);
+            record_logical_loss(
+                &mut self.ledger,
+                &self.contract,
+                LOSS_ANNOTATION_DROPPED,
+                "okf-terms:annotation",
+                subject,
+            );
         }
         Ok(())
-    }
-
-    fn record_loss(&mut self, code: &'static str, logical: &str, subject: String) {
-        let template = self
-            .contract
-            .entries()
-            .iter()
-            .find(|entry| entry.code == code)
-            .expect("runtime OKF terms code must exist in the closed contract");
-        self.ledger.record(LossEntry {
-            code: Cow::Borrowed(code),
-            from: template.from.clone(),
-            to: template.to.clone(),
-            note: template.note.clone(),
-            location: Some(Box::new(
-                RdfLocation::logical(logical).with_subject(subject),
-            )),
-        });
     }
 
     fn graph_selected(&self, graph: Option<&ProjectionTerm>) -> bool {
@@ -1260,30 +1280,6 @@ fn field_value_len(value: &YamlField) -> usize {
         YamlField::Scalar(_) => 1,
         YamlField::Sequence(values) => values.len(),
     }
-}
-
-fn resolve_term<D: DatasetView>(
-    view: &D,
-    id: D::Id,
-    config: &OkfGenerationConfig,
-    cache: &mut BTreeMap<D::Id, ProjectionTerm>,
-) -> Result<ProjectionTerm, ProjectionError> {
-    if let Some(term) = cache.get(&id) {
-        return Ok(term.clone());
-    }
-    let term = ProjectionTerm::from_view(view, id, config.limits())?;
-    let _ = term.to_canonical_json(config.limits())?;
-    cache.insert(id, term.clone());
-    Ok(term)
-}
-
-fn reject_duplicates<T: Ord>(values: &[T], description: &str) -> Result<(), ProjectionError> {
-    if values.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err(ProjectionError::integrity(format!(
-            "dataset view exposed duplicate {description}"
-        )));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

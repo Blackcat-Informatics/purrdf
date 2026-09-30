@@ -1738,7 +1738,7 @@ fn layout_table_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
     let column_count = table.fields.len();
     let mut widths = vec![96; column_count];
     for (column, field) in table.fields.iter().enumerate() {
-        widths[column] = widths[column].max(field_label(*field).len() as i32 * CHAR_WIDTH + 24);
+        widths[column] = widths[column].max(field.label().len() as i32 * CHAR_WIDTH + 24);
         for row in &table.rows {
             if let Some(cell) = row.cells.get(column) {
                 widths[column] = widths[column]
@@ -1775,7 +1775,7 @@ fn layout_table_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
             width: widths[column],
             height: row_heights[0],
         };
-        cells.push(table_cell(0, column, rect, field_label(*field)));
+        cells.push(table_cell(0, column, rect, field.label()));
         x += widths[column];
     }
     let mut y = options.margin + row_heights[0];
@@ -1853,18 +1853,6 @@ fn table_cell(row: usize, column: usize, rect: VizRect, text: &str) -> VizLayout
             rect: label_rect,
             lines: wrap_text(text, chars_for_width(label_rect.width)),
         },
-    }
-}
-
-fn field_label(field: VizTableField) -> &'static str {
-    match field {
-        VizTableField::Statement => "Statement",
-        VizTableField::AssertedIn => "Asserted in",
-        VizTableField::Reifiers => "Reifiers",
-        VizTableField::Annotations => "Annotations",
-        VizTableField::ReferencedBy => "Referenced by",
-        VizTableField::Depth => "Depth",
-        VizTableField::Diagnostics => "Diagnostics",
     }
 }
 

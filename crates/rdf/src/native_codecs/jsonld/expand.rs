@@ -3,13 +3,14 @@
 
 //! Context-aware expansion from compact JSON-LD-star into the typed carrier.
 
+use crate::native_codecs::syntax::check_language_tag;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use purrdf_lex::json::{self, Number, Object as Map, Value as JsonValue};
 
-use super::carrier::{Document, Literal, NamedGraph, Node, Term, Triple, Value};
+use super::carrier::{Document, Literal, NamedGraph, Node, Part, Term, Triple, Value};
 use super::{
     CompiledJsonLdContext, JsonLdContainer, JsonLdDirection, JsonLdNullable, JsonLdTermDefinition,
     JsonLdTypeMapping, RDF_FIRST, RDF_JSON, RDF_NIL, RDF_REIFIES, RDF_REST, RDF_TYPE, RdfDataset,
@@ -475,13 +476,14 @@ impl Builder {
             reverse_block ^ definition.is_some_and(JsonLdTermDefinition::is_reverse_property);
         if reverse {
             for mut value in values {
-                let Term::Id(target) = value.term else {
+                let Term::Id(target) =
+                    std::mem::replace(&mut value.term, Term::Id(node.id.clone()))
+                else {
                     return Err(decode(format!(
                         "reverse property `{}` requires node-reference values",
                         entry.original
                     )));
                 };
-                value.term = Term::Id(node.id.clone());
                 self.add_property(graph, target, entry.expanded.clone(), value);
             }
         } else {
@@ -805,9 +807,9 @@ impl Builder {
             .as_str()
             .ok_or_else(|| decode("@triple @predicate must be a string"))?;
         Ok(Triple {
-            subject: Box::new(subject.term),
+            subject: Box::new(subject.into_term()),
             predicate: expand_required(context, predicate, true, false)?,
-            object: Box::new(object.term),
+            object: Box::new(object.into_term()),
         })
     }
 
@@ -1571,37 +1573,12 @@ fn graph_quad(
 
 fn reserve_node_blank_ids(node: &Node, output: &mut BTreeSet<String>) {
     reserve_blank_id(&node.id, output);
-    for values in node
-        .properties
-        .values()
-        .chain(node.reverse_properties.values())
-    {
-        for value in values {
-            reserve_value_blank_ids(value, output);
+    for part in node.parts() {
+        match part {
+            Part::Term(Term::Id(id)) => reserve_blank_id(id.as_str(), output),
+            Part::Annotation(annotation) => reserve_blank_id(&annotation.id, output),
+            Part::Term(_) => {}
         }
-    }
-}
-
-fn reserve_value_blank_ids(value: &Value, output: &mut BTreeSet<String>) {
-    reserve_term_blank_ids(&value.term, output);
-    for annotation in &value.annotations {
-        reserve_node_blank_ids(annotation, output);
-    }
-}
-
-fn reserve_term_blank_ids(term: &Term, output: &mut BTreeSet<String>) {
-    match term {
-        Term::Id(id) => reserve_blank_id(id, output),
-        Term::Triple(triple) => {
-            reserve_term_blank_ids(&triple.subject, output);
-            reserve_term_blank_ids(&triple.object, output);
-        }
-        Term::List(values) => {
-            for value in values {
-                reserve_value_blank_ids(value, output);
-            }
-        }
-        Term::Literal(_) => {}
     }
 }
 
@@ -1703,13 +1680,9 @@ fn id_term(id: &str) -> Result<RdfTerm, RdfDiagnostic> {
 /// messages differ while the grammar and the diagnostic code do not. There is
 /// deliberately no second copy of the profile inside the codec.
 fn validate_language_tag_at(tag: &str, what: &str) -> Result<(), RdfDiagnostic> {
-    match langtag::parse_with(tag, langtag::Profile::ConcreteSyntaxLangtagBounded) {
-        Ok(_) => Ok(()),
-        Err(error) => Err(RdfDiagnostic::error(
-            error.diagnostic_code(),
-            format!("JSON-LD: invalid {what} {tag:?}: {error}"),
-        )),
-    }
+    check_language_tag(tag, |error| {
+        format!("JSON-LD: invalid {what} {tag:?}: {error}")
+    })
 }
 
 /// [`validate_language_tag_at`] at a value's own `@language`.

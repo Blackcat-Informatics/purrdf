@@ -799,7 +799,7 @@ fn install_panic_hook() {
             let location = info
                 .location()
                 .map_or_else(String::new, |location| format!(" at {location}"));
-            let payload = payload_text(info.payload());
+            let payload = panic_message(info.payload()).unwrap_or("Box<dyn Any>");
             let handled = CAPTURE.with(|slot| {
                 let Ok(mut slot) = slot.try_borrow_mut() else {
                     return false;
@@ -828,14 +828,14 @@ fn install_panic_hook() {
     });
 }
 
-fn payload_text(payload: &(dyn Any + Send)) -> String {
-    if let Some(text) = payload.downcast_ref::<&str>() {
-        (*text).to_owned()
-    } else if let Some(text) = payload.downcast_ref::<String>() {
-        text.clone()
-    } else {
-        "Box<dyn Any>".to_owned()
-    }
+/// The message a panic carried: its `&str` or `String` payload, the two types
+/// `panic!` produces; `None` for any other payload. Every runner here that
+/// reports a caught panic reads it through this one function.
+pub(crate) fn panic_message(payload: &(dyn Any + Send)) -> Option<&str> {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
 }
 
 /// Run one case body under `catch_unwind`, capturing its panic message.

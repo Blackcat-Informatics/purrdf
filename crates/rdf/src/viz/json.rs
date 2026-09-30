@@ -3,8 +3,10 @@
 
 //! The JSON form of every visualization value.
 //!
-//! [`VizJson`] maps each projection, scene, layout and export type to and from a
-//! [`purrdf_lex::json::Value`]. The form is fixed, because the export hashes
+//! Each projection, scene, layout and export type is read and written through
+//! [`purrdf_lex::json::record`]'s [`FromJson`] and [`ToJson`], so a
+//! visualization document obeys the same record law as every other document a
+//! PurRDF component reads. The form is fixed, because the export hashes
 //! ([`VizExport::spec_hash`], [`VizExport::model_hash`], [`VizExport::scene_hash`]) are
 //! taken over it:
 //!
@@ -17,253 +19,116 @@
 //!   its identifier in `id`;
 //! * `None` is `null`, and an absent member reads as `None`.
 //!
-//! Reading ignores members it does not know and refuses a missing required member, a
-//! value of the wrong JSON type, and an unknown variant name.
+//! Reading refuses a member the form does not declare, a repeated member, a missing
+//! required member, a value of the wrong JSON type, and an unknown variant name.
 
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
 use purrdf_lex::json::{Object, Value};
 
-use super::*;
+use super::{
+    VizAccessibility, VizAssertion, VizAssertionId, VizBadge, VizBadgeKind, VizDiagnostic,
+    VizDialect, VizEdgeAnchor, VizElementIndexEntry, VizElementKind, VizEndpoint, VizError,
+    VizExport, VizGraph, VizGraphId, VizGraphPolicy, VizLabelPolicy, VizLayout, VizLayoutAnchor,
+    VizLayoutBadge, VizLayoutEdge, VizLayoutLabel, VizLayoutLegendEntry, VizLayoutNode,
+    VizLayoutOptions, VizLayoutPort, VizLayoutTable, VizLayoutTableCell, VizLegendEntry, VizMode,
+    VizPoint, VizPort, VizPortKind, VizPosition, VizProjection, VizRect, VizReference,
+    VizReferenceId, VizReferenceSite, VizRelation, VizRelationId, VizRenderOptions, VizRole,
+    VizRoleRule, VizScene, VizSceneEdge, VizSceneEdgeKind, VizSceneGroup, VizSceneGroupKind,
+    VizSceneLabel, VizSceneNode, VizSceneNodeKind, VizSceneTable, VizSceneTableCell,
+    VizSceneTableRow, VizSemanticRef, VizSpec, VizStatement, VizStatementId, VizSvgDocument,
+    VizSvgOptions, VizTable, VizTableField, VizTableRow, VizTerm, VizTermId, VizTermValue,
+    VizTextDirection, VizValueRef, VizVocabularyMapping,
+};
 
-/// A visualization value's JSON form.
-pub trait VizJson: Sized {
-    /// The value as JSON.
-    fn to_json(&self) -> Value;
-
-    /// The value a JSON form denotes.
-    ///
-    /// # Errors
-    ///
-    /// [`VizError::Decode`] when `value` is not this type's JSON form.
-    fn from_json(value: &Value) -> Result<Self, VizError>;
-
-    /// The value of an absent object member: an error, except for an `Option`.
-    ///
-    /// # Errors
-    ///
-    /// [`VizError::Decode`] naming the member.
-    fn from_absent(name: &str) -> Result<Self, VizError> {
-        Err(VizError::Decode(format!("missing member `{name}`")))
+impl From<DecodeError> for VizError {
+    fn from(error: DecodeError) -> Self {
+        Self::Decode(error.to_string())
     }
 }
 
-fn mismatch(expected: &str, value: &Value) -> VizError {
-    VizError::Decode(format!(
-        "expected {expected}, found {}",
-        value.kind().name()
-    ))
-}
-
-fn expect_object<'a>(value: &'a Value, what: &str) -> Result<&'a Object, VizError> {
-    value
-        .as_object()
-        .ok_or_else(|| mismatch(&format!("a {what} object"), value))
-}
-
-fn expect_str<'a>(value: &'a Value, what: &str) -> Result<&'a str, VizError> {
-    value
-        .as_str()
-        .ok_or_else(|| mismatch(&format!("a {what} string"), value))
-}
-
-/// The member `name` of `object`, read as `T`.
-fn field<T: VizJson>(object: &Object, name: &str) -> Result<T, VizError> {
-    object.get(name).map_or_else(
-        || T::from_absent(name),
-        |value| {
-            T::from_json(value)
-                .map_err(|error| VizError::Decode(format!("member `{name}`: {error}")))
-        },
-    )
-}
-
-/// The one member of an object naming a variant that carries a value.
-fn single_member<'a>(value: &'a Value, what: &str) -> Result<(&'a str, &'a Value), VizError> {
-    match expect_object(value, what)?.members() {
-        [(name, inner)] => Ok((name.as_str(), inner)),
-        _ => Err(mismatch(&format!("a {what} object of one member"), value)),
-    }
-}
-
-fn unknown_variant(what: &str, name: &str) -> VizError {
-    VizError::Decode(format!("unknown {what} variant `{name}`"))
-}
-
-impl VizJson for String {
-    fn to_json(&self) -> Value {
-        Value::from(self.as_str())
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        expect_str(value, "string").map(str::to_owned)
-    }
-}
-
-impl VizJson for bool {
-    fn to_json(&self) -> Value {
-        Value::Bool(*self)
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        value.as_bool().ok_or_else(|| mismatch("a boolean", value))
-    }
-}
-
-macro_rules! viz_json_integer {
-    ($($t:ty),*) => {$(
-        impl VizJson for $t {
+/// An identifier newtype is its string.
+macro_rules! viz_identifier_json {
+    ($($type:ident),+ $(,)?) => {$(
+        impl ToJson for $type {
             fn to_json(&self) -> Value {
-                Value::from(*self)
-            }
-
-            fn from_json(value: &Value) -> Result<Self, VizError> {
-                value
-                    .as_number()
-                    .and_then(purrdf_lex::json::Number::as_i128)
-                    .and_then(|number| <$t>::try_from(number).ok())
-                    .ok_or_else(|| mismatch(concat!("an integer in the ", stringify!($t), " range"), value))
+                Value::from(self.0.as_str())
             }
         }
-    )*};
-}
 
-viz_json_integer!(i32, u32, usize);
-
-impl<T: VizJson> VizJson for Option<T> {
-    fn to_json(&self) -> Value {
-        self.as_ref().map_or(Value::Null, T::to_json)
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        if value.is_null() {
-            Ok(None)
-        } else {
-            T::from_json(value).map(Some)
+        impl FromJson for $type {
+            fn from_json(value: &Value) -> Result<Self, DecodeError> {
+                String::from_json(value).map(Self)
+            }
         }
-    }
-
-    fn from_absent(_name: &str) -> Result<Self, VizError> {
-        Ok(None)
-    }
+    )+};
 }
 
-impl<T: VizJson> VizJson for Vec<T> {
+viz_identifier_json!(
+    VizTermId,
+    VizStatementId,
+    VizAssertionId,
+    VizRelationId,
+    VizReferenceId,
+    VizGraphId,
+);
+
+/// A base direction as its lowercase token, `None` as `null`.
+fn direction_to_json(direction: Option<VizTextDirection>) -> Value {
+    direction.map_or(Value::Null, |direction| Value::from(direction.as_str()))
+}
+
+/// A base direction read from its lowercase token.
+fn direction_from_json(value: &Value) -> Result<VizTextDirection, DecodeError> {
+    let token = value
+        .as_str()
+        .ok_or_else(|| DecodeError::invalid_type(value, "enum VizTextDirection"))?;
+    VizTextDirection::from_str_token(token).ok_or_else(|| {
+        DecodeError::unknown_variant(
+            token,
+            &[
+                VizTextDirection::Ltr.as_str(),
+                VizTextDirection::Rtl.as_str(),
+            ],
+        )
+    })
+}
+
+impl ToJson for VizValueRef {
     fn to_json(&self) -> Value {
-        Value::Array(self.iter().map(T::to_json).collect())
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        value
-            .as_array()
-            .ok_or_else(|| mismatch("an array", value))?
-            .iter()
-            .enumerate()
-            .map(|(index, item)| {
-                T::from_json(item)
-                    .map_err(|error| VizError::Decode(format!("item {index}: {error}")))
-            })
-            .collect()
+        let (kind, id) = match self {
+            Self::Term { id } => ("term", id.to_json()),
+            Self::Statement { id } => ("statement", id.to_json()),
+        };
+        Object::new().with("kind", kind).with("id", id).into()
     }
 }
 
-impl VizJson for VizTermId {
-    fn to_json(&self) -> Value {
-        self.0.to_json()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        String::from_json(value).map(Self)
-    }
-}
-
-impl VizJson for VizStatementId {
-    fn to_json(&self) -> Value {
-        self.0.to_json()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        String::from_json(value).map(Self)
+impl FromJson for VizValueRef {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut record = Record::new(value, "internally tagged enum VizValueRef")?;
+        let reference = match record.tag("kind", &["term", "statement"])? {
+            "term" => Self::Term {
+                id: record.required("id")?,
+            },
+            _ => Self::Statement {
+                id: record.required("id")?,
+            },
+        };
+        record.deny_unknown()?;
+        Ok(reference)
     }
 }
 
-impl VizJson for VizAssertionId {
-    fn to_json(&self) -> Value {
-        self.0.to_json()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        String::from_json(value).map(Self)
-    }
-}
-
-impl VizJson for VizRelationId {
-    fn to_json(&self) -> Value {
-        self.0.to_json()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        String::from_json(value).map(Self)
-    }
-}
-
-impl VizJson for VizReferenceId {
-    fn to_json(&self) -> Value {
-        self.0.to_json()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        String::from_json(value).map(Self)
-    }
-}
-
-impl VizJson for VizGraphId {
-    fn to_json(&self) -> Value {
-        self.0.to_json()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        String::from_json(value).map(Self)
-    }
-}
-
-impl VizJson for VizValueRef {
-    fn to_json(&self) -> Value {
-        match self {
-            Self::Term { id } => Object::new()
-                .with("kind", "term")
-                .with("id", id.to_json())
-                .into(),
-            Self::Statement { id } => Object::new()
-                .with("kind", "statement")
-                .with("id", id.to_json())
-                .into(),
-        }
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizValueRef")?;
-        let kind: String = field(object, "kind")?;
-        match kind.as_str() {
-            "term" => Ok(Self::Term {
-                id: field(object, "id")?,
-            }),
-            "statement" => Ok(Self::Statement {
-                id: field(object, "id")?,
-            }),
-            other => Err(unknown_variant("VizValueRef", other)),
-        }
-    }
-}
-
-impl VizJson for VizTermValue {
+impl ToJson for VizTermValue {
     fn to_json(&self) -> Value {
         match self {
             Self::Iri { value } => Object::new()
                 .with("kind", "iri")
-                .with("value", value.to_json())
+                .with("value", value.as_str())
                 .into(),
             Self::Blank { label, scope } => Object::new()
                 .with("kind", "blank")
-                .with("label", label.to_json())
+                .with("label", label.as_str())
                 .with("scope", scope.to_json())
                 .into(),
             Self::Literal {
@@ -273,48 +138,39 @@ impl VizJson for VizTermValue {
                 direction,
             } => Object::new()
                 .with("kind", "literal")
-                .with("lexical_form", lexical_form.to_json())
-                .with("datatype", datatype.to_json())
+                .with("lexical_form", lexical_form.as_str())
+                .with("datatype", datatype.as_str())
                 .with("language", language.to_json())
-                .with("direction", direction.to_json())
+                .with("direction", direction_to_json(*direction))
                 .into(),
         }
     }
+}
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizTermValue")?;
-        let kind: String = field(object, "kind")?;
-        match kind.as_str() {
-            "iri" => Ok(Self::Iri {
-                value: field(object, "value")?,
-            }),
-            "blank" => Ok(Self::Blank {
-                label: field(object, "label")?,
-                scope: field(object, "scope")?,
-            }),
-            "literal" => Ok(Self::Literal {
-                lexical_form: field(object, "lexical_form")?,
-                datatype: field(object, "datatype")?,
-                language: field(object, "language")?,
-                direction: field(object, "direction")?,
-            }),
-            other => Err(unknown_variant("VizTermValue", other)),
-        }
+impl FromJson for VizTermValue {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut record = Record::new(value, "internally tagged enum VizTermValue")?;
+        let term = match record.tag("kind", &["iri", "blank", "literal"])? {
+            "iri" => Self::Iri {
+                value: record.required("value")?,
+            },
+            "blank" => Self::Blank {
+                label: record.required("label")?,
+                scope: record.required("scope")?,
+            },
+            _ => Self::Literal {
+                lexical_form: record.required("lexical_form")?,
+                datatype: record.required("datatype")?,
+                language: record.optional("language")?,
+                direction: record.optional_with("direction", direction_from_json)?,
+            },
+        };
+        record.deny_unknown()?;
+        Ok(term)
     }
 }
 
-impl VizJson for VizTextDirection {
-    fn to_json(&self) -> Value {
-        Value::from(self.as_str())
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let token = expect_str(value, "VizTextDirection")?;
-        Self::from_str_token(token).ok_or_else(|| unknown_variant("VizTextDirection", token))
-    }
-}
-
-impl VizJson for VizRole {
+impl ToJson for VizRole {
     fn to_json(&self) -> Value {
         match self {
             Self::Focus => Value::from("focus"),
@@ -324,296 +180,68 @@ impl VizJson for VizRole {
             Self::QuotedStatement => Value::from("quotedStatement"),
             Self::AssertedStatement => Value::from("assertedStatement"),
             Self::AnnotatedStatement => Value::from("annotatedStatement"),
-            Self::Custom(inner) => Object::new().with("custom", inner.to_json()).into(),
+            Self::Custom(inner) => Object::new().with("custom", inner.as_str()).into(),
         }
     }
+}
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        if let Some(name) = value.as_str() {
-            return match name {
-                "focus" => Ok(Self::Focus),
-                "reifier" => Ok(Self::Reifier),
-                "graphName" => Ok(Self::GraphName),
-                "predicate" => Ok(Self::Predicate),
-                "quotedStatement" => Ok(Self::QuotedStatement),
-                "assertedStatement" => Ok(Self::AssertedStatement),
-                "annotatedStatement" => Ok(Self::AnnotatedStatement),
-                other => Err(unknown_variant("VizRole", other)),
-            };
-        }
-        let (name, inner) = single_member(value, "VizRole")?;
+impl FromJson for VizRole {
+    /// A unit variant's name, or `{"custom": …}`.
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        const UNIT: &[&str] = &[
+            "focus",
+            "reifier",
+            "graphName",
+            "predicate",
+            "quotedStatement",
+            "assertedStatement",
+            "annotatedStatement",
+        ];
+        let Some(name) = value.as_str() else {
+            let mut record = Record::new(value, "enum VizRole")?;
+            let custom = record.required("custom")?;
+            record.deny_unknown()?;
+            return Ok(Self::Custom(custom));
+        };
         match name {
-            "custom" => Ok(Self::Custom(String::from_json(inner)?)),
-            other => Err(unknown_variant("VizRole", other)),
+            "focus" => Ok(Self::Focus),
+            "reifier" => Ok(Self::Reifier),
+            "graphName" => Ok(Self::GraphName),
+            "predicate" => Ok(Self::Predicate),
+            "quotedStatement" => Ok(Self::QuotedStatement),
+            "assertedStatement" => Ok(Self::AssertedStatement),
+            "annotatedStatement" => Ok(Self::AnnotatedStatement),
+            other => Err(DecodeError::unknown_variant(other, UNIT)),
         }
     }
 }
 
-impl VizJson for VizDialect {
-    fn to_json(&self) -> Value {
-        match self {
-            Self::Rdf12 => Value::from("rdf12"),
-            Self::SymmetricRdf12 => Value::from("symmetricRdf12"),
-            Self::GeneralizedRdf => Value::from("generalizedRdf"),
-        }
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        match expect_str(value, "VizDialect")? {
-            "rdf12" => Ok(Self::Rdf12),
-            "symmetricRdf12" => Ok(Self::SymmetricRdf12),
-            "generalizedRdf" => Ok(Self::GeneralizedRdf),
-            other => Err(unknown_variant("VizDialect", other)),
-        }
-    }
-}
-
-impl VizJson for VizDiagnostic {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("id", self.id.to_json())
-            .with("code", self.code.to_json())
-            .with("message", self.message.to_json())
-            .with("target", self.target.to_json())
-            .with("dialect", self.dialect.to_json())
-            .into()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizDiagnostic")?;
-        Ok(Self {
-            id: field(object, "id")?,
-            code: field(object, "code")?,
-            message: field(object, "message")?,
-            target: field(object, "target")?,
-            dialect: field(object, "dialect")?,
-        })
-    }
-}
-
-impl VizJson for VizRoleRule {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("predicate_iri", self.predicate_iri.to_json())
-            .with("role", self.role.to_json())
-            .into()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizRoleRule")?;
-        Ok(Self {
-            predicate_iri: field(object, "predicate_iri")?,
-            role: field(object, "role")?,
-        })
-    }
-}
-
-impl VizJson for VizVocabularyMapping {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("prefix", self.prefix.to_json())
-            .with("namespace", self.namespace.to_json())
-            .into()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizVocabularyMapping")?;
-        Ok(Self {
-            prefix: field(object, "prefix")?,
-            namespace: field(object, "namespace")?,
-        })
-    }
-}
-
-impl VizJson for VizGraphPolicy {
+impl ToJson for VizGraphPolicy {
     fn to_json(&self) -> Value {
         match self {
             Self::All => Value::from("all"),
             Self::Include(inner) => Object::new().with("include", inner.to_json()).into(),
         }
     }
+}
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        if let Some(name) = value.as_str() {
-            return match name {
-                "all" => Ok(Self::All),
-                other => Err(unknown_variant("VizGraphPolicy", other)),
-            };
-        }
-        let (name, inner) = single_member(value, "VizGraphPolicy")?;
+impl FromJson for VizGraphPolicy {
+    /// `"all"`, or `{"include": [graph, …]}`.
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let Some(name) = value.as_str() else {
+            let mut record = Record::new(value, "enum VizGraphPolicy")?;
+            let include = record.required("include")?;
+            record.deny_unknown()?;
+            return Ok(Self::Include(include));
+        };
         match name {
-            "include" => Ok(Self::Include(Vec::<String>::from_json(inner)?)),
-            other => Err(unknown_variant("VizGraphPolicy", other)),
+            "all" => Ok(Self::All),
+            other => Err(DecodeError::unknown_variant(other, &["all"])),
         }
     }
 }
 
-impl VizJson for VizLabelPolicy {
-    fn to_json(&self) -> Value {
-        match self {
-            Self::Compact => Value::from("compact"),
-            Self::Full => Value::from("full"),
-        }
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        match expect_str(value, "VizLabelPolicy")? {
-            "compact" => Ok(Self::Compact),
-            "full" => Ok(Self::Full),
-            other => Err(unknown_variant("VizLabelPolicy", other)),
-        }
-    }
-}
-
-impl VizJson for VizMode {
-    fn to_json(&self) -> Value {
-        match self {
-            Self::Compact => Value::from("compact"),
-            Self::Incidence => Value::from("incidence"),
-            Self::Table => Value::from("table"),
-        }
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        match expect_str(value, "VizMode")? {
-            "compact" => Ok(Self::Compact),
-            "incidence" => Ok(Self::Incidence),
-            "table" => Ok(Self::Table),
-            other => Err(unknown_variant("VizMode", other)),
-        }
-    }
-}
-
-impl VizJson for VizTableField {
-    fn to_json(&self) -> Value {
-        match self {
-            Self::Statement => Value::from("statement"),
-            Self::AssertedIn => Value::from("assertedIn"),
-            Self::Reifiers => Value::from("reifiers"),
-            Self::Annotations => Value::from("annotations"),
-            Self::ReferencedBy => Value::from("referencedBy"),
-            Self::Depth => Value::from("depth"),
-            Self::Diagnostics => Value::from("diagnostics"),
-        }
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        match expect_str(value, "VizTableField")? {
-            "statement" => Ok(Self::Statement),
-            "assertedIn" => Ok(Self::AssertedIn),
-            "reifiers" => Ok(Self::Reifiers),
-            "annotations" => Ok(Self::Annotations),
-            "referencedBy" => Ok(Self::ReferencedBy),
-            "depth" => Ok(Self::Depth),
-            "diagnostics" => Ok(Self::Diagnostics),
-            other => Err(unknown_variant("VizTableField", other)),
-        }
-    }
-}
-
-impl VizJson for VizSpec {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("mode", self.mode.to_json())
-            .with("focus", self.focus.to_json())
-            .with("role_rules", self.role_rules.to_json())
-            .with("vocabulary", self.vocabulary.to_json())
-            .with("graph_policy", self.graph_policy.to_json())
-            .with("label_policy", self.label_policy.to_json())
-            .with("max_statements", self.max_statements.to_json())
-            .with("max_terms", self.max_terms.to_json())
-            .with("table_fields", self.table_fields.to_json())
-            .into()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizSpec")?;
-        Ok(Self {
-            mode: field(object, "mode")?,
-            focus: field(object, "focus")?,
-            role_rules: field(object, "role_rules")?,
-            vocabulary: field(object, "vocabulary")?,
-            graph_policy: field(object, "graph_policy")?,
-            label_policy: field(object, "label_policy")?,
-            max_statements: field(object, "max_statements")?,
-            max_terms: field(object, "max_terms")?,
-            table_fields: field(object, "table_fields")?,
-        })
-    }
-}
-
-impl VizJson for VizTerm {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("id", self.id.to_json())
-            .with("value", self.value.to_json())
-            .with("label", self.label.to_json())
-            .with("roles", self.roles.to_json())
-            .into()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizTerm")?;
-        Ok(Self {
-            id: field(object, "id")?,
-            value: field(object, "value")?,
-            label: field(object, "label")?,
-            roles: field(object, "roles")?,
-        })
-    }
-}
-
-impl VizJson for VizStatement {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("id", self.id.to_json())
-            .with("subject", self.subject.to_json())
-            .with("predicate", self.predicate.to_json())
-            .with("object", self.object.to_json())
-            .with("asserted_in", self.asserted_in.to_json())
-            .with("nesting_depth", self.nesting_depth.to_json())
-            .with("incoming_references", self.incoming_references.to_json())
-            .with("dialect", self.dialect.to_json())
-            .with("roles", self.roles.to_json())
-            .into()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizStatement")?;
-        Ok(Self {
-            id: field(object, "id")?,
-            subject: field(object, "subject")?,
-            predicate: field(object, "predicate")?,
-            object: field(object, "object")?,
-            asserted_in: field(object, "asserted_in")?,
-            nesting_depth: field(object, "nesting_depth")?,
-            incoming_references: field(object, "incoming_references")?,
-            dialect: field(object, "dialect")?,
-            roles: field(object, "roles")?,
-        })
-    }
-}
-
-impl VizJson for VizAssertion {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("id", self.id.to_json())
-            .with("statement", self.statement.to_json())
-            .with("graph", self.graph.to_json())
-            .into()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizAssertion")?;
-        Ok(Self {
-            id: field(object, "id")?,
-            statement: field(object, "statement")?,
-            graph: field(object, "graph")?,
-        })
-    }
-}
-
-impl VizJson for VizRelation {
+impl ToJson for VizRelation {
     fn to_json(&self) -> Value {
         match self {
             Self::Reifies {
@@ -644,66 +272,32 @@ impl VizJson for VizRelation {
                 .into(),
         }
     }
+}
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizRelation")?;
-        let kind: String = field(object, "kind")?;
-        match kind.as_str() {
-            "reifies" => Ok(Self::Reifies {
-                id: field(object, "id")?,
-                reifier: field(object, "reifier")?,
-                statement: field(object, "statement")?,
-                graph: field(object, "graph")?,
-            }),
-            "annotation" => Ok(Self::Annotation {
-                id: field(object, "id")?,
-                reifier: field(object, "reifier")?,
-                predicate: field(object, "predicate")?,
-                object: field(object, "object")?,
-                graph: field(object, "graph")?,
-            }),
-            other => Err(unknown_variant("VizRelation", other)),
-        }
+impl FromJson for VizRelation {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut record = Record::new(value, "internally tagged enum VizRelation")?;
+        let relation = match record.tag("kind", &["reifies", "annotation"])? {
+            "reifies" => Self::Reifies {
+                id: record.required("id")?,
+                reifier: record.required("reifier")?,
+                statement: record.required("statement")?,
+                graph: record.required("graph")?,
+            },
+            _ => Self::Annotation {
+                id: record.required("id")?,
+                reifier: record.required("reifier")?,
+                predicate: record.required("predicate")?,
+                object: record.required("object")?,
+                graph: record.required("graph")?,
+            },
+        };
+        record.deny_unknown()?;
+        Ok(relation)
     }
 }
 
-impl VizJson for VizReference {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("id", self.id.to_json())
-            .with("statement", self.statement.to_json())
-            .with("site", self.site.to_json())
-            .into()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizReference")?;
-        Ok(Self {
-            id: field(object, "id")?,
-            statement: field(object, "statement")?,
-            site: field(object, "site")?,
-        })
-    }
-}
-
-impl VizJson for VizPosition {
-    fn to_json(&self) -> Value {
-        match self {
-            Self::Subject => Value::from("subject"),
-            Self::Object => Value::from("object"),
-        }
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        match expect_str(value, "VizPosition")? {
-            "subject" => Ok(Self::Subject),
-            "object" => Ok(Self::Object),
-            other => Err(unknown_variant("VizPosition", other)),
-        }
-    }
-}
-
-impl VizJson for VizReferenceSite {
+impl ToJson for VizReferenceSite {
     fn to_json(&self) -> Value {
         match self {
             Self::Statement {
@@ -728,1040 +322,535 @@ impl VizJson for VizReferenceSite {
                 .into(),
         }
     }
+}
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizReferenceSite")?;
-        let kind: String = field(object, "kind")?;
-        match kind.as_str() {
-            "statement" => Ok(Self::Statement {
-                statement: field(object, "statement")?,
-                position: field(object, "position")?,
-            }),
-            "reification" => Ok(Self::Reification {
-                relation: field(object, "relation")?,
-            }),
-            "annotation" => Ok(Self::Annotation {
-                relation: field(object, "relation")?,
-            }),
-            "graphName" => Ok(Self::GraphName {
-                graph: field(object, "graph")?,
-            }),
-            other => Err(unknown_variant("VizReferenceSite", other)),
-        }
+impl FromJson for VizReferenceSite {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut record = Record::new(value, "internally tagged enum VizReferenceSite")?;
+        let site = match record.tag(
+            "kind",
+            &["statement", "reification", "annotation", "graphName"],
+        )? {
+            "statement" => Self::Statement {
+                statement: record.required("statement")?,
+                position: record.required("position")?,
+            },
+            "reification" => Self::Reification {
+                relation: record.required("relation")?,
+            },
+            "annotation" => Self::Annotation {
+                relation: record.required("relation")?,
+            },
+            _ => Self::GraphName {
+                graph: record.required("graph")?,
+            },
+        };
+        record.deny_unknown()?;
+        Ok(site)
     }
 }
 
-impl VizJson for VizGraph {
+/// The `kind` spellings of [`VizSemanticRef`], in variant order.
+const SEMANTIC_KINDS: &[&str] = &[
+    "term",
+    "statement",
+    "assertion",
+    "relation",
+    "graph",
+    "reference",
+    "diagnostic",
+];
+
+impl ToJson for VizSemanticRef {
     fn to_json(&self) -> Value {
-        Object::new()
-            .with("id", self.id.to_json())
-            .with("term", self.term.to_json())
-            .with("label", self.label.to_json())
-            .into()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizGraph")?;
-        Ok(Self {
-            id: field(object, "id")?,
-            term: field(object, "term")?,
-            label: field(object, "label")?,
-        })
+        let (kind, id) = match self {
+            Self::Term(inner) => ("term", inner.to_json()),
+            Self::Statement(inner) => ("statement", inner.to_json()),
+            Self::Assertion(inner) => ("assertion", inner.to_json()),
+            Self::Relation(inner) => ("relation", inner.to_json()),
+            Self::Graph(inner) => ("graph", inner.to_json()),
+            Self::Reference(inner) => ("reference", inner.to_json()),
+            Self::Diagnostic(inner) => ("diagnostic", inner.to_json()),
+        };
+        Object::new().with("kind", kind).with("id", id).into()
     }
 }
 
-impl VizJson for VizTableRow {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("statement", self.statement.to_json())
-            .with("asserted_in", self.asserted_in.to_json())
-            .with("reifier_count", self.reifier_count.to_json())
-            .with("annotation_count", self.annotation_count.to_json())
-            .with("referenced_by", self.referenced_by.to_json())
-            .with("depth", self.depth.to_json())
-            .into()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizTableRow")?;
-        Ok(Self {
-            statement: field(object, "statement")?,
-            asserted_in: field(object, "asserted_in")?,
-            reifier_count: field(object, "reifier_count")?,
-            annotation_count: field(object, "annotation_count")?,
-            referenced_by: field(object, "referenced_by")?,
-            depth: field(object, "depth")?,
-        })
+impl FromJson for VizSemanticRef {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut record = Record::new(value, "internally tagged enum VizSemanticRef")?;
+        let reference = match record.tag("kind", SEMANTIC_KINDS)? {
+            "term" => Self::Term(record.required("id")?),
+            "statement" => Self::Statement(record.required("id")?),
+            "assertion" => Self::Assertion(record.required("id")?),
+            "relation" => Self::Relation(record.required("id")?),
+            "graph" => Self::Graph(record.required("id")?),
+            "reference" => Self::Reference(record.required("id")?),
+            _ => Self::Diagnostic(record.required("id")?),
+        };
+        record.deny_unknown()?;
+        Ok(reference)
     }
 }
 
-impl VizJson for VizTable {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("fields", self.fields.to_json())
-            .with("rows", self.rows.to_json())
-            .into()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizTable")?;
-        Ok(Self {
-            fields: field(object, "fields")?,
-            rows: field(object, "rows")?,
-        })
-    }
-}
-
-impl VizJson for VizProjection {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("terms", self.terms.to_json())
-            .with("statements", self.statements.to_json())
-            .with("assertions", self.assertions.to_json())
-            .with("relations", self.relations.to_json())
-            .with("graphs", self.graphs.to_json())
-            .with("references", self.references.to_json())
-            .with("table", self.table.to_json())
-            .with("diagnostics", self.diagnostics.to_json())
-            .into()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizProjection")?;
-        Ok(Self {
-            terms: field(object, "terms")?,
-            statements: field(object, "statements")?,
-            assertions: field(object, "assertions")?,
-            relations: field(object, "relations")?,
-            graphs: field(object, "graphs")?,
-            references: field(object, "references")?,
-            table: field(object, "table")?,
-            diagnostics: field(object, "diagnostics")?,
-        })
-    }
-}
-
-impl VizJson for VizExport {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("schema_version", self.schema_version.to_json())
-            .with("spec", self.spec.to_json())
-            .with("spec_hash", self.spec_hash.to_json())
-            .with("model_hash", self.model_hash.to_json())
-            .with("scene_hash", self.scene_hash.to_json())
-            .with("model", self.model.to_json())
-            .with("scene", self.scene.to_json())
-            .with("layout", self.layout.to_json())
-            .with("element_index", self.element_index.to_json())
-            .with("diagnostics", self.diagnostics.to_json())
-            .into()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizExport")?;
-        Ok(Self {
-            schema_version: field(object, "schema_version")?,
-            spec: field(object, "spec")?,
-            spec_hash: field(object, "spec_hash")?,
-            model_hash: field(object, "model_hash")?,
-            scene_hash: field(object, "scene_hash")?,
-            model: field(object, "model")?,
-            scene: field(object, "scene")?,
-            layout: field(object, "layout")?,
-            element_index: field(object, "element_index")?,
-            diagnostics: field(object, "diagnostics")?,
-        })
-    }
-}
-
-impl VizJson for VizElementIndexEntry {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("element_id", self.element_id.to_json())
-            .with("scene_id", self.scene_id.to_json())
-            .with("bindings", self.bindings.to_json())
-            .with("kind", self.kind.to_json())
-            .into()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizElementIndexEntry")?;
-        Ok(Self {
-            element_id: field(object, "element_id")?,
-            scene_id: field(object, "scene_id")?,
-            bindings: field(object, "bindings")?,
-            kind: field(object, "kind")?,
-        })
-    }
-}
-
-impl VizJson for VizElementKind {
-    fn to_json(&self) -> Value {
-        match self {
-            Self::NodeGroup => Value::from("nodeGroup"),
-            Self::NodeShape => Value::from("nodeShape"),
-            Self::NodeLabel => Value::from("nodeLabel"),
-            Self::NodeBadge => Value::from("nodeBadge"),
-            Self::NodeBadgeLabel => Value::from("nodeBadgeLabel"),
-            Self::NodePort => Value::from("nodePort"),
-            Self::EdgeGroup => Value::from("edgeGroup"),
-            Self::EdgePath => Value::from("edgePath"),
-            Self::EdgeLabel => Value::from("edgeLabel"),
-            Self::EdgeBadge => Value::from("edgeBadge"),
-            Self::EdgeBadgeLabel => Value::from("edgeBadgeLabel"),
-            Self::EdgeAnchor => Value::from("edgeAnchor"),
-            Self::EdgeAnchorLabel => Value::from("edgeAnchorLabel"),
-            Self::EdgeAnchorBadge => Value::from("edgeAnchorBadge"),
-            Self::EdgeAnchorBadgeLabel => Value::from("edgeAnchorBadgeLabel"),
-            Self::Table => Value::from("table"),
-            Self::TableCell => Value::from("tableCell"),
-            Self::TableLabel => Value::from("tableLabel"),
-            Self::Legend => Value::from("legend"),
-            Self::LegendEntry => Value::from("legendEntry"),
-            Self::LegendLabel => Value::from("legendLabel"),
-        }
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        match expect_str(value, "VizElementKind")? {
-            "nodeGroup" => Ok(Self::NodeGroup),
-            "nodeShape" => Ok(Self::NodeShape),
-            "nodeLabel" => Ok(Self::NodeLabel),
-            "nodeBadge" => Ok(Self::NodeBadge),
-            "nodeBadgeLabel" => Ok(Self::NodeBadgeLabel),
-            "nodePort" => Ok(Self::NodePort),
-            "edgeGroup" => Ok(Self::EdgeGroup),
-            "edgePath" => Ok(Self::EdgePath),
-            "edgeLabel" => Ok(Self::EdgeLabel),
-            "edgeBadge" => Ok(Self::EdgeBadge),
-            "edgeBadgeLabel" => Ok(Self::EdgeBadgeLabel),
-            "edgeAnchor" => Ok(Self::EdgeAnchor),
-            "edgeAnchorLabel" => Ok(Self::EdgeAnchorLabel),
-            "edgeAnchorBadge" => Ok(Self::EdgeAnchorBadge),
-            "edgeAnchorBadgeLabel" => Ok(Self::EdgeAnchorBadgeLabel),
-            "table" => Ok(Self::Table),
-            "tableCell" => Ok(Self::TableCell),
-            "tableLabel" => Ok(Self::TableLabel),
-            "legend" => Ok(Self::Legend),
-            "legendEntry" => Ok(Self::LegendEntry),
-            "legendLabel" => Ok(Self::LegendLabel),
-            other => Err(unknown_variant("VizElementKind", other)),
-        }
-    }
-}
-
-impl VizJson for VizScene {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("schema_version", self.schema_version.to_json())
-            .with("mode", self.mode.to_json())
-            .with("nodes", self.nodes.to_json())
-            .with("edges", self.edges.to_json())
-            .with("groups", self.groups.to_json())
-            .with("legend", self.legend.to_json())
-            .with("table", self.table.to_json())
-            .into()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizScene")?;
-        Ok(Self {
-            schema_version: field(object, "schema_version")?,
-            mode: field(object, "mode")?,
-            nodes: field(object, "nodes")?,
-            edges: field(object, "edges")?,
-            groups: field(object, "groups")?,
-            legend: field(object, "legend")?,
-            table: field(object, "table")?,
-        })
-    }
-}
-
-impl VizJson for VizSemanticRef {
-    fn to_json(&self) -> Value {
-        match self {
-            Self::Term(inner) => Object::new()
-                .with("kind", "term")
-                .with("id", inner.to_json())
-                .into(),
-            Self::Statement(inner) => Object::new()
-                .with("kind", "statement")
-                .with("id", inner.to_json())
-                .into(),
-            Self::Assertion(inner) => Object::new()
-                .with("kind", "assertion")
-                .with("id", inner.to_json())
-                .into(),
-            Self::Relation(inner) => Object::new()
-                .with("kind", "relation")
-                .with("id", inner.to_json())
-                .into(),
-            Self::Graph(inner) => Object::new()
-                .with("kind", "graph")
-                .with("id", inner.to_json())
-                .into(),
-            Self::Reference(inner) => Object::new()
-                .with("kind", "reference")
-                .with("id", inner.to_json())
-                .into(),
-            Self::Diagnostic(inner) => Object::new()
-                .with("kind", "diagnostic")
-                .with("id", inner.to_json())
-                .into(),
-        }
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizSemanticRef")?;
-        let kind: String = field(object, "kind")?;
-        match kind.as_str() {
-            "term" => Ok(Self::Term(field(object, "id")?)),
-            "statement" => Ok(Self::Statement(field(object, "id")?)),
-            "assertion" => Ok(Self::Assertion(field(object, "id")?)),
-            "relation" => Ok(Self::Relation(field(object, "id")?)),
-            "graph" => Ok(Self::Graph(field(object, "id")?)),
-            "reference" => Ok(Self::Reference(field(object, "id")?)),
-            "diagnostic" => Ok(Self::Diagnostic(field(object, "id")?)),
-            other => Err(unknown_variant("VizSemanticRef", other)),
-        }
-    }
-}
-
-impl VizJson for VizSceneNode {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("id", self.id.to_json())
-            .with("bindings", self.bindings.to_json())
-            .with("kind", self.kind.to_json())
-            .with("label", self.label.to_json())
-            .with("ports", self.ports.to_json())
-            .with("badges", self.badges.to_json())
-            .with("accessibility", self.accessibility.to_json())
-            .into()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizSceneNode")?;
-        Ok(Self {
-            id: field(object, "id")?,
-            bindings: field(object, "bindings")?,
-            kind: field(object, "kind")?,
-            label: field(object, "label")?,
-            ports: field(object, "ports")?,
-            badges: field(object, "badges")?,
-            accessibility: field(object, "accessibility")?,
-        })
-    }
-}
-
-impl VizJson for VizSceneNodeKind {
-    fn to_json(&self) -> Value {
-        match self {
-            Self::Iri => Value::from("iri"),
-            Self::Blank => Value::from("blank"),
-            Self::Literal => Value::from("literal"),
-            Self::Statement => Value::from("statement"),
-        }
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        match expect_str(value, "VizSceneNodeKind")? {
-            "iri" => Ok(Self::Iri),
-            "blank" => Ok(Self::Blank),
-            "literal" => Ok(Self::Literal),
-            "statement" => Ok(Self::Statement),
-            other => Err(unknown_variant("VizSceneNodeKind", other)),
-        }
-    }
-}
-
-impl VizJson for VizSceneEdge {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("id", self.id.to_json())
-            .with("bindings", self.bindings.to_json())
-            .with("kind", self.kind.to_json())
-            .with("source", self.source.to_json())
-            .with("target", self.target.to_json())
-            .with("label", self.label.to_json())
-            .with("badges", self.badges.to_json())
-            .with("anchor", self.anchor.to_json())
-            .with("accessibility", self.accessibility.to_json())
-            .into()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizSceneEdge")?;
-        Ok(Self {
-            id: field(object, "id")?,
-            bindings: field(object, "bindings")?,
-            kind: field(object, "kind")?,
-            source: field(object, "source")?,
-            target: field(object, "target")?,
-            label: field(object, "label")?,
-            badges: field(object, "badges")?,
-            anchor: field(object, "anchor")?,
-            accessibility: field(object, "accessibility")?,
-        })
-    }
-}
-
-impl VizJson for VizSceneEdgeKind {
-    fn to_json(&self) -> Value {
-        match self {
-            Self::Assertion => Value::from("assertion"),
-            Self::Subject => Value::from("subject"),
-            Self::Predicate => Value::from("predicate"),
-            Self::Object => Value::from("object"),
-            Self::Reifies => Value::from("reifies"),
-            Self::Annotation => Value::from("annotation"),
-            Self::QuoteSubject => Value::from("quoteSubject"),
-            Self::QuoteObject => Value::from("quoteObject"),
-        }
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        match expect_str(value, "VizSceneEdgeKind")? {
-            "assertion" => Ok(Self::Assertion),
-            "subject" => Ok(Self::Subject),
-            "predicate" => Ok(Self::Predicate),
-            "object" => Ok(Self::Object),
-            "reifies" => Ok(Self::Reifies),
-            "annotation" => Ok(Self::Annotation),
-            "quoteSubject" => Ok(Self::QuoteSubject),
-            "quoteObject" => Ok(Self::QuoteObject),
-            other => Err(unknown_variant("VizSceneEdgeKind", other)),
-        }
-    }
-}
-
-impl VizJson for VizPort {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("id", self.id.to_json())
-            .with("kind", self.kind.to_json())
-            .into()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizPort")?;
-        Ok(Self {
-            id: field(object, "id")?,
-            kind: field(object, "kind")?,
-        })
-    }
-}
-
-impl VizJson for VizPortKind {
-    fn to_json(&self) -> Value {
-        match self {
-            Self::In => Value::from("in"),
-            Self::Out => Value::from("out"),
-            Self::Subject => Value::from("subject"),
-            Self::Predicate => Value::from("predicate"),
-            Self::Object => Value::from("object"),
-            Self::Relation => Value::from("relation"),
-            Self::Value => Value::from("value"),
-        }
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        match expect_str(value, "VizPortKind")? {
-            "in" => Ok(Self::In),
-            "out" => Ok(Self::Out),
-            "subject" => Ok(Self::Subject),
-            "predicate" => Ok(Self::Predicate),
-            "object" => Ok(Self::Object),
-            "relation" => Ok(Self::Relation),
-            "value" => Ok(Self::Value),
-            other => Err(unknown_variant("VizPortKind", other)),
-        }
-    }
-}
-
-impl VizJson for VizEndpoint {
+impl ToJson for VizEndpoint {
     fn to_json(&self) -> Value {
         match self {
             Self::NodePort { node, port } => Object::new()
                 .with("kind", "nodePort")
-                .with("node", node.to_json())
-                .with("port", port.to_json())
+                .with("node", node.as_str())
+                .with("port", port.as_str())
                 .into(),
             Self::EdgeAnchor { edge, anchor } => Object::new()
                 .with("kind", "edgeAnchor")
-                .with("edge", edge.to_json())
-                .with("anchor", anchor.to_json())
+                .with("edge", edge.as_str())
+                .with("anchor", anchor.as_str())
                 .into(),
         }
     }
+}
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizEndpoint")?;
-        let kind: String = field(object, "kind")?;
-        match kind.as_str() {
-            "nodePort" => Ok(Self::NodePort {
-                node: field(object, "node")?,
-                port: field(object, "port")?,
-            }),
-            "edgeAnchor" => Ok(Self::EdgeAnchor {
-                edge: field(object, "edge")?,
-                anchor: field(object, "anchor")?,
-            }),
-            other => Err(unknown_variant("VizEndpoint", other)),
-        }
+impl FromJson for VizEndpoint {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut record = Record::new(value, "internally tagged enum VizEndpoint")?;
+        let endpoint = match record.tag("kind", &["nodePort", "edgeAnchor"])? {
+            "nodePort" => Self::NodePort {
+                node: record.required("node")?,
+                port: record.required("port")?,
+            },
+            _ => Self::EdgeAnchor {
+                edge: record.required("edge")?,
+                anchor: record.required("anchor")?,
+            },
+        };
+        record.deny_unknown()?;
+        Ok(endpoint)
     }
 }
 
-impl VizJson for VizEdgeAnchor {
+impl ToJson for VizSceneLabel {
     fn to_json(&self) -> Value {
         Object::new()
-            .with("id", self.id.to_json())
-            .with("bindings", self.bindings.to_json())
-            .with("label", self.label.to_json())
-            .with("badges", self.badges.to_json())
-            .with("accessibility", self.accessibility.to_json())
-            .into()
-    }
-
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizEdgeAnchor")?;
-        Ok(Self {
-            id: field(object, "id")?,
-            bindings: field(object, "bindings")?,
-            label: field(object, "label")?,
-            badges: field(object, "badges")?,
-            accessibility: field(object, "accessibility")?,
-        })
-    }
-}
-
-impl VizJson for VizSceneLabel {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("text", self.text.to_json())
-            .with("full_text", self.full_text.to_json())
+            .with("text", self.text.as_str())
+            .with("full_text", self.full_text.as_str())
             .with("language", self.language.to_json())
-            .with("direction", self.direction.to_json())
+            .with("direction", direction_to_json(self.direction))
             .into()
     }
+}
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizSceneLabel")?;
-        Ok(Self {
-            text: field(object, "text")?,
-            full_text: field(object, "full_text")?,
-            language: field(object, "language")?,
-            direction: field(object, "direction")?,
-        })
+impl FromJson for VizSceneLabel {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut record = Record::new(value, "struct VizSceneLabel")?;
+        let label = Self {
+            text: record.required("text")?,
+            full_text: record.required("full_text")?,
+            language: record.optional("language")?,
+            direction: record.optional_with("direction", direction_from_json)?,
+        };
+        record.deny_unknown()?;
+        Ok(label)
     }
 }
 
-impl VizJson for VizBadge {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("kind", self.kind.to_json())
-            .with("label", self.label.to_json())
-            .with("binding", self.binding.to_json())
-            .into()
-    }
+purrdf_lex::json_string_enum!(VizDialect {
+    Rdf12 => "rdf12",
+    SymmetricRdf12 => "symmetricRdf12",
+    GeneralizedRdf => "generalizedRdf",
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizBadge")?;
-        Ok(Self {
-            kind: field(object, "kind")?,
-            label: field(object, "label")?,
-            binding: field(object, "binding")?,
-        })
-    }
-}
+purrdf_lex::json_string_enum!(VizLabelPolicy { Compact => "compact", Full => "full" });
 
-impl VizJson for VizBadgeKind {
-    fn to_json(&self) -> Value {
-        match self {
-            Self::Asserted => Value::from("asserted"),
-            Self::Quoted => Value::from("quoted"),
-            Self::Reifier => Value::from("reifier"),
-            Self::Graph => Value::from("graph"),
-            Self::AnnotationCount => Value::from("annotationCount"),
-            Self::ReifierCount => Value::from("reifierCount"),
-            Self::ReferenceCount => Value::from("referenceCount"),
-            Self::NestingDepth => Value::from("nestingDepth"),
-            Self::Dialect => Value::from("dialect"),
-            Self::Direction => Value::from("direction"),
-            Self::Focus => Value::from("focus"),
-            Self::Role => Value::from("role"),
-        }
-    }
+purrdf_lex::json_string_enum!(VizMode {
+    Compact => "compact",
+    Incidence => "incidence",
+    Table => "table",
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        match expect_str(value, "VizBadgeKind")? {
-            "asserted" => Ok(Self::Asserted),
-            "quoted" => Ok(Self::Quoted),
-            "reifier" => Ok(Self::Reifier),
-            "graph" => Ok(Self::Graph),
-            "annotationCount" => Ok(Self::AnnotationCount),
-            "reifierCount" => Ok(Self::ReifierCount),
-            "referenceCount" => Ok(Self::ReferenceCount),
-            "nestingDepth" => Ok(Self::NestingDepth),
-            "dialect" => Ok(Self::Dialect),
-            "direction" => Ok(Self::Direction),
-            "focus" => Ok(Self::Focus),
-            "role" => Ok(Self::Role),
-            other => Err(unknown_variant("VizBadgeKind", other)),
-        }
-    }
-}
+purrdf_lex::json_string_enum!(VizTableField {
+    Statement => "statement",
+    AssertedIn => "assertedIn",
+    Reifiers => "reifiers",
+    Annotations => "annotations",
+    ReferencedBy => "referencedBy",
+    Depth => "depth",
+    Diagnostics => "diagnostics",
+});
 
-impl VizJson for VizAccessibility {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("title", self.title.to_json())
-            .with("description", self.description.to_json())
-            .into()
-    }
+purrdf_lex::json_string_enum!(VizPosition { Subject => "subject", Object => "object" });
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizAccessibility")?;
-        Ok(Self {
-            title: field(object, "title")?,
-            description: field(object, "description")?,
-        })
-    }
-}
+purrdf_lex::json_string_enum!(VizElementKind {
+    NodeGroup => "nodeGroup",
+    NodeShape => "nodeShape",
+    NodeLabel => "nodeLabel",
+    NodeBadge => "nodeBadge",
+    NodeBadgeLabel => "nodeBadgeLabel",
+    NodePort => "nodePort",
+    EdgeGroup => "edgeGroup",
+    EdgePath => "edgePath",
+    EdgeLabel => "edgeLabel",
+    EdgeBadge => "edgeBadge",
+    EdgeBadgeLabel => "edgeBadgeLabel",
+    EdgeAnchor => "edgeAnchor",
+    EdgeAnchorLabel => "edgeAnchorLabel",
+    EdgeAnchorBadge => "edgeAnchorBadge",
+    EdgeAnchorBadgeLabel => "edgeAnchorBadgeLabel",
+    Table => "table",
+    TableCell => "tableCell",
+    TableLabel => "tableLabel",
+    Legend => "legend",
+    LegendEntry => "legendEntry",
+    LegendLabel => "legendLabel",
+});
 
-impl VizJson for VizSceneGroup {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("id", self.id.to_json())
-            .with("kind", self.kind.to_json())
-            .with("label", self.label.to_json())
-            .with("members", self.members.to_json())
-            .into()
-    }
+purrdf_lex::json_string_enum!(VizSceneNodeKind {
+    Iri => "iri",
+    Blank => "blank",
+    Literal => "literal",
+    Statement => "statement",
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizSceneGroup")?;
-        Ok(Self {
-            id: field(object, "id")?,
-            kind: field(object, "kind")?,
-            label: field(object, "label")?,
-            members: field(object, "members")?,
-        })
-    }
-}
+purrdf_lex::json_string_enum!(VizSceneEdgeKind {
+    Assertion => "assertion",
+    Subject => "subject",
+    Predicate => "predicate",
+    Object => "object",
+    Reifies => "reifies",
+    Annotation => "annotation",
+    QuoteSubject => "quoteSubject",
+    QuoteObject => "quoteObject",
+});
 
-impl VizJson for VizSceneGroupKind {
-    fn to_json(&self) -> Value {
-        match self {
-            Self::Legend => Value::from("legend"),
-        }
-    }
+purrdf_lex::json_string_enum!(VizPortKind {
+    In => "in",
+    Out => "out",
+    Subject => "subject",
+    Predicate => "predicate",
+    Object => "object",
+    Relation => "relation",
+    Value => "value",
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        match expect_str(value, "VizSceneGroupKind")? {
-            "legend" => Ok(Self::Legend),
-            other => Err(unknown_variant("VizSceneGroupKind", other)),
-        }
-    }
-}
+purrdf_lex::json_string_enum!(VizBadgeKind {
+    Asserted => "asserted",
+    Quoted => "quoted",
+    Reifier => "reifier",
+    Graph => "graph",
+    AnnotationCount => "annotationCount",
+    ReifierCount => "reifierCount",
+    ReferenceCount => "referenceCount",
+    NestingDepth => "nestingDepth",
+    Dialect => "dialect",
+    Direction => "direction",
+    Focus => "focus",
+    Role => "role",
+});
 
-impl VizJson for VizLegendEntry {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("id", self.id.to_json())
-            .with("symbol", self.symbol.to_json())
-            .with("label", self.label.to_json())
-            .into()
-    }
+purrdf_lex::json_string_enum!(VizSceneGroupKind { Legend => "legend" });
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizLegendEntry")?;
-        Ok(Self {
-            id: field(object, "id")?,
-            symbol: field(object, "symbol")?,
-            label: field(object, "label")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizDiagnostic as "struct VizDiagnostic" {
+    "id" => id: required,
+    "code" => code: required,
+    "message" => message: required,
+    "target" => target: optional,
+    "dialect" => dialect: required,
+});
 
-impl VizJson for VizSceneTable {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("fields", self.fields.to_json())
-            .with("rows", self.rows.to_json())
-            .into()
-    }
+purrdf_lex::json_record!(VizRoleRule as "struct VizRoleRule" {
+    "predicate_iri" => predicate_iri: required,
+    "role" => role: required,
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizSceneTable")?;
-        Ok(Self {
-            fields: field(object, "fields")?,
-            rows: field(object, "rows")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizVocabularyMapping as "struct VizVocabularyMapping" {
+    "prefix" => prefix: required,
+    "namespace" => namespace: required,
+});
 
-impl VizJson for VizSceneTableRow {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("id", self.id.to_json())
-            .with("binding", self.binding.to_json())
-            .with("cells", self.cells.to_json())
-            .into()
-    }
+purrdf_lex::json_record!(VizSpec as "struct VizSpec" {
+    "mode" => mode: required,
+    "focus" => focus: optional,
+    "role_rules" => role_rules: required,
+    "vocabulary" => vocabulary: required,
+    "graph_policy" => graph_policy: required,
+    "label_policy" => label_policy: required,
+    "max_statements" => max_statements: required,
+    "max_terms" => max_terms: required,
+    "table_fields" => table_fields: required,
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizSceneTableRow")?;
-        Ok(Self {
-            id: field(object, "id")?,
-            binding: field(object, "binding")?,
-            cells: field(object, "cells")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizTerm as "struct VizTerm" {
+    "id" => id: required,
+    "value" => value: required,
+    "label" => label: required,
+    "roles" => roles: required,
+});
 
-impl VizJson for VizSceneTableCell {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("field", self.field.to_json())
-            .with("text", self.text.to_json())
-            .with("bindings", self.bindings.to_json())
-            .into()
-    }
+purrdf_lex::json_record!(VizStatement as "struct VizStatement" {
+    "id" => id: required,
+    "subject" => subject: required,
+    "predicate" => predicate: required,
+    "object" => object: required,
+    "asserted_in" => asserted_in: required,
+    "nesting_depth" => nesting_depth: required,
+    "incoming_references" => incoming_references: required,
+    "dialect" => dialect: required,
+    "roles" => roles: required,
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizSceneTableCell")?;
-        Ok(Self {
-            field: field(object, "field")?,
-            text: field(object, "text")?,
-            bindings: field(object, "bindings")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizAssertion as "struct VizAssertion" {
+    "id" => id: required,
+    "statement" => statement: required,
+    "graph" => graph: required,
+});
 
-impl VizJson for VizLayoutOptions {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("margin", self.margin.to_json())
-            .with("rank_spacing", self.rank_spacing.to_json())
-            .with("node_spacing", self.node_spacing.to_json())
-            .with("component_spacing", self.component_spacing.to_json())
-            .with("component_wrap_width", self.component_wrap_width.to_json())
-            .with("crossing_sweeps", self.crossing_sweeps.to_json())
-            .with("max_node_width", self.max_node_width.to_json())
-            .into()
-    }
+purrdf_lex::json_record!(VizReference as "struct VizReference" {
+    "id" => id: required,
+    "statement" => statement: required,
+    "site" => site: required,
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizLayoutOptions")?;
-        Ok(Self {
-            margin: field(object, "margin")?,
-            rank_spacing: field(object, "rank_spacing")?,
-            node_spacing: field(object, "node_spacing")?,
-            component_spacing: field(object, "component_spacing")?,
-            component_wrap_width: field(object, "component_wrap_width")?,
-            crossing_sweeps: field(object, "crossing_sweeps")?,
-            max_node_width: field(object, "max_node_width")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizGraph as "struct VizGraph" {
+    "id" => id: required,
+    "term" => term: optional,
+    "label" => label: required,
+});
 
-impl VizJson for VizPoint {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("x", self.x.to_json())
-            .with("y", self.y.to_json())
-            .into()
-    }
+purrdf_lex::json_record!(VizTableRow as "struct VizTableRow" {
+    "statement" => statement: required,
+    "asserted_in" => asserted_in: required,
+    "reifier_count" => reifier_count: required,
+    "annotation_count" => annotation_count: required,
+    "referenced_by" => referenced_by: required,
+    "depth" => depth: required,
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizPoint")?;
-        Ok(Self {
-            x: field(object, "x")?,
-            y: field(object, "y")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizTable as "struct VizTable" {
+    "fields" => fields: required,
+    "rows" => rows: required,
+});
 
-impl VizJson for VizRect {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("x", self.x.to_json())
-            .with("y", self.y.to_json())
-            .with("width", self.width.to_json())
-            .with("height", self.height.to_json())
-            .into()
-    }
+purrdf_lex::json_record!(VizProjection as "struct VizProjection" {
+    "terms" => terms: required,
+    "statements" => statements: required,
+    "assertions" => assertions: required,
+    "relations" => relations: required,
+    "graphs" => graphs: required,
+    "references" => references: required,
+    "table" => table: required,
+    "diagnostics" => diagnostics: required,
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizRect")?;
-        Ok(Self {
-            x: field(object, "x")?,
-            y: field(object, "y")?,
-            width: field(object, "width")?,
-            height: field(object, "height")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizExport as "struct VizExport" {
+    "schema_version" => schema_version: required,
+    "spec" => spec: required,
+    "spec_hash" => spec_hash: required,
+    "model_hash" => model_hash: required,
+    "scene_hash" => scene_hash: required,
+    "model" => model: required,
+    "scene" => scene: required,
+    "layout" => layout: required,
+    "element_index" => element_index: required,
+    "diagnostics" => diagnostics: required,
+});
 
-impl VizJson for VizLayoutLabel {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("rect", self.rect.to_json())
-            .with("lines", self.lines.to_json())
-            .into()
-    }
+purrdf_lex::json_record!(VizElementIndexEntry as "struct VizElementIndexEntry" {
+    "element_id" => element_id: required,
+    "scene_id" => scene_id: required,
+    "bindings" => bindings: required,
+    "kind" => kind: required,
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizLayoutLabel")?;
-        Ok(Self {
-            rect: field(object, "rect")?,
-            lines: field(object, "lines")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizScene as "struct VizScene" {
+    "schema_version" => schema_version: required,
+    "mode" => mode: required,
+    "nodes" => nodes: required,
+    "edges" => edges: required,
+    "groups" => groups: required,
+    "legend" => legend: required,
+    "table" => table: optional,
+});
 
-impl VizJson for VizLayoutBadge {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("index", self.index.to_json())
-            .with("rect", self.rect.to_json())
-            .into()
-    }
+purrdf_lex::json_record!(VizSceneNode as "struct VizSceneNode" {
+    "id" => id: required,
+    "bindings" => bindings: required,
+    "kind" => kind: required,
+    "label" => label: required,
+    "ports" => ports: required,
+    "badges" => badges: required,
+    "accessibility" => accessibility: required,
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizLayoutBadge")?;
-        Ok(Self {
-            index: field(object, "index")?,
-            rect: field(object, "rect")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizSceneEdge as "struct VizSceneEdge" {
+    "id" => id: required,
+    "bindings" => bindings: required,
+    "kind" => kind: required,
+    "source" => source: required,
+    "target" => target: required,
+    "label" => label: required,
+    "badges" => badges: required,
+    "anchor" => anchor: optional,
+    "accessibility" => accessibility: required,
+});
 
-impl VizJson for VizLayoutPort {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("id", self.id.to_json())
-            .with("point", self.point.to_json())
-            .into()
-    }
+purrdf_lex::json_record!(VizPort as "struct VizPort" {
+    "id" => id: required,
+    "kind" => kind: required,
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizLayoutPort")?;
-        Ok(Self {
-            id: field(object, "id")?,
-            point: field(object, "point")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizEdgeAnchor as "struct VizEdgeAnchor" {
+    "id" => id: required,
+    "bindings" => bindings: required,
+    "label" => label: required,
+    "badges" => badges: required,
+    "accessibility" => accessibility: required,
+});
 
-impl VizJson for VizLayoutNode {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("id", self.id.to_json())
-            .with("rect", self.rect.to_json())
-            .with("label", self.label.to_json())
-            .with("ports", self.ports.to_json())
-            .with("badges", self.badges.to_json())
-            .with("component", self.component.to_json())
-            .with("rank", self.rank.to_json())
-            .into()
-    }
+purrdf_lex::json_record!(VizBadge as "struct VizBadge" {
+    "kind" => kind: required,
+    "label" => label: required,
+    "binding" => binding: optional,
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizLayoutNode")?;
-        Ok(Self {
-            id: field(object, "id")?,
-            rect: field(object, "rect")?,
-            label: field(object, "label")?,
-            ports: field(object, "ports")?,
-            badges: field(object, "badges")?,
-            component: field(object, "component")?,
-            rank: field(object, "rank")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizAccessibility as "struct VizAccessibility" {
+    "title" => title: required,
+    "description" => description: required,
+});
 
-impl VizJson for VizLayoutAnchor {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("id", self.id.to_json())
-            .with("rect", self.rect.to_json())
-            .with("label", self.label.to_json())
-            .with("badges", self.badges.to_json())
-            .into()
-    }
+purrdf_lex::json_record!(VizSceneGroup as "struct VizSceneGroup" {
+    "id" => id: required,
+    "kind" => kind: required,
+    "label" => label: required,
+    "members" => members: required,
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizLayoutAnchor")?;
-        Ok(Self {
-            id: field(object, "id")?,
-            rect: field(object, "rect")?,
-            label: field(object, "label")?,
-            badges: field(object, "badges")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizLegendEntry as "struct VizLegendEntry" {
+    "id" => id: required,
+    "symbol" => symbol: required,
+    "label" => label: required,
+});
 
-impl VizJson for VizLayoutEdge {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("id", self.id.to_json())
-            .with("points", self.points.to_json())
-            .with("label", self.label.to_json())
-            .with("badges", self.badges.to_json())
-            .with("anchor", self.anchor.to_json())
-            .into()
-    }
+purrdf_lex::json_record!(VizSceneTable as "struct VizSceneTable" {
+    "fields" => fields: required,
+    "rows" => rows: required,
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizLayoutEdge")?;
-        Ok(Self {
-            id: field(object, "id")?,
-            points: field(object, "points")?,
-            label: field(object, "label")?,
-            badges: field(object, "badges")?,
-            anchor: field(object, "anchor")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizSceneTableRow as "struct VizSceneTableRow" {
+    "id" => id: required,
+    "binding" => binding: required,
+    "cells" => cells: required,
+});
 
-impl VizJson for VizLayoutTableCell {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("row", self.row.to_json())
-            .with("column", self.column.to_json())
-            .with("rect", self.rect.to_json())
-            .with("label", self.label.to_json())
-            .into()
-    }
+purrdf_lex::json_record!(VizSceneTableCell as "struct VizSceneTableCell" {
+    "field" => field: required,
+    "text" => text: required,
+    "bindings" => bindings: required,
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizLayoutTableCell")?;
-        Ok(Self {
-            row: field(object, "row")?,
-            column: field(object, "column")?,
-            rect: field(object, "rect")?,
-            label: field(object, "label")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizLayoutOptions as "struct VizLayoutOptions" {
+    "margin" => margin: required,
+    "rank_spacing" => rank_spacing: required,
+    "node_spacing" => node_spacing: required,
+    "component_spacing" => component_spacing: required,
+    "component_wrap_width" => component_wrap_width: required,
+    "crossing_sweeps" => crossing_sweeps: required,
+    "max_node_width" => max_node_width: required,
+});
 
-impl VizJson for VizLayoutTable {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("rect", self.rect.to_json())
-            .with("cells", self.cells.to_json())
-            .into()
-    }
+purrdf_lex::json_record!(VizPoint as "struct VizPoint" {
+    "x" => x: required,
+    "y" => y: required,
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizLayoutTable")?;
-        Ok(Self {
-            rect: field(object, "rect")?,
-            cells: field(object, "cells")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizRect as "struct VizRect" {
+    "x" => x: required,
+    "y" => y: required,
+    "width" => width: required,
+    "height" => height: required,
+});
 
-impl VizJson for VizLayoutLegendEntry {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("id", self.id.to_json())
-            .with("rect", self.rect.to_json())
-            .into()
-    }
+purrdf_lex::json_record!(VizLayoutLabel as "struct VizLayoutLabel" {
+    "rect" => rect: required,
+    "lines" => lines: required,
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizLayoutLegendEntry")?;
-        Ok(Self {
-            id: field(object, "id")?,
-            rect: field(object, "rect")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizLayoutBadge as "struct VizLayoutBadge" {
+    "index" => index: required,
+    "rect" => rect: required,
+});
 
-impl VizJson for VizLayout {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("schema_version", self.schema_version.to_json())
-            .with("mode", self.mode.to_json())
-            .with("width", self.width.to_json())
-            .with("height", self.height.to_json())
-            .with("nodes", self.nodes.to_json())
-            .with("edges", self.edges.to_json())
-            .with("table", self.table.to_json())
-            .with("legend", self.legend.to_json())
-            .into()
-    }
+purrdf_lex::json_record!(VizLayoutPort as "struct VizLayoutPort" {
+    "id" => id: required,
+    "point" => point: required,
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizLayout")?;
-        Ok(Self {
-            schema_version: field(object, "schema_version")?,
-            mode: field(object, "mode")?,
-            width: field(object, "width")?,
-            height: field(object, "height")?,
-            nodes: field(object, "nodes")?,
-            edges: field(object, "edges")?,
-            table: field(object, "table")?,
-            legend: field(object, "legend")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizLayoutNode as "struct VizLayoutNode" {
+    "id" => id: required,
+    "rect" => rect: required,
+    "label" => label: required,
+    "ports" => ports: required,
+    "badges" => badges: required,
+    "component" => component: required,
+    "rank" => rank: required,
+});
 
-impl VizJson for VizSvgOptions {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("embed_metadata", self.embed_metadata.to_json())
-            .with("include_styles", self.include_styles.to_json())
-            .with("title", self.title.to_json())
-            .into()
-    }
+purrdf_lex::json_record!(VizLayoutAnchor as "struct VizLayoutAnchor" {
+    "id" => id: required,
+    "rect" => rect: required,
+    "label" => label: required,
+    "badges" => badges: required,
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizSvgOptions")?;
-        Ok(Self {
-            embed_metadata: field(object, "embed_metadata")?,
-            include_styles: field(object, "include_styles")?,
-            title: field(object, "title")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizLayoutEdge as "struct VizLayoutEdge" {
+    "id" => id: required,
+    "points" => points: required,
+    "label" => label: required,
+    "badges" => badges: required,
+    "anchor" => anchor: optional,
+});
 
-impl VizJson for VizRenderOptions {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("layout", self.layout.to_json())
-            .with("svg", self.svg.to_json())
-            .into()
-    }
+purrdf_lex::json_record!(VizLayoutTableCell as "struct VizLayoutTableCell" {
+    "row" => row: required,
+    "column" => column: required,
+    "rect" => rect: required,
+    "label" => label: required,
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizRenderOptions")?;
-        Ok(Self {
-            layout: field(object, "layout")?,
-            svg: field(object, "svg")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizLayoutTable as "struct VizLayoutTable" {
+    "rect" => rect: required,
+    "cells" => cells: required,
+});
 
-impl VizJson for VizSvgDocument {
-    fn to_json(&self) -> Value {
-        Object::new()
-            .with("svg", self.svg.to_json())
-            .with("export", self.export.to_json())
-            .into()
-    }
+purrdf_lex::json_record!(VizLayoutLegendEntry as "struct VizLayoutLegendEntry" {
+    "id" => id: required,
+    "rect" => rect: required,
+});
 
-    fn from_json(value: &Value) -> Result<Self, VizError> {
-        let object = expect_object(value, "VizSvgDocument")?;
-        Ok(Self {
-            svg: field(object, "svg")?,
-            export: field(object, "export")?,
-        })
-    }
-}
+purrdf_lex::json_record!(VizLayout as "struct VizLayout" {
+    "schema_version" => schema_version: required,
+    "mode" => mode: required,
+    "width" => width: required,
+    "height" => height: required,
+    "nodes" => nodes: required,
+    "edges" => edges: required,
+    "table" => table: optional,
+    "legend" => legend: required,
+});
+
+purrdf_lex::json_record!(VizSvgOptions as "struct VizSvgOptions" {
+    "embed_metadata" => embed_metadata: required,
+    "include_styles" => include_styles: required,
+    "title" => title: required,
+});
+
+purrdf_lex::json_record!(VizRenderOptions as "struct VizRenderOptions" {
+    "layout" => layout: required,
+    "svg" => svg: required,
+});
+
+purrdf_lex::json_record!(VizSvgDocument as "struct VizSvgDocument" {
+    "svg" => svg: required,
+    "export" => export: required,
+});
 
 #[cfg(test)]
 mod tests {
@@ -1777,7 +866,10 @@ mod tests {
             purrdf_lex::json::write_compact(&VizRole::Custom("x".to_owned()).to_json()),
             r#"{"custom":"x"}"#
         );
-        assert_eq!(VizTextDirection::Rtl.to_json(), Value::from("rtl"));
+        assert_eq!(
+            direction_to_json(Some(VizTextDirection::Rtl)),
+            Value::from("rtl")
+        );
         assert_eq!(
             purrdf_lex::json::write_compact(
                 &VizSemanticRef::Term(VizTermId("t".to_owned())).to_json()
@@ -1802,13 +894,30 @@ mod tests {
         let spec = VizSpec::default();
         let mut json = spec.to_json();
         assert_eq!(VizSpec::from_json(&json), Ok(spec.clone()));
-        // An absent optional member is `None`; an unknown member is ignored.
+        // An absent optional member is `None`.
         json.as_object_mut().expect("object").remove("focus");
-        json.as_object_mut().expect("object").insert("extra", 1_u8);
         assert_eq!(VizSpec::from_json(&json), Ok(spec));
+        // A member the form does not declare is refused, naming it.
+        let mut extra = json.clone();
+        extra.as_object_mut().expect("object").insert("extra", 1_u8);
+        let error = VizSpec::from_json(&extra).expect_err("undeclared member");
+        assert!(error.to_string().starts_with("unknown field `extra`"));
+        // A repeated member is refused; the single spelling beside it reads.
+        let text = purrdf_lex::json::write_compact(&json);
+        let repeated = text.replacen('{', r#"{"mode":"table","#, 1);
+        assert_eq!(
+            VizSpec::from_json(&purrdf_lex::json::read(&repeated).expect("json"))
+                .expect_err("repeated member")
+                .to_string(),
+            "duplicate field `mode` at /mode"
+        );
+        assert!(VizSpec::from_json(&purrdf_lex::json::read(&text).expect("json")).is_ok());
         // An absent required member, an unknown variant, and a wrong type are refused.
         json.as_object_mut().expect("object").remove("mode");
-        assert!(VizSpec::from_json(&json).is_err());
+        assert_eq!(
+            VizSpec::from_json(&json).expect_err("missing").to_string(),
+            "missing field `mode`"
+        );
         assert!(VizMode::from_json(&Value::from("sideways")).is_err());
         assert!(VizMode::from_json(&Value::from("table")).is_ok());
         assert!(u32::from_json(&Value::from(-1_i8)).is_err());
@@ -1826,5 +935,61 @@ mod tests {
             )
             .is_err()
         );
+        assert!(
+            VizRole::from_json(&purrdf_lex::json::read(r#"{"custom":"x"}"#).expect("json")).is_ok()
+        );
+        assert!(
+            VizRole::from_json(
+                &purrdf_lex::json::read(r#"{"custom":"x","focus":1}"#).expect("json")
+            )
+            .is_err()
+        );
+        // A tagged variant refuses a member of another variant, and reads its own.
+        let term = r#"{"kind":"iri","value":"https://example.org/a"}"#;
+        assert!(VizTermValue::from_json(&purrdf_lex::json::read(term).expect("json")).is_ok());
+        let crossed = r#"{"kind":"iri","value":"https://example.org/a","label":"b"}"#;
+        assert!(VizTermValue::from_json(&purrdf_lex::json::read(crossed).expect("json")).is_err());
+        // A base direction is exactly `ltr` or `rtl`.
+        let label = r#"{"text":"a","full_text":"a","language":"ar","direction":"rtl"}"#;
+        assert_eq!(
+            VizSceneLabel::from_json(&purrdf_lex::json::read(label).expect("json"))
+                .expect("label")
+                .direction,
+            Some(VizTextDirection::Rtl)
+        );
+        let sideways = label.replace("rtl", "ttb");
+        assert!(
+            VizSceneLabel::from_json(&purrdf_lex::json::read(&sideways).expect("json")).is_err()
+        );
+    }
+
+    #[test]
+    fn every_record_round_trips_through_its_one_member_list() {
+        let label = VizSceneLabel {
+            text: "a".to_owned(),
+            full_text: "ab".to_owned(),
+            language: Some("en".to_owned()),
+            direction: Some(VizTextDirection::Ltr),
+        };
+        assert_eq!(
+            purrdf_lex::json::write_compact(&label.to_json()),
+            r#"{"text":"a","full_text":"ab","language":"en","direction":"ltr"}"#
+        );
+        assert_eq!(VizSceneLabel::from_json(&label.to_json()), Ok(label));
+        let rect = VizRect {
+            x: -1,
+            y: 2,
+            width: 3,
+            height: 4,
+        };
+        assert_eq!(
+            purrdf_lex::json::write_compact(&rect.to_json()),
+            r#"{"x":-1,"y":2,"width":3,"height":4}"#
+        );
+        assert_eq!(VizRect::from_json(&rect.to_json()), Ok(rect));
+        let id = VizTermId("t".to_owned());
+        assert_eq!(id.to_json(), Value::from("t"));
+        assert_eq!(VizTermId::from_json(&Value::from("t")), Ok(id));
+        assert!(VizTermId::from_json(&Value::from(1_u8)).is_err());
     }
 }

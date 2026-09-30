@@ -398,6 +398,131 @@ fn a_closed_enum_is_exactly_its_spellings() {
     );
 }
 
+/// A record whose codec is the one member list of [`crate::json_record!`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Span {
+    start: u32,
+    label: Option<String>,
+    tags: Vec<String>,
+}
+
+crate::json_record!(Span as "struct Span" {
+    "start" => start: required,
+    "label" => label: optional,
+    "tag_list" => tags: defaulted,
+});
+
+/// A record read through its validating constructor.
+#[derive(Debug, PartialEq, Eq)]
+struct Ordered {
+    low: u8,
+    high: u8,
+}
+
+impl Ordered {
+    fn new(low: u8, high: u8) -> Result<Self, DecodeError> {
+        if low <= high {
+            Ok(Self { low, high })
+        } else {
+            Err(DecodeError::custom("low exceeds high"))
+        }
+    }
+}
+
+crate::json_record!(Ordered as "struct Ordered" {
+    "low" => low: required::<u8>,
+    "high" => high: required::<u8>,
+} => Ordered::new);
+
+/// A write-only record: members in declared order, under their JSON names.
+struct Written {
+    first: bool,
+    second: Option<u8>,
+}
+
+crate::json_record!(impl ToJson for Written { "b" => first, "a" => second });
+
+#[test]
+fn a_declared_record_writes_its_members_in_order_and_reads_them_back() {
+    let span = Span {
+        start: 3,
+        label: Some("x".to_owned()),
+        tags: vec!["t".to_owned()],
+    };
+    assert_eq!(
+        json::write_compact(&span.to_json()),
+        r#"{"start":3,"label":"x","tag_list":["t"]}"#
+    );
+    assert_eq!(Span::from_json(&span.to_json()), Ok(span));
+    assert_eq!(
+        Span::from_json(&doc(r#"{"start":1}"#)),
+        Ok(Span {
+            start: 1,
+            label: None,
+            tags: Vec::new(),
+        })
+    );
+    assert_eq!(
+        json::write_compact(
+            &Written {
+                first: true,
+                second: None,
+            }
+            .to_json()
+        ),
+        r#"{"b":true,"a":null}"#
+    );
+}
+
+#[test]
+fn a_declared_record_refuses_unknown_missing_and_repeated_members() {
+    assert_eq!(
+        Span::from_json(&doc(r#"{"start":1,"end":2}"#))
+            .expect_err("unknown")
+            .to_string(),
+        "unknown field `end`, expected one of `start`, `label`, `tag_list`"
+    );
+    assert_eq!(
+        Span::from_json(&doc(r#"{"label":"x"}"#))
+            .expect_err("missing")
+            .to_string(),
+        "missing field `start`"
+    );
+    assert_eq!(
+        Span::from_json(&doc(r#"{"start":1,"start":1}"#))
+            .expect_err("repeated")
+            .to_string(),
+        "duplicate field `start` at /start"
+    );
+    assert_eq!(
+        Span::from_json(&doc("[1]")).expect_err("array").to_string(),
+        "invalid type: sequence, expected struct Span"
+    );
+    assert!(Span::from_json(&doc(r#"{"start":1,"label":null}"#)).is_ok());
+}
+
+#[test]
+fn a_constructed_record_is_validated_by_its_constructor() {
+    assert_eq!(
+        Ordered::from_json(&doc(r#"{"low":1,"high":2}"#)),
+        Ok(Ordered { low: 1, high: 2 })
+    );
+    assert_eq!(
+        Ordered::from_json(&doc(r#"{"low":2,"high":2}"#)),
+        Ok(Ordered { low: 2, high: 2 })
+    );
+    assert_eq!(
+        Ordered::from_json(&doc(r#"{"low":3,"high":2}"#))
+            .expect_err("constructor")
+            .to_string(),
+        "low exceeds high"
+    );
+    assert_eq!(
+        json::write_compact(&Ordered { low: 1, high: 2 }.to_json()),
+        r#"{"low":1,"high":2}"#
+    );
+}
+
 #[test]
 fn unknown_variant_and_field_lists_read_as_prose() {
     assert_eq!(

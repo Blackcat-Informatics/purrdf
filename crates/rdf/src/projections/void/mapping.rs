@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use crate::projections::util::push_iri_triple;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -587,10 +588,7 @@ impl VoidEmitter<'_> {
     }
 
     fn push_iri_predicate(&mut self, subject: &str, predicate: &str, object: &str) {
-        let subject = self.builder.intern_iri(subject);
-        let predicate = self.builder.intern_iri(predicate);
-        let object = self.builder.intern_iri(object);
-        self.builder.push_quad(subject, predicate, object, None);
+        push_iri_triple(&mut self.builder, subject, predicate, object);
     }
 
     fn push_count(&mut self, subject: &str, predicate: VoidRole, value: u64) {

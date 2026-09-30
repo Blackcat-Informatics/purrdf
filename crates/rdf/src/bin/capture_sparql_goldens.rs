@@ -264,12 +264,8 @@ struct SubstShape {
     subst: Vec<(String, TermValue)>,
 }
 
-fn iri(s: &str) -> TermValue {
-    TermValue::Iri(s.to_owned())
-}
-
 fn alice_focus() -> Vec<(String, TermValue)> {
-    vec![("this".to_owned(), iri("http://ex/alice"))]
+    vec![("this".to_owned(), TermValue::iri("http://ex/alice"))]
 }
 
 /// Capture the `$this`-substitution shapes. Returns the count written.
@@ -301,7 +297,7 @@ fn capture_substitution_goldens(goldens: &Path) -> usize {
         SubstShape {
             name: "object_position",
             query: "SELECT ?this ?s WHERE { ?s <http://ex/knows> ?this }",
-            subst: vec![("this".to_owned(), iri("http://ex/carol"))],
+            subst: vec![("this".to_owned(), TermValue::iri("http://ex/carol"))],
         },
         SubstShape {
             name: "projected_only_focus",

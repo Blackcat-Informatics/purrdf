@@ -1,31 +1,37 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use super::ResearchObjectRoles;
+use super::jsonld::{
+    ProfileReader, compact_text, compact_texts, id_object, insert_values, item_pointer,
+    typed_object, validate_data_path,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use purrdf_core::loss::{
     LOSS_RESEARCH_INLINE_PAYLOAD_DROPPED, LOSS_RESEARCH_LOCAL_ID_RESOLVED,
     LOSS_RESEARCH_ORDER_DROPPED, LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
-    LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED,
 };
 use purrdf_core::{DatasetView, LossLedger, research_object_to_rdf_loss_ledger};
 use purrdf_lex::json::{Object, Value};
 
+use super::super::json_codec::role_map_json;
+use super::super::util::{validate_compact_term, validate_role_map};
 use super::super::{
     ProjectionError, ProjectionLimits, ProjectionPackage, escape_xml_attribute, escape_xml_text,
     validate_absolute_iri,
 };
 use super::json::{
     ResearchObjectPackageProjection, ResearchObjectReadOutcome, canonical_json, ensure_sound,
-    json_pointer, normalize_lifted_jsonld, parse_strict_json, record_loss, require_artifact,
+    json_pointer, normalize_lifted_jsonld, parse_strict_json, require_artifact,
 };
 use super::{
     OfflineJsonLdContext, ResearchActivity, ResearchAgent, ResearchChecksum, ResearchDataset,
     ResearchField, ResearchObjectConfig, ResearchObjectModel, ResearchRecordSet, ResearchResource,
-    ResearchText, ResearchValue, lift_research_object, project_research_object,
+    ResearchValue, lift_research_object, project_research_object,
 };
-use purrdf_lex::json::record::{DecodeError, FromJson, Owned, Record, ToJson, into_owned};
+use purrdf_lex::json::record::{Owned, into_owned};
 use purrdf_lex::json_string_enum;
 
 /// Closed RO-Crate projection profile identifier.
@@ -381,31 +387,12 @@ impl RoCrateVocabulary {
     /// Rejects missing/extra roles, JSON-LD keywords, whitespace-bearing terms,
     /// and ambiguous duplicate bindings.
     pub fn new(terms: BTreeMap<RoCrateRole, String>) -> Result<Self, ProjectionError> {
-        for role in RO_CRATE_ROLES {
-            let term = terms.get(role).ok_or_else(|| {
-                ProjectionError::configuration(format!(
-                    "RO-Crate vocabulary is missing role `{role:?}`"
-                ))
-            })?;
-            if term.is_empty() || term.starts_with('@') || term.chars().any(char::is_whitespace) {
-                return Err(ProjectionError::configuration(format!(
-                    "RO-Crate role `{role:?}` has invalid compact term `{term}`"
-                )));
-            }
-        }
-        if terms.len() != RO_CRATE_ROLES.len() {
-            return Err(ProjectionError::configuration(
-                "RO-Crate vocabulary contains an unsupported role",
-            ));
-        }
-        let mut inverse = BTreeMap::<&str, RoCrateRole>::new();
-        for (&role, term) in &terms {
-            if let Some(previous) = inverse.insert(term, role) {
-                return Err(ProjectionError::configuration(format!(
-                    "RO-Crate roles `{previous:?}` and `{role:?}` both bind `{term}`"
-                )));
-            }
-        }
+        validate_role_map(
+            &terms,
+            RO_CRATE_ROLES,
+            "RO-Crate vocabulary",
+            |role, term| validate_compact_term("RO-Crate vocabulary", role, term),
+        )?;
         Ok(Self(terms))
     }
 
@@ -422,18 +409,7 @@ impl RoCrateVocabulary {
     }
 }
 
-impl FromJson for RoCrateVocabulary {
-    /// The role map itself, revalidated by [`RoCrateVocabulary::new`].
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        Ok(Self::new(BTreeMap::from_json(value)?)?)
-    }
-}
-
-impl ToJson for RoCrateVocabulary {
-    fn to_json(&self) -> Value {
-        self.0.to_json()
-    }
-}
+role_map_json!(RoCrateVocabulary);
 
 /// Mandatory caller-owned configuration for RO-Crate 1.3.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -531,46 +507,25 @@ impl RoCrateConfig {
     }
 }
 
-impl FromJson for RoCrateConfig {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct RoCrateConfig")?;
-        let common: ResearchObjectConfig = fields.required("common")?;
-        let context: OfflineJsonLdContext = fields.required("context")?;
-        let vocabulary: RoCrateVocabulary = fields.required("vocabulary")?;
-        let profile_iri: String = fields.required("profile_iri")?;
-        let metadata_descriptor_id: String = fields.required("metadata_descriptor_id")?;
-        let root_dataset_id: String = fields.required("root_dataset_id")?;
-        let packaging: RoCratePackaging = fields.required("packaging")?;
-        fields.deny_unknown()?;
-        Ok(Self::new(
-            common,
-            context,
-            vocabulary,
-            profile_iri,
-            metadata_descriptor_id,
-            root_dataset_id,
-            packaging,
-        )?)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for RoCrateConfig as "struct RoCrateConfig" {
+    "common" => common: required::<ResearchObjectConfig>,
+    "context" => context: required::<OfflineJsonLdContext>,
+    "vocabulary" => vocabulary: required::<RoCrateVocabulary>,
+    "profile_iri" => profile_iri: required::<String>,
+    "metadata_descriptor_id" => metadata_descriptor_id: required::<String>,
+    "root_dataset_id" => root_dataset_id: required::<String>,
+    "packaging" => packaging: required::<RoCratePackaging>,
+} => RoCrateConfig::new);
 
-impl ToJson for RoCrateConfig {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("common", self.common.to_json())
-                .with("context", self.context.to_json())
-                .with("vocabulary", self.vocabulary.to_json())
-                .with("profile_iri", self.profile_iri.to_json())
-                .with(
-                    "metadata_descriptor_id",
-                    self.metadata_descriptor_id.to_json(),
-                )
-                .with("root_dataset_id", self.root_dataset_id.to_json())
-                .with("packaging", self.packaging.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for RoCrateConfig {
+    "common" => common,
+    "context" => context,
+    "vocabulary" => vocabulary,
+    "profile_iri" => profile_iri,
+    "metadata_descriptor_id" => metadata_descriptor_id,
+    "root_dataset_id" => root_dataset_id,
+    "packaging" => packaging,
+});
 
 /// Project caller-vocabulary RDF 1.2 into canonical RO-Crate 1.3 JSON-LD.
 ///
@@ -732,7 +687,8 @@ fn validate_attached_assets(
             }
             continue;
         }
-        validate_data_path(&native_id)?;
+        validate_data_path(&native_id, "RO-Crate data path")
+            .map_err(|error| error.at_path(RO_CRATE_ARTIFACT))?;
         reject_reserved_asset_path(&native_id)?;
         if !model.dataset.resources.contains(&resource.id) {
             return Err(ProjectionError::integrity(format!(
@@ -940,12 +896,12 @@ fn encode_root(model: &ResearchObjectModel, config: &RoCrateConfig) -> Value {
     insert_values(
         &mut object,
         terms.term(RoCrateRole::Name),
-        encode_texts(&dataset.titles, config),
+        compact_texts(&dataset.titles, config.common().roles()),
     );
     insert_values(
         &mut object,
         terms.term(RoCrateRole::Description),
-        encode_texts(&dataset.descriptions, config),
+        compact_texts(&dataset.descriptions, config.common().roles()),
     );
     insert_values(
         &mut object,
@@ -955,17 +911,17 @@ fn encode_root(model: &ResearchObjectModel, config: &RoCrateConfig) -> Value {
     insert_values(
         &mut object,
         terms.term(RoCrateRole::Version),
-        encode_texts(&dataset.versions, config),
+        compact_texts(&dataset.versions, config.common().roles()),
     );
     insert_values(
         &mut object,
         terms.term(RoCrateRole::DatePublished),
-        encode_texts(&dataset.issued, config),
+        compact_texts(&dataset.issued, config.common().roles()),
     );
     insert_values(
         &mut object,
         terms.term(RoCrateRole::DateModified),
-        encode_texts(&dataset.modified, config),
+        compact_texts(&dataset.modified, config.common().roles()),
     );
     insert_values(
         &mut object,
@@ -975,7 +931,7 @@ fn encode_root(model: &ResearchObjectModel, config: &RoCrateConfig) -> Value {
     insert_values(
         &mut object,
         terms.term(RoCrateRole::Keywords),
-        encode_texts(&dataset.keywords, config),
+        compact_texts(&dataset.keywords, config.common().roles()),
     );
     insert_values(
         &mut object,
@@ -1032,7 +988,7 @@ fn encode_agent(agent: &ResearchAgent, config: &RoCrateConfig) -> Value {
     insert_values(
         &mut object,
         terms.term(RoCrateRole::Name),
-        encode_texts(&agent.names, config),
+        compact_texts(&agent.names, config.common().roles()),
     );
     Value::Object(object)
 }
@@ -1046,12 +1002,12 @@ fn encode_resource(resource: &ResearchResource, config: &RoCrateConfig) -> Value
     insert_values(
         &mut object,
         terms.term(RoCrateRole::Name),
-        encode_texts(&resource.names, config),
+        compact_texts(&resource.names, config.common().roles()),
     );
     insert_values(
         &mut object,
         terms.term(RoCrateRole::Description),
-        encode_texts(&resource.descriptions, config),
+        compact_texts(&resource.descriptions, config.common().roles()),
     );
     insert_values(
         &mut object,
@@ -1066,7 +1022,7 @@ fn encode_resource(resource: &ResearchResource, config: &RoCrateConfig) -> Value
     insert_values(
         &mut object,
         terms.term(RoCrateRole::EncodingFormat),
-        encode_texts(&resource.media_types, config),
+        compact_texts(&resource.media_types, config.common().roles()),
     );
     insert_values(
         &mut object,
@@ -1100,7 +1056,7 @@ fn encode_checksum(checksum: &ResearchChecksum, config: &RoCrateConfig) -> Value
         ),
         (
             terms.term(RoCrateRole::ChecksumValue).to_owned(),
-            encode_text(&checksum.value, config),
+            compact_text(&checksum.value, config.common().roles()),
         ),
     ]))
 }
@@ -1114,7 +1070,7 @@ fn encode_activity(activity: &ResearchActivity, config: &RoCrateConfig) -> Value
     insert_values(
         &mut object,
         terms.term(RoCrateRole::Name),
-        encode_texts(&activity.names, config),
+        compact_texts(&activity.names, config.common().roles()),
     );
     insert_values(
         &mut object,
@@ -1151,7 +1107,7 @@ fn encode_activity(activity: &ResearchActivity, config: &RoCrateConfig) -> Value
     insert_values(
         &mut object,
         terms.term(RoCrateRole::EndTime),
-        encode_texts(&activity.end_times, config),
+        compact_texts(&activity.end_times, config.common().roles()),
     );
     insert_values(
         &mut object,
@@ -1170,12 +1126,12 @@ fn encode_record_set(record_set: &ResearchRecordSet, config: &RoCrateConfig) -> 
     insert_values(
         &mut object,
         terms.term(RoCrateRole::Name),
-        encode_texts(&record_set.names, config),
+        compact_texts(&record_set.names, config.common().roles()),
     );
     insert_values(
         &mut object,
         terms.term(RoCrateRole::Description),
-        encode_texts(&record_set.descriptions, config),
+        compact_texts(&record_set.descriptions, config.common().roles()),
     );
     insert_values(
         &mut object,
@@ -1203,7 +1159,7 @@ fn encode_field(field: &ResearchField, config: &RoCrateConfig) -> Value {
     insert_values(
         &mut object,
         terms.term(RoCrateRole::Name),
-        encode_texts(&field.names, config),
+        compact_texts(&field.names, config.common().roles()),
     );
     insert_values(
         &mut object,
@@ -1211,27 +1167,6 @@ fn encode_field(field: &ResearchField, config: &RoCrateConfig) -> Value {
         encode_values(&field.data_types, config),
     );
     Value::Object(object)
-}
-
-fn typed_object(id: &str, class: &str) -> Object {
-    Object::from_iter([
-        ("@id".to_owned(), Value::String(id.to_owned())),
-        ("@type".to_owned(), Value::String(class.to_owned())),
-    ])
-}
-
-fn id_object(id: &str) -> Value {
-    Value::Object(Object::from_iter([(
-        "@id".to_owned(),
-        Value::String(id.to_owned()),
-    )]))
-}
-
-fn encode_texts(values: &[ResearchText], config: &RoCrateConfig) -> Vec<Value> {
-    values
-        .iter()
-        .map(|value| encode_text(value, config))
-        .collect()
 }
 
 fn encode_values(values: &[ResearchValue], config: &RoCrateConfig) -> Vec<Value> {
@@ -1244,37 +1179,7 @@ fn encode_values(values: &[ResearchValue], config: &RoCrateConfig) -> Vec<Value>
 fn encode_value(value: &ResearchValue, config: &RoCrateConfig) -> Value {
     match value {
         ResearchValue::Iri { value } => id_object(value),
-        ResearchValue::Text(value) => encode_text(value, config),
-    }
-}
-
-fn encode_text(value: &ResearchText, config: &RoCrateConfig) -> Value {
-    let xsd_string = config.common().roles().iri(super::ResearchRole::XsdString);
-    if value.datatype == xsd_string && value.language.is_none() && value.direction.is_none() {
-        return Value::String(value.value.clone());
-    }
-    let mut object = Object::from_iter([("@value".to_owned(), Value::String(value.value.clone()))]);
-    if let Some(language) = &value.language {
-        object.insert("@language".to_owned(), Value::String(language.clone()));
-    } else {
-        object.insert("@type".to_owned(), Value::String(value.datatype.clone()));
-    }
-    if let Some(direction) = value.direction {
-        object.insert(
-            "@direction".to_owned(),
-            Value::String(
-                purrdf_core::RdfTextDirection::from(direction)
-                    .as_str()
-                    .to_owned(),
-            ),
-        );
-    }
-    Value::Object(object)
-}
-
-fn insert_values(object: &mut Object, term: &str, values: Vec<Value>) {
-    if !values.is_empty() {
-        object.insert(term.to_owned(), Value::Array(values));
+        ResearchValue::Text(value) => compact_text(value, config.common().roles()),
     }
 }
 
@@ -1311,6 +1216,36 @@ fn decode_document(
         known_ids: BTreeSet::new(),
     }
     .decode(value)
+}
+
+impl ProfileReader for RoDecoder<'_> {
+    type Role = RoCrateRole;
+
+    const ARTIFACT: &'static str = RO_CRATE_ARTIFACT;
+
+    const BARE_STRING_TEXT: bool = true;
+
+    fn term(&self, role: RoCrateRole) -> String {
+        self.config.vocabulary().term(role).to_owned()
+    }
+
+    fn roles(&self) -> &ResearchObjectRoles {
+        self.config.common().roles()
+    }
+
+    fn ledgers(&mut self) -> (&mut LossLedger, &LossLedger) {
+        (self.ledger, self.contract)
+    }
+
+    fn parse_reference_value(
+        &mut self,
+        value: &Value,
+        pointer: &str,
+    ) -> Result<Option<ResearchValue>, ProjectionError> {
+        let native = self.parse_native_ref(value, pointer)?;
+        let resolved = self.resolve_model_id(&native, pointer)?;
+        ResearchValue::iri(resolved).map(Some)
+    }
 }
 
 impl RoDecoder<'_> {
@@ -1663,159 +1598,6 @@ impl RoDecoder<'_> {
         })
     }
 
-    fn take_items(&mut self, object: &mut Object, role: RoCrateRole, parent: &str) -> Vec<Value> {
-        let term = self.config.vocabulary().term(role).to_owned();
-        let Some(value) = object.remove(&term) else {
-            return Vec::new();
-        };
-        match into_owned(value) {
-            Owned::Array(values) => {
-                if values.len() > 1 {
-                    self.loss(LOSS_RESEARCH_ORDER_DROPPED, &json_pointer(parent, &term));
-                }
-                values
-            }
-            other => vec![Value::from(other)],
-        }
-    }
-
-    fn take_texts(
-        &mut self,
-        object: &mut Object,
-        role: RoCrateRole,
-        parent: &str,
-    ) -> Result<Vec<ResearchText>, ProjectionError> {
-        let term = self.config.vocabulary().term(role).to_owned();
-        let mut texts = Vec::new();
-        for (index, value) in self
-            .take_items(object, role, parent)
-            .into_iter()
-            .enumerate()
-        {
-            let pointer = item_pointer(parent, &term, index);
-            if let Some(text) = self.parse_text(value, &pointer)? {
-                texts.push(text);
-            }
-        }
-        Ok(texts)
-    }
-
-    fn parse_text(
-        &mut self,
-        value: Value,
-        pointer: &str,
-    ) -> Result<Option<ResearchText>, ProjectionError> {
-        let xsd_string = self
-            .config
-            .common()
-            .roles()
-            .iri(super::ResearchRole::XsdString)
-            .to_owned();
-        match into_owned(value) {
-            Owned::String(value) => ResearchText::plain(value, xsd_string).map(Some),
-            Owned::Object(mut object) => {
-                let Some(Owned::String(value)) = object.remove("@value").map(into_owned) else {
-                    self.unsupported(pointer);
-                    return Ok(None);
-                };
-                let language = match object.remove("@language").map(into_owned) {
-                    Some(Owned::String(language)) => Some(language),
-                    Some(_) => {
-                        self.unsupported(&json_pointer(pointer, "@language"));
-                        return Ok(None);
-                    }
-                    None => None,
-                };
-                let direction = match object.remove("@direction") {
-                    None => None,
-                    Some(value) => {
-                        match value
-                            .as_str()
-                            .and_then(purrdf_core::RdfTextDirection::from_str_token)
-                        {
-                            Some(direction) => {
-                                Some(super::super::ProjectionDirection::from(direction))
-                            }
-                            None => {
-                                self.unsupported(&json_pointer(pointer, "@direction"));
-                                return Ok(None);
-                            }
-                        }
-                    }
-                };
-                let explicit_datatype = match object.remove("@type").map(into_owned) {
-                    Some(Owned::String(datatype)) => Some(datatype),
-                    Some(_) => {
-                        self.unsupported(&json_pointer(pointer, "@type"));
-                        return Ok(None);
-                    }
-                    None => None,
-                };
-                self.record_unknowns(&object, pointer);
-                let datatype = explicit_datatype.unwrap_or_else(|| {
-                    if direction.is_some() {
-                        self.config
-                            .common()
-                            .roles()
-                            .iri(super::ResearchRole::RdfDirLangString)
-                            .to_owned()
-                    } else if language.is_some() {
-                        self.config
-                            .common()
-                            .roles()
-                            .iri(super::ResearchRole::RdfLangString)
-                            .to_owned()
-                    } else {
-                        xsd_string
-                    }
-                });
-                ResearchText::new(value, datatype, language, direction).map(Some)
-            }
-            _ => {
-                self.unsupported(pointer);
-                Ok(None)
-            }
-        }
-    }
-
-    fn take_values(
-        &mut self,
-        object: &mut Object,
-        role: RoCrateRole,
-        parent: &str,
-    ) -> Result<Vec<ResearchValue>, ProjectionError> {
-        let term = self.config.vocabulary().term(role).to_owned();
-        let mut values = Vec::new();
-        for (index, value) in self
-            .take_items(object, role, parent)
-            .into_iter()
-            .enumerate()
-        {
-            let pointer = item_pointer(parent, &term, index);
-            if let Some(value) = self.parse_value(value, &pointer)? {
-                values.push(value);
-            }
-        }
-        Ok(values)
-    }
-
-    fn parse_value(
-        &mut self,
-        value: Value,
-        pointer: &str,
-    ) -> Result<Option<ResearchValue>, ProjectionError> {
-        if value
-            .as_object()
-            .is_some_and(|object| object.contains_key("@id"))
-        {
-            let native = self.parse_native_ref(&value, pointer)?;
-            let resolved = self.resolve_model_id(&native, pointer)?;
-            return ResearchValue::iri(resolved).map(Some);
-        }
-        self.parse_text(value, pointer)
-            .map(|value| value.map(ResearchValue::Text))
-    }
-
     fn take_single_native_ref(
         &mut self,
         object: &mut Object,
@@ -1937,7 +1719,8 @@ impl RoDecoder<'_> {
                 self.unsupported(&pointer);
                 continue;
             };
-            validate_data_path(&path)?;
+            validate_data_path(&path, "RO-Crate data path")
+                .map_err(|error| error.at_path(RO_CRATE_ARTIFACT))?;
             paths.push(path);
         }
         Ok(paths)
@@ -2059,44 +1842,6 @@ impl RoDecoder<'_> {
         }
         Ok(())
     }
-
-    fn record_unknowns(&mut self, object: &Object, parent: &str) {
-        for member in object.keys() {
-            self.loss(
-                LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
-                &json_pointer(parent, member),
-            );
-        }
-    }
-
-    fn unsupported(&mut self, pointer: &str) {
-        self.loss(LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED, pointer);
-    }
-
-    fn loss(&mut self, code: &'static str, pointer: &str) {
-        record_loss(self.ledger, self.contract, code, RO_CRATE_ARTIFACT, pointer);
-    }
-}
-
-fn item_pointer(parent: &str, term: &str, index: usize) -> String {
-    format!("{}/{index}", json_pointer(parent, term))
-}
-
-fn validate_data_path(path: &str) -> Result<(), ProjectionError> {
-    if path.is_empty()
-        || path.starts_with('/')
-        || path.contains('\\')
-        || path.contains(['?', '#'])
-        || path
-            .split('/')
-            .any(|segment| matches!(segment, "" | "." | ".."))
-    {
-        return Err(
-            ProjectionError::integrity(format!("unsafe RO-Crate data path `{path}`"))
-                .at_path(RO_CRATE_ARTIFACT),
-        );
-    }
-    Ok(())
 }
 
 #[cfg(test)]

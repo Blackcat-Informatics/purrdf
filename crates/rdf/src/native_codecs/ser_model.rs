@@ -82,6 +82,15 @@ pub(crate) struct SerGraph {
 }
 
 impl SerGraph {
+    /// Whether reifier `rid` is a self-reifier sentinel: a triple term that
+    /// names itself as its reifier, i.e. an inline quoted triple its parent
+    /// quad already carries rather than a separate reifier binding.
+    pub(crate) fn is_self_reifier(&self, rid: usize) -> bool {
+        self.terms
+            .get(rid)
+            .is_some_and(|term| term.kind == SerTermKind::Triple && term.reifier == Some(rid))
+    }
+
     /// The document base this graph is emitted under, or `None` for absolute output.
     pub(crate) fn base(&self) -> Option<&BaseIri> {
         self.base.as_ref()

@@ -137,7 +137,7 @@ fn parse_table(
                 warnings,
             ));
         }
-        let row_url = row_url(&table.url, source_number)?;
+        let row_url = table_fragment_iri(&table.url, &format!("row={source_number}"), "CSVW")?;
         let titles = row_titles(&table.schema.row_titles, &table.schema.columns, &cells);
         table.rows.push(CsvwRow {
             number: row_index + 1,
@@ -395,14 +395,6 @@ fn default_column(
         inherited,
         annotations: CsvwAnnotations::new(),
     }
-}
-
-fn row_url(table_url: &str, source_number: usize) -> Result<String, ProjectionError> {
-    let base = purrdf_iri::parse(table_url)
-        .map_err(|error| ProjectionError::term(format!("invalid CSVW table URL: {error}")))?;
-    base.resolve(&format!("#row={source_number}"))
-        .map(|iri| iri.as_str().to_owned())
-        .map_err(|error| ProjectionError::term(format!("invalid CSVW row URL: {error}")))
 }
 
 fn row_titles(names: &[String], columns: &[CsvwColumn], cells: &[CsvwCell]) -> Vec<String> {
@@ -908,7 +900,28 @@ fn valid_xml_name(value: &str, colon: bool) -> bool {
     chars.next().is_some_and(is_xml_name_start_char) && chars.all(is_xml_name_char)
 }
 
-fn temporal_datatype(local: &str) -> bool {
+/// Resolve the fragment `#fragment` against the table URL `table_url`: a row
+/// (`row=N`) or column property IRI of the table. `owner` names the table's
+/// projection in a refusal.
+///
+/// # Errors
+///
+/// Returns a term error for an invalid table URL or resolved IRI.
+pub(super) fn table_fragment_iri(
+    table_url: &str,
+    fragment: &str,
+    owner: &str,
+) -> Result<String, ProjectionError> {
+    let base = purrdf_iri::parse(table_url)
+        .map_err(|error| ProjectionError::term(format!("invalid {owner} table URL: {error}")))?;
+    base.resolve(&format!("#{fragment}"))
+        .map(|iri| iri.as_str().to_owned())
+        .map_err(|error| ProjectionError::term(format!("invalid {owner} fragment URL: {error}")))
+}
+
+/// Whether the XSD local name `local` is one of the date/time datatypes a
+/// CSVW format pattern applies to (CSVW Metadata §6.4.4).
+pub(super) fn temporal_datatype(local: &str) -> bool {
     matches!(local, "date" | "time" | "dateTime" | "dateTimeStamp")
 }
 

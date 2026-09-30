@@ -59,6 +59,7 @@ mod hextuples;
 // NOT a Cargo feature; the default `NoSpans` collector monomorphizes the recording out
 // so the pre-existing parse path is byte-identical.
 mod span;
+mod syntax;
 // Per-format codec dispatch: the single `NativeRdfFormat` → behavior chokepoint. Holds
 // the `RdfCodec` trait, the shared `LineCodec` for the line/Turtle family, and the
 // `codec_for` resolver every parse/serialize call site routes through (replacing the

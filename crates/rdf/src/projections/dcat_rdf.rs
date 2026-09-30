@@ -3,6 +3,8 @@
 
 //! Native RDF serialization of mapped or caller-CONSTRUCTed DCAT descriptions.
 
+use crate::projections::util::push_iri_triple;
+use crate::projections::util::validate_portable_bound;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -69,7 +71,7 @@ impl DcatRdfMappingConfig {
                 )));
             }
         }
-        validate_record_bound(max_output_records, "DCAT RDF max_output_records")?;
+        validate_portable_bound(max_output_records, "DCAT RDF max_output_records")?;
         Ok(Self {
             dcat,
             rdf_type,
@@ -99,29 +101,19 @@ impl DcatRdfMappingConfig {
     }
 }
 
-impl FromJson for DcatRdfMappingConfig {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct RawDcatRdfMappingConfig")?;
-        let dcat = fields.required("dcat")?;
-        let rdf_type: String = fields.required("rdf_type")?;
-        let xsd_string: String = fields.required("xsd_string")?;
-        let max_output_records = fields.required("max_output_records")?;
-        fields.deny_unknown()?;
-        Ok(Self::new(dcat, rdf_type, xsd_string, max_output_records)?)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for DcatRdfMappingConfig as "struct RawDcatRdfMappingConfig" {
+    "dcat" => dcat: required,
+    "rdf_type" => rdf_type: required::<String>,
+    "xsd_string" => xsd_string: required::<String>,
+    "max_output_records" => max_output_records: required,
+} => DcatRdfMappingConfig::new);
 
-impl ToJson for DcatRdfMappingConfig {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("dcat", self.dcat.to_json())
-                .with("rdf_type", self.rdf_type.as_str())
-                .with("xsd_string", self.xsd_string.as_str())
-                .with("max_output_records", self.max_output_records),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for DcatRdfMappingConfig {
+    "dcat" => dcat,
+    "rdf_type" => rdf_type,
+    "xsd_string" => xsd_string,
+    "max_output_records" => max_output_records,
+});
 
 /// Complete source policy for native DCAT RDF.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -515,10 +507,7 @@ impl DcatEmitter<'_> {
     }
 
     fn push_iri_predicate(&mut self, subject: &str, predicate: &str, object: &str) {
-        let subject = self.builder.intern_iri(subject);
-        let predicate = self.builder.intern_iri(predicate);
-        let object = self.builder.intern_iri(object);
-        self.builder.push_quad(subject, predicate, object, None);
+        push_iri_triple(&mut self.builder, subject, predicate, object);
     }
 
     fn push_texts(&mut self, subject: &str, predicate: DcatRole, values: &[ResearchText]) {
@@ -569,20 +558,6 @@ fn rdf_literal(value: &ResearchText) -> RdfLiteral {
         language: value.language.clone(),
         direction: value.direction.map(RdfTextDirection::from),
     }
-}
-
-fn validate_record_bound(value: usize, field: &str) -> Result<(), ProjectionError> {
-    if value == 0 {
-        return Err(ProjectionError::configuration(format!(
-            "{field} must be greater than zero"
-        )));
-    }
-    if u32::try_from(value).is_err() {
-        return Err(ProjectionError::configuration(format!(
-            "{field} exceeds the portable u32 ceiling"
-        )));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

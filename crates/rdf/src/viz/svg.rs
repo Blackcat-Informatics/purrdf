@@ -652,7 +652,7 @@ fn render_table(export: &VizExport, out: &mut String) -> Result<(), VizError> {
             scene
                 .fields
                 .get(cell.column)
-                .map_or("", |field| table_field_label(*field))
+                .map_or("", |field| field.label())
         } else {
             scene
                 .rows
@@ -676,7 +676,7 @@ fn render_table(export: &VizExport, out: &mut String) -> Result<(), VizError> {
         render_rect(cell.rect, "table-cell-shape", out);
         render_text(
             &format!("svg-table-label-{}-{}", cell.row, cell.column),
-            &plain_scene_label(text),
+            &VizSceneLabel::plain(text),
             &cell.label,
             "table-label",
             out,
@@ -719,7 +719,7 @@ fn render_legend(export: &VizExport, out: &mut String) -> Result<(), VizError> {
         };
         render_text(
             &format!("svg-{}-label", entry.id),
-            &plain_scene_label(&entry.label),
+            &VizSceneLabel::plain(&entry.label),
             &label_rect,
             "legend-label",
             out,
@@ -803,12 +803,8 @@ fn render_text(
         out.push('"');
     }
     if let Some(direction) = scene.direction {
-        write!(
-            out,
-            " direction=\"{}\"",
-            RdfTextDirection::from(direction).as_str()
-        )
-        .expect("writing to String cannot fail");
+        write!(out, " direction=\"{}\"", direction.as_str())
+            .expect("writing to String cannot fail");
     }
     out.push('>');
     out.push_str("<title>");
@@ -857,7 +853,7 @@ fn render_badges(
         };
         render_text(
             &format!("svg-{owner_id}-badge-{}-label", geometry.index),
-            &plain_scene_label(&badge.label),
+            &VizSceneLabel::plain(&badge.label),
             &label,
             "badge-label",
             out,
@@ -1067,27 +1063,6 @@ fn mode_name(mode: VizMode) -> &'static str {
     }
 }
 
-fn table_field_label(field: VizTableField) -> &'static str {
-    match field {
-        VizTableField::Statement => "Statement",
-        VizTableField::AssertedIn => "Asserted in",
-        VizTableField::Reifiers => "Reifiers",
-        VizTableField::Annotations => "Annotations",
-        VizTableField::ReferencedBy => "Referenced by",
-        VizTableField::Depth => "Depth",
-        VizTableField::Diagnostics => "Diagnostics",
-    }
-}
-
-fn plain_scene_label(value: &str) -> VizSceneLabel {
-    VizSceneLabel {
-        text: value.to_owned(),
-        full_text: value.to_owned(),
-        language: None,
-        direction: None,
-    }
-}
-
 fn xml_attribute(value: &str) -> Result<std::borrow::Cow<'_, str>, VizError> {
     purrdf_core::xml_escape::escape(value, purrdf_core::xml_escape::Context::Attribute)
         .map_err(|error| VizError::Serialize(error.to_string()))
@@ -1152,6 +1127,7 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_lex::json::record::FromJson;
     use std::collections::BTreeSet;
 
     const EX: &str = "https://example.org/";

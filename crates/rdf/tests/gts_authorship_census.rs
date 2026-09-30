@@ -60,7 +60,7 @@ const CONTINUING_CONSTRUCTORS: [&str; 1] = ["appending"];
 /// rows are narrower producers — a bundle emitter, an archive packer, an example
 /// store, and the frozen-vector fixtures — each of which is still a way to mint
 /// a header and so still belongs in the census.
-const AUTHORSHIP_SITES: [(&str, &str); 10] = [
+const AUTHORSHIP_SITES: [(&str, &str); 9] = [
     // §10.1 streamable compaction: authors a pack under a `DictPlan`.
     ("crates/gts/src/compact.rs", "compact_streamable"),
     // The append-only agent-memory example store (mints the header once, then
@@ -74,11 +74,7 @@ const AUTHORSHIP_SITES: [(&str, &str); 10] = [
     // The `dist` snapshot-bundle emitter, driven by a `MediumPlan`.
     ("crates/rdf/src/gts_compose.rs", "emit_gts"),
     // The frozen dict-vector fixtures (`vectors/30`–`33`).
-    ("crates/rdf/src/gts_dict_vectors.rs", "fixed_source"),
-    (
-        "crates/rdf/src/gts_dict_vectors.rs",
-        "size_comparison_source",
-    ),
+    ("crates/rdf/src/gts_dict_vectors.rs", "claim_corpus"),
     ("crates/rdf/src/gts_dict_vectors.rs", "multi_dict_pack"),
     // The public RDF-dataset → GTS surface (`to_gts` delegates to this).
     ("crates/rdf/src/gts_write.rs", "to_writer"),

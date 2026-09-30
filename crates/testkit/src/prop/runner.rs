@@ -420,14 +420,8 @@ where
     })
 }
 
-fn panic_message(payload: &(dyn Any + Send)) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        (*message).to_owned()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "a panic with a non-string payload".to_owned()
-    }
+fn panic_message(payload: &(dyn Any + Send)) -> &str {
+    crate::harness::panic_message(payload).unwrap_or("a panic with a non-string payload")
 }
 
 /// Shortlex order: a shorter sequence is simpler; between equal lengths the

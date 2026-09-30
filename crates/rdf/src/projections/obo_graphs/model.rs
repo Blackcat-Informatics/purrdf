@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use crate::projections::util::require_strictly_sorted;
 use purrdf_lex::json::{Object, Value};
 
 use super::super::json_codec::{ToJson, json_string_enum};
@@ -8,18 +9,40 @@ use super::super::util::canonical_json_bounded;
 use super::super::{ProjectionError, validate_absolute_iri};
 use super::OboGraphsConfig;
 
-/// Append `name` unless `value` is absent.
-fn with_some<T: ToJson>(object: &mut Object, name: &str, value: Option<&T>) {
-    if let Some(value) = value {
-        object.push(name, value.to_json());
-    }
-}
-
-/// Append `name` unless `values` is empty.
-fn with_items<T: ToJson>(object: &mut Object, name: &str, values: &[T]) {
-    if !values.is_empty() {
-        object.push(name, values.to_json());
-    }
+/// Write a type's OBO Graphs JSON object from one member list.
+///
+/// OBO Graphs 0.3.2 JSON leaves out an absent optional member and an empty
+/// list, so each member names how it is written: `always`; `some`, left out
+/// when `None`; `items`, left out when empty; `flag`, written `true` only when
+/// set. Members are written in list order.
+macro_rules! obo_json {
+    ($type:ty { $($mode:ident $name:literal => $field:ident),* $(,)? }) => {
+        impl ToJson for $type {
+            fn to_json(&self) -> Value {
+                let mut object = Object::new();
+                $(obo_json!(@$mode object, $name, self.$field);)*
+                Value::Object(object)
+            }
+        }
+    };
+    (@always $object:ident, $name:literal, $value:expr) => {
+        $object.push($name, $value.to_json())
+    };
+    (@some $object:ident, $name:literal, $value:expr) => {
+        if let Some(value) = &$value {
+            $object.push($name, value.to_json());
+        }
+    };
+    (@items $object:ident, $name:literal, $value:expr) => {
+        if !$value.is_empty() {
+            $object.push($name, $value.to_json());
+        }
+    };
+    (@flag $object:ident, $name:literal, $value:expr) => {
+        if $value {
+            $object.push($name, true);
+        }
+    };
 }
 
 /// OBO Graphs node kind.
@@ -163,6 +186,19 @@ impl OboMeta {
     }
 }
 
+/// Validate an annotated value's predicate IRI and its metadata: the one law
+/// property values, synonyms and xrefs share.
+fn validate_annotated(
+    predicate: &str,
+    what: &str,
+    meta: Option<&OboMeta>,
+    depth: usize,
+    config: &OboGraphsConfig,
+) -> Result<(), ProjectionError> {
+    validate_absolute_iri(predicate, what)?;
+    meta.map_or(Ok(()), |meta| meta.validate(depth, config))
+}
+
 impl OboPropertyValue {
     fn normalize(&mut self) {
         normalize_strings(&mut self.xrefs);
@@ -172,11 +208,13 @@ impl OboPropertyValue {
     }
 
     fn validate(&self, depth: usize, config: &OboGraphsConfig) -> Result<(), ProjectionError> {
-        validate_absolute_iri(&self.pred, "OBO Graphs property-value predicate")?;
-        if let Some(meta) = &self.meta {
-            meta.validate(depth, config)?;
-        }
-        Ok(())
+        validate_annotated(
+            &self.pred,
+            "OBO Graphs property-value predicate",
+            self.meta.as_deref(),
+            depth,
+            config,
+        )
     }
 }
 
@@ -189,11 +227,13 @@ impl OboSynonym {
     }
 
     fn validate(&self, depth: usize, config: &OboGraphsConfig) -> Result<(), ProjectionError> {
-        validate_absolute_iri(&self.pred, "OBO Graphs synonym predicate")?;
-        if let Some(meta) = &self.meta {
-            meta.validate(depth, config)?;
-        }
-        Ok(())
+        validate_annotated(
+            &self.pred,
+            "OBO Graphs synonym predicate",
+            self.meta.as_deref(),
+            depth,
+            config,
+        )
     }
 }
 
@@ -206,11 +246,13 @@ impl OboXref {
     }
 
     fn validate(&self, depth: usize, config: &OboGraphsConfig) -> Result<(), ProjectionError> {
-        validate_absolute_iri(&self.pred, "OBO Graphs xref predicate")?;
-        if let Some(meta) = &self.meta {
-            meta.validate(depth, config)?;
-        }
-        Ok(())
+        validate_annotated(
+            &self.pred,
+            "OBO Graphs xref predicate",
+            self.meta.as_deref(),
+            depth,
+            config,
+        )
     }
 }
 
@@ -343,172 +385,102 @@ json_string_enum!(OboPropertyType {
     Data => "DATA",
 });
 
-impl ToJson for OboPropertyValue {
-    fn to_json(&self) -> Value {
-        let mut object = Object::new()
-            .with("pred", self.pred.as_str())
-            .with("val", self.val.as_str());
-        with_items(&mut object, "xrefs", &self.xrefs);
-        with_some(&mut object, "meta", self.meta.as_ref());
-        Value::Object(object)
-    }
-}
+obo_json!(OboPropertyValue {
+    always "pred" => pred,
+    always "val" => val,
+    items "xrefs" => xrefs,
+    some "meta" => meta,
+});
 
-impl ToJson for OboSynonym {
-    fn to_json(&self) -> Value {
-        let mut object = Object::new();
-        with_some(&mut object, "synonymType", self.synonym_type.as_ref());
-        object.push("pred", self.pred.as_str());
-        object.push("val", self.val.as_str());
-        with_items(&mut object, "xrefs", &self.xrefs);
-        with_some(&mut object, "meta", self.meta.as_ref());
-        Value::Object(object)
-    }
-}
+obo_json!(OboSynonym {
+    some "synonymType" => synonym_type,
+    always "pred" => pred,
+    always "val" => val,
+    items "xrefs" => xrefs,
+    some "meta" => meta,
+});
 
-impl ToJson for OboXref {
-    fn to_json(&self) -> Value {
-        let mut object = Object::new();
-        with_some(&mut object, "lbl", self.lbl.as_ref());
-        object.push("pred", self.pred.as_str());
-        object.push("val", self.val.as_str());
-        with_items(&mut object, "xrefs", &self.xrefs);
-        with_some(&mut object, "meta", self.meta.as_ref());
-        Value::Object(object)
-    }
-}
+obo_json!(OboXref {
+    some "lbl" => lbl,
+    always "pred" => pred,
+    always "val" => val,
+    items "xrefs" => xrefs,
+    some "meta" => meta,
+});
 
-impl ToJson for OboMeta {
-    fn to_json(&self) -> Value {
-        let mut object = Object::new();
-        with_some(&mut object, "definition", self.definition.as_ref());
-        with_items(&mut object, "comments", &self.comments);
-        with_items(&mut object, "subsets", &self.subsets);
-        with_items(&mut object, "synonyms", &self.synonyms);
-        with_items(&mut object, "xrefs", &self.xrefs);
-        with_items(
-            &mut object,
-            "basicPropertyValues",
-            &self.basic_property_values,
-        );
-        with_some(&mut object, "version", self.version.as_ref());
-        if self.deprecated {
-            object.push("deprecated", true);
-        }
-        Value::Object(object)
-    }
-}
+obo_json!(OboMeta {
+    some "definition" => definition,
+    items "comments" => comments,
+    items "subsets" => subsets,
+    items "synonyms" => synonyms,
+    items "xrefs" => xrefs,
+    items "basicPropertyValues" => basic_property_values,
+    some "version" => version,
+    flag "deprecated" => deprecated,
+});
 
-impl ToJson for OboNode {
-    fn to_json(&self) -> Value {
-        let mut object = Object::new().with("id", self.id.as_str());
-        with_some(&mut object, "lbl", self.lbl.as_ref());
-        with_some(&mut object, "type", self.node_type.as_ref());
-        with_some(&mut object, "propertyType", self.property_type.as_ref());
-        with_some(&mut object, "meta", self.meta.as_ref());
-        Value::Object(object)
-    }
-}
+obo_json!(OboNode {
+    always "id" => id,
+    some "lbl" => lbl,
+    some "type" => node_type,
+    some "propertyType" => property_type,
+    some "meta" => meta,
+});
 
-impl ToJson for OboEdge {
-    fn to_json(&self) -> Value {
-        let mut object = Object::new()
-            .with("sub", self.sub.as_str())
-            .with("pred", self.pred.as_str())
-            .with("obj", self.obj.as_str());
-        with_some(&mut object, "meta", self.meta.as_ref());
-        Value::Object(object)
-    }
-}
+obo_json!(OboEdge {
+    always "sub" => sub,
+    always "pred" => pred,
+    always "obj" => obj,
+    some "meta" => meta,
+});
 
-impl ToJson for OboEquivalentNodesSet {
-    fn to_json(&self) -> Value {
-        let mut object = Object::new()
-            .with("representativeNodeId", self.representative_node_id.as_str())
-            .with("nodeIds", self.node_ids.to_json());
-        with_some(&mut object, "meta", self.meta.as_ref());
-        Value::Object(object)
-    }
-}
+obo_json!(OboEquivalentNodesSet {
+    always "representativeNodeId" => representative_node_id,
+    always "nodeIds" => node_ids,
+    some "meta" => meta,
+});
 
-impl ToJson for OboExistentialRestriction {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("propertyId", self.property_id.as_str())
-                .with("fillerId", self.filler_id.as_str()),
-        )
-    }
-}
+obo_json!(OboExistentialRestriction {
+    always "propertyId" => property_id,
+    always "fillerId" => filler_id,
+});
 
-impl ToJson for OboLogicalDefinitionAxiom {
-    fn to_json(&self) -> Value {
-        let mut object = Object::new()
-            .with("definedClassId", self.defined_class_id.as_str())
-            .with("genusIds", self.genus_ids.to_json())
-            .with("restrictions", self.restrictions.to_json());
-        with_some(&mut object, "meta", self.meta.as_ref());
-        Value::Object(object)
-    }
-}
+obo_json!(OboLogicalDefinitionAxiom {
+    always "definedClassId" => defined_class_id,
+    always "genusIds" => genus_ids,
+    always "restrictions" => restrictions,
+    some "meta" => meta,
+});
 
-impl ToJson for OboDomainRangeAxiom {
-    fn to_json(&self) -> Value {
-        let mut object = Object::new().with("predicateId", self.predicate_id.as_str());
-        with_items(&mut object, "domainClassIds", &self.domain_class_ids);
-        with_items(&mut object, "rangeClassIds", &self.range_class_ids);
-        with_items(
-            &mut object,
-            "allValuesFromEdges",
-            &self.all_values_from_edges,
-        );
-        with_some(&mut object, "meta", self.meta.as_ref());
-        Value::Object(object)
-    }
-}
+obo_json!(OboDomainRangeAxiom {
+    always "predicateId" => predicate_id,
+    items "domainClassIds" => domain_class_ids,
+    items "rangeClassIds" => range_class_ids,
+    items "allValuesFromEdges" => all_values_from_edges,
+    some "meta" => meta,
+});
 
-impl ToJson for OboPropertyChainAxiom {
-    fn to_json(&self) -> Value {
-        let mut object = Object::new()
-            .with("predicateId", self.predicate_id.as_str())
-            .with("chainPredicateIds", self.chain_predicate_ids.to_json());
-        with_some(&mut object, "meta", self.meta.as_ref());
-        Value::Object(object)
-    }
-}
+obo_json!(OboPropertyChainAxiom {
+    always "predicateId" => predicate_id,
+    always "chainPredicateIds" => chain_predicate_ids,
+    some "meta" => meta,
+});
 
-impl ToJson for OboGraph {
-    fn to_json(&self) -> Value {
-        let mut object = Object::new().with("id", self.id.as_str());
-        with_some(&mut object, "lbl", self.lbl.as_ref());
-        with_some(&mut object, "meta", self.meta.as_ref());
-        with_items(&mut object, "nodes", &self.nodes);
-        with_items(&mut object, "edges", &self.edges);
-        with_items(
-            &mut object,
-            "equivalentNodesSets",
-            &self.equivalent_nodes_sets,
-        );
-        with_items(
-            &mut object,
-            "logicalDefinitionAxioms",
-            &self.logical_definition_axioms,
-        );
-        with_items(&mut object, "domainRangeAxioms", &self.domain_range_axioms);
-        with_items(
-            &mut object,
-            "propertyChainAxioms",
-            &self.property_chain_axioms,
-        );
-        Value::Object(object)
-    }
-}
+obo_json!(OboGraph {
+    always "id" => id,
+    some "lbl" => lbl,
+    some "meta" => meta,
+    items "nodes" => nodes,
+    items "edges" => edges,
+    items "equivalentNodesSets" => equivalent_nodes_sets,
+    items "logicalDefinitionAxioms" => logical_definition_axioms,
+    items "domainRangeAxioms" => domain_range_axioms,
+    items "propertyChainAxioms" => property_chain_axioms,
+});
 
-impl ToJson for OboGraphDocument {
-    fn to_json(&self) -> Value {
-        Value::Object(Object::new().with("graphs", self.graphs.to_json()))
-    }
-}
+obo_json!(OboGraphDocument {
+    always "graphs" => graphs,
+});
 
 impl OboGraphDocument {
     /// Validate, normalize, and serialize this document to deterministic JSON.
@@ -623,7 +595,12 @@ fn validate_graph(graph: &OboGraph, config: &OboGraphsConfig) -> Result<(), Proj
                 "equivalentNodesSet representative must be its lexicographically first node id",
             ));
         }
-        ensure_unique_sorted(&set.node_ids, "equivalentNodesSet node ids")?;
+        require_strictly_sorted(&set.node_ids, || {
+            format!(
+                "{} must be strictly sorted and unique",
+                "equivalentNodesSet node ids"
+            )
+        })?;
         for id in &set.node_ids {
             validate_absolute_iri(id, "equivalent node id")?;
         }
@@ -638,7 +615,12 @@ fn validate_graph(graph: &OboGraph, config: &OboGraphsConfig) -> Result<(), Proj
                 "a logical definition requires at least one genus or existential restriction",
             ));
         }
-        ensure_unique_sorted(&axiom.genus_ids, "logical definition genus ids")?;
+        require_strictly_sorted(&axiom.genus_ids, || {
+            format!(
+                "{} must be strictly sorted and unique",
+                "logical definition genus ids"
+            )
+        })?;
         for id in &axiom.genus_ids {
             validate_absolute_iri(id, "logical definition genus id")?;
         }
@@ -660,8 +642,12 @@ fn validate_graph(graph: &OboGraph, config: &OboGraphsConfig) -> Result<(), Proj
                 "a domainRangeAxiom must carry a domain, range, or all-values-from edge",
             ));
         }
-        ensure_unique_sorted(&axiom.domain_class_ids, "domain class ids")?;
-        ensure_unique_sorted(&axiom.range_class_ids, "range class ids")?;
+        require_strictly_sorted(&axiom.domain_class_ids, || {
+            format!("{} must be strictly sorted and unique", "domain class ids")
+        })?;
+        require_strictly_sorted(&axiom.range_class_ids, || {
+            format!("{} must be strictly sorted and unique", "range class ids")
+        })?;
         for id in axiom.domain_class_ids.iter().chain(&axiom.range_class_ids) {
             validate_absolute_iri(id, "domain/range class id")?;
         }
@@ -707,15 +693,6 @@ fn normalize_strings(values: &mut Vec<String>) {
 fn normalize_values<T: Ord>(values: &mut Vec<T>) {
     values.sort();
     values.dedup();
-}
-
-fn ensure_unique_sorted(values: &[String], description: &str) -> Result<(), ProjectionError> {
-    if values.windows(2).any(|pair| pair[0] >= pair[1]) {
-        return Err(ProjectionError::integrity(format!(
-            "{description} must be strictly sorted and unique"
-        )));
-    }
-    Ok(())
 }
 
 fn ensure_unique_by<T>(

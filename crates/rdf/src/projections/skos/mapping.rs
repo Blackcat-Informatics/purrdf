@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use crate::projections::source_rows::{
-    SourceAnnotation, SourceQuad, SourceReifier, source_identifier,
-};
-use std::borrow::Cow;
+use crate::projections::loss::record_row_loss;
+use crate::projections::source_rows::{SourceAnnotation, SourceQuad, SourceReifier};
+use crate::projections::util::reject_duplicates;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -14,8 +13,8 @@ use purrdf_core::loss::{
     LOSS_SKOS_TRIPLE_TERM_DROPPED,
 };
 use purrdf_core::{
-    BlankScope, DatasetView, LossEntry, LossLedger, RdfDataset, RdfDatasetBuilder, RdfLiteral,
-    RdfLocation, TermId, check_ledger_sound, rdf_to_skos_loss_ledger,
+    BlankScope, DatasetView, LossLedger, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId,
+    check_ledger_sound, rdf_to_skos_loss_ledger,
 };
 
 use crate::native_codecs::{NativeRdfFormat, serialize_dataset_to_format};
@@ -110,18 +109,19 @@ impl<'a> Projector<'a> {
         let mut cache = BTreeMap::new();
         let mut quads = Vec::new();
         for quad in view.quads() {
-            let subject = resolve_term(view, quad.s, config, &mut cache)?;
+            let subject =
+                ProjectionTerm::resolve_cached(view, quad.s, config.limits(), &mut cache)?;
             let ProjectionTerm::Iri { value: predicate } =
-                resolve_term(view, quad.p, config, &mut cache)?
+                ProjectionTerm::resolve_cached(view, quad.p, config.limits(), &mut cache)?
             else {
                 return Err(ProjectionError::integrity(
                     "RDF dataset view exposed a non-IRI predicate",
                 ));
             };
-            let object = resolve_term(view, quad.o, config, &mut cache)?;
+            let object = ProjectionTerm::resolve_cached(view, quad.o, config.limits(), &mut cache)?;
             let graph = quad
                 .g
-                .map(|id| resolve_term(view, id, config, &mut cache))
+                .map(|id| ProjectionTerm::resolve_cached(view, id, config.limits(), &mut cache))
                 .transpose()?;
             quads.push(SourceQuad {
                 subject,
@@ -135,15 +135,21 @@ impl<'a> Projector<'a> {
 
         let mut named_graphs = Vec::new();
         for graph in view.named_graphs() {
-            named_graphs.push(resolve_term(view, graph, config, &mut cache)?);
+            named_graphs.push(ProjectionTerm::resolve_cached(
+                view,
+                graph,
+                config.limits(),
+                &mut cache,
+            )?);
         }
         named_graphs.sort();
         reject_duplicates(&named_graphs, "named graph declarations")?;
 
         let mut reifiers = Vec::new();
         for row in view.reifier_quads() {
-            let reifier = resolve_term(view, row.s, config, &mut cache)?;
-            let statement = resolve_term(view, row.o, config, &mut cache)?;
+            let reifier = ProjectionTerm::resolve_cached(view, row.s, config.limits(), &mut cache)?;
+            let statement =
+                ProjectionTerm::resolve_cached(view, row.o, config.limits(), &mut cache)?;
             if !matches!(statement, ProjectionTerm::Triple { .. }) {
                 return Err(ProjectionError::integrity(
                     "RDF dataset view exposed a reifier binding to a non-triple term",
@@ -151,7 +157,7 @@ impl<'a> Projector<'a> {
             }
             let graph = row
                 .g
-                .map(|id| resolve_term(view, id, config, &mut cache))
+                .map(|id| ProjectionTerm::resolve_cached(view, id, config.limits(), &mut cache))
                 .transpose()?;
             reifiers.push(SourceReifier {
                 reifier,
@@ -164,18 +170,18 @@ impl<'a> Projector<'a> {
 
         let mut annotations = Vec::new();
         for row in view.annotation_quads() {
-            let reifier = resolve_term(view, row.s, config, &mut cache)?;
+            let reifier = ProjectionTerm::resolve_cached(view, row.s, config.limits(), &mut cache)?;
             let ProjectionTerm::Iri { value: predicate } =
-                resolve_term(view, row.p, config, &mut cache)?
+                ProjectionTerm::resolve_cached(view, row.p, config.limits(), &mut cache)?
             else {
                 return Err(ProjectionError::integrity(
                     "RDF dataset view exposed a non-IRI annotation predicate",
                 ));
             };
-            let object = resolve_term(view, row.o, config, &mut cache)?;
+            let object = ProjectionTerm::resolve_cached(view, row.o, config.limits(), &mut cache)?;
             let graph = row
                 .g
-                .map(|id| resolve_term(view, id, config, &mut cache))
+                .map(|id| ProjectionTerm::resolve_cached(view, id, config.limits(), &mut cache))
                 .transpose()?;
             annotations.push(SourceAnnotation {
                 reifier,
@@ -276,14 +282,14 @@ impl<'a> Projector<'a> {
         let quad = self.quads[index].clone();
         let source = self.config.source();
         if quad.predicate == source.classes().rdf_type() {
-            if quad.object == iri(source.classes().concept()) {
+            if quad.object == ProjectionTerm::iri(source.classes().concept()) {
                 let Some(concept) = iri_value(&quad.subject) else {
                     return Ok(());
                 };
                 self.add_concept(concept)?;
                 self.consumed[index] = true;
-            } else if quad.object == iri(source.classes().concept_scheme())
-                && quad.subject == iri(self.config.scheme_iri())
+            } else if quad.object == ProjectionTerm::iri(source.classes().concept_scheme())
+                && quad.subject == ProjectionTerm::iri(self.config.scheme_iri())
             {
                 self.consumed[index] = true;
             }
@@ -341,14 +347,14 @@ impl<'a> Projector<'a> {
                 return Ok(());
             };
             self.record_relation(kind, subject, object)?;
-            self.emit_iri(subject, target_predicate, iri(object));
+            self.emit_iri(subject, target_predicate, ProjectionTerm::iri(object));
             self.consumed[index] = true;
             return Ok(());
         }
 
         let source_relations = source.relations();
         if quad.predicate == source_relations.in_scheme() {
-            if quad.object == iri(self.config.scheme_iri()) {
+            if quad.object == ProjectionTerm::iri(self.config.scheme_iri()) {
                 let Some(concept) = iri_value(&quad.subject) else {
                     return Ok(());
                 };
@@ -358,7 +364,7 @@ impl<'a> Projector<'a> {
             return Ok(());
         }
         if quad.predicate == source_relations.has_top_concept() {
-            if quad.subject == iri(self.config.scheme_iri()) {
+            if quad.subject == ProjectionTerm::iri(self.config.scheme_iri()) {
                 let Some(concept) = iri_value(&quad.object) else {
                     return Ok(());
                 };
@@ -368,7 +374,7 @@ impl<'a> Projector<'a> {
             return Ok(());
         }
         if quad.predicate == source_relations.top_concept_of()
-            && quad.object == iri(self.config.scheme_iri())
+            && quad.object == ProjectionTerm::iri(self.config.scheme_iri())
         {
             let Some(concept) = iri_value(&quad.subject) else {
                 return Ok(());
@@ -574,39 +580,39 @@ impl<'a> Projector<'a> {
         let target_classes = self.config.target().classes();
         let target_relations = self.config.target().relations();
         self.output.insert(OutputQuad {
-            subject: iri(&scheme),
+            subject: ProjectionTerm::iri(&scheme),
             predicate: target_classes.rdf_type().to_owned(),
-            object: iri(target_classes.concept_scheme()),
+            object: ProjectionTerm::iri(target_classes.concept_scheme()),
         });
         for concept in &self.concepts {
             self.output.insert(OutputQuad {
-                subject: iri(concept),
+                subject: ProjectionTerm::iri(concept),
                 predicate: target_classes.rdf_type().to_owned(),
-                object: iri(target_classes.concept()),
+                object: ProjectionTerm::iri(target_classes.concept()),
             });
             self.output.insert(OutputQuad {
-                subject: iri(concept),
+                subject: ProjectionTerm::iri(concept),
                 predicate: target_relations.in_scheme().to_owned(),
-                object: iri(&scheme),
+                object: ProjectionTerm::iri(&scheme),
             });
         }
         for concept in &self.top_concepts {
             self.output.insert(OutputQuad {
-                subject: iri(&scheme),
+                subject: ProjectionTerm::iri(&scheme),
                 predicate: target_relations.has_top_concept().to_owned(),
-                object: iri(concept),
+                object: ProjectionTerm::iri(concept),
             });
             self.output.insert(OutputQuad {
-                subject: iri(concept),
+                subject: ProjectionTerm::iri(concept),
                 predicate: target_relations.top_concept_of().to_owned(),
-                object: iri(&scheme),
+                object: ProjectionTerm::iri(&scheme),
             });
         }
     }
 
     fn emit_iri(&mut self, subject: &str, predicate: String, object: ProjectionTerm) {
         self.output.insert(OutputQuad {
-            subject: iri(subject),
+            subject: ProjectionTerm::iri(subject),
             predicate,
             object,
         });
@@ -625,10 +631,10 @@ impl<'a> Projector<'a> {
     fn record_structural_losses(&mut self) -> Result<(), ProjectionError> {
         for index in 0..self.named_graphs.len() {
             self.record_named_graph_loss(index, LOSS_SKOS_NAMED_GRAPH_DROPPED)?;
-            if contains_blank(&self.named_graphs[index]) {
+            if self.named_graphs[index].contains_blank() {
                 self.record_named_graph_loss(index, LOSS_SKOS_BLANK_IDENTITY_DROPPED)?;
             }
-            if contains_triple(&self.named_graphs[index]) {
+            if self.named_graphs[index].is_triple() {
                 self.record_named_graph_loss(index, LOSS_SKOS_TRIPLE_TERM_DROPPED)?;
             }
         }
@@ -643,7 +649,10 @@ impl<'a> Projector<'a> {
             }
             self.record_reifier_loss(index, LOSS_SKOS_REIFIER_DROPPED)?;
             self.record_reifier_loss(index, LOSS_SKOS_TRIPLE_TERM_DROPPED)?;
-            if source_reifier_contains_blank(&self.reifiers[index]) {
+            if self.reifiers[index]
+                .node_terms()
+                .any(ProjectionTerm::contains_blank)
+            {
                 self.record_reifier_loss(index, LOSS_SKOS_BLANK_IDENTITY_DROPPED)?;
             }
         }
@@ -652,10 +661,16 @@ impl<'a> Projector<'a> {
                 self.record_annotation_loss(index, LOSS_SKOS_NAMED_GRAPH_DROPPED)?;
             }
             self.record_annotation_loss(index, LOSS_SKOS_ANNOTATION_DROPPED)?;
-            if source_annotation_contains_blank(&self.annotations[index]) {
+            if self.annotations[index]
+                .node_terms()
+                .any(ProjectionTerm::contains_blank)
+            {
                 self.record_annotation_loss(index, LOSS_SKOS_BLANK_IDENTITY_DROPPED)?;
             }
-            if source_annotation_contains_triple(&self.annotations[index]) {
+            if self.annotations[index]
+                .node_terms()
+                .any(ProjectionTerm::is_triple)
+            {
                 self.record_annotation_loss(index, LOSS_SKOS_TRIPLE_TERM_DROPPED)?;
             }
         }
@@ -668,10 +683,16 @@ impl<'a> Projector<'a> {
                 continue;
             }
             self.record_quad_loss(index, LOSS_SKOS_NON_PROFILE_STATEMENT_DROPPED)?;
-            if source_quad_contains_blank(&self.quads[index]) {
+            if self.quads[index]
+                .node_terms()
+                .any(ProjectionTerm::contains_blank)
+            {
                 self.record_quad_loss(index, LOSS_SKOS_BLANK_IDENTITY_DROPPED)?;
             }
-            if source_quad_contains_triple(&self.quads[index]) {
+            if self.quads[index]
+                .node_terms()
+                .any(ProjectionTerm::is_triple)
+            {
                 self.record_quad_loss(index, LOSS_SKOS_TRIPLE_TERM_DROPPED)?;
             }
         }
@@ -714,9 +735,14 @@ impl<'a> Projector<'a> {
         index: usize,
         code: &'static str,
     ) -> Result<(), ProjectionError> {
-        let subject = source_identifier("quad", &self.quads[index])?;
-        self.record_loss(code, "skos:quad", subject);
-        Ok(())
+        record_row_loss(
+            &mut self.ledger,
+            &self.contract,
+            code,
+            "skos:quad",
+            "quad",
+            &self.quads[index],
+        )
     }
 
     fn record_named_graph_loss(
@@ -724,9 +750,14 @@ impl<'a> Projector<'a> {
         index: usize,
         code: &'static str,
     ) -> Result<(), ProjectionError> {
-        let subject = source_identifier("graph", &self.named_graphs[index])?;
-        self.record_loss(code, "skos:named-graph", subject);
-        Ok(())
+        record_row_loss(
+            &mut self.ledger,
+            &self.contract,
+            code,
+            "skos:named-graph",
+            "graph",
+            &self.named_graphs[index],
+        )
     }
 
     fn record_reifier_loss(
@@ -734,9 +765,14 @@ impl<'a> Projector<'a> {
         index: usize,
         code: &'static str,
     ) -> Result<(), ProjectionError> {
-        let subject = source_identifier("reifier", &self.reifiers[index])?;
-        self.record_loss(code, "skos:reifier", subject);
-        Ok(())
+        record_row_loss(
+            &mut self.ledger,
+            &self.contract,
+            code,
+            "skos:reifier",
+            "reifier",
+            &self.reifiers[index],
+        )
     }
 
     fn record_annotation_loss(
@@ -744,27 +780,14 @@ impl<'a> Projector<'a> {
         index: usize,
         code: &'static str,
     ) -> Result<(), ProjectionError> {
-        let subject = source_identifier("annotation", &self.annotations[index])?;
-        self.record_loss(code, "skos:annotation", subject);
-        Ok(())
-    }
-
-    fn record_loss(&mut self, code: &'static str, logical: &str, subject: String) {
-        let template = self
-            .contract
-            .entries()
-            .iter()
-            .find(|entry| entry.code == code)
-            .expect("runtime SKOS code must exist in the closed contract");
-        self.ledger.record(LossEntry {
-            code: Cow::Borrowed(code),
-            from: template.from.clone(),
-            to: template.to.clone(),
-            note: template.note.clone(),
-            location: Some(Box::new(
-                RdfLocation::logical(logical).with_subject(subject),
-            )),
-        });
+        record_row_loss(
+            &mut self.ledger,
+            &self.contract,
+            code,
+            "skos:annotation",
+            "annotation",
+            &self.annotations[index],
+        )
     }
 }
 
@@ -804,21 +827,6 @@ fn relation_pairs<'a>(
     ]
 }
 
-fn resolve_term<D: DatasetView>(
-    view: &D,
-    id: D::Id,
-    config: &SkosConfig,
-    cache: &mut BTreeMap<D::Id, ProjectionTerm>,
-) -> Result<ProjectionTerm, ProjectionError> {
-    if let Some(term) = cache.get(&id) {
-        return Ok(term.clone());
-    }
-    let term = ProjectionTerm::from_view(view, id, config.limits())?;
-    let _ = term.to_canonical_json(config.limits())?;
-    cache.insert(id, term.clone());
-    Ok(term)
-}
-
 fn intern_term(
     builder: &mut RdfDatasetBuilder,
     term: &ProjectionTerm,
@@ -845,12 +853,6 @@ fn intern_term(
     })
 }
 
-fn iri(value: &str) -> ProjectionTerm {
-    ProjectionTerm::Iri {
-        value: value.to_owned(),
-    }
-}
-
 fn iri_value(term: &ProjectionTerm) -> Option<&str> {
     let ProjectionTerm::Iri { value } = term else {
         return None;
@@ -864,61 +866,6 @@ fn unordered_pair(left: &str, right: &str) -> (String, String) {
     } else {
         (right.to_owned(), left.to_owned())
     }
-}
-
-fn reject_duplicates<T: Ord>(values: &[T], description: &str) -> Result<(), ProjectionError> {
-    if values.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err(ProjectionError::integrity(format!(
-            "dataset view exposed duplicate {description}"
-        )));
-    }
-    Ok(())
-}
-
-fn contains_blank(term: &ProjectionTerm) -> bool {
-    match term {
-        ProjectionTerm::Blank { .. } => true,
-        ProjectionTerm::Triple {
-            subject,
-            predicate,
-            object,
-        } => contains_blank(subject) || contains_blank(predicate) || contains_blank(object),
-        ProjectionTerm::Iri { .. } | ProjectionTerm::Literal { .. } => false,
-    }
-}
-
-fn contains_triple(term: &ProjectionTerm) -> bool {
-    matches!(term, ProjectionTerm::Triple { .. })
-}
-
-fn source_quad_contains_blank(quad: &SourceQuad) -> bool {
-    contains_blank(&quad.subject)
-        || contains_blank(&quad.object)
-        || quad.graph.as_ref().is_some_and(contains_blank)
-}
-
-fn source_quad_contains_triple(quad: &SourceQuad) -> bool {
-    contains_triple(&quad.subject)
-        || contains_triple(&quad.object)
-        || quad.graph.as_ref().is_some_and(contains_triple)
-}
-
-fn source_reifier_contains_blank(row: &SourceReifier) -> bool {
-    contains_blank(&row.reifier)
-        || contains_blank(&row.statement)
-        || row.graph.as_ref().is_some_and(contains_blank)
-}
-
-fn source_annotation_contains_blank(row: &SourceAnnotation) -> bool {
-    contains_blank(&row.reifier)
-        || contains_blank(&row.object)
-        || row.graph.as_ref().is_some_and(contains_blank)
-}
-
-fn source_annotation_contains_triple(row: &SourceAnnotation) -> bool {
-    contains_triple(&row.reifier)
-        || contains_triple(&row.object)
-        || row.graph.as_ref().is_some_and(contains_triple)
 }
 
 #[cfg(test)]

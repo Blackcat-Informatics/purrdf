@@ -895,7 +895,7 @@ pub fn relational_rows(graph: &Graph) -> Result<RelationalRows, String> {
             .map(|(id, term)| {
                 (
                     id,
-                    term_kind_int(term.kind),
+                    term.kind.to_wire(),
                     term.value.clone(),
                     term.datatype,
                     term.lang.clone(),
@@ -930,15 +930,6 @@ fn graph_term_for_scope(scope: ScopeKey) -> Option<usize> {
     match scope {
         ScopeKey::Named(tid) => Some(tid),
         ScopeKey::Default | ScopeKey::All => None,
-    }
-}
-
-fn term_kind_int(kind: TermKind) -> u8 {
-    match kind {
-        TermKind::Iri => 0,
-        TermKind::Literal => 1,
-        TermKind::Bnode => 2,
-        TermKind::Triple => 3,
     }
 }
 

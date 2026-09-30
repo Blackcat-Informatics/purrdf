@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use super::jsonld::validate_data_path;
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::loss::{
@@ -23,7 +24,7 @@ use super::{
     ResearchAgent, ResearchChecksum, ResearchDataset, ResearchObjectConfig, ResearchObjectModel,
     ResearchResource, ResearchText, ResearchValue, lift_research_object, project_research_object,
 };
-use purrdf_lex::json::record::{DecodeError, FromJson, Owned, Record, ToJson, into_owned};
+use purrdf_lex::json::record::{Owned, into_owned};
 
 /// Closed Frictionless Data Package profile identifier.
 pub const FRICTIONLESS_PROFILE: &str = "frictionless-data-package-1";
@@ -77,27 +78,17 @@ impl FrictionlessConfig {
     }
 }
 
-impl FromJson for FrictionlessConfig {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct FrictionlessConfig")?;
-        let common: ResearchObjectConfig = fields.required("common")?;
-        let package_profile: String = fields.required("package_profile")?;
-        let package_name: String = fields.required("package_name")?;
-        fields.deny_unknown()?;
-        Ok(Self::new(common, package_profile, package_name)?)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for FrictionlessConfig as "struct FrictionlessConfig" {
+    "common" => common: required::<ResearchObjectConfig>,
+    "package_profile" => package_profile: required::<String>,
+    "package_name" => package_name: required::<String>,
+} => FrictionlessConfig::new);
 
-impl ToJson for FrictionlessConfig {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("common", self.common.to_json())
-                .with("package_profile", self.package_profile.to_json())
-                .with("package_name", self.package_name.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for FrictionlessConfig {
+    "common" => common,
+    "package_profile" => package_profile,
+    "package_name" => package_name,
+});
 
 /// Project caller-vocabulary RDF 1.2 into canonical Data Package v1 JSON.
 ///
@@ -297,7 +288,7 @@ fn encode_document(
             ledger,
             contract,
             LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-            &format!("dataset:identifier:{}", value_lexical(identifier)),
+            &format!("dataset:identifier:{}", identifier.lexical().to_owned()),
         );
     }
     for (index, _) in dataset.modified.iter().enumerate() {
@@ -355,7 +346,7 @@ fn encode_licenses(
             }
             ResearchValue::Text(value) => {
                 record_text_fidelity(value, config, contract, ledger, &subject);
-                if validate_license_name(&value.value) {
+                if is_name_token(&value.value) {
                     encoded.push(Value::Object(Object::from_iter([(
                         "name".to_owned(),
                         Value::String(value.value.clone()),
@@ -466,7 +457,7 @@ fn encode_resource(
 
     let mut paths = Vec::new();
     for path in &resource.paths {
-        validate_data_path(path)?;
+        validate_data_path(path, "Frictionless resource path")?;
         paths.push(Value::String(path.clone()));
     }
     for (index, url) in resource.urls.iter().enumerate() {
@@ -498,7 +489,7 @@ fn encode_resource(
         // removing `entity_base_iri`. Data Package permits the same safe value
         // as both resource name and path, which keeps identifier-only resources
         // from stricter citation carriers usable without fabricating an IRI.
-        validate_data_path(native_name)?;
+        validate_data_path(native_name, "Frictionless resource path")?;
         paths.push(Value::String(native_name.to_owned()));
     }
     object.insert("path".to_owned(), Value::Array(paths));
@@ -564,7 +555,7 @@ fn encode_hash(
             &format!("{}:checksum[{index}]", resource.id),
         );
     }
-    let algorithm = value_lexical(&checksum.algorithm);
+    let algorithm = checksum.algorithm.lexical().to_owned();
     record_value_fidelity(
         &checksum.algorithm,
         config,
@@ -579,7 +570,7 @@ fn encode_hash(
         ledger,
         &format!("{}:checksum-value", resource.id),
     );
-    if !validate_hash_algorithm(&algorithm) || !is_hex(&checksum.value.value) {
+    if !is_name_token(&algorithm) || !is_hex(&checksum.value.value) {
         forward_loss(
             ledger,
             contract,
@@ -647,7 +638,7 @@ fn insert_single_value(
     let Some(value) = values.first() else {
         return Ok(());
     };
-    let lexical = value_lexical(value);
+    let lexical = value.lexical().to_owned();
     if require_absolute {
         validate_absolute_iri(&lexical, &format!("Frictionless `{member}`"))?;
     }
@@ -698,13 +689,6 @@ fn record_text_fidelity(
 
 fn forward_loss(ledger: &mut LossLedger, contract: &LossLedger, code: &'static str, subject: &str) {
     record_loss(ledger, contract, code, FRICTIONLESS_ARTIFACT, subject);
-}
-
-fn value_lexical(value: &ResearchValue) -> String {
-    match value {
-        ResearchValue::Iri { value } => value.clone(),
-        ResearchValue::Text(value) => value.value.clone(),
-    }
 }
 
 struct FrictionlessDecoder<'a> {
@@ -879,7 +863,7 @@ impl FrictionlessDecoder<'_> {
                 licenses.push(ResearchValue::iri(path)?);
             }
             if let Some(name) = self.take_string(&mut object, "name", &pointer)? {
-                if !validate_license_name(&name) {
+                if !is_name_token(&name) {
                     return Err(self.shape(
                         "Frictionless license name is outside the v1 grammar",
                         &json_pointer(&pointer, "name"),
@@ -1050,7 +1034,7 @@ impl FrictionlessDecoder<'_> {
             if validate_absolute_iri(&value, "Frictionless resource URL").is_ok() {
                 urls.push(ResearchValue::iri(value)?);
             } else {
-                validate_data_path(&value)
+                validate_data_path(&value, "Frictionless resource path")
                     .map_err(|error| self.shape(error.message(), &pointer))?;
                 paths.push(value);
             }
@@ -1082,7 +1066,7 @@ impl FrictionlessDecoder<'_> {
                 &json_pointer(parent, "hash"),
             ));
         };
-        if !validate_hash_algorithm(algorithm) || !is_hex(lexical) {
+        if !is_name_token(algorithm) || !is_hex(lexical) {
             return Err(self.shape(
                 "Frictionless hash must use algorithm:hex syntax",
                 &json_pointer(parent, "hash"),
@@ -1330,30 +1314,9 @@ fn validate_package_name(value: &str, description: &str) -> Result<(), Projectio
     Ok(())
 }
 
-fn validate_data_path(path: &str) -> Result<(), ProjectionError> {
-    if path.is_empty()
-        || path.starts_with('/')
-        || path.contains('\\')
-        || path.contains(['?', '#'])
-        || path
-            .split('/')
-            .any(|segment| matches!(segment, "" | "." | ".."))
-    {
-        return Err(ProjectionError::integrity(format!(
-            "unsafe Frictionless resource path `{path}`"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_license_name(value: &str) -> bool {
-    !value.is_empty()
-        && value.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '-' | '.' | '_')
-        })
-}
-
-fn validate_hash_algorithm(value: &str) -> bool {
+/// Whether `value` is a non-empty run of ASCII alphanumerics, `-`, `.` and
+/// `_`: the token grammar of a Frictionless license name and hash algorithm.
+fn is_name_token(value: &str) -> bool {
     !value.is_empty()
         && value.chars().all(|character| {
             character.is_ascii_alphanumeric() || matches!(character, '-' | '.' | '_')

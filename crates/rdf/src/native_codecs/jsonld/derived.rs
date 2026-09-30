@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use super::carrier::{Document, Node, Term, Value};
+use super::carrier::{Document, Node, Part, Term};
 use super::{CompiledJsonLdContext, RdfDiagnostic};
 
 const MAX_DISTINCT_IRIS: usize = 65_536;
@@ -236,47 +236,39 @@ fn collect_document(document: &Document, collector: &mut Collector) -> Result<()
 }
 
 fn collect_node(node: &Node, collector: &mut Collector) -> Result<(), RdfDiagnostic> {
+    collect_node_header(node, collector)?;
+    for part in node.parts() {
+        match part {
+            Part::Term(term) => collect_term(term, collector)?,
+            Part::Annotation(annotation) => collect_node_header(annotation, collector)?,
+        }
+    }
+    Ok(())
+}
+
+/// A node's own IRI slots: its identifier, its types and its predicates.
+fn collect_node_header(node: &Node, collector: &mut Collector) -> Result<(), RdfDiagnostic> {
     collector.record(&node.id)?;
     for rdf_type in &node.types {
         collector.record(rdf_type)?;
     }
-    for (predicate, values) in node.properties.iter().chain(node.reverse_properties.iter()) {
+    for predicate in node.properties.keys().chain(node.reverse_properties.keys()) {
         collector.record(predicate)?;
-        for value in values {
-            collect_value(value, collector)?;
-        }
     }
     Ok(())
 }
 
-fn collect_value(value: &Value, collector: &mut Collector) -> Result<(), RdfDiagnostic> {
-    collect_term(&value.term, collector)?;
-    for annotation in &value.annotations {
-        collect_node(annotation, collector)?;
-    }
-    Ok(())
-}
-
+/// A term's own IRI slots; the terms inside a triple term or a list are
+/// parts of their own.
 fn collect_term(term: &Term, collector: &mut Collector) -> Result<(), RdfDiagnostic> {
     match term {
         Term::Id(iri) => collector.record(iri),
-        Term::Literal(literal) => {
-            if let Some(datatype) = &literal.datatype {
-                collector.record(datatype)?;
-            }
-            Ok(())
-        }
-        Term::Triple(triple) => {
-            collect_term(&triple.subject, collector)?;
-            collector.record(&triple.predicate)?;
-            collect_term(&triple.object, collector)
-        }
-        Term::List(values) => {
-            for value in values {
-                collect_value(value, collector)?;
-            }
-            Ok(())
-        }
+        Term::Literal(literal) => literal
+            .datatype
+            .as_ref()
+            .map_or(Ok(()), |datatype| collector.record(datatype)),
+        Term::Triple(triple) => collector.record(&triple.predicate),
+        Term::List(_) => Ok(()),
     }
 }
 

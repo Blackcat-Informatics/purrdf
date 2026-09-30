@@ -9,6 +9,7 @@ mod datacite;
 mod dcat;
 mod frictionless;
 mod json;
+mod jsonld;
 mod mapping;
 mod model;
 mod ro_crate;
@@ -34,6 +35,7 @@ pub use frictionless::{
     read_frictionless,
 };
 pub use json::{OfflineJsonLdContext, ResearchObjectPackageProjection, ResearchObjectReadOutcome};
+pub use jsonld::{JsonLdProfileConfig, JsonLdProfileVocabulary};
 pub use mapping::{ResearchObjectProjection, lift_research_object, project_research_object};
 pub use model::{
     ResearchActivity, ResearchAgent, ResearchChecksum, ResearchDataset, ResearchField,
