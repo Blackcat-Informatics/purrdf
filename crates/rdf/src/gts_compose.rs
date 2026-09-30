@@ -21,11 +21,11 @@
 use std::collections::BTreeMap;
 use std::hash::BuildHasher;
 
-use ciborium::value::Value;
 use hashbrown::HashTable;
 use purrdf_gts::model::{AnnotationRow, ReifierRow, Term, TermKind, is_literal_direction};
 use purrdf_gts::wire::{canonical, digest_str};
 use purrdf_gts::writer::Writer;
+use purrdf_lex::cbor::Value;
 
 use crate::{
     BlankScope, DatasetView, DrainCheckpoint, FallibleDatasetView, FastHasher, RdfTextDirection,
@@ -1011,7 +1011,7 @@ impl SnapshotBuilder {
 }
 
 fn iv(n: usize) -> Value {
-    Value::Integer(ciborium::value::Integer::from(n as u64))
+    Value::Integer(purrdf_lex::cbor::Integer::from(n as u64))
 }
 
 /// The by-VALUE twin of `purrdf_gts::writer::term_to_wire`.
@@ -1052,7 +1052,7 @@ fn term_into_wire(term: Term) -> Value {
 
 /// A term id as the writer spells it on the wire (a signed CBOR integer).
 fn wire_id(n: usize) -> Value {
-    Value::Integer(ciborium::value::Integer::from(n as i64))
+    Value::Integer(purrdf_lex::cbor::Integer::from(n as i64))
 }
 
 /// How deep [`render_term`] follows a term's constituents.

@@ -49,7 +49,9 @@ purrdf-xsd = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
-ciborium = { workspace = true }
+# The workspace CBOR codec: GTS metadata payloads and blob containers are
+# `purrdf_lex::cbor::Value` trees, the type purrdf-gts reads and writes.
+purrdf-lex = { workspace = true }
 # CSVW string/duration format validation. Already workspace-pinned and present in
 # the SPARQL tree; the direct edge keeps one standards parser on native and wasm.
 regex = { workspace = true }
@@ -135,7 +137,6 @@ proc-macro2 = { workspace = true }
 # Draft 2020-12 validator for the public JSON-LD options schema: the decoder's
 # acceptance is checked against what the published schema accepts.
 purrdf-jsonschema = { workspace = true }
-ciborium = { workspace = true }
 purrdf-gts = { workspace = true }
 # The SEP-0009 grammar, used by the composite blank-node scoping tests as an
 # independent oracle: the round-tripped lexical form must still parse.

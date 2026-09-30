@@ -316,6 +316,18 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "walkdir": "purrdf_testkit::bench::store (one fixed path per record)",
     "same-file": "purrdf_testkit::bench::store (one fixed path per record)",
     "winapi-util": "purrdf_testkit::bench::store (old walkdir closure)",
+    "ciborium": "purrdf_lex::cbor (RFC 8949 encode, canonical encode and bounded decode)",
+    # ciborium's own closure: its I/O traits and low-level codec, the binary16
+    # float crate and that crate's closure (its build-time helper and its
+    # byte-reinterpretation crate with derive macros). The committed Cargo.lock
+    # listed ciborium (or one of these) as the only dependent of each before
+    # they left.
+    "ciborium-io": "purrdf_lex::cbor (std::io::Read and Write directly)",
+    "ciborium-ll": "purrdf_lex::cbor::head (the data-item head reader and writer)",
+    "half": "purrdf_lex::cbor (binary16 encode and decode by bit pattern)",
+    "crunchy": "purrdf_lex::cbor (no unrolled float conversion helper)",
+    "zerocopy": "purrdf_lex::cbor (f16/f32/f64 bit conversions through std to_bits/from_bits)",
+    "zerocopy-derive": "purrdf_lex::cbor (no byte-reinterpretation derives)",
 }
 
 # Removed as a direct dependency of every workspace member, while a direct

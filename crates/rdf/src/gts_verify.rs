@@ -168,12 +168,12 @@ pub fn verify_content_chain(
 mod tests {
     use std::sync::Arc;
 
-    use ciborium::value::Value;
     use purrdf_core::ir::RdfDatasetBuilder;
     use purrdf_core::{ContentIdScheme, RdfLiteral};
     use purrdf_gts::openpgp::parse_secret_signing_key;
     use purrdf_gts::wire::{digest_label, digest_str};
     use purrdf_gts::writer::Writer;
+    use purrdf_lex::cbor::Value;
 
     use super::{RdfDataset, verify_content_chain};
 

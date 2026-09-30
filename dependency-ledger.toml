@@ -256,29 +256,6 @@ distinct = "a cfg dispatch macro inside sha2, getrandom, wasm-bindgen and the Ru
 holder = "sha2"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
-[packages.ciborium]
-category = "spec-codec"
-reason = "CBOR (RFC 8949) encode/decode for GTS packs and envelopes"
-duplicates_native = "purrdf_lex::cbor"
-pending_native = true
-metrics = { direct = true, exclusive_closure = 7, release = true, wasm = true, build_script = false, proc_macro = false }
-
-[packages.ciborium-io]
-category = "transitive:ciborium"
-reason = "I/O traits for ciborium"
-duplicates_native = "purrdf_lex::cbor"
-pending_native = true
-holder = "ciborium"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
-[packages.ciborium-ll]
-category = "transitive:ciborium"
-reason = "low-level CBOR codec for ciborium"
-duplicates_native = "purrdf_lex::cbor"
-pending_native = true
-holder = "ciborium"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
 [packages.cipher]
 category = "transitive:aes-gcm"
 reason = "block/stream cipher traits for AES-GCM"
@@ -369,14 +346,6 @@ distinct = "internal to rayon's work-stealing pool; PurRDF has no thread pool of
 holder = "rayon"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
 
-[packages.crunchy]
-category = "transitive:ciborium"
-reason = "loop unrolling for half"
-duplicates_native = "purrdf_lex::cbor"
-pending_native = true
-holder = "ciborium"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = true, proc_macro = false }
-
 [packages.crypto-common]
 category = "transitive:sha2"
 reason = "common RustCrypto traits"
@@ -437,14 +406,6 @@ category = "transitive:aes-gcm"
 reason = "GHASH universal hash for AES-GCM"
 distinct = "internal to aes-gcm's AES-256-GCM; PurRDF has no block cipher or AEAD of its own (purrdf_hash::fixed uses single AES rounds only as a hash mixer)"
 holder = "aes-gcm"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
-[packages.half]
-category = "transitive:ciborium"
-reason = "half-precision floats for CBOR"
-duplicates_native = "purrdf_lex::cbor"
-pending_native = true
-holder = "ciborium"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.hashbrown]
@@ -830,22 +791,6 @@ reason = "WIT bindings for wasip2"
 distinct = "internal to getrandom's operating-system entropy bindings; PurRDF has no entropy source of its own"
 holder = "getrandom"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = true, proc_macro = false }
-
-[packages.zerocopy]
-category = "transitive:ciborium"
-reason = "safe transmutes for half"
-duplicates_native = "purrdf_lex::cbor"
-pending_native = true
-holder = "ciborium"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
-
-[packages.zerocopy-derive]
-category = "transitive:ciborium"
-reason = "zerocopy derive macros"
-duplicates_native = "purrdf_lex::cbor"
-pending_native = true
-holder = "ciborium"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = true }
 
 [packages.zmij]
 category = "transitive:serde_json"

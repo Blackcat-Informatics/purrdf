@@ -19,11 +19,11 @@
 
 use std::path::PathBuf;
 
-use ciborium::value::Value;
 use purrdf_ed25519::SigningKey;
 use purrdf_gts::compact::DictPlan;
 use purrdf_gts::reader::read;
 use purrdf_gts::wire::{iter_items, map_get};
+use purrdf_lex::cbor::Value;
 use purrdf_rdf::FastMap;
 use purrdf_rdf::gts_certify::{compact_and_certify, verify_compaction};
 

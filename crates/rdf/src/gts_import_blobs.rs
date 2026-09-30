@@ -6,9 +6,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use ciborium::Value;
 use purrdf_gts::model::ByteRange;
 use purrdf_gts::reader::{BlobPayload, BlobRefusal, FrameContext};
+use purrdf_lex::cbor::Value;
 
 use crate::{GtsBundle, RdfDiagnostic};
 
@@ -666,7 +666,7 @@ impl<'a> BlobCollector<'a> {
             check_metadata_bound(Some(meta), self.limits.max_metadata_bytes).is_ok()
         });
         let retained_len = if per_blob_ok {
-            refusal.metadata.map_or(0, encoded_metadata_len)
+            refusal.metadata.map_or(0, purrdf_lex::cbor::encoded_len)
         } else {
             0
         };
@@ -935,25 +935,6 @@ fn validate_metadata(meta: Option<&Value>, digest: &str) -> Result<(), RdfDiagno
     Ok(())
 }
 
-/// Exact CBOR-encoded size of a metadata map, without materializing the bytes.
-fn encoded_metadata_len(meta: &Value) -> usize {
-    struct Counter(usize);
-    impl std::io::Write for Counter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0 += bytes.len();
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut counter = Counter(0);
-    // Counting cannot fail; a serialization error simply under-counts, and the
-    // per-blob bound has already accepted this value.
-    let _ = ciborium::ser::into_writer(meta, &mut counter);
-    counter.0
-}
-
 fn bounded_metadata(meta: Option<&Value>, limit: usize) -> Result<Option<Value>, RdfDiagnostic> {
     check_metadata_bound(meta, limit)?;
     Ok(meta.cloned())
@@ -975,7 +956,7 @@ fn check_metadata_bound(meta: Option<&Value>, limit: usize) -> Result<(), RdfDia
         }
     }
     if let Some(meta) = meta {
-        ciborium::ser::into_writer(meta, Counter { remaining: limit })
+        purrdf_lex::cbor::write(meta, &mut Counter { remaining: limit })
             .map_err(|error| fail("rdf-ir-gts-blob-limit", error.to_string()))?;
     }
     Ok(())
