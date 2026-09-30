@@ -308,6 +308,7 @@ makes it removable).
 
 ```bash
 make check      # the full local gate: fmt, clippy, build, tests, hygiene
+make hooks      # install the pre-commit hook: rustfmt + the fast hygiene gates, on the staged snapshot
 make test       # cargo test --workspace
 make metadata   # regenerate + verify generated artifacts
 make bench      # purrdf_testkit::bench benchmarks (report-only; not a gate)
