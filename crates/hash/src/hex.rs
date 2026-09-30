@@ -400,7 +400,17 @@ fn encode_slice<'o, const UPPER: bool>(
 /// of `rejected` (`0x00` for a digit). `ANY_CASE` accepts `A`–`F` as well as
 /// `a`–`f`. The one digit classification every reader runs: sixteen lanes in
 /// the decoders, where the loop packs into byte compares, one in [`nibble`].
-#[inline]
+///
+/// Always inlined: a sixteen-lane instance left out of line is four calls per
+/// 64-digit read with its lanes spilled through memory between them, and the
+/// compares are then no longer in the decoder the assembly gate measures
+/// (`hash.hex-decode`).
+#[allow(
+    clippy::inline_always,
+    reason = "the byte-compare lanes must be in the decoder that runs them; an out-of-line \
+              instance spills every lane through memory"
+)]
+#[inline(always)]
 fn classify<const ANY_CASE: bool, const N: usize>(
     digits: &[u8; N],
     values: &mut [u8; N],

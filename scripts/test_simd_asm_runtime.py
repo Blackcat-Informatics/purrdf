@@ -14,12 +14,20 @@ import sys
 import tempfile
 import threading
 import time
+from types import ModuleType
 import unittest
 from unittest.mock import patch
 
 import simd_asm_runtime as runtime
 
-GATE = None
+GATE: ModuleType | None = None
+
+
+def loaded_gate() -> ModuleType:
+    """The gate module the tests run against, which `run_tests` or `__main__` loads."""
+    if GATE is None:
+        raise RuntimeError("the gate module is not loaded; run through check-simd-asm.py --self-test")
+    return GATE
 
 
 class EvidenceTests(unittest.TestCase):
@@ -27,7 +35,7 @@ class EvidenceTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="purrdf-asm-test-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.gate = GATE
+        self.gate = loaded_gate()
         self.config = self.gate.CONFIG_BY_NAME["x86_64"]
         data = self.gate._manifest_dict()
         data["site"][0]["measure"][0]["min_vector_ops"] = 1
@@ -173,6 +181,37 @@ class EvidenceTests(unittest.TestCase):
         with self.runner.context({"process": "fixture"}):
             pass
 
+    def test_every_failing_configuration_is_reported(self):
+        gate = self.gate
+
+        class Stub:
+            workers = 7
+            compiler = "fixture compiler"
+            timings = {}
+
+            def __init__(self, *_args):
+                pass
+
+            def configuration(self, config, _manifest, _chooser):
+                if config.name in ("x86_64", "wasm32-simd128"):
+                    raise gate.GateError(f"`demo.dot` on {config.name}: below the floor")
+                return []
+
+            def stop(self):
+                pass
+
+        options = argparse.Namespace(jobs=7, fresh=False, probe=None)
+        with patch.object(runtime, "Runner", Stub), patch.object(gate, "require_targets"):
+            with self.assertRaises(gate.GateError) as caught:
+                runtime.measure_all(gate, self.manifest, gate.CONFIGS, lambda _c: None, options)
+            self.assertEqual(
+                str(caught.exception).splitlines(),
+                ["`demo.dot` on x86_64: below the floor", "`demo.dot` on wasm32-simd128: below the floor"],
+            )
+            passing = [c for c in gate.CONFIGS if c.name not in ("x86_64", "wasm32-simd128")]
+            self.assertEqual(set(runtime.measure_all(gate, self.manifest, tuple(passing), lambda _c: None, options)),
+                             {c.name for c in passing})
+
     def test_complete_report_set_and_failure_cases(self):
         identity = dict(schema=1, source="source", compiler="compiler", manifest="manifest")
         for name in self.gate.CONFIG_NAMES:
@@ -212,7 +251,7 @@ class LiveEvidenceTests(unittest.TestCase):
     """Explicit opt-in: compile a tiny crate through the installed Cargo path."""
 
     def test_real_cargo_freshness_source_edit_and_missing_assembly(self):
-        gate = GATE
+        gate = loaded_gate()
         with tempfile.TemporaryDirectory(prefix="purrdf-asm-live-") as temporary:
             root = Path(temporary)
             (root / "src").mkdir()
@@ -250,9 +289,12 @@ if __name__ == "__main__":
     import importlib.util
     import sys
     spec = importlib.util.spec_from_file_location("asm_test_gate", Path(__file__).with_name("check-simd-asm.py"))
-    GATE = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = GATE
-    spec.loader.exec_module(GATE)
+    if spec is None or spec.loader is None:
+        raise SystemExit("cannot load check-simd-asm.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    GATE = module
     suite = LiveEvidenceTests if "--live" in sys.argv else EvidenceTests
     result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(suite))
     sys.exit(not result.wasSuccessful())

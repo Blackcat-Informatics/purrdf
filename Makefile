@@ -645,10 +645,9 @@ hnsw-determinism: ## Prove purrdf-hnsw's native and wasm32 canonical bytes are i
 # The SIMD asm evidence gate: seven release builds (x86_64 baseline, x86-64-v3,
 # x86-64-v4, aarch64, aarch64 neoverse-v1, wasm32, wasm32 +simd128) with
 # `--emit=asm`, then every site in scripts/simd-asm-manifest.toml is counted in the
-# emitted functions. It needs the aarch64 and wasm32 standard libraries, and clang +
-# llvm-ar for the C that build scripts compile for the cross targets; any of them
-# missing is a failure here, never a skip. Too slow for `check`, which runs only its
-# `--self-test`.
+# emitted functions. It needs the aarch64 and wasm32 standard libraries (the audited
+# graph is pure Rust, so no C toolchain); a missing one is a failure here, never a
+# skip. Too slow for `check`, which runs only its `--self-test`.
 #
 # `--doc` adds the audit document's checks: every manifest site is a row of
 # docs/design/purrdf-simd.md and every function row has a manifest site, its

@@ -25,7 +25,7 @@ rmeta and a ``.s`` per crate are all produced), LTO off and one codegen unit::
     wasm32-simd128       wasm32-unknown-unknown, -C target-feature=+simd128
 
 That emits a ``.s`` for EVERY crate in the graph, dependencies included, so a
-dependency's own kernels (memchr's, sha2's) are measured in that dependency's symbols.
+dependency's own kernels (sha2's) are measured in that dependency's symbols.
 The asm is per crate and before LTO. LTO may inline, specialize or eliminate bodies;
 these counts prove this build's kernel lowering, not final-binary throughput.
 
@@ -53,8 +53,11 @@ clone is still one kernel.
 
 Names are demangled by a small built-in demangler for both the v0 (``_R...``) and the
 legacy (``_ZN...E``) schemes, enough to recover the path and the crate. A manifest
-entry matches by that crate plus a substring of the demangled path. A private or
-inlined site is measured in the enclosing hot symbol, which its entry names.
+entry matches by that crate plus its demangled path, anchored: the path is the
+symbol, or the symbol followed by its generic arguments (``::<...>``) or a
+compiler-generated item nested in it (a ``::{closure…}`` or ``::{shim…}``). Never a substring, so
+``scan::find_byte`` does not also claim ``scan::find_byte2``. A private or inlined
+site is measured in the enclosing hot symbol, which its entry names.
 
 Counting
 --------
@@ -116,7 +119,9 @@ functions are cached by assembly content, reader version and selectors; verdicts
 always recomputed. Context leases cover both Cargo and the reader. On Stage the shim
 recognizes the explicit assembly context and preserves the lease and private outputs.
 
-``--jobs`` bounds concurrent configurations within one total Cargo job budget.
+``--jobs`` bounds concurrent configurations within one total Cargo job budget. A
+failing configuration does not cancel the others: every configuration runs to its
+verdict and the problems of all of them are reported together.
 ``--config`` runs a checked partial shard; only a full matrix may write the document.
 ``--fresh`` allocates new contexts (the external compiler cache remains enabled).
 ``--report`` writes checked JSON evidence; ``--merge-reports`` requires all seven
@@ -1053,8 +1058,24 @@ class Result:
     problems: tuple[str, ...]
 
 
+def symbol_names(path: str, symbol: str) -> bool:
+    """Whether a measure's ``symbol`` names the function whose demangled path is ``path``.
+
+    Anchored, never a substring: the path IS the symbol, or the symbol followed by
+    its generic arguments (``::<...>``) or a compiler-generated item nested in it
+    (a ``::{closure…}`` or ``::{shim…}``). A substring would let
+    ``purrdf_lex::scan::find_byte`` also claim ``find_byte2`` and ``find_byte_pair``
+    (a different kernel's counts judged against the wrong floor), and would let a
+    symbol that lost its function keep matching a longer neighbour's.
+    """
+    if not path.startswith(symbol):
+        return False
+    rest = path[len(symbol):]
+    return not rest or rest.startswith(("::<", "::{"))
+
+
 def matches(func: Function, measure: Measure) -> bool:
-    return func.crate == measure.crate and measure.symbol in func.path
+    return func.crate == measure.crate and symbol_names(func.path, measure.symbol)
 
 
 def _is_nested_closure(func: Function, symbol: str) -> bool:
@@ -1065,8 +1086,11 @@ def _is_nested_closure(func: Function, symbol: str) -> bool:
     parent's with `::{closure#N}`. It carries none of the parent's evidence, so when
     the parent itself is matched the closure is not a second copy of the site.
     """
-    at = func.path.find(symbol)
-    return at >= 0 and "{closure" in func.path[at + len(symbol):] and "{closure" not in symbol
+    return (
+        symbol_names(func.path, symbol)
+        and "{closure" in func.path[len(symbol):]
+        and "{closure" not in symbol
+    )
 
 
 def measured(functions: list[Function], measure: Measure) -> list[Function]:
@@ -1342,7 +1366,7 @@ def manifest_keep(manifest: Manifest):
         for measure in measures:
             patterns.setdefault(measure.crate, set()).add(measure.symbol)
         return Chooser(
-            select=lambda d: any(symbol in d.path for symbol in patterns.get(d.crate, ())),
+            select=lambda d: any(symbol_names(d.path, symbol) for symbol in patterns.get(d.crate, ())),
             keep=None,
         )
     return keep_for
@@ -1809,7 +1833,7 @@ _X86_FAST_DUP = _X86_FAST_FMA + _X86_FAST_FMA.replace("1111111111111111", "22222
 
 
 _FIXTURE_MEASURE = Measure(
-    configs=CONFIG_NAMES, crate="demo", symbol="kernel::dot", label="", min_vector_ops=1,
+    configs=CONFIG_NAMES, crate="demo", symbol="demo::kernel::dot", label="", min_vector_ops=1,
     require_mnemonics=(), max_fma=0, min_fma=None, forbid_relaxed=True, single_copy=False,
 )
 
@@ -1832,7 +1856,7 @@ def _manifest_dict(**site_overrides) -> dict:
     site = {
         "id": "demo.dot", "summary": "fixture",
         "measure": [{
-            "configs": list(CONFIG_NAMES), "crate": "demo", "symbol": "kernel::dot",
+            "configs": list(CONFIG_NAMES), "crate": "demo", "symbol": "demo::kernel::dot",
             "min_vector_ops": 0, "max_fma": 0, "forbid_relaxed": True,
         }],
     }
@@ -1936,7 +1960,7 @@ def self_test() -> int:
     expect(any("relaxed_" in p for p in _problems(_WASM_RELAXED, "wasm", _measure(max_fma=None, min_fma=0))), "f64x2.relaxed_madd must fail forbid_relaxed")
     expect(not _problems(_WASM_EXACT, "wasm", _measure(require_mnemonics=("f64x2.add", "f64x2.mul"))), "f64x2.add + f64x2.mul without relaxed must pass")
     # -- min_fma on a fast fn
-    fast = _measure(crate="demo", symbol="fast::dot", max_fma=None, min_fma=1, single_copy=True)
+    fast = _measure(crate="demo", symbol="demo::fast::dot", max_fma=None, min_fma=1, single_copy=True)
     expect(any("below the fast floor" in p for p in _problems(_X86_FAST, "x86", fast)), "a fast fn without FMA must fail min_fma >= 1")
     expect(not _problems(_X86_FAST_FMA, "x86", fast), "a fast fn with FMA (and a folded .cold clone) must pass")
     # -- single_copy
@@ -1952,8 +1976,21 @@ def self_test() -> int:
         any("single_copy" in p for p in _problems_in([("demo.s", _X86_FAST_DUP, 0), ("demo-2.s", _X86_FAST_FMA, 1)], "x86", fast)),
         "a duplicate inside one graph fails even when another graph is clean",
     )
+    # -- anchored symbol matching: a path is named by its own symbol, its generic
+    # instances and its nested closures, never by a prefix of a longer name or a
+    # substring from its middle
+    expect(symbol_names("demo::kernel::dot", "demo::kernel::dot"), "the exact path is named")
+    expect(symbol_names("demo::kernel::dot::<f64, f32>", "demo::kernel::dot"), "a generic instance is named")
+    expect(symbol_names("demo::kernel::dot::{closure#0}", "demo::kernel::dot"), "a nested closure is named")
+    expect(not symbol_names("demo::kernel::dot2", "demo::kernel::dot"), "a longer name is not named by its prefix")
+    expect(not symbol_names("demo::kernel::dot_pair", "demo::kernel::dot"), "a sibling with a suffix is not named")
+    expect(not symbol_names("demo::kernel::dot::inner", "demo::kernel::dot"), "a nested item fn is its own function")
+    expect(not symbol_names("demo::kernel::dot", "kernel::dot"), "a symbol from the middle of a path is not a match")
+    dot2 = _X86_PACKED.replace("6kernel3dot17h", "6kernel4dot217h")
+    expect(any("renamed or inlined away" in p for p in _problems(dot2, "x86", _measure())), "a longer neighbour cannot stand in for a missing symbol")
+    expect(not _problems(_X86_PACKED + dot2.replace("0123456789abcdef", "1111111111111111"), "x86", _measure(single_copy=True)), "a longer neighbour is not a second copy")
     # -- presence
-    expect(any("renamed or inlined away" in p for p in _problems(_X86_PACKED, "x86", _measure(symbol="kernel::gone"))), "a missing symbol must fail")
+    expect(any("renamed or inlined away" in p for p in _problems(_X86_PACKED, "x86", _measure(symbol="demo::kernel::gone"))), "a missing symbol must fail")
     expect(any("renamed or inlined away" in p for p in _problems(_X86_PACKED, "x86", _measure(crate="other"))), "the crate must match, not just the path")
 
     # -- manifest validation
