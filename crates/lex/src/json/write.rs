@@ -35,86 +35,100 @@ impl Format<'static> {
     };
 }
 
-/// One step of the writer.
-enum Job<'v> {
-    /// A value at a nesting depth.
-    Value(&'v Value, usize),
-    /// A member name, its separator, then its value.
-    Member(&'v str, &'v Value, usize),
-    /// Fixed text.
-    Text(&'static str),
-    /// A line break and the indentation of a depth (pretty only).
-    Break(usize),
+/// A container being written: the members not yet written, and whether one
+/// already has been (so the next needs a `,`).
+enum Frame<'v> {
+    /// An array's remaining elements.
+    Array(core::slice::Iter<'v, Value>, bool),
+    /// An object's remaining members.
+    Object(core::slice::Iter<'v, (String, Value)>, bool),
+}
+
+/// The line break and indentation of a nesting depth (pretty only).
+fn line_break(out: &mut String, unit: &str, depth: usize) {
+    out.push('\n');
+    for _ in 0..depth {
+        out.push_str(unit);
+    }
+}
+
+/// Write a scalar, or open a container onto `frames` (an empty one is written
+/// whole).
+#[inline]
+fn write_value<'v>(
+    out: &mut String,
+    value: &'v Value,
+    escapes: JsonEscapes,
+    frames: &mut Vec<Frame<'v>>,
+) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(true) => out.push_str("true"),
+        Value::Bool(false) => out.push_str("false"),
+        Value::Number(number) => out.push_str(number.lexeme()),
+        Value::String(text) => push_string(out, text, escapes),
+        Value::Array(items) if items.is_empty() => out.push_str("[]"),
+        Value::Object(object) if object.is_empty() => out.push_str("{}"),
+        Value::Array(items) => {
+            out.push('[');
+            frames.push(Frame::Array(items.iter(), false));
+        }
+        Value::Object(object) => {
+            out.push('{');
+            frames.push(Frame::Object(object.members().iter(), false));
+        }
+    }
 }
 
 /// Append `value` to `out`, laid out per `format`.
 ///
 /// The output is a pure function of the value and the format: members in the
-/// object's order, a number as its lexeme, a string in one spelling. A
-/// container's parts go onto a heap work list in reverse, so they pop in
-/// document order and nesting costs heap, never stack.
+/// object's order, a number as its lexeme, a string in one spelling. Each open
+/// container is one frame on a heap stack holding its remaining members, so a
+/// scalar is written where it stands and nesting costs heap, never stack.
 pub fn write_into(out: &mut String, value: &Value, format: Format<'_>) {
-    let pretty = format.indent.is_some();
-    let separator = if pretty { ": " } else { ":" };
-    let mut jobs = vec![Job::Value(value, 0)];
-    while let Some(job) = jobs.pop() {
-        match job {
-            Job::Text(text) => out.push_str(text),
-            Job::Break(depth) => {
-                out.push('\n');
-                if let Some(unit) = format.indent {
-                    for _ in 0..depth {
-                        out.push_str(unit);
-                    }
-                }
+    let separator = if format.indent.is_some() { ": " } else { ":" };
+    let escapes = format.escapes;
+    let mut frames: Vec<Frame<'_>> = Vec::new();
+    write_value(out, value, escapes, &mut frames);
+    loop {
+        let depth = frames.len();
+        let Some(top) = frames.last_mut() else {
+            break;
+        };
+        // The next member of the innermost container, and whether one came
+        // before it; `None` when the container is spent.
+        let (next, comma, close) = match top {
+            Frame::Array(items, started) => (
+                items.next().map(|item| (None, item)),
+                core::mem::replace(started, true),
+                ']',
+            ),
+            Frame::Object(members, started) => (
+                members.next().map(|(name, member)| (Some(name), member)),
+                core::mem::replace(started, true),
+                '}',
+            ),
+        };
+        let Some((name, item)) = next else {
+            frames.pop();
+            if let Some(unit) = format.indent {
+                line_break(out, unit, depth - 1);
             }
-            Job::Member(name, member, depth) => {
-                push_string(out, name, format.escapes);
-                out.push_str(separator);
-                jobs.push(Job::Value(member, depth));
-            }
-            Job::Value(value, depth) => match value {
-                Value::Null => out.push_str("null"),
-                Value::Bool(true) => out.push_str("true"),
-                Value::Bool(false) => out.push_str("false"),
-                Value::Number(number) => out.push_str(number.lexeme()),
-                Value::String(text) => push_string(out, text, format.escapes),
-                Value::Array(items) if items.is_empty() => out.push_str("[]"),
-                Value::Object(object) if object.is_empty() => out.push_str("{}"),
-                Value::Array(items) => {
-                    out.push('[');
-                    jobs.push(Job::Text("]"));
-                    if pretty {
-                        jobs.push(Job::Break(depth));
-                    }
-                    for (index, item) in items.iter().enumerate().rev() {
-                        jobs.push(Job::Value(item, depth + 1));
-                        if pretty {
-                            jobs.push(Job::Break(depth + 1));
-                        }
-                        if index > 0 {
-                            jobs.push(Job::Text(","));
-                        }
-                    }
-                }
-                Value::Object(object) => {
-                    out.push('{');
-                    jobs.push(Job::Text("}"));
-                    if pretty {
-                        jobs.push(Job::Break(depth));
-                    }
-                    for (index, (name, member)) in object.iter().enumerate().rev() {
-                        jobs.push(Job::Member(name, member, depth + 1));
-                        if pretty {
-                            jobs.push(Job::Break(depth + 1));
-                        }
-                        if index > 0 {
-                            jobs.push(Job::Text(","));
-                        }
-                    }
-                }
-            },
+            out.push(close);
+            continue;
+        };
+        if comma {
+            out.push(',');
         }
+        if let Some(unit) = format.indent {
+            line_break(out, unit, depth);
+        }
+        if let Some(name) = name {
+            push_string(out, name, escapes);
+            out.push_str(separator);
+        }
+        write_value(out, item, escapes, &mut frames);
     }
 }
 

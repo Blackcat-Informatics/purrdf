@@ -2675,19 +2675,22 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   escaping one (15.7 ms to 9.1 ms), `from_json_bounded` 0.719 [0.710, 0.726]
   and 0.668 [0.658, 0.676], the FeatureCollection tree parse 0.917 [0.907,
   0.921] (3.04 ms to 2.79 ms) and the literal 0.810 [0.784, 0.823] (15.5 ms to
-  12.4 ms, most of it now exact decimal parsing). The re-render, the writer's
-  and untouched here, measured 1.159. Pack dictionary decode, which
-  spent a fifth of its time in the IRI splitter's sixteen-byte delimiter kernels
-  (a call and a scalar tail per component), is 0.972 [0.959, 0.978] now that the
-  splitter scans eight bytes a step again, and `hex::Lower` `Display` resolves
-  its encoder once instead of on every call and, in an AVX-512BW build, renders
-  33..63 bytes as a 32-byte head and a tail: 0.941 [0.915, 0.986] at 16 B,
-  0.747 [0.725, 0.751] at 32 B, 0.949 [0.922, 0.968] at 33 B, 0.793 at 40 B,
-  0.974 [0.964, 0.988] at 48 B, 0.821 at 56 B, 0.766 [0.744, 0.793] at 64 B and
-  0.607 [0.591, 0.644] at 128 B (16 B repeats between 0.94 and 1.02 across runs,
-  its cost being the formatter's fixed overhead). The benches are
-  `sparql_results_json_read`, `geojson_json`/`geojson_literal`,
-  `core_escape_scan`/`core_pack_dict_prefix` and the `hex` group at 1 MiB.
+  12.4 ms, most of it now exact decimal parsing). The re-render, the shared
+  writer walking each container's members in place and writing a scalar where
+  it stands instead of pushing a work item per token, is 0.872 [0.861, 0.879]
+  (631 us to 550 us, 25 ABBA rounds at load 5-6, byte-identical output). Pack
+  dictionary decode, which spent a fifth of its time in the IRI splitter's
+  sixteen-byte delimiter kernels (a call and a scalar tail per component), is
+  0.972 [0.959, 0.978] now that the splitter scans eight bytes a step again, and
+  `hex::Lower` `Display` resolves its encoder once instead of on every call and,
+  in an AVX-512BW build, renders 33..63 bytes as a 32-byte head and a tail:
+  0.941 [0.915, 0.986] at 16 B, 0.747 [0.725, 0.751] at 32 B, 0.949 [0.922,
+  0.968] at 33 B, 0.793 at 40 B, 0.974 [0.964, 0.988] at 48 B, 0.821 at 56 B,
+  0.766 [0.744, 0.793] at 64 B and 0.607 [0.591, 0.644] at 128 B (16 B repeats
+  between 0.94 and 1.02 across runs, its cost being the formatter's fixed
+  overhead). The benches are `sparql_results_json_read`,
+  `geojson_json`/`geojson_literal`, `core_escape_scan`/`core_pack_dict_prefix`
+  and the `hex` group at 1 MiB.
 
 ### Fixed
 
