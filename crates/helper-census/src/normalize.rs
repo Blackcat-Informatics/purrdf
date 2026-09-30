@@ -237,6 +237,28 @@ fn opens_fields(previous: Option<&TokenTree>) -> bool {
     })
 }
 
+/// Register the types declared in this token level (`struct S`, `enum E`,
+/// `union U`, `trait T`, `type A`) as local names, renamed by position like a
+/// binding. A type declared inside a body is a private detail of that body: a
+/// nested `struct Park` and `struct ParkWaker` are one algorithm, where a
+/// capitalised name is otherwise kept verbatim as an item name.
+fn declare_local_types(tokens: &[TokenTree], names: &mut BTreeMap<String, usize>) {
+    for pair in tokens.windows(2) {
+        if let [TokenTree::Ident(keyword), TokenTree::Ident(name)] = pair
+            && matches!(
+                keyword.to_string().as_str(),
+                "struct" | "enum" | "union" | "trait" | "type"
+            )
+        {
+            let name = name.to_string();
+            if name.starts_with(|first: char| first.is_ascii_uppercase()) {
+                let next = names.len();
+                names.entry(name).or_insert(next);
+            }
+        }
+    }
+}
+
 fn structural_level(
     stream: &TokenStream,
     level: Level,
@@ -244,6 +266,7 @@ fn structural_level(
     out: &mut Vec<String>,
 ) {
     let tokens: Vec<TokenTree> = stream.clone().into_iter().collect();
+    declare_local_types(&tokens, names);
     let erased = value_form_erasures(&tokens);
     for (index, token) in tokens.iter().enumerate() {
         if erased[index] {
@@ -260,9 +283,12 @@ fn structural_level(
             }
             TokenTree::Ident(ident) => {
                 let text = ident.to_string();
-                if KEYWORDS.contains(&text.as_str())
-                    || names_an_item(&tokens, index, &text)
-                    || names_a_field(&tokens, index, level.fields)
+                let local_type = text.starts_with(|first: char| first.is_ascii_uppercase())
+                    && names.contains_key(&text);
+                if !local_type
+                    && (KEYWORDS.contains(&text.as_str())
+                        || names_an_item(&tokens, index, &text)
+                        || names_a_field(&tokens, index, level.fields))
                 {
                     out.push(text);
                 } else {
@@ -821,6 +847,17 @@ mod tests {
             body_print(&tokens(LOOP_A), &params).structural,
             body_print(&tokens(LOOP_B), &params).structural
         );
+    }
+
+    #[test]
+    fn a_type_declared_inside_a_body_is_a_local_name() {
+        let park = "struct Park(u8); impl Wake for Park { fn wake(self: Arc<Self>) { self.0.unpark(); } } let w = Waker::from(Arc::new(Park(1))); w";
+        let waker = "struct ParkWaker(u8); impl Wake for ParkWaker { fn wake(self: Arc<Self>) { self.0.unpark(); } } let w = Waker::from(Arc::new(ParkWaker(1))); w";
+        assert_eq!(form(park), form(waker));
+        // An item the body only uses stays verbatim: another type is another job.
+        let other = "let w = Waker::from(Arc::new(Park(1))); w";
+        let another = "let w = Waker::from(Arc::new(ParkWaker(1))); w";
+        assert_ne!(form(other), form(another));
     }
 
     #[test]

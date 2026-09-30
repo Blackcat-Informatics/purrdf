@@ -4801,7 +4801,9 @@ mod tests {
     /// plateau regime, and past rank 940 one plateau as long as the streams.
     const COLLIDING: Fixed = Fixed::from_raw(1_000);
 
-    fn block_on<F: Future>(future: F) -> F::Output {
+    /// Poll `future` exactly once and return its output, failing the test if it
+    /// pends: an assertion that the fixture streams are synchronous, not an executor.
+    fn poll_once_expect_ready<F: Future>(future: F) -> F::Output {
         let mut context = Context::from_waker(Waker::noop());
         let mut future = Box::pin(future);
         match future.as_mut().poll(&mut context) {
@@ -5027,11 +5029,13 @@ mod tests {
     fn drain_checked(fusion: &mut FusionStream<Listed>) -> (Vec<FusedRow>, usize) {
         let mut rows = Vec::new();
         let mut tie_wins = 0;
-        block_on(fusion.ensure_initialized()).expect("the fixture obeys the protocol");
+        poll_once_expect_ready(fusion.ensure_initialized())
+            .expect("the fixture obeys the protocol");
         loop {
             assert_filed(fusion);
             fusion.threshold = fusion.compute_threshold().expect("the fixture fits");
-            block_on(fusion.observe_exclusions()).expect("the fixture answers lookups");
+            poll_once_expect_ready(fusion.observe_exclusions())
+                .expect("the fixture answers lookups");
             assert_filed(fusion);
             let mut visits = 0;
             let indexed = fusion
@@ -5042,7 +5046,7 @@ mod tests {
                 .expect("the fixture fits");
             assert_eq!(indexed, scanned, "the index chose a different candidate");
             if indexed.is_some() {
-                let row = block_on(fusion.next())
+                let row = poll_once_expect_ready(fusion.next())
                     .expect("the fixture obeys the protocol")
                     .expect("a selected candidate is emitted");
                 assert_eq!(Some(&row.entity), indexed.as_ref());
@@ -5060,11 +5064,12 @@ mod tests {
             }
             match fusion.best_head_index() {
                 Some(index) => {
-                    block_on(fusion.pull(index)).expect("the fixture obeys the protocol");
+                    poll_once_expect_ready(fusion.pull(index))
+                        .expect("the fixture obeys the protocol");
                 }
                 None => {
                     assert!(
-                        block_on(fusion.next())
+                        poll_once_expect_ready(fusion.next())
                             .expect("the fixture obeys the protocol")
                             .is_none()
                     );
@@ -5076,7 +5081,9 @@ mod tests {
 
     fn drain(fusion: &mut FusionStream<Listed>) -> Vec<FusedRow> {
         let mut rows = Vec::new();
-        while let Some(row) = block_on(fusion.next()).expect("the fixture obeys the protocol") {
+        while let Some(row) =
+            poll_once_expect_ready(fusion.next()).expect("the fixture obeys the protocol")
+        {
             rows.push(row);
         }
         rows
@@ -5221,10 +5228,11 @@ mod tests {
         )
         .expect("one stratum at the top of the range is a valid profile");
         let mut fusion = FusionStream::new(streams, profile);
-        block_on(fusion.ensure_initialized()).expect("the fixture obeys the protocol");
+        poll_once_expect_ready(fusion.ensure_initialized())
+            .expect("the fixture obeys the protocol");
         for _ in 0..5 {
             let index = fusion.best_head_index().expect("a stream is still open");
-            block_on(fusion.pull(index)).expect("the fixture obeys the protocol");
+            poll_once_expect_ready(fusion.pull(index)).expect("the fixture obeys the protocol");
         }
         fusion.threshold = fusion.compute_threshold().expect("the threshold fits");
         fusion

@@ -426,6 +426,24 @@ impl Run {
         }
     }
 }
+/// A minimal executor: a nested waker type and its impl live inside the body.
+pub fn block_on<F: Future>(future: F) -> F::Output {
+    struct ParkWaker(std::thread::Thread);
+    impl Wake for ParkWaker {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
+    let mut context = Context::from_waker(&waker);
+    let mut future = Box::pin(future);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(output) => return output,
+            Poll::Pending => std::thread::park(),
+        }
+    }
+}
 /// Canonical decomposition, then composition.
 pub fn nfc(text: &str) -> String {
     collect(text, |next| Decompose::<false, _>::new(Compose::new(next)), |stage| stage.into_next())
@@ -461,6 +479,24 @@ pub fn shortest_dependency_path<'a>(depends: &'a BTreeMap<String, BTreeSet<Strin
         }
     }
     None
+}
+/// The same executor with the nested waker renamed.
+pub fn drive<F: Future>(work: F) -> F::Output {
+    struct Park(std::thread::Thread);
+    impl Wake for Park {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    let handle = Waker::from(Arc::new(Park(std::thread::current())));
+    let mut cx = Context::from_waker(&handle);
+    let mut work = Box::pin(work);
+    loop {
+        match work.as_mut().poll(&mut cx) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => std::thread::park(),
+        }
+    }
 }
 /// A comment line or a blank one, retyped under other names.
 pub fn is_comment(text: &str) -> bool {
@@ -599,8 +635,12 @@ fn near_miss_cases() -> Vec<(&'static str, bool)> {
             !grouped("fixture_delta::nfc") && !grouped("fixture_delta::nfkc"),
         ),
         (
-            "--check fails on exactly the three seeded near-miss groups",
-            findings.len() == 3
+            "a function whose body declares a nested struct and impl is one group with its copy once the nested type is renamed",
+            groups.contains(&vec!["fixture_delta::block_on", "fixture_epsilon::drive"]),
+        ),
+        (
+            "--check fails on exactly the four seeded near-miss groups",
+            findings.len() == 4
                 && findings
                     .iter()
                     .all(|finding| finding.starts_with("isomorphic bodies")),

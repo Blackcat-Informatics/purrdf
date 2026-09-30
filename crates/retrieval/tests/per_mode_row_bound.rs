@@ -28,14 +28,12 @@
 //!
 //! Fixtures are `example.org` throughout.
 
-use std::future::Future;
 use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
 
 use purrdf_core::TermValue;
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, BoundMode, ExecutionError, Iri, ProducerStatus,
-    RequestTerm, RetrievalRequest, Statistics, compile, execute, plan,
+    RequestTerm, RetrievalRequest, Statistics, block_on, compile, execute, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DepthPlacement, DuplicatePolicy, EvalError,
@@ -1033,24 +1031,5 @@ fn a_tie_between_two_modes_resolves_the_same_way_in_either_declaration_order() {
             ),
             "and again one sentence, whichever order they were registered in ({order})"
         );
-    }
-}
-
-// ---------------------------------------------------------------------------
-// A tiny executor, so the tests need no runtime
-// ---------------------------------------------------------------------------
-
-/// Drive `future` to completion on the current thread.
-///
-/// `execute` is asynchronous as a stage contract and never actually pends, so a
-/// one-poll loop over the no-op waker is the whole executor these tests need.
-fn block_on<F: Future>(future: F) -> F::Output {
-    let waker = Waker::noop();
-    let mut context = Context::from_waker(waker);
-    let mut future = Box::pin(future);
-    loop {
-        if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
-            return value;
-        }
     }
 }
