@@ -77,7 +77,12 @@ pub(crate) enum XmlReadError {
 
 /// Read `text` as an XML document the way every XML codec in this crate does: element
 /// nesting past [`MAX_PARSE_NESTING_DEPTH`] refused as [`XmlReadError::TooDeep`], and a
-/// document type declaration refused outright (no reader here expands an entity).
+/// document type declaration read as XML 1.0 §5.1 requires of a non-validating processor
+/// ([`Dtd::internal_subset`]). RDF/XML documents routinely declare internal entities such
+/// as `&xsd;` for datatype IRIs, so those are declared and expanded under the reader's
+/// expansion budget; an external subset, an external entity and a parameter entity are
+/// refused, so a document never causes a fetch. The GraphML and DataCite projections
+/// refuse any DTD before calling this.
 ///
 /// The error is not a diagnostic because the four callers report in three different error
 /// vocabularies (`RdfDiagnostic` for the RDF/XML and TriX codecs, a `ProjectionError` for
@@ -87,7 +92,7 @@ pub(crate) fn parse_xml(text: &str) -> Result<Document<'_>, XmlReadError> {
         text,
         Options {
             max_depth: MAX_PARSE_NESTING_DEPTH,
-            dtd: Dtd::Refuse,
+            dtd: Dtd::internal_subset(),
         },
     )
     .map_err(|error| match error.kind() {
@@ -147,8 +152,25 @@ mod tests {
     #[test]
     fn a_malformed_document_is_not_a_depth_refusal() {
         assert!(matches!(parse_xml("<a>"), Err(XmlReadError::Malformed(_))));
+    }
+
+    /// An internal entity is declared and expanded; an external one is refused, so no
+    /// document can make the reader fetch.
+    #[test]
+    fn an_internal_entity_expands_and_an_external_one_is_refused() {
+        let internal =
+            parse_xml(r#"<!DOCTYPE r [<!ENTITY e "http://example.org/">]><r a="&e;x"/>"#)
+                .expect("an internal entity is read");
+        assert_eq!(
+            internal.root_element().attribute("a"),
+            Some("http://example.org/x")
+        );
         assert!(matches!(
-            parse_xml("<!DOCTYPE r><r/>"),
+            parse_xml(r#"<!DOCTYPE r [<!ENTITY e SYSTEM "http://example.org/e">]><r>&e;</r>"#),
+            Err(XmlReadError::Malformed(_))
+        ));
+        assert!(matches!(
+            parse_xml(r#"<!DOCTYPE r SYSTEM "http://example.org/r.dtd"><r/>"#),
             Err(XmlReadError::Malformed(_))
         ));
     }

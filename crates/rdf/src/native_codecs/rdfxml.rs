@@ -2119,6 +2119,46 @@ mod tests {
         }
     }
 
+    /// RDF/XML's customary internal entities (`&xsd;`, `&ex;`) expand inside attribute
+    /// values, so the datatype and subject IRIs are the full ones; a document that asks for
+    /// an external entity is refused rather than fetched.
+    #[test]
+    fn internal_entities_expand_in_rdfxml_and_external_ones_are_refused() {
+        let text = r#"<?xml version="1.0"?>
+<!DOCTYPE rdf:RDF [
+  <!ENTITY xsd "http://www.w3.org/2001/XMLSchema#">
+  <!ENTITY ex "http://example.org/">
+]>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:ex="http://example.org/">
+  <rdf:Description rdf:about="&ex;s">
+    <ex:p rdf:datatype="&xsd;integer">7</ex:p>
+  </rdf:Description>
+</rdf:RDF>"#;
+        let dataset = parse(text, None);
+        let nquads = crate::native_codecs::serialize_dataset_with(
+            &dataset,
+            crate::NativeRdfFormat::NQuads,
+            None,
+            &crate::native_codecs::SerializeOptions {
+                selection: crate::SerializeGraph::Dataset,
+                statement_layer: crate::native_codecs::StatementLayer::Project,
+                jsonld_options: None,
+            },
+        )
+        .map(|outcome| String::from_utf8(outcome.bytes).expect("utf8"))
+        .expect("serialize n-quads");
+        assert_eq!(
+            nquads,
+            "<http://example.org/s> <http://example.org/p> \"7\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n"
+        );
+
+        let external = text.replace(
+            r#"<!ENTITY ex "http://example.org/">"#,
+            r#"<!ENTITY ex SYSTEM "http://example.org/ex.ent">"#,
+        );
+        assert!(parse_rdfxml_document(&external, &mut scope(None), None).is_err());
+    }
+
     /// …AND ORDINARY RDF/XML IS UNTOUCHED. Node/property striping spends TWO elements per
     /// RDF nesting level, so a document nested far past anything an author writes still has
     /// to parse — a bound that cost real documents would be worse than the crash.
