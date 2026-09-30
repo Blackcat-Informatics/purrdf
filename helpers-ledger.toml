@@ -1455,6 +1455,40 @@ constants = []
 fingerprints = ["shim:676d6014a0e29d48"]
 names = []
 
+[[job]]
+id = "import-key-policy"
+summary = "One import-table key policy: a key is an absolute IRI and names one document, at every insertion site"
+home = "purrdf_core::imports::ImportMap::try_insert"
+entry_points = ["purrdf_core::imports::ImportMap::check_key"]
+spec = "OWL 2 Structural Specification section 3.4 (owl:imports names an absolute ontology IRI) and SHACL 1.2 Core section 6.1: an import-table key that no owl:imports object can equal is configuration that silently never applies, and one IRI names one document"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ["^check_import_(iri|key|table)$"]
+
+[[job]]
+id = "rules-dispatch"
+summary = "One rules-dispatch entry and one limit-knob mapping: a SHACL shapes graph's rules or a SPARQL 1.2 RL rule set run under the four rule-evaluation limits"
+home = "purrdf_shapes::rules::run_rules"
+entry_points = ["purrdf_shapes::run_rules", "purrdf_shapes::rules::RuleLimits::rule_options", "purrdf_shapes::rules::RuleLimits::infer_options"]
+spec = "SHACL 1.2 Rules and SPARQL 1.2 RL section C: one rule run is bounded by the same four limits whichever host or rule language runs it"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ["^(rule|infer)_options$", "^run_rules_(dispatch|for_host)$"]
+
 [[distinct]]
 members = [
     "purrdf_core::distance::build_identity::compiler_text",

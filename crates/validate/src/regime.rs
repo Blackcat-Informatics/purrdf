@@ -3512,30 +3512,23 @@ pub type ImportList<'a> = [(&'a str, &'a str)];
 ///
 /// # Errors
 ///
-/// A document that is not N-Quads; an entry with an empty ontology IRI, which no
+/// A document that is not N-Quads; an entry whose ontology IRI is not an absolute IRI, which no
 /// `owl:imports` object can ever equal and which would therefore be configuration that silently
 /// never applies; or one ontology IRI declared twice, where keeping either document would be a
-/// choice this boundary made on the caller's behalf.
+/// choice this boundary made on the caller's behalf ([`ImportMap::try_insert`] is the one key
+/// policy).
 fn build_import_map(imports: &ImportList<'_>) -> Result<ImportMap, String> {
     let mut map = ImportMap::default();
+    let refuse = |error: purrdf_core::imports::ImportKeyError| {
+        format!("the import list is unusable: {error}")
+    };
     for (iri, document) in imports {
-        if iri.is_empty() {
-            return Err(
-                "an import entry names the empty ontology IRI, which no owl:imports object can \
-                 equal, so the document it supplies could never be resolved"
-                    .to_owned(),
-            );
-        }
+        map.check_key(iri).map_err(refuse)?;
         let parsed = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
             .map_err(|diagnostic| {
                 format!("the import document for <{iri}> is not N-Quads: {diagnostic}")
             })?;
-        if map.insert((*iri).to_owned(), parsed).is_some() {
-            return Err(format!(
-                "the import list declares <{iri}> twice; keeping either document would be a \
-                 choice this boundary made for the caller"
-            ));
-        }
+        map.try_insert(*iri, parsed).map_err(refuse)?;
     }
     Ok(map)
 }
@@ -7587,7 +7580,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
         )
         .expect_err("one ontology IRI declared twice");
         assert!(
-            twice.contains("declares <http://example.org/schema> twice"),
+            twice.contains("names <http://example.org/schema> twice"),
             "{twice}"
         );
 

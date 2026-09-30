@@ -46,6 +46,11 @@ under Changed and Fixed where a longer account helps.
 
 **Public signatures**
 
+- **core, validate, shapes:** `ImportMap::insert` is `ImportMap::try_insert`,
+  which returns `Result<(), ImportKeyError>` instead of the replaced document.
+  `purrdf_validate::RuleLimits` is `purrdf_shapes::RuleLimits` (still
+  re-exported from `purrdf_validate`).
+
 - **jsonschema, rdf, shapes, slice, geo:** JSON values in public signatures
   are `purrdf_lex::json::Value`, whose numbers keep their lexemes and whose
   objects keep their members in order: schemas and instances in
@@ -157,6 +162,13 @@ under Changed and Fixed where a longer account helps.
   `LedgerEntry` is an alias of `ledger::LedgerEntry<G>`.
 
 **New refusals**
+
+- **validate, cli, sparql-conformance:** an import list or `--import` table
+  refuses a key that is not an absolute IRI (not only the empty one) with the
+  same policy the shapes import table already applied: `ImportMap::try_insert`
+  is the one key check, so the reasoning services, `purrdf query`/`entails`
+  premise imports and the OWL 2 RL conformance imports refuse a relative key
+  and a repeated key alike, and two distinct absolute keys are accepted.
 
 - **gts:** COSE_Sign1 verification is strict: a non-canonical `S`, an
   undecodable `R`, and a small-order key or `R` are invalid even where the
@@ -317,6 +329,16 @@ under Changed and Fixed where a longer account helps.
   plus two lowercase hex digits). The genid path segment and the SHACL rule
   engine's minted-blank tags (`purrdf-shapes`) both call it; their output is
   byte-identical to before. Ledger job `blank-label-hex-escape`.
+- **core:** `purrdf_core::imports::ImportMap::try_insert`, `ImportMap::check_key`
+  and `ImportKeyError`: the one import-table key policy (an absolute IRI naming
+  one document), used by `ShapesImports`, the reasoning services' import lists,
+  and the CLI's `--import` tables.
+- **shapes:** `purrdf_shapes::run_rules`, `RuleSource` and `RuleLimits`: the one
+  rules-dispatch entry for a SHACL shapes graph's rules or a SPARQL 1.2 RL rule
+  set under the four rule-evaluation limits. The `purrdf rules` command,
+  `apply_rules_to_ntriples` (Python, WebAssembly and C) and the entailment
+  service all run through it.
+
 - **ed25519:** `purrdf-ed25519`, a new published, wasm32-clean crate and the
   workspace's one Ed25519 (RFC 8032): `SigningKey` (key expansion from a
   32-byte seed, deterministic `sign`, secrets overwritten on drop),

@@ -50,12 +50,12 @@
 //! facts and 1,048,576 join steps natively, 131,072 and 1,048,576 on `wasm32`. A run
 //! past either fails naming the limit, the numbers and the knob that raises it.
 
-use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::free_expression::{self, FreeExpression};
 use purrdf_shapes::lint::{self, LintReport};
-use purrdf_shapes::srl::{self, InferOptions};
+use purrdf_shapes::srl;
 use purrdf_shapes::text_ingest::{parse_ntriples_to_dataset, parse_turtle_document};
-use purrdf_shapes::{Inference, LimitKnobs, RuleOptions, ShapesError, ShapesImports, engine};
+use purrdf_shapes::{LimitKnobs, ShapesError, ShapesImports, engine};
+use purrdf_shapes::{RuleSource, run_rules};
 
 use crate::ShapesImportList;
 use crate::expr_selector::ExprSelector;
@@ -179,42 +179,7 @@ impl RulesHost {
     }
 }
 
-/// The four rule-evaluation limits a host names, each `None` for the engine or target
-/// default. [`apply_rules_to_ntriples`] and [`crate::entail_to_ntriples`] both turn them into
-/// the one [`RuleOptions`] the SHACL rules engine runs under ([`Self::rule_options`]), so a
-/// rules run and an entailment run of the same shapes graph are bounded identically.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct RuleLimits {
-    /// The term-generating round limit.
-    pub max_term_generating_rounds: Option<u64>,
-    /// The generated-term budget.
-    pub max_generated_terms: Option<u64>,
-    /// The stored-fact limit.
-    pub max_stored_facts: Option<u64>,
-    /// The join-step limit.
-    pub max_join_steps: Option<u64>,
-}
-
-impl RuleLimits {
-    /// The [`RuleOptions`] these limits describe, a refusal naming `knobs`.
-    #[must_use]
-    pub fn rule_options(&self, knobs: LimitKnobs) -> RuleOptions {
-        let mut options = RuleOptions::default().with_limit_knobs(knobs);
-        if let Some(rounds) = self.max_term_generating_rounds {
-            options = options.with_max_term_generating_rounds(rounds);
-        }
-        if let Some(terms) = self.max_generated_terms {
-            options = options.with_max_generated_terms(terms);
-        }
-        if let Some(facts) = self.max_stored_facts {
-            options = options.with_max_stored_facts(facts);
-        }
-        if let Some(steps) = self.max_join_steps {
-            options = options.with_max_join_steps(steps);
-        }
-        options
-    }
-}
+pub use purrdf_shapes::RuleLimits;
 
 /// What a rules run produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -251,8 +216,14 @@ pub struct RulesOutcome {
 /// entry its import closure never names.
 pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcome, ShapesError> {
     let data = parse_ntriples_to_dataset(request.data_nt).map_err(|errors| errors.join("\n"))?;
-    let mut diagnostics = Vec::new();
-    let inference: Inference = match (request.shapes_ttl, request.srl) {
+    let limits = RuleLimits {
+        max_term_generating_rounds: request.max_term_generating_rounds,
+        max_generated_terms: request.max_generated_terms,
+        max_stored_facts: request.max_stored_facts,
+        max_join_steps: request.max_join_steps,
+    };
+    let knobs = request.host.limit_knobs();
+    let (inference, diagnostics) = match (request.shapes_ttl, request.srl) {
         (Some(shapes_ttl), None) => {
             let shapes = engine::parse_shapes_with_graph(
                 shapes_ttl,
@@ -261,17 +232,8 @@ pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcom
                 request.shapes_graph,
                 &ShapesImports::from_turtle(request.imports)?,
             )?;
-            let projected = engine::project_dataset(data.as_ref())?;
-            let holder = ShaclData::new(std::sync::Arc::clone(&projected), projected, None);
-            let options = RuleLimits {
-                max_term_generating_rounds: request.max_term_generating_rounds,
-                max_generated_terms: request.max_generated_terms,
-                max_stored_facts: request.max_stored_facts,
-                max_join_steps: request.max_join_steps,
-            }
-            .rule_options(request.host.limit_knobs());
-            diagnostics = shapes.mandatory_diagnostics().to_vec();
-            purrdf_shapes::infer(&holder, &shapes, &options)?
+            let inference = run_rules(RuleSource::Shapes(&shapes), data.as_ref(), &limits, knobs)?;
+            (inference, shapes.mandatory_diagnostics().to_vec())
         }
         (None, Some(_)) if request.shapes_graph.is_some() => {
             return Err(ShapesError::Invalid(
@@ -289,20 +251,8 @@ pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcom
                 srl::CheckLevel::Stratified,
             )?
             .into_document();
-            let mut options = InferOptions::default().with_limit_knobs(request.host.limit_knobs());
-            if let Some(rounds) = request.max_term_generating_rounds {
-                options = options.with_max_term_generating_rounds(rounds);
-            }
-            if let Some(terms) = request.max_generated_terms {
-                options = options.with_max_generated_terms(terms);
-            }
-            if let Some(facts) = request.max_stored_facts {
-                options = options.with_max_stored_facts(facts);
-            }
-            if let Some(steps) = request.max_join_steps {
-                options = options.with_max_join_steps(steps);
-            }
-            srl::infer(&document, data.as_ref(), &options).map_err(|e| e.to_string())?
+            let inference = run_rules(RuleSource::Srl(&document), data.as_ref(), &limits, knobs)?;
+            (inference, Vec::new())
         }
         (None, None) => {
             return Err(ShapesError::Invalid(

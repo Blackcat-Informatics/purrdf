@@ -123,7 +123,7 @@ pub use purrdf_core::imports::{ImportClosure, ImportMap, imported_iris, unresolv
 /// let document = b.freeze().expect("freeze");
 ///
 /// let mut map = ImportMap::default();
-/// map.insert("http://example.org/lib", document);
+/// map.try_insert("http://example.org/lib", document).expect("a fresh absolute key");
 /// let mut resolve = rif_resolver(&map);
 ///
 /// let known = RifImport { location: "http://example.org/lib".to_owned(), profile: None };
@@ -264,8 +264,10 @@ mod tests {
             b.freeze().expect("freeze")
         };
         let mut map = ImportMap::default();
-        map.insert(V1, version(V1));
-        map.insert(V2, version(V2));
+        map.try_insert(V1, version(V1))
+            .expect("a fresh absolute key");
+        map.try_insert(V2, version(V2))
+            .expect("a fresh absolute key");
         let Err(EntailError::IncompatibleImports(conflicts)) =
             resolve(&document("b", "http://example.org/o", &[V1, V2]), &map)
         else {
@@ -275,7 +277,8 @@ mod tests {
         assert_eq!(conflicts[0].first.as_deref(), Some(V1));
         assert_eq!(conflicts[0].second.as_deref(), Some(V2));
         let mut one = ImportMap::default();
-        one.insert(V2, version(V2));
+        one.try_insert(V2, version(V2))
+            .expect("a fresh absolute key");
         assert!(
             resolve(&document("b", "http://example.org/o", &[V2]), &one)
                 .expect("one version")
@@ -323,7 +326,7 @@ mod tests {
             b.freeze().expect("freeze")
         };
         let mut map = ImportMap::default();
-        map.insert(LIB, schema);
+        map.try_insert(LIB, schema).expect("a fresh absolute key");
         let options = purrdf_datalog::seminaive::EvalOptions::default();
         let run = |premise: &RdfDataset, map: &ImportMap| {
             crate::materialize_with_imports(
@@ -394,7 +397,8 @@ mod tests {
             b.freeze().expect("freeze")
         };
         let mut map = ImportMap::default();
-        map.insert(LIB, document("b", "http://example.org/lib-said", &[]));
+        map.try_insert(LIB, document("b", "http://example.org/lib-said", &[]))
+            .expect("a fresh absolute key");
 
         let Err(refusal) = resolve(&premise(false), &map) else {
             panic!("an entry only an unanchored triple names is never reached");
@@ -444,14 +448,16 @@ mod tests {
         // must carry BOTH documents.
         let premise = document("b", "http://example.org/o", &["http://example.org/a"]);
         let mut map = ImportMap::default();
-        map.insert(
+        map.try_insert(
             "http://example.org/a",
             document("b", "http://example.org/a-said", &["http://example.org/c"]),
-        );
-        map.insert(
+        )
+        .expect("a fresh absolute key");
+        map.try_insert(
             "http://example.org/c",
             document("b", "http://example.org/c-said", &["http://example.org/a"]),
-        );
+        )
+        .expect("a fresh absolute key");
         let merged = resolve(&premise, &map)
             .expect("every import resolves")
             .expect("the premise imports something");
@@ -479,14 +485,15 @@ mod tests {
     fn an_imported_document_is_itself_checked_for_imports() {
         let premise = document("b", "http://example.org/o", &["http://example.org/a"]);
         let mut map = ImportMap::default();
-        map.insert(
+        map.try_insert(
             "http://example.org/a",
             document(
                 "b",
                 "http://example.org/a-said",
                 &["http://example.org/deep"],
             ),
-        );
+        )
+        .expect("a fresh absolute key");
         // Depth 2 is unresolved, so the whole merge refuses NAMING it — a resolver that
         // stopped at depth 1 would have succeeded here with a premise missing an axiom.
         let Err(EntailError::UnresolvedImport(iri)) = resolve(&premise, &map) else {
@@ -495,10 +502,11 @@ mod tests {
         assert_eq!(iri, "http://example.org/deep");
 
         // …and supplying it lets the merge through, carrying all three documents.
-        map.insert(
+        map.try_insert(
             "http://example.org/deep",
             document("b", "http://example.org/deep-said", &[]),
-        );
+        )
+        .expect("a fresh absolute key");
         let merged = resolve(&premise, &map)
             .expect("every import resolves")
             .expect("the premise imports something");
@@ -516,10 +524,11 @@ mod tests {
     #[test]
     fn the_map_resolves_a_rif_import_the_same_way() {
         let mut map = ImportMap::default();
-        map.insert(
+        map.try_insert(
             "http://example.org/lib",
             document("b", "http://example.org/o", &[]),
-        );
+        )
+        .expect("a fresh absolute key");
         let mut resolve = super::rif_resolver(&map);
         assert!(
             resolve(&crate::RifImport {
@@ -589,7 +598,8 @@ mod tests {
         let schema = b.freeze().expect("freeze");
 
         let mut map = ImportMap::default();
-        map.insert("http://example.org/schema", schema);
+        map.try_insert("http://example.org/schema", schema)
+            .expect("a fresh absolute key");
 
         // `ex:tom a ex:Animal` — reachable ONLY through the imported schema, so an entailed
         // verdict is itself the proof that the run had the imported axioms.
@@ -676,10 +686,11 @@ mod tests {
 
         // The imported document names its own `_:r`, in the DEFAULT scope.
         let mut map = ImportMap::default();
-        map.insert(
+        map.try_insert(
             "http://example.org/a",
             document("r", "http://example.org/a-said", &[]),
-        );
+        )
+        .expect("a fresh absolute key");
 
         let merged = resolve(&premise, &map)
             .expect("every import resolves")
@@ -709,14 +720,16 @@ mod tests {
         // premise's keeps the scope the caller gave it.
         let premise = document("b", "http://example.org/o", &["http://example.org/a"]);
         let mut map = ImportMap::default();
-        map.insert(
+        map.try_insert(
             "http://example.org/a",
             document("b", "http://example.org/a-said", &["http://example.org/c"]),
-        );
-        map.insert(
+        )
+        .expect("a fresh absolute key");
+        map.try_insert(
             "http://example.org/c",
             document("b", "http://example.org/c-said", &[]),
-        );
+        )
+        .expect("a fresh absolute key");
         let merged = resolve(&premise, &map)
             .expect("every import resolves")
             .expect("the premise imports something");
@@ -882,13 +895,14 @@ mod tests {
             (ROOT, OWL_IMPORTS, SUPPLIED),
         ]);
         let mut map = ImportMap::default();
-        map.insert(
+        map.try_insert(
             SUPPLIED,
             triples(&[
                 (EARLY, RDF_TYPE, OWL_ONTOLOGY),
                 (SUPPLIED, OWL_IMPORTS, MISSING),
             ]),
-        );
+        )
+        .expect("a fresh absolute key");
         assert_eq!(map.unresolved_imports(&premise), vec![MISSING.to_owned()]);
         // With no map, both of the premise's imports are missing, in import order.
         assert_eq!(
@@ -896,7 +910,8 @@ mod tests {
             vec![EARLY.to_owned(), SUPPLIED.to_owned()]
         );
         // Supplying the last document closes the walk.
-        map.insert(MISSING, triples(&[]));
+        map.try_insert(MISSING, triples(&[]))
+            .expect("a fresh absolute key");
         assert_eq!(map.unresolved_imports(&premise), Vec::<String>::new());
     }
 
@@ -966,7 +981,8 @@ mod tests {
     /// The map supplying `ex:Cat rdfs:subClassOf ex:Animal` as [`LIB`].
     fn schema_map() -> ImportMap {
         let mut map = ImportMap::default();
-        map.insert(LIB, triples(&[(CAT, SUB_CLASS_OF, ANIMAL)]));
+        map.try_insert(LIB, triples(&[(CAT, SUB_CLASS_OF, ANIMAL)]))
+            .expect("a fresh absolute key");
         map
     }
 

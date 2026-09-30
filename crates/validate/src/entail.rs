@@ -28,11 +28,9 @@
 //!
 //! [`engine::entail_graphs`]: purrdf_shapes::engine::entail_graphs
 
-use std::sync::Arc;
-
-use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine;
 use purrdf_shapes::text_ingest::parse_ntriples_to_dataset;
+use purrdf_shapes::{RuleSource, run_rules};
 use purrdf_shapes::{ShapesError, ShapesImports};
 
 use crate::ShapesImportList;
@@ -105,16 +103,18 @@ pub fn entail_to_ntriples(request: &EntailRequest<'_>) -> Result<EntailOutcome, 
         request.shapes_graph,
         &ShapesImports::from_turtle(request.imports)?,
     )?;
-    let projected = engine::project_dataset(data.as_ref())?;
-    let holder = ShaclData::new(Arc::clone(&projected), projected, None);
-    let options = RuleLimits {
+    let limits = RuleLimits {
         max_term_generating_rounds: request.max_term_generating_rounds,
         max_generated_terms: request.max_generated_terms,
         max_stored_facts: request.max_stored_facts,
         max_join_steps: request.max_join_steps,
-    }
-    .rule_options(request.host.entail_limit_knobs());
-    let inference = purrdf_shapes::infer(&holder, &shapes, &options)?;
+    };
+    let inference = run_rules(
+        RuleSource::Shapes(&shapes),
+        data.as_ref(),
+        &limits,
+        request.host.entail_limit_knobs(),
+    )?;
     Ok(EntailOutcome {
         ntriples: canonical_ntriples(inference.dataset())?,
         diagnostics: shapes.mandatory_diagnostics().to_vec(),

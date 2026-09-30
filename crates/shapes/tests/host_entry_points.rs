@@ -352,3 +352,78 @@ fn the_term_generating_round_limit_is_exact() {
         .expect("four rounds suffice");
     assert_eq!(inference.inferred().len(), 5);
 }
+
+// ── run_rules: the one rules-dispatch entry ────────────────────────────────────
+
+fn knobs() -> purrdf_shapes::LimitKnobs {
+    purrdf_shapes::LimitKnobs::new("rounds", "terms", "facts", "steps")
+}
+
+/// A shapes graph's rules through `run_rules` are the inference `infer` computes over the
+/// projected data, byte for byte, and the limits pass through the one `RuleLimits`.
+#[test]
+fn run_rules_over_a_shapes_graph_is_the_shacl_engine_run() {
+    let shapes = engine::parse_shapes(&format!("{PREFIXES}{SPARQL_EXPR_DECLARATION}{TOOLS}"), None)
+        .expect("shapes parse");
+    let ran = purrdf_shapes::run_rules(
+        purrdf_shapes::RuleSource::Shapes(&shapes),
+        data().as_ref(),
+        &purrdf_shapes::RuleLimits::default(),
+        knobs(),
+    )
+    .expect("rules run");
+    let direct = run_rules(&RuleOptions::default()).expect("direct run");
+    assert_eq!(ran.inferred_ntriples(), direct.inferred_ntriples());
+    assert_eq!(ran.proof_text(), direct.proof_text());
+
+    let refused = purrdf_shapes::run_rules(
+        purrdf_shapes::RuleSource::Shapes(&shapes),
+        data().as_ref(),
+        &purrdf_shapes::RuleLimits {
+            max_term_generating_rounds: Some(3),
+            ..purrdf_shapes::RuleLimits::default()
+        },
+        knobs(),
+    )
+    .expect_err("three rounds are too few");
+    assert!(refused.contains("past the limit of 3"), "{refused}");
+}
+
+/// A SPARQL 1.2 RL rule set through `run_rules` is `srl::infer`'s run, and its limit
+/// refusal names the caller's knob.
+#[test]
+fn run_rules_over_an_srl_rule_set_is_the_srl_engine_run() {
+    let document = purrdf_shapes::srl::parse_and_check(
+        "PREFIX ex: <http://example.org/ns#>\n\
+         RULE { ?s ex:tagged ex:yes } WHERE { ?s a ex:Item }",
+        None,
+    )
+    .expect("the rule set checks");
+    let ran = purrdf_shapes::run_rules(
+        purrdf_shapes::RuleSource::Srl(&document),
+        data().as_ref(),
+        &purrdf_shapes::RuleLimits::default(),
+        knobs(),
+    )
+    .expect("rules run");
+    let direct = purrdf_shapes::srl::infer(
+        &document,
+        data().as_ref(),
+        &purrdf_shapes::srl::InferOptions::default(),
+    )
+    .expect("direct run");
+    assert_eq!(ran.inferred().len(), 1);
+    assert_eq!(ran.inferred_ntriples(), direct.inferred_ntriples());
+
+    let refused = purrdf_shapes::run_rules(
+        purrdf_shapes::RuleSource::Srl(&document),
+        data().as_ref(),
+        &purrdf_shapes::RuleLimits {
+            max_stored_facts: Some(1),
+            ..purrdf_shapes::RuleLimits::default()
+        },
+        knobs(),
+    )
+    .expect_err("one stored fact is too few");
+    assert!(refused.contains("facts"), "{refused}");
+}

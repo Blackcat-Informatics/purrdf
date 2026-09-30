@@ -28,12 +28,9 @@
 //! `shacl verify` holds for a product that fails its certification. So a clean report
 //! exits **0** and a report with a finding exits **1**, with the report written either way.
 
-use std::sync::Arc;
-
-use purrdf::shapes::data::ShaclData;
 use purrdf::shapes::free_expression::{self, FreeExpression};
-use purrdf::shapes::srl::{self, InferOptions};
-use purrdf::shapes::{Inference, RuleOptions, engine, lint};
+use purrdf::shapes::srl;
+use purrdf::shapes::{Inference, lint};
 use purrdf_rdf::{JsonLdSerializeOptions, SourceFormat};
 use purrdf_validate::ExprSelector;
 
@@ -170,6 +167,12 @@ pub(crate) fn run_rules(
 
     let data = source::load_dataset(options.input, data_format, options.base)?;
     let mut diagnostics: Vec<lint::MandatoryDiagnostic> = Vec::new();
+    let limits = purrdf::shapes::RuleLimits {
+        max_term_generating_rounds: options.max_term_generating_rounds,
+        max_generated_terms: options.max_generated_terms,
+        max_stored_facts: options.max_stored_facts,
+        max_join_steps: options.max_join_steps,
+    };
     let inference: Inference = match &rule_source {
         RuleSource::Shapes {
             path,
@@ -191,23 +194,13 @@ pub(crate) fn run_rules(
                 shapes_error(error, &format!("--shapes {path}"), &root, "--shapes-base")
             })?;
             diagnostics = shapes.mandatory_diagnostics().to_vec();
-            let projected = engine::project_dataset(data.as_ref()).map_err(CliError::Runtime)?;
-            let holder = ShaclData::new(Arc::clone(&projected), projected, None);
-            let mut rule_options = RuleOptions::default().with_limit_knobs(cli_limit_knobs());
-            if let Some(rounds) = options.max_term_generating_rounds {
-                rule_options = rule_options.with_max_term_generating_rounds(rounds);
-            }
-            if let Some(terms) = options.max_generated_terms {
-                rule_options = rule_options.with_max_generated_terms(terms);
-            }
-            if let Some(facts) = options.max_stored_facts {
-                rule_options = rule_options.with_max_stored_facts(facts);
-            }
-            if let Some(steps) = options.max_join_steps {
-                rule_options = rule_options.with_max_join_steps(steps);
-            }
-            purrdf::shapes::infer(&holder, &shapes, &rule_options)
-                .map_err(|error| CliError::Runtime(format!("--shapes {path}: {error}")))?
+            purrdf::shapes::run_rules(
+                purrdf::shapes::RuleSource::Shapes(&shapes),
+                data.as_ref(),
+                &limits,
+                cli_limit_knobs(),
+            )
+            .map_err(|error| CliError::Runtime(format!("--shapes {path}: {error}")))?
         }
         RuleSource::Srl { path, base } => {
             let document = check_srl(
@@ -217,21 +210,13 @@ pub(crate) fn run_rules(
                 srl::CheckLevel::Stratified,
             )?
             .into_document();
-            let mut infer_options = InferOptions::default().with_limit_knobs(cli_limit_knobs());
-            if let Some(rounds) = options.max_term_generating_rounds {
-                infer_options = infer_options.with_max_term_generating_rounds(rounds);
-            }
-            if let Some(terms) = options.max_generated_terms {
-                infer_options = infer_options.with_max_generated_terms(terms);
-            }
-            if let Some(facts) = options.max_stored_facts {
-                infer_options = infer_options.with_max_stored_facts(facts);
-            }
-            if let Some(steps) = options.max_join_steps {
-                infer_options = infer_options.with_max_join_steps(steps);
-            }
-            srl::infer(&document, data.as_ref(), &infer_options)
-                .map_err(|error| CliError::Runtime(format!("--srl {path}: {error}")))?
+            purrdf::shapes::run_rules(
+                purrdf::shapes::RuleSource::Srl(&document),
+                data.as_ref(),
+                &limits,
+                cli_limit_knobs(),
+            )
+            .map_err(|error| CliError::Runtime(format!("--srl {path}: {error}")))?
         }
     };
 

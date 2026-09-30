@@ -975,12 +975,13 @@ pub fn vendored_imports(root: &Path) -> Result<purrdf_entail::ImportMap, String>
                 path.display()
             )
         })?;
-        if map.insert(iri.clone(), document).is_some() {
-            return Err(format!(
-                "{}: two vendored support documents both declare the ontology {iri}",
+        map.try_insert(iri.clone(), document).map_err(|error| {
+            format!(
+                "{}: the vendored support documents cannot all be imported by the ontology {iri} \
+                 they declare: {error}",
                 path.display()
-            ));
-        }
+            )
+        })?;
     }
     Ok(map)
 }
@@ -1102,7 +1103,8 @@ pub fn certify(
     // refuses (`EntailError::UnreachedImport`) rather than silently ignoring.
     let mut own = purrdf_entail::ImportMap::default();
     for (iri, document) in imports.closure(&premise).documents() {
-        own.insert(iri.clone(), std::sync::Arc::clone(document));
+        own.try_insert(iri.clone(), std::sync::Arc::clone(document))
+            .map_err(|error| format!("OWL-RL import closure: {error}"))?;
     }
     purrdf_entail::entails(&premise, &target, purrdf_entail::Regime::OwlRl, &own)
         .map_err(|e| format!("OWL-RL entailment: {e}"))

@@ -175,6 +175,51 @@ use purrdf_iri::vocab::owl::IMPORTS as OWL_IMPORTS;
 /// `owl:versionIRI`.
 use purrdf_iri::vocab::owl::VERSION_IRI as OWL_VERSIONIRI;
 
+/// Why [`ImportMap::try_insert`] refused a key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportKeyError {
+    /// The key is not an absolute IRI (`reason` carries the IRI parser's complaint when it is
+    /// not an IRI at all), so no `owl:imports` object can ever equal it.
+    NotAbsolute {
+        /// The refused key.
+        iri: String,
+        /// The IRI parser's complaint, when the key is not an IRI at all.
+        reason: Option<String>,
+    },
+    /// The key already names a document.
+    Duplicate {
+        /// The repeated key.
+        iri: String,
+    },
+}
+
+impl std::fmt::Display for ImportKeyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotAbsolute { iri, .. } if iri.is_empty() => f.write_str(
+                "the import key is the empty ontology IRI, which no owl:imports object can \
+                 equal, so the document it supplies could never be resolved",
+            ),
+            Self::NotAbsolute { iri, reason: None } => write!(
+                f,
+                "the import key <{iri}> is not an absolute IRI, so no owl:imports object -- \
+                 absolute once parsed -- can ever equal it, and the document would never be used"
+            ),
+            Self::NotAbsolute {
+                iri,
+                reason: Some(reason),
+            } => write!(f, "the import key <{iri}> is not an IRI: {reason}"),
+            Self::Duplicate { iri } => write!(
+                f,
+                "the import table names <{iri}> twice, and one IRI names one document; keeping \
+                 either would be a choice made for the caller"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ImportKeyError {}
+
 /// The documents an `owl:imports` resolves to, and the IRIs the importing graph was read
 /// from.
 ///
@@ -212,13 +257,79 @@ pub struct ImportMap {
 }
 
 impl ImportMap {
-    /// Declare that `iri` names `document`, returning whatever it named before.
-    pub fn insert(
+    /// Declare that `iri` names `document` — the ONE way a document enters the table, so
+    /// one key policy holds at every insertion site (a shapes import table, a reasoning
+    /// service's import list, a command line's `--import IRI=path`).
+    ///
+    /// The key must be an ABSOLUTE IRI, because an `owl:imports` object is absolute once
+    /// parsed: a relative or empty key could never equal one, and would be configuration that
+    /// silently never applies. It must also be NEW: one IRI names one document, and keeping
+    /// either of two would be a choice made on the caller's behalf. A refused insertion
+    /// leaves the map unchanged.
+    ///
+    /// # Errors
+    ///
+    /// [`ImportKeyError::NotAbsolute`] for a key that is not an absolute IRI;
+    /// [`ImportKeyError::Duplicate`] when `iri` already names a document.
+    ///
+    /// ```
+    /// use purrdf_core::RdfDatasetBuilder;
+    /// use purrdf_core::imports::{ImportKeyError, ImportMap};
+    ///
+    /// let document = RdfDatasetBuilder::new().freeze().expect("freeze");
+    /// let mut map = ImportMap::default();
+    /// map.try_insert("http://example.org/a", document.clone()).expect("a new absolute key");
+    /// map.try_insert("http://example.org/b", document.clone()).expect("a distinct key");
+    /// assert!(matches!(
+    ///     map.try_insert("http://example.org/a", document.clone()),
+    ///     Err(ImportKeyError::Duplicate { .. })
+    /// ));
+    /// assert!(matches!(
+    ///     map.try_insert("", document),
+    ///     Err(ImportKeyError::NotAbsolute { .. })
+    /// ));
+    /// assert_eq!(map.len(), 2);
+    /// ```
+    pub fn try_insert(
         &mut self,
         iri: impl Into<String>,
         document: Arc<RdfDataset>,
-    ) -> Option<Arc<RdfDataset>> {
-        self.documents.insert(iri.into(), document)
+    ) -> Result<(), ImportKeyError> {
+        let iri = iri.into();
+        self.check_key(&iri)?;
+        self.documents.insert(iri, document);
+        Ok(())
+    }
+
+    /// Whether `iri` could be inserted with [`try_insert`](Self::try_insert): the same
+    /// key policy, checked without a document, so a caller can refuse a bad key BEFORE it
+    /// spends work reading the document it would name.
+    ///
+    /// # Errors
+    ///
+    /// As [`try_insert`](Self::try_insert).
+    pub fn check_key(&self, iri: &str) -> Result<(), ImportKeyError> {
+        match purrdf_iri::is_absolute(iri) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(ImportKeyError::NotAbsolute {
+                    iri: iri.to_owned(),
+                    reason: None,
+                });
+            }
+            Err(error) => {
+                return Err(ImportKeyError::NotAbsolute {
+                    iri: iri.to_owned(),
+                    reason: Some(error.to_string()),
+                });
+            }
+        }
+        if self.documents.contains_key(iri) {
+            return Err(ImportKeyError::Duplicate {
+                iri: iri.to_owned(),
+            });
+        }
+        Ok(())
     }
 
     /// The document `iri` names, if this map has one.
@@ -1221,10 +1332,13 @@ mod tests {
 
         // A document the map supplies.
         let mut map = ImportMap::default();
-        map.insert(LIB, triples(&[]));
+        map.try_insert(LIB, triples(&[]))
+            .expect("a fresh absolute key");
         assert_eq!(map.closure(&importer(&[])).unresolved(), NONE);
         let mut other = ImportMap::default();
-        other.insert(OTHER, triples(&[]));
+        other
+            .try_insert(OTHER, triples(&[]))
+            .expect("a fresh absolute key");
         assert_eq!(other.closure(&importer(&[])).unresolved(), [LIB.to_owned()]);
     }
 
@@ -1274,10 +1388,11 @@ mod tests {
         );
 
         let mut map = ImportMap::default();
-        map.insert(
+        map.try_insert(
             LIB,
             triples(&[(LIB, "http://example.org/said", "http://example.org/v")]),
-        );
+        )
+        .expect("a fresh absolute key");
         let closure = map.closure(&graph);
         assert_eq!(closure.unresolved(), NONE);
         let merged = closure
@@ -1358,7 +1473,7 @@ mod tests {
         let root = triples(&[(SHAPES, RDF_TYPE, OWL_ONTOLOGY), (SHAPES, OWL_IMPORTS, LIB)]);
         let walk = |lib: Arc<RdfDataset>| {
             let mut map = ImportMap::default();
-            map.insert(LIB, lib);
+            map.try_insert(LIB, lib).expect("a fresh absolute key");
             map.closure(&root).unresolved().to_vec()
         };
         // By the IRI it was imported by.
@@ -1394,7 +1509,8 @@ mod tests {
     #[test]
     fn an_entry_nothing_imports_is_unreached() {
         let mut map = ImportMap::default();
-        map.insert(LIB, triples(&[]));
+        map.try_insert(LIB, triples(&[]))
+            .expect("a fresh absolute key");
 
         let imports_nothing = triples(&[(SHAPES, RDF_TYPE, OWL_ONTOLOGY)]);
         assert_eq!(map.closure(&imports_nothing).unreached(), [LIB.to_owned()]);
@@ -1412,14 +1528,16 @@ mod tests {
     fn the_merge_is_transitive_cycle_safe_and_standardized_apart() {
         let graph = document("b", "http://example.org/o", &["http://example.org/a"]);
         let mut map = ImportMap::default();
-        map.insert(
+        map.try_insert(
             "http://example.org/a",
             document("b", "http://example.org/a-said", &["http://example.org/c"]),
-        );
-        map.insert(
+        )
+        .expect("a fresh absolute key");
+        map.try_insert(
             "http://example.org/c",
             document("b", "http://example.org/c-said", &["http://example.org/a"]),
-        );
+        )
+        .expect("a fresh absolute key");
         let closure = map.closure(&graph);
         assert_eq!(closure.unresolved(), NONE);
         let merged = closure
@@ -1484,10 +1602,11 @@ mod tests {
                 "{class}: refused unsupplied"
             );
             let mut map = ImportMap::default();
-            map.insert(
+            map.try_insert(
                 LIB,
                 triples(&[(LIB, "http://example.org/said", "http://example.org/v")]),
-            );
+            )
+            .expect("a fresh absolute key");
             let closure = map.closure(&graph);
             assert_eq!(closure.unresolved(), NONE, "{class}");
             let merged = closure
@@ -1605,13 +1724,14 @@ mod tests {
             (OTHER_NODE, OWL_IMPORTS, "http://example.org/root-data"),
         ]);
         let mut map = ImportMap::default();
-        map.insert(
+        map.try_insert(
             LIB,
             triples(&[
                 (LIB, OWL_IMPORTS, SHAPES),
                 (OTHER_NODE, OWL_IMPORTS, "http://example.org/lib-data"),
             ]),
-        );
+        )
+        .expect("a fresh absolute key");
         let listed: Vec<(Option<String>, TermValue)> = map
             .unanchored_imports(&root)
             .into_iter()
@@ -1664,8 +1784,10 @@ mod tests {
         let first = triples(&[(LIB, OWL_VERSIONIRI, LIB_1)]);
         let conflicts = |second: &str, rows: &[(&str, &str, &str)]| {
             let mut map = ImportMap::default();
-            map.insert(LIB_1, Arc::clone(&first));
-            map.insert(second, triples(rows));
+            map.try_insert(LIB_1, Arc::clone(&first))
+                .expect("a fresh absolute key");
+            map.try_insert(second, triples(rows))
+                .expect("a fresh absolute key");
             let closure = map.closure(&importer(second));
             assert_eq!(closure.unresolved(), NONE, "the closure is complete");
             assert_eq!(closure.documents().len(), 2, "both documents are reached");
@@ -1751,7 +1873,8 @@ mod tests {
             (SHAPES, OWL_IMPORTS, V1),
         ]);
         let mut map = ImportMap::default();
-        map.insert(V1, triples(&[(SHAPES, OWL_VERSIONIRI, V1)]));
+        map.try_insert(V1, triples(&[(SHAPES, OWL_VERSIONIRI, V1)]))
+            .expect("a fresh absolute key");
         let closure = map.closure(&graph);
         assert_eq!(
             closure.conflicts(),
@@ -1773,7 +1896,8 @@ mod tests {
         );
         // Neighbour: the imported document is the same version.
         let mut same = ImportMap::default();
-        same.insert(V1, triples(&[(SHAPES, OWL_VERSIONIRI, V2)]));
+        same.try_insert(V1, triples(&[(SHAPES, OWL_VERSIONIRI, V2)]))
+            .expect("a fresh absolute key");
         assert_eq!(same.closure(&graph).conflicts(), []);
     }
 }
