@@ -545,17 +545,14 @@ fn every_path_matches_portable() {
         HexBackend::selected().name()
     ));
     assert!(ran.contains(&"portable"));
-    // A vector path the build or processor provides is the one selected,
-    // except SSSE3 in a build whose target has AVX-512BW.
+    // A vector path the build or processor provides is the one selected.
     #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
     assert_eq!(HexBackend::selected(), HexBackend::Wasm32Simd128);
     #[cfg(all(target_arch = "wasm32", not(target_feature = "simd128")))]
     assert_eq!(HexBackend::selected(), HexBackend::Portable);
     #[cfg(target_arch = "aarch64")]
     assert_eq!(HexBackend::selected(), HexBackend::Aarch64Neon);
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-    assert_eq!(HexBackend::selected(), HexBackend::Portable);
-    #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512bw")))]
+    #[cfg(target_arch = "x86_64")]
     assert_eq!(
         HexBackend::selected(),
         if HexBackend::X86Ssse3.is_available() {
@@ -579,11 +576,10 @@ fn expected_here(backend: HexBackend) -> bool {
 
 /// Every base16 path `PURRDF_REQUIRE_SIMD_PATHS` requires is available, and a
 /// required vector path is the one inputs longer than [`SHORT_MAX`] render
-/// through (SSSE3 only below AVX-512BW, where it is the measured choice).
+/// through.
 fn required_paths_are_available_and_selected() {
     for backend in assert_required_available("hex", expected_here) {
-        let deselected = cfg!(target_feature = "avx512bw") && backend == HexBackend::X86Ssse3;
-        if backend != HexBackend::Portable && !deselected {
+        if backend != HexBackend::Portable {
             assert_eq!(
                 HexBackend::selected(),
                 backend,

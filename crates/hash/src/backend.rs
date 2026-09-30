@@ -166,18 +166,6 @@ impl Backend for HexBackend {
         Self::Portable,
     ];
 
-    /// The first available path, except that [`X86Ssse3`](Self::X86Ssse3)
-    /// is not selected in a build whose target has AVX-512BW: there the
-    /// compare-select loop packs 64 bytes per instruction and measured faster
-    /// than the 16-byte `pshufb` kernel, while on the x86-64 baseline and
-    /// x86-64-v3 the kernel measured faster than the loop (the `hex` group of
-    /// the `purrdf-hash-conformance` `digests` bench).
-    fn selected() -> Self {
-        Self::all_available()
-            .find(|backend| !(cfg!(target_feature = "avx512bw") && *backend == Self::X86Ssse3))
-            .unwrap_or(Self::Portable)
-    }
-
     fn is_available(self) -> bool {
         self.encode_fn_if_available().is_some()
     }

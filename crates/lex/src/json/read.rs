@@ -16,9 +16,10 @@ use crate::scan::find_first_json_string_special;
 use crate::terminals::{is_json_string_forbidden_byte, is_ws, skip_ws};
 
 /// The clean run, in bytes, a string body is scanned a byte at a time before
-/// the chunked scan ([`find_first_json_string_special`]) takes over: a member
-/// name or a short value ends inside it, and the chunked scan's setup costs
-/// more than the bytes it would save there.
+/// the chunked scan ([`find_first_json_string_special`]) takes over: one scan
+/// chunk. A run shorter than a chunk is all tail to the chunked scan, which
+/// answers its tail a byte at a time too, so the byte walk here does the same
+/// tests without the call; a member name or a short value ends inside it.
 const SHORT_RUN: usize = 16;
 
 /// The whitespace run, in bytes, past which [`Reader`] hands the rest of the
@@ -298,8 +299,9 @@ impl<'a> Reader<'a> {
     /// Between two tokens there is usually no whitespace at all, or a byte or
     /// two of it, so the run is crossed here a byte at a time and the chunked
     /// scan ([`skip_ws`]) takes over only once the run is [`WS_RUN`] bytes long:
-    /// a pretty-printer's indentation. Calling the chunked scan for every token
-    /// was measured to cost an eighth of a compact read.
+    /// a pretty-printer's indentation. A shorter run is all tail to the chunked
+    /// scan, answered a byte at a time there too, so crossing it here saves
+    /// only the call.
     #[allow(
         clippy::inline_always,
         reason = "crossed before every token: the zero- and one-byte runs must cost a compare \
@@ -752,21 +754,17 @@ impl<'a> Reader<'a> {
         // Each open object's names so far, when repeats are refused.
         let mut seen: Vec<HashSet<String, FixedState>> = Vec::new();
         // A finished value goes to the innermost open container, or is the
-        // result. The slot is reserved before the value is built, and the
-        // value is built by the closure that fills it, so the value is written
-        // once, in place: a value built on the stack and then copied in was
-        // measured to stall on store forwarding, since it is written field by
-        // field and read back whole.
+        // result.
         macro_rules! finish {
             ($value:expr) => {
                 match open.last() {
                     None => return Ok($value),
                     Some(Open { object: false, .. }) => {
-                        items.extend(core::iter::once_with(|| $value));
+                        items.push($value);
                     }
                     Some(Open { object: true, .. }) => {
                         let name = names.pop().expect("a member's value follows its name");
-                        members.extend(core::iter::once_with(|| (name, $value)));
+                        members.push((name, $value));
                     }
                 }
             };

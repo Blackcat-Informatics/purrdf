@@ -64,22 +64,19 @@
 //! directly before its `$` its last, so a haystack whose ends do not hold them
 //! is refused by a slice compare, and one that does is decided without the
 //! engine when those positions are the whole pattern (`^http://example\.org/`,
-//! `[0-9]{3}$`, `^[a-z]`). The engine's own start-up per call (its cache,
-//! its search configuration) is most of the cost on a short haystack, and a
-//! compare does not pay it.
+//! `[0-9]{3}$`, `^[a-z]`): the engine's per-call start-up (its cache, its
+//! search configuration) and its walk are not run at all.
 //!
 //! # When the plan is read
 //!
 //! A [`Plan`] (window, literal, affix, or the engine alone) is read from the
 //! parsed syntax when a match first needs it, not when the pattern is
-//! compiled, so compiling costs one parse, the engine's: a first match against
-//! a short haystack is the engine's alone, and the plan is read by the next
-//! match, or by a first one against a haystack long enough for a search to pay
-//! for the parse. The translation pass decides the common plans without any
-//! parse: a pattern that is literal text is its own syntax tree, and one with
-//! no token that can be a single-byte position, or anchored with only
-//! repeated or non-ASCII atoms next to its anchors (`^[a-z0-9]+$`), has no
-//! plan beyond the engine.
+//! compiled, so compiling costs one parse, the engine's, and a pattern never
+//! matched is never parsed for its plan. The translation pass decides the
+//! common plans without any parse: a pattern that is literal text is its own
+//! syntax tree, and one with no token that can be a single-byte position, or
+//! anchored with only repeated or non-ASCII atoms next to its anchors
+//! (`^[a-z0-9]+$`), has no plan beyond the engine.
 
 use purrdf_lex::scan::{ByteRun, find_byte, find_byte_pair, find_byte2, find_range_pair};
 use regex_syntax::hir::{Class, Hir, HirKind, Look};
@@ -433,9 +430,9 @@ impl Prefilter {
     /// Whether `regex`, the engine this prefilter was built for, matches
     /// anywhere in `haystack`: exactly `regex.is_match(haystack)`.
     ///
-    /// Out of line: inlined into [`Plan::is_match`], its window loop gave every
-    /// plan's call the large frame it needs, and the literal and anchored plans
-    /// answer in a few dozen cycles.
+    /// Out of line: inlined into [`Plan::is_match`], its window loop would give
+    /// every plan's call the large stack frame it needs, and the literal and
+    /// anchored plans need none of it.
     #[inline(never)]
     pub(super) fn is_match(&self, regex: &regex::Regex, haystack: &str) -> bool {
         let bytes = haystack.as_bytes();
@@ -567,25 +564,16 @@ pub(super) struct Affix {
     rest: Rest,
 }
 
-/// The positions of one end of an anchored pattern: none, bytes when each
-/// position is one byte, compared as one slice, and sets otherwise.
-///
-/// No positions is its own arm rather than an empty slice: comparing an empty
-/// slice still calls `memcmp` with the slice's dangling pointer, and the C
-/// library's masked-load `memcmp` takes a fault-suppression assist on it, which
-/// was measured at 40 ns a call.
+/// The positions of one end of an anchored pattern: bytes when each position
+/// is one byte (none included), compared as one slice, and sets otherwise.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Positions {
-    None,
     Bytes(Box<[u8]>),
     Sets(Box<[ByteSet]>),
 }
 
 impl Positions {
     fn of(sets: Vec<ByteSet>) -> Self {
-        if sets.is_empty() {
-            return Self::None;
-        }
         match sets
             .iter()
             .map(|set| set.only())
@@ -598,7 +586,6 @@ impl Positions {
 
     const fn len(&self) -> usize {
         match self {
-            Self::None => 0,
             Self::Bytes(bytes) => bytes.len(),
             Self::Sets(sets) => sets.len(),
         }
@@ -607,7 +594,6 @@ impl Positions {
     /// Whether `slice`, exactly [`len`](Self::len) bytes, holds the positions.
     fn hold(&self, slice: &[u8]) -> bool {
         match self {
-            Self::None => true,
             Self::Bytes(bytes) => same_bytes(slice, bytes),
             Self::Sets(sets) => slice.iter().zip(sets).all(|(&b, set)| set.contains(b)),
         }
@@ -712,10 +698,9 @@ impl Affix {
 /// with [`find_byte_pair`] (one with [`find_byte`] when the window has one
 /// searchable byte), and a candidate is verified against the whole literal by
 /// a word compare, however long it is: the engine's automaton for a literal is
-/// as long as the literal, so it is never handed one to confirm.
-/// On a haystack shorter than one sixty-four-byte block, the case of an IRI or
-/// a short literal, the general window loop's per-call set-up was measured to
-/// cost more than the search itself.
+/// as long as the literal, so it is never handed one to confirm. Unlike the
+/// general window loop, it keeps no start or end bounds and never runs the
+/// engine on a candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Needle {
     bytes: Box<[u8]>,
@@ -750,8 +735,8 @@ impl Needle {
     /// The first offset at or after `from` where `haystack` holds the needle.
     #[allow(
         clippy::inline_always,
-        reason = "the whole search of a short haystack is a few dozen cycles; a call frame \
-                  around it was measured as a fifth of them"
+        reason = "the search of a short haystack is a few word compares; inlined, it has no \
+                  call frame around them"
     )]
     #[inline(always)]
     fn find(&self, haystack: &[u8], mut from: usize, misses: &mut usize) -> Found {
@@ -781,8 +766,8 @@ impl Needle {
             }
             *misses += 1;
             // Only a needle as short as a window gives way: the engine's
-            // automaton for a longer literal is as long as the literal, and
-            // is far slower on it than the search restarted per candidate.
+            // automaton for a longer literal is as long as the literal, so a
+            // longer literal stays on the search, restarted per candidate.
             if n <= MAX_WINDOW && *misses > MAX_DENSE_MISSES && *misses * MISS_DENSITY > at {
                 return Found::GiveWay(at);
             }
@@ -797,8 +782,8 @@ impl Needle {
     /// search stopped, as the general window does.
     #[allow(
         clippy::inline_always,
-        reason = "the whole search of a short haystack is a few dozen cycles; a call frame \
-                  around it was measured as a fifth of them"
+        reason = "the search of a short haystack is a few word compares; inlined, it has no \
+                  call frame around them"
     )]
     #[inline(always)]
     pub(super) fn is_match<'r>(
@@ -857,15 +842,19 @@ impl Plan {
         }
     }
 
-    /// Whether `regex` matches anywhere in `haystack`: exactly
-    /// `regex.is_match(haystack)`.
-    #[inline]
-    pub(super) fn is_match(&self, regex: &regex::Regex, haystack: &str) -> bool {
+    /// Whether the engine `engine` returns matches anywhere in `haystack`:
+    /// exactly `engine().is_match(haystack)`. A literal asks for the engine
+    /// only when its search gives way to it.
+    pub(super) fn is_match<'r>(
+        &self,
+        engine: impl FnOnce() -> &'r regex::Regex,
+        haystack: &str,
+    ) -> bool {
         match self {
-            Self::Engine => regex.is_match(haystack),
-            Self::Window(prefilter) => prefilter.is_match(regex, haystack),
-            Self::Literal(needle) => needle.is_match(|| regex, haystack),
-            Self::Anchored(affix) => affix.is_match(regex, haystack),
+            Self::Engine => engine().is_match(haystack),
+            Self::Window(prefilter) => prefilter.is_match(engine(), haystack),
+            Self::Literal(needle) => needle.is_match(engine, haystack),
+            Self::Anchored(affix) => affix.is_match(engine(), haystack),
         }
     }
 
@@ -881,12 +870,12 @@ impl Plan {
 }
 
 /// Whether `a` and `b`, of equal length, hold the same bytes: in eight-byte
-/// words, the last one overlapping the one before it, rather than through the
-/// C library's `memcmp`, whose call and masked loads cost more than the compare
-/// on the few bytes a window or an anchored end holds.
+/// words, the last one overlapping the one before it, inline rather than a
+/// call into the C library's `memcmp` for the few bytes a window or an
+/// anchored end holds.
 #[allow(
     clippy::inline_always,
-    reason = "a verification of a few bytes: a call frame costs more than the compare"
+    reason = "a verification of a few bytes: inlined, it has no call frame around the compare"
 )]
 #[inline(always)]
 fn same_bytes(a: &[u8], b: &[u8]) -> bool {

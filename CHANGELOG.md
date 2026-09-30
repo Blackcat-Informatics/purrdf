@@ -828,7 +828,7 @@ under Changed and Fixed where a longer account helps.
   `from_hex`, `to_hex`, `as_bytes`) that every content identity now wraps.
   Inputs up to `hex::SHORT_MAX` (32) bytes render inline through the
   compare-select loop with no dispatch; longer ones run SSSE3 `pshufb` on
-  x86-64 below AVX-512BW (the loop itself at AVX-512BW), NEON `tbl` on
+  x86-64, NEON `tbl` on
   aarch64 and `i8x16.swizzle` in a `simd128` build. The frozen tables
   `crates/hash-conformance/tests/vectors/hex_vectors.txt` and
   `hex_digit_vectors.txt` pin every path, natively and on wasm32. The
@@ -2123,9 +2123,8 @@ under Changed and Fixed where a longer account helps.
   256 KiB thread (it needed more than 4 MiB before). `const`, `enum` and
   `uniqueItems` compare and hash values on a heap stack too, so values nested
   100,000 levels deep compare on a 256 KiB thread. The keyword named by an
-  `EvaluationError` is rendered only when one is raised; `is_valid` over the
-  `validate` bench's 1k instances takes 345 µs where it took 682 µs, and the new
-  `is_valid/tree_1000` bench measures the deep case.
+  `EvaluationError` is rendered only when one is raised, so `is_valid` renders
+  none, and the new `is_valid/tree_1000` bench measures the deep case.
 - **jsonschema:** a regex-parser resource error for too-deep group nesting
   reads `group nesting exceeds 250` wherever it is raised.
 - **text:** the analyzer profile is `purrdf-compatibility-caseless-uax29-v2`.
@@ -2652,86 +2651,54 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   it afterwards. It now renders through the escaper, so nothing between the producer
   and the drain holds the answer.
 
-- Timings, the one exception to the allocator-bytes rule above, for the helpers
-  centralized into shared homes; report-only, taken on a host at load 9-17 as 24
-  interleaved ABBA pairs against `origin/main` (ratio = branch / main, median of
-  pairs, bootstrap 95% CI). The Turtle literal escape scan over 1 MiB fell from
-  1.30 ms to 78.7 us (0.061 [0.060, 0.062]) and, with an escape every KiB, from
-  1.16 ms to 78.9 us; over escape-dense text it is 0.908 [0.889, 0.928]. The
-  one-shot hex render is 0.337 [0.316, 0.347] at 64 B, 0.409 at 4 KiB and 0.583
-  [0.567, 0.588] at 1 MiB against the core encoder it replaced. Pack dictionary
-  encoding, which runs the shared first-mismatch kernel per record, is unchanged
-  at 0.994 [0.980, 1.026]. The shared JSON reader first measured slower than
-  the two hand-written readers it replaced — SPARQL-results JSON read of a
-  10,000-row document 1.329 [1.238, 1.420], a 1 MB GeoJSON FeatureCollection
-  parse 1.815 [1.770, 1.985], a large GeoJSON literal 1.219 — because every
-  reader built a whole `Value` tree and crossed whitespace with a chunked scan
-  per token. The SRJ `SELECT` readers and the GeoJSON literal reader now build
-  their rows and positions straight from the pull reader's events, and the
-  tree reader writes each value once, where it stays. Measured again as 24
-  ABBA pairs at load 3.9-8.3, by a standalone driver calling the same public
-  entry points in both trees: `from_json` is 0.650 [0.633, 0.671] of main on
-  the clean document (11.5 ms to 7.5 ms) and 0.582 [0.575, 0.588] on the
-  escaping one (15.7 ms to 9.1 ms), `from_json_bounded` 0.719 [0.710, 0.726]
-  and 0.668 [0.658, 0.676], the FeatureCollection tree parse 0.917 [0.907,
-  0.921] (3.04 ms to 2.79 ms) and the literal 0.810 [0.784, 0.823] (15.5 ms to
-  12.4 ms, most of it now exact decimal parsing). The re-render, the shared
-  writer walking each container's members in place and writing a scalar where
-  it stands instead of pushing a work item per token, is 0.872 [0.861, 0.879]
-  (631 us to 550 us, 25 ABBA rounds at load 5-6, byte-identical output). Pack
-  dictionary decode, which spent a fifth of its time in the IRI splitter's
-  sixteen-byte delimiter kernels (a call and a scalar tail per component), is
-  0.972 [0.959, 0.978] now that the splitter scans eight bytes a step again, and
-  `hex::Lower` `Display` resolves its encoder once instead of on every call and,
-  in an AVX-512BW build, renders 33..63 bytes as a 32-byte head and a tail:
-  0.941 [0.915, 0.986] at 16 B, 0.747 [0.725, 0.751] at 32 B, 0.949 [0.922,
-  0.968] at 33 B, 0.793 at 40 B, 0.974 [0.964, 0.988] at 48 B, 0.821 at 56 B,
-  0.766 [0.744, 0.793] at 64 B and 0.607 [0.591, 0.644] at 128 B (16 B repeats
-  between 0.94 and 1.02 across runs, its cost being the formatter's fixed
-  overhead). The benches are `sparql_results_json_read`,
+- What the helpers centralized into shared homes do, by construction (no
+  wall-clock figures: two runs of the same code give different ones). The
+  Turtle literal escape scan answers sixteen bytes per packed compare. The
+  shared JSON reader no longer builds a whole `Value` tree for a reader that
+  only wants rows or positions: the SRJ `SELECT` readers and the GeoJSON
+  literal reader build their rows and positions straight from the pull
+  reader's events; a whitespace run or a clean string run shorter than one
+  scan chunk is crossed inline rather than through a call whose chunk loop it
+  would never enter; the reader records whether a string holds an escape while
+  scanning it, so decoding an escape-free string borrows it without a second
+  pass; and each container the tree reader closes is one allocation of
+  exactly its length. The shared writer walks each container's members in
+  place, one frame per open container, instead of pushing a work item per
+  token (byte-identical output). `hex::Lower` and `Upper` `Display` resolve
+  their encoder once instead of walking every path's availability check on
+  each call. The benches are `sparql_results_json_read`,
   `geojson_json`/`geojson_literal`, `core_escape_scan`/`core_pack_dict_prefix`
   and the `hex` group at 1 MiB.
 
-- Timings for XSD patterns, SPARQL `REGEX` and `sh:pattern` since `regex` lost
-  its literal prefilter; report-only, taken on a host at load 5.4-14.4 (the
-  one-minute average, read before every run) as 10 interleaved
-  main/branch/fixed/fixed/branch/main rounds, each tree built by the same
-  driver calling the same public API (ratio = arm / `origin/main` per round,
-  median of rounds, bootstrap 95% CI). Without a prefilter every unanchored
-  search walked its haystack through the lazy DFA: a 64 KiB haystack with the
-  match in its last bytes took 86-88 us for `needle`, `foo.*bar`,
-  `\d{4}-\d{2}`, `[a-z]+@example\.org` and `NEEDLE` under `i`, ratios 25.3
-  to 151 against main; `example\.org` over 4,096 70-byte IRIs was 5.94 [5.90, 5.99], SPARQL
-  `REGEX` over 2,048 4 KiB literals 1.64 to 2.47 and `sh:pattern` over 1,024
-  4 KiB values 10.6 to 11.7. `CompiledPattern::is_match` now runs a
+- XSD patterns, SPARQL `REGEX` and `sh:pattern` since `regex` lost its literal
+  prefilter. Without one, every unanchored search walked its whole haystack
+  through the lazy DFA. `CompiledPattern::is_match` now runs a
   required-literal prefilter read from the engine's own syntax tree, searched
-  with `purrdf_lex::scan::find_byte_pair` and `find_range_pair`: the 64 KiB
-  cases are 0.54 [0.48, 0.57] (`needle`, 1.0 us to 0.5 us), 0.61 [0.58, 0.64],
-  0.77 [0.74, 0.78], 0.56 [0.52, 0.57] and 0.31 [0.30, 0.31] (`NEEDLE` under
-  `i`, 3.4 us to 1.1 us) of main, and SPARQL `REGEX` 0.90 [0.86, 0.93], 0.84
-  [0.74, 0.88] and 0.79 [0.77, 0.81]. Final numbers against main (report-only,
-  taken on a heavily loaded shared host; indicative, not a gate):
-  `example\.org` over 70-byte IRIs (a plain-text pattern search, a one-word test of a clean tail,
-  the hit offset from a bitmask) is 0.855 [0.846, 0.882], was 2.05; anchored
-  literal prefixes and suffixes are compared directly, `^http://example\.org/`
-  0.227 [0.221, 0.238] and `[0-9]{3}$` 0.406 [0.382, 0.413], were 1.08; compile
-  no longer parses twice, `needle` 0.271 [0.259, 0.278], `^[a-z0-9]+$` 0.994
-  [0.985, 1.017] and `^\i\c*$` 0.993 [0.980, 1.001], at parity within noise,
-  the engine build itself being 0.996-1.015 of main; `sh:pattern "^[a-z]"` is
-  0.958 [0.895, 1.021], was 1.21, at parity within noise on a loaded host
-  (loads 4-11). The no-literal controls are unchanged (`[a-z]{25}` 0.98 [0.97,
-  1.03]). The shared first-mismatch helper in `purrdf-deflate` works in
-  16-byte steps: 0.77 of main at 256 B and up, parity at 40 B. The benches are
-  `xsd_regex_match` and `xsd_regex_compile` in `xsd_regex`,
-  `regex_long_literals` in `regex_eval` and `shacl_pattern_long_values` in
-  `pattern_validate`.
+  with `purrdf_lex::scan::find_byte_pair` and `find_range_pair`, so a haystack
+  without the window is refused without entering the engine and the engine
+  starts where a match through the first window could begin. A plain-text
+  pattern such as `example\.org` is answered by the literal search alone,
+  its candidates verified by word compares and never by the engine; the
+  single-byte positions next to an anchor (`^http://example\.org/`,
+  `[0-9]{3}$`, `^[a-z]`) are compared with the haystack's first or last bytes
+  before the engine, or instead of it when they are the whole pattern. Compile
+  parses a pattern once: its plan is read when a match first needs it, decided
+  without a parse for literals and for anchored patterns with only repeated
+  atoms at their anchors, and a literal's engine is built only when a caller
+  needs it. The pair search reads a hit chunk's offset from one lane mask
+  (`pmovmskb` and a trailing-zero count on x86-64) rather than a walk of its
+  lanes. The shared first-mismatch helper in `purrdf-deflate` compares sixteen
+  bytes per step (one `pcmpeqb`/`pmovmskb` pair on x86-64) and answers the
+  bytes after its last whole word with one overlapping word instead of a
+  byte-at-a-time tail. The benches are `xsd_regex_match` and
+  `xsd_regex_compile` in `xsd_regex`, `regex_long_literals` in `regex_eval`
+  and `shacl_pattern_long_values` in `pattern_validate`.
 
 ### Fixed
 
 - **shapes:** the canonical IRI comparison behind the focus-node sort compares
   from the first differing byte again; since the helper centralization it
-  scanned both IRIs end to end on every comparison, making `sh:pattern`
-  validation about 1.2x slower than before. It uses the one first-mismatch
+  scanned both IRIs end to end on every comparison. It uses the one first-mismatch
   helper in `purrdf-deflate`, now 16 bytes a step, and checks only the scalars
   at the difference for bytes the rendering escapes (checked against full
   rendering over 20,000 pairs).

@@ -82,9 +82,11 @@ pub(crate) fn copy_match_portable(buf: &mut [u8], dst: usize, dist: usize, len: 
 /// bytes after the last whole word pair are one more word pair ending at the
 /// shorter length, overlapping the one before it; a key shorter than sixteen
 /// bytes is two overlapping eight-byte words, and only one shorter than eight
-/// is compared one byte at a time. Sixteen-byte words were measured against
-/// eight on the canonical order of 40-byte IRIs, where the comparison's loop
-/// overhead, not its loads, was the difference.
+/// is compared one byte at a time. A sixteen-byte step halves the loop's
+/// compare-and-branch count against an eight-byte one, and on x86-64 its
+/// equality test lowers to one `pcmpeqb`/`pmovmskb` pair, eight instructions
+/// per sixteen bytes where two eight-byte steps take fourteen; the overlapping
+/// last word replaces the byte-at-a-time tail after the last whole word.
 ///
 /// This is the workspace's one first-mismatch index. It is `#[inline]` with no
 /// dispatch, so a short key (a front-coded dictionary record, a few dozen

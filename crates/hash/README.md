@@ -42,12 +42,8 @@ with. Every preimage and wire encoding in the workspace frames through it, and
 `purrdf-hash` implements no SHA-2. The workspace's one SHA-2 implementation is
 the external `sha2` crate, which the crates that need it depend on directly:
 the SHA-256 content identities and query provenance, and `purrdf-ed25519`'s
-SHA-512. A native SHA-256 (x86 SHA extensions and portable) and SHA-384/512
-were measured against `sha2` on the backends this workspace selects and were
-not faster in every case — SHA-256 on the SHA extensions was 3.7% faster at
-64 B, 1.4% slower at 1 KiB and tied at 1 MiB, and portable SHA-512 was 43–47%
-slower at every size — so `sha2` stays, and `purrdf-hash` keeps its zero
-runtime dependencies.
+SHA-512. The workspace keeps that one SHA-2 rather than a second, native one,
+so `purrdf-hash` keeps its zero runtime dependencies.
 
 ## Shared kernels
 

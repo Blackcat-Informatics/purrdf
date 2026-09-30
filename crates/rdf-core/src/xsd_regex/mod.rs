@@ -137,7 +137,6 @@ pub use error::{ReplacementError, XsdRegexError};
 use std::borrow::Cow;
 use std::fmt;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Maximum size, in bytes, of a pattern source string accepted by [`compile`].
 ///
@@ -230,35 +229,8 @@ pub struct CompiledPattern {
     /// when a match first needs it, so compiling never parses the source a
     /// second time.
     plan: OnceLock<prefilter::Plan>,
-    /// Whether `is_match` has answered once without reading the plan.
-    first_use: FirstUse,
     /// The engine's modes, for reading the plan from [`regex::Regex::as_str`].
     modes: Modes,
-}
-
-/// The haystack length from which a first match reads the plan rather than
-/// asking the engine alone: reading it (a parse of the engine's source) costs
-/// about what the engine spends walking this many bytes without a window.
-const PLAN_AFTER_BYTES: usize = 1024;
-
-/// Set by the first [`CompiledPattern::is_match`] that answered without the
-/// plan, so every later one reads it: a pattern matched once against a short
-/// haystack (a SPARQL `REGEX` whose pattern differs per row) never pays the
-/// parse, and one matched again pays it once.
-#[derive(Debug, Default)]
-struct FirstUse(AtomicBool);
-
-impl FirstUse {
-    /// `true` exactly once: for the first caller to ask.
-    fn claim(&self) -> bool {
-        !self.0.swap(true, Ordering::Relaxed)
-    }
-}
-
-impl Clone for FirstUse {
-    fn clone(&self) -> Self {
-        Self(AtomicBool::new(self.0.load(Ordering::Relaxed)))
-    }
 }
 
 /// The engine modes a pattern's source was compiled under.
@@ -305,9 +277,7 @@ impl CompiledPattern {
     /// anchored at an end of the haystack (`^http://example\.org/`,
     /// `[0-9]{3}$`, without `m`) has the positions next to its anchor compared
     /// with the haystack's first or last bytes, which answer it outright when
-    /// they are the whole pattern. The first match against a haystack shorter
-    /// than a kilobyte is the engine's alone, so a pattern used once pays for
-    /// no more than the engine does.
+    /// they are the whole pattern.
     ///
     /// # Examples
     ///
@@ -319,36 +289,8 @@ impl CompiledPattern {
     /// assert!(!pattern.is_match("no date here, only 2026"));
     /// ```
     #[must_use]
-    #[inline]
     pub fn is_match(&self, haystack: &str) -> bool {
-        // A pattern whose plan is the engine calls it from here, as a caller
-        // holding the `regex::Regex` would: routed through the plan's own
-        // dispatch, the engine's search was measured 16% slower on 70-byte
-        // IRIs (`^[a-z]+://`), its inner search loop no longer inlined.
-        match self.plan.get() {
-            Some(prefilter::Plan::Engine) => self.as_regex().is_match(haystack),
-            Some(plan) => self.is_match_by(plan, haystack),
-            None => self.is_match_unplanned(haystack),
-        }
-    }
-
-    /// [`is_match`](Self::is_match) before the plan is read: a first match
-    /// against a short haystack is the engine's alone, and any other reads
-    /// the plan.
-    #[inline(never)]
-    fn is_match_unplanned(&self, haystack: &str) -> bool {
-        if haystack.len() < PLAN_AFTER_BYTES && self.first_use.claim() {
-            return self.as_regex().is_match(haystack);
-        }
-        self.is_match_by(self.plan(), haystack)
-    }
-
-    /// [`is_match`](Self::is_match) by `plan`.
-    fn is_match_by(&self, plan: &prefilter::Plan, haystack: &str) -> bool {
-        match plan {
-            prefilter::Plan::Literal(needle) => needle.is_match(|| self.as_regex(), haystack),
-            plan => plan.is_match(self.as_regex(), haystack),
-        }
+        self.plan().is_match(|| self.as_regex(), haystack)
     }
 
     /// The match plan, read from the engine's source the first time it is
@@ -534,8 +476,7 @@ pub fn compile(pattern: &str, flags: &str) -> Result<CompiledPattern, XsdRegexEr
     // beyond the engine; any other is read from the engine's source when a
     // match first needs it. A literal's engine is built only when a caller
     // needs it: its matches are the literal's occurrences, which the plan
-    // finds, and building the engine was measured at ten times the rest of
-    // compiling `needle` (3.1 us of 3.4 us).
+    // finds without it.
     let (regex, deferred, plan) = match prepared.shape {
         emit::Shape::Literal(text) => (
             OnceLock::new(),
@@ -558,7 +499,6 @@ pub fn compile(pattern: &str, flags: &str) -> Result<CompiledPattern, XsdRegexEr
         deferred,
         is_literal,
         plan,
-        first_use: FirstUse::default(),
         modes,
     })
 }

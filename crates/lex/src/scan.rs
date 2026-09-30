@@ -446,10 +446,10 @@ fn merge_lanes(parts: [[u8; CHUNK]; BLOCK / CHUNK]) -> [u8; CHUNK] {
 /// Whether any lane of a chunk is set, read as one 128-bit word.
 ///
 /// A block's lanes are the OR of four chunks', and a horizontal maximum over
-/// them was measured to lower, once LLVM fuses the four compares into one wide
-/// compare, to a long extract-and-shuffle reduction per block: a pair search
-/// over 70-byte inputs took 60 µs per 4,096 inputs with the maximum and 39 µs
-/// with the word test, which is a register-width OR and a test on every target.
+/// them lowers, once LLVM fuses the four compares into one wide compare, to an
+/// extract-and-shuffle reduction per block; the word test is a register-width
+/// OR and a test on every target, about half the instructions of the
+/// maximum's block loop on x86-64 at the baseline, `v3` and `v4` levels.
 #[allow(
     clippy::inline_always,
     reason = "each public search is one monomorphic kernel: the shared body must be inlined \
@@ -748,12 +748,11 @@ fn find_pair_by<L: PositionTest, T: PositionTest>(
         clean_chunks += BLOCK / CHUNK;
     }
     // The hit chunk's offset, once per search, is the lowest bit of a mask of
-    // the lanes' top bits: the shape that lowers to `pmovmskb`/`vpmovb2m` and a
-    // trailing-zero count. Walking the lanes for the first non-zero one was
-    // measured to lower, on a mask-register target, to a long chain of bit
-    // tests (an unanchored `example\.org` over 4,096 70-byte IRIs: 38 us walking,
-    // 30 us with the mask), and reading them as one word spills them into a
-    // widening sequence on every chunk.
+    // the lanes' top bits: the shape that lowers to one `pmovmskb` (a mask
+    // register under AVX-512) and a trailing-zero count. Walking the lanes for
+    // the first non-zero one unrolls instead to a compare and branch per lane,
+    // and reading them as one word spills them into a widening sequence on
+    // every chunk.
     let first_hit = |lanes: &[u8; CHUNK]| {
         let bits = lanes
             .iter()
@@ -784,14 +783,6 @@ fn find_pair_by<L: PositionTest, T: PositionTest>(
                 .try_into()
                 .expect("a chunk of positions"),
         );
-        // A clean chunk is answered by the one word test, not by a walk of
-        // its lanes: on an input shorter than one block this chunk is the
-        // search's last step, and walking its lanes when none is set was
-        // measured at a sixth of an unanchored `example\.org` over 4,096
-        // 70-byte IRIs.
-        if !any_lane(&lanes) {
-            return None;
-        }
         return first_hit(&lanes).map(|i| last + i);
     }
     (done..positions).find(|&p| lead.test(bytes[p]) & trail.test(bytes[p + gap]) != 0)

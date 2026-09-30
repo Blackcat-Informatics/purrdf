@@ -697,9 +697,9 @@ impl Iterator for CanonicalBytes<'_> {
 /// caller streams both renderings, preserving exact behaviour there. A longer
 /// IRI's next byte is never `>` itself (it is escaped).
 ///
-/// Checking the whole of both IRIs instead was measured to cost `sh:pattern`
-/// validation of 1,024 focus nodes a fifth of its time, spent in the focus-node
-/// sort's comparisons.
+/// Checking the whole of both IRIs instead would scan both end to end on every
+/// comparison of the focus-node sort, where this reads them only up to their
+/// first difference.
 #[inline]
 fn cmp_rendered_iri(left: &[u8], right: &[u8]) -> Option<Ordering> {
     let shared = purrdf_deflate::common_prefix_len(left, right);

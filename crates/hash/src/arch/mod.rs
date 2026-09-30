@@ -23,9 +23,8 @@
 //!
 //! The one `unsafe` here that is not a kernel is [`encode_text`]: the base16
 //! digits the crate's encoder has just written are handed out as `str`
-//! without re-validating them as UTF-8, which cost more than the encoding
-//! itself on long inputs (the `hex` group of the `purrdf-hash-conformance`
-//! `digests` bench).
+//! without re-validating them as UTF-8, which would be a second pass over
+//! every digit the encoder just wrote.
 
 /// Writes the base16 rendering of `input` into `output` through
 /// [`crate::hex`]'s length switch, uppercase when `UPPER`, and returns it as
@@ -37,31 +36,12 @@
 /// must be written for the text to be what this returns.
 #[inline]
 pub(crate) fn encode_text<'o, const UPPER: bool>(input: &[u8], output: &'o mut [u8]) -> &'o str {
-    encode_text_with::<UPPER, false>(input, output)
-}
-
-/// [`encode_text`] for a rendering the caller copies out of `output` at once
-/// (a `Display` writing to a formatter): [`crate::hex::encode_bytes`] with its
-/// `DISPLAY` layout.
-#[inline]
-pub(crate) fn encode_text_display<'o, const UPPER: bool>(
-    input: &[u8],
-    output: &'o mut [u8],
-) -> &'o str {
-    encode_text_with::<UPPER, true>(input, output)
-}
-
-#[inline]
-fn encode_text_with<'o, const UPPER: bool, const DISPLAY: bool>(
-    input: &[u8],
-    output: &'o mut [u8],
-) -> &'o str {
     assert_eq!(
         output.len(),
         2 * input.len(),
         "a base16 rendering is two digits per input byte"
     );
-    crate::hex::encode_bytes::<UPPER, DISPLAY>(input, output);
+    crate::hex::encode_bytes::<UPPER>(input, output);
     debug_assert!(output.is_ascii());
     // SAFETY: `encode_bytes` writes every byte of `output` (checked above to
     // be exactly two per input byte), and every path it runs writes only

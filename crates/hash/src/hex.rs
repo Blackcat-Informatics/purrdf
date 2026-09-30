@@ -53,18 +53,11 @@
 //! baseline x86-64 SSE2 included. It is the one body per length class:
 //!
 //! * up to [`SHORT_MAX`] bytes (every SHA-1, SHA-256 and BLAKE3 digest), the
-//!   loop runs inline at the call site with no dispatch — it measured at
-//!   least as fast as every vector kernel through 32 bytes;
+//!   loop runs inline at the call site with no dispatch: no indirect call
+//!   and no selected-path lookup for the rendering of a digest;
 //! * longer inputs run [`HexBackend::selected`](crate::backend::HexBackend):
-//!   SSSE3 `pshufb` on x86-64 below AVX-512BW, the loop itself in an
-//!   AVX-512BW build (where it packs 64 bytes per compare and measured
-//!   faster than the 16-byte kernel), NEON `tbl` on AArch64 and wasm
+//!   SSSE3 `pshufb` on x86-64, NEON `tbl` on AArch64 and wasm
 //!   `i8x16.swizzle` in a `simd128` build; each kernel's tail is the loop.
-//!
-//! [`Lower`] and [`Upper`] differ from the one-shot entry points in one case:
-//! in an AVX-512BW build a 33..63-byte rendering runs the loop as a 32-byte head
-//! and a tail (`DISPLAY_WIDE`), because the loop's 64-byte vector step would
-//! leave almost all of it to its byte-by-byte remainder.
 //!
 //! The `hex` group of the `purrdf-hash-conformance` `digests` bench measures
 //! each path and each public entry point at 8 B to 4 KiB. Every path writes
@@ -207,32 +200,13 @@ pub(crate) fn encode_portable(input: &[u8], output: &mut [u8], upper: bool) {
     }
 }
 
-/// The input length, in bytes, from which an AVX-512BW build's rendering for a
-/// `Display` is the selected path's; below it (and above [`SHORT_MAX`]) the
-/// compare-select loop runs as a fixed 32-byte head and a shorter tail.
-///
-/// The selected path there is the loop itself, whose widest vector step is 64
-/// input bytes and whose remainder runs byte by byte, so a 33..63-byte input
-/// would run almost entirely in the remainder. Split at [`SHORT_MAX`], each
-/// half is a loop the compiler vectorizes whole.
-const DISPLAY_WIDE: usize = 64;
-
 /// The length switch: short inputs inline, longer ones on the selected path.
 /// `output` is exactly twice as long as `input`.
 #[inline]
-pub(crate) fn encode_bytes<const UPPER: bool, const DISPLAY: bool>(
-    input: &[u8],
-    output: &mut [u8],
-) {
+pub(crate) fn encode_bytes<const UPPER: bool>(input: &[u8], output: &mut [u8]) {
     debug_assert_eq!(output.len(), 2 * input.len());
     if input.len() <= SHORT_MAX {
         encode_scalar::<UPPER>(input, output);
-    } else if DISPLAY && cfg!(target_feature = "avx512bw") && input.len() < DISPLAY_WIDE {
-        // See `DISPLAY_WIDE`: a 32-byte head, then the rest.
-        let (head, tail) = input.split_at(SHORT_MAX);
-        let (out_head, out_tail) = output.split_at_mut(2 * SHORT_MAX);
-        encode_scalar::<UPPER>(head, out_head);
-        encode_scalar::<UPPER>(tail, out_tail);
     } else {
         (selected_encode())(input, output, UPPER);
     }
@@ -241,9 +215,9 @@ pub(crate) fn encode_bytes<const UPPER: bool, const DISPLAY: bool>(
 /// The encoder of [`HexBackend::selected`], chosen once.
 ///
 /// Selection walks every path's availability check (a feature-detection read
-/// each) and filters the result, which costs more than encoding a 64-byte
-/// digest; the answer cannot change for the life of the process, so it is
-/// resolved on first use and read back as one atomic load.
+/// each) and filters the result; the answer cannot change for the life of
+/// the process, so it is resolved on first use and read back as one atomic
+/// load.
 #[inline]
 fn selected_encode() -> HexEncode {
     static SELECTED: OnceLock<HexEncode> = OnceLock::new();
@@ -316,7 +290,7 @@ fn write_chars<const UPPER: bool>(
         if limit == 0 {
             break;
         }
-        let text = crate::arch::encode_text_display::<UPPER>(chunk, &mut buffer[..2 * chunk.len()]);
+        let text = crate::arch::encode_text::<UPPER>(chunk, &mut buffer[..2 * chunk.len()]);
         // Every character is one ASCII byte, so any prefix is a `str`.
         let take = text.len().min(limit);
         f.write_str(&text[..take])?;

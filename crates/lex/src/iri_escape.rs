@@ -170,8 +170,8 @@ pub fn find_first_candidate(bytes: &[u8]) -> Option<usize> {
 ///
 /// The one-byte form of the same class, for a caller that has already found
 /// the one position that matters (the first byte at which two IRIs differ) and
-/// asks only about the bytes of its scalar, where a scan's set-up would cost
-/// more than the question.
+/// asks only about the bytes of its scalar: a table read per byte, with no
+/// scan around it.
 ///
 /// ```
 /// use purrdf_lex::iri_escape::is_candidate;
