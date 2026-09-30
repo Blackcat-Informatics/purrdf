@@ -80,9 +80,9 @@ inline-sequentially on wasm, so that build is slower but not different.
 
 `HnswIndex` is generic over its distance arithmetic, `HnswIndex<A = Exact>`, and
 everything above describes the exact default. Every constructor is generic over
-the sealed `IndexArithmetic` family: `purrdf_hnsw::build::<Reassociated>` (or its
-named spelling `HnswIndex::build_reassociated`) builds the same algorithm as a separate
-type, `HnswIndex<Reassociated>`, whose distances run through
+the sealed `IndexArithmetic` family: `purrdf_hnsw::build::<Reassociated>` builds
+the same algorithm as a separate type, `HnswIndex<Reassociated>`, whose distances
+run through
 `purrdf_core::distance::Reassociated`: sums may be reassociated and contracted to
 fused multiply-add along the dispatch path the build resolves, the widest this
 process runs.

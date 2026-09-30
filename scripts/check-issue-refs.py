@@ -452,7 +452,6 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
         ("crates/gts/src/compact.rs", "Task 6"),
         ("crates/gts/tests/compaction_signatures.rs", "Task 4"),
         ("crates/rdf-core/benches/ir_layout.rs", "Task 7"),
-        ("crates/rdf-core/src/diagnostic.rs", "Task 12"),
         ("crates/rdf-core/src/ir/global.rs", "Task 4"),
         ("crates/rdf-core/src/sssom.rs", "Task 7"),
         ("crates/rdf-core/tests/paged_backend.rs", "(F1)"),

@@ -392,8 +392,9 @@ impl<A: Arithmetic> HnswSpace<A> {
 /// [`Volatility::Stable`]: the graph is frozen and every distance is a pure function of two
 /// of its rows computed by a shared kernel under the index's arithmetic. Under [`Exact`] an
 /// invocation's rows are the same on the main thread, on a fork-join worker, and on
-/// `wasm32-unknown-unknown`; under [`Reassociated`] they are the same wherever this process
-/// runs the dispatch path the index recorded, and a process that cannot run it is refused.
+/// `wasm32-unknown-unknown`; under [`Reassociated`](purrdf_core::distance::Reassociated)
+/// they are the same wherever this process runs the dispatch path the index recorded, and
+/// a process that cannot run it is refused.
 #[derive(Debug, Clone)]
 pub struct HnswRelation<A: Arithmetic = Exact> {
     /// The space every invocation searches.
@@ -591,8 +592,8 @@ impl<A: Arithmetic> HnswRelation<A> {
     /// # The arithmetic enters both axes
     ///
     /// The space's evidence is the one the profile publishes for its index's arithmetic
-    /// and dispatch path, so under [`Reassociated`] the completeness axis carries the
-    /// reassociated sentence verbatim. And a law whose bits depend on the dispatch path
+    /// and dispatch path, so under [`Reassociated`](purrdf_core::distance::Reassociated)
+    /// the completeness axis carries the reassociated sentence verbatim. And a law whose bits depend on the dispatch path
     /// perturbs the order: near-tied rows may order differently from the exact distances,
     /// so the order axis is composed with [`OrderFidelity::Perturbed`] carrying that
     /// arithmetic's own evidence -- the words the reassociated kNN relation carries, so a

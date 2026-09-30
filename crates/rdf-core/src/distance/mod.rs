@@ -153,6 +153,9 @@
 //! thread calls [`Selected::resolve`] and passes the same check.
 
 pub(crate) mod binary64;
+/// The build identity's text encoder. The crate's build script compiles this same
+/// file through `#[path]`, so each of its functions exists once in source and twice
+/// in the build: a build script cannot link the library it is building.
 mod build_identity;
 mod dispatch;
 mod env;

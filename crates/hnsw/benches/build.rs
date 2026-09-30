@@ -128,9 +128,12 @@ fn main() {
 
         let vectors = matrix(scale, dims);
         let start = Instant::now();
-        let index =
-            HnswIndex::build_reassociated(vectors, &DistanceMetric::SquaredEuclidean, params)
-                .expect("the generated corpus builds");
+        let index = purrdf_hnsw::build::<purrdf_core::distance::Reassociated>(
+            vectors,
+            &DistanceMetric::SquaredEuclidean,
+            params,
+        )
+        .expect("the generated corpus builds");
         let build = start.elapsed();
         let arithmetic = format!("reassociated/{}", index.arithmetic().path());
         report(

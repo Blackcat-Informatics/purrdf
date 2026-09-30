@@ -360,6 +360,9 @@ pub(crate) fn byte_entries(
 
 /// `value` after `validate` accepts it.
 ///
+/// The one validate-then-return of every validating projection-config constructor;
+/// each constructor keeps only its own field list and its own `validate`.
+///
 /// # Errors
 ///
 /// Returns `validate`'s refusal.

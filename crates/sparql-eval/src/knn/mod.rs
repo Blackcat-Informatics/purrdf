@@ -1142,17 +1142,7 @@ impl EmbeddingKnnRelation {
     /// A nearest-neighbour relation over `space`, ranking under the [`Exact`] arithmetic.
     #[must_use]
     pub fn new(space: Arc<EmbeddingSpace>) -> Self {
-        Self {
-            space,
-            modes: [
-                BindingPattern::from_code(KNN_MODE),
-                BindingPattern::from_code(KNN_MEMBERSHIP_MODE),
-            ],
-            declared: None,
-            scan: EmbeddingSpace::search::<Exact>,
-            lookup: EmbeddingSpace::row_distance::<Exact>,
-            observations: Arc::new(KnnObservations::default()),
-        }
+        Self::over(space, None)
     }
 
     /// The flattened argument position of `?neighbour`, the retrieved term.
@@ -1186,21 +1176,31 @@ impl EmbeddingKnnRelation<Reassociated> {
     /// refuses it.
     pub fn new_reassociated(space: Arc<EmbeddingSpace>) -> Result<Self, EvalError> {
         let resolved = Reassociated::resolve().map_err(EvalError::FloatEnvironment)?;
-        Ok(Self {
+        Ok(Self::over(space, Some(resolved.selected())))
+    }
+}
+
+impl<A: Arithmetic> EmbeddingKnnRelation<A> {
+    /// The relation over `space` under `A`, with `declared` the dispatch path it
+    /// selected at construction (`None` for an arithmetic that selects per search).
+    ///
+    /// The one assembly both public constructors share. It stays private and is called
+    /// only from them, at a concrete `A`, so the [`Scan`] and [`Lookup`] it takes are
+    /// instantiated in this crate.
+    fn over(space: Arc<EmbeddingSpace>, declared: Option<Selected<A>>) -> Self {
+        Self {
             space,
             modes: [
                 BindingPattern::from_code(KNN_MODE),
                 BindingPattern::from_code(KNN_MEMBERSHIP_MODE),
             ],
-            declared: Some(resolved.selected()),
-            scan: EmbeddingSpace::search::<Reassociated>,
-            lookup: EmbeddingSpace::row_distance::<Reassociated>,
+            declared,
+            scan: EmbeddingSpace::search::<A>,
+            lookup: EmbeddingSpace::row_distance::<A>,
             observations: Arc::new(KnnObservations::default()),
-        })
+        }
     }
-}
 
-impl<A: Arithmetic> EmbeddingKnnRelation<A> {
     /// The space this relation searches.
     #[must_use]
     pub fn space(&self) -> &EmbeddingSpace {

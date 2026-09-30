@@ -19,7 +19,10 @@
 //!   arity one "group", which is shape, not shared functionality.
 //! * The **shim form** renames only the function's own parameters and keeps every
 //!   other identifier and literal verbatim, so two thin forwarders collide exactly
-//!   when they forward to the same target with the same fixed arguments.
+//!   when they spell the same target with the same fixed arguments. The target is
+//!   compared as written, not resolved: `Self::new(value)` in two types, or
+//!   `read_with(text, Limits::DEFAULT)` in two modules, spell the same and forward
+//!   to different items.
 //!
 //! A fingerprint id is `<kind>:<16 lowercase hex digits>`, the first eight bytes of
 //! the BLAKE3 digest of the normal form.
@@ -174,6 +177,14 @@ pub(crate) fn structural_form(
 }
 
 /// The shim form of `stream`: parameters renamed, everything else verbatim.
+///
+/// A path is kept as spelt, so `Self::…` and a module-local callee name whatever
+/// the enclosing type or module holds. A constructor of one type therefore shares
+/// its form with every other type's constructor of the same spelling: `Self(Vec::new())`,
+/// `Self::new(value)`, `Self(iter.into_iter().collect())`, or a field-wise
+/// `Self { a: a.into(), b: b.into() }` whose parameters are named after the fields.
+/// Such constructors of unrelated types share a shape and no job: each builds its
+/// own type.
 fn shim_form(
     stream: &TokenStream,
     params: &BTreeSet<String>,

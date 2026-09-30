@@ -20,7 +20,13 @@ replaces, and the sanctioned second implementations (variants). This gate runs
   ``body:``/``shim:`` fingerprint that matches nothing, or a job marked
   ``enforced = false`` that has no copies left;
 * for an ``enforced`` job, a forbidden match outside the home crate that is not a
-  variant.
+  variant;
+* an isomorphic body or shim group that neither an ``isomorphic`` variant nor a
+  ``[[distinct]]`` row sanctions. A ``[[distinct]]`` row sanctions the one group
+  of its ``kind`` whose member set equals its ``members``: a group that gains a
+  member is reported again. A row whose members are no longer all defined, or
+  that equals no current group, is STALE, and its ``anchor`` must resolve to a
+  documented item.
 
 A job may also forbid a rule another gate computes (``DELEGATED_RULES``):
 ``rule:raw-hash-domain`` and ``rule:shared-hash-domain`` are
@@ -323,6 +329,41 @@ def ledger_findings(
                         f"FAIL: job `{job_id}`: {found['symbol']} ({found['file']}:{found['line']}) re-derives "
                         f"the job outside its home `{census['home']}`: {', '.join(found['reasons'])}"
                     )
+    findings.extend(group_findings(ledger, index))
+    return findings
+
+
+def group_findings(ledger: dict, index: dict) -> list[str]:
+    """The isomorphic-group rule and every ``[[distinct]]`` row's failures."""
+    findings: list[str] = []
+    symbols = index["symbols"]
+    rows = [(row["kind"], tuple(sorted(row["members"]))) for row in ledger.get("distinct", [])]
+    matched: set[tuple[str, tuple[str, ...]]] = set()
+    for group in index["groups"]:
+        key = (group["kind"], tuple(sorted(group["members"])))
+        if key in rows:
+            matched.add(key)
+        elif not group["variant_sanctioned"]:
+            findings.append(
+                f"FAIL: isomorphic {group['kind']} group {group['fingerprint']} is sanctioned by no "
+                f"variant or [[distinct]] row: {', '.join(group['members'])}"
+            )
+    for row, key in zip(ledger.get("distinct", []), rows):
+        where = f"[[distinct]] {key[0]} [{', '.join(key[1])}]"
+        missing = [
+            member for member in key[1] if symbols.get(member) is None or symbols[member]["symbol"] != member
+        ]
+        if missing:
+            findings.append(f"FAIL: {where}: STALE, member {', '.join(missing)} no longer exists; remove the row")
+        elif key not in matched:
+            findings.append(
+                f"FAIL: {where}: STALE, no current {key[0]} group has exactly these members; remove or correct the row"
+            )
+        anchor = symbols.get(row["anchor"])
+        if anchor is None:
+            findings.append(f"FAIL: {where}: anchor `{row['anchor']}` does not resolve")
+        elif not anchor["documented"]:
+            findings.append(f"FAIL: {where}: anchor `{row['anchor']}` carries no documentation")
     return findings
 
 
@@ -1283,6 +1324,7 @@ def fixture_index() -> dict:
             }
         },
         "grouped_variants": [],
+        "groups": [],
         "errors": [],
     }
 
@@ -1304,6 +1346,57 @@ def mutated(change) -> tuple[dict, dict]:
     ledger, index = fixture_ledger(), fixture_index()
     change(ledger, index)
     return ledger, index
+
+
+def distinct_fixture(members: list[str], anchor_documented: bool = True, grown: bool = False) -> list[str]:
+    """The fixture ledger with one ``[[distinct]]`` row over ``members``, judged
+    against one body group of ``other::v`` and ``third::w`` (and ``fourth::x``
+    when ``grown``)."""
+    ledger, index = fixture_ledger(), fixture_index()
+    ledger["distinct"] = [
+        {"members": members, "kind": "body", "criterion": "b", "anchor": "third::w", "reason": "r"}
+    ]
+    group = ["other::v", "third::w"] + (["fourth::x"] if grown else [])
+    for member in ("third::w", "fourth::x"):
+        index["symbols"][member] = {
+            "symbol": member,
+            "file": f"crates/{member.split('::')[0]}/src/lib.rs",
+            "line": 1,
+            "module": member.split("::")[0],
+            "package": member.split("::")[0],
+            "documented": anchor_documented or member != "third::w",
+        }
+    index["groups"] = [{"kind": "body", "fingerprint": "body:00", "members": group, "variant_sanctioned": False}]
+    return run_fixture(ledger, index)
+
+
+def distinct_fixture_cases() -> list[tuple[str, bool]]:
+    exact = distinct_fixture(["third::w", "other::v"])
+    grown = distinct_fixture(["third::w", "other::v"], grown=True)
+    stale = distinct_fixture(["other::v", "fourth::x"])
+    gone = distinct_fixture(["other::v", "gone::y"])
+    undocumented = distinct_fixture(["third::w", "other::v"], anchor_documented=False)
+    return [
+        ("a [[distinct]] row naming exactly its group's members sanctions it", exact == []),
+        (
+            "a group that gains a member its [[distinct]] row does not name fails, and the row is STALE",
+            len(grown) == 2
+            and any("fourth::x" in finding and "sanctioned by no" in finding for finding in grown)
+            and any("STALE" in finding for finding in grown),
+        ),
+        (
+            "a [[distinct]] row that equals no current group is STALE, and the group still fails",
+            len(stale) == 2 and any("STALE, no current body group" in finding for finding in stale),
+        ),
+        (
+            "a [[distinct]] row naming a member that no longer exists is STALE",
+            any("STALE, member gone::y no longer exists" in finding for finding in gone),
+        ),
+        (
+            "a [[distinct]] row whose anchor carries no documentation fails",
+            len(undocumented) == 1 and "carries no documentation" in undocumented[0],
+        ),
+    ]
 
 
 def self_test() -> int:
@@ -1487,6 +1580,7 @@ def self_test() -> int:
         "carries no documentation",
     )
 
+    cases.extend(distinct_fixture_cases())
     cases.extend(rule_fixture_cases())
     cases.extend(literal_fixture_cases())
     cases.extend(hex_rule_fixture_cases())
@@ -1571,7 +1665,8 @@ def main() -> int:
     open_copies = sum(index["jobs"][job["id"]]["copies"] for job in jobs if not job["enforced"])
     print(
         f"OK: {len(jobs)} ledger jobs hold ({enforced} enforced, {variants} reasoned variants, "
-        f"{open_copies} copies still open in unenforced jobs); no #[path] include leaves its crate "
+        f"{open_copies} copies still open in unenforced jobs); {len(ledger.get('distinct', []))} "
+        "[[distinct]] rows each equal one group; no #[path] include leaves its crate "
         f"({len(files)} files)"
     )
     return 0

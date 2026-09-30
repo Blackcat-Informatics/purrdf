@@ -1280,10 +1280,10 @@ under Changed and Fixed where a longer account helps.
   `composed_order_fidelity` has one implementation, here, and `purrdf-hnsw`
   re-exports it at its old path.
 
-- **hnsw:** a reassociated HNSW index. `HnswIndex::build_reassociated`,
-  `HnswIndex::decode_reassociated`, `HnswSpace::from_artifact_reassociated`,
-  `guard::load_reassociated` and the crate-level `build_reassociated` construct
-  it. Each one refuses the other arithmetic's image codes. The image records the
+- **hnsw:** a reassociated HNSW index. `build::<Reassociated>`,
+  `HnswIndex::<Reassociated>::decode`, `HnswSpace::<Reassociated>::from_artifact`
+  and `guard::load::<Reassociated>` construct it: each constructor is one body,
+  generic over the sealed `IndexArithmetic` family. Each one refuses the other arithmetic's image codes. The image records the
   dispatch path that built it, and decode, rebuild verification and search run
   that path, not the widest one: an image built on the sse2 or avx2+fma path runs
   on that path on an avx512f processor. Only a path the process cannot run

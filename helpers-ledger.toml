@@ -73,6 +73,23 @@
 #   anchor    = the documented item that states the reason; it must resolve and
 #               carry documentation.
 #   reason    = the reason, in one or two sentences.
+#
+# [[distinct]] — a set of items that share a body or forwarder shape and share no
+# job, so no [[job.variant]] can name them. Each row sanctions exactly one group:
+# the census group of its `kind` whose member set EQUALS `members`. A group that
+# gains a member is reported again, so a new clone of a sanctioned shape still
+# fails; a row that equals no current group, or names a member that is no longer
+# defined, is STALE and fails. Every key is required.
+#   members   = the group's members, `crate::path::item`, as `--check` names them;
+#               two or more. A symbol two members share (two trait impls on one
+#               type) is listed once per member.
+#   kind      = `body` (an isomorphic-bodies group) or `shim` (an isomorphic-shims
+#               group).
+#   criterion = why the members stay apart, as for a variant: `a`, `b`, `c` or
+#               `layering`.
+#   anchor    = the documented item that states the reason; it must resolve and
+#               carry documentation.
+#   reason    = the reason, in one or two sentences.
 
 [[job]]
 id = "iri-reference-resolution"
@@ -1268,3 +1285,374 @@ enforced = true
 constants = []
 fingerprints = []
 names = ['^(curie_prefix_of|namespace_and_local|split_iri_local)$']
+
+[[distinct]]
+members = [
+    "purrdf_core::distance::build_identity::compiler_text",
+    "purrdf_core::build_script::build_identity::compiler_text",
+]
+kind = "body"
+criterion = "layering"
+anchor = "purrdf_core::distance::build_identity"
+reason = "The build script compiles the library's own `distance/build_identity.rs` through `#[path]`, because a build script cannot link the crate it builds; the two members are one source compiled twice, so the text a build records and the text the encoder computes cannot drift."
+
+[[distinct]]
+members = [
+    "purrdf_core::distance::build_identity::Flags::features",
+    "purrdf_core::build_script::build_identity::Flags::features",
+]
+kind = "body"
+criterion = "layering"
+anchor = "purrdf_core::distance::build_identity"
+reason = "The build script compiles the library's own `distance/build_identity.rs` through `#[path]`, because a build script cannot link the crate it builds; the two members are one source compiled twice, so the text a build records and the text the encoder computes cannot drift."
+
+[[distinct]]
+members = [
+    "purrdf_core::distance::build_identity::target_cpu",
+    "purrdf_core::build_script::build_identity::target_cpu",
+]
+kind = "body"
+criterion = "layering"
+anchor = "purrdf_core::distance::build_identity"
+reason = "The build script compiles the library's own `distance/build_identity.rs` through `#[path]`, because a build script cannot link the crate it builds; the two members are one source compiled twice, so the text a build records and the text the encoder computes cannot drift."
+
+[[distinct]]
+members = [
+    "purrdf_core::distance::build_identity::Flags::set",
+    "purrdf_core::build_script::build_identity::Flags::set",
+]
+kind = "body"
+criterion = "layering"
+anchor = "purrdf_core::distance::build_identity"
+reason = "The build script compiles the library's own `distance/build_identity.rs` through `#[path]`, because a build script cannot link the crate it builds; the two members are one source compiled twice, so the text a build records and the text the encoder computes cannot drift."
+
+[[distinct]]
+members = [
+    "purrdf_core::distance::build_identity::Flags::of",
+    "purrdf_core::build_script::build_identity::Flags::of",
+]
+kind = "body"
+criterion = "layering"
+anchor = "purrdf_core::distance::build_identity"
+reason = "The build script compiles the library's own `distance/build_identity.rs` through `#[path]`, because a build script cannot link the crate it builds; the two members are one source compiled twice, so the text a build records and the text the encoder computes cannot drift."
+
+[[distinct]]
+members = [
+    "purrdf_core::distance::build_identity::currently",
+    "purrdf_core::build_script::build_identity::currently",
+]
+kind = "body"
+criterion = "layering"
+anchor = "purrdf_core::distance::build_identity"
+reason = "The build script compiles the library's own `distance/build_identity.rs` through `#[path]`, because a build script cannot link the crate it builds; the two members are one source compiled twice, so the text a build records and the text the encoder computes cannot drift."
+
+[[distinct]]
+members = [
+    "purrdf_core::distance::build_identity::version_line",
+    "purrdf_core::build_script::build_identity::version_line",
+]
+kind = "shim"
+criterion = "layering"
+anchor = "purrdf_core::distance::build_identity"
+reason = "The build script compiles the library's own `distance/build_identity.rs` through `#[path]`, because a build script cannot link the crate it builds; the two members are one source compiled twice, so the text a build records and the text the encoder computes cannot drift."
+
+[[distinct]]
+members = [
+    "purrdf_gts::model::Graph::reifier",
+    "purrdf_rdf::native_codecs::ser_model::SerGraph::reifier",
+]
+kind = "body"
+criterion = "layering"
+anchor = "purrdf_rdf::native_codecs::ser_model::SerGraph"
+reason = "The native codec's serialization model may not depend on the GTS crate (tests/gts_codec_hygiene.rs), so it keeps its own first-row reifier lookup over the same row shape as the GTS model's."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::constraints::ValueNode::to_term",
+    "purrdf_shapes::engine::FocusNode::to_term",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_shapes::constraints::ValueNode"
+reason = "A value node's `Foreign` arm keeps a node-expression term verbatim even when the dataset interns it, while a focus node is `Foreign` only when the dataset does not intern its term; the two enums share arms, not a guarantee, so each keeps its own accessor."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::constraints::ValueNode::interned",
+    "purrdf_shapes::engine::FocusNode::id",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_shapes::constraints::ValueNode"
+reason = "A value node's `Foreign` arm keeps a node-expression term verbatim even when the dataset interns it, while a focus node is `Foreign` only when the dataset does not intern its term; the two enums share arms, not a guarantee, so each keeps its own accessor."
+
+[[distinct]]
+members = [
+    "purrdf_text::index::TextIndex::field_postings",
+    "purrdf_text::index::TextIndex::postings",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_text::index::TextIndex::field_postings"
+reason = "Both project the one shared posting walk, `partition_postings`: one yields the per-predicate frequencies BM25F field scoring reads, the other the token positions phrase and proximity matching read."
+
+[[distinct]]
+members = [
+    "purrdf_native::py_store::query::PyCancellationToken::new",
+    "purrdf_wasm::async_query::ServiceCatalog::new",
+    "purrdf_wasm::factory::DataFactory::new",
+    "purrdf_wasm::query::CancellationToken::new",
+    "purrdf_wasm::query::QueryEngine::new",
+    "purrdf_wasm::stream::Sink::new",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_wasm::factory::DataFactory::new"
+reason = "`#[wasm_bindgen(constructor)]` and PyO3's `#[new]` export only a function written in the annotated impl block, so each exported type's constructor is a one-line call of its own `Default`."
+
+[[distinct]]
+members = [
+    "purrdf_core::bundle::UnitMetadata::new",
+    "purrdf_shapes::error::PrebindingViolation::new",
+    "purrdf_slice::cache::ToolchainContext::new",
+    "purrdf_sparql_eval::eval::StandpointPredicates::new",
+]
+kind = "shim"
+criterion = "b"
+anchor = "helper_census::normalize::shim_form"
+reason = "Field-wise constructors of four unrelated types, each moving two `impl Into<String>` arguments into its own two fields; they share the spelling of a struct literal, not a computation."
+
+[[distinct]]
+members = [
+    "purrdf_core::distance::dispatch::avx2::distance_bounded",
+    "purrdf_core::distance::dispatch::avx512f::distance_bounded",
+    "purrdf_core::distance::dispatch::portable::distance_bounded",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_core::distance::dispatch::avx2"
+reason = "The portable, AVX2 and AVX-512F wrappers are separate compilations of the one generic body under their own target features, and each is a symbol scripts/simd-asm-manifest.toml pins and measures for its path."
+
+[[distinct]]
+members = [
+    "purrdf_core::distance::dispatch::avx2::distances_indexed",
+    "purrdf_core::distance::dispatch::avx512f::distances_indexed",
+    "purrdf_core::distance::dispatch::portable::distances_indexed",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_core::distance::dispatch::avx2"
+reason = "The portable, AVX2 and AVX-512F wrappers are separate compilations of the one generic body under their own target features, and each is a symbol scripts/simd-asm-manifest.toml pins and measures for its path."
+
+[[distinct]]
+members = [
+    "purrdf_core::distance::dispatch::avx2::distance",
+    "purrdf_core::distance::dispatch::avx512f::distance",
+    "purrdf_core::distance::dispatch::portable::distance",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_core::distance::dispatch::avx2"
+reason = "The portable, AVX2 and AVX-512F wrappers are separate compilations of the one generic body under their own target features, and each is a symbol scripts/simd-asm-manifest.toml pins and measures for its path."
+
+[[distinct]]
+members = [
+    "purrdf_core::distance::dispatch::avx2::distances",
+    "purrdf_core::distance::dispatch::avx512f::distances",
+    "purrdf_core::distance::dispatch::portable::distances",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_core::distance::dispatch::avx2"
+reason = "The portable, AVX2 and AVX-512F wrappers are separate compilations of the one generic body under their own target features, and each is a symbol scripts/simd-asm-manifest.toml pins and measures for its path."
+
+[[distinct]]
+members = [
+    "purrdf_lex::walk::Nested::from",
+    "purrdf_retrieval::iri::Term::from",
+    "purrdf_retrieval::plan::StatisticsEntries::try_from",
+]
+kind = "shim"
+criterion = "b"
+anchor = "helper_census::normalize::shim_form"
+reason = "Each conversion forwards to its own type's `new`, the one constructor that type's invariant lives in; `Self::new(value)` names a different function in each."
+
+[[distinct]]
+members = [
+    "purrdf_iri::base::BaseScope::empty",
+    "purrdf_sparql_algebra::tree::Args::new",
+]
+kind = "shim"
+criterion = "b"
+anchor = "helper_census::normalize::shim_form"
+reason = "The empty value of two unrelated newtypes over a `Vec`, a base-resolution scope and an algebra argument list; they share the spelling `Self(Vec::new())`, not a job."
+
+[[distinct]]
+members = [
+    "purrdf_deflate::gzip::decompress",
+    "purrdf_deflate::inflate::decompress",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_deflate::gzip::decompress"
+reason = "Default-limit entry points of two formats, gzip members (RFC 1952) and a raw DEFLATE stream (RFC 1951), each forwarding to its own module's `decompress_with_limit`."
+
+[[distinct]]
+members = [
+    "purrdf_core::content_id::Blake3ContentId::from_raw",
+    "purrdf_core::content_store::ContentDigest::from_raw",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_core::content_id::Blake3ContentId"
+reason = "The BLAKE3 GTS reference domain and the SHA-256 blob-store domain are separate types so a digest of one algorithm can never stand for the other; each wraps raw bytes as its own type."
+
+[[distinct]]
+members = [
+    "purrdf_core::ir::embedding::wire::SectionDescriptor::new",
+    "purrdf_core::ir::embedding::wire::SectionPayload::new",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_core::ir::embedding::wire::SectionDescriptor"
+reason = "A payload owns its encoded bytes and a descriptor carries only the length of bytes streamed later; each constructor keys its own record by the shared `SectionKey`."
+
+[[distinct]]
+members = [
+    "purrdf_core::sink::DrainError::new",
+    "purrdf_shapes::product::error::ShapesProductError::new",
+]
+kind = "shim"
+criterion = "b"
+anchor = "helper_census::normalize::shim_form"
+reason = "Field-wise constructors of two unrelated error types, a sink drain failure and a shapes product refusal, each pairing its own classification with a message."
+
+[[distinct]]
+members = [
+    "purrdf_core::dataset_view::DatasetView::annotation_quads",
+    "purrdf_core::dataset_view::DatasetView::reifier_quads",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_core::dataset_view::DatasetView::annotation_quads"
+reason = "Capability-gated defaults of two separate side tables, annotations and reifier bindings: a backend without the layer yields nothing, and a backend with one overrides each method on its own."
+
+[[distinct]]
+members = [
+    "purrdf_lex::json::read::read",
+    "purrdf_lex::yaml::read::read",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_lex::yaml::read::read"
+reason = "Default-limit entry points of two grammars, JSON and YAML 1.2, each forwarding to its own module's `read_with`."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::error::IllFormedDeclaration::new",
+    "purrdf_sparql_eval::service::ServiceDenial::new",
+]
+kind = "shim"
+criterion = "b"
+anchor = "helper_census::normalize::shim_form"
+reason = "Field-wise constructors of two unrelated types, a SHACL declaration syntax violation and a SERVICE capability denial, each moving its own three fields into place."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::projections::okf::config::OkfFrontmatterMappings::new",
+    "purrdf_rdf::projections::okf::config::OkfLinkSection::new",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_rdf::projections::util::validated"
+reason = "Both already call the one validate-then-return, `validated`; what remains in each is its own type's field list and its own `validate`."
+
+[[distinct]]
+members = [
+    "purrdf_json::profile::Vocabulary::standard",
+    "purrdf_markdown::profile::Vocabulary::standard",
+]
+kind = "shim"
+criterion = "layering"
+anchor = "purrdf_markdown::profile::Vocabulary::standard"
+reason = "Each codec crate names its own vocabulary under its own designated namespace; the JSON and Markdown codecs are siblings that cannot reach each other, and the two types share only the `Self::under(STANDARD_NAMESPACE)` spelling."
+
+[[distinct]]
+members = [
+    "purrdf_core::diagnostic::RdfLocation::file",
+    "purrdf_core::diagnostic::RdfLocation::logical",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_core::diagnostic::RdfLocation::file"
+reason = "The two constructors set different fields of a location, the physical file path SARIF records and the logical label."
+
+[[distinct]]
+members = [
+    "purrdf_columnar::plain_bench::PlainInt64::from_rows",
+    "purrdf_sparql_algebra::tree::Args::from_iter",
+]
+kind = "shim"
+criterion = "b"
+anchor = "helper_census::normalize::shim_form"
+reason = "Collecting constructors of two unrelated newtypes, a plain benchmark column and an algebra argument list; they share the spelling `Self(iter.into_iter().collect())`, not a job."
+
+[[distinct]]
+members = [
+    "purrdf_hash::arch::aarch64::sha1_blocks",
+    "purrdf_hash::arch::x86_64::sha1_blocks",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_hash::arch::x86_64::sha1_blocks"
+reason = "Per-architecture safe entries, each around its own module's SHA-1 kernel (SHA-NI on x86_64, the Armv8 SHA1 instructions on aarch64), the kernels scripts/simd-asm-manifest.toml pins."
+
+[[distinct]]
+members = [
+    "purrdf_lex::json::record::DecodeError::from",
+    "purrdf_lex::json::record::DecodeError::from",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_lex::json::record::DecodeError::custom"
+reason = "Two `From` impls on one error type for different sources, the lex reader's `Error` and the rdf projections' `ProjectionError`, both routed through the one `DecodeError::custom`."
+
+[[distinct]]
+members = [
+    "purrdf_core::ir::paged::provider::CountingDemandProvider::new",
+    "purrdf_core::ir::paged::provider::InMemoryPageProvider::new",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_core::ir::paged::provider::CountingDemandProvider::new"
+reason = "Initial-generation shims of two page providers, frozen pages and per-page rebuild thunks, each forwarding to its own type's `with_generation`."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::projections::okf::mapping::project_okf_terms",
+    "purrdf_rdf::projections::skos::mapping::project_skos",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_rdf::projections::skos::mapping::project_skos"
+reason = "The public entry points of two projections, OKF bundles and SKOS views, each running its own module's `Projector` under its own configuration."
+
+[[distinct]]
+members = [
+    "purrdf_shex::lexer::tokenize",
+    "purrdf_sparql_algebra::lexer::tokenize",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_shex::lexer::tokenize"
+reason = "The ShExC and SPARQL grammars have different terminals, so each crate's `tokenize` runs its own `Lexer`; they share only the spelling `Lexer::new(input).run()`."
+
+[[distinct]]
+members = [
+    "purrdf_hash::arch::aarch64::hex_encode",
+    "purrdf_hash::arch::x86_64::hex_encode",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_hash::arch::x86_64::hex_encode"
+reason = "Per-architecture safe entries, each around its own module's base16 kernel (SSSE3 on x86_64, NEON on aarch64), each a symbol scripts/simd-asm-manifest.toml pins."

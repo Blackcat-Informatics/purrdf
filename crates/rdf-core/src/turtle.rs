@@ -442,7 +442,7 @@ pub fn emit_quad(quad: &RdfQuad) -> String {
 /// A named reifier is always emitted as its term.
 ///
 /// Each `(predicate, object)` pair takes a bare-IRI predicate (matching the
-/// sibling [`RdfTriple`] / [`RdfAnnotation`] field convention) and a
+/// sibling [`RdfTriple`](crate::model::RdfTriple) / [`RdfAnnotation`] field convention) and a
 /// structured [`RdfTerm`] object, rendered through [`emit_term`] — so a
 /// blank-node object gets its label escaped and a literal object gets proper
 /// quoting, the same guarantee every other position in this module carries.
@@ -480,7 +480,7 @@ pub fn emit_reifier(reifier: &RdfReifier, annotations: &[(String, RdfTerm)]) -> 
 /// Emit a free-standing resource: `<subject> a <type> ; <pred> <obj> ; … .`
 ///
 /// Each `(predicate, object)` pair takes a bare-IRI predicate (matching the
-/// sibling [`RdfTriple`] / [`RdfAnnotation`] field convention) and a
+/// sibling [`RdfTriple`](crate::model::RdfTriple) / [`RdfAnnotation`] field convention) and a
 /// structured [`RdfTerm`] object, rendered through [`emit_term`] — the
 /// generic "subject with a property list" writer the ledger / explanation
 /// builders use. Routing the object through [`emit_term`] means a blank-node

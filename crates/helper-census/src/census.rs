@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_lex::json::{Object, Value as Json};
 
-use crate::ledger::{Job, Ledger};
+use crate::ledger::{Distinct, GroupKind, Job, Ledger};
 use crate::normalize::MIN_TOKENS;
 use crate::source::{Unit, UnitKind, Workspace};
 
@@ -106,6 +106,76 @@ pub(crate) fn group_is_sanctioned(
         .filter(|&&index| !variants.contains(&workspace.units[index].symbol))
         .count();
     unsanctioned <= 1
+}
+
+/// A group's member symbols, sorted: the set a [`Distinct`] row must equal.
+fn member_symbols<'w>(group: &Group, workspace: &'w Workspace) -> Vec<&'w str> {
+    let mut symbols: Vec<&str> = group
+        .members
+        .iter()
+        .map(|&index| workspace.units[index].symbol.as_str())
+        .collect();
+    symbols.sort_unstable();
+    symbols
+}
+
+/// The `[[distinct]]` row whose kind is `kind` and whose members are exactly the
+/// group's, if there is one.
+fn distinct_row(ledger: &Ledger, kind: GroupKind, symbols: &[&str]) -> Option<usize> {
+    ledger.distinct.iter().position(|row| {
+        row.kind == kind
+            && row
+                .members
+                .iter()
+                .map(String::as_str)
+                .eq(symbols.iter().copied())
+    })
+}
+
+/// Every kind of group, with the label `--check` reports it under.
+fn every_group(workspace: &Workspace) -> [(GroupKind, &'static str, Vec<Group>); 2] {
+    [
+        (
+            GroupKind::Body,
+            "isomorphic bodies",
+            isomorphic_groups(workspace),
+        ),
+        (GroupKind::Shim, "isomorphic shims", shim_groups(workspace)),
+    ]
+}
+
+/// A `[[distinct]]` row's own failures: a member that is no longer defined, a
+/// member set that is no current group (both STALE), and an anchor that does not
+/// resolve or carries no documentation.
+fn distinct_row_findings(row: &Distinct, matched: bool, workspace: &Workspace) -> Vec<String> {
+    let mut findings = Vec::new();
+    let label = row.label();
+    let missing: Vec<&str> = row
+        .members
+        .iter()
+        .filter(|member| !workspace.definitions.contains_key(member.as_str()))
+        .map(String::as_str)
+        .collect();
+    if !missing.is_empty() {
+        findings.push(format!(
+            "{label}: STALE, member {} no longer exists; remove the row",
+            missing.join(", ")
+        ));
+    } else if !matched {
+        findings.push(format!(
+            "{label}: STALE, no current {} group has exactly these members; remove or correct the row",
+            row.kind.as_str()
+        ));
+    }
+    match workspace.resolve(&row.anchor) {
+        None => findings.push(format!("{label}: anchor `{}` does not resolve", row.anchor)),
+        Some(symbol) if !workspace.definitions[&symbol].documented => findings.push(format!(
+            "{label}: anchor `{}` carries no documentation",
+            row.anchor
+        )),
+        Some(_) => {}
+    }
+    findings
 }
 
 /// One unit or rule hit that matches a job's forbidden set.
@@ -562,7 +632,41 @@ pub(crate) fn index(workspace: &Workspace, ledger: &Ledger) -> Json {
                 ),
         );
     }
+    for row in &ledger.distinct {
+        for path in row.members.iter().chain(std::iter::once(&row.anchor)) {
+            let entry = workspace.resolve(path).map_or(Json::Null, |symbol| {
+                let definition = &workspace.definitions[&symbol];
+                Json::from(
+                    Object::new()
+                        .with("symbol", symbol)
+                        .with("package", &definition.package)
+                        .with("file", &definition.file)
+                        .with("line", definition.line)
+                        .with("module", &definition.module)
+                        .with("documented", definition.documented),
+                )
+            });
+            symbols.insert(path.clone(), entry);
+        }
+    }
     let variants = variant_symbols(ledger, workspace, "isomorphic");
+    let groups: Vec<Json> = every_group(workspace)
+        .iter()
+        .flat_map(|(kind, _, groups)| {
+            groups.iter().map(|group| {
+                Json::from(
+                    Object::new()
+                        .with("kind", kind.as_str())
+                        .with("fingerprint", &group.fingerprint)
+                        .with("members", member_symbols(group, workspace))
+                        .with(
+                            "variant_sanctioned",
+                            group_is_sanctioned(group, workspace, &variants),
+                        ),
+                )
+            })
+        })
+        .collect();
     let grouped: BTreeSet<&str> = isomorphic_groups(workspace)
         .iter()
         .chain(&shim_groups(workspace))
@@ -577,6 +681,7 @@ pub(crate) fn index(workspace: &Workspace, ledger: &Ledger) -> Json {
         Object::new()
             .with("symbols", symbols)
             .with("jobs", jobs)
+            .with("groups", groups)
             .with(
                 "grouped_variants",
                 variants
@@ -595,11 +700,13 @@ pub(crate) fn index(workspace: &Workspace, ledger: &Ledger) -> Json {
 pub(crate) fn check_findings(workspace: &Workspace, ledger: &Ledger) -> Vec<String> {
     let mut findings: Vec<String> = workspace.errors.clone();
     let variants = variant_symbols(ledger, workspace, "isomorphic");
-    for (label, groups) in [
-        ("isomorphic bodies", isomorphic_groups(workspace)),
-        ("isomorphic shims", shim_groups(workspace)),
-    ] {
+    let mut matched = vec![false; ledger.distinct.len()];
+    for (kind, label, groups) in every_group(workspace) {
         for group in groups {
+            if let Some(row) = distinct_row(ledger, kind, &member_symbols(&group, workspace)) {
+                matched[row] = true;
+                continue;
+            }
             if group_is_sanctioned(&group, workspace, &variants) {
                 continue;
             }
@@ -617,6 +724,9 @@ pub(crate) fn check_findings(workspace: &Workspace, ledger: &Ledger) -> Vec<Stri
                 members.join(", ")
             ));
         }
+    }
+    for (row, matched) in ledger.distinct.iter().zip(matched) {
+        findings.extend(distinct_row_findings(row, matched, workspace));
     }
     for job in &ledger.jobs {
         match home(job, workspace) {

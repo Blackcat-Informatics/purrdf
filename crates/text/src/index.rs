@@ -725,6 +725,10 @@ impl TextIndex {
     }
 
     /// Retained predicate frequencies along a term's existing posting walk.
+    ///
+    /// The walk is [`Self::partition_postings`], shared with [`Self::postings`]; this
+    /// projection yields each posting's per-predicate frequencies, the BM25F field
+    /// statistics input, where `postings` yields its token positions.
     pub(crate) fn field_postings<'a>(
         &'a self,
         partition: &PartitionKey,

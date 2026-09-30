@@ -8,7 +8,7 @@
 //! # What a page is, and how ids compose
 //!
 //! Each page is a frozen [`RdfDataset`] with its own dense, dataset-local
-//! [`TermId`] space. The paged view addresses terms in the shared
+//! [`TermId`](crate::ir::TermId) space. The paged view addresses terms in the shared
 //! [`GlobalTermId`] space of a single
 //! [`GlobalDictionary`]: every page term is re-interned
 //! BY VALUE into that dictionary (boundary G1, in
@@ -47,8 +47,8 @@
 //! [`PageTranslation`] carries an exact summary — per-term occurrence counts for the
 //! base-quad subject, predicate and object positions and for each side table's
 //! reifier column, plus per-graph row counts for all three composed streams — keyed
-//! in that page's own LOCAL [`TermId`] space. Local keying is what makes the summary
-//! invariant under [`compact`](PagedDataset::compact), which renumbers only the
+//! in that page's own LOCAL [`TermId`](crate::ir::TermId) space. Local keying is what
+//! makes the summary invariant under [`compact`](PagedDataset::compact), which renumbers only the
 //! global side.
 //!
 //! `admission::admit_pattern` applies the law and reports a named reason when it
@@ -817,7 +817,7 @@ impl PagedDataset {
 
     /// The [`PageTranslation`] of a page, by ordinal. `None` if `id` is out of range.
     /// Exposed so a test can prove one [`GlobalTermId`] maps to DISTINCT local
-    /// [`TermId`]s on different pages.
+    /// [`TermId`](crate::ir::TermId)s on different pages.
     #[must_use]
     pub fn translation(&self, id: PageId) -> Option<&PageTranslation> {
         let index = usize::try_from(id.0).ok()?;

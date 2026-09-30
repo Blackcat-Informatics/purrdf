@@ -57,11 +57,59 @@ pub(crate) struct Job {
     pub(crate) variants: Vec<Variant>,
 }
 
+/// Which grouping a [`Distinct`] row names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum GroupKind {
+    /// An isomorphic-bodies group: one structural body fingerprint.
+    Body,
+    /// An isomorphic-shims group: one forwarder fingerprint.
+    Shim,
+}
+
+impl GroupKind {
+    /// The ledger spelling.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Body => "body",
+            Self::Shim => "shim",
+        }
+    }
+}
+
+/// One set of items that share a body or forwarder shape and share no job.
+///
+/// It sanctions exactly one group: the group of its kind whose member set is
+/// `members`, no more and no fewer. A new item of the same shape joins the group,
+/// the sets differ, and the group is reported again.
+#[derive(Clone, Debug)]
+pub(crate) struct Distinct {
+    /// The group's member symbols, `crate::path::item`, sorted. A symbol two
+    /// members share (two trait impls on one type) is listed once per member.
+    pub(crate) members: Vec<String>,
+    /// Which grouping the set is a group of.
+    pub(crate) kind: GroupKind,
+    /// The documented item that states why the members are separate.
+    pub(crate) anchor: String,
+}
+
+impl Distinct {
+    /// The row's name in a finding: its kind and its members.
+    pub(crate) fn label(&self) -> String {
+        format!(
+            "[[distinct]] {} [{}]",
+            self.kind.as_str(),
+            self.members.join(", ")
+        )
+    }
+}
+
 /// The whole ledger.
 #[derive(Clone, Debug)]
 pub(crate) struct Ledger {
     /// Rows in file order.
     pub(crate) jobs: Vec<Job>,
+    /// `[[distinct]]` rows in file order.
+    pub(crate) distinct: Vec<Distinct>,
     /// The parsed document, for the engine's cross-check.
     pub(crate) document: BTreeMap<String, Value>,
 }
@@ -89,6 +137,7 @@ const JOB_KEYS: [&str; 12] = [
 ];
 const JOB_OPTIONAL: [&str; 1] = ["variant"];
 const FORBIDDEN_KEYS: [&str; 3] = ["constants", "fingerprints", "names"];
+const DISTINCT_KEYS: [&str; 5] = ["members", "kind", "criterion", "anchor", "reason"];
 const VARIANT_KEYS: [&str; 6] = [
     "symbol",
     "file",
@@ -102,7 +151,7 @@ const VARIANT_KEYS: [&str; 6] = [
 pub(crate) fn parse(text: &str) -> Result<Ledger, String> {
     let document = toml::parse(text).map_err(|error| format!("helpers-ledger.toml {error}"))?;
     for key in document.keys() {
-        if key != "job" {
+        if key != "job" && key != "distinct" {
             return Err(format!(
                 "helpers-ledger.toml: unknown top-level key `{key}`"
             ));
@@ -128,7 +177,39 @@ pub(crate) fn parse(text: &str) -> Result<Ledger, String> {
         }
         jobs.push(job);
     }
-    Ok(Ledger { jobs, document })
+    let distinct = match document.get("distinct") {
+        None => Vec::new(),
+        Some(Value::Array(rows)) => rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| {
+                match row {
+                    Value::Table(row) => distinct(row),
+                    _ => Err("not a table".to_owned()),
+                }
+                .map_err(|error| format!("helpers-ledger.toml distinct #{}: {error}", index + 1))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(_) => {
+            return Err("helpers-ledger.toml: `distinct` must be an array of tables".to_owned());
+        }
+    };
+    for (index, row) in distinct.iter().enumerate() {
+        if distinct[..index]
+            .iter()
+            .any(|seen| seen.kind == row.kind && seen.members == row.members)
+        {
+            return Err(format!(
+                "helpers-ledger.toml: {} is listed twice",
+                row.label()
+            ));
+        }
+    }
+    Ok(Ledger {
+        jobs,
+        distinct,
+        document,
+    })
 }
 
 fn check_keys(
@@ -239,15 +320,42 @@ fn forbidden_table(table: &BTreeMap<String, Value>) -> Result<Forbidden, String>
     })
 }
 
+fn criterion(table: &BTreeMap<String, Value>, what: &str) -> Result<(), String> {
+    let criterion = string(table, "criterion")?;
+    if CRITERIA.contains(&criterion.as_str()) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{what} criterion `{criterion}` is not one of {}",
+            CRITERIA.join(", ")
+        ))
+    }
+}
+
+fn distinct(table: &BTreeMap<String, Value>) -> Result<Distinct, String> {
+    check_keys(table, &DISTINCT_KEYS, &[], "distinct")?;
+    criterion(table, "distinct")?;
+    string(table, "reason")?;
+    let kind = match string(table, "kind")?.as_str() {
+        "body" => GroupKind::Body,
+        "shim" => GroupKind::Shim,
+        other => return Err(format!("distinct kind `{other}` is not `body` or `shim`")),
+    };
+    let mut members = strings(table, "members")?;
+    if members.len() < 2 {
+        return Err("`members` must name the two or more members of one group".to_owned());
+    }
+    members.sort();
+    Ok(Distinct {
+        members,
+        kind,
+        anchor: string(table, "anchor")?,
+    })
+}
+
 fn variant(table: &BTreeMap<String, Value>) -> Result<Variant, String> {
     check_keys(table, &VARIANT_KEYS, &[], "variant")?;
-    let criterion = string(table, "criterion")?;
-    if !CRITERIA.contains(&criterion.as_str()) {
-        return Err(format!(
-            "variant criterion `{criterion}` is not one of {}",
-            CRITERIA.join(", ")
-        ));
-    }
+    criterion(table, "variant")?;
     string(table, "reason")?;
     string(table, "file")?;
     Ok(Variant {
@@ -278,6 +386,32 @@ mod tests {
         assert!(parse(&missing).unwrap_err().contains("enforced"));
         let unknown = ROW.replace("enforced = true\n", "enforced = true\nenforcd = true\n");
         assert!(parse(&unknown).unwrap_err().contains("enforcd"));
+    }
+
+    const DISTINCT: &str = "[[distinct]]\nmembers = [\"c::g\", \"c::f\"]\nkind = \"KIND\"\ncriterion = \"b\"\nanchor = \"c::f\"\nreason = \"r\"\n";
+
+    #[test]
+    fn a_distinct_row_is_read_with_its_members_sorted() {
+        let ledger = parse(&format!("{ROW}{}", DISTINCT.replace("KIND", "shim"))).expect("a row");
+        assert_eq!(ledger.distinct.len(), 1);
+        assert_eq!(ledger.distinct[0].members, ["c::f", "c::g"]);
+        assert_eq!(ledger.distinct[0].kind, super::GroupKind::Shim);
+    }
+
+    #[test]
+    fn a_distinct_row_needs_a_known_kind_two_members_and_no_twin() {
+        let refused = format!("{ROW}{}", DISTINCT.replace("KIND", "bodies"));
+        assert!(parse(&refused).unwrap_err().contains("kind"));
+        let accepted = format!("{ROW}{}", DISTINCT.replace("KIND", "body"));
+        assert!(parse(&accepted).is_ok());
+        let lone = DISTINCT
+            .replace("KIND", "body")
+            .replace("[\"c::g\", \"c::f\"]", "[\"c::g\"]");
+        assert!(parse(&lone).unwrap_err().contains("two or more"));
+        let twice = format!("{0}{0}", DISTINCT.replace("KIND", "body"));
+        assert!(parse(&twice).unwrap_err().contains("listed twice"));
+        let unknown = DISTINCT.replace("KIND", "body").replace("reason", "reasn");
+        assert!(parse(&unknown).unwrap_err().contains("reasn"));
     }
 
     #[test]
