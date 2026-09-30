@@ -21,11 +21,11 @@
 use std::collections::BTreeMap;
 use std::hash::BuildHasher;
 
-use ciborium::value::Value;
 use hashbrown::HashTable;
 use purrdf_gts::model::{AnnotationRow, ReifierRow, Term, TermKind, is_literal_direction};
-use purrdf_gts::wire::{blake3_256, canonical, hex};
+use purrdf_gts::wire::{canonical, digest_str};
 use purrdf_gts::writer::Writer;
+use purrdf_lex::cbor::Value;
 
 use crate::{
     BlankScope, DatasetView, DrainCheckpoint, FallibleDatasetView, FastHasher, RdfTextDirection,
@@ -33,8 +33,8 @@ use crate::{
 };
 
 /// The `rdf:reifies` predicate IRI (RDF 1.2 statement layer).
-pub const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+pub use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
+use purrdf_xsd::datatype::XSD_STRING;
 /// Payloads larger than this select `zstd-rsyncable` over `zstd`.
 pub const DEFAULT_RSYNCABLE_THRESHOLD: usize = 65536;
 /// zstd compression level for the committed `dist` bundle's frames (purrdf-gts 0.9.11
@@ -200,7 +200,7 @@ struct TableMark {
 /// Term ids are append-order during ingestion (process-unstable), then re-id'd
 /// by content in `Self::canonical_tables` so the emitted bytes are a pure
 /// function of the inputs.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SnapshotBuilder {
     terms: Vec<TermRow>,
     /// Hash-consed intern index over NON-blank term rows, holding `terms`
@@ -233,10 +233,24 @@ pub struct SnapshotBuilder {
     totals: IngestReport,
 }
 
+purrdf_hash::default_from_new!(SnapshotBuilder);
+
 impl SnapshotBuilder {
-    /// A fresh, empty builder.
+    /// A fresh, empty builder; [`Default`] delegates here.
+    #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            terms: Vec::new(),
+            index: HashTable::new(),
+            bnode_keys: Vec::new(),
+            bnode_index: HashTable::new(),
+            bnode_wire: HashTable::new(),
+            quads: Vec::new(),
+            reifies: Vec::new(),
+            annot: Vec::new(),
+            poison: None,
+            totals: IngestReport::default(),
+        }
     }
 
     /// Append a freshly built non-blank term row and index it. The insertion
@@ -379,7 +393,7 @@ impl SnapshotBuilder {
 
     /// Ingest a native [`RdfDataset`](crate::RdfDataset) carrier DIRECTLY — interning
     /// its quads and its folded RDF-1.2 reifier/annotation side-tables — without the
-    /// oxigraph quad round-trip. This is how the in-memory carrier is serialized at the
+    /// flat-quad round-trip. This is how the in-memory carrier is serialized at the
     /// single exit: the dataset is already canonical (frozen, blank-nodes standardized
     /// apart by union), so every named graph and the statement layer fold in as-is. The
     /// reifier/annotation side-tables map straight onto `reifies`/`annot` — there is no
@@ -395,7 +409,7 @@ impl SnapshotBuilder {
     }
 
     /// Ingest a native [`RdfDataset`](crate::RdfDataset) with the same source-partitioning
-    /// hooks the legacy oxigraph ingestion exposed: `default_graph_name` assigns base
+    /// hooks as flat-quad ingestion: `default_graph_name` assigns base
     /// quads, reifiers and annotations carrying no graph of their own to a named graph,
     /// and `scope` prefixes
     /// blank-node labels (`"{scope}-{label}"`) so two equal labels in different ingest
@@ -942,9 +956,9 @@ impl SnapshotBuilder {
                     quads
                         .iter()
                         .map(|&(s, p, o, g)| {
-                            let mut row = vec![iv(s), iv(p), iv(o)];
+                            let mut row = vec![Value::from(s), Value::from(p), Value::from(o)];
                             if let Some(g) = g {
-                                row.push(iv(g));
+                                row.push(Value::from(g));
                             }
                             Value::Array(row)
                         })
@@ -961,9 +975,14 @@ impl SnapshotBuilder {
                     reifies
                         .iter()
                         .map(|&(rid, (s, p, o), g)| {
-                            let mut row = vec![iv(rid), iv(s), iv(p), iv(o)];
+                            let mut row = vec![
+                                Value::from(rid),
+                                Value::from(s),
+                                Value::from(p),
+                                Value::from(o),
+                            ];
                             if let Some(g) = g {
-                                row.push(iv(g));
+                                row.push(Value::from(g));
                             }
                             Value::Array(row)
                         })
@@ -978,9 +997,9 @@ impl SnapshotBuilder {
                     annot
                         .iter()
                         .map(|&(r, p, v, g)| {
-                            let mut row = vec![iv(r), iv(p), iv(v)];
+                            let mut row = vec![Value::from(r), Value::from(p), Value::from(v)];
                             if let Some(g) = g {
-                                row.push(iv(g));
+                                row.push(Value::from(g));
                             }
                             Value::Array(row)
                         })
@@ -997,14 +1016,17 @@ impl SnapshotBuilder {
     /// A stable content id over complete content in every reachable state,
     /// poisoned included — see [`Self::snapshot_payload`] for why, and for why
     /// that is not permission to publish a poisoned builder.
+    ///
+    /// The BLAKE3 opens with no hash domain: the preimage is the canonical CBOR
+    /// snapshot payload alone. The id is its own kind, a snapshot content id,
+    /// compared only against another snapshot content id; and it is a
+    /// published identity recorded against the GTS archives it attests, so a
+    /// domain cannot be added without breaking every recorded id for an
+    /// existing archive.
     pub fn snapshot_content_id(&self) -> String {
         let bytes = canonical(&self.snapshot_payload());
-        format!("blake3:{}", hex(&blake3_256(&bytes)))
+        digest_str(&bytes)
     }
-}
-
-fn iv(n: usize) -> Value {
-    Value::Integer(ciborium::value::Integer::from(n as u64))
 }
 
 /// The by-VALUE twin of `purrdf_gts::writer::term_to_wire`.
@@ -1045,7 +1067,7 @@ fn term_into_wire(term: Term) -> Value {
 
 /// A term id as the writer spells it on the wire (a signed CBOR integer).
 fn wire_id(n: usize) -> Value {
-    Value::Integer(ciborium::value::Integer::from(n as i64))
+    Value::Integer(purrdf_lex::cbor::Integer::from(n as i64))
 }
 
 /// How deep [`render_term`] follows a term's constituents.
@@ -1272,18 +1294,9 @@ pub struct BlobRow {
 }
 
 /// Choose `zstd-rsyncable` for large payloads when the base chain is the default
-/// `["zstd"]` (`_Builder.to_gts.choose_transform`).
-pub fn choose_transform(
-    base_chain: &[String],
-    payload_len: usize,
-    threshold: usize,
-) -> Vec<String> {
-    if base_chain.len() == 1 && base_chain[0] == "zstd" && payload_len > threshold {
-        vec!["zstd-rsyncable".to_string()]
-    } else {
-        base_chain.to_vec()
-    }
-}
+/// `["zstd"]`: the GTS writer's snapshot rule, so a composed archive and a
+/// written one pick the same transform.
+pub use purrdf_gts::writer::choose_snapshot_transform as choose_transform;
 
 /// Which frame slot an assignment row addresses.
 ///
@@ -1457,7 +1470,7 @@ pub fn emit_gts(
     if signing {
         let secret = signer_secret.expect("signing implies a secret");
         let kid = signer_kid.ok_or("signing requires a kid")?;
-        writer.sign_with(ed25519_dalek::SigningKey::from_bytes(&secret), &kid);
+        writer.sign_with(purrdf_ed25519::SigningKey::from_bytes(&secret), &kid);
         // The transport-key meta frame, signed along with every later frame.
         let armor = public_key_armor.expect("signing implies a public key");
         let meta = Value::Map(vec![(

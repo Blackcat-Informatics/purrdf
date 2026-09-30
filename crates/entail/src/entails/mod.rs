@@ -195,6 +195,12 @@ use crate::report::{InconsistentRun, ReasoningReport};
 use crate::{EntailError, Materialization, Regime, materialize_with};
 use purrdf_datalog::seminaive::EvalOptions;
 
+/// Whether `term` is the IRI `iri`: the one test the axiom readers apply to every
+/// predicate and class position they dispatch on.
+fn is(term: &TermValue, iri: &str) -> bool {
+    term.as_iri() == Some(iri)
+}
+
 pub mod answers;
 pub mod certificate;
 pub mod comprehension;
@@ -546,6 +552,7 @@ pub(crate) fn resolved_imports_error(error: EntailError) -> EntailError {
         | EntailError::Evaluate(_)
         | EntailError::Chase(_)
         | EntailError::MalformedList(_)
+        | EntailError::ForeignTerm(_)
         | EntailError::UnsupportedRegime(_)
         | EntailError::UnresolvedImport(_)
         | EntailError::UnreachedImport { .. }
@@ -631,7 +638,7 @@ pub(crate) fn resolved_imports_error(error: EntailError) -> EntailError {
 ///     p: QNode::Term(TermValue::iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")),
 ///     o: QNode::Var("c".to_owned()),
 /// }];
-/// let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new())
+/// let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
 ///     .expect("a consistent premise");
 /// assert_eq!(answers.vars(), ["c"]);
 /// assert!(answers.rows().iter().any(|row| row == &[TermValue::iri("http://example.org/Animal")]));
@@ -1060,7 +1067,7 @@ fn decide(
 /// c.push_quad(x, p, z, None);
 /// let conclusion = c.freeze().expect("freeze");
 ///
-/// let certificate = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new())
+/// let certificate = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::default())
 ///     .expect("a consistent premise");
 /// assert!(matches!(certificate.outcome(), EntailmentOutcome::Entailed(_)));
 /// // …and the certificate names the run that answered it.
@@ -1257,12 +1264,12 @@ mod tests {
     use crate::owl_dl::query::{QNode, QTriple};
     use crate::{EntailError, Regime};
 
-    const TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-    const SUBCLASS: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
-    const DISJOINT: &str = "http://www.w3.org/2002/07/owl#disjointWith";
-    const SOMEVALUES: &str = "http://www.w3.org/2002/07/owl#someValuesFrom";
-    const ONPROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
-    const RESTRICTION: &str = "http://www.w3.org/2002/07/owl#Restriction";
+    use purrdf_iri::vocab::owl::DISJOINT_WITH as DISJOINT;
+    use purrdf_iri::vocab::owl::ON_PROPERTY as ONPROPERTY;
+    use purrdf_iri::vocab::owl::RESTRICTION;
+    use purrdf_iri::vocab::owl::SOME_VALUES_FROM as SOMEVALUES;
+    use purrdf_iri::vocab::rdf::TYPE;
+    use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as SUBCLASS;
 
     fn graph(triples: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
@@ -1308,7 +1315,7 @@ mod tests {
     /// The outcome of one question, with its certificate discarded — for the assertions
     /// that are about the verdict alone.
     fn outcome(premise: &RdfDataset, conclusion: &RdfDataset, regime: Regime) -> EntailmentOutcome {
-        entails(premise, conclusion, regime, &ImportMap::new())
+        entails(premise, conclusion, regime, &ImportMap::default())
             .expect("consistent")
             .into_parts()
             .0
@@ -1381,7 +1388,7 @@ mod tests {
         ]);
         let conclusion = graph(&[("http://example.org/anything", TYPE, "http://example.org/At")]);
         let Err(EntailError::Inconsistent(run)) =
-            entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new())
+            entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::default())
         else {
             panic!("two disjoint classes with a shared instance is `cax-dw`");
         };
@@ -1420,7 +1427,7 @@ mod tests {
         let conclusion = graph(&[("http://example.org/x", TYPE, "http://example.org/B")]);
         for regime in [Regime::OwlDirect, Regime::Rif] {
             let Err(EntailError::UnsupportedRegime(refused)) =
-                entails(&premise, &conclusion, regime, &ImportMap::new())
+                entails(&premise, &conclusion, regime, &ImportMap::default())
             else {
                 panic!("{regime:?} is defined by an input this signature does not carry");
             };
@@ -1434,7 +1441,7 @@ mod tests {
             Regime::OwlRl,
             Regime::D,
         ] {
-            entails(&premise, &conclusion, regime, &ImportMap::new())
+            entails(&premise, &conclusion, regime, &ImportMap::default())
                 .unwrap_or_else(|e| panic!("{regime:?}: {e}"));
         }
     }
@@ -1482,7 +1489,8 @@ mod tests {
             o: QNode::Var("c".to_owned()),
         }];
         let answers: CertainAnswers =
-            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
+            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
+                .expect("consistent");
         assert_eq!(answers.vars(), ["c"]);
         assert!(answers.is_complete(), "{:?}", answers.limits());
         for class in ["http://example.org/A", "http://example.org/B"] {
@@ -1496,24 +1504,24 @@ mod tests {
             );
         }
         // The rows are deduplicated and ordered by the row itself, so two runs agree.
-        let again =
-            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
+        let again = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
+            .expect("consistent");
         assert_eq!(answers.rows(), again.rows());
     }
 
     // ── COMPOSITION: entailment is monotone over the conjunction a conclusion graph is ───
 
-    const COMPLEMENTOF: &str = "http://www.w3.org/2002/07/owl#complementOf";
-    const DIFFERENTFROM: &str = "http://www.w3.org/2002/07/owl#differentFrom";
-    const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
-    const OBJECT_PROPERTY: &str = "http://www.w3.org/2002/07/owl#ObjectProperty";
-    const TRANSITIVE: &str = "http://www.w3.org/2002/07/owl#TransitiveProperty";
-    const REFLEXIVE: &str = "http://www.w3.org/2002/07/owl#ReflexiveProperty";
-    const CHAIN: &str = "http://www.w3.org/2002/07/owl#propertyChainAxiom";
-    const ONEOF: &str = "http://www.w3.org/2002/07/owl#oneOf";
-    const FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-    const REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-    const NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+    use purrdf_iri::vocab::owl::CLASS as OWL_CLASS;
+    use purrdf_iri::vocab::owl::COMPLEMENT_OF as COMPLEMENTOF;
+    use purrdf_iri::vocab::owl::DIFFERENT_FROM as DIFFERENTFROM;
+    use purrdf_iri::vocab::owl::OBJECT_PROPERTY;
+    use purrdf_iri::vocab::owl::ONE_OF as ONEOF;
+    use purrdf_iri::vocab::owl::PROPERTY_CHAIN_AXIOM as CHAIN;
+    use purrdf_iri::vocab::owl::REFLEXIVE_PROPERTY as REFLEXIVE;
+    use purrdf_iri::vocab::owl::TRANSITIVE_PROPERTY as TRANSITIVE;
+    use purrdf_iri::vocab::rdf::FIRST;
+    use purrdf_iri::vocab::rdf::NIL;
+    use purrdf_iri::vocab::rdf::REST;
 
     const BOY: &str = "http://example.org/Boy";
     const GIRL: &str = "http://example.org/Girl";
@@ -1859,13 +1867,13 @@ mod tests {
 
     // ── `entails` IS `certain_answers` WITH NOTHING TO PROJECT ───────────────────────────
 
-    const RANGE: &str = "http://www.w3.org/2000/01/rdf-schema#range";
-    const DATATYPE_PROPERTY: &str = "http://www.w3.org/2002/07/owl#DatatypeProperty";
-    const UNIONOF: &str = "http://www.w3.org/2002/07/owl#unionOf";
-    const RDF_LIST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#List";
-    const XSD_BYTE: &str = "http://www.w3.org/2001/XMLSchema#byte";
-    const XSD_SHORT: &str = "http://www.w3.org/2001/XMLSchema#short";
-    const IRREFLEXIVE: &str = "http://www.w3.org/2002/07/owl#IrreflexiveProperty";
+    use purrdf_iri::vocab::owl::DATATYPE_PROPERTY;
+    use purrdf_iri::vocab::owl::IRREFLEXIVE_PROPERTY as IRREFLEXIVE;
+    use purrdf_iri::vocab::owl::UNION_OF as UNIONOF;
+    use purrdf_iri::vocab::rdf::LIST as RDF_LIST;
+    use purrdf_iri::vocab::rdfs::RANGE;
+    use purrdf_xsd::datatype::XSD_BYTE;
+    use purrdf_xsd::datatype::XSD_SHORT;
     const A: &str = "http://example.org/a";
 
     /// The conclusion graph `ds` as the basic graph pattern `patterns(C)`.
@@ -2010,13 +2018,13 @@ mod tests {
         );
 
         for (name, premise, conclusion, expected) in cases {
-            let certificate = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new())
+            let certificate = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::default())
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
             let answers = certain_answers(
                 &premise,
                 &patterns_of(&conclusion),
                 Regime::OwlRl,
-                &ImportMap::new(),
+                &ImportMap::default(),
             )
             .unwrap_or_else(|e| panic!("{name}: {e}"));
 
@@ -2058,13 +2066,13 @@ mod tests {
                 "http://example.org/Never",
             ] {
                 let conclusion = graph(&[("http://example.org/x", TYPE, object)]);
-                let certificate = entails(&premise, &conclusion, regime, &ImportMap::new())
+                let certificate = entails(&premise, &conclusion, regime, &ImportMap::default())
                     .expect("a consistent premise");
                 let answers = certain_answers(
                     &premise,
                     &patterns_of(&conclusion),
                     regime,
-                    &ImportMap::new(),
+                    &ImportMap::default(),
                 )
                 .expect("a consistent premise");
                 assert_eq!(
@@ -2118,8 +2126,8 @@ mod tests {
             p: QNode::Term(TermValue::iri(DIFFERENTFROM)),
             o: QNode::Term(TermValue::iri(PETER)),
         }];
-        let answers =
-            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
+        let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
+            .expect("consistent");
         assert_eq!(answers.vars(), ["x"]);
         assert!(
             answers.rows().is_empty(),
@@ -2179,7 +2187,7 @@ mod tests {
             &premise("http://example.org/b"),
             &bgp,
             Regime::Simple,
-            &ImportMap::new(),
+            &ImportMap::default(),
         )
         .expect("consistent");
         assert_eq!(answers.vars(), ["x"]);
@@ -2194,7 +2202,7 @@ mod tests {
             &premise("http://example.org/a"),
             &bgp,
             Regime::Simple,
-            &ImportMap::new(),
+            &ImportMap::default(),
         )
         .expect("consistent");
         assert_eq!(
@@ -2237,7 +2245,7 @@ mod tests {
                 }],
             ),
         ] {
-            let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new())
+            let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
                 .expect("consistent");
             assert!(
                 answers.is_complete(),
@@ -2268,8 +2276,8 @@ mod tests {
             p: QNode::Var("p".to_owned()),
             o: QNode::Var("o".to_owned()),
         }];
-        let answers =
-            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
+        let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
+            .expect("consistent");
         assert!(!answers.rows().is_empty(), "the closure is enumerated");
         assert_eq!(answers.mechanism(), EntailmentMechanism::StrictTable);
 
@@ -2327,8 +2335,8 @@ mod tests {
                 o: QNode::Term(TermValue::iri(STEWIE)),
             },
         ];
-        let answers =
-            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
+        let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
+            .expect("consistent");
         assert!(
             answers
                 .limits()
@@ -2374,8 +2382,8 @@ mod tests {
                 o: QNode::Term(TermValue::iri(STEWIE)),
             },
         ];
-        let answers =
-            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
+        let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
+            .expect("consistent");
         // The blank predicate is reported as open, naming the triple the caller wrote…
         let open: Vec<&Vec<String>> = answers
             .limits()
@@ -2428,8 +2436,8 @@ mod tests {
                 o: QNode::Term(TermValue::iri(BOY)),
             },
         ];
-        let answers =
-            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
+        let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
+            .expect("consistent");
         assert!(answers.vars().is_empty(), "nothing is projected");
         assert!(
             answers.rows().is_empty(),
@@ -2516,7 +2524,7 @@ mod tests {
             ),
         ];
         for (name, premise, bgp, lane) in cases {
-            let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new())
+            let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(
                 answers

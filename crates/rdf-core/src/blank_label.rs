@@ -40,18 +40,16 @@
 //! Egress is exact for a second, independent reason: a label this workspace
 //! writes must be re-readable by every external conforming parser, which
 //! implements the grammar's exact Unicode ranges and owes this workspace no
-//! latitude at all. This module is that exact egress contract for label syntax
-//! -- the ranges below are transcribed verbatim from the W3C Turtle/SPARQL
-//! `PN_CHARS_BASE`/`PN_CHARS` productions and the XML 1.0
-//! `NameStartChar`/`NameChar`/`Char` productions, not approximated.
+//! latitude at all. This module is that exact egress contract for label syntax:
+//! it decides the W3C Turtle/SPARQL `PN_CHARS_BASE`/`PN_CHARS` productions and
+//! the XML 1.0 `NameStartChar`/`NameChar`/`Char` productions exactly, not
+//! approximately.
 //!
-//! The shared scanner-side transcription of the same Turtle/SPARQL productions
-//! lives in [`purrdf_iri::terminals`], in the zero-dependency leaf every parser
-//! in the workspace already depends on. The two transcriptions are deliberately
-//! independent: this module keeps its own tables (it also owes the XML
-//! alphabets, which the terminal grammar has nothing to say about), and the
-//! agreement between them is a test, so a typo in either is caught by the
-//! other rather than believed by both.
+//! It transcribes none of those ranges itself. Every class is read from
+//! [`purrdf_lex::terminals`], the one transcription every parser in the
+//! workspace scans names with, so a label this module writes verbatim is by
+//! construction one those parsers read back. The unit tests hold that shared
+//! table to an independent in-test transcription of the productions.
 //!
 //! # Two rules, and nothing else
 //!
@@ -151,7 +149,6 @@
 //! canonical label is legal everywhere and [`encode_blank_label`] is the
 //! identity on it.
 
-use core::cmp::Ordering;
 use std::borrow::Cow;
 
 use crate::BlankScope;
@@ -412,22 +409,21 @@ fn decode_envelope(token: &str) -> Option<(String, BlankScope)> {
 /// exactly what [`push_hex6`] writes. Lowercase is deliberately refused so the
 /// decode accepts only the escape's own image.
 fn hex6_digit(c: char) -> Option<u32> {
-    match c {
-        '0'..='9' => Some(c as u32 - '0' as u32),
-        'A'..='F' => Some(c as u32 - 'A' as u32 + 10),
-        _ => None,
-    }
+    let byte = u8::try_from(c).ok().filter(|b| !b.is_ascii_lowercase())?;
+    purrdf_hash::hex::nibble(byte).map(u32::from)
 }
 
 /// Append `cp` as exactly six uppercase hex digits (24 bits covers the whole
 /// `0..=0x10FFFF` scalar range), the fixed-width escape body [`escape_label`]
-/// writes after each `_`.
+/// writes after each `_`: the low three bytes of `cp`, big-endian, in
+/// uppercase base16.
 fn push_hex6(cp: u32, out: &mut String) {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    for nibble in (0..6).rev() {
-        let index = ((cp >> (nibble * 4)) & 0xF) as usize;
-        out.push(char::from(HEX[index]));
-    }
+    let [_, high, middle, low] = cp.to_be_bytes();
+    let mut digits = [0u8; 6];
+    out.push_str(
+        purrdf_hash::hex::encode_upper_to_slice(&[high, middle, low], &mut digits)
+            .expect("three bytes render in six digits"),
+    );
 }
 
 /// Whether `label` is legal as a serialized blank-node label (`_:{label}`).
@@ -500,21 +496,12 @@ pub fn is_valid_blank_node_label_prefix(prefix: &str) -> bool {
 /// Implements the exact production `NCName ::= NCNameStartChar NCNameChar*`,
 /// where `NCNameStartChar = NameStartChar - ':'` and `NCNameChar` is
 /// `NCNameStartChar` plus `'-' | '.' | [0-9] | #xB7 | [#x0300-#x036F] |
-/// [#x203F-#x2040]`. `NCNameStartChar` is character-for-character identical
-/// to the Turtle/SPARQL `PN_CHARS_U` alphabet, so this reuses the same
-/// range tables as [`is_valid_blank_node_label`]. Unlike a blank-node label,
-/// an `NCName` MAY end in `.`: the grammar places no restriction on the
-/// final character.
+/// [#x203F-#x2040]`, decided by [`purrdf_lex::terminals::is_ncname`]. Unlike
+/// a blank-node label, an `NCName` MAY end in `.`: the grammar places no
+/// restriction on the final character.
 #[must_use]
 pub fn is_valid_ncname(label: &str) -> bool {
-    let mut chars = label.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !is_pn_chars_u(first) {
-        return false;
-    }
-    chars.all(|ch| is_pn_chars(ch) || ch == '.')
+    purrdf_lex::terminals::is_ncname(label)
 }
 
 /// Whether `label` survives XML 1.0 character data unchanged.
@@ -539,121 +526,20 @@ pub fn is_valid_xml_text(label: &str) -> bool {
 /// whitespace. `#x9`/`#xA`/`#xD` are legal `Char`s but are whitespace, so the
 /// whitespace test alone removes them from the `[#x20-…]` gap below.
 fn is_xml_text_char(c: char) -> bool {
-    !c.is_whitespace() && purrdf_iri::terminals::is_xml_char(c)
+    !c.is_whitespace() && purrdf_lex::terminals::is_xml_char(c)
 }
 
-/// Inclusive Unicode scalar-value range `[lo, hi]`.
-pub(crate) type CharRange = (u32, u32);
-
-/// Whether a range table is non-empty per entry, within the Unicode scalar
-/// space, and strictly ascending with a gap between neighbours.
-///
-/// [`in_ranges`] binary-searches these tables, and a binary search over an
-/// unsorted or overlapping table does not fail loudly — it silently answers
-/// `false` for a scalar the table contains, which here would mean an
-/// in-alphabet label taking the escape path (or, in the mirror case, an
-/// out-of-alphabet label being written verbatim into a document no conforming
-/// parser can read back). The precondition is therefore asserted at compile
-/// time below rather than asked for in prose.
-const fn ranges_sorted_disjoint(ranges: &[CharRange]) -> bool {
-    let mut i = 0;
-    while i < ranges.len() {
-        let range = ranges[i];
-        if range.0 > range.1 || range.1 > 0x0010_FFFF {
-            return false;
-        }
-        if i > 0 && ranges[i - 1].1 >= range.0 {
-            return false;
-        }
-        i += 1;
-    }
-    true
-}
-
-/// The binary-search precondition for both tables in this module, proved.
-const _: () = {
-    assert!(
-        ranges_sorted_disjoint(PN_CHARS_BASE_RANGES),
-        "PN_CHARS_BASE_RANGES must be sorted, non-empty and disjoint",
-    );
-    assert!(
-        ranges_sorted_disjoint(PN_CHARS_EXTRA_RANGES),
-        "PN_CHARS_EXTRA_RANGES must be sorted, non-empty and disjoint",
-    );
-};
-
-/// `PN_CHARS_BASE` from the W3C Turtle/SPARQL grammar, which is also
-/// character-for-character the XML 1.0 `NameStartChar` production minus
-/// `':'` and `'_'` (`'_'` is folded into `PN_CHARS_U` instead, see
-/// [`is_pn_chars_u`]). Ranges are sorted and non-overlapping — the precondition
-/// [`in_ranges`]'s binary search rests on, proved by the const assertion above
-/// rather than assumed.
-const PN_CHARS_BASE_RANGES: &[CharRange] = &[
-    (0x0041, 0x005A),   // [A-Z]
-    (0x0061, 0x007A),   // [a-z]
-    (0x00C0, 0x00D6),   // [#xC0-#xD6]
-    (0x00D8, 0x00F6),   // [#xD8-#xF6]
-    (0x00F8, 0x02FF),   // [#xF8-#x2FF]
-    (0x0370, 0x037D),   // [#x370-#x37D]
-    (0x037F, 0x1FFF),   // [#x37F-#x1FFF]
-    (0x200C, 0x200D),   // [#x200C-#x200D]
-    (0x2070, 0x218F),   // [#x2070-#x218F]
-    (0x2C00, 0x2FEF),   // [#x2C00-#x2FEF]
-    (0x3001, 0xD7FF),   // [#x3001-#xD7FF]
-    (0xF900, 0xFDCF),   // [#xF900-#xFDCF]
-    (0xFDF0, 0xFFFD),   // [#xFDF0-#xFFFD]
-    (0x10000, 0xEFFFF), // [#x10000-#xEFFFF]
-];
-
-/// The extra ranges `PN_CHARS`/`NCNameChar` fold in beyond `PN_CHARS_U`
-/// (beyond `'-'` and `[0-9]`, which are cheap ASCII checks handled inline).
-/// Sorted and non-overlapping for [`in_ranges`], proved by the const assertion
-/// above.
-const PN_CHARS_EXTRA_RANGES: &[CharRange] = &[
-    (0x00B7, 0x00B7), // #xB7
-    (0x0300, 0x036F), // [#x300-#x36F]
-    (0x203F, 0x2040), // [#x203F-#x2040]
-];
-
-/// Binary-search `cp` against a sorted, non-overlapping table of inclusive
-/// ranges.
-fn in_ranges(cp: u32, ranges: &[CharRange]) -> bool {
-    ranges
-        .binary_search_by(|&(lo, hi)| {
-            if cp < lo {
-                Ordering::Greater
-            } else if cp > hi {
-                Ordering::Less
-            } else {
-                Ordering::Equal
-            }
-        })
-        .is_ok()
-}
-
-/// `PN_CHARS_BASE` (== XML `NameStartChar - ':' - '_'`).
-fn is_pn_chars_base(c: char) -> bool {
-    in_ranges(c as u32, PN_CHARS_BASE_RANGES)
-}
-
-/// `PN_CHARS_U ::= PN_CHARS_BASE | '_'` (== `NCNameStartChar`).
-pub(crate) fn is_pn_chars_u(c: char) -> bool {
-    c == '_' || is_pn_chars_base(c)
-}
-
-/// `PN_CHARS ::= PN_CHARS_U | '-' | [0-9] | #xB7 | [#x300-#x036F] |
-/// [#x203F-#x2040]`.
-pub(crate) fn is_pn_chars(c: char) -> bool {
-    is_pn_chars_u(c) || c == '-' || c.is_ascii_digit() || in_ranges(c as u32, PN_CHARS_EXTRA_RANGES)
-}
+/// The Turtle/SPARQL name classes (`PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`),
+/// from the grammar terminals every PurRDF parser reads names with, so a label
+/// this module writes verbatim is exactly one those parsers accept.
+pub(crate) use purrdf_lex::terminals::{is_pn_chars, is_pn_chars_u};
 
 #[cfg(test)]
 mod tests {
     use super::{
         ESCAPE_MARKER, LabelAlphabet, decode_blank_label, encode_blank_label, escape_label,
-        is_pn_chars, is_pn_chars_base, is_pn_chars_u, is_valid_blank_node_label,
-        is_valid_blank_node_label_prefix, is_valid_label, is_valid_ncname, is_valid_xml_text,
-        retarget_owned_label,
+        is_pn_chars, is_pn_chars_u, is_valid_blank_node_label, is_valid_blank_node_label_prefix,
+        is_valid_label, is_valid_ncname, is_valid_xml_text, retarget_owned_label,
     };
     use crate::BlankScope;
     use std::borrow::Cow;
@@ -1391,38 +1277,6 @@ mod tests {
                     );
                 }
             }
-        }
-    }
-
-    /// The two transcriptions of the same W3C productions -- this module's
-    /// egress tables and the scanner-side [`purrdf_iri::terminals`] -- must
-    /// agree on every Unicode scalar value. Neither is derived from the other,
-    /// so this is the check that catches a typo in either.
-    #[test]
-    fn egress_tables_agree_with_the_shared_scanner_terminals() {
-        for cp in 0..=0x0010_FFFF_u32 {
-            let Some(c) = char::from_u32(cp) else {
-                continue;
-            };
-            // `PN_CHARS_BASE` is asserted on its own rather than left to follow
-            // from `PN_CHARS_U`: both sides define `_U` as `'_' || base`, so a
-            // disagreement at `'_'` -- the one scalar `_U` admits regardless of
-            // the base table -- would cancel out and go unseen.
-            assert_eq!(
-                is_pn_chars_base(c),
-                purrdf_iri::terminals::is_pn_chars_base(c),
-                "{c:?}"
-            );
-            assert_eq!(
-                is_pn_chars_u(c),
-                purrdf_iri::terminals::is_pn_chars_u(c),
-                "{c:?}"
-            );
-            assert_eq!(
-                is_pn_chars(c),
-                purrdf_iri::terminals::is_pn_chars(c),
-                "{c:?}"
-            );
         }
     }
 }

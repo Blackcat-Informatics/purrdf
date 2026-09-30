@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Value-token-dense tokenizer benchmark.
@@ -16,8 +16,8 @@
 //! `String` per token, so this bench measures exactly the allocation the change
 //! removes on the common no-escape path.
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_sparql_algebra::{SparqlParser, lexer::tokenize};
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 
 const ROWS: usize = 4_000;
 
@@ -40,7 +40,7 @@ fn value_fixture(rows: usize) -> String {
     out
 }
 
-fn bench_tokenize_values(c: &mut Criterion) {
+fn bench_tokenize_values(c: &mut Bench) {
     let text = value_fixture(ROWS);
     let mut group = c.benchmark_group("tokenize_values");
     group.throughput(Throughput::Bytes(text.len() as u64));
@@ -60,5 +60,5 @@ fn bench_tokenize_values(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_tokenize_values);
-criterion_main!(benches);
+bench_group!(benches, bench_tokenize_values);
+bench_main!(benches);

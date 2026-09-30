@@ -116,10 +116,15 @@
 //! cargo test -p purrdf-shapes --test box_role_alloc
 //! ```
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+#[path = "support/measured.rs"]
+mod measured;
+
+use std::sync::Arc;
+
+use measured::{assert_parallel_path_is_reachable, measure, measure_lock};
 
 use purrdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
-use purrdf_alloc_probe::{CountingAllocator, Measurement, WholeProcessWindow};
+use purrdf_alloc_probe::CountingAllocator;
 use purrdf_shapes::engine::{FocusId, PreparedShapes, PreparedValidator, parse_shapes_with_config};
 use purrdf_shapes::model::BoxRoleVocab;
 use purrdf_shapes::report::{ValidationReport, ValidationResult};
@@ -127,33 +132,6 @@ use purrdf_shapes::term::NamedNode;
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
-
-/// Serializes every measured region in this binary.
-///
-/// [`WholeProcessWindow`] reads one process-global ledger and `cargo test` runs
-/// test functions concurrently, so two measurements in flight at once would each
-/// report the union of both regions while appearing to report their own.
-static MEASURE_LOCK: Mutex<()> = Mutex::new(());
-
-/// Take [`MEASURE_LOCK`], absorbing poison.
-///
-/// A panicking assertion inside a measured region poisons the mutex. Propagating
-/// that would turn one real failure into a cascade of unrelated ones and bury the
-/// diagnosis; the lock guards a counter, not an invariant a panic could have left
-/// half-written.
-fn measure_lock() -> MutexGuard<'static, ()> {
-    MEASURE_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// Run `operation` inside a whole-process allocation window.
-///
-/// The caller holds [`measure_lock`] and has warmed the operation; this helper
-/// only brackets it.
-fn measure<T>(operation: impl FnOnce() -> T) -> (T, Measurement) {
-    let window = WholeProcessWindow::open();
-    let value = operation();
-    (value, window.close())
-}
 
 /// The fixture's data namespace. Caller-supplied and `example.org` by rule.
 const NS: &str = "http://example.org/purrdf/box-role#";
@@ -166,7 +144,7 @@ const NS: &str = "http://example.org/purrdf/box-role#";
 const META: &str = "http://example.org/purrdf/box-role/meta#";
 
 /// `rdf:type`, spelled out because the measured fixture is built id-natively.
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
 /// Mirrors `PARALLEL_MIN_FOCUS_NODES` in `crates/shapes/src/parallel.rs`.
 ///
@@ -375,21 +353,6 @@ impl Fixture {
         );
         report
     }
-}
-
-/// Refuse to report a figure from a run where the parallel path cannot be taken.
-///
-/// Both sizes are above the threshold at compile time, but a single-threaded
-/// `rayon` pool keeps validation serial whatever the sizes are, and a serial
-/// figure asserted under a parallel test name is the "green because it measured
-/// almost nothing" failure this instrument exists to avoid. That is a property of
-/// the host, so it is checked at run time.
-fn assert_parallel_path_is_reachable() {
-    assert!(
-        rayon::current_num_threads() > 1,
-        "SHACL validation stays serial on a single-threaded rayon pool, so this host cannot \
-         exercise the parallel path these assertions are written about"
-    );
 }
 
 /// The roles a violating result of the measured fixture must carry.
@@ -742,58 +705,6 @@ fn box_roles_are_pinned_for_path_nested_and_reifier_shapes() {
 // 5. The regression guard: every test in this binary holds MEASURE_LOCK first
 // ---------------------------------------------------------------------------
 
-/// Whether `attrs` carries a bare `#[test]` attribute.
-///
-/// Matches by attribute PATH, not by scanning the source text for the word
-/// "test": a doc comment or a code comment that happens to contain that word
-/// must never be read as marking a function.
-fn is_test_attr(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|attr| attr.path().is_ident("test"))
-}
-
-/// Whether `block`'s FIRST statement is a `let` binding whose initializer is a
-/// call to `measure_lock()`.
-///
-/// Not "somewhere in the body": [`WholeProcessWindow`] reads one process-global
-/// ledger for the whole test, so a lock taken after even one allocation has
-/// already let that allocation land unguarded. It must also be a `let` binding
-/// and not a bare `measure_lock();` statement — the returned [`MutexGuard`] is a
-/// temporary that drops at the end of a bare statement, which releases the lock
-/// immediately rather than holding it for the test.
-fn first_statement_holds_measure_lock(block: &syn::Block) -> bool {
-    let Some(syn::Stmt::Local(local)) = block.stmts.first() else {
-        return false;
-    };
-    let Some(init) = &local.init else {
-        return false;
-    };
-    matches!(
-        init.expr.as_ref(),
-        syn::Expr::Call(call)
-            if matches!(
-                call.func.as_ref(),
-                syn::Expr::Path(path) if path.path.is_ident("measure_lock")
-            )
-    )
-}
-
-/// Every `#[test]` function declared anywhere in the scanned file, in source
-/// order.
-///
-/// Walks the whole file rather than only its top-level items, so a `#[test]`
-/// nested inside a `mod` block cannot go unseen.
-#[derive(Default)]
-struct TestFns(Vec<syn::ItemFn>);
-
-impl<'ast> syn::visit::Visit<'ast> for TestFns {
-    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
-        if is_test_attr(&item.attrs) {
-            self.0.push(item.clone());
-        }
-        syn::visit::visit_item_fn(self, item);
-    }
-}
-
 /// **Every `#[test]` function in this binary takes [`MEASURE_LOCK`] as the FIRST
 /// statement of its body.**
 ///
@@ -815,24 +726,13 @@ impl<'ast> syn::visit::Visit<'ast> for TestFns {
 fn every_test_in_this_binary_takes_the_measure_lock_first() {
     let _guard = measure_lock();
     let source = include_str!("box_role_alloc.rs");
-    let parsed = syn::parse_file(source)
-        .unwrap_or_else(|error| panic!("this file must parse as Rust: {error}"));
-    let mut collector = TestFns::default();
-    syn::visit::Visit::visit_file(&mut collector, &parsed);
+    let (tests, offenders) = measured::tests_and_unlocked(source);
 
     assert!(
-        !collector.0.is_empty(),
+        tests > 0,
         "the scan found no #[test] function in this file at all, so this guard is reading \
          nothing"
     );
-
-    let mut offenders: Vec<String> = collector
-        .0
-        .iter()
-        .filter(|item| !first_statement_holds_measure_lock(&item.block))
-        .map(|item| item.sig.ident.to_string())
-        .collect();
-    offenders.sort();
 
     assert!(
         offenders.is_empty(),

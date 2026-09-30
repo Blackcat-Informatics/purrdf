@@ -83,7 +83,7 @@ use core::fmt;
 use core::fmt::Write as _;
 use purrdf_core::TermBox;
 
-use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, display_term};
+use purrdf_core::{TermValue, write_term_value};
 use purrdf_datalog::chase::ChaseError;
 use purrdf_datalog::seminaive::{BudgetResource, EvalError, EvalOptions, render_capacity_refusal};
 use purrdf_entail::{
@@ -173,15 +173,7 @@ const INPUT_MEDIA_TYPE: &str = "application/n-quads";
 /// The CLI spelling of `regime` — the left inverse of [`parse_regime`].
 #[must_use]
 pub const fn regime_name(regime: Regime) -> &'static str {
-    match regime {
-        Regime::Simple => "simple",
-        Regime::Rdf => "rdf",
-        Regime::Rdfs => "rdfs",
-        Regime::OwlRl => "owl-rl",
-        Regime::OwlDirect => "owl-direct",
-        Regime::Rif => "rif",
-        Regime::D => "d",
-    }
+    regime.token()
 }
 
 /// Parse a regime from its CLI spelling (`simple`, `rdf`, `rdfs`, `owl-rl`,
@@ -642,7 +634,7 @@ pub fn regime_plan(regime: Regime, rules: &RuleSet) -> Materialization<'_> {
 pub fn regime_rule_set(regime: Regime, spelling: &str, program: &str) -> Result<RuleSet, String> {
     if regime != Regime::Rif {
         return if program.trim().is_empty() {
-            Ok(RuleSet::new())
+            Ok(RuleSet::default())
         } else {
             Err(format!(
                 "entailment regime \"{spelling}\" takes no rule document, and one was \
@@ -1450,21 +1442,21 @@ pub const AXIOM_KINDS: [&str; 8] = [
     "SubObjectPropertyOf",
 ];
 
+/// `owl:differentFrom` — the mapping's individual-difference predicate.
+use purrdf_iri::vocab::owl::DIFFERENT_FROM as OWL_DIFFERENT_FROM;
+/// `owl:disjointWith` — the mapping's class-disjointness predicate.
+use purrdf_iri::vocab::owl::DISJOINT_WITH as OWL_DISJOINT_WITH;
+/// `owl:equivalentClass` — the mapping's class-equivalence predicate.
+use purrdf_iri::vocab::owl::EQUIVALENT_CLASS as OWL_EQUIVALENT_CLASS;
+/// `owl:sameAs` — the mapping's individual-identity predicate.
+use purrdf_iri::vocab::owl::SAME_AS as OWL_SAME_AS;
 /// `rdf:type` — the OWL 2 RDF mapping's class-assertion predicate, and the
 /// scaffold predicate [`parse_one_term`] parses a bare term through.
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 /// `rdfs:subClassOf` — the mapping's sub-class predicate.
-const RDFS_SUBCLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASS_OF;
 /// `rdfs:subPropertyOf` — the mapping's sub-property predicate.
-const RDFS_SUBPROPERTY_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf";
-/// `owl:equivalentClass` — the mapping's class-equivalence predicate.
-const OWL_EQUIVALENT_CLASS: &str = "http://www.w3.org/2002/07/owl#equivalentClass";
-/// `owl:disjointWith` — the mapping's class-disjointness predicate.
-const OWL_DISJOINT_WITH: &str = "http://www.w3.org/2002/07/owl#disjointWith";
-/// `owl:sameAs` — the mapping's individual-identity predicate.
-const OWL_SAME_AS: &str = "http://www.w3.org/2002/07/owl#sameAs";
-/// `owl:differentFrom` — the mapping's individual-difference predicate.
-const OWL_DIFFERENT_FROM: &str = "http://www.w3.org/2002/07/owl#differentFrom";
+use purrdf_iri::vocab::rdfs::SUB_PROPERTY_OF as RDFS_SUBPROPERTY_OF;
 
 /// One reasoning service's answer and the certificate of the run that produced it.
 ///
@@ -1567,120 +1559,19 @@ impl ReasoningAnswer {
 // ── Term syntax at the boundary ─────────────────────────────────────────────
 
 /// Render `term` in N-Triples term syntax (`<iri>`, `_:label`, `"lex"@en`,
-/// `<<( s p o )>>`).
-///
-/// The escaping is [`purrdf_core::display_term`]'s, so a term rendered here and
-/// the same term rendered by the native serializers escape identically. This is
-/// report/diagnostic identity text (answer and certificate lines), not RDF
-/// document egress, so blank-node label alphabets are deliberately not enforced
-/// here and the function stays total. A triple term whose nesting the owned model
-/// cannot hold is written HERE rather than through `display_term`'s owned model,
-/// because the owned model requires a triple term's predicate to be an IRI and this
-/// function must be total over [`TermValue`].
+/// `<<( s p o )>>`) — [`write_term_value`], the one canonical term writer, so a
+/// term rendered here and the same term rendered by the native serializers are
+/// the same bytes. It is total over [`TermValue`]: a triple term whose predicate
+/// is not an IRI is written as what it is.
 ///
 /// N-Triples terms are self-delimiting — `<…>` ends at the unescaped `>`, `_:…` at
 /// whitespace, `"…"` at the unescaped closing quote — which is what makes a
 /// two-term line like `subclass <C> <D>` unambiguous even though a literal's
 /// lexical form may contain a space.
-///
-/// A triple term the owned model cannot hold is written over a work list: its opening
-/// `<<( ` at once, then its subject next, with the separators, the predicate, the object
-/// and the closing ` )>>` held back in that order until the subject is written. Each of
-/// its components is written by the same rule, so a well-formed one goes through
-/// `display_term` whole.
 fn emit(term: &TermValue) -> String {
-    enum Piece<'t> {
-        Term(&'t TermValue),
-        Text(&'static str),
-    }
     let mut out = String::new();
-    let mut held: Vec<Piece<'_>> = Vec::new();
-    let mut next = Some(Piece::Term(term));
-    while let Some(piece) = next.take().or_else(|| held.pop()) {
-        let term = match piece {
-            Piece::Text(text) => {
-                out.push_str(text);
-                continue;
-            }
-            Piece::Term(term) => term,
-        };
-        let TermValue::Triple { s, p, o } = term else {
-            out.push_str(&emit_leaf(term));
-            continue;
-        };
-        match to_owned_term(term) {
-            Some(owned) => out.push_str(&display_term(&owned)),
-            // A triple term whose predicate is not an IRI — at THIS nesting level or
-            // any level nested inside `s`/`o` — is not a well-formed RDF triple, so
-            // the owned model cannot hold it anywhere along the chain. Rendering it
-            // structurally is the honest option: the caller sees what the term
-            // actually is, including the real offending predicate, rather than a
-            // fabricated empty IRI standing in for it.
-            None => {
-                out.push_str("<<( ");
-                held.extend([
-                    Piece::Text(" )>>"),
-                    Piece::Term(o),
-                    Piece::Text(" "),
-                    Piece::Term(p),
-                    Piece::Text(" "),
-                ]);
-                next = Some(Piece::Term(s));
-            }
-        }
-    }
+    write_term_value(term, &mut out);
     out
-}
-
-/// [`emit`] for a term that is not a triple term.
-fn emit_leaf(term: &TermValue) -> String {
-    match to_owned_term(term) {
-        Some(owned) => display_term(&owned),
-        None => unreachable!("a term that is not a triple term has an owned twin"),
-    }
-}
-
-/// The owned-model twin of a [`TermValue`], for [`emit`].
-///
-/// `None` iff `term` — or any triple term nested inside it, at any depth — has a
-/// predicate that is not an IRI. The owned model ([`RdfTriple`]) requires an IRI
-/// predicate by construction, so there is no owned value to return for such a
-/// term; callers fall back to [`emit`]'s structural `<<( … )>>` rendering, which
-/// shows the real offending term instead of a fabricated placeholder.
-///
-/// A triple term is assembled bottom-up over [`TermValue::try_fold`]'s work list.
-fn to_owned_term(term: &TermValue) -> Option<RdfTerm> {
-    term.try_fold(
-        |leaf| {
-            Ok(match leaf {
-                TermValue::Iri(iri) => RdfTerm::iri(iri.clone()),
-                TermValue::Blank { label, scope } => {
-                    RdfTerm::blank_node(scope.qualify_label(label).into_owned())
-                }
-                TermValue::Literal {
-                    lexical_form,
-                    datatype,
-                    language,
-                    direction,
-                } => RdfTerm::literal(RdfLiteral {
-                    lexical_form: lexical_form.clone(),
-                    datatype: Some(datatype.clone()),
-                    language: language.clone(),
-                    direction: *direction,
-                }),
-                TermValue::Triple { .. } => {
-                    unreachable!("a triple term is folded from its parts")
-                }
-            })
-        },
-        |subject, predicate, object| match predicate {
-            RdfTerm::Iri(predicate) => {
-                Ok(RdfTerm::triple(RdfTriple::new(subject, predicate, object)))
-            }
-            RdfTerm::BlankNode(_) | RdfTerm::Literal(_) | RdfTerm::Triple(_) => Err(()),
-        },
-    )
-    .ok()
 }
 
 /// Parse ONE N-Triples term — an IRI or a blank node — from `text`.
@@ -2024,24 +1915,16 @@ fn parse_proof_service(name: &str) -> Result<Service, String> {
     }
 }
 
-/// Parse lowercase hex back to bytes, refusing an odd length or a non-hex digit.
-fn unhex(text: &str) -> Result<Vec<u8>, String> {
-    if !text.len().is_multiple_of(2) {
-        return Err("a proof body line has an odd number of hex digits".to_owned());
-    }
-    let mut out = Vec::with_capacity(text.len() / 2);
-    for pair in text.as_bytes().as_chunks::<2>().0 {
-        let digit = |byte: u8| match byte {
-            b'0'..=b'9' => Ok(byte - b'0'),
-            b'a'..=b'f' => Ok(byte - b'a' + 10),
-            other => Err(format!(
-                "a proof body carries {:?}, which is not a lowercase hex digit",
-                char::from(other)
-            )),
-        };
-        out.push(digit(pair[0])? << 4 | digit(pair[1])?);
-    }
-    Ok(out)
+/// A proof body line's bytes: its canonical lowercase hex read by
+/// [`purrdf_hash::hex::decode_canonical`], refused in this grammar's words.
+fn proof_body_bytes(text: &str) -> Result<Vec<u8>, String> {
+    purrdf_hash::hex::decode_canonical(text).map_err(|error| match error {
+        purrdf_hash::hex::HexError::InvalidDigit { byte, .. } => format!(
+            "a proof body carries {:?}, which is not a lowercase hex digit",
+            char::from(byte)
+        ),
+        _ => "a proof body line has an odd number of hex digits".to_owned(),
+    })
 }
 
 /// Render a [`ServiceProof`] to the boundary's byte-stable textual form.
@@ -2105,7 +1988,7 @@ pub fn render_dl_proof(proof: &ServiceProof) -> String {
     out.push('\n');
     let _ = writeln!(out, "service {}", proof_service_name(proof.service()));
     out.push_str("availability recorded\n");
-    let _ = writeln!(out, "input {}", purrdf_core::hex::lower(&proof.input()));
+    let _ = writeln!(out, "input {}", purrdf_hash::hex::encode(&proof.input()));
     let _ = writeln!(out, "digest {}", proof.digest_hex());
     let _ = writeln!(
         out,
@@ -2137,7 +2020,7 @@ pub fn render_dl_proof(proof: &ServiceProof) -> String {
     }
     let _ = writeln!(out, "bytes {}", bytes.len());
     for chunk in bytes.chunks(PROOF_BODY_BYTES_PER_LINE) {
-        let _ = writeln!(out, "body {}", purrdf_core::hex::lower(chunk));
+        let _ = writeln!(out, "body {}", purrdf_hash::hex::encode(chunk));
     }
     out
 }
@@ -2182,7 +2065,7 @@ pub fn decode_dl_proof(document: &str) -> Result<ServiceProof, String> {
     let mut bytes = Vec::new();
     for line in lines {
         if let Some(hex) = line.strip_prefix("body ") {
-            bytes.extend_from_slice(&unhex(hex)?);
+            bytes.extend_from_slice(&proof_body_bytes(hex)?);
         }
     }
     if bytes.is_empty() {
@@ -3340,7 +3223,7 @@ const QUERY_VAR_IRI: &str = "urn:purrdf-query-variable:purrdfQvar";
 /// contain the namespace as text, the parser hands back an IRI that does, and a sweep over
 /// the raw bytes alone would then read the caller's own IRI back as a variable — one
 /// spelling answering a different question from the other. So the sweep runs over the raw
-/// text AND over [`uchar_expanded`], and either occurrence extends the namespace.
+/// text AND over its `UCHAR` expansion ([`purrdf_iri::terminals::expand_uchars`]), and either occurrence extends the namespace.
 ///
 /// That is sound rather than approximate. The lexer's only transformation of an IRIREF
 /// body is `\uXXXX`/`\UXXXXXXXX` decoding, and in a document that parses at all every `\`
@@ -3358,7 +3241,11 @@ fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, String> {
     // The one namespace the caller's own text does not contain — the IRI a variable is
     // rewritten INTO, so no IRI the caller wrote can be read back as a variable, in either
     // of the two ways N-Triples lets them write it (see the item docs).
-    let expanded = uchar_expanded(text);
+    // Every well-formed `UCHAR` replaced by the character it denotes, and every other `\`
+    // copied through as itself, exactly as the lexer leaves it: an IRIREF's only decoding is
+    // this one, so an IRI the parser will hand back containing the stand-in namespace spells
+    // it here, whichever of the two ways the caller wrote it.
+    let expanded = purrdf_iri::terminals::expand_uchars(text);
     let mut iri_prefix = QUERY_VAR_IRI.to_owned();
     while text.contains(&iri_prefix) || expanded.contains(&iri_prefix) {
         iri_prefix.push('q');
@@ -3576,63 +3463,6 @@ fn restore_query_vars(
     )
 }
 
-/// `text` with every N-Triples `UCHAR` escape — `\uXXXX` and `\UXXXXXXXX` — replaced by the
-/// character it denotes.
-///
-/// The one string [`parse_bgp`]'s namespace sweep needs beside the raw text: an IRIREF's
-/// only decoding is this one, so an IRI the parser will hand back containing the stand-in
-/// namespace must spell that namespace here, whichever of the two ways the caller wrote it.
-/// See [`parse_bgp`] for why sweeping the raw bytes alone is not enough and why expanding an
-/// escape the parser would not decode costs nothing.
-///
-/// A `\` that does not begin a well-formed `UCHAR` is copied through as itself, exactly as
-/// the lexer leaves it — one that reaches an IRIREF makes the document unparseable, and one
-/// inside a literal is some other escape whose expansion no IRI can be read out of.
-fn uchar_expanded(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = String::with_capacity(text.len());
-    let mut at = 0;
-    while at < bytes.len() {
-        if bytes[at] == b'\\'
-            && let Some((width, decoded)) = read_uchar(bytes, at)
-        {
-            out.push(decoded);
-            at += width;
-            continue;
-        }
-        // `at` is a char boundary: every byte consumed above is ASCII, and so is every byte
-        // of an escape, so the slice below always starts on one.
-        let character = text[at..]
-            .chars()
-            .next()
-            .expect("`at` is a char boundary inside the string");
-        out.push(character);
-        at += character.len_utf8();
-    }
-    out
-}
-
-/// The `UCHAR` escape starting at byte `at` (the `\`), as `(bytes consumed, character)`.
-///
-/// The escape is all-ASCII, so the byte count is the character count. `None` for anything
-/// that is not a complete, in-range `\uXXXX` / `\UXXXXXXXX` — the same reading the lexer
-/// this shadows applies, so the two agree about what an escape IS as well as about what it
-/// denotes.
-fn read_uchar(bytes: &[u8], at: usize) -> Option<(usize, char)> {
-    let width = match *bytes.get(at + 1)? {
-        b'u' => 4,
-        b'U' => 8,
-        _ => return None,
-    };
-    let mut value: u32 = 0;
-    for offset in 0..width {
-        // Sixteen times a 28-bit prefix plus a digit, `width` times: `\U`'s eight digits
-        // reach `u32::MAX` exactly, so no step can overflow.
-        value = value * 16 + char::from(*bytes.get(at + 2 + offset)?).to_digit(16)?;
-    }
-    Some((2 + width, char::from_u32(value)?))
-}
-
 /// The caller's `owl:imports` table, as an ORDERED list of `(ontology-iri, document)` pairs.
 ///
 /// One entry declares that the ontology IRI an `owl:imports` names denotes that document —
@@ -3674,30 +3504,23 @@ pub type ImportList<'a> = [(&'a str, &'a str)];
 ///
 /// # Errors
 ///
-/// A document that is not N-Quads; an entry with an empty ontology IRI, which no
+/// A document that is not N-Quads; an entry whose ontology IRI is not an absolute IRI, which no
 /// `owl:imports` object can ever equal and which would therefore be configuration that silently
 /// never applies; or one ontology IRI declared twice, where keeping either document would be a
-/// choice this boundary made on the caller's behalf.
+/// choice this boundary made on the caller's behalf ([`ImportMap::try_insert`] is the one key
+/// policy).
 fn build_import_map(imports: &ImportList<'_>) -> Result<ImportMap, String> {
-    let mut map = ImportMap::new();
+    let mut map = ImportMap::default();
+    let refuse = |error: purrdf_core::imports::ImportKeyError| {
+        format!("the import list is unusable: {error}")
+    };
     for (iri, document) in imports {
-        if iri.is_empty() {
-            return Err(
-                "an import entry names the empty ontology IRI, which no owl:imports object can \
-                 equal, so the document it supplies could never be resolved"
-                    .to_owned(),
-            );
-        }
+        map.check_key(iri).map_err(refuse)?;
         let parsed = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
             .map_err(|diagnostic| {
                 format!("the import document for <{iri}> is not N-Quads: {diagnostic}")
             })?;
-        if map.insert((*iri).to_owned(), parsed).is_some() {
-            return Err(format!(
-                "the import list declares <{iri}> twice; keeping either document would be a \
-                 choice this boundary made for the caller"
-            ));
-        }
+        map.try_insert(*iri, parsed).map_err(refuse)?;
     }
     Ok(map)
 }
@@ -4691,7 +4514,7 @@ pub fn check_dl_proof(
     let _ = writeln!(out, "service {}", proof_service_name(term.service()));
     out.push_str("availability recorded\n");
     let _ = writeln!(out, "digest {}", term.digest_hex());
-    let _ = writeln!(out, "input {}", purrdf_core::hex::lower(&term.input()));
+    let _ = writeln!(out, "input {}", purrdf_hash::hex::encode(&term.input()));
     let _ = writeln!(out, "runs {}", replay.runs());
     let _ = writeln!(out, "replayed {}", replay.replayed());
     let _ = writeln!(out, "claims {}", replay.claims());
@@ -7749,7 +7572,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
         )
         .expect_err("one ontology IRI declared twice");
         assert!(
-            twice.contains("declares <http://example.org/schema> twice"),
+            twice.contains("names <http://example.org/schema> twice"),
             "{twice}"
         );
 
@@ -8020,12 +7843,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
     fn on_the_smallest_stack<T: Send + 'static>(
         question: impl FnOnce() -> T + Send + 'static,
     ) -> T {
-        std::thread::Builder::new()
-            .stack_size(SMALLEST_TARGET_STACK)
-            .spawn(question)
-            .expect("a thread")
-            .join()
-            .expect("the question is answered rather than aborting the process")
+        purrdf_stack::on_stack(SMALLEST_TARGET_STACK, question).expect("a thread")
     }
 
     /// `count` ground triples sharing a subject and an object, one predicate each.
@@ -8667,43 +8485,13 @@ mod term_walk_tests {
     //! against their recursive references, and deep on a 128 KiB thread where the result
     //! holds no owned-model term.
 
-    use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermBox, TermValue, display_term};
+    use purrdf_core::{TermBox, TermValue, display_term};
 
-    use super::{emit, restore_query_vars, to_owned_term};
-
-    fn reference_owned(term: &TermValue) -> Option<RdfTerm> {
-        match term {
-            TermValue::Triple { s, p, o } => {
-                let TermValue::Iri(predicate) = &**p else {
-                    return None;
-                };
-                Some(RdfTerm::triple(RdfTriple::new(
-                    reference_owned(s)?,
-                    predicate.clone(),
-                    reference_owned(o)?,
-                )))
-            }
-            TermValue::Iri(iri) => Some(RdfTerm::iri(iri.clone())),
-            TermValue::Blank { label, scope } => {
-                Some(RdfTerm::blank_node(scope.qualify_label(label).into_owned()))
-            }
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                direction,
-            } => Some(RdfTerm::literal(RdfLiteral {
-                lexical_form: lexical_form.clone(),
-                datatype: Some(datatype.clone()),
-                language: language.clone(),
-                direction: *direction,
-            })),
-        }
-    }
+    use super::{emit, restore_query_vars};
 
     fn reference_emit(term: &TermValue) -> String {
         match term {
-            TermValue::Triple { s, p, o } => match reference_owned(term) {
+            TermValue::Triple { s, p, o } => match term.to_rdf_term().ok() {
                 Some(owned) => display_term(&owned),
                 None => format!(
                     "<<( {} {} {} )>>",
@@ -8712,7 +8500,7 @@ mod term_walk_tests {
                     reference_emit(o)
                 ),
             },
-            leaf => display_term(&reference_owned(leaf).expect("a leaf has an owned twin")),
+            leaf => display_term(&leaf.to_rdf_term().expect("a leaf has an owned twin")),
         }
     }
 
@@ -8781,14 +8569,13 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = purrdf_core::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::Any,
+                purrdf_core::term_fixture::TermShape::Any,
             );
-            let owned = to_owned_term(&value);
-            assert_eq!(owned, reference_owned(&value), "seed {seed}");
-            malformed += usize::from(owned.is_none());
+            malformed += usize::from(value.to_rdf_term().is_err());
             assert_eq!(emit(&value), reference_emit(&value), "seed {seed}");
             let restored = restore_query_vars(value.clone(), &slot, &names);
             refused += usize::from(restored.is_err());
@@ -8811,23 +8598,19 @@ mod term_walk_tests {
     #[test]
     fn a_deep_malformed_term_renders_on_a_128_kib_thread() {
         const LEVELS: usize = 2_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut value = TermValue::iri("http://example.org/o");
-                for _ in 0..LEVELS {
-                    value = TermValue::Triple {
-                        s: TermBox::new(TermValue::iri("http://example.org/s")),
-                        p: TermBox::new(TermValue::blank("p")),
-                        o: TermBox::new(value),
-                    };
-                }
-                let rendered = emit(&value);
-                assert_eq!(rendered.matches("<<( ").count(), LEVELS);
-                assert!(to_owned_term(&value).is_none());
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the rendering did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut value = TermValue::iri("http://example.org/o");
+            for _ in 0..LEVELS {
+                value = TermValue::Triple {
+                    s: TermBox::new(TermValue::iri("http://example.org/s")),
+                    p: TermBox::new(TermValue::blank("p")),
+                    o: TermBox::new(value),
+                };
+            }
+            let rendered = emit(&value);
+            assert_eq!(rendered.matches("<<( ").count(), LEVELS);
+            assert!(value.to_rdf_term().is_err());
+        })
+        .expect("the thread starts");
     }
 }

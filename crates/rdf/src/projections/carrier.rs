@@ -8,7 +8,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use purrdf_core::{DatasetView, LossLedger, RdfDataset};
-use serde::{Deserialize, Serialize};
+use purrdf_lex::json::{Object, Value};
 
 use super::{
     CroissantConfig, CsvwConfig, CsvwTermsConfig, DataCiteConfig, DcatConfig, DcatRdfConfig,
@@ -23,13 +23,13 @@ use super::{
     read_croissant, read_csvw_exact, read_datacite, read_dcat, read_frictionless, read_lpg_csv,
     read_lpg_cypher, read_lpg_graphml, read_neo4j_csv, read_ro_crate,
 };
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
 
 const OBO_GRAPHS_PATH: &str = "obo-graphs.json";
 const SKOS_PATH: &str = "skos.ttl";
 
 /// Closed set of RDF projection archive profiles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProjectionProfile {
     /// Generic deterministic LPG CSV package.
     LpgCsv,
@@ -50,23 +50,18 @@ pub enum ProjectionProfile {
     /// SKOS Turtle concept-scheme view (write-only).
     Skos,
     /// Croissant 1.1 research-object package.
-    #[serde(rename = "croissant-1.1")]
     Croissant11,
     /// RO-Crate 1.3 research-object package.
-    #[serde(rename = "ro-crate-1.3")]
     RoCrate13,
     /// DataCite Metadata Schema 4.6 package.
-    #[serde(rename = "datacite-4.6")]
     DataCite46,
     /// DCAT 3 research-object package.
-    #[serde(rename = "dcat-3")]
     Dcat3,
     /// Native RDF DCAT description view (write-only).
     DcatRdf,
     /// VoID dataset-description and linkset view (write-only).
     Void,
     /// Frictionless Data Package v1.
-    #[serde(rename = "frictionless-data-package-1")]
     FrictionlessDataPackage1,
 }
 
@@ -177,8 +172,7 @@ impl FromStr for ProjectionProfile {
 /// Curated CSVW/OKF terms, OBO Graphs, SKOS, native DCAT RDF, and VoID cannot be
 /// constructed as this type: they are deliberately write-only views rather than
 /// pretend round-trip carriers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LiftProfile {
     /// Generic deterministic LPG CSV package.
     LpgCsv,
@@ -191,19 +185,14 @@ pub enum LiftProfile {
     /// Exact, lossless RDF 1.2 CSVW package.
     CsvwExact,
     /// Croissant 1.1 research-object package.
-    #[serde(rename = "croissant-1.1")]
     Croissant11,
     /// RO-Crate 1.3 research-object package.
-    #[serde(rename = "ro-crate-1.3")]
     RoCrate13,
     /// DataCite Metadata Schema 4.6 package.
-    #[serde(rename = "datacite-4.6")]
     DataCite46,
     /// DCAT 3 research-object package.
-    #[serde(rename = "dcat-3")]
     Dcat3,
     /// Frictionless Data Package v1.
-    #[serde(rename = "frictionless-data-package-1")]
     FrictionlessDataPackage1,
 }
 
@@ -264,13 +253,7 @@ impl FromStr for LiftProfile {
 /// rejects unknown fields at both layers. Each profile variant carries the exact
 /// mandatory configuration its engine requires; no library vocabulary or limits
 /// are synthesized.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    tag = "profile",
-    content = "config",
-    rename_all = "kebab-case",
-    deny_unknown_fields
-)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectionConfig {
     /// Generic deterministic LPG CSV configuration.
     LpgCsv(LpgConfig),
@@ -291,23 +274,18 @@ pub enum ProjectionConfig {
     /// SKOS concept-scheme configuration.
     Skos(Box<SkosConfig>),
     /// Croissant 1.1 configuration.
-    #[serde(rename = "croissant-1.1")]
     Croissant11(Box<CroissantConfig>),
     /// RO-Crate 1.3 configuration.
-    #[serde(rename = "ro-crate-1.3")]
     RoCrate13(Box<RoCrateConfig>),
     /// DataCite Metadata Schema 4.6 configuration.
-    #[serde(rename = "datacite-4.6")]
     DataCite46(Box<DataCiteConfig>),
     /// DCAT 3 configuration.
-    #[serde(rename = "dcat-3")]
     Dcat3(Box<DcatConfig>),
     /// Native RDF DCAT description configuration.
     DcatRdf(Box<DcatRdfConfig>),
     /// VoID dataset-description configuration.
     Void(Box<VoidConfig>),
     /// Frictionless Data Package v1 configuration.
-    #[serde(rename = "frictionless-data-package-1")]
     FrictionlessDataPackage1(Box<FrictionlessConfig>),
 }
 
@@ -319,9 +297,12 @@ impl ProjectionConfig {
     /// Returns a typed syntax/configuration error for malformed JSON, an unknown
     /// profile, an unknown field, or an invalid nested mandatory policy.
     pub fn from_json(bytes: &[u8]) -> Result<Self, ProjectionError> {
-        serde_json::from_slice(bytes).map_err(|error| {
-            ProjectionError::syntax(format!("parse projection configuration JSON: {error}"))
-        })
+        purrdf_lex::json::read_slice(bytes, purrdf_lex::json::Limits::DEFAULT)
+            .map_err(DecodeError::from)
+            .and_then(|value| config_from_json(&value))
+            .map_err(|error| {
+                ProjectionError::syntax(format!("parse projection configuration JSON: {error}"))
+            })
     }
 
     /// Deterministic compact JSON representation.
@@ -331,9 +312,7 @@ impl ProjectionConfig {
     /// Returns a typed integrity error if the validated configuration cannot be
     /// serialized.
     pub fn to_json(&self) -> Result<Vec<u8>, ProjectionError> {
-        serde_json::to_vec(self).map_err(|error| {
-            ProjectionError::integrity(format!("serialize projection configuration JSON: {error}"))
-        })
+        Ok(purrdf_lex::json::write_compact(&config_to_json(self)).into_bytes())
     }
 
     /// Profile carried by this configuration.
@@ -648,6 +627,87 @@ fn lift_lpg_package(
     })
 }
 
+impl ToJson for ProjectionProfile {
+    fn to_json(&self) -> Value {
+        Value::from(self.as_str())
+    }
+}
+
+impl ToJson for LiftProfile {
+    fn to_json(&self) -> Value {
+        Value::from(self.as_str())
+    }
+}
+
+/// `{"profile": …, "config": …}`: the profile's spelling and its
+/// configuration, and no other member.
+fn config_from_json(value: &Value) -> Result<ProjectionConfig, DecodeError> {
+    let spellings: Vec<&str> = ProjectionProfile::ALL
+        .iter()
+        .map(|profile| profile.as_str())
+        .collect();
+    let mut fields = Record::new(value, "adjacently tagged enum ProjectionConfig")?;
+    let tag = fields.tag("profile", &spellings)?;
+    let profile = ProjectionProfile::ALL
+        .iter()
+        .copied()
+        .find(|profile| profile.as_str() == tag)
+        .expect("the tag names a listed profile");
+    let config = fields
+        .raw("config")?
+        .ok_or_else(|| DecodeError::missing_field("config"))?;
+    fields.deny_unknown()?;
+    Ok(match profile {
+        ProjectionProfile::LpgCsv => ProjectionConfig::LpgCsv(FromJson::from_json(config)?),
+        ProjectionProfile::Neo4jCsv => ProjectionConfig::Neo4jCsv(FromJson::from_json(config)?),
+        ProjectionProfile::OpenCypher => ProjectionConfig::OpenCypher(FromJson::from_json(config)?),
+        ProjectionProfile::Graphml => ProjectionConfig::Graphml(FromJson::from_json(config)?),
+        ProjectionProfile::CsvwExact => ProjectionConfig::CsvwExact(FromJson::from_json(config)?),
+        ProjectionProfile::CsvwTerms => ProjectionConfig::CsvwTerms(FromJson::from_json(config)?),
+        ProjectionProfile::OkfTerms => ProjectionConfig::OkfTerms(FromJson::from_json(config)?),
+        ProjectionProfile::OboGraphs => ProjectionConfig::OboGraphs(FromJson::from_json(config)?),
+        ProjectionProfile::Skos => ProjectionConfig::Skos(FromJson::from_json(config)?),
+        ProjectionProfile::Croissant11 => {
+            ProjectionConfig::Croissant11(FromJson::from_json(config)?)
+        }
+        ProjectionProfile::RoCrate13 => ProjectionConfig::RoCrate13(FromJson::from_json(config)?),
+        ProjectionProfile::DataCite46 => ProjectionConfig::DataCite46(FromJson::from_json(config)?),
+        ProjectionProfile::Dcat3 => ProjectionConfig::Dcat3(FromJson::from_json(config)?),
+        ProjectionProfile::DcatRdf => ProjectionConfig::DcatRdf(FromJson::from_json(config)?),
+        ProjectionProfile::Void => ProjectionConfig::Void(FromJson::from_json(config)?),
+        ProjectionProfile::FrictionlessDataPackage1 => {
+            ProjectionConfig::FrictionlessDataPackage1(FromJson::from_json(config)?)
+        }
+    })
+}
+
+/// The `{"profile": …, "config": …}` value of a configuration.
+fn config_to_json(config: &ProjectionConfig) -> Value {
+    let body = match config {
+        ProjectionConfig::LpgCsv(config)
+        | ProjectionConfig::Neo4jCsv(config)
+        | ProjectionConfig::OpenCypher(config)
+        | ProjectionConfig::Graphml(config) => config.to_json(),
+        ProjectionConfig::CsvwExact(config) => config.to_json(),
+        ProjectionConfig::CsvwTerms(config) => config.to_json(),
+        ProjectionConfig::OkfTerms(config) => config.to_json(),
+        ProjectionConfig::OboGraphs(config) => config.to_json(),
+        ProjectionConfig::Skos(config) => config.to_json(),
+        ProjectionConfig::Croissant11(config) => config.to_json(),
+        ProjectionConfig::RoCrate13(config) => config.to_json(),
+        ProjectionConfig::DataCite46(config) => config.to_json(),
+        ProjectionConfig::Dcat3(config) => config.to_json(),
+        ProjectionConfig::DcatRdf(config) => config.to_json(),
+        ProjectionConfig::Void(config) => config.to_json(),
+        ProjectionConfig::FrictionlessDataPackage1(config) => config.to_json(),
+    };
+    Value::Object(
+        Object::new()
+            .with("profile", config.profile().as_str())
+            .with("config", body),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{LpgExecutionLimits, LpgScope};
@@ -878,14 +938,13 @@ mod tests {
             .expect("repeat DCAT RDF project");
         assert_eq!(first.archive, second.archive);
 
-        let mut unknown: serde_json::Value =
-            serde_json::from_slice(DCAT_RDF_CONFIG).expect("fixture JSON");
-        unknown["config"]["source"]["extra"] = serde_json::Value::Bool(true);
+        let mut unknown =
+            purrdf_lex::json::read(std::str::from_utf8(DCAT_RDF_CONFIG).expect("fixture UTF-8"))
+                .expect("fixture JSON");
+        unknown["config"]["source"]["extra"] = Value::Bool(true);
         assert!(
-            ProjectionConfig::from_json(
-                &serde_json::to_vec(&unknown).expect("serialize invalid config")
-            )
-            .is_err()
+            ProjectionConfig::from_json(purrdf_lex::json::write_compact(&unknown).as_bytes())
+                .is_err()
         );
     }
 
@@ -995,11 +1054,11 @@ mod tests {
                 Ok(lift_profile)
             );
             assert_eq!(
-                serde_json::to_string(&project_profile).expect("serialize project profile"),
+                purrdf_lex::json::write_compact(&project_profile.to_json()),
                 format!("\"{}\"", project_profile.as_str())
             );
             assert_eq!(
-                serde_json::to_string(&lift_profile).expect("serialize lift profile"),
+                purrdf_lex::json::write_compact(&lift_profile.to_json()),
                 format!("\"{}\"", lift_profile.as_str())
             );
             let config = ProjectionConfig::from_json(bytes).expect("tagged profile config");

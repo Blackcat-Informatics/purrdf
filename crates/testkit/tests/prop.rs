@@ -23,7 +23,7 @@ use purrdf_testkit::prop::prelude::*;
 use purrdf_testkit::prop::state_machine::{self, ReferenceStateMachine, SystemUnderTest};
 use purrdf_testkit::prop::{
     CASES_VARIABLE, Choices, FailedCase, Failure, HexError, Invalid, RunSummary, Runner,
-    SEED_VARIABLE, parse_seed, replay, seed_for,
+    SEED_VARIABLE, parse_cases, parse_seed, replay, seed_for,
 };
 
 /// Every regex pattern a property in this workspace generates strings from,
@@ -703,6 +703,30 @@ fn seeds_parse_in_decimal_and_hex_and_refuse_anything_else() {
     assert!(parse_seed("forty-two").is_err());
     assert!(parse_seed("0x").is_err());
     assert!(parse_seed("-1").is_err());
+}
+
+#[test]
+fn a_signed_seed_is_refused_and_its_unsigned_neighbour_parses() {
+    assert_eq!(parse_seed("5"), Ok(5));
+    assert!(parse_seed("+5").is_err());
+    assert_eq!(parse_seed("0xff"), Ok(0xff));
+    assert!(parse_seed("0x+ff").is_err());
+    assert!(parse_seed("0x-ff").is_err());
+    assert!(parse_seed("-0xff").is_err());
+    assert!(parse_seed("+0xff").is_err());
+    assert_eq!(parse_seed("18446744073709551615"), Ok(u64::MAX));
+    assert!(parse_seed("18446744073709551616").is_err());
+}
+
+#[test]
+fn a_case_count_is_positive_decimal_digits_only() {
+    assert_eq!(parse_cases("5"), Ok(5));
+    assert_eq!(parse_cases(" 12 "), Ok(12));
+    assert!(parse_cases("+5").is_err());
+    assert!(parse_cases("-5").is_err());
+    assert!(parse_cases("0").is_err());
+    assert!(parse_cases("0x5").is_err());
+    assert!(parse_cases("five").is_err());
 }
 
 /// Run by [`the_seed_variable_overrides_the_default_seed`] as a child process:

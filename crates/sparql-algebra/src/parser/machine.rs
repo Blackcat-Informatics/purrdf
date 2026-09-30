@@ -34,6 +34,7 @@ use crate::ast::{Literal, NamedNode, NamedNodePattern, Variable};
 use crate::error::{ParseError, Result};
 use crate::lexer::Token;
 use crate::tree::Child;
+use purrdf_hash::fixed::FixedState;
 
 use super::{
     ExistsScopeBasis, Modifiers, Parser, PendingExistsScopeCheck, ScopeConstruct, SelectPosition,
@@ -408,7 +409,7 @@ impl GroupState {
         Self {
             g: GraphPattern::Bgp { patterns: vec![] },
             filters: Vec::new(),
-            scope: VarScope::new(),
+            scope: VarScope::default(),
             open_bgp: None,
             intro: false,
             union: None,
@@ -1455,7 +1456,7 @@ impl Parser<'_, '_> {
                     version, self.version,
                     "a sub-SELECT copies the request's one prologue VERSION"
                 );
-                let mut scope = VarScope::new();
+                let mut scope = VarScope::default();
                 collect_vars(&pattern, &mut scope);
                 GroupValue {
                     pattern,
@@ -2030,7 +2031,7 @@ impl Parser<'_, '_> {
             // A PRODUCTION consultation of the whole WHERE pattern's scope — once per
             // SELECT with expression-valued GROUP BY conditions.
             self.note_scope_consultation();
-            let mut in_scope: std::collections::HashSet<Variable> =
+            let mut in_scope: std::collections::HashSet<Variable, FixedState> =
                 visible_variables(&where_pat).into_iter().collect();
             for (variable, _) in &modifiers.group_extends {
                 if !in_scope.insert(variable.clone()) {
@@ -2056,7 +2057,7 @@ impl Parser<'_, '_> {
             let aggregating = !modifiers.group_by.is_empty()
                 || !modifiers.group_extends.is_empty()
                 || !aggregates.is_empty();
-            let mut in_scope: std::collections::HashSet<Variable> = if aggregating {
+            let mut in_scope: std::collections::HashSet<Variable, FixedState> = if aggregating {
                 modifiers
                     .group_by
                     .iter()
@@ -2084,15 +2085,17 @@ impl Parser<'_, '_> {
             // differs from `in_scope` only when the query aggregates.
             if !self.pending_exists_scope_checks.is_empty() {
                 let pending_checks = std::mem::take(&mut self.pending_exists_scope_checks);
-                let mut agg_arg_scope: Option<std::collections::HashSet<Variable>> = None;
+                let mut agg_arg_scope: Option<std::collections::HashSet<Variable, FixedState>> =
+                    None;
                 for pending in pending_checks {
-                    let root: &std::collections::HashSet<Variable> = match pending.basis {
+                    let root: &std::collections::HashSet<Variable, FixedState> = match pending.basis
+                    {
                         ExistsScopeBasis::Projection => &in_scope,
                         ExistsScopeBasis::AggregateArgument => {
                             if aggregating {
                                 if agg_arg_scope.is_none() {
                                     self.note_scope_consultation();
-                                    let scope: std::collections::HashSet<Variable> =
+                                    let scope: std::collections::HashSet<Variable, FixedState> =
                                         visible_variables(&where_pat)
                                             .into_iter()
                                             .chain(
@@ -2175,9 +2178,9 @@ impl Parser<'_, '_> {
         if !star {
             let is_aggregating = !modifiers.group_by.is_empty() || !aggregates.is_empty();
             if is_aggregating {
-                let as_targets: std::collections::HashSet<&Variable> =
+                let as_targets: std::collections::HashSet<&Variable, FixedState> =
                     select_exprs.iter().map(|(v, _)| v).collect();
-                let group_vars: std::collections::HashSet<&Variable> =
+                let group_vars: std::collections::HashSet<&Variable, FixedState> =
                     modifiers.group_by.iter().collect();
                 for var in &projected {
                     if !as_targets.contains(var) && !group_vars.contains(var) {
@@ -2348,7 +2351,7 @@ impl Parser<'_, '_> {
                     .ctl
                     .push(Ctl::Modifiers(ModStage::GroupBracketed));
                 return Ok(self.activate(Reach::Full, Sink::Refuse(AGGREGATE_OUTSIDE)));
-            } else if self.at_bare_group_condition() {
+            } else if self.at_bare_constraint() {
                 // A bare `BuiltInCall` / `FunctionCall` GroupCondition, e.g. `GROUP BY
                 // STR(?x)` — lowered to a synthetic-var Extend.
                 self.machine.ctl.push(Ctl::Modifiers(ModStage::GroupBare));

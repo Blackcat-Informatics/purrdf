@@ -24,8 +24,8 @@
 #   No input was taken from any implementation's own test corpus.
 #
 # WHERE THE VERDICTS CAME FROM
-#   Labelled once by `oxilangtag` 0.1.6 (`LanguageTag::parse(input).is_ok()`),
-#   used purely as an external oracle over the independently generated inputs
+#   Labelled once by an independent external RFC 5646 implementation, run
+#   outside this repository and used purely as an external oracle over the independently generated inputs
 #   above. No upstream code and no upstream test data was read or copied. The
 #   oracle crate is not, and must not become, a dependency of this workspace.
 #

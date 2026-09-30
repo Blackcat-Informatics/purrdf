@@ -8,7 +8,7 @@
 //! Peak-allocation evidence for `parse_dataset_from_reader` against `parse_dataset`.
 //!
 //! Run with `cargo bench -p purrdf-rdf --bench stream_parse_alloc`. It is a plain
-//! `main` rather than a Criterion harness because the quantity of interest is a MEMORY
+//! `main` rather than a timing-harness bench because the quantity of interest is a MEMORY
 //! high-water mark, not a duration, and a tracking allocator's atomics would perturb
 //! any timing measured beside it.
 //!

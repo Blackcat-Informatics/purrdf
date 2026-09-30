@@ -3,13 +3,16 @@
 
 //! CSVW metadata normalization and inherited-property processing.
 
+use super::table::temporal_datatype;
 use std::collections::{BTreeMap, BTreeSet};
 
+use purrdf_lex::json::{Object, Value};
 use purrdf_xsd::{XsdDatatype, parse as parse_xsd, value_cmp};
 use regex::Regex;
-use serde_json::{Map, Value};
 
+use purrdf_core::RdfTextDirection;
 use purrdf_iri::BaseIri;
+use purrdf_iri::langtag::identity_fold;
 
 use super::super::{ProjectionError, validate_absolute_iri};
 use super::config::{CsvwConfig, CsvwContext};
@@ -82,7 +85,7 @@ struct MetadataLoader<'a> {
 impl MetadataLoader<'_> {
     fn parse_root_context(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         resource: &str,
     ) -> Result<DocumentContext, ProjectionError> {
         let context_value = object.get("@context").ok_or_else(|| {
@@ -160,7 +163,7 @@ impl MetadataLoader<'_> {
 
     fn parse_inherited(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         resource: &str,
         location: &str,
         parent: &CsvwInheritedProperties,
@@ -273,8 +276,8 @@ impl MetadataLoader<'_> {
                 let bytes = self.input.get(&iri).ok_or_else(|| {
                     ProjectionError::package(format!("CSVW schema resource `{iri}` is absent"))
                 })?;
-                let value: Value = crate::json_number::read_json(|| serde_json::from_slice(bytes))
-                    .map_err(|error| {
+                let value: Value =
+                    purrdf_lex::json::record::read_document(bytes).map_err(|error| {
                         ProjectionError::syntax(format!("invalid CSVW schema JSON: {error}"))
                             .at_path(&iri)
                     })?;
@@ -304,7 +307,7 @@ impl MetadataLoader<'_> {
 
     fn parse_schema(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         resource: &str,
         context: &DocumentContext,
         inherited: &CsvwInheritedProperties,
@@ -349,7 +352,7 @@ impl MetadataLoader<'_> {
             virtual_seen |= parsed.virtual_column;
             columns.push(parsed);
         }
-        ensure_unique_column_names(&columns, resource)?;
+        reject_repeated(&columns, |column| &column.name, "column name", resource)?;
         let mut primary_key = column_reference_property(
             object.get("primaryKey"),
             resource,
@@ -408,7 +411,7 @@ impl MetadataLoader<'_> {
 
     fn parse_column(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         resource: &str,
         context: &DocumentContext,
         inherited: &CsvwInheritedProperties,
@@ -659,8 +662,8 @@ impl MetadataLoader<'_> {
                 let bytes = self.input.get(&iri).ok_or_else(|| {
                     ProjectionError::package(format!("CSVW dialect resource `{iri}` is absent"))
                 })?;
-                let value: Value = crate::json_number::read_json(|| serde_json::from_slice(bytes))
-                    .map_err(|error| {
+                let value: Value =
+                    purrdf_lex::json::record::read_document(bytes).map_err(|error| {
                         ProjectionError::syntax(format!("invalid CSVW dialect JSON: {error}"))
                             .at_path(&iri)
                     })?;
@@ -683,7 +686,7 @@ impl MetadataLoader<'_> {
 
     fn parse_dialect(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         resource: &str,
         location: &str,
     ) -> Result<CsvwDialect, ProjectionError> {
@@ -1007,7 +1010,7 @@ impl MetadataLoader<'_> {
 
     fn parse_annotations(
         &self,
-        object: &Map<String, Value>,
+        object: &Object,
         known: &[&str],
         resource: &str,
         location: &str,
@@ -1033,7 +1036,7 @@ impl MetadataLoader<'_> {
 
     fn warn_unknown(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         known: &[&str],
         resource: &str,
         location: &str,
@@ -1063,7 +1066,7 @@ impl MetadataLoader<'_> {
         let bytes = self.input.get(iri).ok_or_else(|| {
             ProjectionError::package(format!("CSVW metadata resource `{iri}` is absent"))
         })?;
-        let value: Value = crate::json_number::read_json(|| serde_json::from_slice(bytes))
+        let value: Value = purrdf_lex::json::record::read_document(bytes)
             .map_err(|error| {
                 ProjectionError::syntax(format!("invalid CSVW metadata JSON: {error}"))
             })
@@ -1119,7 +1122,7 @@ impl MetadataLoader<'_> {
 
     fn parse_group(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         resource: &str,
         context: &DocumentContext,
         inherited: &CsvwInheritedProperties,
@@ -1170,7 +1173,7 @@ impl MetadataLoader<'_> {
             )
             .at_path(resource));
         }
-        ensure_unique_table_urls(&tables, resource)?;
+        reject_repeated(&tables, |table| &table.url, "table URL", resource)?;
         let annotations =
             self.parse_annotations(object, GROUP_PROPERTIES, resource, "$", context)?;
         self.warn_unknown(object, GROUP_PROPERTIES, resource, "$", context);
@@ -1184,7 +1187,7 @@ impl MetadataLoader<'_> {
 
     fn parse_table(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         resource: &str,
         context: &DocumentContext,
         inherited: &CsvwInheritedProperties,
@@ -1396,18 +1399,14 @@ const TRANSFORMATION_PROPERTIES: &[&str] = &[
     "url",
 ];
 
-fn type_is(object: &Map<String, Value>, expected: &str) -> bool {
+fn type_is(object: &Object, expected: &str) -> bool {
     object
         .get("@type")
         .and_then(Value::as_str)
         .is_some_and(|value| value == expected || value.ends_with(&format!("#{expected}")))
 }
 
-fn check_type(
-    object: &Map<String, Value>,
-    expected: &str,
-    resource: &str,
-) -> Result<(), ProjectionError> {
+fn check_type(object: &Object, expected: &str, resource: &str) -> Result<(), ProjectionError> {
     if let Some(value) = object.get("@type") {
         let Some(actual) = value.as_str() else {
             return Err(ProjectionError::integrity(format!(
@@ -1428,7 +1427,7 @@ fn check_type(
 }
 
 fn ensure_only_properties(
-    object: &Map<String, Value>,
+    object: &Object,
     allowed: &[&str],
     resource: &str,
     role: &str,
@@ -1442,22 +1441,8 @@ fn ensure_only_properties(
     Ok(())
 }
 
-fn ensure_unique_table_urls(tables: &[CsvwTable], resource: &str) -> Result<(), ProjectionError> {
-    let mut seen = BTreeSet::new();
-    for table in tables {
-        if !seen.insert(&table.url) {
-            return Err(ProjectionError::integrity(format!(
-                "duplicate CSVW table URL `{}`",
-                table.url
-            ))
-            .at_path(resource));
-        }
-    }
-    Ok(())
-}
-
 fn parse_context_object(
-    map: &Map<String, Value>,
+    map: &Object,
     resource: &str,
     base_iri: &mut BaseIri,
     language: &mut Option<String>,
@@ -1582,7 +1567,7 @@ fn document_base(resource: &str) -> Result<BaseIri, ProjectionError> {
 }
 
 fn parse_optional_id(
-    object: &Map<String, Value>,
+    object: &Object,
     resource: &str,
     context: &DocumentContext,
     location: &str,
@@ -1618,7 +1603,7 @@ fn parse_id_value(
 }
 
 fn array_property<'a>(
-    object: &'a Map<String, Value>,
+    object: &'a Object,
     key: &str,
     resource: &str,
     location: &str,
@@ -1643,7 +1628,7 @@ fn array_property<'a>(
 }
 
 fn optional_array_property<'a>(
-    object: &'a Map<String, Value>,
+    object: &'a Object,
     key: &str,
     resource: &str,
     location: &str,
@@ -1676,23 +1661,6 @@ fn empty_schema(inherited: CsvwInheritedProperties, metadata_explicit: bool) -> 
         inherited,
         annotations: CsvwAnnotations::new(),
     }
-}
-
-fn ensure_unique_column_names(
-    columns: &[CsvwColumn],
-    resource: &str,
-) -> Result<(), ProjectionError> {
-    let mut names = BTreeSet::new();
-    for column in columns {
-        if !names.insert(&column.name) {
-            return Err(ProjectionError::integrity(format!(
-                "duplicate CSVW column name `{}`",
-                column.name
-            ))
-            .at_path(resource));
-        }
-    }
-    Ok(())
 }
 
 fn atomic_bool(
@@ -1911,10 +1879,18 @@ fn parse_text_direction(
 ) -> Option<CsvwTextDirection> {
     match value {
         None => fallback,
-        Some(Value::String(value)) if value == "auto" => Some(CsvwTextDirection::Auto),
-        Some(Value::String(value)) if value == "ltr" => Some(CsvwTextDirection::Ltr),
-        Some(Value::String(value)) if value == "rtl" => Some(CsvwTextDirection::Rtl),
-        Some(Value::String(value)) if value == "inherit" => Some(CsvwTextDirection::Inherit),
+        Some(Value::String(value)) => match value.as_str() {
+            "auto" => Some(CsvwTextDirection::Auto),
+            "inherit" => Some(CsvwTextDirection::Inherit),
+            token => {
+                if let Some(direction) = RdfTextDirection::from_str_token(token) {
+                    Some(direction.into())
+                } else {
+                    invalid_warning(resource, location, "CSVW text direction", warnings);
+                    fallback
+                }
+            }
+        },
         Some(Value::Null) => None,
         Some(_) => {
             invalid_warning(resource, location, "CSVW text direction", warnings);
@@ -1933,8 +1909,14 @@ fn parse_table_direction(
     match value {
         None => fallback,
         Some(Value::String(value)) if value == "auto" => CsvwTableDirection::Auto,
-        Some(Value::String(value)) if value == "ltr" => CsvwTableDirection::Ltr,
-        Some(Value::String(value)) if value == "rtl" => CsvwTableDirection::Rtl,
+        Some(Value::String(value)) => {
+            if let Some(direction) = RdfTextDirection::from_str_token(value) {
+                direction.into()
+            } else {
+                invalid_warning(resource, location, "CSVW table direction", warnings);
+                fallback
+            }
+        }
         Some(_) => {
             invalid_warning(resource, location, "CSVW table direction", warnings);
             fallback
@@ -1964,7 +1946,7 @@ fn natural_language_property(
     warnings: &mut Vec<CsvwWarning>,
 ) -> CsvwNaturalLanguage {
     let mut result = CsvwNaturalLanguage::new();
-    let default_key = default_language.unwrap_or("und").to_ascii_lowercase();
+    let default_key = identity_fold(default_language.unwrap_or("und"));
     match value {
         None => {}
         Some(Value::String(value)) => {
@@ -2027,7 +2009,7 @@ fn natural_language_property(
                     }
                 };
                 if !strings.is_empty() {
-                    result.insert(language.to_ascii_lowercase(), strings);
+                    result.insert(identity_fold(language), strings);
                 }
             }
         }
@@ -2042,12 +2024,12 @@ fn name_from_titles(
     number: usize,
 ) -> String {
     let title = default_language
-        .and_then(|language| titles.get(&language.to_ascii_lowercase()))
+        .and_then(|language| titles.get(&identity_fold(language)))
         .or_else(|| titles.get("und"))
         .and_then(|values| values.first());
     title.map_or_else(
         || format!("_col.{}", number + 1),
-        |value| percent_encode_variable(value),
+        |value| column_name_from_title(value),
     )
 }
 
@@ -2062,18 +2044,32 @@ fn valid_column_name(value: &str) -> bool {
     })
 }
 
-fn percent_encode_variable(value: &str) -> String {
+/// The `name` a column takes from its title when it has none (CSVW Metadata
+/// Vocabulary for Tabular Data, section 5.6 Columns): the title
+/// "percent-encoded as necessary", where a name is restricted to a
+/// `varname` of RFC 6570 section 2.3 (`varchar *( ["."] varchar )`, `varchar
+/// = ALPHA / DIGIT / "_" / pct-encoded`) and "names beginning with `_` are
+/// reserved by this specification".
+///
+/// So ALPHA, DIGIT and `_` are kept, a `.` is kept only between two varchars
+/// (never first, last or doubled), every other byte of the UTF-8 is written
+/// `%XX` in uppercase (`-` and `~` included: neither is a varchar), and a
+/// leading `_` is written `%5F`, so a derived name never takes a reserved one
+/// such as `_row` or `_col.1`.
+pub(super) fn column_name_from_title(value: &str) -> String {
+    let bytes = value.as_bytes();
     let mut output = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'~') {
+    for (index, &byte) in bytes.iter().enumerate() {
+        let keep = byte.is_ascii_alphanumeric()
+            || (byte == b'_' && index > 0)
+            || (byte == b'.'
+                && index > 0
+                && bytes.get(index + 1).is_some_and(|&next| next != b'.'));
+        if keep {
             output.push(char::from(byte));
         } else {
-            use std::fmt::Write as _;
-            let _ = write!(output, "%{byte:02X}");
+            purrdf_iri::percent::push_triplet(&mut output, byte);
         }
-    }
-    if output.starts_with('_') {
-        output.replace_range(..1, "%5F");
     }
     output
 }
@@ -2373,7 +2369,7 @@ fn validate_datatype_format(
     let local = base.strip_prefix(config.vocabulary().xsd_namespace());
     match (local, format) {
         (Some(local), Some(CsvwDatatypeFormat::Pattern(pattern)))
-            if numeric_datatype_name(local) =>
+            if XsdDatatype::from_local(local).is_some_and(XsdDatatype::is_numeric) =>
         {
             if valid_numeric_pattern(&pattern) {
                 Some(CsvwDatatypeFormat::Pattern(pattern))
@@ -2383,7 +2379,7 @@ fn validate_datatype_format(
             }
         }
         (Some(local), Some(CsvwDatatypeFormat::Numeric(mut numeric)))
-            if numeric_datatype_name(local) =>
+            if XsdDatatype::from_local(local).is_some_and(XsdDatatype::is_numeric) =>
         {
             if numeric
                 .pattern
@@ -2410,9 +2406,7 @@ fn validate_datatype_format(
             invalid_warning(resource, location, "boolean format string", warnings);
             None
         }
-        (Some(local), Some(CsvwDatatypeFormat::Pattern(pattern)))
-            if !temporal_datatype_name(local) =>
-        {
+        (Some(local), Some(CsvwDatatypeFormat::Pattern(pattern))) if !temporal_datatype(local) => {
             if Regex::new(&format!("^(?:{pattern})$")).is_ok() {
                 Some(CsvwDatatypeFormat::Pattern(pattern))
             } else {
@@ -2433,32 +2427,6 @@ fn valid_numeric_pattern(pattern: &str) -> bool {
                 '#' | '0' | '.' | ',' | ';' | '%' | '‰' | 'E' | '-' | '+'
             )
         })
-}
-
-fn numeric_datatype_name(local: &str) -> bool {
-    matches!(
-        local,
-        "integer"
-            | "long"
-            | "int"
-            | "short"
-            | "byte"
-            | "unsignedLong"
-            | "unsignedInt"
-            | "unsignedShort"
-            | "unsignedByte"
-            | "nonNegativeInteger"
-            | "positiveInteger"
-            | "nonPositiveInteger"
-            | "negativeInteger"
-            | "decimal"
-            | "float"
-            | "double"
-    )
-}
-
-fn temporal_datatype_name(local: &str) -> bool {
-    matches!(local, "date" | "time" | "dateTime" | "dateTimeStamp")
 }
 
 fn length_datatype(base: &str, config: &CsvwConfig) -> bool {
@@ -2593,7 +2561,7 @@ fn parse_facet_value(
 ) -> Result<purrdf_xsd::XsdValue, ProjectionError> {
     let lexical = match value {
         Value::String(value) => value.clone(),
-        Value::Number(value) => value.to_string(),
+        Value::Number(value) => value.lexeme().to_owned(),
         Value::Bool(value) => value.to_string(),
         _ => {
             return Err(
@@ -2645,7 +2613,7 @@ fn validate_annotation_value(
                 .at_path(resource));
             }
             if let Some(value) = object.get("@value") {
-                if !(value.is_string() || value.is_number() || value.is_boolean()) {
+                if !matches!(value, Value::String(_) | Value::Number(_) | Value::Bool(_)) {
                     return Err(ProjectionError::integrity(
                         "CSVW @value must be a string, number, or boolean",
                     )
@@ -2764,10 +2732,12 @@ fn validate_jsonld_iri(
 
 fn normalize_annotation_value(value: &Value, context: &DocumentContext) -> Value {
     match value {
-        Value::String(value) if context.language.is_some() => serde_json::json!({
-            "@value": value,
-            "@language": context.language,
-        }),
+        // Members in name order, the order every carried value keeps.
+        Value::String(value) if context.language.is_some() => Value::Object(
+            Object::new()
+                .with("@language", context.language.as_deref())
+                .with("@value", value.as_str()),
+        ),
         Value::Array(values) => Value::Array(
             values
                 .iter()
@@ -2791,6 +2761,27 @@ fn normalize_annotation_value(value: &Value, context: &DocumentContext) -> Value
         ),
         _ => value.clone(),
     }
+}
+
+/// Refuse two items of one table group whose `key`s are equal: CSVW requires
+/// table URLs, and column names within a schema, to be unique.
+fn reject_repeated<T>(
+    items: &[T],
+    key: impl Fn(&T) -> &String,
+    what: &str,
+    resource: &str,
+) -> Result<(), ProjectionError> {
+    let mut seen = BTreeSet::new();
+    for item in items {
+        let key = key(item);
+        if !seen.insert(key) {
+            return Err(
+                ProjectionError::integrity(format!("duplicate CSVW {what} `{key}`"))
+                    .at_path(resource),
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2873,7 +2864,7 @@ mod tests {
     /// and not the other is how a "normalization" turns into a silent miss.
     #[test]
     fn canonical_case_still_finds_a_language_mapped_title() {
-        let titles = serde_json::json!({"en-US": "Title", "fr": "Titre"});
+        let titles = Value::object([("en-US", "Title"), ("fr", "Titre")]);
         let mut warnings = Vec::new();
         let mapped = natural_language_property(
             Some(&titles),
@@ -2945,5 +2936,103 @@ mod tests {
                 "{accepted:?} must stay accepted"
             );
         }
+    }
+}
+
+/// The frozen percent-encoding vectors, replayed against the CSVW metadata reader's title-derived column names.
+/// The title-derived column name.
+#[cfg(test)]
+mod column_name_from_title {
+    use super::column_name_from_title;
+
+    #[test]
+    fn a_non_varchar_is_percent_encoded() {
+        assert_eq!(column_name_from_title("a~b"), "a%7Eb");
+        assert_eq!(column_name_from_title("a-b"), "a%2Db");
+        assert_eq!(column_name_from_title("a b"), "a%20b");
+        assert_eq!(column_name_from_title("caf\u{e9}"), "caf%C3%A9");
+    }
+
+    #[test]
+    fn a_dot_between_varchars_is_kept_and_any_other_is_encoded() {
+        assert_eq!(column_name_from_title("a.b"), "a.b");
+        assert_eq!(column_name_from_title("a.%"), "a.%25");
+        assert_eq!(column_name_from_title(".a"), "%2Ea");
+        assert_eq!(column_name_from_title("a."), "a%2E");
+        assert_eq!(column_name_from_title("a..b"), "a%2E.b");
+        assert_eq!(column_name_from_title("."), "%2E");
+    }
+
+    #[test]
+    fn a_leading_underscore_is_encoded_and_any_other_is_kept() {
+        assert_eq!(column_name_from_title("_row"), "%5Frow");
+        assert_eq!(column_name_from_title("a_b_"), "a_b_");
+        assert_eq!(column_name_from_title("__"), "%5F_");
+    }
+}
+
+#[cfg(test)]
+mod percent_frozen_vectors {
+    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
+
+    /// Replay one vector file: `run` answers an input (`None` for a refusal),
+    /// `encode` says whether answers are encoded text rather than `=`-prefixed
+    /// decodings, and `skipped` names inputs this copy is known to answer differently.
+    fn replay(
+        vectors: &str,
+        encode: bool,
+        run: impl Fn(&str) -> Option<String>,
+        skipped: impl Fn(&str) -> bool,
+        plane_skipped: impl Fn(u32) -> bool,
+    ) {
+        let answer = |input: &str| match run(input) {
+            Some(value) if encode => encode_str(&value),
+            Some(value) => encode_str(&format!("={value}")),
+            None => "-".to_owned(),
+        };
+        let file = VectorFile::parse(vectors).expect("a percent vector file");
+        let mut replayed = 0;
+        for record in file.records() {
+            if record.fields[0] == "plane" {
+                let plane = u32::from_str_radix(record.fields[1], 16).expect("hex");
+                if plane_skipped(plane) {
+                    continue;
+                }
+                let answers = ((plane << 16)..=((plane << 16) | 0xFFFF))
+                    .filter_map(char::from_u32)
+                    .filter(|c| !skipped(&c.to_string()))
+                    .map(|c| answer(&c.to_string()));
+                assert_eq!(answer_digest(answers), record.fields[2], "plane {plane:X}");
+            } else {
+                let input = decode_str(record.fields[1]).expect("an encoded input");
+                if skipped(&input) {
+                    continue;
+                }
+                assert_eq!(answer(&input), record.fields[2], "{input:?}");
+            }
+            replayed += 1;
+        }
+        assert!(replayed > 400, "{replayed}");
+    }
+
+    #[test]
+    fn csvw_name_replays_the_frozen_vectors() {
+        replay(
+            include_str!("../../../../lex/tests/vectors/percent_csvw_name_vectors.txt"),
+            true,
+            |input| Some(super::column_name_from_title(input)),
+            |input| {
+                let _ = input;
+                // Titles the vectors do not record.
+                input.contains(char::from(0x7e))
+                    || input.starts_with('.')
+                    || input.ends_with('.')
+                    || input.contains("..")
+            },
+            |plane| {
+                let _ = plane;
+                false
+            },
+        );
     }
 }

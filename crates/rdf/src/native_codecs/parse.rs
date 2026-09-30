@@ -10,9 +10,8 @@
 //! [`RdfDatasetBuilder`] applying the RDF 1.2 statement-layer fold.
 //!
 //! The fold is factored into [`fold_statement_layer`], a source-agnostic two-pass
-//! classifier over `(subject, predicate, object, graph)` rows that BOTH this native
-//! path and the legacy `dataset_io::dataset_from_oxigraph_quads` feed — one fold, no
-//! drift (the must-pass RDF 1.2 fixture parity is the guard).
+//! classifier over `(subject, predicate, object, graph)` rows — one fold, no drift
+//! (the must-pass RDF 1.2 fixture parity is the guard).
 //!
 //! Base IRI is handled per the plan: Turtle/TriG resolve relative IRIs against the
 //! supplied base; RDF/XML threads the base through the first-party
@@ -20,7 +19,6 @@
 //! absolute IRIs and ignore the base (N/A by syntax).
 
 use std::borrow::Cow;
-use std::collections::HashSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
@@ -28,9 +26,7 @@ use super::media_type::{NativeRdfFormat, classify};
 use super::ser_model::{SerGraph, SerTermKind};
 use super::span::{NoSpans, ParseOptions, SpanCollector, SpanTable};
 use super::text_parse::LineParseMode;
-use crate::{
-    BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId,
-};
+use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
 use purrdf_core::blank_label::LabelAlphabet;
 use purrdf_core::cdt_blank::BlankBinding;
 use purrdf_core::{Nested, try_fold_nested};
@@ -38,7 +34,7 @@ use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, ScopedBase};
 
 /// The `rdf:reifies` predicate IRI: a triple-term object under this predicate is the
 /// RDF 1.2 reifier binding the statement layer folds out of the base quad table.
-pub(crate) const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+pub(crate) use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// A subject/object node presented to [`fold_statement_layer`], already interned into
 /// the builder.
@@ -52,7 +48,7 @@ pub(crate) enum FoldNode {
     Triple { s: TermId, p: TermId, o: TermId },
 }
 
-/// One `(subject, predicate, object, graph)` row, source-agnostic over oxigraph quads
+/// One `(subject, predicate, object, graph)` row, source-agnostic over flat quads
 /// and folded GTS graphs. Every component id is already interned in the SAME builder
 /// the fold pushes into; `is_reifies` carries the source-side `rdf:reifies`
 /// classification without cloning the predicate IRI into every row.
@@ -64,8 +60,8 @@ pub(crate) struct FoldRow {
     pub graph: Option<TermId>,
 }
 
-/// The RDF 1.2 statement-layer fold, shared by the native codec path and the legacy
-/// oxigraph-quads path so the two can never drift (the parity fixture is the guard).
+/// The RDF 1.2 statement-layer fold, shared by every row source so they can never
+/// drift (the parity fixture is the guard).
 ///
 /// Pass 1 binds reifiers: a row whose predicate is `rdf:reifies` with a triple-term
 /// object becomes a `push_reifier_in_graph(subject, triple, graph)` binding and the
@@ -90,7 +86,7 @@ where
     I: IntoIterator<Item = FoldRow>,
 {
     // Pass 1: bind reifiers; collect the rest as pending base/annotation rows.
-    let mut reifier_ids: HashSet<(Option<TermId>, TermId)> = HashSet::new();
+    let mut reifier_ids: crate::FastSet<(Option<TermId>, TermId)> = crate::FastSet::default();
     let mut pending: Vec<(TermId, TermId, TermId, Option<TermId>)> = Vec::new();
     for row in rows {
         let FoldRow {
@@ -386,7 +382,7 @@ pub fn parse_dataset_reporting_failure(
 /// regardless of input size (Turtle/TriG/RDF-XML are always sequential, so the mode
 /// is a no-op there).
 ///
-/// Bench/test-only surface: the criterion bench and the determinism-proof tests use
+/// Bench/test-only surface: the `native_codecs` bench and the determinism-proof tests use
 /// it as the baseline the chunk-parallel path must match byte-for-byte. NOT public
 /// API — hidden, unstable, and free to disappear.
 #[doc(hidden)]
@@ -532,13 +528,13 @@ pub(super) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> Str
 /// The first-party parse path folds `rdf:reifies` triples into the graph's `reifiers`
 /// table (they never appear in `quads`) AND classifies a reifier's sibling triples into
 /// the `annotations` table — the parser owns reifier identity, including anonymous `[]`
-/// reifiers. To feed the SAME two-pass fold the oxigraph path uses — and reach the SAME
+/// reifiers. To feed the SAME two-pass fold flat quads use — and reach the SAME
 /// IR — this re-materializes each reifier binding as a synthetic
 /// `<reifier> rdf:reifies <<( s p o )>>` row and each annotation as a
 /// `<reifier> <predicate> <value>` row alongside the plain quads, so pass 1 re-binds
 /// reifiers and pass 2 classifies the reifier subjects' rows as annotations. Term
 /// interning is shared across all rows, so identical terms collapse to one id exactly as
-/// on the oxigraph path.
+/// on the flat-quad path.
 pub(crate) fn dataset_from_ser_graph(graph: &SerGraph) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     dataset_from_ser_graph_impl(graph, false, BlankIngress::Opaque)
 }
@@ -568,10 +564,9 @@ pub(crate) fn dataset_from_text_ser_graph(
 }
 
 /// Like [`dataset_from_ser_graph`], but folds **every** named graph into the default
-/// graph (drops each base quad's graph component) — the oxigraph-free twin of
-/// `store_from_dataset(.., GraphPolicy::FlattenToDefaultGraph)`. This is the load
-/// path the native conformance gate replays against the frozen oxigraph goldens
-/// (which were captured over a flattened store). The statement layer (`rdf:reifies`
+/// graph (drops each base quad's graph component). This is the load path the native
+/// conformance gate replays against the frozen goldens (which were captured over a
+/// flattened dataset). The statement layer (`rdf:reifies`
 /// reifiers + annotations) is flattened with everything else, so a reifier and its
 /// annotations all land at `graph == None` and the fold's per-graph reifier key
 /// degenerates to the reifier id.
@@ -622,7 +617,7 @@ fn dataset_from_ser_graph_impl(
         Vec::with_capacity(graph.quads.len() + graph.reifiers.len() + graph.annotations.len());
 
     // Synthetic `rdf:reifies` rows reconstructed from the GTS reifier table, so the
-    // shared fold re-binds them identically to the oxigraph path (pass 1). A
+    // shared fold re-binds them identically to the flat-quad path (pass 1). A
     // self-reifier sentinel — a `Triple` term whose `reifier` is its OWN id — is the
     // binding of an inline quoted-triple term used as a quad object, NOT a statement-
     // layer reifier; it carries no `<reifier> rdf:reifies <<…>>` row (the N-Quads
@@ -816,8 +811,10 @@ impl SerInterner<'_> {
                     Some(dt_id) => Some(self.iri_string(dt_id)?),
                     None => None,
                 };
-                let direction =
-                    parse_gts_direction(term.direction.as_deref(), term.lang.as_deref())?;
+                let direction = crate::gts_resolve::parse_gts_direction(
+                    term.direction.as_deref(),
+                    term.lang.as_deref(),
+                )?;
                 // A composite literal's embedded blank labels bind through the
                 // SAME rule the bare `_:` tokens above use — that agreement is
                 // what makes `_:b` written as a subject and `_:b` written inside
@@ -902,38 +899,10 @@ impl SerInterner<'_> {
     }
 }
 
-/// Parse a GTS literal base-direction string (`"ltr"`/`"rtl"`) into the IR's
-/// [`RdfTextDirection`], mirroring `purrdf_core`'s `parse_gts_direction`: `None` is
-/// legitimate absence, an unrecognized non-empty value hard-fails, and RDF 1.2 admits
-/// a direction ONLY on a language-tagged string (a direction without a language is a
-/// hard error rather than a silently ill-formed literal).
-fn parse_gts_direction(
-    value: Option<&str>,
-    language: Option<&str>,
-) -> Result<Option<RdfTextDirection>, RdfDiagnostic> {
-    let direction = match value {
-        None => return Ok(None),
-        Some("ltr") => RdfTextDirection::Ltr,
-        Some("rtl") => RdfTextDirection::Rtl,
-        Some(other) => {
-            return Err(RdfDiagnostic::error(
-                "native-codec-invalid-direction",
-                format!("unrecognized GTS literal base direction {other:?}"),
-            ));
-        }
-    };
-    if language.is_none_or(str::is_empty) {
-        return Err(RdfDiagnostic::error(
-            "native-codec-direction-without-language",
-            "an RDF 1.2 literal base direction requires a non-empty language tag",
-        ));
-    }
-    Ok(Some(direction))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RdfTextDirection;
     use crate::TermValue;
 
     #[test]
@@ -1449,10 +1418,11 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = purrdf_core::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::IriPredicates,
+                purrdf_core::term_fixture::TermShape::IriPredicates,
             );
             nested += usize::from(budget < 7);
             let mut graph = SerGraph::default();
@@ -1483,29 +1453,25 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_interns_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = crate::test_terms::triple_chain(LEVELS);
-                let mut graph = SerGraph::default();
-                let root = lower(&mut graph, &value);
-                drop(value);
-                let interner = SerInterner {
-                    graph: &graph,
-                    blanks: BlankIngress::Opaque,
-                };
-                let mut builder = RdfDatasetBuilder::new();
-                interner
-                    .intern(&mut builder, root)
-                    .expect("a lowered chain interns");
-                // Ids are dense, so one more term's id counts the terms before it.
-                assert_eq!(
-                    builder.intern_iri("http://example.org/sentinel").index(),
-                    LEVELS + 3
-                );
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the interner did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            let mut graph = SerGraph::default();
+            let root = lower(&mut graph, &value);
+            drop(value);
+            let interner = SerInterner {
+                graph: &graph,
+                blanks: BlankIngress::Opaque,
+            };
+            let mut builder = RdfDatasetBuilder::new();
+            interner
+                .intern(&mut builder, root)
+                .expect("a lowered chain interns");
+            // Ids are dense, so one more term's id counts the terms before it.
+            assert_eq!(
+                builder.intern_iri("http://example.org/sentinel").index(),
+                LEVELS + 3
+            );
+        })
+        .expect("the thread starts");
     }
 }

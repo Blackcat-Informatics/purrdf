@@ -93,7 +93,7 @@ impl EntailmentPlan {
                     path.display()
                 )));
             }
-            (_, None) => RuleSet::new(),
+            (_, None) => RuleSet::default(),
         };
         Ok(Self { regime, rules })
     }
@@ -111,6 +111,11 @@ impl EntailmentPlan {
         }
     }
 
+    /// The regime's cross-host spelling, which a refusal opens with.
+    pub(crate) fn regime_name(&self) -> &'static str {
+        purrdf_validate::regime::regime_name(self.regime)
+    }
+
     /// The same resolved plan as a [`QueryEntailment`], for the lane that has a QUERY.
     ///
     /// [`Self::materialization`] is the document-transforming plan: `reason` and `convert`
@@ -125,21 +130,8 @@ impl EntailmentPlan {
     /// The mapping is total over the seven regimes, exactly as [`Self::materialization`] is:
     /// there is no regime the query lane serves that the document lane does not, or the
     /// reverse.
-    /// The regime's cross-host spelling, which a refusal opens with.
-    pub(crate) fn regime_name(&self) -> &'static str {
-        purrdf_validate::regime::regime_name(self.regime)
-    }
-
-    pub(crate) fn query_entailment(&self) -> QueryEntailment<'_> {
-        match self.regime {
-            Regime::Simple => QueryEntailment::Simple,
-            Regime::Rdf => QueryEntailment::Rdf,
-            Regime::Rdfs => QueryEntailment::Rdfs,
-            Regime::OwlRl => QueryEntailment::OwlRl,
-            Regime::D => QueryEntailment::D,
-            Regime::OwlDirect => QueryEntailment::OwlDirect,
-            Regime::Rif => QueryEntailment::Rif(&self.rules),
-        }
+    pub(crate) const fn query_entailment(&self) -> QueryEntailment<'_> {
+        QueryEntailment::for_regime(self.regime, &self.rules)
     }
 }
 

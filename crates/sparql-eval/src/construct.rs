@@ -15,9 +15,9 @@
 //!    predicate) is skipped.
 //!
 //! Each position is instantiated to a [`TermValue`](purrdf_core::TermValue) first so its term *kind* can be
-//! validated before interning into the output builder. Byte-identical parity with
-//! the oxigraph baseline is decided downstream at the RDFC-1.0 canonicalization
-//! layer, so blank-node labels and quad ordering here need not match oxigraph's —
+//! validated before interning into the output builder. Byte-identical output is
+//! decided downstream at the RDFC-1.0 canonicalization
+//! layer, so blank-node labels and quad ordering here need not be stable —
 //! `freeze` sorts and de-duplicates, and canonicalization relabels blanks.
 
 use purrdf_core::TermBox;
@@ -46,11 +46,11 @@ use crate::template::{
 use crate::{DetHashMap, DetHashSet};
 
 /// The `rdf:reifies` predicate IRI — the reification-layer indirection edge.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 /// `rdf:type`.
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 /// `xsd:string` — the datatype of an emitted loss-code literal.
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// Evaluate a `CONSTRUCT` query to a frozen IR dataset.
 ///
@@ -610,7 +610,7 @@ fn build_construct_graph<D: DatasetView + Sync>(
             // graph half is constant and the key degenerates to the reifier id,
             // which is exactly the previous behavior.
             // Membership-only (insert/contains, never iterated), so the fixed-key
-            // `DetHashSet` is used: no `RandomState` seeding per row.
+            // `DetHashSet` is used: no per-process random seeding per row.
             let mut reifier_ids: DetHashSet<(GraphId, TermId)> = DetHashSet::default();
             for &idx in plan.reifier_decl_indices {
                 if let Some(e) = instantiated[idx] {
@@ -994,7 +994,7 @@ fn collect_dropped_reifiers(
     // in subject position, so the reifier it names is not dropped.
     let mut template_vars: BTreeSet<String> = BTreeSet::new();
     for quad in template {
-        collect_triple_pattern_vars(&quad.triple, &mut template_vars);
+        quad.triple.collect_variable_names(&mut template_vars);
         if let Some(NamedNodePattern::Variable(v)) = &quad.graph {
             template_vars.insert(v.as_str().to_owned());
         }
@@ -1079,41 +1079,6 @@ fn collect_where_triples<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a Triple
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. }
             | GraphPattern::Group { inner, .. } => pending.push(inner),
-        }
-    }
-}
-
-/// Collect the variable names mentioned in a triple pattern, descending into nested
-/// quoted-triple terms in subject/object position.
-fn collect_triple_pattern_vars(tp: &TriplePattern, out: &mut BTreeSet<String>) {
-    collect_term_pattern_vars(&tp.subject, out);
-    if let NamedNodePattern::Variable(v) = &tp.predicate {
-        out.insert(v.as_str().to_owned());
-    }
-    collect_term_pattern_vars(&tp.object, out);
-}
-
-/// Collect the variable names mentioned in a term pattern, a quoted triple term's
-/// positions included.
-///
-/// The walk keeps its own work list, so a term nested to any depth costs no more
-/// machine stack. `out` is a set, so the order the positions are visited in leaves
-/// no trace: a quoted triple's predicate variable is recorded when the triple is
-/// reached, its subject and object as their positions come up.
-fn collect_term_pattern_vars(term: &TermPattern, out: &mut BTreeSet<String>) {
-    let mut pending: Vec<&TermPattern> = vec![term];
-    while let Some(term) = pending.pop() {
-        match term {
-            TermPattern::Variable(v) => {
-                out.insert(v.as_str().to_owned());
-            }
-            TermPattern::Triple(t) => {
-                if let NamedNodePattern::Variable(v) = &t.predicate {
-                    out.insert(v.as_str().to_owned());
-                }
-                pending.extend([&t.object, &t.subject]);
-            }
-            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
         }
     }
 }
@@ -1224,13 +1189,18 @@ fn push_loss_code(
 /// A deterministic blank-node label for a loss node, derived PURELY from the loss
 /// code and the resolved triple-term content. Identical drops (same triple term)
 /// produce the same label so the builder dedups them to ONE node; no counter, no
-/// randomness. Uses a fixed-seed hash of the term value for a compact, stable label.
+/// randomness.
+///
+/// The label is `loss-` and sixteen lowercase hex digits of FNV-1a 64
+/// ([`purrdf_hash::fnv::fnv1a64`]) over the loss code framed by
+/// [`purrdf_hash::frame::frame_le`] followed by the term's canonical bytes
+/// ([`TermValue::canonical_bytes`]). Both halves are specified and injective,
+/// so the label is the same on every target, build and toolchain release.
 fn loss_node_label(code: &str, inner: &TermValue) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    code.hash(&mut h);
-    inner.hash(&mut h);
-    format!("loss-{:016x}", h.finish())
+    let mut preimage = Vec::new();
+    purrdf_hash::frame::frame_le(&mut preimage, code.as_bytes());
+    inner.canonical_bytes(&mut preimage);
+    format!("loss-{:016x}", purrdf_hash::fnv::fnv1a64(&preimage))
 }
 
 /// Instantiate one template triple for `row`, interning into `builder`. Returns
@@ -1321,6 +1291,57 @@ fn term_pattern_has_blank_node(term: &TermPattern) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The loss-node label is FNV-1a 64 over the framed loss code and the
+    /// inner triple term's canonical bytes: frozen here, so a change of either
+    /// half is a visible edit of a published label.
+    #[test]
+    fn the_loss_node_label_is_frozen() {
+        let inner = TermValue::Triple {
+            s: TermBox::new(TermValue::iri("http://ex/alice")),
+            p: TermBox::new(TermValue::iri("http://ex/age")),
+            o: TermBox::new(TermValue::Literal {
+                lexical_form: "42".to_owned(),
+                datatype: "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+                language: None,
+                direction: None,
+            }),
+        };
+        let label = loss_node_label(LOSS_REIFIER_LAYER_DROPPED, &inner);
+        assert_eq!(label, "loss-53ade2f793c76fe0");
+        let mut preimage = Vec::new();
+        preimage.extend_from_slice(&21u64.to_le_bytes());
+        preimage.extend_from_slice(b"reifier-layer-dropped");
+        inner.canonical_bytes(&mut preimage);
+        assert_eq!(
+            label,
+            format!("loss-{:016x}", purrdf_hash::fnv::fnv1a64(&preimage))
+        );
+    }
+
+    /// Its neighbours: a different object, and the same term under a different
+    /// code, each get a different label.
+    #[test]
+    fn a_distinct_loss_gets_a_distinct_label() {
+        let triple = |object: &str| TermValue::Triple {
+            s: TermBox::new(TermValue::iri("http://ex/alice")),
+            p: TermBox::new(TermValue::iri("http://ex/age")),
+            o: TermBox::new(TermValue::iri(object)),
+        };
+        let base = loss_node_label(LOSS_REIFIER_LAYER_DROPPED, &triple("http://ex/a"));
+        assert_eq!(
+            base,
+            loss_node_label(LOSS_REIFIER_LAYER_DROPPED, &triple("http://ex/a"))
+        );
+        assert_ne!(
+            base,
+            loss_node_label(LOSS_REIFIER_LAYER_DROPPED, &triple("http://ex/b"))
+        );
+        assert_ne!(
+            base,
+            loss_node_label(LOSS_ANNOTATION_LAYER_DROPPED, &triple("http://ex/a"))
+        );
+    }
     use purrdf_sparql_algebra::Child;
 
     /// The ungoverned triple-producing `CONSTRUCT`: an UNSCOPED template (every
@@ -2155,7 +2176,7 @@ mod tests {
             "the nested triple-term subject is skipped; its well-formed sibling is not"
         );
         for quad in out.quads() {
-            let object = out.term_value(quad.o);
+            let object = out.term_value(quad.o).unwrap();
             assert!(
                 object_term_model_holds(&object),
                 "an emitted object breaks the RDF 1.2 term model: {object:?}"
@@ -2181,8 +2202,8 @@ mod tests {
 
     // ── Loss-aware CONSTRUCT ──────────────────────────────────────────────────
 
-    const REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
-    const RDF_TYPE_IRI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+    use purrdf_iri::vocab::rdf::REIFIES;
+    use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE_IRI;
     /// A pure-fixture (example.org) standpoint vocabulary: the `according_to`
     /// predicate is caller-supplied configuration, not an engine constant.
     const ACCORDING_TO: &str = "http://example.org/accordingTo";
@@ -2738,19 +2759,19 @@ mod term_walk_tests {
 
     /// A deterministic choice sequence.
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
-            Self { state: seed }
+            Self {
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
+            }
         }
 
         /// One choice below `n`.
         fn choose(&mut self, n: usize) -> usize {
-            let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
-                .expect("a draw below the count fits")
+            self.state.below_usize(n)
         }
     }
 
@@ -2888,16 +2909,6 @@ mod term_walk_tests {
         tracker
     }
 
-    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
-    }
-
     /// How many triple terms `value`'s object chain nests, and its innermost object.
     fn unwind(value: &TermValue) -> (usize, &TermValue) {
         let mut levels = 0;
@@ -2945,7 +2956,7 @@ mod term_walk_tests {
     /// bottom.
     #[test]
     fn a_hundred_thousand_level_position_is_classified_on_a_128_kib_stack() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let mut pattern = TermPattern::Variable(Variable::new("v"));
             let mut value = TermValue::Blank {
                 label: "d".to_owned(),
@@ -2979,7 +2990,8 @@ mod term_walk_tests {
             let (levels, innermost) = unwind(&tracked);
             assert_eq!(levels, DEPTH);
             assert!(matches!(innermost, TermValue::Blank { label, .. } if label == "d"));
-        });
+        })
+        .expect("spawn");
     }
 }
 
@@ -3000,22 +3012,20 @@ mod where_walk_tests {
     const SMALL_STACK: usize = 128 * 1024;
 
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 30,
             }
         }
 
         fn choose(&mut self, n: usize) -> usize {
-            let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
-                .expect("a draw below the count fits")
+            self.state.below_usize(n)
         }
 
         fn spend(&mut self) -> bool {
@@ -3181,29 +3191,25 @@ mod where_walk_tests {
     /// in pre-order — outermost first — on a 128 KiB stack.
     #[test]
     fn a_hundred_thousand_level_pattern_is_collected_on_a_128_kib_stack() {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(|| {
-                let mut shape = GraphPattern::Bgp {
-                    patterns: vec![triple(0)],
+        purrdf_stack::on_stack(SMALL_STACK, || {
+            let mut shape = GraphPattern::Bgp {
+                patterns: vec![triple(0)],
+            };
+            for level in 1..=DEPTH {
+                shape = GraphPattern::Join {
+                    left: Child::new(GraphPattern::Bgp {
+                        patterns: vec![triple(level)],
+                    }),
+                    right: Child::new(shape),
                 };
-                for level in 1..=DEPTH {
-                    shape = GraphPattern::Join {
-                        left: Child::new(GraphPattern::Bgp {
-                            patterns: vec![triple(level)],
-                        }),
-                        right: Child::new(shape),
-                    };
-                }
-                let mut collected = Vec::new();
-                collect_where_triples(&shape, &mut collected);
-                assert_eq!(collected.len(), DEPTH + 1);
-                assert_eq!(collected[0], &triple(DEPTH));
-                assert_eq!(collected[1], &triple(DEPTH - 1));
-                assert_eq!(collected[DEPTH], &triple(0));
-            })
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned");
+            }
+            let mut collected = Vec::new();
+            collect_where_triples(&shape, &mut collected);
+            assert_eq!(collected.len(), DEPTH + 1);
+            assert_eq!(collected[0], &triple(DEPTH));
+            assert_eq!(collected[1], &triple(DEPTH - 1));
+            assert_eq!(collected[DEPTH], &triple(0));
+        })
+        .expect("spawn");
     }
 }

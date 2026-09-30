@@ -214,6 +214,24 @@ pub enum FolProof {
 }
 
 impl FolProof {
+    /// The fields every variant carries — the producing clause's index, its identity
+    /// and the stated goal — read by the one match over the variants.
+    fn header(&self) -> (usize, &str, NodeId) {
+        match self {
+            Self::Assert {
+                rule,
+                rule_identity,
+                goal,
+            }
+            | Self::ByRule {
+                rule,
+                rule_identity,
+                goal,
+                ..
+            } => (*rule, rule_identity, *goal),
+        }
+    }
+
     /// Whether this proof node is an unconditional [`Self::Assert`] leaf.
     #[must_use]
     pub fn is_assert(&self) -> bool {
@@ -223,28 +241,20 @@ impl FolProof {
     /// The producing clause's authored index, regardless of variant.
     #[must_use]
     pub fn rule(&self) -> usize {
-        match self {
-            Self::Assert { rule, .. } | Self::ByRule { rule, .. } => *rule,
-        }
+        self.header().0
     }
 
     /// The producing clause's content-addressed identity, regardless of variant —
     /// see [`clause_identity`].
     #[must_use]
     pub fn rule_identity(&self) -> &str {
-        match self {
-            Self::Assert { rule_identity, .. } | Self::ByRule { rule_identity, .. } => {
-                rule_identity
-            }
-        }
+        self.header().1
     }
 
     /// The STATED conclusion this proof is of, regardless of variant.
     #[must_use]
     pub fn goal(&self) -> NodeId {
-        match self {
-            Self::Assert { goal, .. } | Self::ByRule { goal, .. } => *goal,
-        }
+        self.header().2
     }
 
     /// This node's positive premises, in authored body order (empty for an
@@ -391,6 +401,11 @@ pub fn render(dag: &TermDag, node: NodeId) -> String {
 
 /// Length-prefix `s` into `out`, so no concatenation of two variable-length
 /// fields can be confused with a different split of the same bytes.
+///
+/// The prefix is the length in decimal followed by `:`, not
+/// `purrdf_hash::frame::frame_le`'s eight little-endian bytes: the key is text —
+/// the tabling engine's call-pattern key, rendered into a `String` and compared
+/// against keys recorded by [`canon`]'s tests — so its notation is frozen with it.
 fn frame(out: &mut String, s: &str) {
     write!(out, "{}:{}", s.len(), s).expect("writing to a String never fails");
 }
@@ -698,7 +713,7 @@ fn freshen_clause(
     nodes.extend(clause.body.iter().map(|lit| lit.atom()));
     let metas = distinct_metas(dag, &nodes);
 
-    let mut renaming = Subst::new();
+    let mut renaming = Subst::default();
     let mut sort_decls: Vec<(MetaId, NodeId)> = Vec::new();
     for old in metas {
         let (fresh_id, fresh) = dag.fresh_meta();
@@ -872,7 +887,7 @@ fn expand_round(
             for &(meta, sort) in &sort_decls {
                 engine.meta_sort.insert(meta, sort);
             }
-            let mut base = Subst::new();
+            let mut base = Subst::default();
             // Both the freshened clause head and the demanded call may carry sorted
             // metavariables; declaring both sides' known sorts before unifying is what lets
             // an order-sorted clash prune a firing that a sort-blind unifier would accept.
@@ -1226,7 +1241,7 @@ fn project(
     let mut answers: Vec<FolBinding> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for (atom_key, atom) in candidates {
-        let mut subst = Subst::new();
+        let mut subst = Subst::default();
         // A goal metavariable's declared sort must gate projection too: an answer
         // whose ground value violates the goal variable's sort is not an answer to
         // THIS (sorted) goal.
@@ -1466,7 +1481,7 @@ pub fn check_fol_proof(
     };
 
     let (head, body, sort_decls) = freshen_clause(dag, clause, meta_sorts);
-    let mut subst = Subst::new();
+    let mut subst = Subst::default();
     for &(meta, sort) in &sort_decls {
         subst.declare_meta_sort(meta, sort);
     }
@@ -1565,7 +1580,7 @@ pub fn content_key(dag: &TermDag, proof: &FolProof) -> String {
 /// use purrdf_datalog::resolve_fol::{derivation_id, FolProof};
 /// use purrdf_datalog::term::TermDag;
 ///
-/// let mut dag = TermDag::new();
+/// let mut dag = TermDag::default();
 /// let goal = dag.intern_leaf("fact");
 /// let proof = FolProof::Assert { rule: 0, rule_identity: "rule-id".to_owned(), goal };
 /// let id = derivation_id(&dag, &proof);
@@ -1593,7 +1608,7 @@ pub fn derivation_id(dag: &TermDag, proof: &FolProof) -> String {
             }
         }
     }
-    hex_lower(&hasher.finalize())
+    purrdf_hash::hex::encode(&hasher.finalize())
 }
 
 /// The **flat** derivation identity — the published flat recipe, folding a node's
@@ -1619,20 +1634,8 @@ pub fn flat_derivation_id(dag: &TermDag, proof: &FolProof) -> String {
     hasher.update(proof.rule_identity().as_bytes());
     hasher.update(b"\n");
     hasher.update(premise_keys.join("\n").as_bytes());
-    hex_lower(&hasher.finalize())
+    purrdf_hash::hex::encode(&hasher.finalize())
 }
-
-/// Lowercase hexadecimal rendering of `bytes`: the workspace's one one-shot hex
-/// renderer, re-exported here under the name this crate has always used for it.
-///
-/// This is a re-export, not a second implementation — the single transcription lives in
-/// [`purrdf_core::hex::lower`], reached by every crate downstream of the IR kernel.
-/// [`crate::cache::ContractHash::to_hex`] reuses it rather than carrying its own copy.
-/// [`crate::chase`]'s witness-label renderer deliberately does NOT: it is called once per
-/// invented witness inside the chase's fixpoint loop, so it keeps its own lookup-table
-/// implementation rather than paying this function's per-byte `write!` formatting overhead
-/// on a hot path.
-pub(crate) use purrdf_core::hex::lower as hex_lower;
 
 // ── The DlClause lowering adapter ───────────────────────────────────────────────
 
@@ -1782,7 +1785,7 @@ pub fn solve_datalog_goal(
     goal: &ClauseAtom,
     budget: &FolBudget,
 ) -> Result<(TermDag, FolControl), NonDatalogClause> {
-    let mut dag = TermDag::new();
+    let mut dag = TermDag::default();
     let triple_op = dag.intern_leaf("triple");
 
     let fol_clauses = lower_datalog_clauses(&mut dag, triple_op, clauses)?;
@@ -1831,7 +1834,7 @@ mod tests {
     /// key — and a genuinely different variable PATTERN does not.
     #[test]
     fn canon_numbers_metas_in_first_visit_order_so_variants_share_a_key() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let (_, x) = dag.fresh_meta();
         let (_, y) = dag.fresh_meta();
         let atom1 = app(&mut dag, "p", vec![x, y, x]);
@@ -1859,7 +1862,7 @@ mod tests {
     /// distinct atoms.
     #[test]
     fn render_is_human_readable_but_canon_is_the_identity_key() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let a = leaf(&mut dag, "a");
         let b = leaf(&mut dag, "b");
         let term = app(&mut dag, "p", vec![a, b]);
@@ -1886,7 +1889,7 @@ mod tests {
     /// numeral, with a proof [`check_fol_proof`] accepts.
     #[test]
     fn peano_add_returns_correct_answer_with_checkable_proofs() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let z = leaf(&mut dag, "z");
 
         // add(z, Y, Y) :- .
@@ -1959,7 +1962,7 @@ mod tests {
     /// element of a 3-element list is found, each with a checkable proof.
     #[test]
     fn member_over_cons_lists_enumerates_elements_with_proofs() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let a = leaf(&mut dag, "a");
         let b = leaf(&mut dag, "b");
         let c = leaf(&mut dag, "c");
@@ -2076,7 +2079,7 @@ mod tests {
             }
         }
 
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let e = leaf(&mut dag, "e");
         let f = leaf(&mut dag, "f");
         let win_e = app(&mut dag, "win", vec![e]);
@@ -2105,7 +2108,7 @@ mod tests {
     /// never `True` or `False`.
     #[test]
     fn direct_negative_loop_is_undefined_not_true_or_false() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let p = leaf(&mut dag, "p");
         let clause = FolClause {
             head: p,
@@ -2157,7 +2160,7 @@ mod tests {
 
     #[test]
     fn budget_cut_demotes_dependent_atom_to_undefined_not_true() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let (clauses, base, goal_atom) = budget_cut_program(&mut dag);
         let program = FolProgram {
             clauses,
@@ -2194,7 +2197,7 @@ mod tests {
     /// vectors — determinism holds even under truncation.
     #[test]
     fn budget_partial_answer_set_is_deterministic_across_runs() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let (clauses, _base, goal_atom) = budget_cut_program(&mut dag);
         let program = FolProgram {
             clauses,
@@ -2224,7 +2227,7 @@ mod tests {
     /// resolution FLOUNDERS — a typed `Unsupported`, never a fabricated answer.
     #[test]
     fn floundering_naf_goal_is_typed_unsupported_not_a_fabricated_answer() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let (_, x) = dag.fresh_meta();
         let head = app(&mut dag, "p", vec![x]);
         let q_x = app(&mut dag, "q", vec![x]);
@@ -2252,7 +2255,7 @@ mod tests {
     /// grounding happens.
     #[test]
     fn clause_body_wider_than_64_literals_is_unsupported() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let head = leaf(&mut dag, "wide_head");
         let body: Vec<FolLit> = (0..65)
             .map(|i| FolLit::Pos(leaf(&mut dag, &format!("lit{i}"))))
@@ -2284,7 +2287,7 @@ mod tests {
     /// the cited clause actually derives from its (empty) premises is rejected.
     #[test]
     fn check_fol_proof_rejects_a_forged_head() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let (_, x) = dag.fresh_meta();
         let head = app(&mut dag, "p", vec![x]);
         let clause = FolClause {
@@ -2316,7 +2319,7 @@ mod tests {
     /// rejected by name.
     #[test]
     fn check_fol_proof_rejects_a_premise_count_mismatch_and_an_unknown_rule() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let a = leaf(&mut dag, "a");
         let head = app(&mut dag, "p", vec![a]);
         let clause = FolClause {
@@ -2380,7 +2383,7 @@ mod tests {
     /// `canon` is exactly `canon_sorted` with no sorts.
     #[test]
     fn canon_bytes_are_stable_and_sort_blind_matches_today() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let a = leaf(&mut dag, "a");
         let b = leaf(&mut dag, "b");
         assert_eq!(canon(&dag, a), "L1:a");
@@ -2413,7 +2416,7 @@ mod tests {
     /// following sibling.
     #[test]
     fn canon_folds_the_metavariable_sort_into_the_key() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let s = leaf(&mut dag, "S");
         let t = leaf(&mut dag, "T");
         let (m_id, m) = dag.fresh_meta();
@@ -2439,7 +2442,7 @@ mod tests {
     /// wider value, so a sort-blind resolver gives the wrong answer here.
     #[test]
     fn order_sorted_control_clause_rejects_a_wider_binding() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let cat = leaf(&mut dag, "Cat");
         let animal = leaf(&mut dag, "Animal");
         let felix = leaf(&mut dag, "felix"); // sort Cat — the narrower, accepted value
@@ -2525,7 +2528,7 @@ mod tests {
 
     /// The Peano-addition program, its clause list, and one decided answer proof.
     fn peano_answer_proof() -> (TermDag, Vec<FolClause>, FolProof) {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let z = leaf(&mut dag, "z");
         let (_, y0) = dag.fresh_meta();
         let head0 = app(&mut dag, "add", vec![z, y0, y0]);
@@ -2674,7 +2677,7 @@ mod tests {
     /// actual premise multiset, not a set.
     #[test]
     fn derivation_id_keeps_duplicate_premises() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let a = leaf(&mut dag, "a");
         let child = FolProof::Assert {
             rule: 0,
@@ -2705,7 +2708,7 @@ mod tests {
     /// identity — sort-discriminated derivations never collide.
     #[test]
     fn clause_identity_folds_in_the_variable_sorts() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let cat = leaf(&mut dag, "Cat");
         let dog = leaf(&mut dag, "Dog");
         let (x_id, x) = dag.fresh_meta();
@@ -2735,7 +2738,7 @@ mod tests {
     /// keying `Assert` off `premises.is_empty()` would fail this test.
     #[test]
     fn neg_only_clause_proof_is_by_rule_not_assert() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let holds = leaf(&mut dag, "holds");
         let absent = leaf(&mut dag, "absent");
         // holds :- not absent.   (there is no `absent` fact, so the negation succeeds)
@@ -2785,7 +2788,7 @@ mod tests {
     /// emission gate above.
     #[test]
     fn check_fol_proof_rejects_an_assert_over_a_bodied_clause() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let holds = leaf(&mut dag, "holds");
         let absent = leaf(&mut dag, "absent");
         let clause = FolClause {
@@ -2817,7 +2820,7 @@ mod tests {
     /// negation — the sort discipline and the three-valued negation compose.
     #[test]
     fn sorted_negation_decides_and_rechecks() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let cat = leaf(&mut dag, "Cat");
         let felix = leaf(&mut dag, "felix");
         let order = unify::SortOrder::from_subclass_edges(&[(cat, cat)]);

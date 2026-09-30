@@ -6,12 +6,11 @@
 //! These pure helpers — corpus enumeration, the nondeterministic / multi-query /
 //! deferred-construct classifiers, and the stable solution-row key — are used by the
 //! `capture_sparql_goldens` binary to freeze the native engine's outputs as the
-//! committed conformance goldens. They are oxigraph-free and ride the always-on `gts`
-//! feature.
+//! committed conformance goldens. They ride the always-on `gts` feature.
 
 use std::path::{Path, PathBuf};
 
-/// Nondeterministic SPARQL builtins: results vary per-call, so a frozen oxigraph
+/// Nondeterministic SPARQL builtins: results vary per-call, so a frozen
 /// golden is not meaningful. The capture writes a `.nondeterministic` marker (the
 /// Task-4 gate runs native for well-formedness only), and the parity sweep runs
 /// native only and asserts well-formed output.
@@ -136,6 +135,24 @@ fn collect_rq_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
 #[must_use]
 pub fn row_key(row: &[Option<crate::TermValue>]) -> String {
     format!("{row:?}")
+}
+
+/// A SELECT result as a deterministic golden: the tab-joined variable list on
+/// line one (projection order), then the sorted [`row_key`] lines, each
+/// newline-terminated. The one format the golden capture writes and the corpus
+/// gate compares.
+#[must_use]
+pub fn solutions_golden(variables: &[String], rows: &[Vec<Option<crate::TermValue>>]) -> String {
+    let mut out = String::new();
+    out.push_str(&variables.join("\t"));
+    out.push('\n');
+    let mut keys: Vec<String> = rows.iter().map(|r| row_key(r)).collect();
+    keys.sort();
+    for k in keys {
+        out.push_str(&k);
+        out.push('\n');
+    }
+    out
 }
 
 #[cfg(test)]

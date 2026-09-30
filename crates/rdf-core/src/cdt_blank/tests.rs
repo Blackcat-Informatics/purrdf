@@ -6,8 +6,8 @@
 //! assertion it reproduces at the lexical layer.
 
 use super::{
-    BlankBinding, CdtBlankError, bind_cdt_blank_labels, cdt_embedded_blanks, is_cdt_datatype,
-    rewrite_cdt_blank_terms,
+    BlankBinding, CdtBlankError, bind_cdt_blank_labels, cdt_embedded_blanks, decode_escape,
+    is_cdt_datatype, rewrite_cdt_blank_terms,
 };
 use crate::blank_label::{LabelAlphabet, encode_blank_label};
 use crate::ir::term::BlankScope;
@@ -291,9 +291,8 @@ fn a_hundred_thousand_deep_label_is_bound_exactly_as_a_shallow_one() {
     let scope = BlankScope(7);
     let expected_token = encode_blank_label("b", scope, LabelAlphabet::BlankNodeLabel);
     let expected_ambient: String = "[".repeat(depth) + "_:" + &expected_token + &"]".repeat(depth);
-    let (text_identity, found, ambient, read_back) = std::thread::Builder::new()
-        .stack_size(256 * 1024)
-        .spawn(move || {
+    let (text_identity, found, ambient, read_back) =
+        purrdf_stack::on_stack(256 * 1024, move || {
             let text =
                 bind_cdt_blank_labels(&lexical, LIST, TEXT).expect("a deep literal is a value");
             let text_identity = matches!(text, std::borrow::Cow::Borrowed(_)) && text == lexical;
@@ -302,9 +301,7 @@ fn a_hundred_thousand_deep_label_is_bound_exactly_as_a_shallow_one() {
             let read_back = cdt_embedded_blanks(&ambient, LIST);
             (text_identity, found, ambient, read_back)
         })
-        .expect("the thread starts")
-        .join()
-        .expect("the walks did not abort");
+        .expect("the thread starts");
     assert!(
         text_identity,
         "the text binding is a byte identity at any depth"
@@ -369,4 +366,21 @@ fn rewriting_can_skolemize_an_embedded_blank() {
 fn a_no_op_rewrite_borrows() {
     let out = rewrite_cdt_blank_terms("[_:b, 42]", LIST, &mut |_| None);
     assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
+}
+
+#[test]
+fn a_signed_uchar_is_not_an_escape() {
+    assert_eq!(decode_escape("\\u+041", 0), ('\\', 1));
+    assert_eq!(decode_escape("\\U+0000041", 0), ('\\', 1));
+    assert_eq!(
+        purrdf_iri::terminals::expand_uchars("urn:\\u+041"),
+        "urn:\\u+041"
+    );
+}
+
+#[test]
+fn an_unsigned_uchar_still_decodes() {
+    assert_eq!(decode_escape("\\u0041", 0), ('A', 6));
+    assert_eq!(decode_escape("\\U00000041", 0), ('A', 10));
+    assert_eq!(purrdf_iri::terminals::expand_uchars("urn:\\u0041"), "urn:A");
 }

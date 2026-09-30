@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-09-28T08:00:17-06:00\n"
+"POT-Creation-Date: 2026-09-29T20:27:15-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -813,10 +813,10 @@ msgstr "到达其他引擎"
 
 #: src/getting-started/rust.md:70
 msgid ""
-"Every engine hangs off the same facade. For example, the zero-dependency IRI "
-"leaf and the ShEx schema layer:"
+"Every engine hangs off the same facade. For example, the IRI layer, which "
+"has no third-party dependency, and the ShEx schema layer:"
 msgstr ""
-"每个引擎都挂在同一个门面之下。例如，零依赖的 IRI 叶子 crate 与 ShEx 模式层："
+"每个引擎都挂在同一个门面之下。例如，没有任何第三方依赖的 IRI 层与 ShEx 模式层："
 
 #: src/getting-started/rust.md:74 src/getting-started/rust.md:75
 #: src/concepts/interned-dataset.md:32 src/sparql/querying.md:31
@@ -846,22 +846,24 @@ msgid ""
 "eval`, `purrdf-sparql-results`, `purrdf-cdt`, `purrdf-shapes`, `purrdf-"
 "jsonschema`, `purrdf-shex`, `purrdf-gts`, `purrdf-datalog`, `purrdf-entail`, "
 "`purrdf-geo`, `purrdf-text`, `purrdf-validate`, `purrdf-slice`, `purrdf-"
-"iri`, `purrdf-xsd`, `purrdf-events`, `purrdf-hash`, `purrdf-wasm`) exist for "
-"consumers that want exactly one engine — for example, a tool that only needs "
-"IRI parsing can depend on the zero-dependency `purrdf-iri` alone. The crate "
-"map is in the [repository README](https://github.com/Blackcat-Informatics/"
-"purrdf#crate-map)."
+"iri`, `purrdf-lex`, `purrdf-xsd`, `purrdf-events`, `purrdf-hash`, `purrdf-"
+"wasm`) exist for consumers that want exactly one engine — for example, a "
+"tool that only needs IRI parsing can depend on `purrdf-iri` alone, whose "
+"dependencies are the first-party lexical layer `purrdf-lex` and the zero-"
+"dependency `purrdf-hash`. The crate map is in the [repository README]"
+"(https://github.com/Blackcat-Informatics/purrdf#crate-map)."
 msgstr ""
 "大多数应用只需依赖 `purrdf`。子 crate（`purrdf-core`、`purrdf-rdf`、`purrdf-"
 "columnar`、`purrdf-sparql-algebra`、`purrdf-sparql-eval`、`purrdf-sparql-"
 "results`、`purrdf-cdt`、`purrdf-shapes`、`purrdf-jsonschema`、`purrdf-shex`、"
 "`purrdf-gts`、`purrdf-datalog`、`purrdf-entail`、`purrdf-geo`、`purrdf-"
-"text`、`purrdf-validate`、`purrdf-slice`、`purrdf-iri`、`purrdf-xsd`、"
-"`purrdf-events`、`purrdf-hash`、`purrdf-wasm`）是为只想要恰好一个引擎的使用方"
-"准备的——例如，只需要 IRI 解析的工具可以仅依赖零依赖的 `purrdf-iri`。crate 一"
-"览见[仓库 README](https://github.com/Blackcat-Informatics/purrdf#crate-map)。"
+"text`、`purrdf-validate`、`purrdf-slice`、`purrdf-iri`、`purrdf-lex`、"
+"`purrdf-xsd`、`purrdf-events`、`purrdf-hash`、`purrdf-wasm`）是为只想要恰好一"
+"个引擎的使用方准备的——例如，只需要 IRI 解析的工具可以仅依赖 `purrdf-iri`，它"
+"的依赖是第一方词法层 `purrdf-lex` 与零依赖的 `purrdf-hash`。crate 一览见[仓"
+"库 README](https://github.com/Blackcat-Informatics/purrdf#crate-map)。"
 
-#: src/getting-started/rust.md:96
+#: src/getting-started/rust.md:97
 msgid ""
 "Every release crate builds cleanly for `wasm32-unknown-unknown`, so the same "
 "Rust code paths work in native and wasm hosts."
@@ -869,11 +871,11 @@ msgstr ""
 "每个发布的 crate 都能干净地构建到 `wasm32-unknown-unknown`，因此同样的 Rust "
 "代码路径在原生宿主与 wasm 宿主中都能工作。"
 
-#: src/getting-started/rust.md:99 src/getting-started/python.md:139
+#: src/getting-started/rust.md:100 src/getting-started/python.md:139
 msgid "Next steps"
 msgstr "后续步骤"
 
-#: src/getting-started/rust.md:101
+#: src/getting-started/rust.md:102
 msgid ""
 "[The Interned Dataset IR](../concepts/interned-dataset.md) — how the IR "
 "works and why it is fast."
@@ -881,7 +883,7 @@ msgstr ""
 "[驻留数据集 IR](../concepts/interned-dataset.md)——IR 如何工作，以及它为何快"
 "速。"
 
-#: src/getting-started/rust.md:103
+#: src/getting-started/rust.md:104
 msgid ""
 "[Graph, Tabular & Research-Object Projections](../concepts/projections.md) — "
 "deterministic LPG, CSVW, OBO Graphs, SKOS, and research-object carriers "
@@ -890,13 +892,13 @@ msgstr ""
 "[图、表格与 Research Object 投影](../concepts/projections.md)——通过总括 "
 "crate 获得确定性的 LPG、CSVW、OBO Graphs、SKOS 与 Research Object 载体。"
 
-#: src/getting-started/rust.md:105
+#: src/getting-started/rust.md:106
 msgid ""
 "[SPARQL: Querying](../sparql/querying.md) — running queries over a frozen "
 "dataset."
 msgstr "[SPARQL：查询](../sparql/querying.md)——在冻结的数据集上运行查询。"
 
-#: src/getting-started/rust.md:107
+#: src/getting-started/rust.md:108
 msgid "[docs.rs/purrdf](https://docs.rs/purrdf) — the full API reference."
 msgstr "[docs.rs/purrdf](https://docs.rs/purrdf)——完整的 API 参考。"
 
@@ -2434,14 +2436,14 @@ msgstr ""
 msgid ""
 "Text codecs are _not_ in the kernel — parsing and serialization live one "
 "layer up in [`purrdf-rdf`](https://docs.rs/purrdf-rdf). The split keeps the "
-"kernel small and its invariants enforceable at the crate boundary: no "
-"oxigraph, no PyO3 (a hygiene gate asserts the dependency tree), `wasm32`\\-"
-"clean, and a file-IO-free IR layer."
+"kernel small and its invariants enforceable at the crate boundary: no PyO3 "
+"(a hygiene gate asserts the dependency tree), `wasm32`\\-clean, and a file-"
+"IO-free IR layer."
 msgstr ""
 "文本编解码器*不*在内核中——解析与序列化位于上一层的 [`purrdf-rdf`](https://"
 "docs.rs/purrdf-rdf) 中。这种拆分让内核保持小巧，并让其不变量能在 crate 边界上"
-"强制执行：不含 oxigraph，不含 PyO3（一项卫生检查会对依赖树进行断言），"
-"`wasm32`\\-clean（可干净构建到该目标），且 IR 层不涉及文件 IO。"
+"强制执行：不含 PyO3（一项卫生检查会对依赖树进行断言），`wasm32`\\-clean（可干"
+"净构建到该目标），且 IR 层不涉及文件 IO。"
 
 #: src/concepts/interned-dataset.md:84
 msgid "Why this design"
@@ -2449,16 +2451,15 @@ msgstr "为何如此设计"
 
 #: src/concepts/interned-dataset.md:86
 msgid ""
-"The layout is chosen by measurement, not assertion: the criterion bench "
-"`crates/rdf-core/benches/ir_layout.rs` compares array-of-structs, struct-of-"
-"arrays, and predicate-adjacency layouts on allocation counts, high-water "
-"memory, and end-to-end latency — the shipped layout is whichever wins. See "
-"[Performance](../project/performance.md)."
+"The layout is chosen by measurement, not assertion: the bench `crates/rdf-"
+"core/benches/ir_layout.rs` compares array-of-structs, struct-of-arrays, and "
+"predicate-adjacency layouts on allocation counts, high-water memory, and end-"
+"to-end latency — the shipped layout is whichever wins. See [Performance](../"
+"project/performance.md)."
 msgstr ""
-"布局是通过测量而非断言选定的：criterion 基准 `crates/rdf-core/benches/"
-"ir_layout.rs` 在分配次数、内存高水位以及端到端延迟上比较结构体数组、数组结构"
-"体与谓词邻接三种布局——最终发布的是胜出的那一种。参见[性能](../project/"
-"performance.md)。"
+"布局是通过测量而非断言选定的：基准 `crates/rdf-core/benches/ir_layout.rs` 在"
+"分配次数、内存高水位以及端到端延迟上比较结构体数组、数组结构体与谓词邻接三种"
+"布局——最终发布的是胜出的那一种。参见[性能](../project/performance.md)。"
 
 #: src/concepts/rdf12.md:8
 msgid ""
@@ -4829,7 +4830,7 @@ msgstr ""
 
 #: src/concepts/codecs.md:196 src/concepts/base-iris.md:258
 #: src/sparql/querying.md:1943 src/validation/shacl.md:1419
-#: src/validation/shex.md:64 src/entailment.md:364
+#: src/validation/shex.md:64 src/entailment.md:365
 msgid "Conformance"
 msgstr "一致性"
 
@@ -11562,13 +11563,13 @@ msgid ""
 "implements **SHACL 1.2**: Core, SPARQL Extensions, Node Expressions, "
 "Inference Rules and the SPARQL 1.2 RL rule language, plus the SHACL-AF 1.0 "
 "spellings those documents supersede. It runs entirely on PurRDF's own "
-"interned IR and native SPARQL engine (no oxigraph, no PyO3)."
+"interned IR and native SPARQL engine (no PyO3)."
 msgstr ""
 "[`purrdf-shapes`](https://docs.rs/purrdf-shapes)（重新导出为 "
 "`purrdf::shapes`）是 PurRDF 的原生 SHACL 验证器与规则引擎。它实现了 **SHACL "
 "1.2**：Core、SPARQL 扩展、节点表达式、推理规则以及 SPARQL 1.2 RL 规则语言，外"
 "加被这些文档取代的 SHACL-AF 1.0 拼写。它完全运行在 PurRDF 自己的驻留 IR 与原"
-"生 SPARQL 引擎之上（不含 oxigraph，不含 PyO3）。"
+"生 SPARQL 引擎之上（不含 PyO3）。"
 
 #: src/validation/shacl.md:15
 msgid ""
@@ -17062,11 +17063,11 @@ msgstr ""
 
 #: src/validation/shex.md:22
 msgid ""
-"**ShExJ** (the JSON wire format, spec Appendix A) — strict, round-tripping "
-"serde support matching the shexTest ground truth."
+"**ShExJ** (the JSON wire format, spec Appendix A) — a strict, round-tripping "
+"reader and writer matching the shexTest ground truth."
 msgstr ""
-"**ShExJ**（JSON 线格式，规范附录 A）——严格且可往返（转换）的 serde 支持，与 "
-"shexTest 的基准事实一致。"
+"**ShExJ**（JSON 线格式，规范附录 A）——严格且可往返（转换）的读取器与写出器，"
+"与 shexTest 的基准事实一致。"
 
 #: src/validation/shex.md:24
 msgid ""
@@ -18157,30 +18158,30 @@ msgstr ""
 #: src/entailment.md:355
 msgid ""
 "**Dependency-lean and wasm-clean.** The dependencies are `purrdf-core`, "
-"[`purrdf-datalog`](datalog.md), `purrdf-xsd`, `roxmltree`, `purrdf-hash`, "
-"and `hashbrown`'s raw hash table, keyed by `purrdf-core`'s fixed-key hasher "
-"— every one of them `wasm32-unknown-unknown`\\-clean, so the engines carry "
-"into Rust, Python, WebAssembly, and C unchanged, with no threads, "
-"filesystem, or RNG dependency."
+"[`purrdf-datalog`](datalog.md), `purrdf-xsd`, `purrdf-lex`, `purrdf-iri`, "
+"`purrdf-hash`, and `hashbrown`'s raw hash table, keyed by `purrdf-core`'s "
+"fixed-key hasher — every one of them `wasm32-unknown-unknown`\\-clean, so "
+"the engines carry into Rust, Python, WebAssembly, and C unchanged, with no "
+"threads, filesystem, or RNG dependency."
 msgstr ""
 "**依赖精简且 wasm-clean。** 依赖项为 `purrdf-core`、[`purrdf-datalog`]"
-"(datalog.md)、`purrdf-xsd`、`roxmltree`、`purrdf-hash`，以及以 `purrdf-core` "
-"的固定密钥哈希器为键计算哈希值的 `hashbrown` 原始哈希表——每一个都是 `wasm32-"
-"unknown-unknown`\\-clean（可干净构建到该目标），因此这些引擎可以原样带入 "
-"Rust、Python、WebAssembly 与 C，不依赖线程、文件系统或 RNG。"
+"(datalog.md)、`purrdf-xsd`、`purrdf-lex`、`purrdf-iri`、`purrdf-hash`，以及"
+"以 `purrdf-core` 的固定密钥哈希器为键计算哈希值的 `hashbrown` 原始哈希表——每"
+"一个都是 `wasm32-unknown-unknown`\\-clean（可干净构建到该目标），因此这些引擎"
+"可以原样带入 Rust、Python、WebAssembly 与 C，不依赖线程、文件系统或 RNG。"
 
-#: src/entailment.md:361
+#: src/entailment.md:362
 msgid ""
 "**Deterministic.** Same input + regime → same closure, always — and the same "
 "report, byte for byte."
 msgstr ""
 "**确定性。** 相同的输入 + 机制 → 相同的推理闭包，始终如此——报告也逐字节相同。"
 
-#: src/entailment.md:366
+#: src/entailment.md:367
 msgid "Two corpora measure two different things, and the distinction matters:"
 msgstr "两份语料度量的是两件不同的事，这一区别很重要："
 
-#: src/entailment.md:368
+#: src/entailment.md:369
 msgid ""
 "**W3C SPARQL 1.1 entailment-regime group — 70 of 70 cases pass**, with zero "
 "ledgered residuals: the RDF/RDFS/OWL-RL chase, the OWL-Direct (DL) tableau, "
@@ -18191,7 +18192,7 @@ msgstr ""
 "RDF/RDFS/OWL-RL chase、OWL-Direct（DL）tableau、RIF-Core 规则引擎，以及 RDF "
 "公理性的谓词类型推定，全部经由 SPARQL 一致性测试框架运行。"
 
-#: src/entailment.md:372
+#: src/entailment.md:373
 msgid ""
 "**W3C OWL 2 test suite — 258 of 262 cases agree, 4 ledgered**, zero "
 "unledgered. This corpus is _consistency_\\-shaped: all 262 vendored cases "
@@ -18208,7 +18209,7 @@ msgstr ""
 "明。4 个分歧中的每一个都在一个带类型的台账中点名列出；未入台账的分歧，以及已"
 "入台账却开始一致的用例，都是硬失败。"
 
-#: src/entailment.md:380
+#: src/entailment.md:381
 msgid ""
 "Two things this row does **not** say. First, the upstream material is not "
 "free of entailment tests — the W3C manifest holds **206 positive and 23 "
@@ -18233,7 +18234,7 @@ msgstr ""
 "荷的分拣，而非能力限制，而「262 个中 258 个」是基于一份语料的数字，而不是基"
 "于 W3C 所发布内容的数字。"
 
-#: src/entailment.md:393
+#: src/entailment.md:394
 msgid ""
 "Those five figures are a **dated measurement**, recorded in `census.tsv`'s "
 "`dl_probe` column and described in that suite's `PROVENANCE.md`. The harness "
@@ -18248,7 +18249,7 @@ msgstr ""
 "归。重新推导这些数字意味着重新运行探测，这是一项有意的操作，而不是把关检查的"
 "一部分。"
 
-#: src/entailment.md:399
+#: src/entailment.md:400
 msgid ""
 "**W3C OWL 2 RL entailment tests — 50 of 50 cases agree, 0 ledgered**, zero "
 "unledgered. This is the independent oracle for the rule table: W3C's own "
@@ -18261,7 +18262,7 @@ msgstr ""
 "`Regime::OwlRl` 下调用一次 `purrdf_entail::entails()` 作答。两个通道证明的是"
 "不同的事，分开报告。"
 
-#: src/entailment.md:405
+#: src/entailment.md:406
 msgid ""
 "**The negative lane is 23 of 23: no unsoundness.** The chase never derived a "
 "triple W3C publishes as _not_ entailed. That is the safety result, and it "
@@ -18272,14 +18273,14 @@ msgstr ""
 "被蕴涵的三元组。这是安全性结果，它在*全部* 23 个负向用例上都成立——可靠性是每"
 "个用例都必须满足的，因此没有按 profile 过滤任何用例。"
 
-#: src/entailment.md:410
+#: src/entailment.md:411
 msgid ""
 "**Those 23 agreements are two different results, and the harness prints the "
 "split** on a scoreboard line of its own:"
 msgstr ""
 "**这 23 次一致是两种不同的结果，测试框架会打印其划分**，单独占一行记分板："
 
-#: src/entailment.md:417
+#: src/entailment.md:418
 msgid ""
 "Three are _decided_ non-entailments — both halves of Theorem PR1's "
 "hypothesis hold, so the closure's failure to contain the non-conclusion is a "
@@ -18297,7 +18298,7 @@ msgstr ""
 "`refuted 0`。`23 of 23` 应读作「未发现不可靠性」，绝不能读作「证明了 23 个非"
 "蕴涵」。"
 
-#: src/entailment.md:426
+#: src/entailment.md:427
 msgid ""
 "The positive lane is **27 of 27** — the 27 positive entailments W3C itself "
 "places inside the RL profile under RDF-Based semantics — and the typed "
@@ -18312,7 +18313,7 @@ msgstr ""
 "`imports-unresolved` 为 0，且**需要采取行动的项为 0**（`missing-rule` 为 "
 "0）。"
 
-#: src/entailment.md:433
+#: src/entailment.md:434
 msgid ""
 "Every class it used to hold is closed, and the rule table did not change "
 "once to close any of them. `entails()` reaches a conclusion six ways, and "
@@ -18321,7 +18322,7 @@ msgstr ""
 "它过去包含的每一类都已关闭，而为了关闭其中任何一类，规则表一次也没有改变。"
 "`entails()` 以六种方式得出结论，其中五种不是匹配："
 
-#: src/entailment.md:437
+#: src/entailment.md:438
 msgid ""
 "**refutation.** A negative fact still has no head anywhere in Tables 4–9 — "
 "no rule concludes `owl:differentFrom`, and none concludes membership in an "
@@ -18344,7 +18345,7 @@ msgstr ""
 "态，并且恰好在每一对都被驳倒时才被蕴涵——这就是为什么有两个条目随之离开了 "
 "`schema-conclusion` 类。"
 
-#: src/entailment.md:448
+#: src/entailment.md:449
 msgid ""
 "**freeze-and-chase.** `p rdf:type owl:TransitiveProperty` abbreviates a "
 "universally quantified Horn implication, and an implication is decided by "
@@ -18362,7 +18363,7 @@ msgstr ""
 "的一次查找，而且这一步不可省略：模式公理是一个合取式，只确立其中有意思的那一"
 "半，就会声称该语义并不许可的结论。"
 
-#: src/entailment.md:456
+#: src/entailment.md:457
 msgid ""
 "**comprehension.** A conclusion may assert that a CLASS EXISTS — an "
 "anonymous `owl:unionOf`, an anonymous `owl:Restriction` — which the RDF-"
@@ -18375,7 +18376,7 @@ msgstr ""
 "件所许可，但须满足一个关于运算对象的类型附加条件。只生成结论所点名的那些脚手"
 "架，且所用的空节点已检查在两份文档中都不存在。"
 
-#: src/entailment.md:461
+#: src/entailment.md:462
 msgid ""
 "**reflexivity.** `owl:ReflexiveProperty` is outside the RL syntax, so the "
 "profile states no rule for it — and a rule that did would range over every "
@@ -18387,7 +18388,7 @@ msgstr ""
 "给出规则——而如果有这样一条规则，它的取值范围将是每一个资源，从而扩大每个使用"
 "方默认都会计算的推理闭包。结论自身的自环改为从前提的自反类型声明中读出。"
 
-#: src/entailment.md:466
+#: src/entailment.md:467
 msgid ""
 "**datatype containment.** A property's declared `rdfs:range` datatypes "
 "intersect, and the intersection may be contained in one the premise never "
@@ -18401,7 +18402,7 @@ msgstr ""
 "⊓ unsignedInt ⊑ unsignedShort`，这两者都无法通过对三元组做连接来发现。在 XSD "
 "值空间上判定，采用三值逻辑，否定答案只有在反例范围被精确判定时才会给出。"
 
-#: src/entailment.md:473
+#: src/entailment.md:474
 msgid ""
 "The last case needed no mechanism at all, only the document its premise "
 "names: `webont-imports-011` `owl:imports` a support ontology the upstream "
@@ -18414,7 +18415,7 @@ msgstr ""
 "W3C 自己的 URL 获取后随库固化在这些用例旁边，并作为调用方持有的配置提供给 "
 "`entails()`。该库仍然不获取任何内容。"
 
-#: src/entailment.md:479
+#: src/entailment.md:480
 msgid ""
 "Nothing about the inventory moves: `rules(Regime::OwlRl)` and "
 "`implemented(Regime::OwlRl)` are still exactly the same 78, "
@@ -18434,7 +18435,7 @@ msgstr ""
 "结的常量、规则体与规则头；生成的三元组以及许可它们的推理闭包三元组），以及它"
 "自己的检查器，无需运行推理机即可重新判定全部内容。"
 
-#: src/entailment.md:489
+#: src/entailment.md:490
 msgid ""
 "The one case that used to be actionable is closed by an **extension**, and "
 "the extension is labelled rather than absorbed. `a owl:differentFrom b` "
@@ -18462,7 +18463,7 @@ msgstr ""
 "到的推理闭包是表 4–9 再加上一份它可以阅读并拒绝的清单，而 `OWL-RL 78 / 78` 仍"
 "然只是关于表 4–9 的声明，别无其他。"
 
-#: src/entailment.md:503
+#: src/entailment.md:504
 msgid ""
 "The live scoreboard is [`docs/CONFORMANCE.md`](https://github.com/Blackcat-"
 "Informatics/purrdf/blob/main/docs/CONFORMANCE.md)."
@@ -20353,22 +20354,25 @@ msgstr "内核隔离带"
 
 #: src/project/design-rules.md:48
 msgid ""
-"`purrdf-core` must never depend on oxigraph or PyO3 — the whole workspace is "
-"oxigraph-free, and a hygiene gate asserts the dependency tree. The three "
-"foundation leaves (`purrdf-iri`, `purrdf-xsd`, `purrdf-events`) keep **zero "
-"runtime dependencies**. Diagnostics stay structured and SARIF-free in the "
-"kernel; the SARIF boundary is the `purrdf-validate` leaf."
+"`purrdf-core` must never depend on PyO3, and a hygiene gate asserts the "
+"dependency tree. The root `purrdf-hash` keeps **zero runtime dependencies**, "
+"and the foundation leaves above it (`purrdf-lex`, `purrdf-iri`, `purrdf-"
+"xsd`, `purrdf-events`) depend only on the first-party crates their "
+"`layers.toml` rows allow and on no third-party crate. Diagnostics stay "
+"structured and SARIF-free in the kernel; the SARIF boundary is the `purrdf-"
+"validate` leaf."
 msgstr ""
-"`purrdf-core` 绝不能依赖 oxigraph 或 PyO3——整个工作区都不含 oxigraph，并有一"
-"道卫生关卡对依赖树进行断言。三个基础叶子 crate（`purrdf-iri`、`purrdf-xsd`、"
-"`purrdf-events`）保持**零运行时依赖**。诊断在内核中保持结构化且不含 SARIF；"
+"`purrdf-core` 绝不能依赖 PyO3，并有一道卫生关卡对依赖树进行断言。根 crate "
+"`purrdf-hash` 保持**零运行时依赖**，其上的基础叶子 crate（`purrdf-lex`、"
+"`purrdf-iri`、`purrdf-xsd`、`purrdf-events`）只依赖其 `layers.toml` 行所允许"
+"的第一方 crate，不依赖任何第三方 crate。诊断在内核中保持结构化且不含 SARIF；"
 "SARIF 边界是 `purrdf-validate` 这个叶子 crate。"
 
-#: src/project/design-rules.md:54
+#: src/project/design-rules.md:55
 msgid "Everything is wasm-able"
 msgstr "一切皆可编译到 wasm"
 
-#: src/project/design-rules.md:56
+#: src/project/design-rules.md:57
 msgid ""
 "Every release crate must build for `wasm32-unknown-unknown`, and CI hard-"
 "fails otherwise. No dependency may drag in threads, the filesystem, C "
@@ -20381,11 +20385,11 @@ msgstr ""
 "密码学实现保持纯 Rust，正是出于这一原因。这正是 JavaScript 包之所以是*同一个"
 "引擎*、而不是移植版本的原因。"
 
-#: src/project/design-rules.md:62
+#: src/project/design-rules.md:63
 msgid "Hard-fail, never wrong"
 msgstr "宁可硬失败，绝不给错答案"
 
-#: src/project/design-rules.md:64
+#: src/project/design-rules.md:65
 msgid ""
 "Across the toolkit, out-of-scope input is a **typed error**, never a partial "
 "answer: malformed RDF is an `RdfDiagnostic`, an unsupported SPARQL builtin "
@@ -20402,7 +20406,7 @@ msgstr ""
 "格式错误。按设计有损的投影是允许的，但必须*显式报告*，经由[损失台账](../"
 "slices.md#损失台账)。"
 
-#: src/project/design-rules.md:72
+#: src/project/design-rules.md:73
 msgid ""
 "A hard-fail is owed to input the toolkit cannot handle — never to a value "
 "its own signature accepts. `purrdf-entail::materialize` used to refuse `OWL-"
@@ -20419,7 +20423,7 @@ msgstr ""
 "`Materialization`，其中携带每种蕴涵机制自身的输入，因而不再有任何「不支持的蕴"
 "涵机制」错误可以指称。"
 
-#: src/project/design-rules.md:80
+#: src/project/design-rules.md:81
 msgid ""
 "The reasoning side adds a second discipline on top of hard-fail: where a run "
 "_succeeds_ but is bounded, it says so. `materialize` returns a "
@@ -20434,11 +20438,11 @@ msgstr ""
 "演算的契约哈希。静默交付一个正确但不完备的答案，与交付一个错误答案属于同一种"
 "失效模式。"
 
-#: src/project/design-rules.md:87
+#: src/project/design-rules.md:88
 msgid "Conformance corpora are the contract"
 msgstr "一致性语料就是契约"
 
-#: src/project/design-rules.md:89
+#: src/project/design-rules.md:90
 msgid ""
 "The W3C and community test suites are vendored, **byte-frozen**, and SHA-256-"
 "verified; harnesses assert exact counts and enforce XPASS discipline on "
@@ -20448,19 +20452,19 @@ msgstr ""
 "试框架断言精确的计数，并在其预期失败台账上执行 XPASS 纪律。参见[一致性与测试]"
 "(conformance.md)。"
 
-#: src/project/design-rules.md:94
+#: src/project/design-rules.md:95
 msgid "Supporting rules"
 msgstr "辅助规则"
 
-#: src/project/design-rules.md:96
+#: src/project/design-rules.md:97
 msgid ""
-"**Measured performance** — perf claims require a criterion bench, not an "
-"adjective ([Performance](performance.md))."
+"**Measured performance** — perf claims require a bench, not an adjective "
+"([Performance](performance.md))."
 msgstr ""
-"**经过测量的性能**——性能声称需要一个 criterion 基准测试，而不是一个形容词"
-"（[性能](performance.md)）。"
+"**经过测量的性能**——性能声称需要一个基准测试，而不是一个形容词（[性能]"
+"(performance.md)）。"
 
-#: src/project/design-rules.md:98
+#: src/project/design-rules.md:99
 msgid ""
 "**One version, lockstep releases** — crates.io, PyPI, and npm ship one "
 "workspace version ([Versioning & Releases](releases.md))."
@@ -20468,7 +20472,7 @@ msgstr ""
 "**同一版本，同步发布**——crates.io、PyPI 与 npm 发布同一个工作区版本（[版本与"
 "发布](releases.md)）。"
 
-#: src/project/design-rules.md:100
+#: src/project/design-rules.md:101
 msgid ""
 "**Zero nightly features, stable MSRV** — there are no `#![feature(...)]` "
 "attributes anywhere in the workspace and the MSRV floor (currently 1.98, on "
@@ -20483,7 +20487,7 @@ msgstr ""
 "toolchain.toml` 中指定的*浮动* nightly，以获得更锐利的 clippy 与 rustdoc "
 "lint 以及更强的默认借用检查器；发布工件在 stable 上构建。"
 
-#: src/project/design-rules.md:106
+#: src/project/design-rules.md:107
 msgid ""
 "**Brand** — the project is **PurRDF** in prose and `purrdf` in identifiers "
 "([`docs/BRAND.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
@@ -20846,13 +20850,13 @@ msgstr ""
 #: src/project/performance.md:25
 msgid ""
 "Crucially, the _layout itself_ was chosen by benchmark: the `crates/rdf-core/"
-"benches/ir_layout.rs` criterion suite measures array-of-structs vs. struct-"
-"of-arrays vs. predicate-adjacency layouts on allocation counts, high-water "
+"benches/ir_layout.rs` bench suite measures array-of-structs vs. struct-of-"
+"arrays vs. predicate-adjacency layouts on allocation counts, high-water "
 "memory, and end-to-end latency — and the shipped layout is whichever wins."
 msgstr ""
 "关键在于，*布局本身*是由基准测试选定的：`crates/rdf-core/benches/"
-"ir_layout.rs` criterion 套件在分配次数、内存峰值与端到端延迟上测量结构体数"
-"组、数组结构体与谓词邻接三种布局——随库发布的布局就是胜出的那一种。"
+"ir_layout.rs` 基准套件在分配次数、内存峰值与端到端延迟上测量结构体数组、数组"
+"结构体与谓词邻接三种布局——随库发布的布局就是胜出的那一种。"
 
 #: src/project/performance.md:31
 msgid "The two benchmark layers"
@@ -20871,8 +20875,8 @@ msgid "How to run"
 msgstr "运行方式"
 
 #: src/project/performance.md:35
-msgid "**Rust criterion suites**"
-msgstr "**Rust criterion 套件**"
+msgid "**Rust bench suites**"
+msgstr "**Rust 基准套件**"
 
 #: src/project/performance.md:35
 msgid ""
@@ -20919,19 +20923,18 @@ msgstr "变更的纪律"
 
 #: src/project/performance.md:43
 msgid ""
-"Any change claiming a performance win must **extend the criterion benches** "
-"rather than asserting the speedup in prose. Where a planner or algorithm "
-"choice matters for correctness-adjacent behavior, it is gated by "
-"_deterministic_ tests instead of timings — for example, the cost-based BGP "
-"planner's win over the retired structural heuristic is asserted by unit "
-"tests that count real intermediate rows, and by a differential corpus test, "
-"while the criterion bench merely watches for regressions."
+"Any change claiming a performance win must **extend the benches** rather "
+"than asserting the speedup in prose. Where a planner or algorithm choice "
+"matters for correctness-adjacent behavior, it is gated by _deterministic_ "
+"tests instead of timings — for example, the cost-based BGP planner's win "
+"over the retired structural heuristic is asserted by unit tests that count "
+"real intermediate rows, and by a differential corpus test, while the bench "
+"merely watches for regressions."
 msgstr ""
-"任何声称带来性能提升的变更都必须**扩展 criterion 基准测试**，而不是在行文中断"
-"言加速。当规划器或算法的选择对与正确性相关的行为有影响时，它由*确定性*测试而"
-"非计时来把关——例如，基于代价的 BGP 规划器优于已退役的结构性启发式方法，这一点"
-"由统计真实中间行数的单元测试以及一项差分语料测试来断言，而 criterion 基准测试"
-"只负责监视性能回退。"
+"任何声称带来性能提升的变更都必须**扩展基准测试**，而不是在行文中断言加速。当"
+"规划器或算法的选择对与正确性相关的行为有影响时，它由*确定性*测试而非计时来把"
+"关——例如，基于代价的 BGP 规划器优于已退役的结构性启发式方法，这一点由统计真实"
+"中间行数的单元测试以及一项差分语料测试来断言，而基准测试只负责监视性能回退。"
 
 #: src/project/performance.md:51
 msgid ""
@@ -20967,8 +20970,8 @@ msgid "Reproducing locally"
 msgstr "在本地复现"
 
 #: src/project/performance.md:67
-msgid "# the default criterion set\n"
-msgstr "# 默认的 criterion 集合\n"
+msgid "# the default bench set\n"
+msgstr "# 默认的基准集合\n"
 
 #: src/project/performance.md:68
 msgid "# a single package's bench\n"
@@ -21148,7 +21151,7 @@ msgstr "每个工作区 crate 的版本都必须与标签版本一致。"
 
 #: src/project/releases.md:63
 msgid ""
-"After its initial record bootstrap, every version of every crate in the 29-"
+"After its initial record bootstrap, every version of every crate in the 31-"
 "crate release set is published by that lane. Each existing crate record is "
 "locked on crates.io with _Require trusted publishing_ (`trustpub_only`), so "
 "an API token cannot publish a new version of any of them: crates.io answers "
@@ -21161,7 +21164,7 @@ msgid ""
 "cleanly, the token creates the new crate's record, Trusted Publishing is "
 "enabled on it, and the same run is resumed."
 msgstr ""
-"在各自最初的记录引导（bootstrap）之后，29 个 crate 的发布集合中每个 crate 的"
+"在各自最初的记录引导（bootstrap）之后，31 个 crate 的发布集合中每个 crate 的"
 "每个版本都由该通道发布。每个已有的 crate 记录都在 crates.io 上以 _Require "
 "trusted publishing_（`trustpub_only`）锁定，因此 API 令牌无法为其中任何一个发"
 "布新版本：crates.io 会回应 `403 Forbidden: New versions of this crate can "
@@ -21173,84 +21176,87 @@ msgstr ""
 
 #: src/project/releases.md:75
 msgid ""
-"Nine workspace members are deliberately never published to crates.io: "
+"Eleven workspace members are deliberately never published to crates.io: "
 "`purrdf-capi` (built via cargo-c, distributed as `libpurrdf`), `purrdf-"
-"sparql-conformance` (the test harness), `purrdf-cli` (the `purrdf` binary), "
+"sparql-conformance` (the test harness), `purrdf-hash-conformance` (the "
+"frozen-vector suites of `purrdf-hash`), `purrdf-cli` (the `purrdf` binary), "
 "`purrdf-envelope-probe` (the micro-hardware envelope capture tool), `purrdf-"
 "bench` (benchmark tooling), `purrdf-alloc-probe` (the shared counting "
 "allocator the allocation tests and benches measure with), `purrdf-testkit` "
 "(the shared test support: goldens, temporary paths, frozen vectors and the "
 "`harness = false` runner), `wasm-link` (the wasm package's post-link step), "
-"and `purrdf-python` (the extension crate, which ships to PyPI via maturin "
+"`helper-census` (the structural census behind the shared-helpers gate), and "
+"`purrdf-python` (the extension crate, which ships to PyPI via maturin "
 "instead)."
 msgstr ""
-"有九个工作区成员有意从不发布到 crates.io：`purrdf-capi`（经由 cargo-c 构建，"
-"以 `libpurrdf` 的形式分发）、`purrdf-sparql-conformance`（测试框架）、"
-"`purrdf-cli`（`purrdf` 二进制文件）、`purrdf-envelope-probe`（微型硬件包络采"
-"集工具）、`purrdf-bench`（基准测试工具）、`purrdf-alloc-probe`（分配测试与基"
-"准测试进行测量时所共用的计数分配器）、`purrdf-testkit`（共用测试支持：黄金文"
-"件、临时路径、冻结向量与 `harness = false` 运行器）、`wasm-link`（wasm 包的链"
-"接后处理工具），以及 `purrdf-python`（扩展 crate，改为经由 maturin 发布到 "
-"PyPI）。"
+"有十一个工作区成员有意从不发布到 crates.io：`purrdf-capi`（经由 cargo-c 构"
+"建，以 `libpurrdf` 的形式分发）、`purrdf-sparql-conformance`（测试框架）、"
+"`purrdf-hash-conformance`（`purrdf-hash` 的冻结向量测试套件）、`purrdf-cli`"
+"（`purrdf` 二进制文件）、`purrdf-envelope-probe`（微型硬件包络采集工具）、"
+"`purrdf-bench`（基准测试工具）、`purrdf-alloc-probe`（分配测试与基准测试进行"
+"测量时所共用的计数分配器）、`purrdf-testkit`（共用测试支持：黄金文件、临时路"
+"径、冻结向量与 `harness = false` 运行器）、`wasm-link`（wasm 包的链接后处理工"
+"具）、`helper-census`（共享辅助函数门禁背后的结构普查工具），以及 `purrdf-"
+"python`（扩展 crate，改为经由 maturin 发布到 PyPI）。"
 
-#: src/project/releases.md:85
+#: src/project/releases.md:87
 msgid ""
-"`purrdf-alloc-probe` and `purrdf-testkit` are the only two of the nine that "
-"published crates depend on, and they reach them solely through `[dev-"
+"`purrdf-alloc-probe` and `purrdf-testkit` are the only two of the eleven "
+"that published crates depend on, and they reach them solely through `[dev-"
 "dependencies]`. Their root `[workspace.dependencies]` entries are therefore "
 "path-only, with no `version` key, which is what makes cargo drop them from "
 "the packaged manifest: an unpublished crate cannot be a versioned dependency "
 "of a published one, and `cargo publish`'s verification step resolves dev-"
 "dependencies too."
 msgstr ""
-"这九个成员中，只有 `purrdf-alloc-probe` 和 `purrdf-testkit` 被已发布的 crate "
-"所依赖，并且仅通过 `[dev-dependencies]` 引入。因此，它们在根 "
+"这十一个成员中，只有 `purrdf-alloc-probe` 和 `purrdf-testkit` 被已发布的 "
+"crate 所依赖，并且仅通过 `[dev-dependencies]` 引入。因此，它们在根 "
 "`[workspace.dependencies]` 中的条目只有路径、没有 `version` 键，这正是 cargo "
 "将它们从打包后的清单中去除的原因：未发布的 crate 不能成为已发布 crate 的带版"
 "本依赖，而 `cargo publish` 的验证步骤也会解析 dev-dependencies。"
 
-#: src/project/releases.md:93
+#: src/project/releases.md:95
 msgid "Cutting a release"
 msgstr "切出一个发布"
 
-#: src/project/releases.md:95
+#: src/project/releases.md:97
 msgid ""
 "The coherent flow from `main` uses the `make` helpers so the three lanes can "
 "never drift:"
 msgstr ""
 "从 `main` 出发的连贯流程使用 `make` 辅助目标，因此三条通道永远不会出现偏差："
 
-#: src/project/releases.md:99
+#: src/project/releases.md:101
 msgid ""
 "# 1. Bump all three version sources in lockstep (fails unless they end up "
 "equal).\n"
 msgstr "# 1. 同步递增全部三个版本来源（除非最终三者相等，否则失败）。\n"
 
-#: src/project/releases.md:101
+#: src/project/releases.md:103
 msgid ""
 "# 2. Regenerate the committed C-ABI header from the bumped crate version.\n"
 msgstr "# 2. 依据递增后的 crate 版本重新生成已提交的 C-ABI 头文件。\n"
 
-#: src/project/releases.md:104
+#: src/project/releases.md:106
 msgid "# 3. Regenerate the changelog from the conventional-commit history.\n"
 msgstr "# 3. 依据约定式提交（conventional commit）历史重新生成变更日志。\n"
 
-#: src/project/releases.md:107
+#: src/project/releases.md:109
 msgid ""
 "# 4. Review, then commit the release bump, generated header, and changelog.\n"
 msgstr "# 4. 审阅后，提交版本递增、生成的头文件与变更日志。\n"
 
-#: src/project/releases.md:109
+#: src/project/releases.md:111
 msgid "\"chore(release): 0.2.2\""
 msgstr "\"chore(release): 0.2.2\""
 
-#: src/project/releases.md:110
+#: src/project/releases.md:112
 msgid ""
 "# 5. From an up-to-date main, run every release gate, then push all three "
 "tags.\n"
 msgstr "# 5. 从最新的 main 出发，运行每一道发布关卡，然后推送全部三个标签。\n"
 
-#: src/project/releases.md:115
+#: src/project/releases.md:117
 msgid ""
 "`make release-tags` refuses to run unless the working tree is clean, the "
 "branch is `main` and synchronized with `origin/main`, the version check "
@@ -21273,11 +21279,11 @@ msgstr ""
 "预检通过之前，不会创建任何标签。每个标签触发各自的通道，而 cargo 通道还会额外"
 "发布一个依据已提交的 `CHANGELOG.md` 构建的 GitHub Release。"
 
-#: src/project/releases.md:127
+#: src/project/releases.md:129
 msgid "Citing PurRDF"
 msgstr "引用 PurRDF"
 
-#: src/project/releases.md:129
+#: src/project/releases.md:131
 msgid ""
 "Releases carry a DOI; if you use PurRDF in research, please cite it — see "
 "[`CITATION.cff`](https://github.com/Blackcat-Informatics/purrdf/blob/main/"

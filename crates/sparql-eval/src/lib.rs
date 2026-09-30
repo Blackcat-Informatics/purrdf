@@ -7,8 +7,7 @@
 //! [`purrdf_sparql_algebra`] front-end and evaluates it over the
 //! [`purrdf_core`] IR's [`DatasetView`](purrdf_core::DatasetView) read trait
 //! **entirely in interned [`TermId`](purrdf_core::TermId) space**. It is the
-//! native replacement for the oxigraph-family `spareval` on the query path and
-//! the single required impl of the
+//! query-path engine and the single required impl of the
 //! [`SparqlEngine`](purrdf_core::SparqlEngine) seam.
 //!
 //! ## Design pillars
@@ -63,9 +62,7 @@
 //!   direct evaluator path before any governor charge, ledger, or stop probe. See
 //!   [`governor`] and `docs/SPARQL-GOVERNOR-PROFILE.md`.
 //!
-//! The crate carries **zero oxigraph-family dependencies** and builds for
-//! `wasm32-unknown-unknown` (the wasm query path); both invariants are
-//! gated by `make rdf-core-hygiene`.
+//! The crate builds for `wasm32-unknown-unknown` (the wasm query path).
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
@@ -76,7 +73,6 @@
 // builds forbidden and deny new wasm unsafe outside that one import module.
 #![cfg_attr(not(target_arch = "wasm32"), forbid(unsafe_code))]
 #![cfg_attr(target_arch = "wasm32", deny(unsafe_code))]
-#![warn(missing_docs)]
 
 pub mod agg_fn;
 mod basic_profile;
@@ -89,7 +85,7 @@ mod cdt_unfold;
 mod clock;
 mod construct;
 mod contain;
-mod convert;
+pub mod convert;
 mod dataset_spec;
 mod deferred_exists;
 mod describe_query;
@@ -113,8 +109,11 @@ mod modifier;
 #[cfg(test)]
 mod nested_exists_gate;
 #[cfg(test)]
+mod nested_lateral_gate;
+#[cfg(test)]
 mod op_count;
 pub(crate) mod parallel;
+pub use parallel::chunk_len_for_threads;
 #[cfg(test)]
 mod parallel_determinism_gate;
 mod path;
@@ -134,7 +133,8 @@ pub mod protocol;
 pub mod remote;
 #[cfg(target_arch = "wasm32")]
 #[allow(unsafe_code, reason = "the expansion of #[wasm_bindgen] host imports")]
-mod wasm_host;
+#[doc(hidden)]
+pub mod wasm_host;
 // HTTP-shaped SERVICE source. The actual POST transport is host-injected so this
 // crate stays wasm-portable.
 pub mod remote_http;
@@ -146,6 +146,8 @@ pub mod scratch;
 // Per-service context for the SERVICE seam: the capability/credential/header policy a
 // host attaches to individual endpoints, and the two resolvers built on it.
 pub mod execution;
+#[doc(hidden)]
+pub mod fixture;
 pub mod service;
 mod service_endpoints;
 pub mod solution;
@@ -197,8 +199,8 @@ pub use governed::{
 pub use governor::{
     CHARGE_SCHEDULE, CancellationFlag, ChargePoint, GOVERNOR_CORPUS_DIGEST,
     GOVERNOR_PROFILE_DIGEST, GOVERNOR_PROFILE_ID, GOVERNOR_PROFILE_VERSION, GovernorState,
-    ItemCharge, NodeCharges, NonMonotoneBarrier, PlanEstimate, ProfileIdentity, QueryExplanation,
-    QueryGovernors, STOP_POLL_FUEL, StopSignal, WallDeadline, resolve_precedence,
+    HostStopWatch, ItemCharge, NodeCharges, NonMonotoneBarrier, PlanEstimate, ProfileIdentity,
+    QueryExplanation, QueryGovernors, STOP_POLL_FUEL, StopSignal, WallDeadline, resolve_precedence,
 };
 // The interned query egress: a result visited inside its own evaluation, so a
 // caller that reads two columns of a wide row does not pay for the other twenty.
@@ -311,7 +313,7 @@ pub use witness::{RelationAttestations, RelationWitness};
 ///    seeded hasher could reorder hash-iteration-driven steps and leak into the
 ///    result. We always drive *output* order from `Vec`s, but fixed-key hashing
 ///    removes the hazard entirely (cf. the repo `mappings-determinism` lesson).
-/// 2. **wasm-cleanliness.** `std`'s default `RandomState` would pull a random
+/// 2. **wasm-cleanliness.** `std`'s default random hasher state would pull a random
 ///    source; the fixed-key `FixedHasher` needs none, keeping the crate clean on
 ///    `wasm32-unknown-unknown`.
 ///

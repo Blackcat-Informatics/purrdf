@@ -353,7 +353,8 @@ cannot hand the function a value it accepts and get a refusal instead of an answ
   themselves — the crate fabricates none, per the
   [toolkit-not-ontology rule](project/design-rules.md).
 - **Dependency-lean and wasm-clean.** The dependencies are `purrdf-core`,
-  [`purrdf-datalog`](datalog.md), `purrdf-xsd`, `roxmltree`, `purrdf-hash`, and
+  [`purrdf-datalog`](datalog.md), `purrdf-xsd`, `purrdf-lex`, `purrdf-iri`,
+  `purrdf-hash`, and
   `hashbrown`'s raw hash table, keyed by `purrdf-core`'s fixed-key hasher —
   every one of them
   `wasm32-unknown-unknown`-clean, so the engines carry into Rust, Python,

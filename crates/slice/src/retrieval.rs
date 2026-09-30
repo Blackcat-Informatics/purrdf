@@ -48,7 +48,7 @@
 //!
 //! [`IriError::NoBase`]: purrdf_iri::IriError::NoBase
 
-use std::fmt::Write as _;
+use purrdf_iri::percent;
 use std::path::Path;
 
 use purrdf_iri::BaseIri;
@@ -121,8 +121,8 @@ pub fn file_iri_for_absolute_path(text: &str) -> String {
 fn file_iri_from_parts(authority: &str, path: &str) -> String {
     format!(
         "file://{}{}",
-        percent_encode(authority, b""),
-        percent_encode(path, b":@/")
+        percent::encode(authority, percent::REG_NAME),
+        percent::encode(path, percent::PATH)
     )
 }
 
@@ -176,44 +176,6 @@ fn absolute_iri_path(text: &str) -> String {
     } else {
         format!("/{slashed}")
     }
-}
-
-/// Percent-encode one component of a `file://` IRI.
-///
-/// RFC-3986 §2.3 `unreserved` and §2.2 `sub-delims` survive verbatim in every component;
-/// `extra` names what this component additionally keeps (`path-abempty` keeps `:`, `@` and
-/// the `/` separators, a `reg-name` authority keeps neither). Everything else — space, `#`,
-/// `?`, `%` and every non-ASCII byte — is percent-encoded, so the result round-trips as a
-/// URI rather than re-parsing as a query or a fragment.
-fn percent_encode(text: &str, extra: &[u8]) -> String {
-    let mut encoded = String::with_capacity(text.len() + 8);
-    for &byte in text.as_bytes() {
-        let keep = byte.is_ascii_alphanumeric()
-            || matches!(
-                byte,
-                b'-' | b'.'
-                    | b'_'
-                    | b'~'
-                    | b'!'
-                    | b'$'
-                    | b'&'
-                    | b'\''
-                    | b'('
-                    | b')'
-                    | b'*'
-                    | b'+'
-                    | b','
-                    | b';'
-                    | b'='
-            )
-            || extra.contains(&byte);
-        if keep {
-            encoded.push(byte as char);
-        } else {
-            let _ = write!(encoded, "%{byte:02X}");
-        }
-    }
-    encoded
 }
 
 #[cfg(test)]
@@ -288,10 +250,10 @@ mod tests {
     #[test]
     fn each_component_encodes_under_its_own_rule() {
         assert_eq!(
-            percent_encode("a b#c?d%e\u{e9}/f:g@h", b":@/"),
+            percent::encode("a b#c?d%e\u{e9}/f:g@h", percent::PATH),
             "a%20b%23c%3Fd%25e%C3%A9/f:g@h"
         );
-        assert_eq!(percent_encode("a/b:c", b""), "a%2Fb%3Ac");
+        assert_eq!(percent::encode("a/b:c", percent::REG_NAME), "a%2Fb%3Ac");
     }
 
     // ── Filesystem derivation ──────────────────────────────────────────────────

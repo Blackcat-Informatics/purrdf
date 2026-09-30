@@ -1237,13 +1237,6 @@ impl Parser<'_> {
         self.parse_inline_shape(shape_ref)
     }
 
-    /// Whether `node` is a blank node that is the subject of no triple of the
-    /// shapes graph — the Turtle `[]`.
-    fn is_bare_blank_node(&self, node: &Term) -> bool {
-        matches!(node, Term::BlankNode(_))
-            && native_quads(self.data, Some(node), None, None, GraphFilter::AnyGraph).is_empty()
-    }
-
     /// Refuse a node-expression key that the SELECTED expression kind does not
     /// read, so an authored operand is never silently discarded.
     ///
@@ -1416,8 +1409,7 @@ impl Parser<'_> {
             format!("shnex:{local}")
         } else if let Some(local) = iri.strip_prefix(sh::NS) {
             format!("sh:{local}")
-        } else if let Some(local) = iri.strip_prefix("http://www.w3.org/1999/02/22-rdf-syntax-ns#")
-        {
+        } else if let Some(local) = iri.strip_prefix(rdf::NS) {
             format!("rdf:{local}")
         } else {
             format!("<{iri}>")
@@ -2105,10 +2097,10 @@ impl Parser<'_> {
         // this engine cannot evaluate: refused, never resolved as a host function.
         // The declaration alone, uncalled, is inert.
         let iri_term = Term::NamedNode(fn_iri.clone());
-        if self.has_type(&iri_term, crate::shapes::SH_JS_FUNCTION) {
+        if self.has_type(&iri_term, sh::JS_FUNCTION) {
             return Err(self.refuse_shacl_js(
                 &iri_term,
-                crate::shapes::SH_JS_FUNCTION,
+                sh::JS_FUNCTION,
                 format!(
                     "node expression on {node} calls <{}>, a sh:JSFunction: {}",
                     fn_iri.as_str(),

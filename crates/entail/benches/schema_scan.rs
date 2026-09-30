@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! OWL-Direct CONSISTENCY benchmark over a SCHEMA-HEAVY ontology: many disjoint
@@ -67,7 +67,7 @@
 
 use std::sync::Arc;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder};
 use purrdf_entail::reasoner::Reasoner;
@@ -76,12 +76,12 @@ use purrdf_entail::reasoner::Reasoner;
 /// its own, and a reserved-for-documentation authority is the only one it may put in a term.
 const EX: &str = "http://example.org/";
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDFS_DOMAIN: &str = "http://www.w3.org/2000/01/rdf-schema#domain";
-const RDFS_RANGE: &str = "http://www.w3.org/2000/01/rdf-schema#range";
-const OWL_ON_PROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
-const OWL_SOME_VALUES_FROM: &str = "http://www.w3.org/2002/07/owl#someValuesFrom";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_iri::vocab::owl::ON_PROPERTY as OWL_ON_PROPERTY;
+use purrdf_iri::vocab::owl::SOME_VALUES_FROM as OWL_SOME_VALUES_FROM;
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_iri::vocab::rdfs::DOMAIN as RDFS_DOMAIN;
+use purrdf_iri::vocab::rdfs::RANGE as RDFS_RANGE;
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 /// How many individuals the FIXED ABox holds, whatever `pairs` is.
 const ABOX_INDIVIDUALS: usize = 10;
@@ -126,7 +126,7 @@ fn ontology(pairs: usize) -> Arc<RdfDataset> {
     b.freeze().expect("freeze")
 }
 
-fn bench_schema_scan(c: &mut Criterion) {
+fn bench_schema_scan(c: &mut Bench) {
     let mut group = c.benchmark_group("owl_direct_consistency_schema_heavy");
     for &pairs in &[5_usize, 100, 400, 800] {
         let dataset = ontology(pairs);
@@ -142,5 +142,5 @@ fn bench_schema_scan(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_schema_scan);
-criterion_main!(benches);
+bench_group!(benches, bench_schema_scan);
+bench_main!(benches);

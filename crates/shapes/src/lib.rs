@@ -27,6 +27,7 @@
 #![doc(
     html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
+#![forbid(unsafe_code)]
 
 pub(crate) mod class_membership;
 pub(crate) mod components;
@@ -43,7 +44,9 @@ pub mod function_resolution;
 pub mod graphql;
 pub mod imports;
 pub mod instance;
+pub(crate) mod json_model;
 pub mod json_schema;
+pub mod limits;
 pub mod linkml;
 pub mod lint;
 pub mod model;
@@ -52,6 +55,8 @@ pub mod path;
 pub(crate) mod plan;
 pub(crate) mod prebinding;
 pub mod product;
+#[doc(hidden)]
+pub mod product_fixture;
 pub mod provenance;
 pub mod pydantic;
 pub mod report;
@@ -60,6 +65,8 @@ pub mod rules;
 mod schema_catalog;
 pub mod schema_import;
 mod schema_surface;
+#[doc(hidden)]
+pub mod shacl_corpora;
 pub mod shape_union;
 pub mod shapes;
 pub mod sparql;
@@ -101,8 +108,8 @@ pub use pydantic::{
     import_pydantic_package,
 };
 pub use rules::{
-    LimitKnobs, RuleLimit, RuleLimitExceeded, RuleOptions, RuleProcessor, apply_rules,
-    entail_dataset, infer,
+    LimitKnobs, RuleLimit, RuleLimitExceeded, RuleLimits, RuleOptions, RuleProcessor, RuleSource,
+    apply_rules, entail_dataset, infer, run_rules,
 };
 pub use schema_import::{
     ImportedShapes, SchemaDatatypeMap, SchemaImportConfig, SchemaImportError,
@@ -117,7 +124,3 @@ pub use typescript::{
 /// Crate version string for cache/toolchain salt parity with Python package
 /// versions (`metadata.version("purrdf-shapes")`).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-#[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;

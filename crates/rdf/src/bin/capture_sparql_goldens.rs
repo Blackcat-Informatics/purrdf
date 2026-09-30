@@ -3,8 +3,7 @@
 
 //! Capture the native SPARQL engine as committed goldens.
 //!
-//! The native [`NativeSparqlEngine`] is the SOLE SPARQL authority (the cutover
-//! proved native ≡ oxigraph). This maintainer-only
+//! The native [`NativeSparqlEngine`] is the SOLE SPARQL authority. This maintainer-only
 //! binary captures the native engine's deterministic SPARQL outputs over OUR corpus
 //! (`queries/**` + `generated/queries/**`) and over the `$this`-substitution
 //! shapes, writing them as byte-stable golden files under
@@ -12,9 +11,8 @@
 //! the engine against these frozen goldens forever (native-vs-native = a regression
 //! gate).
 //!
-//! `crates/sparql-conformance` stays oxigraph-free: it merely RECEIVES these data
-//! files; this binary is oxigraph-free too (it loads purrdf.gts via the oxigraph-free
-//! `flattened_dataset_from_bytes` and runs only the native engine).
+//! `crates/sparql-conformance` merely RECEIVES these data files; this binary loads
+//! purrdf.gts via `flattened_dataset_from_bytes` and runs only the native engine.
 //!
 //! Determinism contract: every golden is byte-stable across runs. CONSTRUCT/DESCRIBE
 //! goldens are RDFC-1.0 canonical N-Quads; SELECT goldens are the SORTED multiset of
@@ -26,7 +24,7 @@ use std::path::{Path, PathBuf};
 use purrdf_core::SparqlEngine;
 use purrdf_rdf::capture_support::{
     collect_corpus_files, corpus_repo_root, is_deferred_construct, is_multi_query_file,
-    is_nondeterministic, row_key,
+    is_nondeterministic, solutions_golden,
 };
 use purrdf_rdf::{
     BlankScope, NativeRdfFormat, RdfDataset, SparqlRequest, SparqlResult, TermRef, TermValue,
@@ -34,7 +32,7 @@ use purrdf_rdf::{
 };
 use purrdf_sparql_eval::NativeSparqlEngine;
 
-/// Where every golden tree roots. The conformance crate (oxigraph-free) reads these.
+/// Where every golden tree roots. The conformance crate reads these.
 fn goldens_root() -> PathBuf {
     corpus_repo_root()
         .join("crates")
@@ -108,7 +106,7 @@ fn main() {
 /// `.rq` file into a golden (or a classification marker).
 fn capture_corpus(goldens: &Path) -> Tally {
     // Load the merged ontology exactly as the corpus conformance gate does: the
-    // oxigraph-free flattened dataset (every named graph folded into the default
+    // flattened dataset (every named graph folded into the default
     // graph), so the goldens and the gate share one identical load view.
     let gts_path = corpus_repo_root()
         .join("generated")
@@ -225,22 +223,6 @@ fn write_result_golden(stem: &Path, result: &SparqlResult, tally: &mut Tally) {
     }
 }
 
-/// Render a SELECT result as a deterministic golden: first line is the tab-joined
-/// variable list (preserving query projection order), then the SORTED `row_key`
-/// lines (a deterministic multiset — solution row order is not contractual).
-fn solutions_golden(variables: &[String], rows: &[Vec<Option<TermValue>>]) -> String {
-    let mut out = String::new();
-    out.push_str(&variables.join("\t"));
-    out.push('\n');
-    let mut keys: Vec<String> = rows.iter().map(|r| row_key(r)).collect();
-    keys.sort();
-    for k in keys {
-        out.push_str(&k);
-        out.push('\n');
-    }
-    out
-}
-
 // ---------------------------------------------------------------------------
 // Substitution goldens.
 // ---------------------------------------------------------------------------
@@ -266,12 +248,8 @@ struct SubstShape {
     subst: Vec<(String, TermValue)>,
 }
 
-fn iri(s: &str) -> TermValue {
-    TermValue::Iri(s.to_owned())
-}
-
 fn alice_focus() -> Vec<(String, TermValue)> {
-    vec![("this".to_owned(), iri("http://ex/alice"))]
+    vec![("this".to_owned(), TermValue::iri("http://ex/alice"))]
 }
 
 /// Capture the `$this`-substitution shapes. Returns the count written.
@@ -303,7 +281,7 @@ fn capture_substitution_goldens(goldens: &Path) -> usize {
         SubstShape {
             name: "object_position",
             query: "SELECT ?this ?s WHERE { ?s <http://ex/knows> ?this }",
-            subst: vec![("this".to_owned(), iri("http://ex/carol"))],
+            subst: vec![("this".to_owned(), TermValue::iri("http://ex/carol"))],
         },
         SubstShape {
             name: "projected_only_focus",
@@ -392,12 +370,9 @@ fn expect_solutions<'a>(
     result: &'a SparqlResult,
     name: &str,
 ) -> (&'a [String], &'a [Vec<Option<TermValue>>]) {
-    match result {
-        SparqlResult::Solutions {
-            variables, rows, ..
-        } => (variables, rows),
-        other => panic!("substitution {name}: expected SELECT solutions, got {other:?}"),
-    }
+    result
+        .solutions()
+        .unwrap_or_else(|| panic!("substitution {name}: expected SELECT solutions, got {result:?}"))
 }
 
 // ---------------------------------------------------------------------------

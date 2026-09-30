@@ -57,16 +57,13 @@ use crate::score::{
     Constraint, PartitionFilter, Scored, ScoringWork, distinct_terms, score_located, select_counted,
 };
 
-/// The datatype of a plain string literal.
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-/// The datatype `?score` is emitted as.
-const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
-/// The datatype `?rank`, `?matched` and `?position` are emitted as.
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-/// The datatype of a language-tagged string.
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-/// The datatype of a directional language-tagged string.
-const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+// `?score` is emitted as `xsd:decimal`; `?rank`, `?matched` and `?position` as
+// `xsd:integer`. A searchable literal is an `xsd:string`, an `rdf:langString` or
+// an `rdf:dirLangString`.
+use purrdf_core::datatype::{XSD_DECIMAL, XSD_INTEGER, XSD_STRING};
+use purrdf_core::vocab::rdf::{
+    DIR_LANG_STRING as RDF_DIR_LANG_STRING, LANG_STRING as RDF_LANG_STRING,
+};
 
 /// [`TextSearchRelation`]'s `?doc` position.
 const SEARCH_DOC: usize = 0;
@@ -80,6 +77,9 @@ const SEARCH_RANK: usize = 3;
 const SEARCH_LANG: usize = 4;
 /// [`TextSearchRelation`]'s `?matched` position.
 const SEARCH_MATCHED: usize = 5;
+/// [`TextSearchRelation`]'s call shape: `?doc` on the subject side, the needle and
+/// the four projections on the object side.
+const SEARCH_ARITY: PfArity = PfArity::new(1, 5);
 /// The general access pattern [`TextSearchRelation`] declares: the needle is the
 /// one position it cannot enumerate, and every other position is free.
 const SEARCH_MODE: &str = "fbffff";
@@ -105,6 +105,9 @@ const OCCURRENCE_TERM: usize = 1;
 const OCCURRENCE_LANG: usize = 2;
 /// [`TermOccurrenceRelation`]'s `?position` position.
 const OCCURRENCE_POSITION: usize = 3;
+/// [`TermOccurrenceRelation`]'s call shape: `?doc` on the subject side,
+/// `(term ?lang ?position)` on the object side.
+const OCCURRENCE_ARITY: PfArity = PfArity::new(1, 3);
 /// The one access pattern [`TermOccurrenceRelation`] declares.
 const OCCURRENCE_MODE: &str = "fbff";
 
@@ -264,16 +267,6 @@ fn rank_bound(value: &TermValue) -> Result<RankBound, EvalError> {
         .map_or(RankBound::BeyondTheIndex, RankBound::At))
 }
 
-/// The analyzed needle — the terms the index's own pipeline produces for `text`.
-fn analyze(text: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    Analyzer::new().analyze(text, &mut tokens);
-    tokens
-        .into_iter()
-        .map(|token| token.text.into_owned())
-        .collect()
-}
-
 /// Whether `row` agrees with every bound position of the invocation.
 fn agrees(bound: &[Option<TermValue>], row: &[TermValue]) -> bool {
     bound
@@ -291,11 +284,6 @@ fn bound_values(args: &PfArgs<'_>) -> Vec<Option<TermValue>> {
 /// A `?lang` cell: the tag itself, or the empty string for an untagged document.
 fn language_term(language: Option<&str>) -> TermValue {
     TermValue::simple_literal(language.unwrap_or(""))
-}
-
-/// An `xsd:integer` cell.
-fn integer_term(value: u32) -> TermValue {
-    TermValue::typed_literal(value.to_string(), XSD_INTEGER)
 }
 
 /// Refuse an invocation whose argument vectors do not match `declared`.
@@ -398,7 +386,7 @@ fn partition_keys(index: &TextIndex) -> Vec<PartitionKey> {
 /// function of the index's content, so two processes that built the same index
 /// from the same rows attest the same generation and a reader may compare them.
 fn index_generation(index: &TextIndex) -> Arc<str> {
-    Arc::from(purrdf_core::hex::lower(&index.fingerprint()))
+    Arc::from(purrdf_hash::hex::encode(&index.fingerprint()))
 }
 
 // ---------------------------------------------------------------------------
@@ -1178,7 +1166,7 @@ impl PropertyFunction for TextSearchRelation {
     }
 
     fn arity(&self) -> PfArity {
-        PfArity::new(1, 5)
+        SEARCH_ARITY
     }
 
     /// Two modes, and the second one widens nothing.
@@ -1352,7 +1340,7 @@ impl PropertyFunction for TextSearchRelation {
             || args.get(SEARCH_MATCHED).is_some();
         let select_ceiling = if post_rank_filtered { None } else { ceiling };
 
-        let analyzed = analyze(text);
+        let analyzed = Analyzer::new().terms(text);
         let at = match rank {
             RankBound::At(at) => Some(at),
             // `BeyondTheIndex` is answered empty below; `Unbound` bounds nothing.
@@ -1463,9 +1451,9 @@ impl SearchCursor {
             // the engine discards unread. Zero is outside the 1-based rank domain,
             // so it could never be mistaken for a rank even by a reader that
             // ignored that contract.
-            integer_term(hit.rank.unwrap_or(0)),
+            TermValue::integer(hit.rank.unwrap_or(0)),
             language_term(document.language()),
-            integer_term(hit.matched),
+            TermValue::integer(hit.matched),
         ])
     }
 }
@@ -1704,7 +1692,7 @@ impl PropertyFunction for TermOccurrenceRelation {
     }
 
     fn arity(&self) -> PfArity {
-        PfArity::new(1, 3)
+        OCCURRENCE_ARITY
     }
 
     fn modes(&self) -> &[BindingPattern] {
@@ -1798,7 +1786,7 @@ impl PropertyFunction for TermOccurrenceRelation {
             filter = filter.restricted_to(self.index.partitions_holding_subject(subject));
         }
 
-        let mut analyzed = analyze(text);
+        let mut analyzed = Analyzer::new().terms(text);
         if analyzed.len() > 1 {
             return Err(EvalError::function(format!(
                 "the term at position {OCCURRENCE_TERM} is {text:?}, which analyzes to \
@@ -1886,7 +1874,7 @@ impl OccurrenceCursor {
             held.subject().clone(),
             self.needle.clone(),
             language_term(held.language()),
-            integer_term(position),
+            TermValue::integer(position),
         ])
     }
 
@@ -2082,7 +2070,7 @@ mod tests {
     }
 
     fn integer(value: u32) -> TermValue {
-        TermValue::typed_literal(value.to_string(), XSD_INTEGER)
+        TermValue::integer(value)
     }
 
     fn decimal(value: &str) -> TermValue {
@@ -3009,7 +2997,7 @@ mod tests {
             .expect("a bound needle is admissible");
         assert_eq!(
             cursor.generation(),
-            IndexGeneration::Declared(Arc::from(purrdf_core::hex::lower(&index.fingerprint()))),
+            IndexGeneration::Declared(Arc::from(purrdf_hash::hex::encode(&index.fingerprint()))),
             "an empty index has an identity, so its producer attests one"
         );
 

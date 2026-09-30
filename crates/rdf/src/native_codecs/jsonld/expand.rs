@@ -3,24 +3,26 @@
 
 //! Context-aware expansion from compact JSON-LD-star into the typed carrier.
 
+use crate::native_codecs::syntax::check_language_tag;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use serde_json::{Map, Value as JsonValue};
+use purrdf_lex::json::{self, Number, Object as Map, Value as JsonValue};
 
-use super::carrier::{Document, Literal, NamedGraph, Node, Term, Triple, Value};
+use super::carrier::{Document, Literal, NamedGraph, Node, Part, Term, Triple, Value};
 use super::{
     CompiledJsonLdContext, JsonLdContainer, JsonLdDirection, JsonLdNullable, JsonLdTermDefinition,
     JsonLdTypeMapping, RDF_FIRST, RDF_JSON, RDF_NIL, RDF_REIFIES, RDF_REST, RDF_TYPE, RdfDataset,
     RdfDiagnostic, RdfQuad, RdfTerm, XSD_STRING, decode, parse, validated_iri_term,
 };
 use crate::{RdfLiteral, RdfTextDirection, RdfTriple};
+use purrdf_core::collections::{ListVocab, build_rdf_list};
 use purrdf_iri::langtag;
 
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
-const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_xsd::datatype::XSD_BOOLEAN;
+use purrdf_xsd::datatype::XSD_DOUBLE;
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 pub(super) fn expand_document(
     mut document: JsonValue,
@@ -474,13 +476,14 @@ impl Builder {
             reverse_block ^ definition.is_some_and(JsonLdTermDefinition::is_reverse_property);
         if reverse {
             for mut value in values {
-                let Term::Id(target) = value.term else {
+                let Term::Id(target) =
+                    std::mem::replace(&mut value.term, Term::Id(node.id.clone()))
+                else {
                     return Err(decode(format!(
                         "reverse property `{}` requires node-reference values",
                         entry.original
                     )));
                 };
-                value.term = Term::Id(node.id.clone());
                 self.add_property(graph, target, entry.expanded.clone(), value);
             }
         } else {
@@ -527,7 +530,7 @@ impl Builder {
         }
         if definition
             .is_some_and(|definition| definition.containers().contains(&JsonLdContainer::Index))
-            && raw.is_object()
+            && raw.as_object().is_some()
         {
             return self.expand_index_map(raw, graph, context, definition);
         }
@@ -569,7 +572,7 @@ impl Builder {
         if raw.is_null() {
             return Ok(None);
         }
-        if !raw.is_object() {
+        if raw.as_object().is_none() {
             return expand_scalar(raw, context, definition).map(Some);
         }
         let object = raw
@@ -804,9 +807,9 @@ impl Builder {
             .as_str()
             .ok_or_else(|| decode("@triple @predicate must be a string"))?;
         Ok(Triple {
-            subject: Box::new(subject.term),
+            subject: Box::new(subject.into_term()),
             predicate: expand_required(context, predicate, true, false)?,
-            object: Box::new(object.term),
+            object: Box::new(object.into_term()),
         })
     }
 
@@ -989,7 +992,7 @@ fn expand_language_map(
             values.push(Value::plain(Term::Literal(Literal {
                 lexical: lexical.to_owned(),
                 datatype: None,
-                language: (language != "@none").then(|| language.to_ascii_lowercase()),
+                language: (language != "@none").then(|| langtag::identity_fold(language)),
                 direction: direction.map(str::to_owned),
             })));
         }
@@ -1017,8 +1020,7 @@ fn expand_scalar(
             }
             JsonLdTypeMapping::Json => {
                 return Ok(Value::plain(Term::Literal(Literal {
-                    lexical: serde_json::to_string(&crate::json_value::Binary64(raw))
-                        .map_err(|source| decode(format!("encode rdf:JSON value: {source}")))?,
+                    lexical: rdf_json_lexical(raw)?,
                     datatype: Some(RDF_JSON.to_owned()),
                     language: None,
                     direction: None,
@@ -1051,12 +1053,12 @@ fn expand_scalar(
     Ok(Value::plain(Term::Literal(Literal {
         lexical,
         datatype,
-        language: if raw.is_string() {
+        language: if raw.as_str().is_some() {
             effective_language(context, definition).map(str::to_owned)
         } else {
             None
         },
-        direction: if raw.is_string() {
+        direction: if raw.as_str().is_some() {
             effective_direction(context, definition).map(str::to_owned)
         } else {
             None
@@ -1096,7 +1098,7 @@ fn expand_value_object(
             entry
                 .value
                 .as_str()
-                .map(str::to_ascii_lowercase)
+                .map(langtag::identity_fold)
                 .ok_or_else(|| decode("@language must be a string"))
         })
         .transpose()?;
@@ -1106,7 +1108,7 @@ fn expand_value_object(
                 .value
                 .as_str()
                 .ok_or_else(|| decode("@direction must be a string"))?;
-            if !matches!(direction, "ltr" | "rtl") {
+            if JsonLdDirection::from_str_token(direction).is_none() {
                 return Err(decode("@direction must be `ltr` or `rtl`"));
             }
             Ok(direction.to_owned())
@@ -1119,8 +1121,7 @@ fn expand_value_object(
     }
     if json_keyword {
         return Ok(Literal {
-            lexical: serde_json::to_string(&crate::json_value::Binary64(value))
-                .map_err(|source| decode(format!("encode rdf:JSON value: {source}")))?,
+            lexical: rdf_json_lexical(value)?,
             datatype,
             language: None,
             direction: None,
@@ -1171,9 +1172,18 @@ fn scalar_lexical_for_datatype(
     }
 }
 
-fn canonical_json_double(value: &serde_json::Number) -> Result<String, RdfDiagnostic> {
-    value
-        .as_f64()
+/// The `rdf:JSON` lexical form of `value`: compact JSON, members ordered by name, every
+/// number in its binary64 spelling.
+fn rdf_json_lexical(value: &JsonValue) -> Result<String, RdfDiagnostic> {
+    let mut value = crate::json_number::binary64(value)
+        .map_err(|source| decode(format!("encode rdf:JSON value: {source}")))?;
+    value.sort_keys();
+    Ok(json::write_compact(&value))
+}
+
+fn canonical_json_double(value: &Number) -> Result<String, RdfDiagnostic> {
+    Some(crate::json_number::read_json(|| value.as_f64()))
+        .filter(|value| value.is_finite())
         .map(purrdf_xsd::numeric::canonical_double)
         .ok_or_else(|| {
             decode(format!(
@@ -1199,8 +1209,7 @@ fn effective_direction(
 ) -> Option<&'static str> {
     match definition.and_then(JsonLdTermDefinition::direction_mapping) {
         Some(JsonLdNullable::Null) => None,
-        Some(JsonLdNullable::Value(JsonLdDirection::LeftToRight)) => Some("ltr"),
-        Some(JsonLdNullable::Value(JsonLdDirection::RightToLeft)) => Some("rtl"),
+        Some(JsonLdNullable::Value(direction)) => Some(direction.as_str()),
         None => context.default_direction().map(JsonLdDirection::as_str),
     }
 }
@@ -1210,7 +1219,7 @@ fn effective_direction(
 /// context (term map, inverse index) for every node, value and graph object visited.
 fn object_context<'a>(
     parent: &'a CompiledJsonLdContext,
-    object: &Map<String, JsonValue>,
+    object: &Map,
 ) -> Result<Cow<'a, CompiledJsonLdContext>, RdfDiagnostic> {
     object.get("@context").map_or_else(
         || Ok(Cow::Borrowed(parent)),
@@ -1241,7 +1250,7 @@ struct ExpandedMember<'a> {
 
 fn expanded_members<'a>(
     context: &CompiledJsonLdContext,
-    object: &'a Map<String, JsonValue>,
+    object: &'a Map,
 ) -> Result<Vec<ExpandedMember<'a>>, RdfDiagnostic> {
     let mut seen = BTreeSet::new();
     let mut members = Vec::with_capacity(object.len());
@@ -1272,7 +1281,7 @@ fn member<'a, 'b>(
 
 fn expanded_member<'a>(
     context: &CompiledJsonLdContext,
-    object: &'a Map<String, JsonValue>,
+    object: &'a Map,
     keyword: &str,
 ) -> Result<Option<&'a JsonValue>, RdfDiagnostic> {
     let members = expanded_members(context, object)?;
@@ -1323,11 +1332,11 @@ fn expand_id_value(
 
 /// [`as_values`]' owning twin: yields the values so each can be released as it is
 /// consumed, rather than borrowed out of a tree that has to outlive the walk.
-fn into_values(value: JsonValue) -> Vec<JsonValue> {
-    match value {
-        JsonValue::Array(values) => values,
+fn into_values(mut value: JsonValue) -> Vec<JsonValue> {
+    match &mut value {
+        JsonValue::Array(values) => std::mem::take(values),
         JsonValue::Null => Vec::new(),
-        value => vec![value],
+        _ => vec![value],
     }
 }
 
@@ -1343,7 +1352,7 @@ fn non_null_values(value: &JsonValue) -> impl Iterator<Item = &JsonValue> {
 }
 
 fn insert_expanded_control(
-    object: &mut Map<String, JsonValue>,
+    object: &mut Map,
     context: &CompiledJsonLdContext,
     keyword: &str,
     value: JsonValue,
@@ -1354,6 +1363,7 @@ fn insert_expanded_control(
         )));
     }
     object.insert(keyword.to_owned(), value);
+    object.sort_keys();
     Ok(())
 }
 
@@ -1498,27 +1508,39 @@ impl Lowerer {
         }
     }
 
+    /// JSON-LD 1.1 Processing Algorithms and API §8.4 List Conversion: a fresh blank
+    /// node for every entry of the list first, then each entry converted to its object,
+    /// then the `rdf:first`/`rdf:rest` cells ([`build_rdf_list`]). An entry's
+    /// annotations annotate its `rdf:first` statement.
     fn lower_list(
         &mut self,
         values: &[Value],
         graph: Option<&RdfTerm>,
     ) -> Result<RdfTerm, RdfDiagnostic> {
-        if values.is_empty() {
-            return validated_iri_term(RDF_NIL);
-        }
-        let head = self.fresh_list_node();
-        let mut current = head.clone();
-        for (index, value) in values.iter().enumerate() {
-            let item = self.lower_term(&value.term, graph)?;
-            self.push(current.clone(), RDF_FIRST, item.clone(), graph);
-            self.lower_annotations(&current, RDF_FIRST, &item, &value.annotations, graph)?;
-            let rest = if index + 1 == values.len() {
-                validated_iri_term(RDF_NIL)?
-            } else {
-                self.fresh_list_node()
-            };
-            self.push(current, RDF_REST, rest.clone(), graph);
-            current = rest;
+        let cells: Vec<RdfTerm> = values.iter().map(|_| self.fresh_list_node()).collect();
+        let items = values
+            .iter()
+            .map(|value| self.lower_term(&value.term, graph))
+            .collect::<Result<Vec<_>, _>>()?;
+        let vocab = ListVocab {
+            first: validated_iri_term(RDF_FIRST)?,
+            rest: validated_iri_term(RDF_REST)?,
+            nil: validated_iri_term(RDF_NIL)?,
+        };
+        let quads = &mut self.quads;
+        let head = build_rdf_list(
+            items.iter().cloned(),
+            &vocab,
+            |index| cells[index].clone(),
+            |subject, predicate, object| {
+                let RdfTerm::Iri(predicate) = predicate else {
+                    unreachable!("the list vocabulary is rdf:first and rdf:rest, both IRIs")
+                };
+                quads.push(graph_quad(subject, &predicate, object, graph));
+            },
+        );
+        for ((cell, item), value) in cells.iter().zip(&items).zip(values) {
+            self.lower_annotations(cell, RDF_FIRST, item, &value.annotations, graph)?;
         }
         Ok(head)
     }
@@ -1530,47 +1552,33 @@ impl Lowerer {
         object: RdfTerm,
         graph: Option<&RdfTerm>,
     ) {
-        let mut quad = RdfQuad::new(subject, predicate, object);
-        if let Some(graph) = graph {
-            quad = quad.in_graph(graph.clone());
-        }
-        self.quads.push(quad);
+        self.quads
+            .push(graph_quad(subject, predicate, object, graph));
+    }
+}
+
+/// The quad `(subject, predicate, object)`, in `graph` when one is given.
+fn graph_quad(
+    subject: RdfTerm,
+    predicate: &str,
+    object: RdfTerm,
+    graph: Option<&RdfTerm>,
+) -> RdfQuad {
+    let quad = RdfQuad::new(subject, predicate, object);
+    match graph {
+        Some(graph) => quad.in_graph(graph.clone()),
+        None => quad,
     }
 }
 
 fn reserve_node_blank_ids(node: &Node, output: &mut BTreeSet<String>) {
     reserve_blank_id(&node.id, output);
-    for values in node
-        .properties
-        .values()
-        .chain(node.reverse_properties.values())
-    {
-        for value in values {
-            reserve_value_blank_ids(value, output);
+    for part in node.parts() {
+        match part {
+            Part::Term(Term::Id(id)) => reserve_blank_id(id.as_str(), output),
+            Part::Annotation(annotation) => reserve_blank_id(&annotation.id, output),
+            Part::Term(_) => {}
         }
-    }
-}
-
-fn reserve_value_blank_ids(value: &Value, output: &mut BTreeSet<String>) {
-    reserve_term_blank_ids(&value.term, output);
-    for annotation in &value.annotations {
-        reserve_node_blank_ids(annotation, output);
-    }
-}
-
-fn reserve_term_blank_ids(term: &Term, output: &mut BTreeSet<String>) {
-    match term {
-        Term::Id(id) => reserve_blank_id(id, output),
-        Term::Triple(triple) => {
-            reserve_term_blank_ids(&triple.subject, output);
-            reserve_term_blank_ids(&triple.object, output);
-        }
-        Term::List(values) => {
-            for value in values {
-                reserve_value_blank_ids(value, output);
-            }
-        }
-        Term::Literal(_) => {}
     }
 }
 
@@ -1657,7 +1665,7 @@ fn id_term(id: &str) -> Result<RdfTerm, RdfDiagnostic> {
 /// The failure reports the module's
 /// [`langtag::LanguageTagError::diagnostic_code`], so the user learns which
 /// production refused. JSON-LD decode diagnostics carry no line/column or JSON
-/// pointer (the `serde_json` value tree this walks has discarded both by the
+/// pointer (the JSON value tree this walks has discarded both by the
 /// time expansion runs), which this does not change.
 /// # Why it is `pub(super)`, and what `what` is for
 ///
@@ -1672,13 +1680,9 @@ fn id_term(id: &str) -> Result<RdfTerm, RdfDiagnostic> {
 /// messages differ while the grammar and the diagnostic code do not. There is
 /// deliberately no second copy of the profile inside the codec.
 fn validate_language_tag_at(tag: &str, what: &str) -> Result<(), RdfDiagnostic> {
-    match langtag::parse_with(tag, langtag::Profile::ConcreteSyntaxLangtagBounded) {
-        Ok(_) => Ok(()),
-        Err(error) => Err(RdfDiagnostic::error(
-            error.diagnostic_code(),
-            format!("JSON-LD: invalid {what} {tag:?}: {error}"),
-        )),
-    }
+    check_language_tag(tag, |error| {
+        format!("JSON-LD: invalid {what} {tag:?}: {error}")
+    })
 }
 
 /// [`validate_language_tag_at`] at a value's own `@language`.
@@ -1702,11 +1706,8 @@ fn lower_literal(literal: &Literal) -> Result<RdfTerm, RdfDiagnostic> {
         literal.datatype.as_deref(),
     ) {
         (Some(language), Some(direction), _) => {
-            let direction = match direction {
-                "ltr" => RdfTextDirection::Ltr,
-                "rtl" => RdfTextDirection::Rtl,
-                _ => return Err(decode(format!("invalid direction `{direction}`"))),
-            };
+            let direction = RdfTextDirection::from_str_token(direction)
+                .ok_or_else(|| decode(format!("invalid direction `{direction}`")))?;
             RdfLiteral {
                 lexical_form: literal.lexical.clone(),
                 datatype: None,

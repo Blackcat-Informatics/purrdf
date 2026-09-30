@@ -13,8 +13,8 @@
 //! ever handed on.
 //!
 //! The tables are generated from the vendored Unicode Character Database by
-//! `crates/jsonschema/examples/gen_ecma_property_tables.rs` (see
-//! `property_tables.rs`):
+//! the workspace's one Unicode table generator,
+//! `crates/lex/examples/gen_unicode_tables.rs` (see `property_tables.rs`):
 //!
 //! * General_Category values: every `gc` alias of UCD
 //!   `PropertyValueAliases.txt`, mapped to its short alias.

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! The whole-tree walks over a parsed query algebra: `Clone`, `Drop`, `==`, `Hash`,
@@ -22,7 +22,7 @@
 //! - `clone` — `Query::clone`, the copy dropped outside the sample;
 //! - `drop` — dropping a copy made outside the sample;
 //! - `eq` — `==` between the tree and an equal copy, which walks every node;
-//! - `hash` — `Hash` into a `DefaultHasher`, the same hasher on every revision so
+//! - `hash` — `Hash` into a `FixedHasher`, the same hasher on every revision so
 //!   only the walk moves;
 //! - `debug` — `format!("{:?}")`;
 //! - `serialize` — `pattern_to_select_query` over the pattern under the projection.
@@ -34,23 +34,19 @@
 //! Report-only, `cargo bench -p purrdf-sparql-algebra --bench algebra_walks` (the
 //! `make bench` lane) — excluded from `make check`. No timing is asserted.
 
+use purrdf_hash::fixed::hash_one as hash_of;
+use purrdf_testkit::text::nested;
 use std::fmt::Write as _;
-use std::hash::{DefaultHasher, Hash, Hasher};
 
-use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
 use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser, pattern_to_select_query};
+use purrdf_testkit::bench::{BatchSize, Bench, bench_group, bench_main, black_box};
 
 const EX: &str = "http://example.org/";
 
 /// The heights every deep tree is measured at.
 const DEEP_LEVELS: &[usize] = &[64, 512, 100_000];
 
-/// `open` written `n` times around `core`, closed by `close` written `n` times.
-fn nested(open: &str, core: &str, close: &str, n: usize) -> String {
-    format!("{}{core}{}", open.repeat(n), close.repeat(n))
-}
-
-/// The deep trees at `n` levels, as `(criterion id, query text)`.
+/// The deep trees at `n` levels, as `(bench id, query text)`.
 fn deep_queries(n: usize) -> [(String, String); 3] {
     [
         (
@@ -77,7 +73,7 @@ fn deep_queries(n: usize) -> [(String, String); 3] {
     ]
 }
 
-/// The wide trees, as `(criterion id, query text)`.
+/// The wide trees, as `(bench id, query text)`.
 fn wide_queries() -> [(String, String); 3] {
     let mut bgp = String::from("SELECT * WHERE {");
     for i in 0..4096 {
@@ -116,12 +112,6 @@ fn serialized_pattern(query: &Query) -> &GraphPattern {
     }
 }
 
-fn hash_of(query: &Query) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    query.hash(&mut hasher);
-    hasher.finish()
-}
-
 /// `text`, parsed.
 fn parse(id: &str, text: &str) -> Query {
     SparqlParser::new()
@@ -129,7 +119,7 @@ fn parse(id: &str, text: &str) -> Query {
         .unwrap_or_else(|error| panic!("{id} parses: {error}"))
 }
 
-fn bench_tree(c: &mut Criterion, id: &str, text: &str) {
+fn bench_tree(c: &mut Bench, id: &str, text: &str) {
     let tree = parse(id, text);
     let copy = tree.clone();
     assert!(tree == copy, "{id}: a clone equals its original");
@@ -170,7 +160,7 @@ fn bench_tree(c: &mut Criterion, id: &str, text: &str) {
     group.finish();
 }
 
-fn bench_algebra_walks(c: &mut Criterion) {
+fn bench_algebra_walks(c: &mut Bench) {
     for &n in DEEP_LEVELS {
         for (id, text) in deep_queries(n) {
             bench_tree(c, &id, &text);
@@ -181,5 +171,5 @@ fn bench_algebra_walks(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_algebra_walks);
-criterion_main!(benches);
+bench_group!(benches, bench_algebra_walks);
+bench_main!(benches);

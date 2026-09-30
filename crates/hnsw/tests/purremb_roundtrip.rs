@@ -17,14 +17,14 @@
 #[path = "support/purremb.rs"]
 mod purremb;
 
+#[path = "support/fixture.rs"]
+mod fixture;
+use fixture::params;
+use purrdf_core::distance::Exact;
 use purrdf_core::distance::{Arithmetic, BuildIdentity, BuildShape, Path, Reassociated};
 use purrdf_core::{EmbeddingView, IndexUseRole, verify_embedding};
 use purrdf_hnsw::{HnswError, HnswIndex, Params, guard, profile, relation::HnswSpace};
 use purrdf_sparql_eval::{Completeness, KnnGuard, OrderFidelity, PropertyFunction};
-
-fn params() -> Params {
-    Params::new(4, 8, 16, 8).expect("valid")
-}
 
 /// The refusal `guard::validate_guard` raises for a foreign evidence revision, verbatim.
 ///
@@ -59,12 +59,13 @@ fn the_payload_round_trips_through_the_real_sections() {
         "the section carries the canonical image"
     );
 
-    let index = guard::load(&selected, fixture.matrix.clone()).expect("the payload decodes");
+    let index =
+        guard::load::<Exact>(&selected, fixture.matrix.clone()).expect("the payload decodes");
     assert_eq!(index.canonical_image(), fixture.image);
     assert!(guard::verify_rebuild(&selected, &fixture.matrix, &fixture.params).expect("rebuilds"));
 
     // Reload directly from the borrowed view bytes and prove the search is the same.
-    let direct = HnswIndex::decode(
+    let direct = HnswIndex::<Exact>::decode(
         fixture.matrix.clone(),
         selected.payload_bytes().expect("bytes"),
     )
@@ -80,7 +81,7 @@ fn the_payload_round_trips_through_the_real_sections() {
 fn a_reloaded_space_searches_over_the_target_row_order() {
     let fixture = purremb::Fixture::new(32, 4, params());
     let space = std::sync::Arc::new(
-        HnswSpace::from_artifact(
+        HnswSpace::<Exact>::from_artifact(
             &fixture.bytes,
             fixture.target_set,
             fixture.vector_space,
@@ -123,7 +124,7 @@ fn a_substituted_payload_is_refused_before_any_search() {
 
     let view = EmbeddingView::from_bytes(&tampered).expect("the framing still opens");
     let selected = guard::select(&view).expect("the guard still names the profile");
-    let error = guard::load(&selected, fixture.matrix.clone())
+    let error = guard::load::<Exact>(&selected, fixture.matrix.clone())
         .expect_err("the substituted payload must not decode");
     assert!(
         matches!(error, HnswError::PayloadCommitment { .. }),
@@ -136,7 +137,7 @@ fn a_substituted_payload_is_refused_before_any_search() {
 
     // The whole construction refuses too, before any search can be issued.
     assert!(
-        HnswSpace::from_artifact(
+        HnswSpace::<Exact>::from_artifact(
             &tampered,
             fixture.target_set,
             fixture.vector_space,
@@ -247,7 +248,7 @@ fn a_search_over_a_coarse_prefix_still_answers() {
     // would have traded one false statement for a worse one.
     let fixture = purremb::Fixture::with_prefix(48, 8, 4, params());
     let guard_value = KnnGuard::new(48, 48).expect("valid");
-    let space = HnswSpace::from_artifact(
+    let space = HnswSpace::<Exact>::from_artifact(
         &fixture.bytes,
         fixture.target_set,
         fixture.vector_space,
@@ -291,7 +292,7 @@ fn a_foreign_evidence_revision_is_refused_at_bind_time() {
 
     // And the outermost entry point a host actually calls refuses for the same reason, not
     // merely somewhere deeper for an incidental one.
-    let refusal = HnswSpace::from_artifact(
+    let refusal = HnswSpace::<Exact>::from_artifact(
         &foreign,
         fixture.target_set,
         fixture.vector_space,
@@ -323,7 +324,7 @@ fn a_guard_claiming_transformed_vectors_is_refused_at_bind_time() {
         "the refusal must name the loss contract, got {error}"
     );
 
-    let refusal = HnswSpace::from_artifact(
+    let refusal = HnswSpace::<Exact>::from_artifact(
         &transforming,
         fixture.target_set,
         fixture.vector_space,
@@ -345,7 +346,7 @@ fn the_profiles_own_evidence_and_loss_contract_still_bind_and_are_what_fidelity_
     // refusal tests and fail here, which is the only reason those tests mean anything.
     let fixture = purremb::Fixture::new(24, 4, params());
     let space = std::sync::Arc::new(
-        HnswSpace::from_artifact(
+        HnswSpace::<Exact>::from_artifact(
             &fixture.bytes,
             fixture.target_set,
             fixture.vector_space,
@@ -409,7 +410,7 @@ fn guard_refuses_cross_paired_profile() {
         profile::IMPLEMENTATION_ID_REASSOCIATED
     );
     assert!(
-        HnswSpace::from_artifact(
+        HnswSpace::<Exact>::from_artifact(
             &exact.bytes,
             exact.target_set,
             exact.vector_space,
@@ -418,7 +419,7 @@ fn guard_refuses_cross_paired_profile() {
         )
         .is_ok()
     );
-    let space = HnswSpace::from_artifact_reassociated(
+    let space = HnswSpace::<Reassociated>::from_artifact(
         &fast.bytes,
         fast.target_set,
         fast.vector_space,
@@ -426,11 +427,14 @@ fn guard_refuses_cross_paired_profile() {
         KnnGuard::new(24, 24).expect("valid"),
     )
     .expect("the reassociated space binds");
-    assert_eq!(space.evidence(), profile::loss_evidence_reassociated(path));
+    assert_eq!(
+        space.evidence(),
+        profile::loss_evidence_for::<Reassociated>(path)
+    );
 
     // Illegal: the exact implementation carrying the reassociated evidence.
     let mut crossed = profile::implementation();
-    crossed.revision = Some(profile::loss_evidence_reassociated(path).into_bytes());
+    crossed.revision = Some(profile::loss_evidence_for::<Reassociated>(path).into_bytes());
     let refusal = profile_refusal(
         validated(&exact.with_implementation(crossed)).expect_err("a cross pairing is refused"),
     );
@@ -473,7 +477,7 @@ fn guard_refuses_cross_paired_profile() {
     verify_embedding(&mut view).expect("the artifact verifies");
     let selected = guard::select(&view).expect("the guard names the profile");
     let refusal = profile_refusal(
-        guard::load_reassociated(&selected, fast.matrix.clone())
+        guard::load::<Reassociated>(&selected, fast.matrix.clone())
             .expect_err("a guard naming another path than its payload is refused"),
     );
     assert!(refusal.contains("two different compilations"), "{refusal}");
@@ -484,7 +488,7 @@ fn guard_refuses_cross_paired_profile() {
     verify_embedding(&mut view).expect("the artifact verifies");
     let selected = guard::select(&view).expect("the guard names the profile");
     let refusal = profile_refusal(
-        guard::load(&selected, fast.matrix.clone()).expect_err("loaded as the wrong law"),
+        guard::load::<Exact>(&selected, fast.matrix.clone()).expect_err("loaded as the wrong law"),
     );
     assert!(refusal.contains("hnsw-reassociated-v2"), "{refusal}");
 }
@@ -520,7 +524,7 @@ fn a_foreign_build_shape_is_refused_at_the_guard() {
             guard::payload_bytes(&selected).expect("inline"),
         )
         .expect("the guard commits these bytes");
-        let loaded = guard::load_reassociated(&selected, fast.matrix.clone());
+        let loaded = guard::load::<Reassociated>(&selected, fast.matrix.clone());
         let verified = guard::verify_rebuild(&selected, &fast.matrix, &fast.params);
         if refused {
             assert_eq!(loaded.expect_err("a foreign build is refused"), refusal);
@@ -573,7 +577,7 @@ fn a_foreign_build_identity_is_refused_at_the_guard() {
             guard::payload_bytes(&selected).expect("inline"),
         )
         .expect("the guard commits these bytes");
-        let loaded = guard::load_reassociated(&selected, fast.matrix.clone());
+        let loaded = guard::load::<Reassociated>(&selected, fast.matrix.clone());
         let verified = guard::verify_rebuild(&selected, &fast.matrix, &fast.params);
         if refused {
             assert_eq!(loaded.expect_err("a foreign build is refused"), refusal);

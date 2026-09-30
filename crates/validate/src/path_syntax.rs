@@ -17,7 +17,7 @@ use purrdf_shapes::shapes::Path;
 #[must_use]
 pub fn render_path(path: &Path) -> String {
     match path {
-        Path::Predicate(p) => format!("<{}>", p.as_str()),
+        Path::Predicate(p) => format!("<{}>", purrdf_core::iri_escape::escape(p.as_str())),
         Path::Inverse(inner) => format!("^{}", grouped(inner)),
         Path::Sequence(parts) => join(parts, "/"),
         Path::Alternative(parts) => join(parts, "|"),

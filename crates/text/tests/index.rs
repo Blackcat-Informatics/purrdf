@@ -28,6 +28,11 @@ use purrdf_text::{
     TextIndex, TextIndexConfig, rank_partition, select, verify_binding,
 };
 
+#[path = "support/index.rs"]
+mod index_fixture;
+
+use index_fixture::{config, plain, subjects};
+
 const S: &str = "https://example.org/s";
 const O: &str = "https://example.org/o";
 const P: &str = "https://example.org/p";
@@ -36,32 +41,9 @@ const LABEL: &str = "https://example.org/label";
 const REIFIER: &str = "https://example.org/r";
 const GRAPH: &str = "https://example.org/g";
 
-/// A configuration over `predicates` covering every graph.
-fn config(predicates: &[&str]) -> TextIndexConfig {
-    TextIndexConfig::new(
-        predicates.iter().map(|p| TermValue::iri(*p)).collect(),
-        GraphSelector::Any,
-    )
-    .expect("the fixture configurations are well formed")
-}
-
 /// Build an index over `dataset` for `predicates`, expecting success.
 fn index_of(dataset: &Arc<RdfDataset>, predicates: &[&str]) -> TextIndex {
     TextIndex::from_dataset(&**dataset, &config(predicates)).expect("the fixture index must build")
-}
-
-/// The subjects of every document whose partition matches `partition`, in id
-/// order.
-fn subjects(index: &TextIndex) -> Vec<TermValue> {
-    index
-        .documents()
-        .map(|document| document.subject().clone())
-        .collect()
-}
-
-/// The default-graph, untagged partition — the one most fixtures live in.
-fn plain() -> PartitionKey {
-    PartitionKey::new(None, None)
 }
 
 // ── the annotation layer ─────────────────────────────────────────────────────
@@ -761,7 +743,7 @@ fn an_index_over_an_empty_dataset_holds_nothing_and_still_attests_a_generation()
     assert!(
         select(
             &index,
-            &needle_terms("anything at all"),
+            &Analyzer::new().terms("anything at all"),
             &PartitionFilter::unconstrained(),
             None,
             None,
@@ -772,7 +754,7 @@ fn an_index_over_an_empty_dataset_holds_nothing_and_still_attests_a_generation()
     );
     assert_eq!(index.document_frequency(&plain(), "anything"), 0);
     assert!(
-        rank_partition(&index, &plain(), &needle_terms("anything"), None)
+        rank_partition(&index, &plain(), &Analyzer::new().terms("anything"), None)
             .expect("ranking a partition the index does not hold is an empty answer")
             .is_empty(),
         "naming a partition an empty index does not hold yields no rows"
@@ -810,7 +792,7 @@ fn an_index_over_an_empty_dataset_holds_nothing_and_still_attests_a_generation()
     assert_eq!(
         select(
             &landed,
-            &needle_terms("anything at all"),
+            &Analyzer::new().terms("anything at all"),
             &PartitionFilter::unconstrained(),
             None,
             None,
@@ -1110,16 +1092,6 @@ fn an_annotation_only_predicate_is_found_by_the_coverage() {
     );
     verify_binding(&index, &*dataset, &over_note)
         .expect("an annotation-only corpus is the intended data");
-}
-
-/// The analyzed terms of `text`, as a needle for [`select`].
-fn needle_terms(text: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    Analyzer::new().analyze(text, &mut tokens);
-    tokens
-        .into_iter()
-        .map(|token| token.text.into_owned())
-        .collect()
 }
 
 /// A predicate may legitimately carry both literals and IRIs. A non-literal

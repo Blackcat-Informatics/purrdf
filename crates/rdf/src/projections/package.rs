@@ -1,16 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use crate::projections::util::byte_entries;
 use std::collections::BTreeMap;
-
-use serde::{Deserialize, Deserializer, Serialize};
 
 use super::ProjectionError;
 
 /// Maximum artifact path length accepted by the portable package profile.
 const MAX_ARTIFACT_PATH_BYTES: usize = 4_096;
-/// Hard recursion ceiling shared with the RDF kernel's validated triple-term forest.
-const MAX_TERM_DEPTH: usize = 16;
 /// Largest value representable by the canonical 11-octal-digit USTAR size field.
 const USTAR_MAX_MEMBER_BYTES: u64 = 0o77_777_777_777;
 
@@ -19,17 +16,12 @@ const USTAR_MAX_MEMBER_BYTES: u64 = 0o77_777_777_777;
 /// There is deliberately no `Default`: the caller chooses explicit limits suitable
 /// for its trust and memory boundary. Deserialization validates the same invariants as
 /// [`ProjectionLimits::new`], so a configuration file cannot bypass them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProjectionLimits {
-    #[serde(rename = "max_artifacts")]
     artifact_count: usize,
-    #[serde(rename = "max_artifact_bytes")]
     artifact_bytes: usize,
-    #[serde(rename = "max_total_bytes")]
     total_bytes: usize,
-    #[serde(rename = "max_archive_bytes")]
     archive_bytes: usize,
-    #[serde(rename = "max_term_depth")]
     term_depth: usize,
 }
 
@@ -81,9 +73,10 @@ impl ProjectionLimits {
                 "max_artifact_bytes exceeds USTAR's {USTAR_MAX_MEMBER_BYTES}-byte member ceiling"
             )));
         }
-        if max_term_depth > MAX_TERM_DEPTH {
+        if max_term_depth > purrdf_events::MAX_TERM_NESTING_DEPTH {
             return Err(ProjectionError::configuration(format!(
-                "max_term_depth exceeds the hard safety ceiling of {MAX_TERM_DEPTH}"
+                "max_term_depth exceeds the hard safety ceiling of {}",
+                purrdf_events::MAX_TERM_NESTING_DEPTH
             )));
         }
         Ok(Self {
@@ -121,37 +114,21 @@ impl ProjectionLimits {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawProjectionLimits {
-    #[serde(rename = "max_artifacts")]
-    artifact_count: usize,
-    #[serde(rename = "max_artifact_bytes")]
-    artifact_bytes: usize,
-    #[serde(rename = "max_total_bytes")]
-    total_bytes: usize,
-    #[serde(rename = "max_archive_bytes")]
-    archive_bytes: usize,
-    #[serde(rename = "max_term_depth")]
-    term_depth: usize,
-}
+purrdf_lex::json_record!(impl FromJson for ProjectionLimits as "struct ProjectionLimits" {
+    "max_artifacts" => max_artifacts: required,
+    "max_artifact_bytes" => max_artifact_bytes: required,
+    "max_total_bytes" => max_total_bytes: required,
+    "max_archive_bytes" => max_archive_bytes: required,
+    "max_term_depth" => max_term_depth: required,
+} => ProjectionLimits::new);
 
-impl<'de> Deserialize<'de> for ProjectionLimits {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawProjectionLimits::deserialize(deserializer)?;
-        Self::new(
-            raw.artifact_count,
-            raw.artifact_bytes,
-            raw.total_bytes,
-            raw.archive_bytes,
-            raw.term_depth,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+purrdf_lex::json_record!(impl ToJson for ProjectionLimits {
+    "max_artifacts" => artifact_count,
+    "max_artifact_bytes" => artifact_bytes,
+    "max_total_bytes" => total_bytes,
+    "max_archive_bytes" => archive_bytes,
+    "max_term_depth" => term_depth,
+});
 
 /// A deterministic, validated, filesystem-free projection artifact package.
 ///
@@ -281,11 +258,20 @@ impl ProjectionPackage {
         self.artifacts.get(path).map(Vec::as_slice)
     }
 
+    /// Bytes of the artifact at `path`, which a reader requires.
+    ///
+    /// # Errors
+    ///
+    /// Returns a package error located at `path` when the package holds no
+    /// such artifact.
+    pub(crate) fn required(&self, path: &str) -> Result<&[u8], ProjectionError> {
+        self.get(path)
+            .ok_or_else(|| ProjectionError::package("required artifact is missing").at_path(path))
+    }
+
     /// Artifacts in deterministic lexical path order.
     pub fn artifacts(&self) -> impl ExactSizeIterator<Item = (&str, &[u8])> {
-        self.artifacts
-            .iter()
-            .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+        byte_entries(&self.artifacts)
     }
 
     /// Number of artifacts.
@@ -506,16 +492,21 @@ mod tests {
 
     #[test]
     fn limits_deserialize_through_validation() {
-        let good = serde_json::to_string(&limits()).expect("serialize");
+        use purrdf_lex::json::record::{from_slice, to_vec};
+
+        let good = to_vec(&limits());
         assert_eq!(
-            serde_json::from_str::<ProjectionLimits>(&good).expect("deserialize"),
+            from_slice::<ProjectionLimits>(&good).expect("deserialize"),
             limits()
         );
-        let bad = r#"{"max_artifacts":0,"max_artifact_bytes":1,"max_total_bytes":1,"max_archive_bytes":1,"max_term_depth":1}"#;
-        assert!(serde_json::from_str::<ProjectionLimits>(bad).is_err());
-        let unknown = r#"{"max_artifacts":1,"max_artifact_bytes":1,"max_total_bytes":1,"max_archive_bytes":1536,"max_term_depth":1,"surprise":true}"#;
-        assert!(serde_json::from_str::<ProjectionLimits>(unknown).is_err());
-        assert!(ProjectionLimits::new(1, 1, 1, 1_536, MAX_TERM_DEPTH + 1).is_err());
+        let bad = br#"{"max_artifacts":0,"max_artifact_bytes":1,"max_total_bytes":1,"max_archive_bytes":1,"max_term_depth":1}"#;
+        assert!(from_slice::<ProjectionLimits>(bad).is_err());
+        let unknown = br#"{"max_artifacts":1,"max_artifact_bytes":1,"max_total_bytes":1,"max_archive_bytes":1536,"max_term_depth":1,"surprise":true}"#;
+        assert!(from_slice::<ProjectionLimits>(unknown).is_err());
+        assert!(
+            ProjectionLimits::new(1, 1, 1, 1_536, purrdf_events::MAX_TERM_NESTING_DEPTH + 1)
+                .is_err()
+        );
     }
 
     #[test]

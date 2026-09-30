@@ -10,13 +10,13 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use purrdf_core::xsd_regex;
+use purrdf_lex::json::{Object, Value, write_compact};
 use purrdf_shapes::json_schema::{
     CompiledSchema, Namespaces, SchemaCompileError, SchemaCompileRequest, SchemaSurfaceMode,
     compile, compile_schema,
 };
 use purrdf_shapes::shapes::from_dataset;
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
-use serde_json::{Value, json};
 
 fn compile_pattern(pattern: &str, flags: &str) -> Result<CompiledSchema, SchemaCompileError> {
     let turtle = format!(
@@ -26,8 +26,8 @@ fn compile_pattern(pattern: &str, flags: &str) -> Result<CompiledSchema, SchemaC
          ex:Shape a sh:NodeShape ; sh:targetClass ex:Probe ;
            sh:property [ sh:path ex:code ; sh:maxCount 1 ; sh:datatype xsd:string ;
              sh:pattern {} ; sh:flags {} ] .",
-        serde_json::to_string(pattern).expect("pattern string"),
-        serde_json::to_string(flags).expect("flags string"),
+        write_compact(&Value::from(pattern)),
+        write_compact(&Value::from(flags)),
     );
     let dataset = parse_turtle_to_dataset(&turtle, None).expect("fixture Turtle");
     let shapes = from_dataset(&dataset).expect("fixture shapes");
@@ -65,8 +65,8 @@ fn emitted(pattern: &str, flags: &str) -> String {
         "{}",
         compiled.losses.render_json()
     );
-    let schema: Value = serde_json::from_str(&compiled.schema_json).expect("JSON Schema");
-    let openapi: Value = serde_json::from_str(&compiled.openapi_json).expect("OpenAPI");
+    let schema = purrdf_lex::json::read(&compiled.schema_json).expect("JSON Schema");
+    let openapi = purrdf_lex::json::read(&compiled.openapi_json).expect("OpenAPI");
     let pattern = &schema["$defs"]["Probe"]["properties"]["ex:code"]["pattern"];
     assert_eq!(
         pattern,
@@ -138,7 +138,12 @@ fn emitted_patterns_preserve_their_languages_in_unicode_ecmascript() {
             let imported = xsd_regex::compile(&imported, "").expect("imported XSD source");
             assert_eq!(imported.as_regex().is_match(input), expected);
         }
-        requests.push(json!({"pattern": pattern, "input": input, "expected": expected}));
+        requests.push(Value::from(
+            Object::new()
+                .with("pattern", pattern)
+                .with("input", input)
+                .with("expected", expected),
+        ));
     }
     // The emitter expresses XPath's exact multiline anchor rule; the existing
     // Rust validator retains its separately documented final-newline divergence.
@@ -152,8 +157,12 @@ fn emitted_patterns_preserve_their_languages_in_unicode_ecmascript() {
         ("^", "\n", vec![0]),
         ("$", "\n", vec![0]),
     ] {
-        requests
-            .push(json!({"pattern": emitted(source, "m"), "input": input, "positions": positions}));
+        requests.push(Value::from(
+            Object::new()
+                .with("pattern", emitted(source, "m"))
+                .with("input", input)
+                .with("positions", positions),
+        ));
     }
     run_ecmascript_oracle(&requests);
 }
@@ -186,7 +195,7 @@ fn run_ecmascript_oracle(requests: &[Value]) {
         .stdin
         .take()
         .expect("stdin")
-        .write_all(&serde_json::to_vec(requests).expect("oracle input"))
+        .write_all(write_compact(&Value::from(requests)).as_bytes())
         .expect("write oracle input");
     let output = child.wait_with_output().expect("ECMAScript oracle");
     assert!(
@@ -236,7 +245,12 @@ fn i_flag_patterns_carry_xpath_case_variants_in_unicode_ecmascript() {
             validator_agrees,
             "{source:?}/{flags:?} on {input:?}"
         );
-        requests.push(json!({"pattern": pattern, "input": input, "expected": expected}));
+        requests.push(Value::from(
+            Object::new()
+                .with("pattern", pattern)
+                .with("input", input)
+                .with("expected", expected),
+        ));
     }
     run_ecmascript_oracle(&requests);
 }

@@ -33,6 +33,11 @@
 //! the encoder run on SSE2 or AVX2 (x86_64, AVX2 detected at run time), NEON
 //! (aarch64) or simd128 (wasm32 built with `+simd128`), and portable code
 //! otherwise. Every path returns exactly what the portable one does.
+//!
+//! The portable match-length compare is public as [`common_prefix_len`], the
+//! workspace's one first-mismatch index: `#[inline]` and dispatch-free, it
+//! serves short keys (the pack dictionary's front coding) directly, while the
+//! encoder's windows of up to 258 bytes take the dispatched vector compare.
 
 #![deny(unsafe_code)]
 
@@ -56,3 +61,4 @@ pub use deflate::{Deflater, Level};
 pub use error::{Alphabet, Error};
 pub use gzip::{GzipDecoder, GzipReader, GzipWriter};
 pub use inflate::{Inflater, Progress, Status};
+pub use kernels::common_prefix_len;

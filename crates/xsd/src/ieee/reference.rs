@@ -738,61 +738,22 @@ pub fn successor_midpoint_decimal(x: f64) -> String {
             i32::try_from(biased).expect("eleven bits") - 1075,
         )
     };
-    // The midpoint is (2·significand + 1) · 2^(exponent − 1): an odd integer times a
-    // power of two, which is an integer (a power of two ≥ 1) or an integer over 10^k
-    // (2^−k = 5^k / 10^k).
-    let mut digits: Vec<u8> = (2 * significand + 1)
-        .to_string()
-        .bytes()
-        .rev()
-        .map(|digit| digit - b'0')
-        .collect();
-    let scale = exponent - 1;
-    let multiply = |digits: &mut Vec<u8>, factor: u8| {
-        let mut carry = 0_u8;
-        for digit in digits.iter_mut() {
-            let product = *digit * factor + carry;
-            *digit = product % 10;
-            carry = product / 10;
-        }
-        if carry != 0 {
-            digits.push(carry);
-        }
-    };
-    let point = if scale >= 0 {
-        for _ in 0..scale {
-            multiply(&mut digits, 2);
-        }
-        0
-    } else {
-        for _ in 0..scale.unsigned_abs() {
-            multiply(&mut digits, 5);
-        }
-        usize::try_from(scale.unsigned_abs()).expect("small")
-    };
-    while digits.len() <= point {
-        digits.push(0);
-    }
-    let mut text = String::with_capacity(digits.len() + 1);
-    for (index, digit) in digits.iter().enumerate().rev() {
-        text.push(char::from(b'0' + digit));
-        if index == point && point != 0 {
-            text.push('.');
-        }
-    }
-    text
+    // The midpoint is (2·significand + 1) · 2^(exponent − 1), a dyadic rational:
+    // an odd integer times a power of two, which is an integer (a power of two
+    // ≥ 1) or an integer over 10^k (2^−k = 5^k / 10^k). An odd numerator times
+    // 5^k ends in 5, so the expansion has no trailing zero to trim.
+    let (mantissa, scale) =
+        crate::bigint::BigInt::from_binary(i128::from(2 * significand + 1), exponent - 1);
+    mantissa.to_decimal_lexical(scale)
 }
 
 /// A SplitMix64 stream: deterministic draws, no clock and no RNG.
 struct Draws(u64);
 
 impl Draws {
+    /// The next draw: [`purrdf_hash::mix::splitmix64_next`] over the counter.
     const fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
+        purrdf_hash::mix::splitmix64_next(&mut self.0)
     }
 
     /// A positive finite binary64 with a decimal exponent in `[−300, 300]`.

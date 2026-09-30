@@ -1,0 +1,45 @@
+# JSON `\u` decoding of every UTF-16 code unit and every surrogate pair (frozen).
+#
+# `unit` records write each code unit in the range as one `\uXXXX` escape; `pair`
+# records write each scalar in the range as its surrogate pair of escapes. Digits
+# are `upper` or `lower` case. The answer is the lowercase hex SHA-256 of the
+# per-value answers (`=` and the decoded text, or `-`), each followed by a line
+# feed. Recorded from the GeoJSON reader.
+#
+# Fields: form, digit case, first value (hex), last value (hex), answer digest.
+# vector-count: 34
+# body-sha256: 5b0357579c7b6fae28077ac16ebf59ab1f6da88987d13eb3c1a59bae29aaadb8
+unit	upper	0	FFFF	0548faec94c19696943cde81511dbdfd8e9512266633ae1b2cedf642e3e5228c
+pair	upper	10000	1FFFF	afd5f69ee6cdb60ced6b0c83a222f4fbc3d902e0c49cd730ebff1db1e8fd4467
+pair	upper	20000	2FFFF	d110c8488a9eef99788f52aeff87d44946e33c29c3371f5736e3a83383ee5f6a
+pair	upper	30000	3FFFF	42fbc52005e917c75411e2ac7ca08b5591309559e8377432fc1ed1b15a9b245c
+pair	upper	40000	4FFFF	c69690bafb610420643f8c55fe65712f1b28fbcab95c93577c8b5c1f72aa887c
+pair	upper	50000	5FFFF	ec0d9bf873fd04a50f7bc87f45c6d6de50ff6436ec73278bdb40b1fd4e2a4674
+pair	upper	60000	6FFFF	602003d27ac301c8a6f5da6c78ee0247a09045de98f9d240de703af21aea86b0
+pair	upper	70000	7FFFF	9b26294f28d36eaf83ad154da2359719ef0ae955886dff2d378de8bd20b7e535
+pair	upper	80000	8FFFF	da5e26cc1fe24d5ae11ca6d970c4818754b90d86959cc4ca8c439d37f84bcf5c
+pair	upper	90000	9FFFF	f84cfdb4f2af3052310863dc01b274de151a947f05dc0c91c72fb6ac6f9afb2c
+pair	upper	A0000	AFFFF	bdf5c5327c89c661a9b2b7697982c946f3a1611e732f00aec3fbdfdfdecaf3ab
+pair	upper	B0000	BFFFF	99a9dbfdb7b7e3746b63165a9f11a07fe29e40d780626989f823e8b907be5eb9
+pair	upper	C0000	CFFFF	8b3ddb2e1c74802d416e2215a5a9907fbcd3333be8732c9bd8fa512b2f890695
+pair	upper	D0000	DFFFF	5d4b6a75545a2ee541aa60eb269a8d614a5fef7b767e486ba066fc7ad371e7d3
+pair	upper	E0000	EFFFF	e8840dc70d333fe3a227af914e24a52bb99ee1c028d37cd9771cea6cbe7ab1fd
+pair	upper	F0000	FFFFF	50b44ebe72e4947eb43b8a07dd403d72390991f0ddc90b564876b31281a7ce72
+pair	upper	100000	10FFFF	96a9e21864b22e63331da80759cbde72742cc6586385d8d806da7df2feabd0bc
+unit	lower	0	FFFF	0548faec94c19696943cde81511dbdfd8e9512266633ae1b2cedf642e3e5228c
+pair	lower	10000	1FFFF	afd5f69ee6cdb60ced6b0c83a222f4fbc3d902e0c49cd730ebff1db1e8fd4467
+pair	lower	20000	2FFFF	d110c8488a9eef99788f52aeff87d44946e33c29c3371f5736e3a83383ee5f6a
+pair	lower	30000	3FFFF	42fbc52005e917c75411e2ac7ca08b5591309559e8377432fc1ed1b15a9b245c
+pair	lower	40000	4FFFF	c69690bafb610420643f8c55fe65712f1b28fbcab95c93577c8b5c1f72aa887c
+pair	lower	50000	5FFFF	ec0d9bf873fd04a50f7bc87f45c6d6de50ff6436ec73278bdb40b1fd4e2a4674
+pair	lower	60000	6FFFF	602003d27ac301c8a6f5da6c78ee0247a09045de98f9d240de703af21aea86b0
+pair	lower	70000	7FFFF	9b26294f28d36eaf83ad154da2359719ef0ae955886dff2d378de8bd20b7e535
+pair	lower	80000	8FFFF	da5e26cc1fe24d5ae11ca6d970c4818754b90d86959cc4ca8c439d37f84bcf5c
+pair	lower	90000	9FFFF	f84cfdb4f2af3052310863dc01b274de151a947f05dc0c91c72fb6ac6f9afb2c
+pair	lower	A0000	AFFFF	bdf5c5327c89c661a9b2b7697982c946f3a1611e732f00aec3fbdfdfdecaf3ab
+pair	lower	B0000	BFFFF	99a9dbfdb7b7e3746b63165a9f11a07fe29e40d780626989f823e8b907be5eb9
+pair	lower	C0000	CFFFF	8b3ddb2e1c74802d416e2215a5a9907fbcd3333be8732c9bd8fa512b2f890695
+pair	lower	D0000	DFFFF	5d4b6a75545a2ee541aa60eb269a8d614a5fef7b767e486ba066fc7ad371e7d3
+pair	lower	E0000	EFFFF	e8840dc70d333fe3a227af914e24a52bb99ee1c028d37cd9771cea6cbe7ab1fd
+pair	lower	F0000	FFFFF	50b44ebe72e4947eb43b8a07dd403d72390991f0ddc90b564876b31281a7ce72
+pair	lower	100000	10FFFF	96a9e21864b22e63331da80759cbde72742cc6586385d8d806da7df2feabd0bc

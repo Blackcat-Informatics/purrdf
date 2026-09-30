@@ -12,7 +12,6 @@ use crate::error::{CliError, CliOutcome};
 use crate::format;
 use crate::governors::{self, GovernorFlags};
 use crate::path_relation::{self, PathRelationSpec};
-use crate::query::build_aggregate_registry;
 use crate::{ledger, sink, source};
 
 /// The resolved `update` flags.
@@ -54,7 +53,7 @@ pub(crate) fn run(
     // `AggregateRegistry::register_statistical_aggregates` takes only a namespace
     // string; `None` here reproduces `QueryOptions::EMPTY` byte-for-byte, so an
     // omitted `--aggregate-namespace` changes nothing about existing behaviour.
-    let aggregates = build_aggregate_registry(options.aggregate_namespace);
+    let aggregates = purrdf_validate::query::statistical_aggregates(options.aggregate_namespace);
     // The path-witness relations `--path-relation` declares, snapshotted from the
     // PRE-update dataset — the same state the request's `WHERE` clause matches, and the
     // only state that exists before the mutation is computed. A duplicate IRI across
@@ -81,7 +80,7 @@ pub(crate) fn run(
     let query_options = QueryOptions::new().with_env(&env);
 
     if options.governors.is_engaged() {
-        let governors = options.governors.to_governors();
+        let governors = options.governors.to_governors()?;
         match engine.update_governed(&mut dataset, request, query_options, &governors)? {
             GovernedUpdateOutcome::Applied { .. } => {}
             GovernedUpdateOutcome::BudgetExhausted {

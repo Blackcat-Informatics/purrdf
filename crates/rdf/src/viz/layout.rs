@@ -5,8 +5,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use serde::{Deserialize, Serialize};
-
 use super::*;
 
 /// Version of the deterministic layout contract.
@@ -19,7 +17,7 @@ const NODE_PAD_Y: i32 = 12;
 const VERTICAL_LANE_SPACING: i32 = 16;
 
 /// Deterministic layout options independent of SVG.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizLayoutOptions {
     /// Outer canvas margin.
     pub margin: i32,
@@ -52,7 +50,7 @@ impl Default for VizLayoutOptions {
 }
 
 /// Integer point in layout units.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VizPoint {
     /// Horizontal coordinate.
     pub x: i32,
@@ -61,7 +59,7 @@ pub struct VizPoint {
 }
 
 /// Integer rectangle in layout units.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct VizRect {
     /// Left coordinate.
     pub x: i32,
@@ -121,7 +119,7 @@ impl VizRect {
 }
 
 /// Positioned and wrapped text.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizLayoutLabel {
     /// Bounding rectangle.
     pub rect: VizRect,
@@ -130,7 +128,7 @@ pub struct VizLayoutLabel {
 }
 
 /// Positioned badge keyed by its index in the scene element.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizLayoutBadge {
     /// Badge index in the scene record.
     pub index: usize,
@@ -139,7 +137,7 @@ pub struct VizLayoutBadge {
 }
 
 /// Positioned node port.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizLayoutPort {
     /// Node-local port id.
     pub id: String,
@@ -148,7 +146,7 @@ pub struct VizLayoutPort {
 }
 
 /// Positioned scene node.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizLayoutNode {
     /// Scene node id.
     pub id: String,
@@ -167,7 +165,7 @@ pub struct VizLayoutNode {
 }
 
 /// Positioned edge anchor.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizLayoutAnchor {
     /// Scene anchor id.
     pub id: String,
@@ -180,7 +178,7 @@ pub struct VizLayoutAnchor {
 }
 
 /// Routed scene edge.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizLayoutEdge {
     /// Scene edge id.
     pub id: String,
@@ -195,7 +193,7 @@ pub struct VizLayoutEdge {
 }
 
 /// Positioned table cell.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizLayoutTableCell {
     /// Row index; zero is the header.
     pub row: usize,
@@ -208,7 +206,7 @@ pub struct VizLayoutTableCell {
 }
 
 /// Positioned statement table.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizLayoutTable {
     /// Table rectangle.
     pub rect: VizRect,
@@ -217,7 +215,7 @@ pub struct VizLayoutTable {
 }
 
 /// Positioned visual-grammar legend entry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizLayoutLegendEntry {
     /// Scene legend entry id.
     pub id: String,
@@ -226,7 +224,7 @@ pub struct VizLayoutLegendEntry {
 }
 
 /// Complete deterministic geometry for a semantic scene.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizLayout {
     /// Layout schema version.
     pub schema_version: String,
@@ -1740,7 +1738,7 @@ fn layout_table_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
     let column_count = table.fields.len();
     let mut widths = vec![96; column_count];
     for (column, field) in table.fields.iter().enumerate() {
-        widths[column] = widths[column].max(field_label(*field).len() as i32 * CHAR_WIDTH + 24);
+        widths[column] = widths[column].max(field.label().len() as i32 * CHAR_WIDTH + 24);
         for row in &table.rows {
             if let Some(cell) = row.cells.get(column) {
                 widths[column] = widths[column]
@@ -1777,7 +1775,7 @@ fn layout_table_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
             width: widths[column],
             height: row_heights[0],
         };
-        cells.push(table_cell(0, column, rect, field_label(*field)));
+        cells.push(table_cell(0, column, rect, field.label()));
         x += widths[column];
     }
     let mut y = options.margin + row_heights[0];
@@ -1855,18 +1853,6 @@ fn table_cell(row: usize, column: usize, rect: VizRect, text: &str) -> VizLayout
             rect: label_rect,
             lines: wrap_text(text, chars_for_width(label_rect.width)),
         },
-    }
-}
-
-fn field_label(field: VizTableField) -> &'static str {
-    match field {
-        VizTableField::Statement => "Statement",
-        VizTableField::AssertedIn => "Asserted in",
-        VizTableField::Reifiers => "Reifiers",
-        VizTableField::Annotations => "Annotations",
-        VizTableField::ReferencedBy => "Referenced by",
-        VizTableField::Depth => "Depth",
-        VizTableField::Diagnostics => "Diagnostics",
     }
 }
 

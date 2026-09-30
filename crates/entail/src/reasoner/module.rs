@@ -63,9 +63,8 @@ use std::sync::Arc;
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 
 use super::proof::{Claim, ClaimBasis, ClaimSubject, Question, ServiceProof};
-use super::term_key;
 use crate::EntailError;
-use crate::interner::{Interner, intern_into};
+use crate::interner::{Interner, blank_closure, blank_subjects, intern_into};
 use crate::owl_dl::parser::Vocab;
 use crate::owl_dl::proof::try_ontology_identity;
 use crate::vocab::{
@@ -333,12 +332,7 @@ fn extract(
     }
 
     // Blank-node subject → the triples it carries, for the closure walks.
-    let mut blanks: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
-    for (index, &(s, _, _)) in triples.iter().enumerate() {
-        if matches!(interner.value(s), TermValue::Blank { .. }) {
-            blanks.entry(s).or_default().push(index);
-        }
-    }
+    let blanks = blank_subjects(&interner, &triples);
 
     let mut state = Extraction {
         sigma: signature
@@ -395,7 +389,7 @@ fn extract(
         .iter()
         .map(|&id| interner.value(id).clone())
         .collect();
-    closed.sort_by_key(term_key);
+    closed.sort();
     let mut conservative_keeps: Vec<ConservativeKeep> = state
         .conservative
         .iter()
@@ -404,7 +398,7 @@ fn extract(
             predicate: interner.value(predicate).clone(),
         })
         .collect();
-    conservative_keeps.sort_by_key(|keep| (term_key(&keep.subject), term_key(&keep.predicate)));
+    conservative_keeps.sort_by(|a, b| (&a.subject, &a.predicate).cmp(&(&b.subject, &b.predicate)));
 
     // The extracted module's own producer-independent identity: the claim a consumer checks
     // this proof term against, and the reason a proof of one extraction cannot stand for
@@ -476,17 +470,7 @@ struct Context<'a> {
 impl Context<'_> {
     /// Add the blank-node closure reachable from `term` to `out`.
     fn closure(&self, term: u32, out: &mut BTreeSet<usize>) {
-        let mut stack = vec![term];
-        let mut seen: BTreeSet<u32> = BTreeSet::new();
-        while let Some(node) = stack.pop() {
-            if !matches!(self.interner.value(node), TermValue::Blank { .. }) || !seen.insert(node) {
-                continue;
-            }
-            for &index in self.blanks.get(&node).map_or(&[][..], Vec::as_slice) {
-                out.insert(index);
-                stack.push(self.triples[index].2);
-            }
-        }
+        blank_closure(self.interner, self.triples, self.blanks, term, out);
     }
 
     /// Every named IRI reachable from `term`, itself included when it is one.

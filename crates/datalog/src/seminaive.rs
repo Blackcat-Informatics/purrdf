@@ -71,7 +71,7 @@
 //! limits on term generation: term-generating rounds and generated terms.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use rayon::prelude::*;
@@ -80,6 +80,7 @@ use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
 use crate::cursor::{LendingIterator, VALUE_OBJECT, VALUE_SUBJECT, ValueCursor};
 use crate::guard::{Guard, GuardCall, GuardEvaluator, GuardSite, Negation, NoGuards};
 use crate::id::{RowId, TermId};
+use crate::paths::shortest_path;
 use purrdf_core::{SmallVec, smallvec};
 
 use crate::plan::{
@@ -1237,11 +1238,11 @@ fn negative_cycle(rules: &[DlClause]) -> EvalError {
                 .chain(rule.negations().iter().flat_map(Negation::atoms));
             for atom in negated_atoms {
                 let negated = predicate_symbol(atom);
-                let Some(path) = shortest_dependency_path(&depends, &negated, &head_symbol) else {
+                let Some(path) = shortest_path(&depends, &negated, &head_symbol) else {
                     continue;
                 };
                 let mut cycle = vec![head_symbol.clone()];
-                cycle.extend(path.into_iter().map(str::to_owned));
+                cycle.extend(path);
                 return EvalError::NonStratifiable {
                     head: head_symbol,
                     negated,
@@ -1251,40 +1252,6 @@ fn negative_cycle(rules: &[DlClause]) -> EvalError {
         }
     }
     unreachable!("a non-stratifiable program has a negative edge inside a dependency cycle")
-}
-
-/// The shortest `from -> … -> to` path through `depends`, inclusive of both ends.
-///
-/// A breadth-first search over lexically ordered adjacency, so the path is a pure function
-/// of the rule program rather than of a traversal accident.
-fn shortest_dependency_path<'a>(
-    depends: &'a BTreeMap<String, BTreeSet<String>>,
-    from: &'a str,
-    to: &str,
-) -> Option<Vec<&'a str>> {
-    let mut parent: BTreeMap<&str, &str> = BTreeMap::new();
-    let mut queue: VecDeque<&str> = VecDeque::from([from]);
-    let mut seen: BTreeSet<&str> = BTreeSet::from([from]);
-    while let Some(node) = queue.pop_front() {
-        if node == to {
-            // Walk the parent chain back to `from`, then reverse it.
-            let mut path = vec![node];
-            let mut cursor = node;
-            while cursor != from {
-                cursor = parent[cursor];
-                path.push(cursor);
-            }
-            path.reverse();
-            return Some(path);
-        }
-        for next in depends.get(node).into_iter().flatten() {
-            if seen.insert(next.as_str()) {
-                parent.insert(next.as_str(), node);
-                queue.push_back(next.as_str());
-            }
-        }
-    }
-    None
 }
 
 // ── Semi-naive scan modes ───────────────────────────────────────────────────────

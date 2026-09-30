@@ -33,6 +33,27 @@ pub enum DigestKind {
     Index,
 }
 
+impl DigestKind {
+    /// Refuse unless the recomputed digest `actual` is the recorded `expected`: every
+    /// digest and typed identity PURREMB carries — written or read — is verified
+    /// through this one comparison, so a mismatch always names its kind and both
+    /// values.
+    pub(super) fn verify(
+        self,
+        expected: &[u8; 32],
+        actual: &[u8; 32],
+    ) -> Result<(), EmbeddingError> {
+        if expected != actual {
+            return Err(EmbeddingError::DigestMismatch {
+                kind: self,
+                expected: *expected,
+                actual: *actual,
+            });
+        }
+        Ok(())
+    }
+}
+
 /// A fail-closed PURREMB format, identity, or verification error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -259,11 +280,9 @@ impl std::error::Error for EmbeddingError {
     }
 }
 
-impl From<crate::distance::FloatEnvironmentError> for EmbeddingError {
-    fn from(error: crate::distance::FloatEnvironmentError) -> Self {
-        Self::FloatEnvironment(error)
-    }
-}
+purrdf_lex::variant_from!(EmbeddingError {
+    FloatEnvironment(crate::distance::FloatEnvironmentError),
+});
 
 /// A PURREMB streaming-write failure.
 #[derive(Debug)]
@@ -293,14 +312,28 @@ impl std::error::Error for EmbeddingWriteError {
     }
 }
 
-impl From<EmbeddingError> for EmbeddingWriteError {
-    fn from(error: EmbeddingError) -> Self {
-        Self::Format(error)
-    }
-}
+purrdf_lex::variant_from!(EmbeddingWriteError {
+    Format(EmbeddingError),
+    Io(std::io::Error),
+});
 
-impl From<std::io::Error> for EmbeddingWriteError {
-    fn from(error: std::io::Error) -> Self {
-        Self::Io(error)
+#[cfg(test)]
+mod tests {
+    use super::{DigestKind, EmbeddingError};
+
+    #[test]
+    fn verify_accepts_the_recorded_digest_and_names_a_mismatch() {
+        let recorded = [7_u8; 32];
+        assert_eq!(DigestKind::Section.verify(&recorded, &recorded), Ok(()));
+        let mut recomputed = recorded;
+        recomputed[31] ^= 1;
+        assert_eq!(
+            DigestKind::Target.verify(&recorded, &recomputed),
+            Err(EmbeddingError::DigestMismatch {
+                kind: DigestKind::Target,
+                expected: recorded,
+                actual: recomputed,
+            })
+        );
     }
 }

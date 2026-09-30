@@ -21,7 +21,7 @@
 //! Each corpus is built twice over the same matrix and parameters: once as the
 //! [`Exact`](purrdf_core::distance::Exact) index ([`HnswIndex::build`]) and once as the
 //! [`Reassociated`](purrdf_core::distance::Reassociated) one
-//! ([`HnswIndex::build_reassociated`]), and each runs the same `ef` sweep, printed under its
+//! ([`build::<Reassociated>`]), and each runs the same `ef` sweep, printed under its
 //! own `arithmetic=` heading. Both are graded against the one exact scan: a reassociated
 //! index's recall is the fraction of the exact nearest rows it offered. The two sweeps are
 //! printed side by side and never divided into each other.
@@ -42,16 +42,18 @@
 //! "expected" recall is hard-coded, and no figure is compared to anything but the exact
 //! answer over the same query and the same corpus.
 //!
-//! # Why one-shot rather than criterion
+//! # Why one-shot rather than the sampling harness
 //!
 //! The output this evidence needs — p50/p99 percentiles over a fixed query set, an
-//! exact-rank histogram, and a visited-work total — is not criterion's output, and the
+//! exact-rank histogram, and a visited-work total — is not the sampling harness's output, and the
 //! point of the target is a readable table rather than a statistical estimate. Timings are
 //! wall-clock samples from a shared host and are disclosed as such; nothing here asserts a
 //! latency, and no gate runs it.
 
 #![allow(missing_docs)]
 
+#[path = "../tests/support/fixture.rs"]
+mod fixture;
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -101,20 +103,6 @@ fn uniform(rows: usize, dims: usize) -> VectorMatrix {
         data.push(if value == 0.0 { 0.25 } else { value });
     }
     VectorMatrix::new(rows, dims, data).expect("the generated matrix is finite and rectangular")
-}
-
-/// Every row scored against `query_row`, in the exact path's order.
-fn exact_scored(vectors: &VectorMatrix, norms: &[f64], query_row: usize) -> Vec<Ranked> {
-    let exact = Exact::resolve().expect("the default float environment is the IEEE one");
-    let query = vectors.row(query_row);
-    (0..vectors.rows())
-        .map(|row| Ranked {
-            distance: KERNEL
-                .distance(exact, query, norms[query_row], vectors.row(row), norms[row])
-                .expect("the fixture is finite and the kernel keeps it so"),
-            row,
-        })
-        .collect()
 }
 
 /// The `p`-th percentile of `samples`, in the samples' unit. `p` is a percentage.
@@ -222,7 +210,7 @@ fn report(name: &str, rows: usize, dims: usize) {
     // scored against, and recomputing it per `ef` would not change a bit of it.
     let exact_ordered: Vec<Vec<Ranked>> = (0..QUERIES)
         .map(|query| {
-            let mut scored = exact_scored(&vectors, &norms, query);
+            let mut scored = fixture::exact_scored(KERNEL, &vectors, &norms, query);
             scored.sort_unstable();
             scored
         })
@@ -237,7 +225,7 @@ fn report(name: &str, rows: usize, dims: usize) {
     let exact = HnswIndex::build(vectors, &DistanceMetric::SquaredEuclidean, seed_params)
         .expect("the fixture builds");
     sweep("exact", exact, &norms, &exact_ordered);
-    let reassociated = HnswIndex::build_reassociated(
+    let reassociated = purrdf_hnsw::build::<purrdf_core::distance::Reassociated>(
         reassociated_vectors,
         &DistanceMetric::SquaredEuclidean,
         seed_params,
@@ -306,7 +294,7 @@ fn sweep<A: Arithmetic>(
                 black_box(&offered);
 
                 let start = Instant::now();
-                let scored = exact_scored(vectors, norms, query);
+                let scored = fixture::exact_scored(KERNEL, vectors, norms, query);
                 let answer = best(K, scored);
                 exact_ns.push(start.elapsed().as_nanos() as u64);
                 black_box(&answer);

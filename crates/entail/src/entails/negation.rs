@@ -62,17 +62,18 @@
 //! sequence — which is what makes a warrant comparable against a re-lowering of the same
 //! conclusion.
 
-use std::collections::{BTreeMap, BTreeSet};
+use super::is;
+use std::collections::BTreeSet;
 
 use purrdf_core::{RdfDataset, TermValue};
 
 use crate::engine::surface_of;
-use crate::entails::graph::{Triple, default_graph_triples, show};
+use crate::entails::graph::{Indexed, Triple, read_collection, show};
 use crate::entails::pattern::{PatTriple, patterns_at};
 use crate::vocab::{
     OWL_ALLDIFFERENT, OWL_CLASS, OWL_COMPLEMENTOF, OWL_DATATYPECOMPLEMENTOF, OWL_DIFFERENTFROM,
-    OWL_DISTINCTMEMBERS, OWL_MEMBERS, OWL_NEGATIVEPROPERTYASSERTION, OWL_SAMEAS, RDF_FIRST,
-    RDF_NIL, RDF_REST, RDF_TYPE, RDFS_CLASS,
+    OWL_DISTINCTMEMBERS, OWL_MEMBERS, OWL_NEGATIVEPROPERTYASSERTION, OWL_SAMEAS, RDF_TYPE,
+    RDFS_CLASS,
 };
 
 /// The reserved terms whose presence in a conclusion means a NEGATIVE FACT.
@@ -212,66 +213,6 @@ pub(crate) enum Read {
     Lowered(Lowering),
 }
 
-/// One conclusion graph, indexed the three ways the recognizers need to read it.
-struct Indexed {
-    /// Every default-graph triple, in the dataset's frozen quad order.
-    triples: Vec<Triple>,
-    /// Subject surface → the indices of the triples it is the subject of.
-    by_subject: BTreeMap<String, Vec<usize>>,
-    /// Term surface → the indices of the triples mentioning it in ANY position.
-    mentions: BTreeMap<String, Vec<usize>>,
-}
-
-impl Indexed {
-    /// Index `ds`'s default graph.
-    fn of(ds: &RdfDataset) -> Self {
-        let triples = default_graph_triples(ds);
-        let mut by_subject: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-        let mut mentions: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-        for (index, triple) in triples.iter().enumerate() {
-            by_subject
-                .entry(surface_of(&triple[0]))
-                .or_default()
-                .push(index);
-            for position in triple {
-                let slot = mentions.entry(surface_of(position)).or_default();
-                if slot.last() != Some(&index) {
-                    slot.push(index);
-                }
-            }
-        }
-        Self {
-            triples,
-            by_subject,
-            mentions,
-        }
-    }
-
-    /// The indices of the triples `term` is the subject of.
-    fn subject_of(&self, term: &TermValue) -> &[usize] {
-        self.by_subject
-            .get(&surface_of(term))
-            .map_or(&[][..], Vec::as_slice)
-    }
-
-    /// The indices of the triples mentioning `term` anywhere.
-    fn mentioning(&self, term: &TermValue) -> &[usize] {
-        self.mentions
-            .get(&surface_of(term))
-            .map_or(&[][..], Vec::as_slice)
-    }
-}
-
-/// Whether `term` names an IRI.
-fn is_named(term: &TermValue) -> bool {
-    matches!(term, TermValue::Iri(_))
-}
-
-/// Whether `term` is the IRI `iri`.
-fn is(term: &TermValue, iri: &str) -> bool {
-    matches!(term, TermValue::Iri(value) if value == iri)
-}
-
 /// Split `conclusion` into the negative facts refutation must discharge and the triples it
 /// leaves behind.
 ///
@@ -301,7 +242,7 @@ pub(crate) fn lower(conclusion: &RdfDataset) -> Read {
         let read = if is(predicate, OWL_DIFFERENTFROM) {
             // An existential inequality — "there is something different from b" — is not a
             // fact whose negation this module can assert: it would have to choose a witness.
-            if is_named(subject) && is_named(object) {
+            if subject.is_iri() && object.is_iri() {
                 consumed.insert(index);
                 facts.push(NegativeFact::Distinct {
                     left: subject.clone(),
@@ -433,7 +374,7 @@ fn complement(
             if filler.is_some() {
                 return refuse("the node carries two complements, so it denotes neither");
             }
-            if !is_named(object) {
+            if !object.is_iri() {
                 return refuse(
                     "the complement of a class EXPRESSION would negate membership in a class \
                      whose own axioms nothing here read",
@@ -459,8 +400,7 @@ fn complement(
             continue;
         }
         let [subject, predicate, object] = &indexed.triples[index];
-        if !is(predicate, RDF_TYPE) || surface_of(object) != surface_of(node) || !is_named(subject)
-        {
+        if !is(predicate, RDF_TYPE) || surface_of(object) != surface_of(node) || !subject.is_iri() {
             return refuse("the node is mentioned somewhere this lane did not look");
         }
         instances.push((index, subject.clone()));
@@ -542,8 +482,14 @@ fn all_different(
     let Some(head) = head else {
         return refuse("the node states no member list");
     };
-    let mut cells: BTreeSet<usize> = BTreeSet::new();
-    let members = walk(indexed, &head, node, &mut cells)?;
+    let collection = read_collection(indexed, &head, node, "the member list")?;
+    if let Some(member) = collection.members.iter().find(|member| !member.is_iri()) {
+        return refuse(&format!(
+            "the member {} is not a named individual, so it has no identity to separate",
+            show(member)
+        ));
+    }
+    let (members, cells) = (collection.members, collection.triples);
     if members.len() < 2 {
         return refuse(
             "a collection of fewer than two members constrains nothing, so answering it would \
@@ -564,84 +510,6 @@ fn all_different(
     Ok(())
 }
 
-/// Walk the RDF collection headed by `head`, collecting its members and its cells' triples.
-///
-/// A cell must be a BLANK node with exactly one `rdf:first`, exactly one `rdf:rest` and no
-/// other triple, pointed at only by its predecessor, and every member must be a named
-/// individual; the walk must reach `rdf:nil`. Anything else refuses — the same discipline
-/// [`crate::lists`] applies inside the chase, for the same reason: reasoning over the
-/// well-formed PREFIX of a broken collection answers a question the caller did not ask.
-///
-/// `previous` is the node that points at `head`, so the exclusivity check ("this cell is
-/// reached from exactly one place") can be made without a second index.
-fn walk(
-    indexed: &Indexed,
-    head: &TermValue,
-    previous: &TermValue,
-    cells: &mut BTreeSet<usize>,
-) -> Result<Vec<TermValue>, String> {
-    let mut members = Vec::new();
-    let mut current = head.clone();
-    let mut from = previous.clone();
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    while !is(&current, RDF_NIL) {
-        let refuse = |why: &str| Err(format!("the member list at {}: {why}", show(&current)));
-        if !matches!(current, TermValue::Blank { .. }) {
-            return refuse("a collection cell must be a blank node");
-        }
-        if !seen.insert(surface_of(&current)) {
-            return refuse("the collection is cyclic");
-        }
-        let own = indexed.subject_of(&current);
-        let own_set: BTreeSet<usize> = own.iter().copied().collect();
-        let mut member: Option<TermValue> = None;
-        let mut rest: Option<TermValue> = None;
-        for &index in own {
-            let [_, predicate, object] = &indexed.triples[index];
-            if is(predicate, RDF_FIRST) {
-                if member.is_some() {
-                    return refuse("the cell carries two rdf:first values");
-                }
-                if !is_named(object) {
-                    return refuse(
-                        "a member that is not a named individual has no identity to \
-                                   separate",
-                    );
-                }
-                member = Some(object.clone());
-            } else if is(predicate, RDF_REST) {
-                if rest.is_some() {
-                    return refuse("the cell carries two rdf:rest values");
-                }
-                rest = Some(object.clone());
-            } else {
-                return refuse("the cell carries a triple that is not part of a collection");
-            }
-        }
-        // Reached from exactly one place, and that place is the predecessor: a cell two
-        // collections share is a cell this walk cannot consume on either's behalf.
-        for &index in indexed.mentioning(&current) {
-            if own_set.contains(&index) {
-                continue;
-            }
-            let [subject, _, object] = &indexed.triples[index];
-            if surface_of(subject) != surface_of(&from)
-                || surface_of(object) != surface_of(&current)
-            {
-                return refuse("the cell is reached from more than one place");
-            }
-        }
-        let (Some(member), Some(rest)) = (member, rest) else {
-            return refuse("the cell is missing its rdf:first or its rdf:rest");
-        };
-        cells.extend(own_set);
-        members.push(member);
-        from = current;
-        current = rest;
-    }
-    Ok(members)
-}
-
 #[cfg(test)]
 mod tests {
     use purrdf_core::{BlankScope, RdfDatasetBuilder};
@@ -649,8 +517,8 @@ mod tests {
     use super::{NegativeFact, Read, lower, lowering};
     use crate::vocab::{
         OWL_ALLDIFFERENT, OWL_CLASS, OWL_COMPLEMENTOF, OWL_DIFFERENTFROM, OWL_DISTINCTMEMBERS,
-        OWL_MEMBERS, OWL_NEGATIVEPROPERTYASSERTION, OWL_SAMEAS, RDF_FIRST, RDF_NIL, RDF_REST,
-        RDF_TYPE,
+        OWL_MEMBERS, OWL_NEGATIVEPROPERTYASSERTION, OWL_SAMEAS, RDF_FIRST, RDF_LIST, RDF_NIL,
+        RDF_REST, RDF_TYPE,
     };
     use purrdf_core::{RdfDataset, TermValue};
     use std::sync::Arc;
@@ -778,6 +646,31 @@ mod tests {
                 ]
             );
         }
+    }
+
+    /// A cell typed `rdf:List` is a collection cell (the RDFS list comprehension condition
+    /// licenses the typing for every collection), so the typing is consumed with the cell;
+    /// any other typing on a cell still refuses.
+    #[test]
+    fn a_member_list_whose_cells_are_typed_rdf_list_lowers() {
+        let conclusion = graph(&[
+            ("_x", RDF_TYPE, OWL_ALLDIFFERENT),
+            ("_x", OWL_MEMBERS, "_l1"),
+            ("_l1", RDF_TYPE, RDF_LIST),
+            ("_l1", RDF_FIRST, A),
+            ("_l1", RDF_REST, "_l2"),
+            ("_l2", RDF_TYPE, RDF_LIST),
+            ("_l2", RDF_FIRST, B),
+            ("_l2", RDF_REST, RDF_NIL),
+        ]);
+        let lowered = lowering(&conclusion).expect("a typed collection is recognized");
+        assert!(
+            lowered
+                .residual(&crate::entails::graph::default_graph_triples(&conclusion))
+                .is_empty(),
+            "the typing is consumed with its cell"
+        );
+        assert_eq!(lowered.facts.len(), 1);
     }
 
     /// A conclusion with nothing negative in it is NOT this module's business.

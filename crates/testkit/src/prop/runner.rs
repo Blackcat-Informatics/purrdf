@@ -51,6 +51,12 @@ impl Config {
             ..Self::default()
         }
     }
+
+    /// The default configuration with `cases_from_env(default)` cases (see
+    /// [`cases_from_env`]): `PURRDF_PROP_CASES` when it is set, `default` otherwise.
+    pub fn with_env_cases(default: u32) -> Self {
+        Self::with_cases(cases_from_env(default))
+    }
 }
 
 /// `PURRDF_PROP_CASES` when it is set, `default` otherwise: the case count of
@@ -58,10 +64,7 @@ impl Config {
 /// that is not a positive integer is refused rather than ignored.
 pub fn cases_from_env(default: u32) -> u32 {
     match std::env::var(CASES_VARIABLE) {
-        Ok(text) => match text.trim().parse::<u32>() {
-            Ok(cases) if cases > 0 => cases,
-            _ => panic!("{CASES_VARIABLE} is `{text}`, which is not a positive integer"),
-        },
+        Ok(text) => parse_cases(&text).unwrap_or_else(|error| panic!("{CASES_VARIABLE}: {error}")),
         Err(std::env::VarError::NotPresent) => default,
         Err(std::env::VarError::NotUnicode(text)) => {
             panic!("{CASES_VARIABLE} is not Unicode: {text:?}")
@@ -72,23 +75,40 @@ pub fn cases_from_env(default: u32) -> u32 {
 /// The deterministic default seed of the property named `name`: FNV-1a over
 /// the name, finalised by SplitMix64. No property ever reads OS entropy.
 pub fn seed_for(name: &str) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in name.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    SplitMix64::new(hash).next_u64()
+    SplitMix64::new(purrdf_hash::fnv::fnv1a64(name.as_bytes())).next_u64()
 }
 
-/// Parse a seed as `PURRDF_PROP_SEED` spells it: decimal, or hexadecimal
-/// after `0x`.
+/// Whether `digits` is one or more digits of `radix` and nothing else. The
+/// standard integer parsers also take a leading `+`, which neither variable
+/// spells.
+fn only_digits(digits: &str, radix: u32) -> bool {
+    !digits.is_empty() && digits.chars().all(|digit| digit.is_digit(radix))
+}
+
+/// Parse a case count as `PURRDF_PROP_CASES` spells it: a positive decimal
+/// integer, digits only.
+pub fn parse_cases(text: &str) -> Result<u32, String> {
+    let text = text.trim();
+    match text.parse::<u32>() {
+        Ok(cases) if cases > 0 && only_digits(text, 10) => Ok(cases),
+        _ => Err(format!("`{text}` is not a positive integer")),
+    }
+}
+
+/// Parse a seed as `PURRDF_PROP_SEED` spells it: decimal digits, or
+/// hexadecimal digits after `0x`, with no sign.
 pub fn parse_seed(text: &str) -> Result<u64, String> {
     let text = text.trim();
-    let parsed = match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-        Some(hex) => u64::from_str_radix(hex, 16),
-        None => text.parse::<u64>(),
+    let (digits, radix) = match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+        Some(hex) => (hex, 16),
+        None => (text, 10),
     };
-    parsed.map_err(|error| format!("`{text}` is not a seed (decimal, or hex after 0x): {error}"))
+    let refused =
+        |reason: String| format!("`{text}` is not a seed (decimal, or hex after 0x): {reason}");
+    if !only_digits(digits, radix) {
+        return Err(refused(format!("expected only base-{radix} digits")));
+    }
+    u64::from_str_radix(digits, radix).map_err(|error| refused(error.to_string()))
 }
 
 fn seed_from_env(name: &str) -> u64 {
@@ -406,14 +426,8 @@ where
     })
 }
 
-fn panic_message(payload: &(dyn Any + Send)) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        (*message).to_owned()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "a panic with a non-string payload".to_owned()
-    }
+fn panic_message(payload: &(dyn Any + Send)) -> &str {
+    crate::harness::panic_message(payload).unwrap_or("a panic with a non-string payload")
 }
 
 /// Shortlex order: a shorter sequence is simpler; between equal lengths the

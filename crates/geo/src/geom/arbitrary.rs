@@ -29,11 +29,9 @@ impl Lcg {
 
     /// The next thirty-two bits, taken from the well-mixed high half of the state.
     pub(crate) fn next_u32(&mut self) -> u32 {
-        self.0 = self
-            .0
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        (self.0 >> 32) as u32
+        let state =
+            purrdf_testkit::rng::lcg64_next(&mut self.0, purrdf_testkit::rng::LCG64_MMIX_INCREMENT);
+        (state >> 32) as u32
     }
 
     /// A value in `0..bound`, for a `bound` of at least one.
@@ -139,15 +137,4 @@ pub(crate) fn nest(mut geometry: Geometry, levels: usize) -> Geometry {
         .expect("a collection of one member shares its dimension");
     }
     geometry
-}
-
-/// Run `work` on a thread with [`SMALL_STACK`] bytes of stack and wait for it; a
-/// walk that recursed once per level would abort the process instead of returning.
-pub(crate) fn on_small_stack(work: impl FnOnce() + Send + 'static) {
-    std::thread::Builder::new()
-        .stack_size(SMALL_STACK)
-        .spawn(work)
-        .expect("the thread starts")
-        .join()
-        .expect("the walks did not abort");
 }

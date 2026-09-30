@@ -20,7 +20,7 @@ use ::purrdf::RdfDataset;
 use purrdf_sparql_eval::{AggregateRegistry, UserFunctionRegistry};
 
 use crate::components::{ComponentRegistry, severity_from_term};
-use crate::data::{GraphFilter, native_quads};
+use crate::data::{GraphFilter, native_quads, objects_of};
 use crate::error::ShapesError;
 use crate::expression::NodeExpr;
 use crate::imports::{ShapesImports, resolve_shapes_imports};
@@ -958,8 +958,8 @@ impl Default for Shapes {
             node_shapes: Vec::new(),
             rules: crate::rules::RuleGraph::default(),
             box_role_vocab: None,
-            functions: Arc::new(UserFunctionRegistry::new()),
-            aggregates: Arc::new(AggregateRegistry::new()),
+            functions: Arc::new(UserFunctionRegistry::default()),
+            aggregates: Arc::new(AggregateRegistry::default()),
             validation_options: crate::engine::ValidationOptions::default(),
             target_types: std::collections::BTreeMap::new(),
             shapes_graph: None,
@@ -1458,32 +1458,6 @@ pub(crate) struct Parser<'s> {
 
 // ── Graph read helper (used by the parser's free functions and `prefixes`) ─────
 
-/// Return all objects for `(subject, predicate, ?)`.
-fn objects_of(data: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
-    if !subject.is_subject() {
-        return vec![];
-    }
-    let pred = Term::NamedNode(NamedNode::from(predicate));
-    native_quads(
-        data,
-        Some(subject),
-        Some(&pred),
-        None,
-        GraphFilter::AnyGraph,
-    )
-    .into_iter()
-    .map(|(_, _, object)| object)
-    .collect()
-}
-
-/// `sh:JSTarget`, a SHACL JavaScript Extensions target. Not a SHACL 1.2 term, so it
-/// has no `model::sh` constant.
-const SH_JS_TARGET: &str = "http://www.w3.org/ns/shacl#JSTarget";
-/// `sh:JSTargetType`, the SHACL JavaScript Extensions class of target types.
-const SH_JS_TARGET_TYPE: &str = "http://www.w3.org/ns/shacl#JSTargetType";
-/// `sh:JSFunction`, the SHACL JavaScript Extensions class of functions.
-pub(crate) const SH_JS_FUNCTION: &str = "http://www.w3.org/ns/shacl#JSFunction";
-
 /// Record a SHACL-JS refusal in `slot` unless one is already recorded.
 pub(crate) fn record_shacl_js(
     slot: &std::cell::RefCell<Option<crate::error::ShaclJsRefusal>>,
@@ -1800,7 +1774,7 @@ impl<'s> Parser<'s> {
         let custom_fns = self.custom_fns.clone();
         let bodies = self.parse_custom_function_bodies(&custom_fns)?;
 
-        let mut functions = UserFunctionRegistry::new();
+        let mut functions = UserFunctionRegistry::default();
         self.parse_sparql_functions(&mut functions)?;
 
         // The post-tree linking pass: install the bodies, fill the one shared
@@ -1828,7 +1802,7 @@ impl<'s> Parser<'s> {
             rules,
             box_role_vocab: self.box_role_vocab.clone(),
             functions: Arc::new(functions),
-            aggregates: Arc::new(AggregateRegistry::new()),
+            aggregates: Arc::new(AggregateRegistry::default()),
             validation_options: crate::engine::ValidationOptions::default(),
             target_types: self
                 .target_types
@@ -1873,7 +1847,7 @@ impl<'s> Parser<'s> {
     /// parsed.
     fn refuse_javascript_calls(&self, shapes: &Shapes) -> Result<(), String> {
         let javascript: std::collections::BTreeSet<String> = self
-            .quads_with(None, Some(rdf::TYPE), Some(SH_JS_FUNCTION))
+            .quads_with(None, Some(rdf::TYPE), Some(sh::JS_FUNCTION))
             .into_iter()
             .filter_map(|(subject, _, _)| match subject {
                 Term::NamedNode(iri) => Some(iri.as_str().to_owned()),
@@ -1889,7 +1863,7 @@ impl<'s> Parser<'s> {
         };
         Err(self.refuse_shacl_js(
             &Term::NamedNode(NamedNode::from(function.as_str())),
-            SH_JS_FUNCTION,
+            sh::JS_FUNCTION,
             format!(
                 "the SPARQL of {site} calls <{function}>, a sh:JSFunction: {}; the shapes \
                  graph is refused rather than failing when the call is evaluated",
@@ -2125,25 +2099,9 @@ impl<'s> Parser<'s> {
         .is_empty()
     }
 
-    /// Return all objects for `(subject, predicate, ?)`.
+    /// The distinct objects of `(subject, predicate, ?)` in any graph.
     fn objects_of(&self, subject: &Term, predicate: &str) -> Vec<Term> {
-        let Some(subject_id) = crate::data::resolve_id(self.data, subject) else {
-            return vec![];
-        };
-        let Some(predicate_id) = self.data.term_id_by_iri(predicate) else {
-            return vec![];
-        };
-        let mut seen = ::purrdf::IdSet::default();
-        crate::data::quads_for_pattern_ids(
-            self.data,
-            Some(subject_id),
-            Some(predicate_id),
-            None,
-            GraphFilter::AnyGraph,
-        )
-        .filter(|quad| seen.insert(quad.o))
-        .map(|quad| crate::term::term_id_to_native(self.data, quad.o))
-        .collect()
+        objects_of(self.data, subject, predicate)
     }
 
     /// Return the first object for `(subject, predicate, ?)`, if any.
@@ -2245,9 +2203,11 @@ impl<'s> Parser<'s> {
         }
     }
 
-    /// Whether `node` is the EMPTY node expression: a blank node that is the
-    /// subject of no triple (SHACL 1.2 Node Expressions §4.1.1).
-    pub(crate) fn is_empty_expression(&self, node: &Term) -> bool {
+    /// Whether `node` is a bare blank node: one that is the subject of no triple of
+    /// the shapes graph — the Turtle `[]`. As a node expression that is the EMPTY
+    /// expression (SHACL 1.2 Node Expressions §4.1.1); as a shape reference it is the
+    /// shape with no constraints.
+    pub(crate) fn is_bare_blank_node(&self, node: &Term) -> bool {
         matches!(node, Term::BlankNode(_))
             && native_quads(self.data, Some(node), None, None, GraphFilter::AnyGraph).is_empty()
     }
@@ -2371,7 +2331,7 @@ impl<'s> Parser<'s> {
         crate::term::sort_terms_canonical(&mut tn);
         for t in tn {
             match &t {
-                Term::BlankNode(_) if self.is_empty_expression(&t) => {}
+                Term::BlankNode(_) if self.is_bare_blank_node(&t) => {}
                 Term::BlankNode(_) => {
                     let saved_shape = self.current_shape.replace(id.clone());
                     let expr = self.parse_node_expr(&t);
@@ -2493,14 +2453,14 @@ impl<'s> Parser<'s> {
             // A SHACL-JS target — a `sh:JSTarget`, or an instance of a declared
             // `sh:JSTargetType` — is a target this engine cannot compute: its focus
             // nodes are the output of JavaScript. Declared and unused, both are inert.
-            let javascript_target = if self.has_type(&t_node, SH_JS_TARGET) {
-                Some(SH_JS_TARGET)
+            let javascript_target = if self.has_type(&t_node, sh::JS_TARGET) {
+                Some(sh::JS_TARGET)
             } else if self
                 .objects_of(&t_node, rdf::TYPE)
                 .iter()
-                .any(|class| self.has_type(class, SH_JS_TARGET_TYPE))
+                .any(|class| self.has_type(class, sh::JS_TARGET_TYPE))
             {
-                Some(SH_JS_TARGET_TYPE)
+                Some(sh::JS_TARGET_TYPE)
             } else {
                 None
             };
@@ -2859,7 +2819,7 @@ impl<'s> Parser<'s> {
         }
         let expr = match &node {
             Term::NamedNode(_) | Term::Literal(_) | Term::Triple(_) => NodeExpr::Constant(node),
-            Term::BlankNode(_) if self.is_empty_expression(&node) => NodeExpr::Empty,
+            Term::BlankNode(_) if self.is_bare_blank_node(&node) => NodeExpr::Empty,
             Term::BlankNode(_) => {
                 let saved_shape = self.current_shape.replace(ps_node.clone());
                 let parsed = self.parse_node_expr(&node);
@@ -2998,49 +2958,34 @@ impl<'s> Parser<'s> {
     /// rdf:first or rdf:rest), or has exactly one value for the property rdf:first
     /// in G and exactly one value for the property rdf:rest in G that is also a
     /// SHACL list in G, and the list does not have itself as a value of the
-    /// property path rdf:rest+ in G." Every clause is enforced: a cell without
-    /// `rdf:first` or `rdf:rest`, with two of either, a literal cell, or a cycle is
-    /// refused rather than read as a shorter list.
+    /// property path rdf:rest+ in G." That is the strict walker's contract
+    /// ([`DatasetView::rdf_list_strict`](::purrdf::DatasetView::rdf_list_strict)):
+    /// a cell without `rdf:first` or `rdf:rest`, with two of either, a literal
+    /// cell, or a cycle is refused rather than read as a shorter list.
     fn walk_rdf_list(&self, head: &Term, shape_id: &Term) -> Result<Vec<Term>, String> {
-        let nil = Term::NamedNode(NamedNode::from(rdf::NIL));
-        let mut items = Vec::new();
-        let mut current = head.clone();
-        let mut seen: FastSet<Term> = FastSet::default();
-
-        loop {
-            if !matches!(current, Term::NamedNode(_) | Term::BlankNode(_)) {
-                return Err(format!(
-                    "the RDF list at {head} on {shape_id} is not a well-formed SHACL list: \
-                     {current} is not an IRI or a blank node"
-                ));
-            }
-            let firsts = self.objects_of(&current, rdf::FIRST);
-            let rests = self.objects_of(&current, rdf::REST);
-            if current == nil {
-                if !firsts.is_empty() || !rests.is_empty() {
-                    return Err(format!(
-                        "the RDF list at {head} on {shape_id} is not a well-formed SHACL list: \
-                         rdf:nil has an rdf:first or rdf:rest value"
-                    ));
-                }
-                break;
-            }
-            if !seen.insert(current.clone()) {
-                return Err(format!("cyclic RDF list on shape {shape_id}"));
-            }
-            let ([first], [rest]) = (firsts.as_slice(), rests.as_slice()) else {
-                return Err(format!(
-                    "the RDF list at {head} on {shape_id} is not a well-formed SHACL list: the \
-                     cell {current} has {} rdf:first and {} rdf:rest values, where a list cell \
-                     has exactly one of each",
-                    firsts.len(),
-                    rests.len()
-                ));
-            };
-            items.push(first.clone());
-            current = rest.clone();
+        let malformed = |why: &dyn std::fmt::Display| {
+            format!("the RDF list at {head} on {shape_id} is not a well-formed SHACL list: {why}")
+        };
+        if !head.is_subject() {
+            return Err(malformed(&"it is not an IRI or a blank node"));
         }
-        Ok(items)
+        let Some(head_id) = crate::data::resolve_id(self.data, head) else {
+            // A node the shapes graph never mentions is the subject of nothing:
+            // a list only as `rdf:nil`.
+            return if matches!(head, Term::NamedNode(n) if n.as_str() == rdf::NIL) {
+                Ok(Vec::new())
+            } else {
+                Err(malformed(&"it has no rdf:first"))
+            };
+        };
+        ::purrdf::DatasetView::rdf_list_strict(self.data, head_id, ::purrdf::GraphMatch::Any)
+            .map(|members| {
+                members
+                    .into_iter()
+                    .map(|member| crate::term::term_id_to_native(self.data, member))
+                    .collect()
+            })
+            .map_err(|error| malformed(&error))
     }
 
     /// Walk an RDF list of shape nodes, parsing each as an anonymous shape.
@@ -3137,14 +3082,6 @@ fn annotate_property_edge(mut ps: PropertyShape, annotated: Annotated) -> Option
     }
 }
 
-/// The local name of an IRI: the substring after the last `#` or `/`. Used to
-/// derive a `sh:SPARQLFunction` parameter's pre-bound SPARQL variable name from its
-/// predicate IRI (SHACL-AF §5.1).
-pub(crate) fn local_name(iri: &str) -> &str {
-    let cut = iri.rfind(['#', '/']).map_or(0, |i| i + 1);
-    &iri[cut..]
-}
-
 /// Parse an `xsd:integer` literal into a `u64`; `None` for any other term.
 pub(crate) fn parse_u64(term: &Term) -> Option<u64> {
     // SHACL's count, length and limit parameters are "literals with datatype
@@ -3165,8 +3102,7 @@ mod tests {
     use crate::expression::FnCall;
     use purrdf_sparql_eval::UserFnBody;
 
-    /// Parse Turtle into a frozen dataset (the in-crate tests historically used an
-    /// oxigraph store; the name is kept so the call sites stay stable).
+    /// Parse Turtle into a frozen dataset.
     fn load_store(ttl: &str) -> Arc<RdfDataset> {
         crate::text_ingest::parse_turtle_to_dataset(ttl, None).expect("Turtle parse error")
     }
@@ -4008,6 +3944,93 @@ mod tests {
         });
         assert!(in_constraint.is_some(), "expected In constraint");
         assert_eq!(in_constraint.unwrap().len(), 3);
+    }
+
+    /// The `sh:in` members of the one node shape a Turtle fixture declares.
+    fn in_members(body: &str) -> Result<Vec<Term>, String> {
+        let store = load_store(&format!("{PREFIXES}\n{body}"));
+        let shapes = from_store(&store)?;
+        Ok(shapes.node_shapes[0]
+            .constraints
+            .iter()
+            .find_map(|c| match c {
+                Constraint::In(items) => Some(items.clone()),
+                _ => None,
+            })
+            .expect("an sh:in constraint"))
+    }
+
+    /// A list cell with two `rdf:rest` edges is no SHACL list (SHACL 1.2 Core
+    /// §1.4, "exactly one value for the property rdf:rest"), so the shape is
+    /// refused rather than read as either branch.
+    #[test]
+    fn a_list_cell_with_two_rdf_rest_edges_is_refused() {
+        let error = in_members(
+            r#"ex:S a sh:NodeShape ; sh:targetNode ex:x ; sh:in _:l1 .
+               _:l1 rdf:first "a" ; rdf:rest _:l2 , rdf:nil .
+               _:l2 rdf:first "b" ; rdf:rest rdf:nil ."#,
+        )
+        .expect_err("a branching list is refused");
+        assert!(error.contains("more than one rdf:rest"), "{error}");
+    }
+
+    /// The valid neighbour of the refusal above: the same cells with one
+    /// `rdf:rest` each walk in list order.
+    #[test]
+    fn a_well_formed_list_walks_in_order() {
+        let members = in_members(
+            r#"ex:S a sh:NodeShape ; sh:targetNode ex:x ; sh:in _:l1 .
+               _:l1 rdf:first "a" ; rdf:rest _:l2 .
+               _:l2 rdf:first "b" ; rdf:rest rdf:nil ."#,
+        )
+        .expect("a well-formed list parses");
+        assert_eq!(
+            members,
+            [
+                Term::Literal(Literal::new_simple_literal("a")),
+                Term::Literal(Literal::new_simple_literal("b"))
+            ]
+        );
+    }
+
+    /// `rdf:nil` is the empty SHACL list.
+    #[test]
+    fn an_rdf_nil_list_head_is_the_empty_list() {
+        let store = load_store(&format!(
+            "{PREFIXES}\nex:S a sh:NodeShape ; sh:targetNode ex:x ; sh:and rdf:nil ."
+        ));
+        let shapes = from_store(&store).expect("an empty sh:and list parses");
+        assert!(
+            shapes.node_shapes[0]
+                .constraints
+                .iter()
+                .any(|c| matches!(c, Constraint::And(members) if members.is_empty()))
+        );
+    }
+
+    /// A cell may carry `rdf:type rdf:List`: only its `rdf:first` and `rdf:rest`
+    /// are constrained.
+    #[test]
+    fn a_list_cell_typed_rdf_list_still_walks() {
+        let members = in_members(
+            r#"ex:S a sh:NodeShape ; sh:targetNode ex:x ; sh:in _:l1 .
+               _:l1 a rdf:List ; rdf:first "a" ; rdf:rest rdf:nil ."#,
+        )
+        .expect("a typed cell is still a list cell");
+        assert_eq!(members, [Term::Literal(Literal::new_simple_literal("a"))]);
+    }
+
+    /// A member may be any term: a literal and a triple term included.
+    #[test]
+    fn literal_and_triple_term_members_walk() {
+        let members = in_members(
+            r#"ex:S a sh:NodeShape ; sh:targetNode ex:x ;
+                   sh:in ( "a" <<( ex:s ex:p ex:o )>> ) ."#,
+        )
+        .expect("literal and triple-term members parse");
+        assert_eq!(members.len(), 2);
+        assert!(matches!(members[0], Term::Literal(_)));
+        assert!(matches!(members[1], Term::Triple(_)));
     }
 
     // ── Test 8: sh:nodeKind ────────────────────────────────────────────────────

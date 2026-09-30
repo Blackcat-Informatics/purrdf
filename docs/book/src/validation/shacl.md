@@ -10,7 +10,7 @@ SPDX-License-Identifier: CC-BY-4.0
 implements **SHACL 1.2**: Core, SPARQL Extensions, Node Expressions, Inference
 Rules and the SPARQL 1.2 RL rule language, plus the SHACL-AF 1.0 spellings
 those documents supersede. It runs entirely on PurRDF's own interned IR and
-native SPARQL engine (no oxigraph, no PyO3).
+native SPARQL engine (no PyO3).
 
 It validates an RDF 1.2 data graph against a SHACL shapes graph with **no
 inference** (parity with pySHACL `inference="none"`); combine with

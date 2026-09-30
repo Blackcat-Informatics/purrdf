@@ -57,19 +57,17 @@
 
 use std::collections::BTreeMap;
 
-use ::purrdf::{FastMap, FastSet, RdfDataset, TermId, TermRef};
-use serde_json::{Map, Value, json};
+use crate::json_model::{Map, Value, json};
+use ::purrdf::{DatasetView as _, FastMap, FastSet, GraphMatch, RdfDataset, TermId, TermRef};
+use purrdf_core::collections::{ListCellUse, convertible_list_cells};
 
 use crate::data::{GraphFilter, native_quads, quads_for_pattern_ids, resolve_id};
 use crate::json_schema::Namespaces;
 use crate::model::rdf;
 use crate::term::{Term, term_id_to_native};
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+use purrdf_iri::vocab::rdf::{LANG_STRING as RDF_LANG_STRING, NIL as RDF_NIL};
+use purrdf_xsd::datatype::{XSD_BOOLEAN, XSD_INTEGER, XSD_STRING};
 
 /// Project the default graph of `dataset` into a JSON-LD `@graph` document.
 ///
@@ -113,7 +111,7 @@ fn project_graph_data(data: &RdfDataset, ns: &Namespaces) -> Value {
     }
 
     json!({
-        "@context": Value::Object(ns.context_object()),
+        "@context": crate::json_model::object(ns.context_object()),
         "@graph": Value::Array(nodes),
     })
 }
@@ -137,7 +135,7 @@ fn project_subject_data(
 ) -> Value {
     if !subject.is_subject() {
         // Literals (and quoted triples) are never node subjects.
-        return Value::Object(Map::new());
+        return crate::json_model::object(Map::new());
     }
 
     // Gather predicate → [objects], grouping by compacted predicate key.
@@ -197,7 +195,7 @@ fn project_subject_data(
         obj.insert(key, v);
     }
 
-    Value::Object(obj)
+    crate::json_model::object(obj)
 }
 
 /// Project an object term of the default graph: the `@list` object when it is
@@ -234,7 +232,7 @@ fn project_list_or_value(
         if member && let Term::BlankNode(label) = term {
             list.insert("@index".to_owned(), Value::String(format!("_:{label}")));
         }
-        return Value::Object(list);
+        return crate::json_model::object(list);
     }
     project_value(term, ns)
 }
@@ -271,7 +269,7 @@ fn project_term(term: &Term, ns: &Namespaces) -> Value {
                         Value::String(direction.as_str().to_owned()),
                     );
                 }
-                return Value::Object(object);
+                return crate::json_model::object(object);
             }
             let dt_iri = lit.datatype_str();
             // Plain string / langString without a tag → bare string.
@@ -291,9 +289,9 @@ fn project_term(term: &Term, ns: &Namespaces) -> Value {
         // or a named node. (Statement-layer reifiers are projected via
         // `@annotation`, not as plain object values.)
         Term::Triple(triple) => {
-            let subject = match project_term(&triple.subject, ns) {
-                Value::Object(mut reference) => reference.remove("@id").unwrap_or(Value::Null),
-                other => other,
+            let subject = match crate::json_model::into_object(project_term(&triple.subject, ns)) {
+                Ok(mut reference) => reference.remove("@id").unwrap_or(Value::Null),
+                Err(other) => other,
             };
             let mut embedded = Map::new();
             embedded.insert("@id".to_owned(), subject);
@@ -301,7 +299,7 @@ fn project_term(term: &Term, ns: &Namespaces) -> Value {
                 ns.compact_iri(triple.predicate.as_str()),
                 project_term(&triple.object, ns),
             );
-            json!({ "@id": Value::Object(embedded) })
+            json!({ "@id": crate::json_model::object(embedded) })
         }
     }
 }
@@ -355,7 +353,9 @@ pub(crate) fn is_canonical_integer(lexical: &str) -> bool {
 /// both of which have as value an array consisting of a single element, and
 /// node has no other entries" — and the walk stops at the first cell that is
 /// not, or whose usage is not an `rdf:rest`; the cells it passed become the
-/// `@list` of the value that referenced the last of them.
+/// `@list` of the value that referenced the last of them. The walk is the
+/// shared [`convertible_list_cells`]; this index supplies the step's
+/// well-formedness test over the default graph.
 ///
 /// Two readings are fixed here, both keeping a triple the algorithm would
 /// otherwise lose. The algorithm tolerates "an optional @type entry whose value
@@ -371,9 +371,6 @@ pub(crate) fn is_canonical_integer(lexical: &str) -> bool {
 pub(crate) struct ListIndex {
     /// The cells carried inside some `@list`.
     cells: FastSet<TermId>,
-    first: Option<TermId>,
-    rest: Option<TermId>,
-    nil: Option<TermId>,
 }
 
 /// How often, and from where, a blank node is referenced.
@@ -390,9 +387,6 @@ impl ListIndex {
     fn empty() -> Self {
         Self {
             cells: FastSet::default(),
-            first: None,
-            rest: None,
-            nil: None,
         }
     }
 
@@ -448,7 +442,7 @@ impl ListIndex {
         // A well-formed list node: blank, referenced once from the default
         // graph, and the subject of exactly one `rdf:first` and one `rdf:rest`
         // there and of nothing else.
-        let well_formed = |cell: TermId| -> Option<(TermId, TermId)> {
+        let well_formed = |cell: TermId| -> Option<ListCellUse<TermId>> {
             if !is_blank(cell) {
                 return None;
             }
@@ -468,27 +462,14 @@ impl ListIndex {
                     return None;
                 }
             }
-            (firsts == 1 && rests == 1).then_some((subject, predicate))
+            (firsts == 1 && rests == 1).then_some(if predicate == rest {
+                ListCellUse::RestOf(subject)
+            } else {
+                ListCellUse::Head
+            })
         };
-        let mut cells: FastSet<TermId> = FastSet::default();
-        for tail in tails {
-            let mut node = tail;
-            while !cells.contains(&node)
-                && let Some((subject, predicate)) = well_formed(node)
-            {
-                cells.insert(node);
-                if predicate != rest {
-                    break;
-                }
-                node = subject;
-            }
-        }
-        Self {
-            cells,
-            first: Some(first),
-            rest: Some(rest),
-            nil: Some(nil),
-        }
+        let cells = convertible_list_cells(tails, well_formed);
+        Self { cells }
     }
 
     /// Whether `term` is a list cell carried inside a `@list`.
@@ -501,29 +482,16 @@ impl ListIndex {
     /// The members, in order, of the list whose head is `term`, when `term` is a
     /// converted list's head; `None` otherwise (including for `rdf:nil`, which
     /// [`project_value`] projects on its own).
+    ///
+    /// Every cell from a converted cell to `rdf:nil` is itself converted, and
+    /// so has exactly one `rdf:first` and one `rdf:rest` in the default graph:
+    /// the strict walker reads that chain as it is.
     fn members(&self, data: &RdfDataset, term: &Term) -> Option<Vec<TermId>> {
         if !self.is_cell(data, term) {
             return None;
         }
-        let (first, rest, nil) = (self.first?, self.rest?, self.nil?);
-        let mut cell = resolve_id(data, term)?;
-        let mut members = Vec::new();
-        while cell != nil && members.len() <= self.cells.len() {
-            let single = |predicate: TermId| {
-                quads_for_pattern_ids(
-                    data,
-                    Some(cell),
-                    Some(predicate),
-                    None,
-                    GraphFilter::DefaultGraph,
-                )
-                .next()
-                .map(|quad| quad.o)
-            };
-            members.push(single(first)?);
-            cell = single(rest)?;
-        }
-        Some(members)
+        let head = resolve_id(data, term)?;
+        data.rdf_list_strict(head, GraphMatch::Default).ok()
     }
 }
 
@@ -532,6 +500,7 @@ impl ListIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_model::ValueKind;
 
     fn load(ttl: &str) -> std::sync::Arc<RdfDataset> {
         crate::text_ingest::parse_turtle_to_dataset(ttl, None).expect("Turtle parse")
@@ -860,8 +829,8 @@ mod tests {
             meta:bob a meta:Person ; meta:name "Bob" .
         "#
         );
-        let a = serde_json::to_string_pretty(&project_graph(&load(&ttl), &fixture_ns())).unwrap();
-        let b = serde_json::to_string_pretty(&project_graph(&load(&ttl), &fixture_ns())).unwrap();
+        let a = crate::json_model::write_pretty(&project_graph(&load(&ttl), &fixture_ns()));
+        let b = crate::json_model::write_pretty(&project_graph(&load(&ttl), &fixture_ns()));
         assert_eq!(a, b, "projection must be byte-stable");
     }
 }

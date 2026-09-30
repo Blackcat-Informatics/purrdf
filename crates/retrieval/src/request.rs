@@ -49,13 +49,12 @@
 //! because adding variants before first publication is free.
 
 use purrdf_text::Fixed;
-use serde::{Deserialize, Serialize};
 
 use crate::fuse::TopK;
 use crate::iri::{Iri, Term};
 
 /// The distance metric a vector request is expressed in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Metric {
     /// Cosine distance.
     Cosine,
@@ -80,7 +79,7 @@ pub enum Metric {
 /// is not), so this type's `PartialEq` is a genuine equivalence relation and
 /// `Eq` holds for every value, including deserialized or otherwise untrusted
 /// ones.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub enum RequestTerm {
     /// A lexical (full-text) term.
     Lexical {
@@ -144,7 +143,6 @@ pub enum RequestTerm {
         /// The predicate IRI the geometry is associated with.
         predicate: Iri,
         /// An optional maximum distance.
-        #[serde(with = "crate::iri::fixed_option")]
         max_distance: Option<Fixed>,
     },
     /// A temporal term: a closed interval on the caller's own time line.
@@ -221,10 +219,8 @@ pub enum RequestTerm {
         /// The predicate IRI the interval constrains.
         predicate: Iri,
         /// The inclusive lower endpoint, or `None` for a range unbounded below.
-        #[serde(with = "crate::iri::fixed_option")]
         lower: Option<Fixed>,
         /// The inclusive upper endpoint, or `None` for a range unbounded above.
-        #[serde(with = "crate::iri::fixed_option")]
         upper: Option<Fixed>,
     },
     /// An entity seed: retrieve from a term the caller already knows.
@@ -369,7 +365,7 @@ impl Eq for RequestTerm {}
 /// It is also what keeps the derivation total. [`Self::Complete`] is not "no
 /// narrowing applies"; it is "the narrowing this request licenses is none", and
 /// the planner reads it as a value like any other.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ReadBound {
     /// At most this many fused rows, and therefore no deeper a read than those
     /// rows can come from.
@@ -400,7 +396,7 @@ pub enum ReadBound {
 /// There is deliberately no `Default`. An empty term list is a coherent value,
 /// but a default [`ReadBound`] is not: both arms are things a caller asks for,
 /// and picking one on the caller's behalf would decide how deep its read goes.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RetrievalRequest {
     /// The request's terms, in caller order.
     pub terms: Vec<RequestTerm>,

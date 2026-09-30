@@ -27,60 +27,15 @@
     all(target_arch = "x86", target_feature = "sse2")
 ))]
 
+use purrdf_core::distance::control::Mxcsr;
 use purrdf_core::distance::{Arithmetic as _, Exact, FloatEnvironmentError};
+use purrdf_core::purremb_fixture::{Identities, reference_norm};
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, DimensionalityPolicy, DistanceMetric, EmbeddingBuilder,
-    EmbeddingError, EmbeddingFamilyContract, EmbeddingView, MatrixInput, MatrixRow,
-    PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, StageImplementation, TargetSet,
+    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
+    DistanceMetric, EmbeddingBuilder, EmbeddingError, EmbeddingFamilyContract, EmbeddingView,
+    MatrixInput, MatrixRow, PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, TargetSet,
     VectorDtype, verify_embedding,
 };
-
-/// MXCSR flush-to-zero.
-const FTZ: u32 = 1 << 15;
-
-fn read_mxcsr() -> u32 {
-    let mut value: u32 = 0;
-    // SAFETY: `stmxcsr` stores the 32-bit MXCSR to a live, aligned, writable `u32`.
-    unsafe {
-        core::arch::asm!(
-            "stmxcsr [{ptr}]",
-            ptr = in(reg) &raw mut value,
-            options(nostack, preserves_flags),
-        );
-    }
-    value
-}
-
-fn write_mxcsr(value: u32) {
-    // SAFETY: `ldmxcsr` loads MXCSR from a live, aligned `u32`. Every value written here is
-    // the saved register or the saved register with FTZ added, and `Flushed` restores the
-    // saved one on every exit, including a panic.
-    unsafe {
-        core::arch::asm!(
-            "ldmxcsr [{ptr}]",
-            ptr = in(reg) &raw const value,
-            options(nostack, preserves_flags, readonly),
-        );
-    }
-}
-
-/// FTZ set on this thread for as long as the guard lives.
-struct Flushed(u32);
-
-impl Flushed {
-    fn new() -> Self {
-        let saved = read_mxcsr();
-        write_mxcsr(saved | FTZ);
-        Self(saved)
-    }
-}
-
-impl Drop for Flushed {
-    fn drop(&mut self) {
-        write_mxcsr(self.0);
-    }
-}
 
 /// Whether `error` is the flush-to-zero refusal: named by the MXCSR where it is read
 /// (`x86_64`), and by the behavioural probe where it is not (32-bit x86).
@@ -97,54 +52,7 @@ fn is_ftz(error: &EmbeddingError) -> bool {
 /// direction as a zero norm.
 const ROW: [f64; 2] = [3e-310, 4e-310];
 
-/// PURREMB §13.2's scaled L2 fold, transcribed from the specification's written order.
-/// `black_box` keeps it from being folded at compile time under the default environment.
-fn reference_norm(values: &[f64]) -> f64 {
-    let mut scale = 0.0_f64;
-    let mut ssq = 1.0_f64;
-    for &value in core::hint::black_box(values) {
-        let value = value.abs();
-        if value == 0.0 {
-            continue;
-        }
-        if scale < value {
-            let ratio = scale / value;
-            let square = ratio * ratio;
-            let product = ssq * square;
-            ssq = 1.0 + product;
-            scale = value;
-        } else {
-            let ratio = value / scale;
-            let square = ratio * ratio;
-            ssq += square;
-        }
-    }
-    let root = ssq.sqrt();
-    core::hint::black_box(scale) * root
-}
-
-fn artifact(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        format!("https://example.org/{name}"),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("artifact")
-}
-
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            format!("https://example.org/{name}"),
-            ContentDigest::of(name.as_bytes()),
-            "application/octet-stream",
-            vec![1],
-        )
-        .expect("stage"),
-    )
-}
+const FX: Identities = Identities::at("https://example.org/");
 
 /// Build the one-row binary64 artifact whose only projection has `postprocessing`.
 fn build(postprocessing: PrefixPostprocessing) -> Result<Vec<u8>, EmbeddingError> {
@@ -154,14 +62,14 @@ fn build(postprocessing: PrefixPostprocessing) -> Result<Vec<u8>, EmbeddingError
     let target_id = target.id;
     let set = TargetSet::new(vec![target_id]).expect("target set");
     let contract = EmbeddingFamilyContract {
-        model: artifact("model-ftz"),
-        engine: artifact("engine-ftz"),
-        tokenizer: artifact("tokenizer-ftz"),
-        execution: stage("execution-ftz"),
-        subject_projection: stage("projection-ftz"),
+        model: FX.artifact("model-ftz"),
+        engine: FX.artifact("engine-ftz"),
+        tokenizer: FX.artifact("tokenizer-ftz"),
+        execution: FX.stage("execution-ftz"),
+        subject_projection: FX.stage("projection-ftz"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling-ftz"),
+        pooling: FX.stage("pooling-ftz"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F64,
@@ -205,7 +113,7 @@ fn a_normalized_projection_needs_the_ieee_environment_and_a_raw_one_does_not() {
     let raw = build(PrefixPostprocessing::None).expect("builds by default");
 
     let (flushed_norm, sealed, verified, resolved, raw_sealed, raw_verified) = {
-        let flushed = Flushed::new();
+        let flushed = Mxcsr::flush_to_zero();
         let norm = reference_norm(&ROW);
         let sealed = build(PrefixPostprocessing::DeterministicL2);
         let verified = verify(&normalized);

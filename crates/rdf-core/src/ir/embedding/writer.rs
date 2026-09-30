@@ -19,9 +19,10 @@ use crate::distance::{Arithmetic as _, Exact, Resolved, Scalar};
 use super::contract::{PrefixPostprocessing, VectorDtype};
 use super::error::{DigestKind, EmbeddingError, EmbeddingWriteError};
 use super::identity::{
-    ArtifactRoot, FamilyId, MatrixContentDigest, MatrixId, ProjectionContentDigest, ProjectionId,
-    TargetId, TargetSetId, VectorSpaceId, derive_matrix_content_digest, derive_matrix_id,
-    derive_projection_id, derive_target_set_id, derive_vector_space_id,
+    ArtifactRoot, D_MATRIX_CONTENT, D_PROJECTION_CONTENT, D_TARGET_SET, FamilyId, FramedHasher,
+    MatrixContentDigest, MatrixId, ProjectionContentDigest, ProjectionId, TargetId, TargetSetId,
+    VectorSpaceId, derive_matrix_content_digest, derive_matrix_id, derive_projection_id,
+    derive_target_set_id, derive_vector_space_id,
 };
 use super::metadata::CanonicalMetadataInput;
 use super::wire::{
@@ -30,7 +31,7 @@ use super::wire::{
     SECTION_EXTENSION_MIN, SECTION_EXTERNAL_BINDINGS, SECTION_INDEX_GUARDS, SECTION_INDEX_PAYLOAD,
     SECTION_MATRICES, SECTION_MATRIX_DATA, SECTION_RELATIONS, SECTION_SOURCE, SECTION_TARGET_SETS,
     SECTION_TARGETS, SECTION_TOKEN_SPANS, SectionDescriptor, SectionKey, SectionPayload,
-    encode_artifact,
+    encode_artifact, put_u32, put_u64,
 };
 
 const MATRICES_HEADER_LENGTH: u64 = 160;
@@ -39,10 +40,6 @@ const PROJECTION_RECORD_LENGTH: u64 = 152;
 const PROJECTION_ID_INDEX_RECORD_LENGTH: u64 = 40;
 const MATRIX_KEY_INDEX_RECORD_LENGTH: u64 = 72;
 const EFFECTIVE_PROJECTION_INDEX_RECORD_LENGTH: u64 = 72;
-
-const D_TARGET_SET: &[u8] = b"purrdf.purremb.v1.target-set\0";
-const D_MATRIX_CONTENT: &[u8] = b"purrdf.purremb.v1.matrix-content\0";
-const D_PROJECTION_CONTENT: &[u8] = b"purrdf.purremb.v1.projection-content\0";
 
 /// One caller extension section retained byte-for-byte by the writer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -653,24 +650,18 @@ impl<W: Write + Seek> EmbeddingStreamWriter<W> {
         }
 
         let actual_target_set = TargetSetId::from_raw(target_set_hasher.finish());
-        check_digest(
-            DigestKind::TargetSet,
+        DigestKind::TargetSet.verify(
             commitment.target_set_id.as_bytes(),
             actual_target_set.as_bytes(),
         )?;
         let actual_content = MatrixContentDigest::from_raw(matrix_hasher.finish());
-        check_digest(
-            DigestKind::Matrix,
+        DigestKind::Matrix.verify(
             commitment.content_digest.as_bytes(),
             actual_content.as_bytes(),
         )?;
         let actual_matrix_id =
             derive_matrix_id(actual_target_set, commitment.family_id, actual_content);
-        check_digest(
-            DigestKind::Matrix,
-            commitment.matrix_id.as_bytes(),
-            actual_matrix_id.as_bytes(),
-        )?;
+        DigestKind::Matrix.verify(commitment.matrix_id.as_bytes(), actual_matrix_id.as_bytes())?;
         verify_projection_hashers(&commitment, projections, actual_matrix_id)?;
         self.layout
             .set_section_digest(section_key, section_hasher.finalize().into())?;
@@ -702,11 +693,7 @@ fn prepare_matrix<T: MatrixScalar>(
         .map(|row| row.target_id)
         .collect::<Vec<_>>();
     let target_set_id = derive_target_set_id(&target_ids);
-    check_digest(
-        DigestKind::TargetSet,
-        input.target_set_id.as_bytes(),
-        target_set_id.as_bytes(),
-    )?;
+    DigestKind::TargetSet.verify(input.target_set_id.as_bytes(), target_set_id.as_bytes())?;
 
     let projections =
         canonical_projection_specs(input.family_id, input.stored_dimension, input.projections)?;
@@ -791,11 +778,7 @@ fn canonical_projection_specs(
             projection.effective_dimension,
             projection.postprocessing.code(),
         );
-        check_digest(
-            DigestKind::Contract,
-            projection.vector_space_id.as_bytes(),
-            expected.as_bytes(),
-        )?;
+        DigestKind::Contract.verify(projection.vector_space_id.as_bytes(), expected.as_bytes())?;
         previous = projection.effective_dimension;
     }
     if previous != stored_dimension {
@@ -850,11 +833,7 @@ fn validate_commitments(matrices: &[MatrixCommitment]) -> Result<(), EmbeddingEr
             matrix.family_id,
             matrix.content_digest,
         );
-        check_digest(
-            DigestKind::Matrix,
-            matrix.matrix_id.as_bytes(),
-            expected_matrix_id.as_bytes(),
-        )?;
+        DigestKind::Matrix.verify(matrix.matrix_id.as_bytes(), expected_matrix_id.as_bytes())?;
         if matrix.projections.is_empty() {
             return Err(EmbeddingError::Missing("matrix projection"));
         }
@@ -873,8 +852,7 @@ fn validate_commitments(matrices: &[MatrixCommitment]) -> Result<(), EmbeddingEr
                 projection.effective_dimension,
                 projection.postprocessing.code(),
             );
-            check_digest(
-                DigestKind::Contract,
+            DigestKind::Contract.verify(
                 projection.vector_space_id.as_bytes(),
                 expected_space.as_bytes(),
             )?;
@@ -883,8 +861,7 @@ fn validate_commitments(matrices: &[MatrixCommitment]) -> Result<(), EmbeddingEr
                 projection.vector_space_id,
                 projection.content_digest,
             );
-            check_digest(
-                DigestKind::Projection,
+            DigestKind::Projection.verify(
                 projection.projection_id.as_bytes(),
                 expected_projection.as_bytes(),
             )?;
@@ -1317,36 +1294,6 @@ fn matrix_instance(index: usize) -> Result<u32, EmbeddingError> {
     })
 }
 
-struct FramedHasher {
-    hasher: Sha256,
-}
-
-impl FramedHasher {
-    fn new(domain: &[u8]) -> Self {
-        let mut hasher = Sha256::new();
-        hasher.update(domain);
-        Self { hasher }
-    }
-
-    fn field(&mut self, bytes: &[u8]) {
-        let length = u64::try_from(bytes.len()).expect("an in-memory slice length fits u64");
-        self.begin_field(length);
-        self.update(bytes);
-    }
-
-    fn begin_field(&mut self, length: u64) {
-        self.hasher.update(length.to_le_bytes());
-    }
-
-    fn update(&mut self, bytes: &[u8]) {
-        self.hasher.update(bytes);
-    }
-
-    fn finish(self) -> [u8; 32] {
-        self.hasher.finalize().into()
-    }
-}
-
 fn target_set_hasher(row_count: u64) -> FramedHasher {
     let mut hasher = FramedHasher::new(D_TARGET_SET);
     hasher.field(&row_count.to_le_bytes());
@@ -1489,17 +1436,12 @@ fn verify_projection_hashers(
     }
     for (state, expected) in states.into_iter().zip(&commitment.projections) {
         let actual_content = ProjectionContentDigest::from_raw(state.hasher.finish());
-        check_digest(
-            DigestKind::Projection,
+        DigestKind::Projection.verify(
             expected.content_digest.as_bytes(),
             actual_content.as_bytes(),
         )?;
         let actual_id = derive_projection_id(matrix_id, expected.vector_space_id, actual_content);
-        check_digest(
-            DigestKind::Projection,
-            expected.projection_id.as_bytes(),
-            actual_id.as_bytes(),
-        )?;
+        DigestKind::Projection.verify(expected.projection_id.as_bytes(), actual_id.as_bytes())?;
     }
     Ok(())
 }
@@ -1586,7 +1528,7 @@ impl MatrixScalar for f32 {
 
     fn raw_bytes(self) -> ScalarBytes {
         let mut bytes = [0u8; 8];
-        bytes[..4].copy_from_slice(&self.to_le_bytes());
+        *bytes.first_chunk_mut().expect("eight bytes hold four") = self.to_le_bytes();
         ScalarBytes { bytes, length: 4 }
     }
 
@@ -1617,29 +1559,6 @@ impl MatrixScalar for f64 {
     fn rounded_bytes(value: f64) -> ScalarBytes {
         value.raw_bytes()
     }
-}
-
-fn check_digest(
-    kind: DigestKind,
-    expected: &[u8; 32],
-    actual: &[u8; 32],
-) -> Result<(), EmbeddingError> {
-    if expected != actual {
-        return Err(EmbeddingError::DigestMismatch {
-            kind,
-            expected: *expected,
-            actual: *actual,
-        });
-    }
-    Ok(())
-}
-
-fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
-    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-}
-
-fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
-    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
 #[cfg(test)]

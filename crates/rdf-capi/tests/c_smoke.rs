@@ -14,24 +14,27 @@ use std::process::Command;
 fn cdylib_artifact(messages: &[u8], lib_name: &str) -> Option<PathBuf> {
     let messages = std::str::from_utf8(messages).ok()?;
     for line in messages.lines() {
-        let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
+        let Ok(message) = purrdf_lex::json::read(line) else {
             continue;
         };
-        if message.get("reason").and_then(serde_json::Value::as_str) != Some("compiler-artifact")
+        if message
+            .get("reason")
+            .and_then(purrdf_lex::json::Value::as_str)
+            != Some("compiler-artifact")
             || !message
                 .pointer("/target/kind")
-                .and_then(serde_json::Value::as_array)
+                .and_then(purrdf_lex::json::Value::as_array)
                 .is_some_and(|kinds| kinds.iter().any(|kind| kind == "cdylib"))
         {
             continue;
         }
         let Some(filenames) = message
             .get("filenames")
-            .and_then(serde_json::Value::as_array)
+            .and_then(purrdf_lex::json::Value::as_array)
         else {
             continue;
         };
-        for filename in filenames.iter().filter_map(serde_json::Value::as_str) {
+        for filename in filenames.iter().filter_map(purrdf_lex::json::Value::as_str) {
             let path = PathBuf::from(filename);
             if path.file_name().and_then(|name| name.to_str()) == Some(lib_name) {
                 return Some(path);

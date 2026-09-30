@@ -120,16 +120,25 @@ impl Presence {
     }
 }
 
-impl FromIterator<bool> for Presence {
-    fn from_iter<I: IntoIterator<Item = bool>>(rows: I) -> Self {
-        let rows = rows.into_iter();
-        let mut presence = Self::with_capacity(rows.size_hint().0);
-        for present in rows {
-            presence.push(present);
+/// `FromIterator` for a column built row by row: room for the iterator's lower
+/// bound up front, then every row pushed in order. Each column type states only
+/// its row type.
+macro_rules! collect_rows {
+    ($($column:ty => $row:ty),+ $(,)?) => {$(
+        impl FromIterator<$row> for $column {
+            fn from_iter<I: IntoIterator<Item = $row>>(rows: I) -> Self {
+                let rows = rows.into_iter();
+                let mut column = Self::with_capacity(rows.size_hint().0);
+                for row in rows {
+                    column.push(row);
+                }
+                column
+            }
         }
-        presence
-    }
+    )+};
 }
+
+collect_rows!(Presence => bool, Int64Column => Option<i64>);
 
 /// A word with its low `bits` bits set, `bits` in `1..=64`.
 const fn low_bits(bits: usize) -> u64 {
@@ -241,17 +250,6 @@ impl Int64Column {
             values: self.values.iter(),
             row: 0,
         }
-    }
-}
-
-impl FromIterator<Option<i64>> for Int64Column {
-    fn from_iter<I: IntoIterator<Item = Option<i64>>>(rows: I) -> Self {
-        let rows = rows.into_iter();
-        let mut column = Self::with_capacity(rows.size_hint().0);
-        for value in rows {
-            column.push(value);
-        }
-        column
     }
 }
 

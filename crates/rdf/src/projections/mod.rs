@@ -54,13 +54,17 @@ mod csvw;
 mod dataset_description;
 mod dcat_rdf;
 mod error;
+mod json_codec;
+mod loss;
 mod lpg;
 mod obo_graphs;
 mod okf;
 mod package;
 mod research_object;
+mod selection;
 mod sink;
 mod skos;
+mod source_rows;
 mod term;
 mod util;
 mod void;
@@ -92,8 +96,8 @@ pub use lpg::{
     LpgIriSelection, LpgLabel, LpgLiftOutcome, LpgNamedGraphSelection, LpgNode,
     LpgPackageProjection, LpgProgress, LpgProgressObserver, LpgProgressPhase, LpgProjection,
     LpgProjectionReport, LpgProperty, LpgPropertyAtom, LpgRdfQuad, LpgReifier, LpgScope,
-    LpgStreamProjection, lift_lpg, project_lpg, project_lpg_csv, project_lpg_csv_to_sink,
-    project_lpg_cypher, project_lpg_cypher_to_sink, project_lpg_graphml,
+    LpgSelection, LpgStreamProjection, lift_lpg, project_lpg, project_lpg_csv,
+    project_lpg_csv_to_sink, project_lpg_cypher, project_lpg_cypher_to_sink, project_lpg_graphml,
     project_lpg_graphml_to_sink, project_lpg_with_progress, project_neo4j_csv,
     project_neo4j_csv_to_sink, read_lpg_csv, read_lpg_cypher, read_lpg_graphml, read_neo4j_csv,
     write_lpg_csv, write_lpg_csv_to_sink, write_lpg_cypher, write_lpg_cypher_to_sink,
@@ -118,18 +122,20 @@ pub use research_object::{
     CROISSANT_ARTIFACT, CROISSANT_PROFILE, CROISSANT_ROLES, CroissantConfig, CroissantRole,
     CroissantVocabulary, DATACITE_ARTIFACT, DATACITE_PROFILE, DCAT_ARTIFACT, DCAT_PROFILE,
     DCAT_ROLES, DataCiteConfig, DataCiteControlledValues, DcatConfig, DcatRole, DcatVocabulary,
-    FRICTIONLESS_ARTIFACT, FRICTIONLESS_PROFILE, FrictionlessConfig, OfflineJsonLdContext,
-    RESEARCH_ROLES, RO_CRATE_ARTIFACT, RO_CRATE_PREVIEW_ARTIFACT, RO_CRATE_PREVIEW_FILES_PREFIX,
-    RO_CRATE_PROFILE, RO_CRATE_ROLES, ResearchActivity, ResearchAgent, ResearchChecksum,
-    ResearchDataset, ResearchField, ResearchObjectConfig, ResearchObjectIdentity,
-    ResearchObjectModel, ResearchObjectPackageProjection, ResearchObjectPolicy,
-    ResearchObjectProjection, ResearchObjectReadOutcome, ResearchObjectRoles, ResearchRecordSet,
-    ResearchResource, ResearchRole, ResearchText, ResearchValue, RoCrateAssets, RoCrateConfig,
-    RoCratePackaging, RoCrateRole, RoCrateVocabulary, lift_research_object, project_croissant,
-    project_datacite, project_dcat, project_frictionless, project_research_object,
-    project_ro_crate, project_ro_crate_with_assets, read_croissant, read_datacite, read_dcat,
-    read_frictionless, read_ro_crate,
+    FRICTIONLESS_ARTIFACT, FRICTIONLESS_PROFILE, FrictionlessConfig, JsonLdProfileConfig,
+    JsonLdProfileVocabulary, OfflineJsonLdContext, RESEARCH_ROLES, RO_CRATE_ARTIFACT,
+    RO_CRATE_PREVIEW_ARTIFACT, RO_CRATE_PREVIEW_FILES_PREFIX, RO_CRATE_PROFILE, RO_CRATE_ROLES,
+    ResearchActivity, ResearchAgent, ResearchChecksum, ResearchDataset, ResearchField,
+    ResearchObjectConfig, ResearchObjectIdentity, ResearchObjectModel,
+    ResearchObjectPackageProjection, ResearchObjectPolicy, ResearchObjectProjection,
+    ResearchObjectReadOutcome, ResearchObjectRoles, ResearchRecordSet, ResearchResource,
+    ResearchRole, ResearchText, ResearchValue, RoCrateAssets, RoCrateConfig, RoCratePackaging,
+    RoCrateRole, RoCrateVocabulary, lift_research_object, project_croissant, project_datacite,
+    project_dcat, project_frictionless, project_research_object, project_ro_crate,
+    project_ro_crate_with_assets, read_croissant, read_datacite, read_dcat, read_frictionless,
+    read_ro_crate,
 };
+pub use selection::{GraphSelection, SubjectSelector};
 pub use sink::{ProjectionArtifactSink, ProjectionPackageSink};
 pub use skos::{
     SkosClassRoles, SkosConfig, SkosDocumentationRoles, SkosGraphSelection, SkosLabelRoles,

@@ -863,6 +863,8 @@ fn is_join_identity_values(pattern: &GraphPattern) -> bool {
 /// this node itself originates — from the stop signal, from the request charge, from the
 /// cell ceiling, or from a governor the source reports through [`RemoteError::Governed`].
 /// `SILENT` swallows none of those four.
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_service<D: DatasetView + Sync>(
     node: &GraphPattern,
     name: &NamedNodePattern,
@@ -1638,7 +1640,7 @@ mod tests {
         };
         let denying = InProcessServiceResolver::new()
             .with_endpoint("http://example.org/ep", endpoint())
-            .with_catalog(ServiceCatalog::new().with_service(
+            .with_catalog(ServiceCatalog::default().with_service(
                 "http://example.org/ep",
                 ServiceProfile::new(ServiceCapabilities::granting([])),
             ));
@@ -1665,7 +1667,7 @@ mod tests {
         // A catalog that grants the service: the clause answers, nothing silenced.
         let granting = InProcessServiceResolver::new()
             .with_endpoint("http://example.org/ep", endpoint())
-            .with_catalog(ServiceCatalog::new().with_service(
+            .with_catalog(ServiceCatalog::default().with_service(
                 "http://example.org/ep",
                 ServiceProfile::new(ServiceCapabilities::granting([ServiceCapability::Query])),
             ));
@@ -3033,22 +3035,20 @@ mod body_walk_tests {
 
     /// A deterministic choice sequence with a nesting budget.
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 30,
             }
         }
 
         fn choose(&mut self, n: usize) -> usize {
-            let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
-                .expect("a draw below the count fits")
+            self.state.below_usize(n)
         }
 
         fn spend(&mut self) -> bool {
@@ -3389,15 +3389,6 @@ mod body_walk_tests {
         body
     }
 
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
-    }
-
     // ── The tests ──────────────────────────────────────────────────────────────────
 
     /// The sanitized copy of every generated body is the copy the recursive reference
@@ -3452,7 +3443,7 @@ mod body_walk_tests {
     /// ground quoted triple as deep is scanned for the blank node at its bottom.
     #[test]
     fn a_hundred_thousand_level_body_is_sanitized_on_a_128_kib_stack() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let leaf = GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(Variable::new("s")),
@@ -3485,6 +3476,7 @@ mod body_walk_tests {
             }
             assert!(ground_term_has_blank_node(&with_blank));
             assert!(!ground_term_has_blank_node(&without));
-        });
+        })
+        .expect("spawn");
     }
 }

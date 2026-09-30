@@ -171,9 +171,54 @@ use crate::ir::{
 use crate::model::RdfLiteral;
 
 /// `owl:imports`.
-const OWL_IMPORTS: &str = "http://www.w3.org/2002/07/owl#imports";
+use purrdf_iri::vocab::owl::IMPORTS as OWL_IMPORTS;
 /// `owl:versionIRI`.
-const OWL_VERSIONIRI: &str = "http://www.w3.org/2002/07/owl#versionIRI";
+use purrdf_iri::vocab::owl::VERSION_IRI as OWL_VERSIONIRI;
+
+/// Why [`ImportMap::try_insert`] refused a key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportKeyError {
+    /// The key is not an absolute IRI (`reason` carries the IRI parser's complaint when it is
+    /// not an IRI at all), so no `owl:imports` object can ever equal it.
+    NotAbsolute {
+        /// The refused key.
+        iri: String,
+        /// The IRI parser's complaint, when the key is not an IRI at all.
+        reason: Option<String>,
+    },
+    /// The key already names a document.
+    Duplicate {
+        /// The repeated key.
+        iri: String,
+    },
+}
+
+impl std::fmt::Display for ImportKeyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotAbsolute { iri, .. } if iri.is_empty() => f.write_str(
+                "the import key is the empty ontology IRI, which no owl:imports object can \
+                 equal, so the document it supplies could never be resolved",
+            ),
+            Self::NotAbsolute { iri, reason: None } => write!(
+                f,
+                "the import key <{iri}> is not an absolute IRI, so no owl:imports object -- \
+                 absolute once parsed -- can ever equal it, and the document would never be used"
+            ),
+            Self::NotAbsolute {
+                iri,
+                reason: Some(reason),
+            } => write!(f, "the import key <{iri}> is not an IRI: {reason}"),
+            Self::Duplicate { iri } => write!(
+                f,
+                "the import table names <{iri}> twice, and one IRI names one document; keeping \
+                 either would be a choice made for the caller"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ImportKeyError {}
 
 /// The documents an `owl:imports` resolves to, and the IRIs the importing graph was read
 /// from.
@@ -198,7 +243,7 @@ const OWL_VERSIONIRI: &str = "http://www.w3.org/2002/07/owl#versionIRI";
 /// let graph = b.freeze().expect("freeze");
 ///
 /// // An import nobody supplied is named.
-/// let closure = ImportMap::new().closure(&graph);
+/// let closure = ImportMap::default().closure(&graph);
 /// assert_eq!(closure.unresolved(), ["http://example.org/other".to_owned()]);
 /// ```
 #[derive(Debug, Clone, Default)]
@@ -212,19 +257,79 @@ pub struct ImportMap {
 }
 
 impl ImportMap {
-    /// An import map that resolves nothing and declares no loaded document.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Declare that `iri` names `document`, returning whatever it named before.
-    pub fn insert(
+    /// Declare that `iri` names `document` — the ONE way a document enters the table, so
+    /// one key policy holds at every insertion site (a shapes import table, a reasoning
+    /// service's import list, a command line's `--import IRI=path`).
+    ///
+    /// The key must be an ABSOLUTE IRI, because an `owl:imports` object is absolute once
+    /// parsed: a relative or empty key could never equal one, and would be configuration that
+    /// silently never applies. It must also be NEW: one IRI names one document, and keeping
+    /// either of two would be a choice made on the caller's behalf. A refused insertion
+    /// leaves the map unchanged.
+    ///
+    /// # Errors
+    ///
+    /// [`ImportKeyError::NotAbsolute`] for a key that is not an absolute IRI;
+    /// [`ImportKeyError::Duplicate`] when `iri` already names a document.
+    ///
+    /// ```
+    /// use purrdf_core::RdfDatasetBuilder;
+    /// use purrdf_core::imports::{ImportKeyError, ImportMap};
+    ///
+    /// let document = RdfDatasetBuilder::new().freeze().expect("freeze");
+    /// let mut map = ImportMap::default();
+    /// map.try_insert("http://example.org/a", document.clone()).expect("a new absolute key");
+    /// map.try_insert("http://example.org/b", document.clone()).expect("a distinct key");
+    /// assert!(matches!(
+    ///     map.try_insert("http://example.org/a", document.clone()),
+    ///     Err(ImportKeyError::Duplicate { .. })
+    /// ));
+    /// assert!(matches!(
+    ///     map.try_insert("", document),
+    ///     Err(ImportKeyError::NotAbsolute { .. })
+    /// ));
+    /// assert_eq!(map.len(), 2);
+    /// ```
+    pub fn try_insert(
         &mut self,
         iri: impl Into<String>,
         document: Arc<RdfDataset>,
-    ) -> Option<Arc<RdfDataset>> {
-        self.documents.insert(iri.into(), document)
+    ) -> Result<(), ImportKeyError> {
+        let iri = iri.into();
+        self.check_key(&iri)?;
+        self.documents.insert(iri, document);
+        Ok(())
+    }
+
+    /// Whether `iri` could be inserted with [`try_insert`](Self::try_insert): the same
+    /// key policy, checked without a document, so a caller can refuse a bad key BEFORE it
+    /// spends work reading the document it would name.
+    ///
+    /// # Errors
+    ///
+    /// As [`try_insert`](Self::try_insert).
+    pub fn check_key(&self, iri: &str) -> Result<(), ImportKeyError> {
+        match purrdf_iri::is_absolute(iri) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(ImportKeyError::NotAbsolute {
+                    iri: iri.to_owned(),
+                    reason: None,
+                });
+            }
+            Err(error) => {
+                return Err(ImportKeyError::NotAbsolute {
+                    iri: iri.to_owned(),
+                    reason: Some(error.to_string()),
+                });
+            }
+        }
+        if self.documents.contains_key(iri) {
+            return Err(ImportKeyError::Duplicate {
+                iri: iri.to_owned(),
+            });
+        }
+        Ok(())
     }
 
     /// The document `iri` names, if this map has one.
@@ -308,13 +413,13 @@ impl ImportMap {
     /// b.push_quad(node, imports, lib, None);
     /// let graph = b.freeze().expect("freeze");
     ///
-    /// let listed = ImportMap::new().unanchored_imports(&graph);
+    /// let listed = ImportMap::default().unanchored_imports(&graph);
     /// assert_eq!(listed.len(), 1);
     /// assert_eq!(listed[0].document, None);
     /// assert_eq!(listed[0].subject, TermValue::iri("http://example.org/node"));
     ///
     /// // Read under the node's IRI, the same triple is an import, and nothing is listed.
-    /// let mut map = ImportMap::new();
+    /// let mut map = ImportMap::default();
     /// map.declare_loaded("http://example.org/node");
     /// assert!(map.unanchored_imports(&graph).is_empty());
     /// ```
@@ -430,14 +535,14 @@ impl ImportMap {
     /// let graph = b.freeze().expect("freeze");
     ///
     /// // Read under `ex:o`, the graph imports `ex:other`, and nothing supplies it.
-    /// let mut map = ImportMap::new();
+    /// let mut map = ImportMap::default();
     /// map.declare_loaded("http://example.org/o");
     /// assert_eq!(
     ///     map.unresolved_imports(&graph),
     ///     vec!["http://example.org/other".to_owned()]
     /// );
     /// // Read under no IRI, `ex:o` is no anchor and the triple imports nothing.
-    /// assert!(ImportMap::new().unresolved_imports(&graph).is_empty());
+    /// assert!(ImportMap::default().unresolved_imports(&graph).is_empty());
     /// ```
     #[must_use]
     pub fn unresolved_imports(&self, graph: &RdfDataset) -> Vec<String> {
@@ -469,7 +574,7 @@ impl ImportMap {
 }
 
 /// `owl:incompatibleWith`.
-const OWL_INCOMPATIBLE_WITH: &str = "http://www.w3.org/2002/07/owl#incompatibleWith";
+use purrdf_iri::vocab::owl::INCOMPATIBLE_WITH as OWL_INCOMPATIBLE_WITH;
 
 /// Two graphs of one import closure that the closure should not hold together.
 ///
@@ -577,8 +682,9 @@ impl ClosureGraphIdentity {
         let objects = |subject: TermId, predicate: Option<TermId>| -> Vec<String> {
             predicate.map_or_else(Vec::new, |predicate| {
                 dataset
-                    .quads_for_pattern(Some(subject), Some(predicate), None, GraphMatch::Any)
-                    .filter_map(|quad| match dataset.term_value(quad.o) {
+                    .objects(subject, predicate, GraphMatch::Any)
+                    .into_iter()
+                    .filter_map(|object| match dataset.term_value(object) {
                         TermValue::Iri(iri) => Some(iri),
                         _ => None,
                     })
@@ -803,7 +909,7 @@ impl ImportClosure {
 /// map that supplies no document.
 #[must_use]
 pub fn unresolved_imports(graph: &RdfDataset, loaded: &[&str]) -> Vec<String> {
-    let mut map = ImportMap::new();
+    let mut map = ImportMap::default();
     for iri in loaded {
         map.declare_loaded(*iri);
     }
@@ -1225,11 +1331,14 @@ mod tests {
         );
 
         // A document the map supplies.
-        let mut map = ImportMap::new();
-        map.insert(LIB, triples(&[]));
+        let mut map = ImportMap::default();
+        map.try_insert(LIB, triples(&[]))
+            .expect("a fresh absolute key");
         assert_eq!(map.closure(&importer(&[])).unresolved(), NONE);
-        let mut other = ImportMap::new();
-        other.insert(OTHER, triples(&[]));
+        let mut other = ImportMap::default();
+        other
+            .try_insert(OTHER, triples(&[]))
+            .expect("a fresh absolute key");
         assert_eq!(other.closure(&importer(&[])).unresolved(), [LIB.to_owned()]);
     }
 
@@ -1240,7 +1349,7 @@ mod tests {
     #[test]
     fn an_import_on_a_loaded_iri_counts_and_one_on_another_node_is_data() {
         let loaded = triples(&[(SHAPES, OWL_IMPORTS, LIB)]);
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.declare_loaded(SHAPES);
         assert_eq!(imported_iris(loaded.as_ref(), &[SHAPES]), [LIB]);
         assert_eq!(map.closure(&loaded).unresolved(), [LIB.to_owned()]);
@@ -1257,7 +1366,7 @@ mod tests {
 
         // A graph read under no IRI at all: the loaded anchor is absent, so the very triple
         // that was an import above is data here.
-        assert_eq!(ImportMap::new().closure(&loaded).unresolved(), NONE);
+        assert_eq!(ImportMap::default().closure(&loaded).unresolved(), NONE);
     }
 
     /// An `owl:Ontology` header's import counts: unsupplied it is refused, supplied it is
@@ -1273,16 +1382,17 @@ mod tests {
         ]);
         assert_eq!(imported_iris(graph.as_ref(), &[]), [LIB]);
         assert_eq!(
-            ImportMap::new().closure(&graph).unresolved(),
+            ImportMap::default().closure(&graph).unresolved(),
             [LIB.to_owned()],
             "only the header's import is named; the other triple is data"
         );
 
-        let mut map = ImportMap::new();
-        map.insert(
+        let mut map = ImportMap::default();
+        map.try_insert(
             LIB,
             triples(&[(LIB, "http://example.org/said", "http://example.org/v")]),
-        );
+        )
+        .expect("a fresh absolute key");
         let closure = map.closure(&graph);
         assert_eq!(closure.unresolved(), NONE);
         let merged = closure
@@ -1319,11 +1429,15 @@ mod tests {
             b.freeze().expect("freeze")
         };
         assert_eq!(
-            ImportMap::new().closure(&with_header(true)).unresolved(),
+            ImportMap::default()
+                .closure(&with_header(true))
+                .unresolved(),
             [LIB.to_owned()]
         );
         assert_eq!(
-            ImportMap::new().closure(&with_header(false)).unresolved(),
+            ImportMap::default()
+                .closure(&with_header(false))
+                .unresolved(),
             NONE
         );
     }
@@ -1340,7 +1454,7 @@ mod tests {
                 (SERIES, OWL_IMPORTS, LIB),
             ])
         };
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.declare_loaded(SHAPES);
         assert_eq!(map.closure(&graph(SHAPES)).unresolved(), [LIB.to_owned()]);
         assert_eq!(
@@ -1358,8 +1472,8 @@ mod tests {
         const DEEP: &str = "http://example.org/deep";
         let root = triples(&[(SHAPES, RDF_TYPE, OWL_ONTOLOGY), (SHAPES, OWL_IMPORTS, LIB)]);
         let walk = |lib: Arc<RdfDataset>| {
-            let mut map = ImportMap::new();
-            map.insert(LIB, lib);
+            let mut map = ImportMap::default();
+            map.try_insert(LIB, lib).expect("a fresh absolute key");
             map.closure(&root).unresolved().to_vec()
         };
         // By the IRI it was imported by.
@@ -1394,8 +1508,9 @@ mod tests {
     /// it.
     #[test]
     fn an_entry_nothing_imports_is_unreached() {
-        let mut map = ImportMap::new();
-        map.insert(LIB, triples(&[]));
+        let mut map = ImportMap::default();
+        map.try_insert(LIB, triples(&[]))
+            .expect("a fresh absolute key");
 
         let imports_nothing = triples(&[(SHAPES, RDF_TYPE, OWL_ONTOLOGY)]);
         assert_eq!(map.closure(&imports_nothing).unreached(), [LIB.to_owned()]);
@@ -1412,15 +1527,17 @@ mod tests {
     #[test]
     fn the_merge_is_transitive_cycle_safe_and_standardized_apart() {
         let graph = document("b", "http://example.org/o", &["http://example.org/a"]);
-        let mut map = ImportMap::new();
-        map.insert(
+        let mut map = ImportMap::default();
+        map.try_insert(
             "http://example.org/a",
             document("b", "http://example.org/a-said", &["http://example.org/c"]),
-        );
-        map.insert(
+        )
+        .expect("a fresh absolute key");
+        map.try_insert(
             "http://example.org/c",
             document("b", "http://example.org/c-said", &["http://example.org/a"]),
-        );
+        )
+        .expect("a fresh absolute key");
         let closure = map.closure(&graph);
         assert_eq!(closure.unresolved(), NONE);
         let merged = closure
@@ -1480,15 +1597,16 @@ mod tests {
             let graph = triples(&rows);
             assert_eq!(imported_iris(graph.as_ref(), &[]), [LIB], "{class}");
             assert_eq!(
-                ImportMap::new().closure(&graph).unresolved(),
+                ImportMap::default().closure(&graph).unresolved(),
                 [LIB.to_owned()],
                 "{class}: refused unsupplied"
             );
-            let mut map = ImportMap::new();
-            map.insert(
+            let mut map = ImportMap::default();
+            map.try_insert(
                 LIB,
                 triples(&[(LIB, "http://example.org/said", "http://example.org/v")]),
-            );
+            )
+            .expect("a fresh absolute key");
             let closure = map.closure(&graph);
             assert_eq!(closure.unresolved(), NONE, "{class}");
             let merged = closure
@@ -1504,12 +1622,15 @@ mod tests {
                 ),
                 "{class}: merged supplied"
             );
-            assert_eq!(ImportMap::new().unanchored_imports(&graph), NO_UNANCHORED);
+            assert_eq!(
+                ImportMap::default().unanchored_imports(&graph),
+                NO_UNANCHORED
+            );
         }
         let control = triples(&[(NODE, RDF_TYPE, THING), (NODE, OWL_IMPORTS, LIB)]);
         assert_eq!(imported_iris(control.as_ref(), &[]), NONE);
-        assert_eq!(ImportMap::new().closure(&control).unresolved(), NONE);
-        let listed = ImportMap::new().unanchored_imports(&control);
+        assert_eq!(ImportMap::default().closure(&control).unresolved(), NONE);
+        let listed = ImportMap::default().unanchored_imports(&control);
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].subject, TermValue::iri(NODE));
         assert_eq!(listed[0].object, TermValue::iri(LIB));
@@ -1528,7 +1649,7 @@ mod tests {
         ]);
         assert_eq!(imported_iris(graph.as_ref(), &[]), [LIB, DEEP]);
         assert_eq!(
-            ImportMap::new().closure(&graph).unresolved(),
+            ImportMap::default().closure(&graph).unresolved(),
             [LIB.to_owned(), DEEP.to_owned()]
         );
     }
@@ -1542,8 +1663,8 @@ mod tests {
         const NODE: &str = "http://example.org/data";
         let data_only = triples(&[(NODE, RDF_TYPE, SH_DATA_GRAPH), (NODE, OWL_IMPORTS, LIB)]);
         assert_eq!(imported_iris(data_only.as_ref(), &[]), NONE);
-        assert_eq!(ImportMap::new().closure(&data_only).unresolved(), NONE);
-        let listed = ImportMap::new().unanchored_imports(&data_only);
+        assert_eq!(ImportMap::default().closure(&data_only).unresolved(), NONE);
+        let listed = ImportMap::default().unanchored_imports(&data_only);
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].subject, TermValue::iri(NODE));
 
@@ -1553,17 +1674,17 @@ mod tests {
             (NODE, OWL_IMPORTS, LIB),
         ]);
         assert_eq!(
-            ImportMap::new().closure(&with_header).unresolved(),
+            ImportMap::default().closure(&with_header).unresolved(),
             [LIB.to_owned()]
         );
         assert_eq!(
-            ImportMap::new().unanchored_imports(&with_header),
+            ImportMap::default().unanchored_imports(&with_header),
             NO_UNANCHORED
         );
 
         // A document LOADED under the node's IRI is in the loading role whatever it types
         // itself: the loaded IRI stays an anchor.
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.declare_loaded(NODE);
         assert_eq!(map.closure(&data_only).unresolved(), [LIB.to_owned()]);
     }
@@ -1580,13 +1701,13 @@ mod tests {
             ])
         };
         assert_eq!(
-            ImportMap::new()
+            ImportMap::default()
                 .closure(&importer(SH_SHAPES_GRAPH))
                 .unresolved(),
             NONE
         );
         assert_eq!(
-            ImportMap::new()
+            ImportMap::default()
                 .closure(&importer(SH_DATA_GRAPH))
                 .unresolved(),
             [LIB.to_owned()]
@@ -1602,14 +1723,15 @@ mod tests {
             (SHAPES, OWL_IMPORTS, LIB),
             (OTHER_NODE, OWL_IMPORTS, "http://example.org/root-data"),
         ]);
-        let mut map = ImportMap::new();
-        map.insert(
+        let mut map = ImportMap::default();
+        map.try_insert(
             LIB,
             triples(&[
                 (LIB, OWL_IMPORTS, SHAPES),
                 (OTHER_NODE, OWL_IMPORTS, "http://example.org/lib-data"),
             ]),
-        );
+        )
+        .expect("a fresh absolute key");
         let listed: Vec<(Option<String>, TermValue)> = map
             .unanchored_imports(&root)
             .into_iter()
@@ -1635,7 +1757,7 @@ mod tests {
             (SHAPES, OWL_IMPORTS, LIB),
             (LIB, RDF_TYPE, OWL_ONTOLOGY),
         ]);
-        let closure = ImportMap::new().closure(&graph);
+        let closure = ImportMap::default().closure(&graph);
         assert_eq!(closure.unresolved(), NONE);
         assert!(closure.merge(&graph).expect("freeze").is_none());
         assert_eq!(imported_iris(graph.as_ref(), &[]), vec![LIB.to_owned()]);
@@ -1651,7 +1773,7 @@ mod tests {
         const LIB_1: &str = "http://example.org/lib/1";
         const LIB_2: &str = "http://example.org/lib/2";
         const OLD: &str = "http://example.org/old";
-        const OWL_INCOMPATIBLE_WITH: &str = "http://www.w3.org/2002/07/owl#incompatibleWith";
+        use purrdf_iri::vocab::owl::INCOMPATIBLE_WITH as OWL_INCOMPATIBLE_WITH;
         let importer = |second: &str| {
             triples(&[
                 (SHAPES, RDF_TYPE, OWL_ONTOLOGY),
@@ -1661,9 +1783,11 @@ mod tests {
         };
         let first = triples(&[(LIB, OWL_VERSIONIRI, LIB_1)]);
         let conflicts = |second: &str, rows: &[(&str, &str, &str)]| {
-            let mut map = ImportMap::new();
-            map.insert(LIB_1, Arc::clone(&first));
-            map.insert(second, triples(rows));
+            let mut map = ImportMap::default();
+            map.try_insert(LIB_1, Arc::clone(&first))
+                .expect("a fresh absolute key");
+            map.try_insert(second, triples(rows))
+                .expect("a fresh absolute key");
             let closure = map.closure(&importer(second));
             assert_eq!(closure.unresolved(), NONE, "the closure is complete");
             assert_eq!(closure.documents().len(), 2, "both documents are reached");
@@ -1748,8 +1872,9 @@ mod tests {
             (SHAPES, OWL_VERSIONIRI, V2),
             (SHAPES, OWL_IMPORTS, V1),
         ]);
-        let mut map = ImportMap::new();
-        map.insert(V1, triples(&[(SHAPES, OWL_VERSIONIRI, V1)]));
+        let mut map = ImportMap::default();
+        map.try_insert(V1, triples(&[(SHAPES, OWL_VERSIONIRI, V1)]))
+            .expect("a fresh absolute key");
         let closure = map.closure(&graph);
         assert_eq!(
             closure.conflicts(),
@@ -1770,8 +1895,9 @@ mod tests {
              <http://example.org/shapes/2> and <http://example.org/shapes/1>)"
         );
         // Neighbour: the imported document is the same version.
-        let mut same = ImportMap::new();
-        same.insert(V1, triples(&[(SHAPES, OWL_VERSIONIRI, V2)]));
+        let mut same = ImportMap::default();
+        same.try_insert(V1, triples(&[(SHAPES, OWL_VERSIONIRI, V2)]))
+            .expect("a fresh absolute key");
         assert_eq!(same.closure(&graph).conflicts(), []);
     }
 }
@@ -1841,10 +1967,11 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = crate::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::Any,
+                crate::term_fixture::TermShape::Any,
             );
             assert_eq!(scope_of(&value), reference_scope(&value), "seed {seed}");
             let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
@@ -1877,35 +2004,31 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_rescoped_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut value = TermValue::Blank {
-                    label: "b".to_owned(),
-                    scope: BlankScope(3),
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut value = TermValue::Blank {
+                label: "b".to_owned(),
+                scope: BlankScope(3),
+            };
+            for _ in 0..LEVELS {
+                value = TermValue::Triple {
+                    s: TermBox::new(TermValue::iri("http://example.org/s")),
+                    p: TermBox::new(TermValue::iri("http://example.org/p")),
+                    o: TermBox::new(value),
                 };
-                for _ in 0..LEVELS {
-                    value = TermValue::Triple {
-                        s: TermBox::new(TermValue::iri("http://example.org/s")),
-                        p: TermBox::new(TermValue::iri("http://example.org/p")),
-                        o: TermBox::new(value),
-                    };
-                }
-                assert_eq!(scope_of(&value), 3);
-                let mut next = 10;
-                let mut map = ScopeMap::Fresh {
-                    assigned: BTreeMap::new(),
-                    next: &mut next,
-                };
-                let mut builder = RdfDatasetBuilder::new();
-                assert_eq!(
-                    intern_scoped(&mut builder, &value, &mut map).index(),
-                    LEVELS + 2
-                );
-                assert_eq!(assigned(&map).map(|assigned| assigned.len()), Some(1));
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no walk overflowed the thread's stack");
+            }
+            assert_eq!(scope_of(&value), 3);
+            let mut next = 10;
+            let mut map = ScopeMap::Fresh {
+                assigned: BTreeMap::new(),
+                next: &mut next,
+            };
+            let mut builder = RdfDatasetBuilder::new();
+            assert_eq!(
+                intern_scoped(&mut builder, &value, &mut map).index(),
+                LEVELS + 2
+            );
+            assert_eq!(assigned(&map).map(|assigned| assigned.len()), Some(1));
+        })
+        .expect("the thread starts");
     }
 }

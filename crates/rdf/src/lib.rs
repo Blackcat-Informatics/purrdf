@@ -10,7 +10,7 @@
 //!
 //! # Crate boundary
 //!
-//! The oxigraph-free, PyO3-free kernel — the immutable IR, the owned value model,
+//! The PyO3-free kernel — the immutable IR, the owned value model,
 //! diagnostics, dataset capability flags, the loss ledger, provenance, the FnO and
 //! SSSOM codecs, the content store, and the GTS reader path — lives in the
 //! ring-fenced sibling crate [`purrdf_core`]. `purrdf` **re-exports** every one
@@ -19,20 +19,20 @@
 //! *here* is the native text/statement/normalize surface ([`native_codecs`],
 //! [`native_quads`], [`statements`], [`turtle_normalize`]), the [`gts_compose`]
 //! author, and the `flattened_dataset_from_bytes` GTS helper in [`gts`]. The
-//! Python bindings live in `bindings/python`, and the last oxigraph adapters
-//! have been removed, so the entire crate is oxigraph-free.
+//! Python bindings live in `bindings/python`.
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
 #![doc(
     html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
+#![forbid(unsafe_code)]
 
 // ---------------------------------------------------------------------------
 // Re-exported kernel modules (live in `purrdf-core`). The re-export keeps the
 // public `purrdf::ir::…` surface AND this crate's internal `crate::ir::…`
-// references resolving against the ring-fenced core, so the oxigraph/py adapters
-// below need no path edits.
+// references resolving against the ring-fenced core, so the modules below need
+// no path edits.
 // ---------------------------------------------------------------------------
 pub mod gts_write;
 pub use purrdf_core::{
@@ -64,26 +64,23 @@ pub use purrdf_core::embedding;
 pub use purrdf_core::embedding::*;
 pub mod gts_view;
 // The native RDF text codecs: the codec-only `GtsCodecBackend`
-// over the `purrdf-gts` Turtle/TriG/NT/NQ/RDF-XML codecs, oxigraph-free.
+// over the `purrdf-gts` Turtle/TriG/NT/NQ/RDF-XML codecs.
 pub mod native_codecs;
 /// Deterministic graph/tabular/research-object projection foundations and codecs.
 pub mod projections;
-// Oxigraph-free `RdfQuad` ⇄ `RdfDataset` conversions: the native twins of
-// the oxigraph-quad helpers, available to every Rust consumer without pulling the
-// oxigraph Store adapter.
+// Native `RdfQuad` ⇄ `RdfDataset` conversions, available to every Rust consumer
+// without a store adapter.
 pub mod native_quads;
 // The PyO3-free GTS snapshot compose core: SnapshotBuilder + emit_gts +
 // BlobRow, lifted out of the Python binding surface so purrdf-pipeline can
-// author a full multi-named-graph snapshot without pulling pyo3. Oxigraph-free
-//.
+// author a full multi-named-graph snapshot without pulling pyo3.
 pub mod dataset_io;
 pub mod gts_compose;
-// The native OWL ↔ RDF 1.2 statement codec is fully oxigraph-free (it folds over the
-// native flat-quad stream).
+// The native OWL ↔ RDF 1.2 statement codec folds over the native flat-quad stream.
 pub mod statements;
 // Shared corpus-classification helpers: the pure corpus
 // enumeration / classification helpers the native golden-capture binary
-// (src/bin/capture_sparql_goldens.rs) uses. Oxigraph-free.
+// (src/bin/capture_sparql_goldens.rs) uses.
 pub mod capture_support;
 // The ONE definition of the frozen in-band-dictionary corpus vectors' fixed
 // sources and authoring recipes, shared by the maintainer freezing binary
@@ -96,17 +93,16 @@ pub mod gts_dict_vectors;
 #[doc(hidden)]
 pub mod gts_fixtures;
 // Canonical, review-friendly Turtle serializer over the IR: the
-// native replacement for rdflib `longturtle` in `purrdf normalize`. Oxigraph-free.
+// native replacement for rdflib `longturtle` in `purrdf normalize`.
 pub mod turtle_normalize;
-/// Statement-centric RDF 1.2 visualization projection and SVG export support.
 pub mod viz;
 // How deep an input document may nest, and the two places that is enforced. Internal: a
 // caller cannot raise or lower it, because every consumer gets the one portability and
 // denial-of-service envelope.
 mod nesting;
 // Numeric conversions for the RDF codec boundaries.
+mod direction_json;
 mod json_number;
-pub mod json_value;
 
 // Mirror the kernel's root-level re-exports so `purrdf::RdfTerm`,
 // `purrdf::RdfDiagnostic`, … keep resolving exactly as before. The two
@@ -154,7 +150,7 @@ pub use native_codecs::{
 };
 pub use native_quads::{
     canonical_flat_nquads, canonical_flat_nquads_with, dataset_from_quad_sources,
-    dataset_from_quads, flat_dataset_from_quad_sources, flat_dataset_from_quads,
+    dataset_from_quads, flat_dataset_from_quad_sources, flat_dataset_from_quads, flat_rdf_quads,
     flat_rdf_quads_from_dataset,
 };
 pub use projections::{
@@ -172,11 +168,12 @@ pub use projections::{
     CsvwWritePlan, DATACITE_ARTIFACT, DATACITE_PROFILE, DCAT_ARTIFACT, DCAT_PROFILE, DCAT_ROLES,
     DataCiteConfig, DataCiteControlledValues, DcatConfig, DcatRdfConfig, DcatRdfMappingConfig,
     DcatRdfSource, DcatRole, DcatVocabulary, FRICTIONLESS_ARTIFACT, FRICTIONLESS_PROFILE,
-    FrictionlessConfig, LiftProfile, LpgAnnotation, LpgConfig, LpgEdge, LpgExecutionLimits,
-    LpgGraph, LpgGraphContext, LpgIriSelection, LpgLabel, LpgLiftOutcome, LpgNamedGraphSelection,
-    LpgNode, LpgPackageProjection, LpgProgress, LpgProgressObserver, LpgProgressPhase,
-    LpgProjection, LpgProjectionReport, LpgProperty, LpgPropertyAtom, LpgRdfQuad, LpgReifier,
-    LpgScope, LpgStreamProjection, OKF_TERMS_PROFILE, OboDomainRangeAxiom, OboEdge,
+    FrictionlessConfig, GraphSelection, JsonLdProfileConfig, JsonLdProfileVocabulary, LiftProfile,
+    LpgAnnotation, LpgConfig, LpgEdge, LpgExecutionLimits, LpgGraph, LpgGraphContext,
+    LpgIriSelection, LpgLabel, LpgLiftOutcome, LpgNamedGraphSelection, LpgNode,
+    LpgPackageProjection, LpgProgress, LpgProgressObserver, LpgProgressPhase, LpgProjection,
+    LpgProjectionReport, LpgProperty, LpgPropertyAtom, LpgRdfQuad, LpgReifier, LpgScope,
+    LpgSelection, LpgStreamProjection, OKF_TERMS_PROFILE, OboDomainRangeAxiom, OboEdge,
     OboEquivalentNodesSet, OboExistentialRestriction, OboGraph, OboGraphDocument, OboGraphsConfig,
     OboGraphsProjection, OboGraphsVocabulary, OboLogicalDefinitionAxiom, OboMeta, OboMetadataRoles,
     OboNode, OboNodeType, OboOwlRoles, OboPropertyChainAxiom, OboPropertyType, OboPropertyValue,
@@ -196,22 +193,22 @@ pub use projections::{
     ResearchRole, ResearchText, ResearchValue, RoCrateAssets, RoCrateConfig, RoCratePackaging,
     RoCrateRole, RoCrateVocabulary, SkosClassRoles, SkosConfig, SkosDocumentationRoles,
     SkosGraphSelection, SkosLabelRoles, SkosProjection, SkosRelationRoles, SkosSourceRoles,
-    SkosTargetRoles, VOID_ROLES, VoidConfig, VoidDatasetPrefix, VoidExecutionLimits,
-    VoidExternalLinkMapping, VoidGraphSelector, VoidRole, VoidSourceRoles, VoidStaticStatement,
-    VoidStaticValue, VoidVocabulary, escape_cypher_identifier, escape_cypher_string,
-    escape_xml_attribute, escape_xml_text, lift_archive, lift_lpg, lift_research_object,
-    project_archive, project_archive_with_assets, project_construct_view, project_croissant,
-    project_csvw, project_csvw_exact, project_csvw_terms, project_datacite, project_dcat,
-    project_dcat_rdf, project_frictionless, project_lpg, project_lpg_artifacts_to_sink,
-    project_lpg_csv, project_lpg_csv_to_sink, project_lpg_cypher, project_lpg_cypher_to_sink,
-    project_lpg_graphml, project_lpg_graphml_to_sink, project_lpg_with_progress, project_neo4j_csv,
-    project_neo4j_csv_to_sink, project_obo_graphs, project_okf_terms, project_research_object,
-    project_ro_crate, project_ro_crate_with_assets, project_skos, project_void, read_croissant,
-    read_csvw, read_csvw_exact, read_datacite, read_dcat, read_frictionless, read_lpg_csv,
-    read_lpg_cypher, read_lpg_graphml, read_neo4j_csv, read_ro_crate, serialize_rdf_description,
-    stable_identifier, validate_absolute_iri, write_csvw, write_lpg_csv, write_lpg_csv_to_sink,
-    write_lpg_cypher, write_lpg_cypher_to_sink, write_lpg_graphml, write_lpg_graphml_to_sink,
-    write_neo4j_csv, write_neo4j_csv_to_sink,
+    SkosTargetRoles, SubjectSelector, VOID_ROLES, VoidConfig, VoidDatasetPrefix,
+    VoidExecutionLimits, VoidExternalLinkMapping, VoidGraphSelector, VoidRole, VoidSourceRoles,
+    VoidStaticStatement, VoidStaticValue, VoidVocabulary, escape_cypher_identifier,
+    escape_cypher_string, escape_xml_attribute, escape_xml_text, lift_archive, lift_lpg,
+    lift_research_object, project_archive, project_archive_with_assets, project_construct_view,
+    project_croissant, project_csvw, project_csvw_exact, project_csvw_terms, project_datacite,
+    project_dcat, project_dcat_rdf, project_frictionless, project_lpg,
+    project_lpg_artifacts_to_sink, project_lpg_csv, project_lpg_csv_to_sink, project_lpg_cypher,
+    project_lpg_cypher_to_sink, project_lpg_graphml, project_lpg_graphml_to_sink,
+    project_lpg_with_progress, project_neo4j_csv, project_neo4j_csv_to_sink, project_obo_graphs,
+    project_okf_terms, project_research_object, project_ro_crate, project_ro_crate_with_assets,
+    project_skos, project_void, read_croissant, read_csvw, read_csvw_exact, read_datacite,
+    read_dcat, read_frictionless, read_lpg_csv, read_lpg_cypher, read_lpg_graphml, read_neo4j_csv,
+    read_ro_crate, serialize_rdf_description, stable_identifier, validate_absolute_iri, write_csvw,
+    write_lpg_csv, write_lpg_csv_to_sink, write_lpg_cypher, write_lpg_cypher_to_sink,
+    write_lpg_graphml, write_lpg_graphml_to_sink, write_neo4j_csv, write_neo4j_csv_to_sink,
 };
 pub use purrdf_core::{
     ArtifactId, ArtifactIndex, ArtifactInterner, ArtifactRecord, AssertionOccurrence, Attribution,
@@ -267,7 +264,7 @@ pub use purrdf_core::{
 
 // Shared USTAR (tar) codec: byte-deterministic writer + reader used by both the
 // snapshot stage (writer) and the validate path (reader). Unconditional — no
-// oxigraph or PyO3 dependency.
+// PyO3 dependency.
 pub mod ustar;
 
 /// The common purrdf surface, for `use purrdf::prelude::*;`.
@@ -279,7 +276,3 @@ pub mod ustar;
 pub mod prelude {
     pub use purrdf_core::prelude::*;
 }
-
-#[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;

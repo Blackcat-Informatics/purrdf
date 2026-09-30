@@ -3,17 +3,17 @@
 
 //! Report-only latency measurements; allocation probes run in a separate process.
 
-// Criterion emits a public entry point in a non-library benchmark target.
+// `bench_group!` emits a public entry point in a non-library benchmark target.
 #![allow(missing_docs)]
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use purrdf_json::{SourceDocument, analyze, decode_document, encode, project};
+use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main};
 use std::hint::black_box;
 
 #[path = "support/fixture.rs"]
 mod fixture;
 
-fn benchmarks(criterion: &mut Criterion) {
+fn benchmarks(criterion: &mut Bench) {
     let profile = fixture::profile();
     let mut group = criterion.benchmark_group("ordered_json");
     for rows in fixture::SIZES {
@@ -41,5 +41,5 @@ fn benchmarks(criterion: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, benchmarks);
-criterion_main!(benches);
+bench_group!(benches, benchmarks);
+bench_main!(benches);

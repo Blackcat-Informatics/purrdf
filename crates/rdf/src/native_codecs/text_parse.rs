@@ -33,10 +33,12 @@
 //! sparql-algebra lexer, which decodes them in `IRIREF` position), so `test060`
 //! now parses.
 
-use std::collections::{BTreeMap, HashMap};
+use super::syntax::check_language_tag;
+use std::collections::BTreeMap;
 
-use purrdf_iri::langtag;
-use purrdf_iri::terminals::is_ws;
+use purrdf_core::collections::{ListVocab, build_rdf_list};
+use purrdf_iri::scan::find_byte2;
+use purrdf_iri::terminals;
 use purrdf_iri::{BaseOrigin, BaseScope, Iri, IriError, Position};
 use purrdf_sparql_algebra::lexer::{Spanned, Token, tokenize, tokenize_turtle};
 use rayon::prelude::*;
@@ -47,19 +49,19 @@ use super::span::{NoSpans, SpanCollector};
 use crate::nesting::{MAX_PARSE_NESTING_DEPTH, nesting_too_deep};
 use crate::{RdfDiagnostic, RdfLocation};
 
-const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
+use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+use purrdf_iri::vocab::rdf::NS as RDF_NS;
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
+use purrdf_iri::vocab::rdf::REST as RDF_REST;
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
-const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+use purrdf_xsd::datatype::XSD_BOOLEAN;
+use purrdf_xsd::datatype::XSD_DECIMAL;
+use purrdf_xsd::datatype::XSD_DOUBLE;
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 fn err(detail: impl Into<String>) -> RdfDiagnostic {
     RdfDiagnostic::error("native-codec-parse", detail.into())
@@ -112,35 +114,12 @@ const BYTE_ORDER_MARK: char = '\u{feff}';
 /// `0x80`, so a raw-byte test can neither miss a member nor alias one — and the byte
 /// index it stops at is therefore always a scalar boundary.
 fn trim_ws_start(raw: &str) -> &str {
-    let bytes = raw.as_bytes();
-    let start = bytes
-        .iter()
-        .position(|&byte| !is_ws(byte))
-        .unwrap_or(bytes.len());
-    &raw[start..]
-}
-
-/// `raw` with its leading AND trailing runs of `WS` removed — the line-grammar-exact
-/// replacement for [`str::trim`].
-///
-/// > `WS ::= #x20 | #x9 | #xD | #xA`
-///
-/// — Turtle 1.2 §6.5 / SPARQL 1.2 §19.8. See [`trim_ws_start`] for why the four-member
-/// production and the twenty-six-member Unicode property are not interchangeable and
-/// why the byte-wise scan is exact.
-fn trim_ws(raw: &str) -> &str {
-    let trimmed = trim_ws_start(raw);
-    let bytes = trimmed.as_bytes();
-    let end = bytes
-        .iter()
-        .rposition(|&byte| !is_ws(byte))
-        .map_or(0, |last| last + 1);
-    &trimmed[..end]
+    &raw[terminals::skip_ws(raw.as_bytes(), 0)..]
 }
 
 /// 1-based column (counted in Unicode scalar values) of a byte offset that lies
 /// within the TRIMMED content of `raw`. `trimmed_off` is a byte offset into
-/// [`trim_ws(raw)`](trim_ws) (i.e. token spans from tokenizing the trimmed line); it is
+/// the trimmed line [`terminals::trim_ws`] makes of it (i.e. token spans from tokenizing the trimmed line); it is
 /// rebased onto `raw` by adding the leading-`WS` width.
 ///
 /// > `WS ::= #x20 | #x9 | #xD | #xA`
@@ -159,10 +138,7 @@ fn trim_ws(raw: &str) -> &str {
 /// reported the column of the `<` after it.
 fn column_in_raw(raw: &str, trimmed_off: usize) -> u32 {
     let lead = raw.len() - trim_ws_start(raw).len();
-    let mut byte = (lead + trimmed_off).min(raw.len());
-    while byte > 0 && !raw.is_char_boundary(byte) {
-        byte -= 1;
-    }
+    let byte = raw.floor_char_boundary(lead + trimmed_off);
     u32::try_from(raw[..byte].chars().count() + 1).unwrap_or(u32::MAX)
 }
 
@@ -442,7 +418,7 @@ impl<'a> Iterator for PhysicalLines<'a> {
             return None;
         }
         let bytes = self.rest.as_bytes();
-        let Some(offset) = memchr::memchr2(b'\r', b'\n', bytes) else {
+        let Some(offset) = find_byte2(bytes, b'\r', b'\n') else {
             // A final line that ends at end-of-input: `EOL?` is optional, so this is a
             // line, and (like `str::lines`) a document that DOES end in a terminator
             // yields no extra empty line after it — `rest` is empty and the iterator ends.
@@ -469,7 +445,7 @@ fn count_line_terminators(text: &str) -> u32 {
     let bytes = text.as_bytes();
     let mut count = 0u32;
     let mut at = 0usize;
-    while let Some(offset) = memchr::memchr2(b'\r', b'\n', &bytes[at..]) {
+    while let Some(offset) = find_byte2(&bytes[at..], b'\r', b'\n') {
         let start = at + offset;
         at = start + eol_width(bytes, start);
         count = count.saturating_add(1);
@@ -499,7 +475,7 @@ fn split_line_chunks(text: &str, target_bytes: usize) -> Vec<&str> {
     while start < text.len() {
         let mut end = start.saturating_add(target).min(text.len());
         if end < text.len() {
-            end = match memchr::memchr2(b'\r', b'\n', &bytes[end..]) {
+            end = match find_byte2(&bytes[end..], b'\r', b'\n') {
                 Some(offset) => {
                     let at = end + offset;
                     at + eol_width(bytes, at)
@@ -772,7 +748,7 @@ fn parse_one_line(
     lineno: u32,
     base: &BaseScope,
 ) -> Result<Option<Statement>, RdfDiagnostic> {
-    let line = trim_ws(raw);
+    let line = terminals::trim_ws(raw);
     if line.is_empty() || line.starts_with('#') {
         return Ok(None);
     }
@@ -819,6 +795,26 @@ fn parse_one_line(
     Ok(Some(nodes))
 }
 
+/// Consume the token at `*pos`, MOVING it out of the owned buffer (a cheap
+/// `Token::Dot` placeholder is left behind) and advancing `*pos`. Every token
+/// reader here advances monotonically and looks only at `*pos` and beyond, so
+/// a consumed position is never read again.
+fn take_token<'a>(tokens: &mut [Spanned<'a>], pos: &mut usize) -> Option<Token<'a>> {
+    let token = tokens
+        .get_mut(*pos)
+        .map(|spanned| std::mem::replace(&mut spanned.token, Token::Dot));
+    if token.is_some() {
+        *pos += 1;
+    }
+    token
+}
+
+/// The token at `pos` of a lexed statement or document, if the cursor has not run
+/// past its end: the one lookahead the line cursor and the document parser share.
+fn token_at<'t, 'a>(tokens: &'t [Spanned<'a>], pos: usize) -> Option<&'t Token<'a>> {
+    tokens.get(pos).map(|spanned| &spanned.token)
+}
+
 /// A cursor over one line's lexer tokens, parsing N-Triples/N-Quads terms.
 ///
 /// The cursor OWNS its token buffer (discarded after the line is parsed), so
@@ -860,21 +856,14 @@ impl<'a> TokenCursor<'a> {
     }
 
     fn peek(&self) -> Option<&Token<'a>> {
-        self.tokens.get(self.pos).map(|s| &s.token)
+        token_at(&self.tokens, self.pos)
     }
 
     /// Consume the current token, MOVING it out of the owned buffer (a cheap
     /// `Token::Dot` placeholder is left behind; the cursor never re-reads a
     /// consumed position — `peek` looks only at `pos`, which has advanced).
     fn bump(&mut self) -> Option<Token<'a>> {
-        let t = self
-            .tokens
-            .get_mut(self.pos)
-            .map(|s| std::mem::replace(&mut s.token, Token::Dot));
-        if t.is_some() {
-            self.pos += 1;
-        }
-        t
+        take_token(&mut self.tokens, &mut self.pos)
     }
 
     /// True at the statement terminator `.` or the end of the token stream.
@@ -1093,7 +1082,7 @@ fn split_lang_direction(
     column: u32,
 ) -> Result<(String, Option<String>), RdfDiagnostic> {
     if let Some((base, dir)) = raw.rsplit_once("--") {
-        if matches!(dir, "ltr" | "rtl") && !base.is_empty() {
+        if crate::RdfTextDirection::from_str_token(dir).is_some() && !base.is_empty() {
             Ok((base.to_owned(), Some(dir.to_owned())))
         } else {
             Err(err_at("invalid literal base direction", line_no, column))
@@ -1208,18 +1197,16 @@ fn absolute_iri_by_grammar(
 /// path: `@1`, `@-`, `@9-9` and `@en-` are refused from Turtle, TriG,
 /// N-Triples and N-Quads alike.
 fn validate_language_tag(tag: &str, line_no: u32, column: u32) -> Result<(), RdfDiagnostic> {
-    match langtag::parse_with(tag, langtag::Profile::ConcreteSyntaxLangtagBounded) {
-        Ok(_) => Ok(()),
-        Err(error) => Err(RdfDiagnostic::error(
-            error.diagnostic_code(),
-            format!("invalid language tag {tag:?}: {error}"),
-        )
-        .with_location(RdfLocation {
+    check_language_tag(tag, |error| {
+        format!("invalid language tag {tag:?}: {error}")
+    })
+    .map_err(|diagnostic| {
+        diagnostic.with_location(RdfLocation {
             line: Some(line_no),
             column: Some(column),
             ..RdfLocation::default()
-        })),
-    }
+        })
+    })
 }
 
 fn node_is(node: &Node, kinds: &[fn(&Node) -> bool]) -> bool {
@@ -1306,7 +1293,7 @@ struct DocParser<'a, 'c, S: SpanCollector> {
     /// force when the `@prefix` was read (Turtle §4.4). Resolving at declaration time
     /// rather than at use time is what makes `p:x` denote one IRI for the whole
     /// document even if a later `@base` rebinds.
-    prefixes: HashMap<String, String>,
+    prefixes: crate::FastMap<String, String>,
     /// Every prefix a `@prefix` / `PREFIX` directive of THIS document declared, bound
     /// to the resolved namespace its LAST declaration gave it.
     ///
@@ -1349,7 +1336,7 @@ struct DocParser<'a, 'c, S: SpanCollector> {
 
 impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     fn new(text: &'a str, base: BaseScope, allow_named_graphs: bool, collector: &'c mut S) -> Self {
-        let mut prefixes = HashMap::new();
+        let mut prefixes = crate::FastMap::default();
         prefixes.insert("rdf".to_owned(), RDF_NS.to_owned());
         // These are compile-time constants known to be well-formed absolute IRIs, so a
         // parse failure here is a programming error in this file, not bad input.
@@ -1432,7 +1419,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             ));
         }
         // Turtle/TriG admit a bare `/` in a prefixed-name local part (e.g.
-        // `purrdf:report/shacl/sarif`), matching oxigraph/purrdf-gts leniency.
+        // `purrdf:report/shacl/sarif`), matching purrdf-gts leniency.
         // Turtle has no `/` operator, so this is unambiguous in term position;
         // the SPARQL `tokenize` keeps `/` as the property-path operator.
         self.tokens = tokenize_turtle(self.src).map_err(|e| {
@@ -1879,27 +1866,21 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             }
             items.push(self.term(graph, depth)?);
         }
-        if items.is_empty() {
-            return Ok(Node::Iri(self.rdf_nil.clone()));
-        }
+        // Every cell is minted before any statement is written, so the labels are
+        // those of the collection's cells in order whatever the items hold.
         let cells: Vec<Node> = (0..items.len()).map(|_| self.next_bnode()).collect();
-        // The three vocabulary nodes are built once per collection, not once per item,
-        // and the cells are borrowed from the local `cells` rather than cloned — `emit`
-        // takes references and copies what it keeps.
-        let rdf_first = Node::Iri(self.rdf_first.clone());
-        let rdf_rest = Node::Iri(self.rdf_rest.clone());
-        let rdf_nil = Node::Iri(self.rdf_nil.clone());
-        for (index, item) in items.into_iter().enumerate() {
-            let current = &cells[index];
-            let rest = if index + 1 == cells.len() {
-                &rdf_nil
-            } else {
-                &cells[index + 1]
-            };
-            self.emit(current, &rdf_first, &item, graph);
-            self.emit(current, &rdf_rest, rest, graph);
-        }
-        Ok(cells.into_iter().next().expect("non-empty collection"))
+        // The three vocabulary nodes are built once per collection, not once per item.
+        let vocab = ListVocab {
+            first: Node::Iri(self.rdf_first.clone()),
+            rest: Node::Iri(self.rdf_rest.clone()),
+            nil: Node::Iri(self.rdf_nil.clone()),
+        };
+        Ok(build_rdf_list(
+            items,
+            &vocab,
+            |index| cells[index].clone(),
+            |subject, predicate, object| self.emit(&subject, &predicate, &object, graph),
+        ))
     }
 
     fn literal(&mut self) -> Result<Node, RdfDiagnostic> {
@@ -2263,11 +2244,11 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     }
 
     fn peek(&self) -> Option<&Token<'a>> {
-        self.tokens.get(self.pos).map(|s| &s.token)
+        token_at(&self.tokens, self.pos)
     }
 
     fn peek2(&self) -> Option<&Token<'a>> {
-        self.tokens.get(self.pos + 1).map(|s| &s.token)
+        token_at(&self.tokens, self.pos + 1)
     }
 
     /// Consume the current token, MOVING it out of the owned buffer (a cheap
@@ -2275,14 +2256,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// position — `peek`/`peek2` look only at `pos` and beyond, which advance
     /// monotonically).
     fn bump(&mut self) -> Option<Token<'a>> {
-        let t = self
-            .tokens
-            .get_mut(self.pos)
-            .map(|s| std::mem::replace(&mut s.token, Token::Dot));
-        if t.is_some() {
-            self.pos += 1;
-        }
-        t
+        take_token(&mut self.tokens, &mut self.pos)
     }
 
     fn at(&self, token: &Token<'a>) -> bool {
@@ -2413,7 +2387,7 @@ struct Interner {
     /// Index table over the atom rows of `terms` (store-once dedup).
     atoms: hashbrown::HashTable<u32>,
     /// Structural dedup for triple terms; the key is three term ids (no strings).
-    triples: HashMap<SerTriple3, usize>,
+    triples: crate::FastMap<SerTriple3, usize>,
     terms: Vec<SerTerm>,
 }
 
@@ -2421,7 +2395,7 @@ impl Interner {
     fn new() -> Self {
         Self {
             atoms: hashbrown::HashTable::new(),
-            triples: HashMap::new(),
+            triples: crate::FastMap::default(),
             terms: Vec::new(),
         }
     }
@@ -3745,7 +3719,7 @@ mod tests {
 
     /// A bare `/` in a prefixed-name local part (e.g. `ex:report/shacl/sarif`)
     /// must parse as ONE prefixed name and expand to the prefix namespace plus the
-    /// slash-bearing local, matching oxigraph/purrdf-gts (strict Turtle would need
+    /// slash-bearing local, matching purrdf-gts (strict Turtle would need
     /// `\/`, but real-world ontologies and fixtures use the bare form).
     #[test]
     fn turtle_prefixed_name_allows_bare_slash_in_local() {

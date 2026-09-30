@@ -164,11 +164,16 @@
 
 use core::ops::ControlFlow;
 
-/// Depth bound for resolving nested reified-triple terms, mirroring
-/// `MAX_GTS_TERM_NESTING_DEPTH` in the IR engine. A cyclic or absurdly nested triple
-/// term hard-fails ([`EventError::NestingDepthExceeded`]) rather than recursing
+/// Depth bound for resolving nested reified-triple terms, the one bound the GTS
+/// reader and writer, the IR validator and the projections all enforce. A cyclic or
+/// absurdly nested triple term hard-fails ([`EventError::NestingDepthExceeded`]) rather than recursing
 /// without bound.
 pub const MAX_TERM_NESTING_DEPTH: usize = 16;
+
+/// What a sink answers to let the drive go on: the answer of every event a sink
+/// accepts without cancelling, and so the default of every optional event it
+/// ignores.
+pub const CONTINUE: Result<ControlFlow<()>, EventError> = Ok(ControlFlow::Continue(()));
 
 /// A **blank-node label namespace**, local to one ingestion drive. A [`ScopeId`]
 /// does NOT scope [`EventTermId`]s (those are drive-global); it scopes blank-node
@@ -205,14 +210,52 @@ impl Default for ScopeId {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct EventTermId(pub u32);
 
-/// RDF 1.2 base direction for directional language-tagged literals. Mirrors the IR
-/// engine's `RdfTextDirection` by value so this crate stays dependency-free.
+/// RDF 1.2 base direction for directional language-tagged literals.
+///
+/// The stack's one direction type: it lives in this protocol crate, the lowest
+/// layer that carries a direction, and every layer above names it —
+/// `purrdf_cdt::TextDirection` and `purrdf-core`'s `RdfTextDirection` are this
+/// type — so an event's direction enters the IR, and leaves it again, as is.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum TextDirection {
     /// Left-to-right.
     Ltr,
     /// Right-to-left.
     Rtl,
+}
+
+impl TextDirection {
+    /// The lowercase direction token (`"ltr"` or `"rtl"`) as it appears in
+    /// concrete syntaxes (the `--ltr` / `--rtl` suffix after a language tag).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ltr => "ltr",
+            Self::Rtl => "rtl",
+        }
+    }
+
+    /// Read the RDF 1.2 base-direction token (`ltr` or `rtl`, the exact
+    /// lowercase spelling RDF 1.2 Concepts §3.3 gives), or `None` for any
+    /// other text.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_events::TextDirection;
+    ///
+    /// assert_eq!(TextDirection::from_str_token("rtl"), Some(TextDirection::Rtl));
+    /// assert_eq!(TextDirection::from_str_token("RTL"), None);
+    /// assert_eq!(TextDirection::Ltr.as_str(), "ltr");
+    /// ```
+    #[must_use]
+    pub fn from_str_token(token: &str) -> Option<Self> {
+        match token {
+            "ltr" => Some(Self::Ltr),
+            "rtl" => Some(Self::Rtl),
+            _ => None,
+        }
+    }
 }
 
 /// A **reified statement** — a triple (s, p, o) of [`EventTermId`]s, NOT a quad.
@@ -564,7 +607,7 @@ pub trait RdfEventSink {
                 return Ok(ControlFlow::Break(()));
             }
         }
-        Ok(ControlFlow::Continue(()))
+        CONTINUE
     }
 
     /// Bind a `reifier` resource to a reified `triple` term (C0.4: many reifiers MAY
@@ -633,20 +676,20 @@ pub trait RdfEventSink {
     /// no-op; carrying it is optional.
     fn prefix(&mut self, prefix: &str, iri: &str) -> Result<ControlFlow<()>, EventError> {
         let _ = (prefix, iri);
-        Ok(ControlFlow::Continue(()))
+        CONTINUE
     }
 
     /// Droppable hint: the document base IRI. Defaults to a no-op.
     fn base(&mut self, iri: &str) -> Result<ControlFlow<()>, EventError> {
         let _ = iri;
-        Ok(ControlFlow::Continue(()))
+        CONTINUE
     }
 
     /// Droppable hint: a source-location span for the next event. Defaults to a
     /// no-op.
     fn location(&mut self, span: SourceSpan) -> Result<ControlFlow<()>, EventError> {
         let _ = span;
-        Ok(ControlFlow::Continue(()))
+        CONTINUE
     }
 
     /// Resolve every forward reference and finalize. Any [`EventTermId`] still
@@ -777,6 +820,23 @@ pub trait RdfEventSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only the exact lowercase tokens name a direction; a case variant, a
+    /// padded token and the empty string are refused.
+    #[test]
+    fn only_the_exact_lowercase_tokens_read_as_a_direction() {
+        assert_eq!(
+            TextDirection::from_str_token("ltr"),
+            Some(TextDirection::Ltr)
+        );
+        assert_eq!(
+            TextDirection::from_str_token("rtl"),
+            Some(TextDirection::Rtl)
+        );
+        for refused in ["LTR", "Rtl", " ltr", "rtl ", "", "auto", "--ltr"] {
+            assert_eq!(TextDirection::from_str_token(refused), None, "{refused:?}");
+        }
+    }
 
     /// A trivial in-memory sink used to exercise the default methods and the
     /// object-safe path within this dependency-free crate.

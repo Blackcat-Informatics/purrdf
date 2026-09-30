@@ -326,7 +326,7 @@ fn walk_query(query: &mut Query, visit: &mut dyn FnMut(u32, Cell<'_>)) -> u32 {
 /// whose empty argument list allocates nothing.
 fn walk_pattern(root: &mut GraphPattern, index: &mut u32, visit: &mut dyn FnMut(u32, Cell<'_>)) {
     let mut steps: purrdf_core::SmallVec<[Step; 16]> = purrdf_core::smallvec![Step::Enter(
-        Node::Pattern(std::mem::replace(root, pattern_placeholder()))
+        Node::Pattern(std::mem::replace(root, GraphPattern::empty_bgp()))
     )];
     let mut returned: purrdf_core::SmallVec<[Node; 16]> = purrdf_core::SmallVec::new();
     while let Some(step) = steps.pop() {
@@ -450,14 +450,6 @@ enum Slot<'a> {
     Aggregate(&'a mut AggregateExpression),
 }
 
-/// A pattern with no cells and no children, left in a slot whose node is out being
-/// walked. Allocates nothing.
-fn pattern_placeholder() -> GraphPattern {
-    GraphPattern::Bgp {
-        patterns: Vec::new(),
-    }
-}
-
 /// An expression with no children, left in a slot whose node is out being walked.
 /// Allocates nothing.
 fn expression_placeholder() -> Expression {
@@ -467,7 +459,9 @@ fn expression_placeholder() -> Expression {
 /// Take the node out of `slot`, leaving a placeholder.
 fn take(slot: Slot<'_>) -> Node {
     match slot {
-        Slot::Pattern(pattern) => Node::Pattern(std::mem::replace(pattern, pattern_placeholder())),
+        Slot::Pattern(pattern) => {
+            Node::Pattern(std::mem::replace(pattern, GraphPattern::empty_bgp()))
+        }
         Slot::Expression(expression) => {
             Node::Expression(std::mem::replace(expression, expression_placeholder()))
         }
@@ -610,7 +604,7 @@ fn for_each_child_slot(shell: &mut Shell, f: &mut dyn FnMut(Slot<'_>)) {
             GraphPattern::OrderBy { inner, expression } => {
                 f(Slot::Pattern(inner));
                 for order in expression.iter_mut() {
-                    f(Slot::Expression(order_key(order)));
+                    f(Slot::Expression(order.expression_mut()));
                 }
             }
             GraphPattern::Project { inner, .. }
@@ -679,16 +673,9 @@ fn for_each_child_slot(shell: &mut Shell, f: &mut dyn FnMut(Slot<'_>)) {
                 f(Slot::Expression(arg));
             }
             for order in order_by.iter_mut() {
-                f(Slot::Expression(order_key(order)));
+                f(Slot::Expression(order.expression_mut()));
             }
         }
-    }
-}
-
-/// The expression a sort key orders by.
-fn order_key(order: &mut OrderExpression) -> &mut Expression {
-    match order {
-        OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => expr,
     }
 }
 
@@ -1039,7 +1026,6 @@ mod iterative_walk_tests {
     };
 
     use super::{Cell, CellValue, count_star, moved, moved_node, walk_query};
-    use purrdf_testkit::rng::splitmix64_next;
 
     const EX: &str = "http://example.org/";
 
@@ -1293,12 +1279,12 @@ mod iterative_walk_tests {
 
     /// The choices one generated shape is built from: a SplitMix64 counter stream, so
     /// a seed names a shape.
-    struct Choices(u64);
+    struct Choices(purrdf_testkit::rng::SplitMix64);
 
     impl Choices {
         /// One choice in `0..bound`.
         fn pick(&mut self, bound: u64) -> u64 {
-            splitmix64_next(&mut self.0) % bound
+            self.0.below(bound)
         }
 
         /// One even choice.
@@ -1574,7 +1560,7 @@ mod iterative_walk_tests {
 
     /// One generated `SELECT` query.
     fn gen_query(seed: u64) -> Query {
-        let mut choices = Choices(seed);
+        let mut choices = Choices(purrdf_testkit::rng::SplitMix64::new(seed));
         let mut budget = 2 + choices.pick(9) as usize;
         Query::Select {
             pattern: gen_pattern(&mut choices, &mut budget),
@@ -1624,16 +1610,6 @@ mod iterative_walk_tests {
         }
     }
 
-    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
-    }
-
     // ── The checks ─────────────────────────────────────────────────────────────────
 
     /// Over two hundred generated queries, the loop numbers the same cells in the same
@@ -1681,7 +1657,7 @@ mod iterative_walk_tests {
     #[test]
     fn the_loop_moves_what_the_recursion_moves() {
         for seed in 0..200_u64 {
-            let mut choices = Choices(seed);
+            let mut choices = Choices(purrdf_testkit::rng::SplitMix64::new(seed));
             let ground = gen_ground(&mut choices, 4);
             assert_eq!(
                 moved(&ground),
@@ -1698,7 +1674,7 @@ mod iterative_walk_tests {
     /// leaves the variable under the operators written and the operators in place.
     #[test]
     fn a_hundred_thousand_nested_operators_are_numbered_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let mut expression = Expression::Variable(var("v"));
             for _ in 0..DEPTH {
                 expression = Expression::Not(Child::new(expression));
@@ -1755,6 +1731,7 @@ mod iterative_walk_tests {
                     }],
                 }
             );
-        });
+        })
+        .expect("spawn");
     }
 }

@@ -83,6 +83,54 @@ fn assemble(header: &str, body: &str, vocab: &SliceVocab) -> String {
     format!("{header}{}\n\n{body}", prefix_block(&body, vocab))
 }
 
+/// Binds `?holder` to the claim's standpoint, or the universal standpoint when it has none.
+const HOLDER: &str = "    BIND(COALESCE(?sp, purrdf:universalStandpoint) AS ?holder)\n";
+
+/// Binds `?propText` to the claimed statement as text, or the observed entity's IRI.
+const PROP_TEXT: &str = "    BIND(IF(BOUND(?s), CONCAT(STR(?s), \" \", STR(?p), \" \", STR(?o)), STR(?feature)) AS ?propText)\n";
+
+/// Drops a denied (refuted) claim.
+const REFUTED_FILTER: &str = "    FILTER(!BOUND(?mod) || ?mod != purrdf:refuted)\n";
+
+/// A `BIND` minting `?var` as the IRI of `?source` with `/suffix` appended.
+fn mint(source: &str, suffix: &str, var: &str) -> String {
+    format!("    BIND(IRI(CONCAT(STR(?{source}), \"/{suffix}\")) AS ?{var})\n")
+}
+
+/// The three `WHERE` branches every claim-reading projection matches, joined by
+/// `UNION`: an `owl:Axiom` reification (A), a `purrdf:StandpointClaim` about a reified
+/// statement (B), and one about a generic entity (C). `axiom_modality` also reads the
+/// axiom branch's `purrdf:standpointModality`, for the projections that carry the belief
+/// value.
+fn claim_branches(axiom_modality: bool) -> String {
+    let modality = if axiom_modality {
+        "\n      OPTIONAL { ?ax purrdf:standpointModality ?mod }"
+    } else {
+        ""
+    };
+    format!(
+        "    {{ ?ax a owl:Axiom ;\n\
+         \x20       owl:annotatedSource ?s ;\n\
+         \x20       owl:annotatedProperty ?p ;\n\
+         \x20       owl:annotatedTarget ?o .\n\
+         \x20     OPTIONAL {{ ?ax purrdf:accordingTo ?sp }}{modality} }}\n\
+         \x20   UNION\n\
+         \x20   {{ ?ax a purrdf:StandpointClaim ;\n\
+         \x20       purrdf:vantage ?sp ;\n\
+         \x20       purrdf:observedFeature ?stmt .\n\
+         \x20     ?stmt owl:annotatedSource ?s ;\n\
+         \x20           owl:annotatedProperty ?p ;\n\
+         \x20           owl:annotatedTarget ?o .\n\
+         \x20     OPTIONAL {{ ?ax purrdf:claimModality ?mod }} }}\n\
+         \x20   UNION\n\
+         \x20   {{ ?ax a purrdf:StandpointClaim ;\n\
+         \x20       purrdf:vantage ?sp ;\n\
+         \x20       purrdf:observedFeature ?feature .\n\
+         \x20     FILTER NOT EXISTS {{ ?feature owl:annotatedSource ?s }}\n\
+         \x20     OPTIONAL {{ ?ax purrdf:claimModality ?mod }} }}\n"
+    )
+}
+
 // ── Standpoint-OWL 2 (standpointLabel) ──────────────────────────────────────────
 
 fn emit_owl2(vocab: &SliceVocab) -> String {
@@ -90,7 +138,6 @@ fn emit_owl2(vocab: &SliceVocab) -> String {
     let label_concat = "    BIND(CONCAT(\"<standpointAxiom><\", ?op, \"><Standpoint name=\\\"\", ?spName, \"\\\"/></\", ?op, \"></standpointAxiom>\") AS ?label)\n";
     let sp_name = "    BIND(IF(!BOUND(?sp) || ?sp = purrdf:universalStandpoint, \"*\", STR(?sp)) AS ?spName)\n";
     let modality = "    BIND(IF(BOUND(?mod) && (?mod = purrdf:conceivable || ?mod = purrdf:probable), \"Diamond\", \"Box\") AS ?op)\n";
-    let refuted_filter = "    FILTER(!BOUND(?mod) || ?mod != purrdf:refuted)\n";
     let body = format!(
         "CONSTRUCT {{\n\
          \x20   <{label_iri}> a owl:AnnotationProperty .\n\
@@ -117,7 +164,7 @@ fn emit_owl2(vocab: &SliceVocab) -> String {
          \x20         owl:annotatedProperty ?p ;\n\
          \x20         owl:annotatedTarget ?o .\n\
          \x20     OPTIONAL {{ ?claim purrdf:claimModality ?mod }} }}\n\
-         {refuted_filter}{sp_name}{modality}{label_concat}\
+         {REFUTED_FILTER}{sp_name}{modality}{label_concat}\
          }}\n"
     );
     let header = format!(
@@ -136,13 +183,15 @@ fn emit_owl2(vocab: &SliceVocab) -> String {
 // ── CRMinf (CIDOC-CRM Argumentation) ────────────────────────────────────────────
 
 fn emit_crminf(vocab: &SliceVocab) -> String {
-    let holder = "    BIND(COALESCE(?sp, purrdf:universalStandpoint) AS ?holder)\n";
     let value = "    BIND(IF(!BOUND(?mod), \"true\", IF(?mod = purrdf:refuted, \"false\", IF(?mod = purrdf:conceivable, \"possible\", IF(?mod = purrdf:probable, \"probable\", \"true\")))) AS ?value)\n";
     let subject_bind = "    BIND(COALESCE(?s, ?feature) AS ?subject)\n";
-    let prop_text = "    BIND(IF(BOUND(?s), CONCAT(STR(?s), \" \", STR(?p), \" \", STR(?o)), STR(?feature)) AS ?propText)\n";
-    let mint = "    BIND(IRI(CONCAT(STR(?ax), \"/argumentation\")) AS ?arg)\n\
-                \x20   BIND(IRI(CONCAT(STR(?ax), \"/belief\")) AS ?belief)\n\
-                \x20   BIND(IRI(CONCAT(STR(?ax), \"/proposition\")) AS ?prop)\n";
+    let mint = [
+        mint("ax", "argumentation", "arg"),
+        mint("ax", "belief", "belief"),
+        mint("ax", "proposition", "prop"),
+    ]
+    .concat();
+    let branches = claim_branches(true);
     let body = format!(
         "CONSTRUCT {{\n\
          \x20   ?arg a crminf:I1_Argumentation ;\n\
@@ -156,27 +205,7 @@ fn emit_crminf(vocab: &SliceVocab) -> String {
          \x20       crminf:J5_holds_to_be ?value .\n\
          }}\n\
          WHERE {{\n\
-         \x20   {{ ?ax a owl:Axiom ;\n\
-         \x20       owl:annotatedSource ?s ;\n\
-         \x20       owl:annotatedProperty ?p ;\n\
-         \x20       owl:annotatedTarget ?o .\n\
-         \x20     OPTIONAL {{ ?ax purrdf:accordingTo ?sp }}\n\
-         \x20     OPTIONAL {{ ?ax purrdf:standpointModality ?mod }} }}\n\
-         \x20   UNION\n\
-         \x20   {{ ?ax a purrdf:StandpointClaim ;\n\
-         \x20       purrdf:vantage ?sp ;\n\
-         \x20       purrdf:observedFeature ?stmt .\n\
-         \x20     ?stmt owl:annotatedSource ?s ;\n\
-         \x20           owl:annotatedProperty ?p ;\n\
-         \x20           owl:annotatedTarget ?o .\n\
-         \x20     OPTIONAL {{ ?ax purrdf:claimModality ?mod }} }}\n\
-         \x20   UNION\n\
-         \x20   {{ ?ax a purrdf:StandpointClaim ;\n\
-         \x20       purrdf:vantage ?sp ;\n\
-         \x20       purrdf:observedFeature ?feature .\n\
-         \x20     FILTER NOT EXISTS {{ ?feature owl:annotatedSource ?s }}\n\
-         \x20     OPTIONAL {{ ?ax purrdf:claimModality ?mod }} }}\n\
-         {holder}{value}{subject_bind}{prop_text}{mint}\
+         {branches}{HOLDER}{value}{subject_bind}{PROP_TEXT}{mint}\
          }}\n"
     );
     let header = format!(
@@ -196,8 +225,8 @@ fn emit_crminf(vocab: &SliceVocab) -> String {
 // ── PROV-O (qualified attribution) ──────────────────────────────────────────────
 
 fn emit_prov(vocab: &SliceVocab) -> String {
-    let holder = "    BIND(COALESCE(?sp, purrdf:universalStandpoint) AS ?holder)\n";
-    let mint = "    BIND(IRI(CONCAT(STR(?ax), \"/attribution\")) AS ?attr)\n";
+    let mint = mint("ax", "attribution", "attr");
+    let branches = claim_branches(false);
     let body = format!(
         "CONSTRUCT {{\n\
          \x20   ?ax a prov:Entity ;\n\
@@ -211,26 +240,7 @@ fn emit_prov(vocab: &SliceVocab) -> String {
          \x20   ?holder a prov:Agent .\n\
          }}\n\
          WHERE {{\n\
-         \x20   {{ ?ax a owl:Axiom ;\n\
-         \x20       owl:annotatedSource ?s ;\n\
-         \x20       owl:annotatedProperty ?p ;\n\
-         \x20       owl:annotatedTarget ?o .\n\
-         \x20     OPTIONAL {{ ?ax purrdf:accordingTo ?sp }} }}\n\
-         \x20   UNION\n\
-         \x20   {{ ?ax a purrdf:StandpointClaim ;\n\
-         \x20       purrdf:vantage ?sp ;\n\
-         \x20       purrdf:observedFeature ?stmt .\n\
-         \x20     ?stmt owl:annotatedSource ?s ;\n\
-         \x20           owl:annotatedProperty ?p ;\n\
-         \x20           owl:annotatedTarget ?o .\n\
-         \x20     OPTIONAL {{ ?ax purrdf:claimModality ?mod }} }}\n\
-         \x20   UNION\n\
-         \x20   {{ ?ax a purrdf:StandpointClaim ;\n\
-         \x20       purrdf:vantage ?sp ;\n\
-         \x20       purrdf:observedFeature ?feature .\n\
-         \x20     FILTER NOT EXISTS {{ ?feature owl:annotatedSource ?s }}\n\
-         \x20     OPTIONAL {{ ?ax purrdf:claimModality ?mod }} }}\n\
-         {holder}{mint}\
+         {branches}{HOLDER}{mint}\
          }}\n"
     );
     let header = format!(
@@ -249,9 +259,9 @@ fn emit_prov(vocab: &SliceVocab) -> String {
 // ── W3C Web Annotation (oa) ──────────────────────────────────────────────────────
 
 fn emit_oa(vocab: &SliceVocab) -> String {
-    let holder = "    BIND(COALESCE(?sp, purrdf:universalStandpoint) AS ?holder)\n";
     let target = "    BIND(COALESCE(?s, ?feature) AS ?target)\n";
-    let mint = "    BIND(IRI(CONCAT(STR(?ax), \"/annotation\")) AS ?ann)\n";
+    let mint = mint("ax", "annotation", "ann");
+    let branches = claim_branches(false);
     let body = format!(
         "CONSTRUCT {{\n\
          \x20   ?ann a oa:Annotation ;\n\
@@ -264,26 +274,7 @@ fn emit_oa(vocab: &SliceVocab) -> String {
          \x20       owl:annotatedTarget ?o .\n\
          }}\n\
          WHERE {{\n\
-         \x20   {{ ?ax a owl:Axiom ;\n\
-         \x20       owl:annotatedSource ?s ;\n\
-         \x20       owl:annotatedProperty ?p ;\n\
-         \x20       owl:annotatedTarget ?o .\n\
-         \x20     OPTIONAL {{ ?ax purrdf:accordingTo ?sp }} }}\n\
-         \x20   UNION\n\
-         \x20   {{ ?ax a purrdf:StandpointClaim ;\n\
-         \x20       purrdf:vantage ?sp ;\n\
-         \x20       purrdf:observedFeature ?stmt .\n\
-         \x20     ?stmt owl:annotatedSource ?s ;\n\
-         \x20           owl:annotatedProperty ?p ;\n\
-         \x20           owl:annotatedTarget ?o .\n\
-         \x20     OPTIONAL {{ ?ax purrdf:claimModality ?mod }} }}\n\
-         \x20   UNION\n\
-         \x20   {{ ?ax a purrdf:StandpointClaim ;\n\
-         \x20       purrdf:vantage ?sp ;\n\
-         \x20       purrdf:observedFeature ?feature .\n\
-         \x20     FILTER NOT EXISTS {{ ?feature owl:annotatedSource ?s }}\n\
-         \x20     OPTIONAL {{ ?ax purrdf:claimModality ?mod }} }}\n\
-         {holder}{target}{mint}\
+         {branches}{HOLDER}{target}{mint}\
          }}\n"
     );
     let header = format!(
@@ -302,10 +293,8 @@ fn emit_oa(vocab: &SliceVocab) -> String {
 // ── schema.org Claim ─────────────────────────────────────────────────────────────
 
 fn emit_schema(vocab: &SliceVocab) -> String {
-    let refuted_filter = "    FILTER(!BOUND(?mod) || ?mod != purrdf:refuted)\n";
-    let holder = "    BIND(COALESCE(?sp, purrdf:universalStandpoint) AS ?holder)\n";
-    let prop_text = "    BIND(IF(BOUND(?s), CONCAT(STR(?s), \" \", STR(?p), \" \", STR(?o)), STR(?feature)) AS ?propText)\n";
-    let mint = "    BIND(IRI(CONCAT(STR(?ax), \"/claim\")) AS ?claim)\n";
+    let mint = mint("ax", "claim", "claim");
+    let branches = claim_branches(true);
     let body = format!(
         "CONSTRUCT {{\n\
          \x20   ?claim a schema:Claim ;\n\
@@ -313,27 +302,7 @@ fn emit_schema(vocab: &SliceVocab) -> String {
          \x20       schema:text ?propText .\n\
          }}\n\
          WHERE {{\n\
-         \x20   {{ ?ax a owl:Axiom ;\n\
-         \x20       owl:annotatedSource ?s ;\n\
-         \x20       owl:annotatedProperty ?p ;\n\
-         \x20       owl:annotatedTarget ?o .\n\
-         \x20     OPTIONAL {{ ?ax purrdf:accordingTo ?sp }}\n\
-         \x20     OPTIONAL {{ ?ax purrdf:standpointModality ?mod }} }}\n\
-         \x20   UNION\n\
-         \x20   {{ ?ax a purrdf:StandpointClaim ;\n\
-         \x20       purrdf:vantage ?sp ;\n\
-         \x20       purrdf:observedFeature ?stmt .\n\
-         \x20     ?stmt owl:annotatedSource ?s ;\n\
-         \x20           owl:annotatedProperty ?p ;\n\
-         \x20           owl:annotatedTarget ?o .\n\
-         \x20     OPTIONAL {{ ?ax purrdf:claimModality ?mod }} }}\n\
-         \x20   UNION\n\
-         \x20   {{ ?ax a purrdf:StandpointClaim ;\n\
-         \x20       purrdf:vantage ?sp ;\n\
-         \x20       purrdf:observedFeature ?feature .\n\
-         \x20     FILTER NOT EXISTS {{ ?feature owl:annotatedSource ?s }}\n\
-         \x20     OPTIONAL {{ ?ax purrdf:claimModality ?mod }} }}\n\
-         {refuted_filter}{holder}{prop_text}{mint}\
+         {branches}{REFUTED_FILTER}{HOLDER}{PROP_TEXT}{mint}\
          }}\n"
     );
     let header = format!(
@@ -352,8 +321,7 @@ fn emit_schema(vocab: &SliceVocab) -> String {
 // ── BBC News Ontology ────────────────────────────────────────────────────────────
 
 fn emit_bbc(vocab: &SliceVocab) -> String {
-    let holder = "    BIND(COALESCE(?sp, purrdf:universalStandpoint) AS ?holder)\n";
-    let mint = "    BIND(IRI(CONCAT(STR(?event), \"/news-event\")) AS ?newsEvent)\n";
+    let mint = mint("event", "news-event", "newsEvent");
     let body = format!(
         "CONSTRUCT {{\n\
          \x20   ?newsEvent a bbc:NewsEvent ;\n\
@@ -367,7 +335,7 @@ fn emit_bbc(vocab: &SliceVocab) -> String {
          \x20       purrdf:observedFeature ?event .\n\
          \x20   ?event a purrdf:Event .\n\
          \x20   OPTIONAL {{ ?ax purrdf:claimModality ?mod }}\n\
-         {holder}{mint}\
+         {HOLDER}{mint}\
          }}\n"
     );
     let header = format!(
@@ -435,16 +403,7 @@ fn emit_modality(vocab: &SliceVocab) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-
-    fn repo_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf()
-    }
+    use purrdf_testkit::paths::workspace_root;
 
     fn first_diff(got: &str, want: &str) -> String {
         for (i, (g, w)) in got.lines().zip(want.lines()).enumerate() {
@@ -461,7 +420,7 @@ mod tests {
 
     #[test]
     fn every_standpoint_file_matches_committed() {
-        let root = repo_root();
+        let root = workspace_root();
         // Committed-artifact parity: the committed queries were generated with
         // the blackcatinformatics purrdf namespace (prefix `purrdf`), so this
         // cross-check must use it (pure fixtures elsewhere use example.org).

@@ -22,10 +22,8 @@
 //! fixture configuration, never a minted vocabulary.
 
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
@@ -41,6 +39,13 @@ use purrdf_sparql_eval::{
 };
 
 mod common;
+
+#[path = "support/lookup.rs"]
+mod lookup;
+
+use lookup::{profile, strata};
+use purrdf_retrieval::block_on;
+use purrdf_retrieval::fixture::iri;
 
 /// The bound every run searches under.
 const TOP_K: TopK = TopK::new(5);
@@ -62,29 +67,6 @@ const MOVES_AFTER: u64 = 3;
 
 fn ex(suffix: &str) -> String {
     format!("http://example.org/{suffix}")
-}
-
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
-
-/// A minimal single-threaded executor. The producers never actually pend.
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
 }
 
 /// What a producer's index does while it is being read.
@@ -211,12 +193,6 @@ impl PfCursor for IndexedCursor {
     }
 }
 
-/// The two strata: one block, the same candidates, so the fusion certifies at its
-/// sixth rank and stops both streams far inside the planned four hundred.
-fn strata() -> [Iri; 2] {
-    [iri(&ex("stratum/left")), iri(&ex("stratum/right"))]
-}
-
 /// The registry, with the left producer's index behaving as `left` says and the
 /// right one's stable.
 fn registry(left: Index) -> PropertyFunctionRegistry {
@@ -312,19 +288,6 @@ fn statistics() -> Cardinalities {
         cardinalities.insert(iri(&ex(predicate)), ROWS);
     }
     Cardinalities(cardinalities)
-}
-
-fn profile() -> FusionProfile {
-    FusionProfile::with_decay(
-        strata()
-            .into_iter()
-            .map(|stratum| (stratum, Fixed::ONE))
-            .collect(),
-        DecayRule::ReciprocalRank {
-            k: u32::try_from(RECIP_K).expect("the smoothing constant fits"),
-        },
-    )
-    .expect("the fixture profile is valid")
 }
 
 /// A profile that weights only the right stratum, so the left one runs and is read

@@ -15,24 +15,23 @@
 //! * `language` is the BCP-47 language tag for a language-tagged literal (else empty),
 //! * `graph` is the named-graph IRI / `_:` blank (empty for the default graph).
 //!
-//! Encoding and decoding reuse `serde_json` (already a dep — no new dependency, so the
-//! crate stays wasm-clean). Emission is byte-deterministic: quads are written in dataset
+//! Each line is read by [`purrdf_lex::json`] and its strings are written by
+//! [`purrdf_lex::json_escape`], the workspace's one JSON reader and string spelling. Emission is byte-deterministic: quads are written in dataset
 //! order, one canonical JSON array per line. HexTuples is a CLASSIC quad syntax with no
 //! RDF-1.2 triple-term surface: a triple term in a serialize request is a HARD error.
 
+use super::syntax::{ClassicRow, ClassicTerm, CodecName, check_language_tag, freeze_classic_rows};
 use purrdf_core::sink::{TextOut, TextSink};
+use purrdf_lex::json_escape::JsonEscapes;
 use std::borrow::Cow;
 use std::sync::Arc;
 
 use super::codec::RdfCodec;
 use super::media_type::NativeRdfFormat;
-use super::parse::{FoldNode, FoldRow, RDF_REIFIES, fold_statement_layer};
-use super::ser_model::{SerGraph, SerTerm, SerTermKind};
+use super::ser_model::{SerGraph, SerTermKind};
 use super::text_parse::LineParseMode;
-use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
+use crate::{RdfDataset, RdfDiagnostic, RdfLiteral};
 use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
-use purrdf_core::cdt_blank::BlankBinding;
-use purrdf_iri::langtag;
 use purrdf_iri::terminals::is_ws;
 
 /// The HexTuples codec: a standalone (non-line-family) [`RdfCodec`] over the
@@ -69,42 +68,19 @@ impl RdfCodec for HexTuplesCodec {
     }
 }
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+use purrdf_xsd::datatype::XSD_STRING;
+
+/// This codec's name, which its diagnostics lead with.
+const HEXTUPLES: CodecName = CodecName("HexTuples");
 /// HexTuples datatype sentinel for an IRI object.
 const GLOBAL_ID: &str = "globalId";
 /// HexTuples datatype sentinel for a blank-node object.
 const LOCAL_ID: &str = "localId";
 
-fn parse_err(detail: impl Into<String>) -> RdfDiagnostic {
-    RdfDiagnostic::error(
-        "native-codec-parse",
-        format!("HexTuples: {}", detail.into()),
-    )
-}
-
-fn serialize_err(detail: impl Into<String>) -> RdfDiagnostic {
-    RdfDiagnostic::error(
-        "native-codec-serialize",
-        format!("HexTuples: {}", detail.into()),
-    )
-}
-
 // ───────────────────────────────────────────────────────────────────────────────
 // Parse: HexTuples NDJSON → frozen RdfDataset IR (via the shared statement fold)
 // ───────────────────────────────────────────────────────────────────────────────
-
-/// A first-party HexTuples term the parser accumulates before interning. HexTuples is
-/// classic (no triple terms).
-#[derive(Clone, Debug)]
-enum HexTerm {
-    Iri(String),
-    Blank(String),
-    Literal(RdfLiteral),
-}
-
-/// One decoded HexTuples line: `(subject, predicate, object, graph)`.
-type HexRow = (HexTerm, String, HexTerm, Option<HexTerm>);
 
 /// Parse HexTuples `text` into a frozen [`RdfDataset`].
 pub(super) fn parse_hextuples_to_dataset(
@@ -131,13 +107,28 @@ pub(super) fn parse_hextuples_to_dataset(
 /// Unicode `White_Space` property, twenty-six scalars — and therefore answers a question
 /// JSON did not ask. The difference is a SILENT DROP, not a widening: a line holding
 /// nothing but U+00A0 NO-BREAK SPACE trimmed to the empty string and was skipped as
-/// BLANK, when it is in fact a line `serde_json` has no reading for. HexTuples is NDJSON
+/// BLANK, when it is in fact a line the JSON grammar has no reading for. HexTuples is NDJSON
 /// — every non-blank line must be a six-element JSON array — so the only honest answers
 /// are "blank" and "invalid JSON", and U+00A0 is not blank by any rule JSON states.
 /// This is the same defect, in the same directory, that the line/Turtle front-end's
 /// `WS` work removed from `text_parse`; the sibling codec kept its copy.
 fn is_blank_json_line(line: &str) -> bool {
     line.as_bytes().iter().all(|&byte| is_ws(byte))
+}
+
+/// The strings of one line's JSON array, or why the line is not an array of strings.
+fn line_fields(line: &str) -> Result<Vec<String>, String> {
+    let mut value = purrdf_lex::json::read(line).map_err(|error| error.to_string())?;
+    let Some(items) = value.as_array_mut() else {
+        return Err("expected an array".to_owned());
+    };
+    std::mem::take(items)
+        .into_iter()
+        .map(|mut item| match &mut item {
+            purrdf_lex::json::Value::String(text) => Ok(std::mem::take(text)),
+            other => Err(format!("expected a string, found {}", other.kind().name())),
+        })
+        .collect()
 }
 
 /// Decode ONE physical HexTuples line, or `None` when the line is blank.
@@ -150,20 +141,20 @@ fn parse_hextuples_line(
     line: &str,
     lineno: usize,
     base: &purrdf_iri::BaseScope,
-) -> Result<Option<HexRow>, RdfDiagnostic> {
+) -> Result<Option<ClassicRow>, RdfDiagnostic> {
     if is_blank_json_line(line) {
         return Ok(None);
     }
-    let fields: Vec<String> = serde_json::from_str(line)
-        .map_err(|e| parse_err(format!("line {lineno}: invalid JSON array: {e}")))?;
+    let fields = line_fields(line)
+        .map_err(|e| HEXTUPLES.parse_err(format!("line {lineno}: invalid JSON array: {e}")))?;
     if fields.len() != 6 {
-        return Err(parse_err(format!(
+        return Err(HEXTUPLES.parse_err(format!(
             "line {lineno}: expected 6 fields, found {}",
             fields.len()
         )));
     }
-    let [subject, predicate, value, datatype, language, graph] =
-        <[String; 6]>::try_from(fields).map_err(|_| parse_err("internal: field count mismatch"))?;
+    let [subject, predicate, value, datatype, language, graph] = <[String; 6]>::try_from(fields)
+        .map_err(|_| HEXTUPLES.parse_err("internal: field count mismatch"))?;
     let subject = node_term(&subject, base)?;
     validate_iri(&predicate, base)?;
     let object = object_term(&value, &datatype, &language, base, lineno)?;
@@ -183,7 +174,7 @@ fn parse_hextuples_line(
 /// order, in [`freeze_rows`] — that is the sequential point that fixes every term id,
 /// and moving it would change the frozen IR, so it is left exactly where it was.
 pub(super) struct HexTuplesStreamParser {
-    rows: Vec<HexRow>,
+    rows: Vec<ClassicRow>,
     /// The 1-based document line number of the NEXT line to be pushed.
     lineno: usize,
     /// The base in scope, carried for the DIAGNOSTIC only — see [`validate_iri`].
@@ -210,18 +201,18 @@ impl HexTuplesStreamParser {
 
     /// Intern and freeze once the stream is exhausted.
     pub(super) fn finish(self) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-        freeze_rows(self.rows)
+        freeze_classic_rows(self.rows, LabelAlphabet::BlankNodeLabel)
     }
 }
 
 /// A subject / graph node: an IRI or a `_:`-prefixed blank node.
-fn node_term(value: &str, base: &purrdf_iri::BaseScope) -> Result<HexTerm, RdfDiagnostic> {
+fn node_term(value: &str, base: &purrdf_iri::BaseScope) -> Result<ClassicTerm, RdfDiagnostic> {
     if let Some(label) = value.strip_prefix("_:") {
         validate_blank_label(label)?;
-        Ok(HexTerm::Blank(label.to_owned()))
+        Ok(ClassicTerm::Blank(label.to_owned()))
     } else {
         validate_iri(value, base)?;
-        Ok(HexTerm::Iri(value.to_owned()))
+        Ok(ClassicTerm::Iri(value.to_owned()))
     }
 }
 
@@ -248,15 +239,11 @@ fn node_term(value: &str, base: &purrdf_iri::BaseScope) -> Result<HexTerm, RdfDi
 /// production refused, and keeps the `line {lineno}:` prefix this codec's other
 /// per-line diagnostics carry — HexTuples is NDJSON, so the line number is the
 /// whole of the position information it has (there is no column: the parser is
-/// `serde_json` over a whole line and records no intra-line span).
+/// a JSON read over a whole line and records no intra-line span).
 fn validate_language_tag(language: &str, lineno: usize) -> Result<(), RdfDiagnostic> {
-    match langtag::parse_with(language, langtag::Profile::ConcreteSyntaxLangtagBounded) {
-        Ok(_) => Ok(()),
-        Err(error) => Err(RdfDiagnostic::error(
-            error.diagnostic_code(),
-            format!("HexTuples: line {lineno}: invalid language tag {language:?}: {error}"),
-        )),
-    }
+    check_language_tag(language, |error| {
+        format!("HexTuples: line {lineno}: invalid language tag {language:?}: {error}")
+    })
 }
 
 /// The object term, keyed by the `datatype` sentinel / IRI and the language field.
@@ -269,16 +256,16 @@ fn object_term(
     language: &str,
     base: &purrdf_iri::BaseScope,
     lineno: usize,
-) -> Result<HexTerm, RdfDiagnostic> {
+) -> Result<ClassicTerm, RdfDiagnostic> {
     match datatype {
         GLOBAL_ID => {
             validate_iri(value, base)?;
-            Ok(HexTerm::Iri(value.to_owned()))
+            Ok(ClassicTerm::Iri(value.to_owned()))
         }
         LOCAL_ID => {
             let label = value.strip_prefix("_:").unwrap_or(value);
             validate_blank_label(label)?;
-            Ok(HexTerm::Blank(label.to_owned()))
+            Ok(ClassicTerm::Blank(label.to_owned()))
         }
         // The empty-language guard stays where it was: an empty field 5 means "no
         // language", not "a language that is the empty string", and falls through to
@@ -286,65 +273,18 @@ fn object_term(
         // that carry no language tag at all.
         RDF_LANG_STRING if !language.is_empty() => {
             validate_language_tag(language, lineno)?;
-            Ok(HexTerm::Literal(RdfLiteral {
+            Ok(ClassicTerm::Literal(RdfLiteral {
                 lexical_form: value.to_owned(),
                 datatype: None,
                 language: Some(language.to_owned()),
                 direction: None,
             }))
         }
-        "" | XSD_STRING => Ok(HexTerm::Literal(RdfLiteral::simple(value.to_owned()))),
+        "" | XSD_STRING => Ok(ClassicTerm::Literal(RdfLiteral::simple(value.to_owned()))),
         datatype => {
             validate_iri(datatype, base)?;
-            Ok(HexTerm::Literal(RdfLiteral::typed(value, datatype)))
+            Ok(ClassicTerm::Literal(RdfLiteral::typed(value, datatype)))
         }
-    }
-}
-
-fn freeze_rows(rows: Vec<HexRow>) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    let mut builder = RdfDatasetBuilder::new();
-    let mut fold_rows: Vec<FoldRow> = Vec::with_capacity(rows.len());
-    for (subject, predicate, object, graph) in rows {
-        let subject = intern_term(&mut builder, &subject)?;
-        let is_reifies = predicate == RDF_REIFIES;
-        let predicate = builder.intern_iri(&predicate);
-        let object = FoldNode::Term(intern_term(&mut builder, &object)?);
-        let graph = match graph {
-            Some(g) => Some(intern_term(&mut builder, &g)?),
-            None => None,
-        };
-        fold_rows.push(FoldRow {
-            subject,
-            is_reifies,
-            predicate,
-            object,
-            graph,
-        });
-    }
-    fold_statement_layer(&mut builder, fold_rows)?;
-    builder.freeze()
-}
-
-/// # Errors
-/// A composite (`cdt:List` / `cdt:Map`) literal whose lexical form does not
-/// parse refuses the document; see [`purrdf_core::cdt_blank`].
-fn intern_term(builder: &mut RdfDatasetBuilder, term: &HexTerm) -> Result<TermId, RdfDiagnostic> {
-    match term {
-        HexTerm::Iri(iri) => Ok(builder.intern_iri(iri)),
-        // Text ingress: decode the `(label, scope)` encoding this codec's serializer
-        // applied at egress, so a document it wrote re-parses to the very
-        // `(label, scope)` pair it was written from. HexTuples types its blank ids
-        // as `BLANK_NODE_LABEL`s, which is the alphabet the image test re-encodes
-        // against.
-        HexTerm::Blank(label) => {
-            Ok(builder.intern_text_blank(label, LabelAlphabet::BlankNodeLabel))
-        }
-        // A composite literal's embedded blank labels bind through the SAME rule
-        // the blank ids above use, so both spellings of one node agree.
-        HexTerm::Literal(literal) => Ok(builder.intern_literal_bound(
-            literal.clone(),
-            BlankBinding::Decoded(LabelAlphabet::BlankNodeLabel),
-        )?),
     }
 }
 
@@ -381,9 +321,7 @@ fn validate_blank_label(label: &str) -> Result<(), RdfDiagnostic> {
     if is_valid_label(label, LabelAlphabet::BlankNodeLabel) {
         Ok(())
     } else {
-        Err(parse_err(format!(
-            "invalid blank-node identifier {label:?}"
-        )))
+        Err(HEXTUPLES.parse_err(format!("invalid blank-node identifier {label:?}")))
     }
 }
 
@@ -406,10 +344,10 @@ fn write_hextuples<W: TextOut + ?Sized>(
         write_line(out, graph, s, p, o, g)?;
     }
     for &(rid, _, _) in &graph.reifiers {
-        if is_self_reifier(graph, rid) {
+        if graph.is_self_reifier(rid) {
             continue;
         }
-        return Err(serialize_err(
+        return Err(HEXTUPLES.serialize_err(
             "cannot serialize an RDF-1.2 reifier binding (no triple-term surface)",
         ));
     }
@@ -422,13 +360,6 @@ fn write_hextuples<W: TextOut + ?Sized>(
     Ok(())
 }
 
-fn is_self_reifier(graph: &SerGraph, rid: usize) -> bool {
-    graph
-        .terms
-        .get(rid)
-        .is_some_and(|t| t.kind == SerTermKind::Triple && t.reifier == Some(rid))
-}
-
 fn write_line<W: TextOut + ?Sized>(
     out: &mut W,
     graph: &SerGraph,
@@ -438,8 +369,8 @@ fn write_line<W: TextOut + ?Sized>(
     g: Option<usize>,
 ) -> Result<(), RdfDiagnostic> {
     // Every field is a `Cow` borrowed from the term table (or a constant) except the
-    // `_:` blank forms, which are the only ones that need building. serde_json writes
-    // a `Cow<str>` exactly as it writes a `String`, so the line is byte-identical.
+    // `_:` blank forms, which are the only ones that need building. Each is written
+    // straight into the line as a JSON string, so no value tree is built.
     let subject = node_string(graph, s)?;
     let predicate = iri_string(graph, p)?;
     let (value, datatype, language) = object_fields(graph, o)?;
@@ -448,32 +379,37 @@ fn write_line<W: TextOut + ?Sized>(
         None => Cow::Borrowed(""),
     };
     let fields: [Cow<'_, str>; 6] = [subject, predicate, value, datatype, language, graph_field];
-    let line = serde_json::to_string(&fields)
-        .map_err(|e| serialize_err(format!("JSON encode failed: {e}")))?;
+    let mut line =
+        String::with_capacity(fields.iter().map(|field| field.len() + 3).sum::<usize>() + 2);
+    line.push('[');
+    for (index, field) in fields.iter().enumerate() {
+        if index > 0 {
+            line.push(',');
+        }
+        purrdf_lex::json_escape::push_string(&mut line, field, JsonEscapes::ShortForms);
+    }
+    line.push_str("]\n");
     out.push_str(&line);
-    out.push('\n');
     Ok(())
 }
 
 /// A node term's HexTuples string: an IRI verbatim, or a `_:`-prefixed blank label.
 fn node_string(graph: &SerGraph, tid: usize) -> Result<Cow<'_, str>, RdfDiagnostic> {
-    let term = ser_term(graph, tid)?;
+    let term = HEXTUPLES.term(graph, tid)?;
     match term.kind {
-        SerTermKind::Iri => Ok(Cow::Borrowed(ser_value(term)?)),
-        SerTermKind::Bnode => Ok(Cow::Owned(format!("_:{}", ser_value(term)?))),
-        other => Err(serialize_err(format!(
+        SerTermKind::Iri => Ok(Cow::Borrowed(HEXTUPLES.value(term)?)),
+        SerTermKind::Bnode => Ok(Cow::Owned(format!("_:{}", HEXTUPLES.value(term)?))),
+        other => Err(HEXTUPLES.serialize_err(format!(
             "a subject / graph node must be an IRI or blank node, got {other:?}"
         ))),
     }
 }
 
 fn iri_string(graph: &SerGraph, tid: usize) -> Result<Cow<'_, str>, RdfDiagnostic> {
-    let term = ser_term(graph, tid)?;
+    let term = HEXTUPLES.term(graph, tid)?;
     match term.kind {
-        SerTermKind::Iri => Ok(Cow::Borrowed(ser_value(term)?)),
-        other => Err(serialize_err(format!(
-            "a predicate must be an IRI, got {other:?}"
-        ))),
+        SerTermKind::Iri => Ok(Cow::Borrowed(HEXTUPLES.value(term)?)),
+        other => Err(HEXTUPLES.serialize_err(format!("a predicate must be an IRI, got {other:?}"))),
     }
 }
 
@@ -481,20 +417,20 @@ fn iri_string(graph: &SerGraph, tid: usize) -> Result<Cow<'_, str>, RdfDiagnosti
 type ObjectFields<'a> = (Cow<'a, str>, Cow<'a, str>, Cow<'a, str>);
 
 fn object_fields(graph: &SerGraph, tid: usize) -> Result<ObjectFields<'_>, RdfDiagnostic> {
-    let term = ser_term(graph, tid)?;
+    let term = HEXTUPLES.term(graph, tid)?;
     match term.kind {
         SerTermKind::Iri => Ok((
-            Cow::Borrowed(ser_value(term)?),
+            Cow::Borrowed(HEXTUPLES.value(term)?),
             Cow::Borrowed(GLOBAL_ID),
             Cow::Borrowed(""),
         )),
         SerTermKind::Bnode => Ok((
-            Cow::Owned(format!("_:{}", ser_value(term)?)),
+            Cow::Owned(format!("_:{}", HEXTUPLES.value(term)?)),
             Cow::Borrowed(LOCAL_ID),
             Cow::Borrowed(""),
         )),
         SerTermKind::Literal => {
-            let value = Cow::Borrowed(ser_value(term)?);
+            let value = Cow::Borrowed(HEXTUPLES.value(term)?);
             if let Some(language) = &term.lang {
                 Ok((
                     value,
@@ -502,29 +438,15 @@ fn object_fields(graph: &SerGraph, tid: usize) -> Result<ObjectFields<'_>, RdfDi
                     Cow::Borrowed(language.as_str()),
                 ))
             } else if let Some(datatype) = term.datatype {
-                let datatype_iri = ser_value(ser_term(graph, datatype)?)?;
+                let datatype_iri = HEXTUPLES.value(HEXTUPLES.term(graph, datatype)?)?;
                 Ok((value, Cow::Borrowed(datatype_iri), Cow::Borrowed("")))
             } else {
                 Ok((value, Cow::Borrowed(XSD_STRING), Cow::Borrowed("")))
             }
         }
-        SerTermKind::Triple => Err(serialize_err(
-            "cannot serialize an RDF-1.2 triple term (no triple-term surface)",
-        )),
+        SerTermKind::Triple => Err(HEXTUPLES
+            .serialize_err("cannot serialize an RDF-1.2 triple term (no triple-term surface)")),
     }
-}
-
-fn ser_term(graph: &SerGraph, tid: usize) -> Result<&SerTerm, RdfDiagnostic> {
-    graph
-        .terms
-        .get(tid)
-        .ok_or_else(|| serialize_err(format!("term id {tid} is out of range")))
-}
-
-fn ser_value(term: &SerTerm) -> Result<&str, RdfDiagnostic> {
-    term.value
-        .as_deref()
-        .ok_or_else(|| serialize_err("term is missing its value"))
 }
 
 #[cfg(test)]
@@ -575,7 +497,7 @@ mod tests {
             serialize_dataset(&ds, "application/x-hextuples", SerializeGraph::Dataset).unwrap();
         let text = String::from_utf8(bytes).unwrap();
         let line = text.lines().next().expect("one line");
-        let fields: Vec<String> = serde_json::from_str(line).expect("json array");
+        let fields = line_fields(line).expect("json array");
         assert_eq!(fields.len(), 6);
         assert_eq!(fields[2], "v");
         assert_eq!(fields[3], RDF_LANG_STRING);

@@ -69,22 +69,18 @@
 //! reader fold compared for equality against the expectation, with no
 //! divergence assertions left.
 
-use std::path::PathBuf;
-
 use purrdf_gts::model::{Graph, TermKind};
 use purrdf_gts::reader::read;
-use serde_json::Value as Json;
+use purrdf_lex::json::Value as Json;
 
 /// The frozen vector under test, without extension.
 const VECTOR: &str = "12-conflicting-reifier";
 
-fn vectors_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vectors")
-}
-
 /// Fold the frozen vector through the real reader, exactly as a consumer would.
 fn fold_frozen_vector() -> Graph {
-    let path = vectors_dir().join(format!("{VECTOR}.gts"));
+    let path = purrdf_testkit::paths::workspace_root()
+        .join("vectors")
+        .join(format!("{VECTOR}.gts"));
     let bytes = std::fs::read(&path)
         .unwrap_or_else(|error| panic!("read frozen vector {}: {error}", path.display()));
     read(&bytes, true, None)
@@ -92,10 +88,13 @@ fn fold_frozen_vector() -> Graph {
 
 /// Parse the frozen cross-engine expectation that ships beside the vector.
 fn frozen_expectation() -> Json {
-    let path = vectors_dir().join(format!("{VECTOR}.expected.json"));
+    let path = purrdf_testkit::paths::workspace_root()
+        .join("vectors")
+        .join(format!("{VECTOR}.expected.json"));
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read frozen expectation {}: {error}", path.display()));
-    serde_json::from_str(&text).unwrap_or_else(|error| panic!("parse {}: {error}", path.display()))
+    purrdf_lex::json::read(&text)
+        .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()))
 }
 
 /// Render one reifier row as `(reifier, subject, predicate, object, graph?)`

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::RdfStoreCapabilities;
 use crate::dataset_view::{DatasetView, GraphMatch, ViewTermId};
 use crate::hash::{FastMap, FastSet};
-use crate::ir::{QuadIds, QuadProbePlan, QuadRef, RdfDataset, TermId, TermRef, TermValue};
+use crate::ir::{QuadIds, QuadProbePlan, RdfDataset, TermId, TermRef, TermValue};
 
 /// A term in one mutation snapshot. Equal values shared by both layers always
 /// use `Base`; a `Delta` ID therefore names a value absent from the base.
@@ -325,11 +325,7 @@ impl DeltaDatasetView {
             .chain(self.delta.reifier_quads())
             .chain(self.delta.annotation_quads())
             .map(|q| self.map_delta(q))
-            .chain(
-                self.suppressed
-                    .iter()
-                    .map(|q| map_quad(*q, DeltaViewId::Base)),
-            )
+            .chain(self.suppressed.iter().map(|q| q.map_ids(DeltaViewId::Base)))
     }
 
     pub(crate) fn lookup_iri(&self, iri: &str) -> Option<DeltaViewId> {
@@ -398,7 +394,7 @@ impl DeltaDatasetView {
     }
 
     fn map_delta(&self, q: QuadIds) -> QuadIds<DeltaViewId> {
-        map_quad(q, |id| self.delta_id(id))
+        q.map_ids(|id| self.delta_id(id))
     }
 
     /// Query with a plan prepared for these bound axes and graph constraint.
@@ -433,7 +429,7 @@ impl DeltaDatasetView {
                     .quads_for_pattern_with_plan(&plan, q.s, q.p, q.o, q.g)
             })
             .filter(|q| self.base_quad_is_ordinary(*q))
-            .map(|q| map_quad(q, DeltaViewId::Base));
+            .map(|q| q.map_ids(DeltaViewId::Base));
         let delta = self
             .local_pattern(s, p, o, g, Layer::Delta)
             .into_iter()
@@ -467,7 +463,7 @@ impl DeltaDatasetView {
                     )
             })
             .filter(|q| self.demoted_annotation_is_unique(*q))
-            .map(|q| map_quad(q, DeltaViewId::Base))
+            .map(|q| q.map_ids(DeltaViewId::Base))
             .filter(move |q| {
                 s.is_none_or(|v| q.s == v)
                     && p.is_none_or(|v| q.p == v)
@@ -549,45 +545,16 @@ struct Pattern {
     g: GraphMatch,
 }
 
-fn map_quad(q: QuadIds, map: impl Fn(TermId) -> DeltaViewId) -> QuadIds<DeltaViewId> {
-    QuadIds {
-        s: map(q.s),
-        p: map(q.p),
-        o: map(q.o),
-        g: q.g.map(map),
-    }
-}
-
-fn map_term(term: TermRef<'_>, map: impl Fn(TermId) -> DeltaViewId) -> TermRef<'_, DeltaViewId> {
-    match term {
-        TermRef::Iri(iri) => TermRef::Iri(iri),
-        TermRef::Blank { label, scope } => TermRef::Blank { label, scope },
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => TermRef::Literal {
-            lexical,
-            datatype: map(datatype),
-            language,
-            direction,
-        },
-        TermRef::Triple { s, p, o } => TermRef::Triple {
-            s: map(s),
-            p: map(p),
-            o: map(o),
-        },
-    }
-}
-
 impl DatasetView for DeltaDatasetView {
     type Id = DeltaViewId;
     type ProbePlan = QuadProbePlan;
 
-    /// The base and the delta are both frozen datasets, each bounded at 16.
+    /// The wider bound of the base and the delta.
     fn triple_term_nesting_bound(&self) -> Option<usize> {
-        Some(super::super::validate::MAX_TERM_NESTING_DEPTH)
+        crate::dataset_view::widest_nesting_bound([
+            self.base.triple_term_nesting_bound(),
+            self.delta.triple_term_nesting_bound(),
+        ])
     }
 
     fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
@@ -601,23 +568,14 @@ impl DatasetView for DeltaDatasetView {
                     .flat_map(RdfDataset::annotation_quads)
                     .filter(|q| self.demoted_annotation_is_unique(*q)),
             )
-            .map(|q| map_quad(q, DeltaViewId::Base))
+            .map(|q| q.map_ids(DeltaViewId::Base))
             .chain(self.delta.quads().map(|q| self.map_delta(q)))
-    }
-
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_, Self::Id>> + '_ {
-        self.quads().map(|q| QuadRef {
-            s: self.resolve(q.s),
-            p: self.resolve(q.p),
-            o: self.resolve(q.o),
-            g: q.g.map(|id| self.resolve(id)),
-        })
     }
 
     fn resolve(&self, id: Self::Id) -> TermRef<'_, Self::Id> {
         match id {
-            DeltaViewId::Base(id) => map_term(self.base.resolve(id), DeltaViewId::Base),
-            DeltaViewId::Delta(id) => map_term(self.delta.resolve(id), |id| self.delta_id(id)),
+            DeltaViewId::Base(id) => self.base.resolve(id).map_ids(DeltaViewId::Base),
+            DeltaViewId::Delta(id) => self.delta.resolve(id).map_ids(|id| self.delta_id(id)),
         }
     }
 
@@ -711,7 +669,7 @@ impl DatasetView for DeltaDatasetView {
         self.base
             .reifier_quads()
             .filter(|q| !self.suppressed.contains(q))
-            .map(|q| map_quad(q, DeltaViewId::Base))
+            .map(|q| q.map_ids(DeltaViewId::Base))
             .chain(
                 self.delta
                     .reifier_quads()
@@ -725,7 +683,7 @@ impl DatasetView for DeltaDatasetView {
             .into_iter()
             .flat_map(|id| self.base.reifier_quads_of(id))
             .filter(|q| !self.suppressed.contains(q))
-            .map(|q| map_quad(q, DeltaViewId::Base))
+            .map(|q| q.map_ids(DeltaViewId::Base))
             .chain(
                 self.local_id(reifier, Layer::Delta)
                     .into_iter()
@@ -757,7 +715,7 @@ impl DatasetView for DeltaDatasetView {
             .into_iter()
             .flat_map(move |graph| self.base.reifier_quads_in_graph(graph))
             .filter(|q| !self.suppressed.contains(q))
-            .map(|q| map_quad(q, DeltaViewId::Base))
+            .map(|q| q.map_ids(DeltaViewId::Base))
             .chain(
                 self.local_graph(g, Layer::Delta)
                     .into_iter()
@@ -778,7 +736,7 @@ impl DatasetView for DeltaDatasetView {
                     .flat_map(RdfDataset::quads)
                     .filter(|q| self.base_quad_is_annotation(*q)),
             )
-            .map(|q| map_quad(q, DeltaViewId::Base))
+            .map(|q| q.map_ids(DeltaViewId::Base))
             .chain(
                 self.delta
                     .annotation_quads()
@@ -815,7 +773,7 @@ impl DatasetView for DeltaDatasetView {
                             .filter(|q| self.base_quad_is_annotation(*q)),
                     )
             })
-            .map(|q| map_quad(q, DeltaViewId::Base))
+            .map(|q| q.map_ids(DeltaViewId::Base))
             .chain(
                 self.local_graph(g, Layer::Delta)
                     .into_iter()
@@ -848,7 +806,7 @@ impl DatasetView for DeltaDatasetView {
                             .filter(|q| self.base_quad_is_annotation(*q)),
                     )
             })
-            .map(|q| map_quad(q, DeltaViewId::Base));
+            .map(|q| q.map_ids(DeltaViewId::Base));
         let delta = self
             .local_id(reifier, Layer::Delta)
             .into_iter()
@@ -929,7 +887,7 @@ mod tests {
         assert_eq!(
             materialized
                 .named_graphs()
-                .map(|id| materialized.term_value(id))
+                .map(|id| materialized.term_value(id).unwrap())
                 .collect::<FastSet<_>>(),
             frozen
                 .named_graphs()
@@ -1277,10 +1235,10 @@ mod tests {
         for q in base.reifier_quads().chain(base.annotation_quads()) {
             mutation
                 .insert(QuadValues {
-                    s: base.term_value(q.s),
-                    p: base.term_value(q.p),
-                    o: base.term_value(q.o),
-                    g: q.g.map(|id| base.term_value(id)),
+                    s: base.term_value(q.s).unwrap(),
+                    p: base.term_value(q.p).unwrap(),
+                    o: base.term_value(q.o).unwrap(),
+                    g: q.g.map(|id| base.term_value(id).unwrap()),
                 })
                 .unwrap();
         }

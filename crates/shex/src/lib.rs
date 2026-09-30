@@ -134,7 +134,3 @@ pub use validate::{
     ConformanceStatus, ExternalResolver, ResultEntry, ResultShapeMap, ShapeSelector,
     ValidationOptions, validate, validate_with,
 };
-
-#[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;

@@ -3,9 +3,13 @@
 
 //! Retention, typed preparation and operation-budget contracts for public callers.
 
+mod support;
+
+use support::three_subjects_one_value;
+
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, ResourceDimension, SparqlResult, TermValue};
+use purrdf_core::{ResourceDimension, SparqlResult, TermValue};
 use purrdf_sparql_algebra::{GraphPattern, PropertyFunctionCall, Query, QueryDataset};
 use purrdf_sparql_eval::governor::{GovernorState, QueryGovernors};
 use purrdf_sparql_eval::{
@@ -15,17 +19,6 @@ use purrdf_sparql_eval::{
 const A: &str = "SELECT ?s WHERE { ?s <http://example.org/p> ?o } ORDER BY ?s";
 const B: &str = "ASK { ?s <http://example.org/p> ?o }";
 const C: &str = "SELECT ?o WHERE { ?s <http://example.org/p> ?o }";
-
-fn fixture() -> Arc<RdfDataset> {
-    let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("http://example.org/p");
-    let object = builder.intern_iri("http://example.org/value");
-    for name in ["a", "b", "c"] {
-        let subject = builder.intern_iri(&format!("http://example.org/{name}"));
-        builder.push_quad(subject, predicate, object, None);
-    }
-    builder.freeze().unwrap()
-}
 
 #[test]
 fn entry_ceiling_evicts_least_recently_used_but_retained_handles_still_execute() {
@@ -41,7 +34,7 @@ fn entry_ceiling_evicts_least_recently_used_but_retained_handles_still_execute()
     assert!(!Arc::ptr_eq(&b, &cache.prepare(B, None).unwrap()));
     assert_eq!(cache.stats().evictions, 2);
     let result = NativeSparqlEngine::new()
-        .query_prepared(&fixture(), &b, &[], QueryOptions::EMPTY)
+        .query_prepared(&three_subjects_one_value(), &b, &[], QueryOptions::EMPTY)
         .unwrap();
     assert!(matches!(result, SparqlResult::Boolean(true)));
 }
@@ -63,7 +56,12 @@ fn byte_ceiling_and_oversize_admission_bound_storage_without_poisoning_useful_pl
     assert_eq!(cache.stats().evictions, 0);
     assert!(Arc::ptr_eq(&a, &cache.prepare(A, None).unwrap()));
     let result = NativeSparqlEngine::new()
-        .query_prepared(&fixture(), &large, &[], QueryOptions::EMPTY)
+        .query_prepared(
+            &three_subjects_one_value(),
+            &large,
+            &[],
+            QueryOptions::EMPTY,
+        )
         .unwrap();
     assert!(matches!(result, SparqlResult::Solutions { rows, .. } if rows.len() == 1));
     cache.prepare(B, None).unwrap();
@@ -119,7 +117,7 @@ fn prepared_operation_preserves_substitutions_without_text_cache_access() {
         .parse_query(A)
         .unwrap();
     let prepared = engine.prepare_algebra(query, QueryOptions::EMPTY).unwrap();
-    let dataset = fixture();
+    let dataset = three_subjects_one_value();
     let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
     for name in ["a", "b"] {
         let substitutions = [(
@@ -145,7 +143,7 @@ fn prepared_operation_preserves_substitutions_without_text_cache_access() {
 
 #[test]
 fn prepared_workers_charge_one_shared_budget_and_do_not_multiply_it() {
-    let dataset = fixture();
+    let dataset = three_subjects_one_value();
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query(A, None).unwrap();
     let metered = Arc::new(GovernorState::new(&QueryGovernors::METERED));
@@ -192,7 +190,7 @@ fn join_order_eviction_replans_without_reusing_answers() {
         entries: 1,
         bytes: 1000,
     });
-    let dataset = fixture();
+    let dataset = three_subjects_one_value();
     // TWO-pattern BGPs, deliberately. A one-pattern BGP has exactly one join
     // order, so the evaluator answers it without consulting the order cache at
     // all — there is nothing to plan and nothing worth remembering, and going to

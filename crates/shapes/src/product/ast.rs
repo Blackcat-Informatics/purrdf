@@ -218,6 +218,7 @@ use crate::model::{BoxRoleVocab, sparql_ns};
 use crate::plan::ClassCatalog;
 use crate::report::Severity;
 use crate::rules::{OrderKey, Rule, RuleBody, RuleGraph, RuleSetDeclaration};
+use crate::shapes::link::{ModelWalk, ShapeIndex};
 use crate::shapes::{
     AnnotatedConstraint, ClosedMode, ClosedTypeIndex, ComponentValidator, Constraint,
     ConstraintAnnotation, NodeKindValue, Path, PropertyShape, Shape, Shapes, SparqlTargetType,
@@ -225,7 +226,7 @@ use crate::shapes::{
 };
 use crate::term::{Literal, NamedNode, Term, Triple};
 
-use super::error::{ProductDimension, ShapesProductError};
+use super::error::{ProductDimension, ShapesProductError, malformed};
 
 // ---------------------------------------------------------------------------
 // Limits and tag spaces
@@ -347,11 +348,6 @@ const SELECT_KEY_SPARQL_EXPR: &str = "sh:sparqlExpr";
 // Refusals
 // ---------------------------------------------------------------------------
 
-/// Refuse: the bytes are structurally invalid.
-fn malformed(message: impl Into<String>) -> ShapesProductError {
-    ShapesProductError::new(ProductDimension::Malformed, message)
-}
-
 /// Refuse: the bytes ask for something this build does not implement.
 fn unsupported(message: impl Into<String>) -> ShapesProductError {
     ShapesProductError::new(ProductDimension::UnsupportedCapability, message)
@@ -377,6 +373,20 @@ fn depth_limit() -> ShapesProductError {
              bytes from exhausting the native stack — an abort no caller could have handled"
         ),
     )
+}
+
+/// Open one nesting level of a walk whose live depth is `depth`, refusing with
+/// `refusal` past [`MAX_DEPTH`]: the one bound the encoder, the decoder and the
+/// model walks share.
+pub(crate) fn open_level(
+    depth: &mut u32,
+    refusal: fn() -> ShapesProductError,
+) -> Result<(), ShapesProductError> {
+    if *depth >= MAX_DEPTH {
+        return Err(refusal());
+    }
+    *depth += 1;
+    Ok(())
 }
 
 /// Translate a `pack::bits` decoding failure into an admission refusal.
@@ -483,11 +493,7 @@ impl AstWriter {
 
     /// Open one level of recursion, refusing past [`MAX_DEPTH`].
     fn enter(&mut self) -> Result<(), ShapesProductError> {
-        if self.depth >= MAX_DEPTH {
-            return Err(depth_limit());
-        }
-        self.depth += 1;
-        Ok(())
+        open_level(&mut self.depth, depth_limit)
     }
 
     /// Close one level of recursion.
@@ -1606,11 +1612,7 @@ impl<'a> AstReader<'a> {
 
     /// Open one level of recursion, refusing past [`MAX_DEPTH`].
     fn enter(&mut self) -> Result<(), ShapesProductError> {
-        if self.depth >= MAX_DEPTH {
-            return Err(depth_limit());
-        }
-        self.depth += 1;
-        Ok(())
+        open_level(&mut self.depth, depth_limit)
     }
 
     /// Close one level of recursion.
@@ -2538,26 +2540,20 @@ impl FnTable {
         }
         Ok(table.by_iri.into_values().collect())
     }
+}
 
-    /// Open one level of the walk.
-    fn enter(&mut self) -> Result<(), ShapesProductError> {
-        if self.depth >= MAX_DEPTH {
-            return Err(depth_limit());
-        }
-        self.depth += 1;
-        Ok(())
+impl ModelWalk for FnTable {
+    fn depth(&mut self) -> &mut u32 {
+        &mut self.depth
     }
 
-    /// Close one level of the walk.
-    fn leave(&mut self) {
-        self.depth -= 1;
-    }
-
-    /// Record `func` and walk its body once.
-    fn declare(&mut self, func: &Arc<CustomFunction>) -> Result<(), ShapesProductError> {
+    fn first_declaration(
+        &mut self,
+        func: &Arc<CustomFunction>,
+    ) -> Result<bool, ShapesProductError> {
         if let Some(existing) = self.by_iri.get(func.iri.as_str()) {
             if Arc::ptr_eq(existing, func) {
-                return Ok(());
+                return Ok(false);
             }
             return Err(malformed(format!(
                 "this shapes graph declares the custom node-expression function <{}> twice, as two \
@@ -2566,242 +2562,13 @@ impl FnTable {
                 func.iri.as_str()
             )));
         }
-        // Recorded BEFORE the body is walked: a self-recursive body is legal, and
-        // this is what makes walking it terminate.
         self.by_iri
             .insert(func.iri.as_str().to_owned(), Arc::clone(func));
-        if let Some(body) = func.body.get() {
-            self.node_expr(body)?;
-        }
-        Ok(())
+        Ok(true)
     }
 
-    /// Walk the target declarations that can reach a node expression: a
-    /// structured `sh:targetNode` is one, and a `sh:targetWhere` shape can carry
-    /// one. Wildcard-free for the reason [`Self::constraint`] is.
-    fn targets(&mut self, targets: &[Target]) -> Result<(), ShapesProductError> {
-        for target in targets {
-            match target {
-                Target::Class(_)
-                | Target::SubjectsOf(_)
-                | Target::ObjectsOf(_)
-                | Target::Node(_)
-                | Target::ImplicitClass(_)
-                | Target::Sparql { .. } => {}
-                Target::NodeExpression(expr) => self.node_expr(expr)?,
-                Target::Where(shape) => self.shape(shape)?,
-            }
-        }
-        Ok(())
-    }
-
-    /// Walk a node shape.
-    fn shape(&mut self, shape: &Shape) -> Result<(), ShapesProductError> {
-        self.enter()?;
-        self.targets(&shape.targets)?;
-        for constraint in &shape.constraints {
-            self.constraint(constraint)?;
-        }
-        for property in &shape.property_shapes {
-            self.property_shape(property)?;
-        }
-        for rule in &shape.rules {
-            self.rule(rule)?;
-        }
-        self.leave();
-        Ok(())
-    }
-
-    /// Walk a rule: its node expressions and its condition shapes.
-    fn rule(&mut self, rule: &Rule) -> Result<(), ShapesProductError> {
-        match &rule.body {
-            RuleBody::Triple {
-                subject,
-                predicate,
-                object,
-            } => {
-                for expr in [subject, predicate, object].into_iter().flatten() {
-                    self.node_expr(expr)?;
-                }
-            }
-            RuleBody::Sparql {
-                construct: _,
-                parameters: _,
-            } => {}
-        }
-        for condition in &rule.conditions {
-            self.shape(condition)?;
-        }
-        Ok(())
-    }
-
-    /// Walk a property shape.
-    fn property_shape(&mut self, shape: &PropertyShape) -> Result<(), ShapesProductError> {
-        self.enter()?;
-        for expr in shape.values.iter().chain(&shape.default_value) {
-            self.node_expr(expr)?;
-        }
-        for constraint in &shape.constraints {
-            self.constraint(constraint)?;
-        }
-        for nested in &shape.property_shapes {
-            self.property_shape(nested)?;
-        }
-        for reifier in &shape.reifier_shapes {
-            self.shape(reifier)?;
-        }
-        self.leave();
-        Ok(())
-    }
-
-    /// Walk a constraint.
-    ///
-    /// Wildcard-free, so a new `Constraint` arm that can reach a node expression
-    /// cannot be added without deciding whether the table has to see it.
-    fn constraint(&mut self, constraint: &Constraint) -> Result<(), ShapesProductError> {
-        self.enter()?;
-        match constraint {
-            Constraint::Class(_)
-            | Constraint::Datatype(_)
-            | Constraint::NodeKind(_)
-            | Constraint::MinCount(_)
-            | Constraint::MaxCount(_)
-            | Constraint::In(_)
-            | Constraint::HasValue(_)
-            | Constraint::Pattern { .. }
-            | Constraint::MinLength(_)
-            | Constraint::MaxLength(_)
-            | Constraint::UniqueLang(_)
-            | Constraint::LanguageIn(_)
-            | Constraint::Closed { .. }
-            | Constraint::MinInclusive(_)
-            | Constraint::MaxInclusive(_)
-            | Constraint::MinExclusive(_)
-            | Constraint::MaxExclusive(_)
-            | Constraint::Sparql { .. }
-            | Constraint::Equals(_)
-            | Constraint::Disjoint(_)
-            | Constraint::SubsetOf(_)
-            | Constraint::LessThan(_)
-            | Constraint::LessThanOrEquals(_)
-            | Constraint::MinListLength(_)
-            | Constraint::MaxListLength(_)
-            | Constraint::UniqueMembers(_)
-            | Constraint::SingleLine(_)
-            | Constraint::RootClass(_)
-            | Constraint::Component { .. } => {}
-            Constraint::UniqueValuesFor { targets, .. } => self.targets(targets)?,
-            Constraint::Not(shape)
-            | Constraint::Node(shape)
-            | Constraint::MemberShape(shape)
-            | Constraint::SomeValue(shape) => {
-                self.shape(shape)?;
-            }
-            Constraint::And(shapes) | Constraint::Or(shapes) | Constraint::Xone(shapes) => {
-                for shape in shapes {
-                    self.shape(shape)?;
-                }
-            }
-            Constraint::QualifiedValueShape {
-                shape, siblings, ..
-            } => {
-                self.shape(shape)?;
-                for sibling in siblings {
-                    self.shape(sibling)?;
-                }
-            }
-            Constraint::Expression { expr, .. } | Constraint::NodeByExpression { expr, .. } => {
-                self.node_expr(expr)?;
-            }
-        }
-        self.leave();
-        Ok(())
-    }
-
-    /// Walk the shape argument of `shnex:conformsToShape`.
-    fn shape_arg(&mut self, arg: &ShapeArg) -> Result<(), ShapesProductError> {
-        match arg {
-            ShapeArg::Named(shape) => self.shape(shape),
-            ShapeArg::Computed { expr, .. } => self.node_expr(expr),
-        }
-    }
-
-    /// Walk a node expression.
-    ///
-    /// Wildcard-free for the same reason [`Self::constraint`] is.
-    fn node_expr(&mut self, expr: &NodeExpr) -> Result<(), ShapesProductError> {
-        self.enter()?;
-        match expr {
-            NodeExpr::Constant(_)
-            | NodeExpr::This
-            | NodeExpr::Path(_)
-            | NodeExpr::Arg(_)
-            | NodeExpr::Empty
-            | NodeExpr::Var(_)
-            | NodeExpr::List(_)
-            | NodeExpr::Select { .. } => {}
-            NodeExpr::InstancesOf(types) => self.node_expr(types)?,
-            NodeExpr::Filter { nodes, shape }
-            | NodeExpr::FindFirst { nodes, shape }
-            | NodeExpr::MatchAll { nodes, shape } => {
-                self.node_expr(nodes)?;
-                self.shape(shape)?;
-            }
-            NodeExpr::Union(operands)
-            | NodeExpr::Intersection(operands)
-            | NodeExpr::Concat(operands) => {
-                for operand in operands {
-                    self.node_expr(operand)?;
-                }
-            }
-            NodeExpr::If { cond, then, els } => {
-                self.node_expr(cond)?;
-                self.node_expr(then)?;
-                self.node_expr(els)?;
-            }
-            NodeExpr::Count { of, .. }
-            | NodeExpr::Distinct(of)
-            | NodeExpr::Min(of)
-            | NodeExpr::Max(of)
-            | NodeExpr::Sum(of)
-            | NodeExpr::Limit { of, .. }
-            | NodeExpr::Offset { of, .. }
-            | NodeExpr::Exists(of) => self.node_expr(of)?,
-            NodeExpr::OrderBy { of, key, .. } => {
-                self.node_expr(of)?;
-                self.node_expr(key)?;
-            }
-            NodeExpr::Call(
-                FnCall::Builtin { args, .. }
-                | FnCall::UserDefined { args, .. }
-                | FnCall::Sparql { args, .. },
-            ) => {
-                for arg in args {
-                    self.node_expr(arg)?;
-                }
-            }
-            NodeExpr::CustomCall { func, args } => {
-                self.declare(func)?;
-                for (_, arg) in args {
-                    self.node_expr(arg)?;
-                }
-            }
-            NodeExpr::PathValues { focus, .. } => self.node_expr(focus)?,
-            NodeExpr::Remove { nodes, remove } => {
-                self.node_expr(nodes)?;
-                self.node_expr(remove)?;
-            }
-            NodeExpr::FlatMap { nodes, map } => {
-                self.node_expr(nodes)?;
-                self.node_expr(map)?;
-            }
-            NodeExpr::NodesMatching(shape) => self.shape(shape)?,
-            NodeExpr::ConformsToShape { node, shape } => {
-                self.node_expr(node)?;
-                self.shape_arg(shape)?;
-            }
-        }
-        self.leave();
+    /// The table records declarations only; a shape-index handle carries none.
+    fn shape_index(&mut self, _found: &ShapeIndex) -> Result<(), ShapesProductError> {
         Ok(())
     }
 }

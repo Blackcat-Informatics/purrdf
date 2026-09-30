@@ -49,16 +49,24 @@
 //! not a papered-over bug). It prints the scoreboard line `RULES: passed {n}
 //! total {n}` (scraped by the conformance matrix).
 
+#[path = "support/report.rs"]
+mod report;
+
+use report::merge;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use purrdf::{RdfDataset, RdfDatasetBuilder, canonicalize};
+use purrdf::{RdfDataset, canonicalize};
 use purrdf_shapes::data::ShaclData;
+use purrdf_shapes::shacl_corpora::file_iri;
 use purrdf_shapes::shapes::from_dataset_with_prefixes;
 use purrdf_shapes::{apply_rules, engine, text_ingest};
 
-const RULES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../vectors/shacl/af/rules");
+/// The rules corpus, under the workspace root.
+fn rules_dir() -> PathBuf {
+    purrdf_testkit::paths::workspace_root().join("vectors/shacl/af/rules")
+}
 
 /// The EXACT number of case directories the corpus must hold, so a removed or
 /// renamed case fails fast. Bump this deliberately when adding a case.
@@ -70,10 +78,6 @@ const TOTAL_CASES: usize = 20;
 const XFAIL: &[(&str, &str)] = &[];
 
 // ── IRI / parse helpers ────────────────────────────────────────────────────────
-
-fn file_iri(path: &Path) -> String {
-    format!("file://{}", path.display())
-}
 
 /// A parsed input fixture: the frozen dataset and the document prefix map the codec
 /// recorded while parsing it.
@@ -97,16 +101,6 @@ fn parse_input(path: &Path, text: &str) -> Result<ParsedInput, String> {
 }
 
 // ── Expected-graph reconstruction ──────────────────────────────────────────────
-
-/// Merge the projected base with the parsed derived-delta graph into one frozen
-/// dataset (`base ⊎ expected-derived`). `push_dataset` standardizes blank labels
-/// apart per source, so the two graphs' blanks never collide.
-fn merge(base: &RdfDataset, derived: &RdfDataset) -> Result<Arc<RdfDataset>, String> {
-    let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(base);
-    builder.push_dataset(derived);
-    builder.freeze().map_err(|e| e.to_string())
-}
 
 // ── One case ───────────────────────────────────────────────────────────────────
 
@@ -173,9 +167,13 @@ fn run_case(case: &Case) -> Result<(), String> {
 // ── Discovery ──────────────────────────────────────────────────────────────────
 
 fn discover() -> Vec<Case> {
-    let root = Path::new(RULES_DIR);
-    assert!(root.is_dir(), "rules corpus not found at {RULES_DIR}");
-    let mut cases: Vec<Case> = fs::read_dir(root)
+    let root = rules_dir();
+    assert!(
+        root.is_dir(),
+        "rules corpus not found at {}",
+        root.display()
+    );
+    let mut cases: Vec<Case> = fs::read_dir(&root)
         .expect("read rules corpus dir")
         .filter_map(|entry| {
             let path = entry.ok()?.path();

@@ -5,13 +5,14 @@
 //!
 //! PurRDF keeps its kernel (`purrdf-core`) *structured but SARIF-free*: parse
 //! failures are [`RdfDiagnostic`]s, SHACL results are [`ValidationReport`]s, and
-//! neither knows anything about SARIF or serde. This crate is where that
+//! neither knows anything about SARIF. This crate is where that
 //! structured data crosses the boundary into a **source-traced, byte-deterministic
 //! SARIF 2.1.0 log** for editors, CI, and code-scanning dashboards.
 //!
 //! # What lives here (and why here)
 //!
-//! * The hand-rolled SARIF serde model (no heavyweight SARIF dependency).
+//! * The hand-rolled SARIF object model, written through `purrdf_lex::json` (no
+//!   heavyweight SARIF dependency).
 //! * The mappings from PurRDF severities/rules/locations to SARIF
 //!   `level`/`ruleId`/`physicalLocation`/`logicalLocation`.
 //! * The resolution of runtime-only provenance ids (`UnitId`) to public slice
@@ -19,7 +20,7 @@
 //!   ids never enter the emitted JSON.
 //!
 //! Hosting the writer in this leaf keeps the kernel ring-fence intact: `purrdf-core`
-//! and `purrdf-shapes` never gain a SARIF or serde-derive concern.
+//! and `purrdf-shapes` never gain a SARIF concern.
 //!
 //! # The shared string boundary
 //!
@@ -43,11 +44,17 @@
 //!   is *not* the same thing as [`entail`]; that module's docs spell the
 //!   difference out.
 //!
+//! * [`query`] — what a SPARQL-results emission carries beside the answers
+//!   ([`query::provenance`]), identical for every host that answered it.
+//! * [`governors`] — a governed call's ceilings, as a host received them, turned
+//!   into the evaluator's configuration ([`governors::from_parts`]) from one
+//!   metered base, with "no ceiling" said explicitly.
+//!
 //! [`ReasoningReport`]: purrdf_entail::ReasoningReport
 //!
 //! # Portability
 //!
-//! Pure serde over the report types — no PyO3, no oxigraph-family edge, no ambient
+//! Pure JSON building over the report types — no PyO3, no ambient
 //! I/O — so the crate stays `wasm32-unknown-unknown`-clean like every release crate.
 //!
 //! [`RdfDiagnostic`]: purrdf_core::RdfDiagnostic
@@ -63,9 +70,11 @@
 pub mod build;
 pub mod entail;
 pub mod expr_selector;
+pub mod governors;
 pub mod model;
 pub mod path_syntax;
 pub mod product;
+pub mod query;
 pub mod regime;
 pub mod rules;
 pub mod shacl;
@@ -153,7 +162,3 @@ pub use shapes_tools::{
     apply_rules_to_ntriples, check_rules, eval_node_expr, lint_shapes_ttl,
     lint_shapes_ttl_with_shapes_graph, parse_check_level, parse_scope_binding,
 };
-
-#[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;

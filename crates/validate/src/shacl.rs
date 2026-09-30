@@ -300,7 +300,7 @@ fn parse_ntriples(document: &str) -> Result<Arc<purrdf_core::RdfDataset>, String
 mod tests {
     use std::fmt::Write as _;
 
-    use serde_json::{Value, json};
+    use purrdf_lex::json::{self, Object, Value};
 
     use super::*;
 
@@ -340,14 +340,14 @@ mod tests {
         };
         let data = "<http://example.org/a> <http://example.org/p> <http://example.org/b> .\n";
         let log = |list: &str, options: &SarifOptions| -> Value {
-            serde_json::from_str(
+            json::read(
                 &validate_to_sarif_string(&shapes(list), None, data, options, &[]).expect("SARIF"),
             )
             .expect("JSON")
         };
         let flagged = log("()", &SarifOptions::default());
         let run = &flagged["runs"][0];
-        assert_eq!(run["properties"]["shaclConforms"], json!(false));
+        assert_eq!(run["properties"]["shaclConforms"], false);
         assert_eq!(
             run["results"].as_array().map(Vec::len),
             Some(1),
@@ -355,35 +355,52 @@ mod tests {
         );
         assert_eq!(
             run["results"][0]["ruleId"],
-            json!("http://www.w3.org/ns/shacl#XoneConstraintComponent")
+            "http://www.w3.org/ns/shacl#XoneConstraintComponent"
         );
         assert_eq!(
             run["invocations"],
-            json!([{
-                "executionSuccessful": true,
-                "toolExecutionNotifications": [{
-                    "descriptor": { "id": "xone-minListLength", "index": 0 },
-                    "level": "note",
-                    "message": { "text": purrdf_shapes::lint::MandatoryDiagnostic {
-                        rule: "xone-minListLength",
-                        shape: purrdf_shapes::term::Term::NamedNode(
-                            "http://example.org/S".into()
-                        ),
-                    }.message() },
-                    "locations": [{ "logicalLocations": [{
-                        "name": "<http://example.org/S>", "kind": "shape"
-                    }] }]
-                }]
-            }]),
+            Value::array([Object::new().with("executionSuccessful", true).with(
+                "toolExecutionNotifications",
+                Value::array([Object::new()
+                    .with(
+                        "descriptor",
+                        Object::new()
+                            .with("id", "xone-minListLength")
+                            .with("index", 0_u8)
+                    )
+                    .with("level", "note")
+                    .with(
+                        "message",
+                        Object::new().with(
+                            "text",
+                            purrdf_shapes::lint::MandatoryDiagnostic {
+                                rule: "xone-minListLength",
+                                shape: purrdf_shapes::term::Term::NamedNode(
+                                    "http://example.org/S".into()
+                                ),
+                            }
+                            .message()
+                        )
+                    )
+                    .with(
+                        "locations",
+                        json::read(
+                            r#"[{ "logicalLocations": [{
+                                    "name": "<http://example.org/S>", "kind": "shape"
+                                }] }]"#
+                        )
+                        .expect("JSON")
+                    )])
+            )]),
             "{flagged:#}"
         );
         assert_eq!(
             run["tool"]["driver"]["notifications"][0]["id"],
-            json!("xone-minListLength")
+            "xone-minListLength"
         );
         assert_eq!(
             run["tool"]["driver"]["notifications"][0]["defaultConfiguration"]["level"],
-            json!("note")
+            "note"
         );
 
         let timed = log(
@@ -400,10 +417,7 @@ mod tests {
             .as_array()
             .expect("invocations");
         assert_eq!(invocations.len(), 1, "{timed:#}");
-        assert_eq!(
-            invocations[0]["startTimeUtc"],
-            json!("2026-01-01T00:00:00Z")
-        );
+        assert_eq!(invocations[0]["startTimeUtc"], "2026-01-01T00:00:00Z");
         assert_eq!(
             invocations[0]["toolExecutionNotifications"]
                 .as_array()
@@ -413,7 +427,7 @@ mod tests {
 
         let filled = log("( [ sh:nodeKind sh:IRI ] )", &SarifOptions::default());
         let run = &filled["runs"][0];
-        assert_eq!(run["properties"]["shaclConforms"], json!(true));
+        assert_eq!(run["properties"]["shaclConforms"], true);
         assert!(run.get("invocations").is_none(), "{filled:#}");
         assert!(
             run["tool"]["driver"].get("notifications").is_none(),
@@ -432,7 +446,7 @@ mod tests {
         );
         let conforms = |options: &SarifOptions| -> (Value, Value) {
             let sarif = validate_to_sarif_string(&shapes, None, DATA, options, &[]).expect("sarif");
-            let log: Value = serde_json::from_str(&sarif).expect("json");
+            let log = json::read(&sarif).expect("json");
             let properties = log["runs"][0]["properties"].clone();
             (
                 properties["shaclConforms"].clone(),
@@ -442,8 +456,8 @@ mod tests {
         assert_eq!(
             conforms(&SarifOptions::default()),
             (
-                json!(false),
-                json!([
+                Value::Bool(false),
+                Value::array([
                     "http://www.w3.org/ns/shacl#Violation",
                     "http://www.w3.org/ns/shacl#Warning",
                     "http://www.w3.org/ns/shacl#Info"
@@ -461,7 +475,10 @@ mod tests {
         };
         assert_eq!(
             conforms(&relaxed),
-            (json!(true), json!(["http://www.w3.org/ns/shacl#Violation"]))
+            (
+                Value::Bool(true),
+                Value::array(["http://www.w3.org/ns/shacl#Violation"])
+            )
         );
     }
 
@@ -479,25 +496,31 @@ mod tests {
         path: Option<&str>,
         message: &str,
     ) -> Value {
-        let mut locations = vec![json!({
-            "name": "http://example.org/alice",
-            "kind": "focusNode",
-        })];
+        let logical = |name: &str, kind: &str| Object::new().with("name", name).with("kind", kind);
+        let mut locations = vec![logical("http://example.org/alice", "focusNode")];
         if let Some(path) = path {
-            locations.push(json!({ "name": path, "kind": "resultPath" }));
+            locations.push(logical(path, "resultPath"));
         }
-        locations.push(json!({ "name": component, "kind": "constraintComponent" }));
-        json!({
-            "ruleId": component,
-            "ruleIndex": 0,
-            "level": "error",
-            "message": { "text": message },
-            "locations": [{ "logicalLocations": locations }],
-            "relatedLocations": [{
-                "logicalLocations": [{ "name": source_shape, "kind": "sourceShape" }],
-                "message": { "text": "shape defined here" },
-            }],
-        })
+        locations.push(logical(component, "constraintComponent"));
+        Object::new()
+            .with("ruleId", component)
+            .with("ruleIndex", 0_u8)
+            .with("level", "error")
+            .with("message", Object::new().with("text", message))
+            .with(
+                "locations",
+                Value::array([Object::new().with("logicalLocations", Value::array(locations))]),
+            )
+            .with(
+                "relatedLocations",
+                Value::array([Object::new()
+                    .with(
+                        "logicalLocations",
+                        Value::array([logical(source_shape, "sourceShape")]),
+                    )
+                    .with("message", Object::new().with("text", "shape defined here"))]),
+            )
+            .into()
     }
 
     #[test]
@@ -541,7 +564,7 @@ mod tests {
                     validate_to_sarif_string(&reversed, None, &data, &SarifOptions::default(), &[])
                         .expect("reversing parameter values preserves validation"),
                 );
-                let document: Value = serde_json::from_str(&sarif).expect("SARIF JSON");
+                let document = json::read(&sarif).expect("SARIF JSON");
                 let expected: Vec<Value> = ["first", "second"]
                     .into_iter()
                     .skip(present)
@@ -554,7 +577,7 @@ mod tests {
                         )
                     })
                     .collect();
-                assert_eq!(document["runs"][0]["results"], json!(expected),);
+                assert_eq!(document["runs"][0]["results"], Value::Array(expected));
 
                 if let Some(predicate) = ["first", "second"].get(present) {
                     writeln!(
@@ -616,8 +639,8 @@ mod tests {
                     .expect("native property constraints validate"),
                 "importing the vocabulary preserves the exact report",
             );
-            let document: Value = serde_json::from_str(&sarif).expect("SARIF JSON");
-            assert_eq!(document["runs"][0]["results"], json!(results),);
+            let document = json::read(&sarif).expect("SARIF JSON");
+            assert_eq!(document["runs"][0]["results"], Value::Array(results));
         }
     }
 

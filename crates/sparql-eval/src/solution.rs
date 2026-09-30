@@ -29,6 +29,8 @@ use crate::scratch::SolutionTerm;
 /// Maps each [`Variable`] to a stable column ordinal. Column order is significant:
 /// it fixes `SELECT` result-column order and the deterministic left-then-right
 /// ordering of join outputs.
+///
+/// The [`Default`] schema has zero columns: the schema of the identity table `Z`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct VarSchema {
     /// column ordinal → variable.
@@ -95,16 +97,11 @@ impl VarSchema {
 }
 
 impl VarSchema {
-    /// An empty schema (zero columns) — the schema of the identity table `Z`.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Build a schema from an ordered iterator of variables, keeping first
     /// occurrence and dropping later duplicates (so the column order is the
     /// variables' first-seen order).
     pub fn from_vars(vars: impl IntoIterator<Item = Variable>) -> Self {
-        let mut schema = Self::new();
+        let mut schema = Self::default();
         for v in vars {
             schema.push(v);
         }
@@ -232,7 +229,7 @@ impl VarSchema {
     /// value and for the single-pattern join order.
     pub fn empty_shared() -> Arc<Self> {
         static EMPTY: std::sync::OnceLock<Arc<VarSchema>> = std::sync::OnceLock::new();
-        Arc::clone(EMPTY.get_or_init(|| Arc::new(Self::new())))
+        Arc::clone(EMPTY.get_or_init(|| Arc::new(Self::default())))
     }
 }
 
@@ -410,7 +407,7 @@ mod tests {
     #[test]
     fn schema_lookup_agrees_on_both_sides_of_the_index_threshold() {
         let names: Vec<String> = (0..INDEXED_ABOVE * 3).map(|i| format!("v{i}")).collect();
-        let mut schema = VarSchema::new();
+        let mut schema = VarSchema::default();
         for (expected_ordinal, name) in names.iter().enumerate() {
             assert_eq!(schema.push(var(name)), expected_ordinal);
             assert!(
@@ -450,7 +447,7 @@ mod tests {
     /// on BOTH sides for the identical schema instance, including for a column
     /// whose ordinal was assigned before the index existed.
     fn check_index_of_agrees(vars: Vec<Variable>) {
-        let mut schema = VarSchema::new();
+        let mut schema = VarSchema::default();
         let mut distinct_seen: Vec<Variable> = Vec::new();
         for v in vars {
             let before_len = schema.len();

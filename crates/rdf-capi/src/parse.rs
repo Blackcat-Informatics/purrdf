@@ -10,6 +10,7 @@ use purrdf_rs::{DatasetSink, GtsCodecBackend, RdfParseRequest, RdfParserBackend}
 
 use crate::error::PurrdfError;
 use crate::handles::PurrdfDataset;
+use crate::handles::into_handle;
 use crate::status::PurrdfStatus;
 use crate::{cstr_to_str, opt_cstr_to_str};
 
@@ -71,7 +72,7 @@ pub unsafe extern "C" fn purrdf_parse(
             let dataset = sink.into_dataset().ok_or_else(|| {
                 PurrdfError::new(PurrdfStatus::ParseError, "parse produced no dataset")
             })?;
-            *out_dataset = PurrdfDataset::into_raw(dataset);
+            *out_dataset = into_handle(PurrdfDataset(dataset));
             Ok(PurrdfStatus::Ok)
         })
     }

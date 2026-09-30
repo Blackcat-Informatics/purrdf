@@ -72,6 +72,7 @@ pub(crate) const fn fold(a: u64, b: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{fold_halves, fold_wide};
+    use crate::mix::splitmix64_next;
 
     #[test]
     fn both_formulations_agree() {
@@ -91,9 +92,9 @@ mod tests {
                 assert_eq!(fold_wide(a, b), fold_halves(a, b), "{a:#x} · {b:#x}");
             }
         }
-        let mut rng = purrdf_testkit::rng::Xoshiro256::from_seed(0x666f_6c64);
+        let mut state = 0x666f_6c64;
         for _ in 0..1 << 20 {
-            let (a, b) = (rng.next_u64(), rng.next_u64());
+            let (a, b) = (splitmix64_next(&mut state), splitmix64_next(&mut state));
             assert_eq!(fold_wide(a, b), fold_halves(a, b), "{a:#x} · {b:#x}");
         }
     }

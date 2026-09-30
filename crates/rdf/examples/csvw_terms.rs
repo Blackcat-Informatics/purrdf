@@ -10,11 +10,15 @@ use std::fs;
 use std::path::PathBuf;
 
 use purrdf_rdf::{
-    CsvwConfig, CsvwContext, CsvwDatatype, CsvwMode, CsvwNaturalLanguage, CsvwTermsCardinality,
-    CsvwTermsColumn, CsvwTermsConfig, CsvwTermsGraphSelection, CsvwTermsIdentityColumn,
-    CsvwTermsLimits, CsvwTermsSelector, CsvwTermsTable, CsvwTermsValueMode, CsvwVocabulary,
-    ProjectionLimits, parse_dataset, project_csvw_terms,
+    CsvwConfig, CsvwContext, CsvwMode, CsvwNaturalLanguage, CsvwTermsCardinality, CsvwTermsColumn,
+    CsvwTermsConfig, CsvwTermsGraphSelection, CsvwTermsIdentityColumn, CsvwTermsLimits,
+    CsvwTermsSelector, CsvwTermsTable, CsvwTermsValueMode, CsvwVocabulary, ProjectionLimits,
+    parse_dataset, project_csvw_terms,
 };
+
+#[path = "../tests/support/projection_configs.rs"]
+mod projection_configs;
+use projection_configs::csvw_datatype;
 
 const EX: &str = "https://example.org/schema/";
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
@@ -23,23 +27,6 @@ const CLASS: &str = "https://example.org/schema/Class";
 const PROPERTY: &str = "https://example.org/schema/Property";
 const INDIVIDUAL: &str = "https://example.org/schema/Individual";
 const LABEL: &str = "https://example.org/schema/label";
-
-fn datatype(base: impl Into<String>) -> CsvwDatatype {
-    CsvwDatatype {
-        id: None,
-        base: base.into(),
-        format: None,
-        length: None,
-        min_length: None,
-        max_length: None,
-        minimum: None,
-        maximum: None,
-        min_inclusive: None,
-        max_inclusive: None,
-        min_exclusive: None,
-        max_exclusive: None,
-    }
-}
 
 fn titles(title: &str) -> CsvwNaturalLanguage {
     BTreeMap::from([(String::new(), vec![title.to_owned()])])
@@ -56,7 +43,7 @@ fn iri_column(
         name,
         titles(title),
         predicate,
-        CsvwTermsValueMode::iri(datatype(format!("{XSD}anyURI")))?,
+        CsvwTermsValueMode::iri(csvw_datatype(format!("{XSD}anyURI")))?,
         cardinality,
         required,
     )?)
@@ -71,7 +58,7 @@ fn literal_column(
         name,
         titles(title),
         predicate,
-        CsvwTermsValueMode::literal(datatype(format!("{XSD}string")), None, None)?,
+        CsvwTermsValueMode::literal(csvw_datatype(format!("{XSD}string")), None, None)?,
         CsvwTermsCardinality::One,
         false,
     )?)
@@ -94,7 +81,7 @@ fn table(
             BTreeSet::new(),
             BTreeSet::from([EX.to_owned()]),
         )?,
-        CsvwTermsIdentityColumn::new("iri", titles("IRI"), datatype(format!("{XSD}anyURI")))?,
+        CsvwTermsIdentityColumn::new("iri", titles("IRI"), csvw_datatype(format!("{XSD}anyURI")))?,
         columns,
     )?)
 }

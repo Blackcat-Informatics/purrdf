@@ -26,6 +26,9 @@ use crate::ast::{
     Variable,
 };
 use crate::tree::{Args, Chain, Child, NonEmpty};
+use purrdf_lex::term_syntax::{
+    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri, write_literal,
+};
 
 /// The closed SEP-0009 function registry and its argument-count signatures,
 /// re-exported so a consumer that matches on [`Function::Cdt`] can name
@@ -200,14 +203,20 @@ pub enum Query {
 }
 
 impl Query {
+    /// The query's `WHERE`-body pattern, whichever query form it is.
+    #[must_use]
+    pub const fn pattern(&self) -> &GraphPattern {
+        match self {
+            Self::Select { pattern, .. }
+            | Self::Construct { pattern, .. }
+            | Self::Describe { pattern, .. }
+            | Self::Ask { pattern, .. } => pattern,
+        }
+    }
+
     /// The query's `FROM` / `FROM NAMED` dataset clause (empty = the store default).
     pub fn dataset(&self) -> &QueryDataset {
-        match self {
-            Self::Select { dataset, .. }
-            | Self::Construct { dataset, .. }
-            | Self::Describe { dataset, .. }
-            | Self::Ask { dataset, .. } => dataset,
-        }
+        self.prologue().0
     }
 
     /// The query's effective base IRI (an explicit `BASE` decl, or the
@@ -215,22 +224,43 @@ impl Query {
     /// against which a runtime `IRI()`/`URI()` call resolves its string argument
     /// (SPARQL 1.1 §17.4.2.6). `None` when neither was ever supplied.
     pub fn base_iri(&self) -> Option<&NamedNode> {
-        match self {
-            Self::Select { base_iri, .. }
-            | Self::Construct { base_iri, .. }
-            | Self::Describe { base_iri, .. }
-            | Self::Ask { base_iri, .. } => base_iri.as_ref(),
-        }
+        self.prologue().1
     }
 
     /// The query's `VERSION` declaration, if the prologue declared one (last-wins
     /// across repeated declarations; see [`SparqlVersion`]).
     pub fn version(&self) -> Option<&SparqlVersion> {
+        self.prologue().2
+    }
+
+    /// The dataset clause, base IRI and version every query form carries, read
+    /// by the one match over the four forms that the accessors above share.
+    const fn prologue(&self) -> (&QueryDataset, Option<&NamedNode>, Option<&SparqlVersion>) {
         match self {
-            Self::Select { version, .. }
-            | Self::Construct { version, .. }
-            | Self::Describe { version, .. }
-            | Self::Ask { version, .. } => version.as_ref(),
+            Self::Select {
+                dataset,
+                base_iri,
+                version,
+                ..
+            }
+            | Self::Construct {
+                dataset,
+                base_iri,
+                version,
+                ..
+            }
+            | Self::Describe {
+                dataset,
+                base_iri,
+                version,
+                ..
+            }
+            | Self::Ask {
+                dataset,
+                base_iri,
+                version,
+                ..
+            } => (dataset, base_iri.as_ref(), version.as_ref()),
         }
     }
 }
@@ -444,16 +474,27 @@ impl core::fmt::Display for Update {
     }
 }
 
+/// Append a [`NamedNodePattern`] in SPARQL surface syntax (`<iri>` or `?var`).
+fn write_named_node_pattern(n: &NamedNodePattern, out: &mut String) {
+    match n {
+        NamedNodePattern::NamedNode(node) => write_iri(node.as_str(), out),
+        NamedNodePattern::Variable(v) => {
+            out.push('?');
+            out.push_str(v.as_str());
+        }
+    }
+}
+
 /// Render an [`NamedNodePattern`] in SPARQL surface syntax (`<iri>` or `?var`).
 fn fmt_named_node_pattern(n: &NamedNodePattern) -> String {
-    match n {
-        NamedNodePattern::NamedNode(node) => format!("<{}>", node.as_str()),
-        NamedNodePattern::Variable(v) => format!("?{}", v.as_str()),
-    }
+    let mut out = String::new();
+    write_named_node_pattern(n, &mut out);
+    out
 }
 
 /// Render a [`TriplePattern`] as `s p o`, its quoted triple terms `<<( s p o )>>`,
 /// over a work list: a term nested to any depth is written without recursion.
+/// Every constant is spelled by [`purrdf_lex::term_syntax`].
 fn fmt_triple_pattern(t: &TriplePattern) -> String {
     enum Part<'a> {
         Text(&'static str),
@@ -471,26 +512,27 @@ fn fmt_triple_pattern(t: &TriplePattern) -> String {
     while let Some(part) = stack.pop() {
         match part {
             Part::Text(text) => out.push_str(text),
-            Part::Predicate(p) => out.push_str(&fmt_named_node_pattern(p)),
+            Part::Predicate(p) => write_named_node_pattern(p, &mut out),
             Part::Term(term) => match term {
-                TermPattern::NamedNode(n) => {
-                    out.push('<');
-                    out.push_str(n.as_str());
-                    out.push('>');
-                }
-                TermPattern::BlankNode(b) => {
-                    out.push_str("_:");
-                    out.push_str(b.as_str());
-                }
-                TermPattern::Literal(l) => out.push_str(&fmt_literal(l)),
+                TermPattern::NamedNode(n) => write_iri(n.as_str(), &mut out),
+                TermPattern::BlankNode(b) => write_blank(b.as_str(), &mut out),
+                TermPattern::Literal(l) => write_literal(
+                    l.value(),
+                    l.datatype().as_str(),
+                    l.language(),
+                    l.direction().map(crate::ast::BaseDirection::as_str),
+                    &mut out,
+                ),
                 TermPattern::Variable(v) => {
                     out.push('?');
                     out.push_str(v.as_str());
                 }
                 TermPattern::Triple(inner) => {
-                    out.push_str("<<( ");
+                    out.push_str(TRIPLE_TERM_OPEN);
+                    out.push(' ');
                     stack.extend([
-                        Part::Text(" )>>"),
+                        Part::Text(TRIPLE_TERM_CLOSE),
+                        Part::Text(" "),
                         Part::Term(&inner.object),
                         Part::Text(" "),
                         Part::Predicate(&inner.predicate),
@@ -502,21 +544,6 @@ fn fmt_triple_pattern(t: &TriplePattern) -> String {
         }
     }
     out
-}
-
-/// Render a [`Literal`] in SPARQL surface syntax.
-fn fmt_literal(l: &Literal) -> String {
-    match (l.language(), l.direction()) {
-        (Some(lang), Some(dir)) => {
-            let d = match dir {
-                crate::ast::BaseDirection::Ltr => "ltr",
-                crate::ast::BaseDirection::Rtl => "rtl",
-            };
-            format!("{:?}@{lang}--{d}", l.value())
-        }
-        (Some(lang), None) => format!("{:?}@{lang}", l.value()),
-        (None, _) => format!("{:?}^^<{}>", l.value(), l.datatype().as_str()),
-    }
 }
 
 /// Render a `DELETE`/`INSERT` template (a list of [`QuadPattern`]s) as the body of
@@ -1235,6 +1262,40 @@ impl PropertyPathExpression {
 }
 
 impl GraphPattern {
+    /// The empty basic graph pattern: the identity table `Z` of §18.2, one solution
+    /// with no bindings. The one spelling of it, so every rewrite that leaves a hole
+    /// or tests for the identity agrees with the parser on what it is.
+    #[must_use]
+    pub const fn empty_bgp() -> Self {
+        Self::Bgp {
+            patterns: Vec::new(),
+        }
+    }
+
+    /// The property-function call this pattern is, if it is one.
+    #[must_use]
+    pub const fn as_property_function(&self) -> Option<&PropertyFunctionCall> {
+        match self {
+            Self::PropertyFunction(call) => Some(call),
+            _ => None,
+        }
+    }
+
+    /// [`Self::as_property_function`], for a rewrite that writes into the call.
+    #[must_use]
+    pub const fn as_property_function_mut(&mut self) -> Option<&mut PropertyFunctionCall> {
+        match self {
+            Self::PropertyFunction(call) => Some(call),
+            _ => None,
+        }
+    }
+
+    /// Whether this is the empty basic graph pattern ([`Self::empty_bgp`]).
+    #[must_use]
+    pub const fn is_empty_bgp(&self) -> bool {
+        matches!(self, Self::Bgp { patterns } if patterns.is_empty())
+    }
+
     /// `{ left } UNION { right }`, as the parser builds it: a `left` that is already
     /// a [`Self::Union`] gains one arm, so a written chain of any length is one node.
     /// A `right` that is a `Union` stays one arm, as the braced group it came from.
@@ -1532,6 +1593,29 @@ pub enum OrderExpression {
     Asc(Expression),
     /// Descending (`DESC(expr)`).
     Desc(Expression),
+}
+
+impl OrderExpression {
+    /// The expression this key orders by, its direction set aside.
+    ///
+    /// Every walk that treats a sort key as an ordinary expression (variable
+    /// collection, substitution, prepare-time planning) wants exactly this; one
+    /// accessor rather than an irrefutable `Asc(e) | Desc(e)` binding at each walk is
+    /// what keeps them from diverging.
+    #[must_use]
+    pub const fn expression(&self) -> &Expression {
+        match self {
+            Self::Asc(expr) | Self::Desc(expr) => expr,
+        }
+    }
+
+    /// [`Self::expression`] for rewriting in place, under the key's original direction.
+    #[must_use]
+    pub const fn expression_mut(&mut self) -> &mut Expression {
+        match self {
+            Self::Asc(expr) | Self::Desc(expr) => expr,
+        }
+    }
 }
 
 /// A `GROUP BY` aggregate — SPARQL 1.1 §18.5.1's algebra node
@@ -2182,6 +2266,26 @@ mod tests {
             },
             graph,
         }
+    }
+
+    #[test]
+    fn only_a_bgp_with_no_triples_is_the_empty_bgp() {
+        assert!(GraphPattern::empty_bgp().is_empty_bgp());
+        let one = GraphPattern::Bgp {
+            patterns: vec![quad_pattern(None).triple],
+        };
+        assert!(
+            !one.is_empty_bgp(),
+            "a BGP holding a triple is not the identity"
+        );
+        let empty_group = GraphPattern::Graph {
+            name: NamedNodePattern::NamedNode(nn("http://ex/g")),
+            inner: Child::new(GraphPattern::empty_bgp()),
+        };
+        assert!(
+            !empty_group.is_empty_bgp(),
+            "a pattern wrapping the identity is not itself the identity"
+        );
     }
 
     #[test]

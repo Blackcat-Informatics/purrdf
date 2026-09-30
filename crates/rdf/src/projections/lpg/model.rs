@@ -1,17 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use crate::projections::util::require_strictly_sorted;
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Deserializer, Serialize};
+use purrdf_lex::json::{Object, Value};
 
+use super::super::json_codec::{Fields, FromJson, JsonError, ToJson};
 use super::super::util::canonical_json_bounded;
 use super::super::{
     ProjectionError, ProjectionLimits, ProjectionTerm, stable_identifier, validate_absolute_iri,
 };
 
 const LPG_SCHEMA_VERSION: u32 = 1;
-const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+use purrdf_xsd::XsdDatatype;
+use purrdf_xsd::datatype::{XSD_BOOLEAN, XSD_DECIMAL, XSD_DOUBLE, XSD_FLOAT};
+use purrdf_xsd::numeric::{is_decimal_lexical, is_integer_lexical};
 
 /// Mandatory policy and resource boundary for the canonical LPG mapping.
 ///
@@ -19,7 +23,7 @@ const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 /// IRI-object statements become native labels, chooses an explicit input scope, and
 /// supplies separate scan/model/node/edge ceilings. Every other predicate remains a
 /// full source IRI.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LpgConfig {
     rdf_type: String,
     scope: LpgScope,
@@ -80,40 +84,16 @@ impl LpgConfig {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawLpgConfig {
-    rdf_type: String,
-    scope: LpgScope,
-    limits: ProjectionLimits,
-    execution_limits: LpgExecutionLimits,
-}
-
-impl<'de> Deserialize<'de> for LpgConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawLpgConfig::deserialize(deserializer)?;
-        Self::new(raw.rdf_type, raw.scope, raw.limits, raw.execution_limits)
-            .map_err(serde::de::Error::custom)
-    }
-}
-
 /// Mandatory fail-fast execution bounds for RDF-to-LPG mapping.
 ///
 /// Artifact, archive, and recursive-term byte/depth bounds remain in
 /// [`ProjectionLimits`]. These bounds cover the semantic mapping before bytes are
 /// emitted. There is deliberately no `Default`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LpgExecutionLimits {
-    #[serde(rename = "max_input_records")]
     input_records: usize,
-    #[serde(rename = "max_model_records")]
     model_records: usize,
-    #[serde(rename = "max_nodes")]
     nodes: usize,
-    #[serde(rename = "max_edges")]
     edges: usize,
 }
 
@@ -176,56 +156,123 @@ impl LpgExecutionLimits {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawLpgExecutionLimits {
-    #[serde(rename = "max_input_records")]
-    input_records: usize,
-    #[serde(rename = "max_model_records")]
-    model_records: usize,
-    #[serde(rename = "max_nodes")]
-    nodes: usize,
-    #[serde(rename = "max_edges")]
-    edges: usize,
-}
-
-impl<'de> Deserialize<'de> for LpgExecutionLimits {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawLpgExecutionLimits::deserialize(deserializer)?;
-        Self::new(raw.input_records, raw.model_records, raw.nodes, raw.edges)
-            .map_err(serde::de::Error::custom)
-    }
-}
-
-/// Exact allow/deny selection over absolute IRIs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "mode", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum LpgIriSelection {
-    /// Admit every IRI except the explicit deny set.
+/// Exact include/exclude selection over members of type `T`: absolute IRIs
+/// ([`LpgIriSelection`]) or exact named-graph terms
+/// ([`LpgNamedGraphSelection`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LpgSelection<T> {
+    /// Admit every member except the explicit exclude set.
     All {
-        /// Absolute IRIs excluded from the selection.
-        deny: BTreeSet<String>,
+        /// Members excluded from the selection.
+        exclude: BTreeSet<T>,
     },
-    /// Admit only the explicit allow set, minus the explicit deny set.
+    /// Admit only the explicit include set, minus the explicit exclude set.
     Only {
-        /// Absolute IRIs eligible for selection.
-        allow: BTreeSet<String>,
-        /// Absolute IRIs excluded from the allow set.
-        deny: BTreeSet<String>,
+        /// Members eligible for selection.
+        include: BTreeSet<T>,
+        /// Members excluded from the include set.
+        exclude: BTreeSet<T>,
     },
 }
 
-impl LpgIriSelection {
-    /// Select every IRI.
+/// Exact allow/deny selection over absolute IRIs: its JSON and its refusals
+/// name the include set `allow` and the exclude set `deny`.
+pub type LpgIriSelection = LpgSelection<String>;
+
+/// Exact include/exclude selection over RDF named-graph terms.
+pub type LpgNamedGraphSelection = LpgSelection<ProjectionTerm>;
+
+/// The names an IRI selection gives its include and exclude sets.
+const IRI_SETS: (&str, &str) = ("allow", "deny");
+
+/// The names a named-graph selection gives its include and exclude sets.
+const GRAPH_SETS: (&str, &str) = ("include", "exclude");
+
+impl<T: Ord> LpgSelection<T> {
+    /// Select every member.
     pub const fn all() -> Self {
         Self::All {
-            deny: BTreeSet::new(),
+            exclude: BTreeSet::new(),
         }
     }
 
+    /// The include set (`None` admits every member) and the exclude set.
+    const fn sets(&self) -> (Option<&BTreeSet<T>>, &BTreeSet<T>) {
+        match self {
+            Self::All { exclude } => (None, exclude),
+            Self::Only { include, exclude } => (Some(include), exclude),
+        }
+    }
+
+    /// Check every member with `check`, and refuse a member both included and
+    /// excluded; `names` are the sets' names in the refusal.
+    fn validate(
+        &self,
+        description: &str,
+        names: (&str, &str),
+        mut check: impl FnMut(&T) -> Result<(), ProjectionError>,
+    ) -> Result<(), ProjectionError> {
+        let (include, exclude) = self.sets();
+        for member in include.into_iter().flatten().chain(exclude) {
+            check(member)?;
+        }
+        if include.is_some_and(|include| !include.is_disjoint(exclude)) {
+            let (include, exclude) = names;
+            return Err(ProjectionError::configuration(format!(
+                "{description} {include} and {exclude} sets must be disjoint"
+            )));
+        }
+        Ok(())
+    }
+
+    pub(super) fn contains<Q: Ord + ?Sized>(&self, value: &Q) -> bool
+    where
+        T: std::borrow::Borrow<Q>,
+    {
+        let (include, exclude) = self.sets();
+        include.is_none_or(|include| include.contains(value)) && !exclude.contains(value)
+    }
+}
+
+impl<T: Ord + FromJson> LpgSelection<T> {
+    /// `{"mode": "all", <exclude>}` or `{"mode": "only", <include>, <exclude>}`,
+    /// the sets named by `names`.
+    fn read(
+        value: &Value,
+        expecting: &str,
+        (include, exclude): (&'static str, &'static str),
+    ) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, expecting)?;
+        let selection = match fields.tag("mode", SELECTION_MODES)? {
+            "all" => Self::All {
+                exclude: fields.required(exclude)?,
+            },
+            _ => Self::Only {
+                include: fields.required(include)?,
+                exclude: fields.required(exclude)?,
+            },
+        };
+        fields.deny_unknown()?;
+        Ok(selection)
+    }
+}
+
+impl<T: ToJson> LpgSelection<T> {
+    /// The JSON form [`LpgSelection::read`] reads.
+    fn write(&self, (include_name, exclude_name): (&str, &str)) -> Value {
+        Value::Object(match self {
+            Self::All { exclude } => Object::new()
+                .with("mode", "all")
+                .with(exclude_name, exclude.to_json()),
+            Self::Only { include, exclude } => Object::new()
+                .with("mode", "only")
+                .with(include_name, include.to_json())
+                .with(exclude_name, exclude.to_json()),
+        })
+    }
+}
+
+impl LpgIriSelection {
     /// Select every IRI except the supplied deny set.
     ///
     /// # Errors
@@ -237,9 +284,9 @@ impl LpgIriSelection {
         S: Into<String>,
     {
         let selection = Self::All {
-            deny: deny.into_iter().map(Into::into).collect(),
+            exclude: deny.into_iter().map(Into::into).collect(),
         };
-        selection.validate("IRI selection")?;
+        selection.validate_iris("IRI selection")?;
         Ok(selection)
     }
 
@@ -257,72 +304,29 @@ impl LpgIriSelection {
         DS: Into<String>,
     {
         let selection = Self::Only {
-            allow: allow.into_iter().map(Into::into).collect(),
-            deny: deny.into_iter().map(Into::into).collect(),
+            include: allow.into_iter().map(Into::into).collect(),
+            exclude: deny.into_iter().map(Into::into).collect(),
         };
-        selection.validate("IRI selection")?;
+        selection.validate_iris("IRI selection")?;
         Ok(selection)
     }
 
-    fn validate(&self, description: &str) -> Result<(), ProjectionError> {
-        let (allow, deny) = match self {
-            Self::All { deny } => (None, deny),
-            Self::Only { allow, deny } => (Some(allow), deny),
-        };
-        for value in allow.into_iter().flatten().chain(deny) {
-            validate_absolute_iri(value, description)?;
-        }
-        if allow.is_some_and(|allow| !allow.is_disjoint(deny)) {
-            return Err(ProjectionError::configuration(format!(
-                "{description} allow and deny sets must be disjoint"
-            )));
-        }
-        Ok(())
-    }
-
-    pub(super) fn contains(&self, value: &str) -> bool {
-        match self {
-            Self::All { deny } => !deny.contains(value),
-            Self::Only { allow, deny } => allow.contains(value) && !deny.contains(value),
-        }
+    fn validate_iris(&self, description: &str) -> Result<(), ProjectionError> {
+        self.validate(description, IRI_SETS, |iri| {
+            validate_absolute_iri(iri, description)
+        })
     }
 
     pub(super) fn contains_types(&self, values: Option<&BTreeSet<String>>) -> bool {
         match self {
-            Self::All { deny } => values.is_none_or(|values| values.is_disjoint(deny)),
-            Self::Only { allow, deny } => {
-                values.is_some_and(|values| !values.is_disjoint(allow) && values.is_disjoint(deny))
-            }
+            Self::All { exclude } => values.is_none_or(|values| values.is_disjoint(exclude)),
+            Self::Only { include, exclude } => values
+                .is_some_and(|values| !values.is_disjoint(include) && values.is_disjoint(exclude)),
         }
     }
-}
-
-/// Exact include/exclude selection over RDF named-graph terms.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "mode", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum LpgNamedGraphSelection {
-    /// Admit every named graph except the explicit exclude set.
-    All {
-        /// Exact named-graph terms excluded from the selection.
-        exclude: BTreeSet<ProjectionTerm>,
-    },
-    /// Admit only the include set, minus the exclude set.
-    Only {
-        /// Exact named-graph terms eligible for selection.
-        include: BTreeSet<ProjectionTerm>,
-        /// Exact named-graph terms excluded from the include set.
-        exclude: BTreeSet<ProjectionTerm>,
-    },
 }
 
 impl LpgNamedGraphSelection {
-    /// Select every named graph.
-    pub const fn all() -> Self {
-        Self::All {
-            exclude: BTreeSet::new(),
-        }
-    }
-
     /// Select every named graph except the supplied exact terms.
     pub fn all_except<I>(exclude: I) -> Self
     where
@@ -345,33 +349,15 @@ impl LpgNamedGraphSelection {
         }
     }
 
-    fn validate(&self, limits: ProjectionLimits) -> Result<(), ProjectionError> {
-        let (include, exclude) = match self {
-            Self::All { exclude } => (None, exclude),
-            Self::Only { include, exclude } => (Some(include), exclude),
-        };
-        for term in include.into_iter().flatten().chain(exclude) {
-            validate_graph_name(term, limits, "LPG scope named graph")?;
-        }
-        if include.is_some_and(|include| !include.is_disjoint(exclude)) {
-            return Err(ProjectionError::configuration(
-                "LPG named-graph include and exclude sets must be disjoint",
-            ));
-        }
-        Ok(())
-    }
-
-    pub(super) fn contains(&self, graph: &ProjectionTerm) -> bool {
-        match self {
-            Self::All { exclude } => !exclude.contains(graph),
-            Self::Only { include, exclude } => include.contains(graph) && !exclude.contains(graph),
-        }
+    fn validate_graphs(&self, limits: ProjectionLimits) -> Result<(), ProjectionError> {
+        self.validate("LPG scope named graph", GRAPH_SETS, |term| {
+            validate_graph_name(term, limits, "LPG scope named graph")
+        })
     }
 }
 
 /// Mandatory RDF input scope for LPG projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "mode", rename_all = "kebab-case", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LpgScope {
     /// Explicitly project the complete dataset view.
     All,
@@ -425,10 +411,10 @@ impl LpgScope {
             ..
         } = self
         {
-            named_graphs.validate(limits)?;
-            predicates.validate("LPG predicate scope")?;
-            node_types.validate("LPG node-type scope")?;
-            edge_types.validate("LPG edge-type scope")?;
+            named_graphs.validate_graphs(limits)?;
+            predicates.validate_iris("LPG predicate scope")?;
+            node_types.validate_iris("LPG node-type scope")?;
+            edge_types.validate_iris("LPG edge-type scope")?;
         }
         Ok(())
     }
@@ -443,38 +429,53 @@ impl LpgScope {
         }
     }
 
-    pub(super) fn includes_named_graph(&self, graph: &ProjectionTerm) -> bool {
+    /// Whether the scope admits a value: `All` admits everything, and `Select`
+    /// admits what `selected` says of its selection.
+    fn admits(&self, selected: impl FnOnce(&LpgScopeSelection<'_>) -> bool) -> bool {
         match self {
             Self::All => true,
-            Self::Select { named_graphs, .. } => named_graphs.contains(graph),
+            Self::Select {
+                named_graphs,
+                predicates,
+                node_types,
+                edge_types,
+                ..
+            } => selected(&LpgScopeSelection {
+                named_graphs,
+                predicates,
+                node_types,
+                edge_types,
+            }),
         }
+    }
+
+    pub(super) fn includes_named_graph(&self, graph: &ProjectionTerm) -> bool {
+        self.admits(|scope| scope.named_graphs.contains(graph))
     }
 
     pub(super) fn includes_predicate(&self, predicate: &str) -> bool {
-        match self {
-            Self::All => true,
-            Self::Select { predicates, .. } => predicates.contains(predicate),
-        }
+        self.admits(|scope| scope.predicates.contains(predicate))
     }
 
     pub(super) fn includes_node_types(&self, types: Option<&BTreeSet<String>>) -> bool {
-        match self {
-            Self::All => true,
-            Self::Select { node_types, .. } => node_types.contains_types(types),
-        }
+        self.admits(|scope| scope.node_types.contains_types(types))
     }
 
     pub(super) fn includes_edge_type(&self, edge_type: &str) -> bool {
-        match self {
-            Self::All => true,
-            Self::Select { edge_types, .. } => edge_types.contains(edge_type),
-        }
+        self.admits(|scope| scope.edge_types.contains(edge_type))
     }
 }
 
+/// The selections of an [`LpgScope::Select`], borrowed.
+struct LpgScopeSelection<'a> {
+    named_graphs: &'a LpgNamedGraphSelection,
+    predicates: &'a LpgIriSelection,
+    node_types: &'a LpgIriSelection,
+    edge_types: &'a LpgIriSelection,
+}
+
 /// Graph placement carried beside one RDF-origin LPG record.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LpgGraphContext {
     /// RDF default graph.
     Default,
@@ -501,8 +502,7 @@ impl LpgGraphContext {
 }
 
 /// Exact RDF 1.2 statement identity retained beside a native LPG construct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LpgRdfQuad {
     /// Exact subject term.
     pub subject: ProjectionTerm,
@@ -519,8 +519,7 @@ pub struct LpgRdfQuad {
 /// The owning [`LpgProperty`] always carries the exact RDF literal in
 /// [`LpgProperty::rdf`]. This atom is the useful property-graph value; it never
 /// replaces or weakens lexical/datatype/language/direction identity.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LpgPropertyAtom {
     /// Boolean value from a valid `xsd:boolean` lexical form.
     Boolean {
@@ -560,8 +559,7 @@ impl LpgPropertyAtom {
 }
 
 /// One RDF type-like statement lowered to a native LPG label.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LpgLabel {
     /// Stable identifier of the exact source statement.
     pub statement_id: String,
@@ -572,8 +570,7 @@ pub struct LpgLabel {
 }
 
 /// One RDF literal statement lowered to a native LPG property.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LpgProperty {
     /// Stable identifier of the exact source statement.
     pub statement_id: String,
@@ -586,8 +583,7 @@ pub struct LpgProperty {
 }
 
 /// Canonical LPG node with exact RDF term identity.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LpgNode {
     /// Stable collision-resistant node identifier.
     pub id: String,
@@ -600,8 +596,7 @@ pub struct LpgNode {
 }
 
 /// Canonical directed LPG edge with exact RDF statement identity.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LpgEdge {
     /// Stable collision-resistant edge identifier.
     pub id: String,
@@ -616,8 +611,7 @@ pub struct LpgEdge {
 }
 
 /// Exact RDF 1.2 reifier binding carried by the canonical LPG model.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LpgReifier {
     /// Stable record identifier.
     pub id: String,
@@ -630,8 +624,7 @@ pub struct LpgReifier {
 }
 
 /// Exact RDF 1.2 statement annotation carried by the canonical LPG model.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LpgAnnotation {
     /// Stable record identifier.
     pub id: String,
@@ -646,8 +639,7 @@ pub struct LpgAnnotation {
 }
 
 /// Canonical deterministic LPG plus complete RDF 1.2 reversal sideband.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LpgGraph {
     /// Canonical model schema version. Version 1 is the only accepted value.
     pub schema_version: u32,
@@ -696,7 +688,12 @@ impl LpgGraph {
             )));
         }
         self.validate_record_budget(config)?;
-        require_strict_order(&self.named_graphs, "named graphs")?;
+        require_strictly_sorted(&self.named_graphs, || {
+            format!(
+                "{} must be strictly ordered with no duplicates",
+                "named graphs"
+            )
+        })?;
         require_id_order(&self.nodes, |node| &node.id, "nodes")?;
         require_id_order(&self.edges, |edge| &edge.id, "edges")?;
         require_id_order(&self.reifiers, |row| &row.id, "reifiers")?;
@@ -733,8 +730,18 @@ impl LpgGraph {
                     "duplicate or colliding LPG node identity",
                 ));
             }
-            require_strict_order(&node.labels, "node labels")?;
-            require_strict_order(&node.properties, "node properties")?;
+            require_strictly_sorted(&node.labels, || {
+                format!(
+                    "{} must be strictly ordered with no duplicates",
+                    "node labels"
+                )
+            })?;
+            require_strictly_sorted(&node.properties, || {
+                format!(
+                    "{} must be strictly ordered with no duplicates",
+                    "node properties"
+                )
+            })?;
         }
 
         let mut statements = BTreeSet::new();
@@ -885,7 +892,7 @@ impl LpgGraph {
         Ok(())
     }
 
-    /// Serialize this validated model as canonical compact JSON.
+    /// Write this validated model as canonical compact JSON.
     ///
     /// # Errors
     ///
@@ -909,7 +916,7 @@ impl LpgGraph {
                 config.limits().max_artifact_bytes()
             )));
         }
-        let graph: Self = serde_json::from_slice(bytes)
+        let graph: Self = super::super::json_codec::from_slice(bytes)
             .map_err(|error| ProjectionError::syntax(format!("parse LPG JSON: {error}")))?;
         graph.validate(config)?;
         if graph.to_canonical_json(config)? != bytes {
@@ -990,49 +997,31 @@ pub(super) fn reifier_identifier(
     row: &LpgReifier,
     limits: ProjectionLimits,
 ) -> Result<String, ProjectionError> {
-    #[derive(Serialize)]
-    struct ReifierKey<'a> {
-        reifier: &'a ProjectionTerm,
-        statement: &'a ProjectionTerm,
-        graph: &'a LpgGraphContext,
-    }
-    record_identifier(
-        "reifier",
-        &ReifierKey {
-            reifier: &row.reifier,
-            statement: &row.statement,
-            graph: &row.graph,
-        },
-        limits,
-        "LPG reifier key",
-    )
+    let key = Object::new()
+        .with("reifier", row.reifier.to_json())
+        .with("statement", row.statement.to_json())
+        .with("graph", row.graph.to_json());
+    record_identifier("reifier", &Value::Object(key), limits, "LPG reifier key")
 }
 
 pub(super) fn annotation_identifier(
     row: &LpgAnnotation,
     limits: ProjectionLimits,
 ) -> Result<String, ProjectionError> {
-    #[derive(Serialize)]
-    struct AnnotationKey<'a> {
-        reifier: &'a ProjectionTerm,
-        predicate: &'a str,
-        object: &'a ProjectionTerm,
-        graph: &'a LpgGraphContext,
-    }
+    let key = Object::new()
+        .with("reifier", row.reifier.to_json())
+        .with("predicate", row.predicate.as_str())
+        .with("object", row.object.to_json())
+        .with("graph", row.graph.to_json());
     record_identifier(
         "annotation",
-        &AnnotationKey {
-            reifier: &row.reifier,
-            predicate: &row.predicate,
-            object: &row.object,
-            graph: &row.graph,
-        },
+        &Value::Object(key),
         limits,
         "LPG annotation key",
     )
 }
 
-fn record_identifier<T: Serialize>(
+fn record_identifier<T: ToJson + ?Sized>(
     prefix: &str,
     value: &T,
     limits: ProjectionLimits,
@@ -1052,14 +1041,14 @@ pub(super) fn property_atom(term: &ProjectionTerm) -> Result<LpgPropertyAtom, Pr
         ));
     };
     Ok(match datatype.as_str() {
-        concat!("http://www.w3.org/2001/XMLSchema#", "boolean") => match lexical.as_str() {
+        XSD_BOOLEAN => match lexical.as_str() {
             "true" | "1" => LpgPropertyAtom::Boolean { value: true },
             "false" | "0" => LpgPropertyAtom::Boolean { value: false },
             _ => LpgPropertyAtom::String {
                 value: lexical.clone(),
             },
         },
-        datatype if is_integer_datatype(datatype) => {
+        datatype if XsdDatatype::from_iri(datatype).is_some_and(XsdDatatype::is_integer_family) => {
             if is_integer_lexical(lexical) {
                 lexical.parse::<i64>().map_or_else(
                     |_| LpgPropertyAtom::Decimal {
@@ -1073,7 +1062,7 @@ pub(super) fn property_atom(term: &ProjectionTerm) -> Result<LpgPropertyAtom, Pr
                 }
             }
         }
-        concat!("http://www.w3.org/2001/XMLSchema#", "decimal") => {
+        XSD_DECIMAL => {
             if is_decimal_lexical(lexical) {
                 LpgPropertyAtom::Decimal {
                     lexical: lexical.clone(),
@@ -1084,68 +1073,18 @@ pub(super) fn property_atom(term: &ProjectionTerm) -> Result<LpgPropertyAtom, Pr
                 }
             }
         }
-        concat!("http://www.w3.org/2001/XMLSchema#", "float")
-        | concat!("http://www.w3.org/2001/XMLSchema#", "double") => parse_float(lexical)
-            .map_or_else(
-                || LpgPropertyAtom::String {
-                    value: lexical.clone(),
-                },
-                |value| LpgPropertyAtom::Float {
-                    bits: value.to_bits(),
-                },
-            ),
+        XSD_FLOAT | XSD_DOUBLE => parse_float(lexical).map_or_else(
+            || LpgPropertyAtom::String {
+                value: lexical.clone(),
+            },
+            |value| LpgPropertyAtom::Float {
+                bits: value.to_bits(),
+            },
+        ),
         _ => LpgPropertyAtom::String {
             value: lexical.clone(),
         },
     })
-}
-
-fn is_integer_datatype(datatype: &str) -> bool {
-    matches!(
-        datatype.strip_prefix(XSD),
-        Some(
-            "integer"
-                | "long"
-                | "int"
-                | "short"
-                | "byte"
-                | "nonNegativeInteger"
-                | "positiveInteger"
-                | "unsignedLong"
-                | "unsignedInt"
-                | "unsignedShort"
-                | "unsignedByte"
-                | "nonPositiveInteger"
-                | "negativeInteger"
-        )
-    )
-}
-
-fn is_integer_lexical(lexical: &str) -> bool {
-    let digits = lexical
-        .strip_prefix(['+', '-'])
-        .unwrap_or(lexical)
-        .as_bytes();
-    !digits.is_empty() && digits.iter().all(u8::is_ascii_digit)
-}
-
-fn is_decimal_lexical(lexical: &str) -> bool {
-    let unsigned = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
-    let mut pieces = unsigned.split('.');
-    let before = pieces.next().unwrap_or_default();
-    let after = pieces.next();
-    if pieces.next().is_some() {
-        return false;
-    }
-    let before_valid = before.bytes().all(|byte| byte.is_ascii_digit());
-    match after {
-        None => !before.is_empty() && before_valid,
-        Some(after) => {
-            before_valid
-                && after.bytes().all(|byte| byte.is_ascii_digit())
-                && (!before.is_empty() || !after.is_empty())
-        }
-    }
 }
 
 fn parse_float(lexical: &str) -> Option<f64> {
@@ -1161,15 +1100,6 @@ fn parse_float(lexical: &str) -> Option<f64> {
         }
         _ => None,
     }
-}
-
-fn require_strict_order<T: Ord>(rows: &[T], description: &str) -> Result<(), ProjectionError> {
-    if rows.windows(2).any(|pair| pair[0] >= pair[1]) {
-        return Err(ProjectionError::integrity(format!(
-            "{description} must be strictly ordered with no duplicates"
-        )));
-    }
-    Ok(())
 }
 
 fn require_id_order<T>(
@@ -1298,9 +1228,266 @@ pub(super) fn collect_node_terms(term: &ProjectionTerm, nodes: &mut BTreeSet<Pro
     }
 }
 
+// ── JSON shapes ────────────────────────────────────────────────────────────
+
+purrdf_lex::json_record!(impl FromJson for LpgConfig as "struct LpgConfig" {
+    "rdf_type" => rdf_type: required::<String>,
+    "scope" => scope: required,
+    "limits" => limits: required,
+    "execution_limits" => execution_limits: required,
+} => LpgConfig::new);
+
+purrdf_lex::json_record!(impl ToJson for LpgConfig {
+    "rdf_type" => rdf_type,
+    "scope" => scope,
+    "limits" => limits,
+    "execution_limits" => execution_limits,
+});
+
+purrdf_lex::json_record!(impl FromJson for LpgExecutionLimits as "struct LpgExecutionLimits" {
+    "max_input_records" => input_records: required,
+    "max_model_records" => model_records: required,
+    "max_nodes" => nodes: required,
+    "max_edges" => edges: required,
+} => LpgExecutionLimits::new);
+
+purrdf_lex::json_record!(impl ToJson for LpgExecutionLimits {
+    "max_input_records" => input_records,
+    "max_model_records" => model_records,
+    "max_nodes" => nodes,
+    "max_edges" => edges,
+});
+
+/// The `mode` spellings shared by the IRI, named-graph, and scope selections.
+const SELECTION_MODES: &[&str] = &["all", "only"];
+
+impl FromJson for LpgIriSelection {
+    /// `{"mode": "all", "deny"}` or `{"mode": "only", "allow", "deny"}`.
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        Self::read(value, "internally tagged enum LpgIriSelection", IRI_SETS)
+    }
+}
+
+impl ToJson for LpgIriSelection {
+    fn to_json(&self) -> Value {
+        self.write(IRI_SETS)
+    }
+}
+
+impl FromJson for LpgNamedGraphSelection {
+    /// `{"mode": "all", "exclude"}` or `{"mode": "only", "include", "exclude"}`.
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        Self::read(
+            value,
+            "internally tagged enum LpgNamedGraphSelection",
+            GRAPH_SETS,
+        )
+    }
+}
+
+impl ToJson for LpgNamedGraphSelection {
+    fn to_json(&self) -> Value {
+        self.write(GRAPH_SETS)
+    }
+}
+
+impl FromJson for LpgScope {
+    /// `{"mode": "all"}` with no other member, or `{"mode": "select", …}`.
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "internally tagged enum LpgScope")?;
+        let scope = match fields.tag("mode", &["all", "select"])? {
+            "all" => Self::All,
+            _ => Self::Select {
+                include_default_graph: fields.required("include_default_graph")?,
+                named_graphs: fields.required("named_graphs")?,
+                predicates: fields.required("predicates")?,
+                node_types: fields.required("node_types")?,
+                edge_types: fields.required("edge_types")?,
+            },
+        };
+        fields.deny_unknown()?;
+        Ok(scope)
+    }
+}
+
+impl ToJson for LpgScope {
+    fn to_json(&self) -> Value {
+        Value::Object(match self {
+            Self::All => Object::new().with("mode", "all"),
+            Self::Select {
+                include_default_graph,
+                named_graphs,
+                predicates,
+                node_types,
+                edge_types,
+            } => Object::new()
+                .with("mode", "select")
+                .with("include_default_graph", *include_default_graph)
+                .with("named_graphs", named_graphs.to_json())
+                .with("predicates", predicates.to_json())
+                .with("node_types", node_types.to_json())
+                .with("edge_types", edge_types.to_json()),
+        })
+    }
+}
+
+impl FromJson for LpgGraphContext {
+    /// `{"kind": "default"}` with no other member, or `{"kind": "named", "name"}`.
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "internally tagged enum LpgGraphContext")?;
+        let context = match fields.tag("kind", &["default", "named"])? {
+            "default" => Self::Default,
+            _ => Self::Named {
+                name: fields.required("name")?,
+            },
+        };
+        fields.deny_unknown()?;
+        Ok(context)
+    }
+}
+
+impl ToJson for LpgGraphContext {
+    fn to_json(&self) -> Value {
+        Value::Object(match self {
+            Self::Default => Object::new().with("kind", "default"),
+            Self::Named { name } => Object::new()
+                .with("kind", "named")
+                .with("name", name.to_json()),
+        })
+    }
+}
+
+purrdf_lex::json_record!(LpgRdfQuad as "struct LpgRdfQuad" {
+    "subject" => subject: required,
+    "predicate" => predicate: required,
+    "object" => object: required,
+    "graph" => graph: required,
+});
+
+impl FromJson for LpgPropertyAtom {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "internally tagged enum LpgPropertyAtom")?;
+        let atom = match fields.tag(
+            "kind",
+            &["boolean", "integer", "decimal", "float", "string"],
+        )? {
+            "boolean" => Self::Boolean {
+                value: fields.required("value")?,
+            },
+            "integer" => Self::Integer {
+                value: fields.required("value")?,
+            },
+            "decimal" => Self::Decimal {
+                lexical: fields.required("lexical")?,
+            },
+            "float" => Self::Float {
+                bits: fields.required("bits")?,
+            },
+            _ => Self::String {
+                value: fields.required("value")?,
+            },
+        };
+        fields.deny_unknown()?;
+        Ok(atom)
+    }
+}
+
+impl ToJson for LpgPropertyAtom {
+    fn to_json(&self) -> Value {
+        Value::Object(match self {
+            Self::Boolean { value } => Object::new().with("kind", "boolean").with("value", *value),
+            Self::Integer { value } => Object::new().with("kind", "integer").with("value", *value),
+            Self::Decimal { lexical } => Object::new()
+                .with("kind", "decimal")
+                .with("lexical", lexical.as_str()),
+            Self::Float { bits } => Object::new().with("kind", "float").with("bits", *bits),
+            Self::String { value } => Object::new()
+                .with("kind", "string")
+                .with("value", value.as_str()),
+        })
+    }
+}
+
+purrdf_lex::json_record!(LpgLabel as "struct LpgLabel" {
+    "statement_id" => statement_id: required,
+    "value" => value: required,
+    "rdf" => rdf: required,
+});
+
+purrdf_lex::json_record!(LpgProperty as "struct LpgProperty" {
+    "statement_id" => statement_id: required,
+    "key" => key: required,
+    "value" => value: required,
+    "rdf" => rdf: required,
+});
+
+purrdf_lex::json_record!(LpgNode as "struct LpgNode" {
+    "id" => id: required,
+    "identity" => identity: required,
+    "labels" => labels: required,
+    "properties" => properties: required,
+});
+
+purrdf_lex::json_record!(LpgEdge as "struct LpgEdge" {
+    "id" => id: required,
+    "source" => source: required,
+    "target" => target: required,
+    "edge_type" => edge_type: required,
+    "rdf" => rdf: required,
+});
+
+purrdf_lex::json_record!(LpgReifier as "struct LpgReifier" {
+    "id" => id: required,
+    "reifier" => reifier: required,
+    "statement" => statement: required,
+    "graph" => graph: required,
+});
+
+purrdf_lex::json_record!(LpgAnnotation as "struct LpgAnnotation" {
+    "id" => id: required,
+    "reifier" => reifier: required,
+    "predicate" => predicate: required,
+    "object" => object: required,
+    "graph" => graph: required,
+});
+
+purrdf_lex::json_record!(LpgGraph as "struct LpgGraph" {
+    "schema_version" => schema_version: required,
+    "nodes" => nodes: required,
+    "edges" => edges: required,
+    "reifiers" => reifiers: required,
+    "annotations" => annotations: required,
+    "named_graphs" => named_graphs: required,
+});
+
 #[cfg(test)]
 mod tests {
+    use super::super::super::json_codec::{from_slice, to_vec};
     use super::*;
+    use purrdf_xsd::datatype::XSD_NS as XSD;
+
+    fn read_value(bytes: &[u8]) -> Value {
+        purrdf_lex::json::read_slice(bytes, purrdf_lex::json::Limits::DEFAULT).expect("JSON value")
+    }
+
+    /// A field-less tag variant is exactly its tag: a member beside `"mode":
+    /// "all"` or `"kind": "default"` is an unknown field, and the bare tag
+    /// beside it is read.
+    #[test]
+    fn a_unit_tag_variant_refuses_members_beside_its_tag() {
+        assert!(LpgScope::from_json(&read_value(br#"{"mode":"all","extra":true}"#)).is_err());
+        assert_eq!(
+            LpgScope::from_json(&read_value(br#"{"mode":"all"}"#)).expect("bare tag"),
+            LpgScope::All
+        );
+        assert!(
+            LpgGraphContext::from_json(&read_value(br#"{"kind":"default","name":null}"#)).is_err()
+        );
+        assert_eq!(
+            LpgGraphContext::from_json(&read_value(br#"{"kind":"default"}"#)).expect("bare tag"),
+            LpgGraphContext::Default
+        );
+    }
 
     fn limits() -> ProjectionLimits {
         ProjectionLimits::new(32, 1_000_000, 4_000_000, 5_000_000, 16).expect("limits")
@@ -1315,24 +1502,26 @@ mod tests {
             LpgExecutionLimits::new(1_000, 1_000, 1_000, 1_000).expect("execution limits"),
         )
         .expect("config");
-        let json = serde_json::to_string(&config).expect("serialize");
-        assert_eq!(
-            serde_json::from_str::<LpgConfig>(&json).expect("parse"),
-            config
-        );
-        let mut unknown: serde_json::Value = serde_json::from_str(&json).expect("JSON value");
+        let json = to_vec(&config);
+        assert_eq!(from_slice::<LpgConfig>(&json).expect("parse"), config);
+        let mut unknown = read_value(&json);
         unknown
             .as_object_mut()
             .expect("config object")
-            .insert("unknown".to_owned(), serde_json::Value::Bool(true));
-        assert!(serde_json::from_value::<LpgConfig>(unknown).is_err());
+            .insert("unknown", Value::Bool(true));
+        assert!(LpgConfig::from_json(&unknown).is_err());
 
-        let mut missing_scope: serde_json::Value = serde_json::from_str(&json).expect("JSON value");
+        let mut missing_scope = read_value(&json);
         missing_scope
             .as_object_mut()
             .expect("config object")
             .remove("scope");
-        assert!(serde_json::from_value::<LpgConfig>(missing_scope).is_err());
+        assert!(
+            LpgConfig::from_json(&missing_scope)
+                .expect_err("missing scope")
+                .to_string()
+                .contains("missing field `scope`")
+        );
 
         assert!(
             LpgIriSelection::only(["http://example.org/p"], ["http://example.org/p"],).is_err()

@@ -61,11 +61,9 @@ impl std::fmt::Display for GraphBuildError {
 
 impl std::error::Error for GraphBuildError {}
 
-impl From<RdfDiagnostic> for GraphBuildError {
-    fn from(diagnostic: RdfDiagnostic) -> Self {
-        Self::Query(diagnostic)
-    }
-}
+purrdf_lex::variant_from!(GraphBuildError {
+    Query(RdfDiagnostic),
+});
 
 impl NativeSparqlEngine {
     /// Evaluate a prepared CONSTRUCT and append its complete typed graph directly.

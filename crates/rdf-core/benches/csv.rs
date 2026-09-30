@@ -1,10 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-#![allow(
-    missing_docs,
-    reason = "criterion_group! expands to a public harness function that is not library API"
-)]
+#![allow(missing_docs, reason = "a bench target is not library API")]
 
 //! `purrdf_core::csv` read and write throughput over 1 MiB inputs.
 //!
@@ -18,8 +15,8 @@
 use std::fmt::Write as _;
 use std::time::Duration;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_core::csv::{Dialect, QuoteStyle, Reader, StringRecord, Writer, read_table};
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 
 /// The input size each shape is grown to.
 const TARGET_BYTES: usize = 1 << 20;
@@ -86,7 +83,7 @@ fn write_all(dialect: Dialect<'_>, records: &[StringRecord]) -> Vec<u8> {
     writer.into_inner().expect("in memory")
 }
 
-fn bench_csv(c: &mut Criterion) {
+fn bench_csv(c: &mut Bench) {
     let sssom = sssom_shaped();
     let csvw = csvw_shaped();
     let csvw_dialect = Dialect {
@@ -132,5 +129,5 @@ fn bench_csv(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_csv);
-criterion_main!(benches);
+bench_group!(benches, bench_csv);
+bench_main!(benches);

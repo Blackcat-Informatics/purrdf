@@ -12,8 +12,12 @@
 
 use crate::error::{IriError, Result};
 use crate::host::Mode;
-use crate::scan::{ByteRun, byte_runs, count_runs, in_runs};
+use crate::scan::{
+    ByteClass, ByteRun, byte_run_count, byte_runs, count_runs, find_byte, find_byte2, in_runs,
+    needle_table,
+};
 use core::ops::Range;
+use purrdf_lex::percent;
 
 /// A parsed, validated IRI (or URI) with byte-offset spans for each component.
 ///
@@ -131,18 +135,18 @@ impl Iri {
             start..text.len()
         });
         let start = text.len();
-        percent_encode_non_ascii(self.path(), &mut text);
+        percent::push_encoded(&mut text, self.path(), percent::NON_ASCII);
         let path = start..text.len();
         let query = self.query().map(|q| {
             text.push('?');
             let start = text.len();
-            percent_encode_non_ascii(q, &mut text);
+            percent::push_encoded(&mut text, q, percent::NON_ASCII);
             start..text.len()
         });
         let fragment = self.fragment().map(|f| {
             text.push('#');
             let start = text.len();
-            percent_encode_non_ascii(f, &mut text);
+            percent::push_encoded(&mut text, f, percent::NON_ASCII);
             start..text.len()
         });
         Self {
@@ -156,34 +160,16 @@ impl Iri {
     }
 }
 
-/// RFC 3987 §3.1 step 2 over one component: every non-ASCII code point becomes
-/// the upper-case `%HH` escapes of its UTF-8 octets.
-fn percent_encode_non_ascii(component: &str, out: &mut String) {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    for c in component.chars() {
-        if c.is_ascii() {
-            out.push(c);
-            continue;
-        }
-        let mut utf8 = [0_u8; 4];
-        for &octet in c.encode_utf8(&mut utf8).as_bytes() {
-            out.push('%');
-            out.push(char::from(HEX[usize::from(octet >> 4)]));
-            out.push(char::from(HEX[usize::from(octet & 0x0F)]));
-        }
-    }
-}
-
 /// The URI form of a validated authority: userinfo and port percent-encoded,
 /// an internationalized `ireg-name` converted by IDNA where it can be and
 /// percent-encoded where it cannot.
 fn authority_to_uri(authority: &str, out: &mut String) {
-    let (userinfo, host_port) = match find_first_byte(authority.as_bytes(), b'@') {
+    let (userinfo, host_port) = match find_byte(authority.as_bytes(), b'@') {
         Some(at) => (Some(&authority[..at]), &authority[at + 1..]),
         None => (None, authority),
     };
     if let Some(userinfo) = userinfo {
-        percent_encode_non_ascii(userinfo, out);
+        percent::push_encoded(out, userinfo, percent::NON_ASCII);
         out.push('@');
     }
     // The same host/port split `validate_authority` makes: a bracketed
@@ -202,7 +188,7 @@ fn authority_to_uri(authority: &str, out: &mut String) {
     } else if let Some(ascii) = crate::idna::to_ascii_mapped(host) {
         out.push_str(&ascii);
     } else {
-        percent_encode_non_ascii(host, out);
+        percent::push_encoded(out, host, percent::NON_ASCII);
     }
     if let Some(port) = port {
         out.push(':');
@@ -365,8 +351,7 @@ fn scan(s: &str, mode: Mode) -> Result<Spans> {
     if bytes[idx..].starts_with(b"//") {
         let astart = idx + 2;
         // authority runs until the next '/', '?', '#' or end.
-        let aend =
-            astart + find_first_of(&bytes[astart..], *b"/?#").unwrap_or(bytes.len() - astart);
+        let aend = astart + find_authority_end(&bytes[astart..]).unwrap_or(bytes.len() - astart);
         validate_authority(&s[astart..aend], astart, mode)?;
         authority = Some(astart..aend);
         idx = aend;
@@ -374,7 +359,7 @@ fn scan(s: &str, mode: Mode) -> Result<Spans> {
 
     // path: runs until '?' or '#' or end.
     let pstart = idx;
-    let pend = pstart + find_first_of(&bytes[pstart..], *b"?#").unwrap_or(bytes.len() - pstart);
+    let pend = pstart + find_byte2(&bytes[pstart..], b'?', b'#').unwrap_or(bytes.len() - pstart);
     validate_path(&s[pstart..pend], pstart, mode)?;
     // RFC-3986 §4.2: a relative reference with no scheme and no authority has a
     // `path-noscheme`, whose FIRST segment must not contain a ':' — otherwise the
@@ -394,7 +379,7 @@ fn scan(s: &str, mode: Mode) -> Result<Spans> {
     let mut query: Option<Range<usize>> = None;
     if idx < bytes.len() && bytes[idx] == b'?' {
         let qstart = idx + 1;
-        let qend = qstart + find_first_byte(&bytes[qstart..], b'#').unwrap_or(bytes.len() - qstart);
+        let qend = qstart + find_byte(&bytes[qstart..], b'#').unwrap_or(bytes.len() - qstart);
         validate_query(&s[qstart..qend], qstart, mode)?;
         query = Some(qstart..qend);
         idx = qend;
@@ -427,7 +412,7 @@ fn find_scheme_colon(s: &str) -> Option<usize> {
     if b.is_empty() || !b[0].is_ascii_alphabetic() {
         return None;
     }
-    match find_first_of(b, *b":/?#") {
+    match find_scheme_end(b) {
         Some(i) if b[i] == b':' => Some(i),
         Some(_) | None => None,
     }
@@ -720,7 +705,7 @@ fn clean_prefix_len(word: &[u8; CLEAN_WORD], extra_mask: u8) -> usize {
 fn validate_authority(s: &str, base_off: usize, mode: Mode) -> Result<()> {
     // authority = [ userinfo "@" ] host [ ":" port ]
     // Userinfo cannot contain an unescaped '@', so the first '@' delimits it.
-    let (userinfo, rest, host_off) = match find_first_byte(s.as_bytes(), b'@') {
+    let (userinfo, rest, host_off) = match find_byte(s.as_bytes(), b'@') {
         Some(at) => (Some(&s[..at]), &s[at + 1..], base_off + at + 1),
         None => (None, s, base_off),
     };
@@ -791,63 +776,25 @@ fn validate_fragment(s: &str, base_off: usize, mode: Mode) -> Result<()> {
     validate_component(s, base_off, COLON | AT | SLASH | QUESTION, false, mode)
 }
 
-/// SWAR word width: one `u64` scans eight bytes per iteration.
-const SCAN_WORD: usize = 8;
+/// The bytes that end an authority: `/`, `?`, `#`.
+const AUTHORITY_END: [u8; 256] = needle_table(b"/?#");
+/// The bytes that end a scheme candidate: `:`, `/`, `?`, `#`.
+const SCHEME_END: [u8; 256] = needle_table(b":/?#");
 
-/// Broadcast a byte to all eight lanes of a `u64`.
-const LANES_LO: u64 = 0x0101_0101_0101_0101;
-/// High bit of each byte lane.
-const LANES_HI: u64 = 0x8080_8080_8080_8080;
-
-#[inline]
-fn find_first_byte(bytes: &[u8], needle: u8) -> Option<usize> {
-    find_first_of(bytes, [needle])
+/// The first `/`, `?` or `#`: one chunked [`ByteClass`] kernel, out of line
+/// so the class's runs fold in as constants.
+#[inline(never)]
+fn find_authority_end(bytes: &[u8]) -> Option<usize> {
+    const CLASS: ByteClass<{ byte_run_count(&AUTHORITY_END) }> =
+        ByteClass::from_table(AUTHORITY_END);
+    CLASS.find_first(bytes)
 }
 
-/// Set the high bit of every byte lane in `v` that is zero (classic SWAR
-/// zero-byte test); all other lanes report clear.
-#[inline]
-fn zero_byte_lanes(v: u64) -> u64 {
-    v.wrapping_sub(LANES_LO) & !v & LANES_HI
-}
-
-/// Find the first ASCII delimiter byte in a dense byte slice.
-///
-/// IRI component splitting scans long ASCII-heavy strings for a very small set
-/// of delimiters. A branch-light SWAR scan over `u64` words (stable Rust, no
-/// dependencies — this crate is a zero-dep leaf) keeps the hot path wide
-/// without changing the UTF-8 semantics: all delimiter bytes are ASCII and
-/// therefore cannot be confused with a non-ASCII continuation byte. Lane
-/// order is fixed by `from_le_bytes`, so the result is platform-independent.
-#[inline]
-fn find_first_of<const N: usize>(bytes: &[u8], needles: [u8; N]) -> Option<usize> {
-    if N == 0 {
-        return None;
-    }
-
-    let mut offset = 0usize;
-    while offset + SCAN_WORD <= bytes.len() {
-        let word = u64::from_le_bytes(
-            bytes[offset..offset + SCAN_WORD]
-                .try_into()
-                .expect("slice is exactly SCAN_WORD bytes"),
-        );
-        let mut mask = 0u64;
-        for &needle in &needles {
-            mask |= zero_byte_lanes(word ^ (u64::from(needle) * LANES_LO));
-        }
-        if mask != 0 {
-            // The first set bit sits in the high bit of the first matching
-            // little-endian lane: bit index / 8 = byte index within the word.
-            return Some(offset + (mask.trailing_zeros() as usize) / 8);
-        }
-        offset += SCAN_WORD;
-    }
-
-    bytes[offset..]
-        .iter()
-        .position(|b| needles.contains(b))
-        .map(|i| offset + i)
+/// The first `:`, `/`, `?` or `#`: one chunked [`ByteClass`] kernel.
+#[inline(never)]
+fn find_scheme_end(bytes: &[u8]) -> Option<usize> {
+    const CLASS: ByteClass<{ byte_run_count(&SCHEME_END) }> = ByteClass::from_table(SCHEME_END);
+    CLASS.find_first(bytes)
 }
 
 #[cfg(test)]
@@ -1071,22 +1018,18 @@ mod tests {
             "\u{f0000}",
             "\u{10fffd}",
         ];
-        let mut state = 0x01B1_C0DE_5EED_u64;
-        let mut next = move || {
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut state) % 1_000_003)
-                .expect("small")
-        };
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(0x01B1_C0DE_5EED);
         let mut verdicts = [0_usize; 3];
         for len in (0..=70).chain([128, 400]) {
             for _ in 0..30 {
                 let mut s = String::new();
                 while s.len() < len {
                     // Mostly clean bytes, so the refusals land at every offset.
-                    if next() % 5 == 0 {
-                        s.push_str(PIECES[next() % PIECES.len()]);
+                    if rng.below_usize(5) == 0 {
+                        s.push_str(PIECES[rng.below_usize(PIECES.len())]);
                     } else {
                         s.push(
-                            "abcXYZ019-._~!$&'()*+,;="[next() % 24..]
+                            "abcXYZ019-._~!$&'()*+,;="[rng.below_usize(24)..]
                                 .chars()
                                 .next()
                                 .expect("ascii"),
@@ -1120,11 +1063,13 @@ mod tests {
     }
 
     #[test]
-    fn swar_delimiter_scan_matches_first_scalar_hit() {
+    fn delimiter_scans_find_the_first_hit() {
         let haystack = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?tail#later";
-        assert_eq!(find_first_of(haystack, *b"?#"), Some(32));
-        assert_eq!(find_first_byte(haystack, b'#'), Some(37));
-        assert_eq!(find_first_of(haystack, *b":/"), None);
+        assert_eq!(find_byte2(haystack, b'?', b'#'), Some(32));
+        assert_eq!(find_byte(haystack, b'#'), Some(37));
+        assert_eq!(find_authority_end(haystack), Some(32));
+        assert_eq!(find_scheme_end(b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), None);
+        assert_eq!(find_scheme_end(b"http://x"), Some(4));
     }
 
     /// The const `CLASS` bitmap must reproduce the original per-character grammar
@@ -1138,7 +1083,7 @@ mod tests {
             assert_eq!(
                 cls & UNRESERVED != 0,
                 c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~'),
-                "UNRESERVED mismatch at 0x{b:02X}"
+                "UNRESERVED mismatch at {b:#04X}"
             );
             assert_eq!(
                 cls & SUB_DELIMS != 0,
@@ -1146,20 +1091,20 @@ mod tests {
                     c,
                     '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '='
                 ),
-                "SUB_DELIMS mismatch at 0x{b:02X}"
+                "SUB_DELIMS mismatch at {b:#04X}"
             );
-            assert_eq!(cls & COLON != 0, c == ':', "COLON mismatch at 0x{b:02X}");
-            assert_eq!(cls & AT != 0, c == '@', "AT mismatch at 0x{b:02X}");
-            assert_eq!(cls & SLASH != 0, c == '/', "SLASH mismatch at 0x{b:02X}");
+            assert_eq!(cls & COLON != 0, c == ':', "COLON mismatch at {b:#04X}");
+            assert_eq!(cls & AT != 0, c == '@', "AT mismatch at {b:#04X}");
+            assert_eq!(cls & SLASH != 0, c == '/', "SLASH mismatch at {b:#04X}");
             assert_eq!(
                 cls & QUESTION != 0,
                 c == '?',
-                "QUESTION mismatch at 0x{b:02X}"
+                "QUESTION mismatch at {b:#04X}"
             );
             assert_eq!(
                 cls & SCHEME_TAIL != 0,
                 c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'),
-                "SCHEME_TAIL mismatch at 0x{b:02X}"
+                "SCHEME_TAIL mismatch at {b:#04X}"
             );
         }
     }

@@ -12,14 +12,16 @@
 //! fixed corpus through the full build path, serializes the canonical payload image, and
 //! folds the bytes into one `u64`.
 //!
-//! # Why the digest is hand-rolled FNV-1a
+//! # Why the digest is FNV-1a
 //!
-//! The digest must be a function of the bytes and **nothing else**. `DefaultHasher` is
+//! The digest must be a function of the bytes and **nothing else**. std's default hasher is
 //! SipHash with an unspecified per-process key, and the table hasher `FixedHasher` is a
-//! different function on a build with AES than on one without; either would make the digest move for reasons that have nothing to do with
-//! the graph, which is the exact false signal this harness exists to remove. FNV-1a is
-//! six lines of integer arithmetic with published constants, so a golden that moves is a
-//! serialization defect and never a hasher change.
+//! different function on a build with AES than on one without; either would make the
+//! digest move for reasons that have nothing to do with the graph, which is the exact
+//! false signal this harness exists to remove. The digest is [`purrdf_hash::fnv`]:
+//! FNV-1a 64-bit, integer arithmetic with published constants, pinned by that module's
+//! reference test values, so a golden that moves is a serialization defect and never a
+//! hasher change.
 //!
 //! The corpus is generated from a seeded splitmix64 integer stream rather than committed
 //! as a multi-hundred-megabyte binary: 5,000 rows at 4,096 dimensions. This is the
@@ -36,11 +38,12 @@
 //! for the first time, so there is no external target to reproduce.
 
 use purrdf_core::distance::Exact;
+use purrdf_hash::fnv::fnv1a64;
 use purrdf_sparql_eval::knn::Kernel;
 
+use crate::builder;
 use crate::graph::VectorMatrix;
 use crate::params::Params;
-use crate::{Compiled, builder};
 
 /// The number of rows in the digest corpus.
 pub const CORPUS_ROWS: usize = 5_000;
@@ -87,15 +90,14 @@ pub fn digest_serial() -> u64 {
 /// path with an explicit schedule without re-implementing the builder.
 #[must_use]
 pub fn digest_with_batch(batch: Option<usize>) -> u64 {
-    let index = builder::build_with_batch(
+    let index = builder::build_with_batch::<Exact>(
         corpus(),
         Kernel::SquaredEuclidean,
         digest_params(),
         batch,
-        Compiled::<Exact>::here(),
     )
     .expect("the digest corpus is valid and builds");
-    fnv1a_64(&index.canonical_image())
+    fnv1a64(&index.canonical_image())
 }
 
 /// The number of corpus members the digest folds, so the harness can prove the digest is
@@ -111,7 +113,8 @@ pub const fn corpus_dims() -> usize {
     CORPUS_DIMS
 }
 
-/// The fixed corpus: a uniform family in `[-1, 1)` generated from the seeded stream.
+/// The fixed corpus: a uniform family in `[-1, 1)` generated from the seeded stream,
+/// [`purrdf_hash::mix::signed_unit_step_nonzero`] over the self-composed SplitMix64 steps.
 ///
 /// The generator is deterministic integer mixing followed by exactly-rounded binary64
 /// arithmetic, so a native host and a wasm host produce bit-identical components. An
@@ -122,23 +125,7 @@ pub fn corpus() -> VectorMatrix {
     let mut state = CORPUS_SEED;
     let mut data = Vec::with_capacity(CORPUS_ROWS * CORPUS_DIMS);
     for _ in 0..CORPUS_ROWS * CORPUS_DIMS {
-        state = crate::level::splitmix64(state);
-        let unit = (state >> 11) as f64 / (1_u64 << 53) as f64;
-        // `mul_add` is one correctly-rounded operation on every target, including wasm
-        // without a fused-multiply-add instruction, so the corpus is bit-identical there.
-        let value = unit.mul_add(2.0, -1.0);
-        data.push(if value == 0.0 { 0.25 } else { value });
+        data.push(purrdf_hash::mix::signed_unit_step_nonzero(&mut state, 0.25));
     }
     VectorMatrix::new(CORPUS_ROWS, CORPUS_DIMS, data).expect("the corpus shape is valid")
-}
-
-/// FNV-1a over the canonical payload bytes: six lines, published constants, no state.
-const fn fnv1a_64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    let mut index = 0;
-    while index < bytes.len() {
-        hash = (hash ^ bytes[index] as u64).wrapping_mul(0x0000_0100_0000_01b3);
-        index += 1;
-    }
-    hash
 }

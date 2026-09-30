@@ -25,6 +25,7 @@ use core::fmt;
 use crate::arch::Crc32Update;
 use crate::backend::Crc32Backend;
 use crate::digest::Digest;
+use crate::dispatch::Backend as _;
 
 /// The generator polynomial with its `x^32` term: bit `d` is the coefficient
 /// of `x^d`.
@@ -270,11 +271,7 @@ impl Crc32 {
     }
 }
 
-impl Default for Crc32 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::default_from_new!(Crc32);
 
 impl fmt::Debug for Crc32 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

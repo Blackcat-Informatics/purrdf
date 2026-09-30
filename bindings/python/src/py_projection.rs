@@ -100,11 +100,7 @@ impl PyProjectionPackage {
     /// Fresh Python list of immutable structured loss records.
     #[getter]
     fn losses(&self, py: Python<'_>) -> PyResult<Vec<Py<PyProjectionLoss>>> {
-        self.losses
-            .iter()
-            .cloned()
-            .map(|loss| Py::new(py, loss))
-            .collect()
+        loss_list(py, &self.losses)
     }
 }
 
@@ -208,11 +204,7 @@ impl PyProjectionStream {
     /// Fresh Python list of immutable structured loss records.
     #[getter]
     fn losses(&self, py: Python<'_>) -> PyResult<Vec<Py<PyProjectionLoss>>> {
-        self.losses
-            .iter()
-            .cloned()
-            .map(|loss| Py::new(py, loss))
-            .collect()
+        loss_list(py, &self.losses)
     }
 
     /// Exact number of RDF input records scanned.
@@ -259,11 +251,7 @@ impl PyProjectionLift {
     /// Fresh Python list of immutable structured loss records.
     #[getter]
     fn losses(&self, py: Python<'_>) -> PyResult<Vec<Py<PyProjectionLoss>>> {
-        self.losses
-            .iter()
-            .cloned()
-            .map(|loss| Py::new(py, loss))
-            .collect()
+        loss_list(py, &self.losses)
     }
 }
 
@@ -495,6 +483,17 @@ fn lift_py(
         dataset: outcome.dataset,
         losses: losses(&outcome.loss_ledger),
     })
+}
+
+/// The Python list every projection result's `losses` getter returns: a fresh
+/// `PyProjectionLoss` object per record, so a caller mutating the list cannot
+/// reach the result's own ledger. The single conversion all three results share.
+fn loss_list(py: Python<'_>, losses: &[PyProjectionLoss]) -> PyResult<Vec<Py<PyProjectionLoss>>> {
+    losses
+        .iter()
+        .cloned()
+        .map(|loss| Py::new(py, loss))
+        .collect()
 }
 
 fn losses(ledger: &LossLedger) -> Vec<PyProjectionLoss> {

@@ -95,7 +95,7 @@ pub(crate) struct SafetyRegistries<'a> {
 }
 
 /// Rows/groups at or below this stay sequential (thread spin-up would dominate
-/// the work for small inputs). Tuned against the criterion benches in
+/// the work for small inputs). Tuned against the benches in
 /// `crates/sparql-eval/benches/`, which are report-only and assert no timing.
 pub(crate) const PARALLEL_MIN_ROWS: usize = 1024;
 
@@ -131,8 +131,20 @@ fn chunk_size_for(len: usize) -> usize {
     if let Some(forced) = FORCE_CHUNK_SIZE.with(std::cell::Cell::get) {
         return forced.max(1);
     }
-    let threads = rayon::current_num_threads().max(1);
-    (len / (threads * 4).max(1)).max(PARALLEL_MIN_CHUNK_ITEMS)
+    chunk_len_for_threads(len, rayon::current_num_threads(), PARALLEL_MIN_CHUNK_ITEMS)
+}
+
+/// The fork-join chunk geometry every parallel engine shares: about four chunks per
+/// worker of `threads`, so work-stealing can balance ragged per-item costs, and never
+/// fewer than `min_chunk` items per chunk, so a worker is not handed a sliver
+/// dominated by per-chunk overhead. `threads == 0` is read as one.
+///
+/// A pure function of its arguments: a caller that needs a host-independent plan
+/// passes a fixed `threads`, one that should track the pool passes
+/// `rayon::current_num_threads()`.
+#[must_use]
+pub fn chunk_len_for_threads(len: usize, threads: usize, min_chunk: usize) -> usize {
+    (len / (threads.max(1) * 4)).max(min_chunk)
 }
 
 /// The fixed reference parallelism [`aggregate_chunk_size_for`] assumes in place of
@@ -190,7 +202,11 @@ fn aggregate_chunk_size_for(len: usize) -> usize {
     if let Some(forced) = FORCE_CHUNK_SIZE.with(std::cell::Cell::get) {
         return forced.max(1);
     }
-    (len / (AGGREGATE_CHUNK_REFERENCE_THREADS * 4).max(1)).max(PARALLEL_MIN_CHUNK_ITEMS)
+    chunk_len_for_threads(
+        len,
+        AGGREGATE_CHUNK_REFERENCE_THREADS,
+        PARALLEL_MIN_CHUNK_ITEMS,
+    )
 }
 
 #[cfg(test)]
@@ -359,7 +375,9 @@ pub(crate) fn is_parallel_safe(expr: &Expression, registries: SafetyRegistries<'
 
 /// A judgment of one `EXISTS` body the fork-safety walks consult before walking it:
 /// `Some(unsafe)` decides the body without entering it, `None` walks it as written. See
-/// [`is_parallel_safe_with`].
+/// [`is_parallel_safe_with`]. A lateral placeholder
+/// (`crate::deferred_exists::lateral_placeholder`) is offered to it too, and one it
+/// answers `None` for is unsafe: there is nothing behind a placeholder to walk.
 pub(crate) type ExistsVerdict<'h> = &'h dyn Fn(&GraphPattern) -> Option<bool>;
 
 /// [`is_parallel_safe`], with every `EXISTS` body first offered to `verdict`: a
@@ -530,6 +548,14 @@ fn reaches_unsafe_builtin(
             }
             Reach::Pattern(GraphPattern::PropertyFunction(call)) => {
                 if property_function_is_unsafe(&call.iri, registries.relations) {
+                    return true;
+                }
+            }
+            // A substituted copy's placeholder for a `LATERAL` right operand stands for an
+            // operand the walk cannot see: `verdict` answers for it, and one it cannot
+            // answer for is judged unsafe rather than safe by omission.
+            Reach::Pattern(pattern) if crate::deferred_exists::is_lateral_placeholder(pattern) => {
+                if verdict(pattern).unwrap_or(true) {
                     return true;
                 }
             }
@@ -779,12 +805,17 @@ fn pattern_reaches_unsafe_builtin(
 /// guess in the one direction that can silently change an answer. A sequential fallback
 /// is always correct, so "when in doubt, UNSAFE".
 fn property_function_is_unsafe(iri: &str, relations: &PropertyFunctionRegistry) -> bool {
-    let Some(relation) = relations.resolve(iri) else {
-        return true;
-    };
-    // Wildcard-shaped match — `Volatility` is `#[non_exhaustive]`, and a class added
-    // later must be unsafe here until it is deliberately admitted.
-    !matches!(relation.volatility(), Volatility::Stable)
+    resolved_is_unsafe(relations.resolve(iri).map(|relation| relation.volatility()))
+}
+
+/// Whether a registered callee whose resolution gave `declared` is unsafe to run from a
+/// forked worker: safe only when it resolved and declared [`Volatility::Stable`].
+///
+/// The one verdict behind [`property_function_is_unsafe`] and [`aggregate_is_unsafe`].
+/// Wildcard-shaped — `Volatility` is `#[non_exhaustive]`, and a class added later must
+/// be unsafe here until it is deliberately admitted.
+const fn resolved_is_unsafe(declared: Option<Volatility>) -> bool {
+    !matches!(declared, Some(Volatility::Stable))
 }
 
 /// Whether a `Custom` aggregate call on `iri` is unsafe to fold from a forked
@@ -808,10 +839,11 @@ fn property_function_is_unsafe(iri: &str, relations: &PropertyFunctionRegistry) 
 /// change an answer. A sequential fallback is always correct, so "when in doubt,
 /// UNSAFE".
 pub(crate) fn aggregate_is_unsafe(iri: &str, aggregates: &AggregateRegistry) -> bool {
-    let Some(aggregate) = aggregates.resolve(iri) else {
-        return true;
-    };
-    !matches!(aggregate.volatility(), Volatility::Stable)
+    resolved_is_unsafe(
+        aggregates
+            .resolve(iri)
+            .map(|aggregate| aggregate.volatility()),
+    )
 }
 
 /// Chunk-based, infallible parallel collect: split `items` into index-ordered
@@ -1511,6 +1543,21 @@ mod tests {
         ArithmeticOperator, Literal, NamedNode, PurrdfCall, PurrdfFn, TriplePattern,
     };
 
+    // ---- chunk geometry ------------------------------------------------------
+
+    #[test]
+    fn chunk_len_aims_for_four_chunks_per_thread_above_the_floor() {
+        assert_eq!(chunk_len_for_threads(4_096, 8, 16), 128);
+        assert_eq!(chunk_len_for_threads(4_096, 8, 1_024), 1_024);
+        assert_eq!(chunk_len_for_threads(0, 8, 16), 16);
+        // No worker count is read as one worker, never as a division by zero.
+        assert_eq!(chunk_len_for_threads(400, 0, 1), 100);
+        assert_eq!(
+            chunk_len_for_threads(400, 0, 1),
+            chunk_len_for_threads(400, 1, 1)
+        );
+    }
+
     // ---- should_parallelize -------------------------------------------------
 
     #[test]
@@ -1756,7 +1803,7 @@ mod tests {
 
     #[test]
     fn native_stable_custom_is_parallel_safe() {
-        let mut reg = UserFunctionRegistry::new();
+        let mut reg = UserFunctionRegistry::default();
         reg.register_native(
             CUSTOM_NATIVE_IRI,
             crate::user_fn::Arity::Exact(0),
@@ -1768,7 +1815,7 @@ mod tests {
 
     #[test]
     fn native_volatile_custom_is_parallel_unsafe() {
-        let mut reg = UserFunctionRegistry::new();
+        let mut reg = UserFunctionRegistry::default();
         reg.register_native(
             CUSTOM_NATIVE_IRI,
             crate::user_fn::Arity::Exact(0),
@@ -1783,7 +1830,7 @@ mod tests {
 
     #[test]
     fn sparql_bodied_custom_is_parallel_unsafe() {
-        let mut reg = UserFunctionRegistry::new();
+        let mut reg = UserFunctionRegistry::default();
         reg.insert(CUSTOM_SPARQL_IRI, trivial_sparql_function());
         assert!(!is_parallel_safe(
             &custom_call(CUSTOM_SPARQL_IRI),
@@ -1795,7 +1842,7 @@ mod tests {
     fn unknown_custom_without_registry_stays_safe() {
         assert!(is_parallel_safe(&custom_call(CUSTOM_UNKNOWN_IRI), NONE));
 
-        let reg = UserFunctionRegistry::new();
+        let reg = UserFunctionRegistry::default();
         assert!(is_parallel_safe(
             &custom_call(CUSTOM_UNKNOWN_IRI),
             fns(&reg)
@@ -2080,7 +2127,7 @@ mod tests {
     }
 
     fn agg_registry_with(volatility: Volatility) -> AggregateRegistry {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register(
             AGG_IRI,
             std::sync::Arc::new(DeclaredAggregate { volatility }),
@@ -2103,10 +2150,10 @@ mod tests {
     /// `aggregate_is_unsafe` takes `&AggregateRegistry`, never
     /// `Option<&AggregateRegistry>` — there is no "absent registry" call this could
     /// exercise as a case DISTINCT from an empty one, which makes "a `None`-shaped
-    /// call and a `Some(&AggregateRegistry::new())`-shaped call behave identically"
+    /// call and a `Some(&AggregateRegistry::default())`-shaped call behave identically"
     /// structurally impossible to violate rather than merely tested: the type
     /// system admits only the one spelling. [`AggregateRegistry::EMPTY`]
-    /// and a freshly built, still-empty [`AggregateRegistry::new`] both resolve
+    /// and a freshly built, still-empty [`AggregateRegistry::default`] both resolve
     /// `AGG_IRI` to nothing, so the gate refuses under either — the SAME
     /// conservative treatment an unresolved property function gets
     /// (`property_function_without_a_registry_is_parallel_unsafe`), never the
@@ -2114,7 +2161,7 @@ mod tests {
     #[test]
     fn custom_aggregate_without_a_registry_is_parallel_unsafe() {
         assert!(aggregate_is_unsafe(AGG_IRI, &AggregateRegistry::EMPTY));
-        let empty = AggregateRegistry::new();
+        let empty = AggregateRegistry::default();
         assert!(aggregate_is_unsafe(AGG_IRI, &empty));
     }
 
@@ -2533,7 +2580,7 @@ mod walk_tests {
     }
 
     fn functions() -> UserFunctionRegistry {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_native(
             NATIVE_STABLE,
             crate::user_fn::Arity::Exact(0),
@@ -2643,21 +2690,20 @@ mod walk_tests {
     // ── A deterministic shape generator ────────────────────────────────────────────
 
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 30,
             }
         }
 
         fn choose(&mut self, options: usize) -> usize {
-            let draw = purrdf_testkit::rng::splitmix64_next(&mut self.state);
-            usize::try_from(draw % options as u64).expect("a choice fits usize")
+            self.state.below_usize(options)
         }
 
         fn spend(&mut self) -> bool {
@@ -2853,33 +2899,29 @@ mod walk_tests {
             }
             pattern
         }
-        let answers = std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let functions = functions();
-                let relations = relations();
-                let registries = configured(&functions, &relations);
-                let minting = negated(call(Function::Rand, Vec::new()));
-                let pure = negated(call(
-                    Function::Str,
-                    vec![Expression::Variable(Variable::new("v"))],
-                ));
-                let probing = negated(Expression::Exists(Child::new(bgp())));
-                let unknown_relation = filtered(relation_call(RELATION_UNKNOWN));
-                let stable_relation = filtered(relation_call(RELATION_STABLE));
-                [
-                    expr_reaches_unsafe_builtin(&minting, registries, &|_| None),
-                    expr_reaches_unsafe_builtin(&pure, registries, &|_| None),
-                    expression_re_enters_evaluation(&probing),
-                    expression_re_enters_evaluation(&pure),
-                    pattern_reaches_unsafe_builtin(&unknown_relation, registries, &|_| None),
-                    pattern_reaches_unsafe_builtin(&stable_relation, registries, &|_| None),
-                    expr_reaches_unsafe_builtin(&probing, registries, &deciding_verdict),
-                ]
-            })
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned");
+        let answers = purrdf_stack::on_stack(128 * 1024, || {
+            let functions = functions();
+            let relations = relations();
+            let registries = configured(&functions, &relations);
+            let minting = negated(call(Function::Rand, Vec::new()));
+            let pure = negated(call(
+                Function::Str,
+                vec![Expression::Variable(Variable::new("v"))],
+            ));
+            let probing = negated(Expression::Exists(Child::new(bgp())));
+            let unknown_relation = filtered(relation_call(RELATION_UNKNOWN));
+            let stable_relation = filtered(relation_call(RELATION_STABLE));
+            [
+                expr_reaches_unsafe_builtin(&minting, registries, &|_| None),
+                expr_reaches_unsafe_builtin(&pure, registries, &|_| None),
+                expression_re_enters_evaluation(&probing),
+                expression_re_enters_evaluation(&pure),
+                pattern_reaches_unsafe_builtin(&unknown_relation, registries, &|_| None),
+                pattern_reaches_unsafe_builtin(&stable_relation, registries, &|_| None),
+                expr_reaches_unsafe_builtin(&probing, registries, &deciding_verdict),
+            ]
+        })
+        .expect("spawn");
         assert_eq!(answers, [true, false, true, false, true, false, false]);
     }
 }

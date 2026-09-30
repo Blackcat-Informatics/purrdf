@@ -745,11 +745,9 @@ impl std::fmt::Display for RulesError {
 
 impl std::error::Error for RulesError {}
 
-impl From<String> for RulesError {
-    fn from(message: String) -> Self {
-        Self::Failed(message)
-    }
-}
+purrdf_lex::variant_from!(RulesError {
+    Failed(String),
+});
 
 impl From<RulesError> for String {
     fn from(error: RulesError) -> Self {
@@ -791,6 +789,102 @@ pub fn infer(
     options: &RuleOptions,
 ) -> Result<Inference, String> {
     infer_with(data, shapes, options, srl::eval::Reexecution::Incremental)
+}
+
+/// The four rule-evaluation limits a host names, each `None` for the engine default.
+///
+/// [`run_rules`] turns them into the one [`RuleOptions`] (a SHACL shapes graph's rules) or
+/// [`srl::InferOptions`] (a SPARQL 1.2 RL rule set) the run is bounded by, so every host's
+/// rules run — the command line, Python, WebAssembly, C, and the entailment service — is
+/// bounded identically by the same knobs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RuleLimits {
+    /// The term-generating round limit.
+    pub max_term_generating_rounds: Option<u64>,
+    /// The generated-term budget.
+    pub max_generated_terms: Option<u64>,
+    /// The stored-fact limit.
+    pub max_stored_facts: Option<u64>,
+    /// The join-step limit.
+    pub max_join_steps: Option<u64>,
+}
+
+impl RuleLimits {
+    /// The [`RuleOptions`] these limits describe, a refusal naming `knobs`.
+    #[must_use]
+    pub fn rule_options(&self, knobs: LimitKnobs) -> RuleOptions {
+        let mut options = RuleOptions::default().with_limit_knobs(knobs);
+        if let Some(rounds) = self.max_term_generating_rounds {
+            options = options.with_max_term_generating_rounds(rounds);
+        }
+        if let Some(terms) = self.max_generated_terms {
+            options = options.with_max_generated_terms(terms);
+        }
+        if let Some(facts) = self.max_stored_facts {
+            options = options.with_max_stored_facts(facts);
+        }
+        if let Some(steps) = self.max_join_steps {
+            options = options.with_max_join_steps(steps);
+        }
+        options
+    }
+
+    /// The [`srl::InferOptions`] these limits describe, a refusal naming `knobs`.
+    #[must_use]
+    pub fn infer_options(&self, knobs: LimitKnobs) -> srl::InferOptions {
+        let mut options = srl::InferOptions::default().with_limit_knobs(knobs);
+        if let Some(rounds) = self.max_term_generating_rounds {
+            options = options.with_max_term_generating_rounds(rounds);
+        }
+        if let Some(terms) = self.max_generated_terms {
+            options = options.with_max_generated_terms(terms);
+        }
+        if let Some(facts) = self.max_stored_facts {
+            options = options.with_max_stored_facts(facts);
+        }
+        if let Some(steps) = self.max_join_steps {
+            options = options.with_max_join_steps(steps);
+        }
+        options
+    }
+}
+
+/// The rule set a [`run_rules`] call executes: exactly one of the two rule languages, which
+/// neither specification defines running as one.
+#[derive(Debug, Clone, Copy)]
+pub enum RuleSource<'a> {
+    /// The SHACL-AF rules of a parsed shapes graph.
+    Shapes(&'a Shapes),
+    /// A checked SPARQL 1.2 RL rule set.
+    Srl(&'a srl::RuleSetDocument),
+}
+
+/// Run `source`'s rules over `data` under `limits` — the ONE rules-dispatch entry every
+/// host uses (the `purrdf rules` command, the Python, WebAssembly and C rules entry points
+/// through `purrdf_validate::apply_rules_to_ntriples`, and the entailment service), so a
+/// rules run of the same rule set over the same data is the same [`Inference`] whichever
+/// host asks. A SHACL shapes graph's data is projected into the SHACL evaluation view
+/// first; a SPARQL 1.2 RL rule set reads `data` as given.
+///
+/// # Errors
+///
+/// The refusal's text: as [`infer`] for a shapes graph, and the [`srl::SrlError`] for a
+/// rule set that fails during execution or passes a limit; `knobs` names what to change.
+pub fn run_rules(
+    source: RuleSource<'_>,
+    data: &RdfDataset,
+    limits: &RuleLimits,
+    knobs: LimitKnobs,
+) -> Result<Inference, String> {
+    match source {
+        RuleSource::Shapes(shapes) => {
+            let projected = crate::engine::project_dataset(data)?;
+            let holder = ShaclData::new(Arc::clone(&projected), projected, None);
+            infer(&holder, shapes, &limits.rule_options(knobs))
+        }
+        RuleSource::Srl(document) => srl::infer(document, data, &limits.infer_options(knobs))
+            .map_err(|error| error.to_string()),
+    }
 }
 
 /// [`infer`], re-executing iterating shape rules as `reexecution` says.
@@ -1353,7 +1447,7 @@ fn triple_rule_execution(
     let governors = crate::sparql::current_governors();
     for focus in focus_nodes {
         crate::sparql::poll_between_evaluations(governors.as_deref())?;
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let mut sets: Vec<Vec<Term>> = Vec::with_capacity(3);
         for plan in &plans {
             sets.push(match plan {
@@ -1390,7 +1484,7 @@ fn global_triple_rule(
         return Ok(());
     };
     let absent = Term::blank(format!("g-x{execution}_focus"));
-    let mut guard = RecursionGuard::new();
+    let mut guard = RecursionGuard::default();
     let mut sets: Vec<Vec<Term>> = Vec::with_capacity(3);
     for expr in [subject, predicate, object] {
         let mut values = ExprPlan::of(data, expr).eval(data, &absent, &mut guard)?;
@@ -1758,17 +1852,8 @@ fn mint_tag(focus: Option<&Term>, execution: u64) -> String {
 fn focus_tag(focus: &Term) -> String {
     let rendered = focus.to_string();
     let mut tag = String::with_capacity(rendered.len() * 3 + 2);
-    const HEX: &[u8; 16] = b"0123456789abcdef";
     tag.push('f');
-    for byte in rendered.bytes() {
-        if byte.is_ascii_alphanumeric() {
-            tag.push(char::from(byte));
-        } else {
-            tag.push('-');
-            tag.push(char::from(HEX[usize::from(byte >> 4)]));
-            tag.push(char::from(HEX[usize::from(byte & 0x0f)]));
-        }
-    }
+    purrdf_core::ir::skolem::escape_label_bytes_into(rendered.as_bytes(), &mut tag);
     tag.push('_');
     tag
 }

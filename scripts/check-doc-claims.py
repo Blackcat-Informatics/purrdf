@@ -3163,7 +3163,7 @@ def jsonld_lens_claims() -> list[Claim]:
 
 
 _SHACL12_ROW = "SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL)"
-_SHACL12_CORPUS = _REPO / "crates" / "shapes" / "tests" / "shacl_corpora" / "shacl12.rs"
+_SHACL12_CORPUS = _REPO / "crates" / "shapes" / "src" / "shacl_corpora" / "shacl12.rs"
 _SHAPES_README = _REPO / "crates" / "shapes" / "README.md"
 _BOOK_SHACL = _REPO / "docs" / "book" / "src" / "validation" / "shacl.md"
 
@@ -3179,9 +3179,9 @@ def load_shacl12_type_counts() -> dict[str, int]:
     """
     text = _read(_SHACL12_CORPUS)
     rel = _SHACL12_CORPUS.relative_to(_REPO)
-    total_match = re.search(r"pub\(crate\) const W3C12_TOTAL_CASES: usize = (\d+);", text)
+    total_match = re.search(r"pub const W3C12_TOTAL_CASES: usize = (\d+);", text)
     table_match = re.search(
-        r"pub\(crate\) const W3C12_CASES_BY_TYPE: &\[\(&str, usize\)\] = &\[(.*?)\];",
+        r"pub const W3C12_CASES_BY_TYPE: &\[\(&str, usize\)\] = &\[(.*?)\];",
         text,
         re.DOTALL,
     )
@@ -3219,7 +3219,7 @@ _SHACL12_HARNESS = _REPO / "crates" / "shapes" / "tests" / "w3c12_conformance.rs
 # the table of entries whose approved result spells a decimal non-canonically, and
 # its count pin.
 _SHACL12_NODE_EXPR_GRADER = (
-    _REPO / "crates" / "shapes" / "tests" / "shacl_corpora" / "node_expr_grading.rs"
+    _REPO / "crates" / "shapes" / "src" / "shacl_corpora" / "node_expr_grading.rs"
 )
 _SHACL12_UNLISTED_ROW = "SHACL 1.2 unlisted vendored files"
 
@@ -3269,7 +3269,7 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
     mat = "the generated conformance-matrix block in docs/CONFORMANCE.md"
     pins = (
         "W3C12_TOTAL_CASES / W3C12_CASES_BY_TYPE in "
-        "crates/shapes/tests/shacl_corpora/shacl12.rs"
+        "crates/shapes/src/shacl_corpora/shacl12.rs"
     )
     catsrc = f"the category pins in {_SHACL12_HARNESS.relative_to(_REPO)}"
     if counts["total"] != listed + cats["unlisted"]:
@@ -4894,6 +4894,12 @@ def rl_matrix_agreement_claim(
 # quantity.
 _CHANGE_PATH_PINS = ("FOCUS_NODES", "SEAM_FOCUS_NODES", "BIND_ALLOC_CONST", "REPETITIONS")
 
+# `REPETITIONS` is shared by every allocation suite, so it lives in the measured-region
+# support module they all include rather than in `change_path_alloc.rs`; it is a
+# `pub const` there. Every other pin is a private `const` in the change-path test.
+_MEASURED_SUPPORT = _REPO / "crates" / "shapes" / "tests" / "support" / "measured.rs"
+_CHANGE_PATH_PIN_SOURCES: dict[str, Path] = {"REPETITIONS": _MEASURED_SUPPORT}
+
 
 def load_change_path_pins() -> dict[str, int]:
     """The change-path suite's pinned sizes and allocation constants, plus its scope.
@@ -4910,10 +4916,14 @@ def load_change_path_pins() -> dict[str, int]:
     rel = _CHANGE_PATH_TEST.relative_to(_REPO)
     pins: dict[str, int] = {}
     for name in _CHANGE_PATH_PINS:
-        found = re.search(rf"^const {name}: \w+ = ([\d_]+);", text, re.MULTILINE)
+        source = _CHANGE_PATH_PIN_SOURCES.get(name, _CHANGE_PATH_TEST)
+        found = re.search(
+            rf"^(?:pub )?const {name}: \w+ = ([\d_]+);", _read(source), re.MULTILINE
+        )
         if not found:
             raise SystemExit(
-                f"check-doc-claims: no `const {name}` in {rel}; the allocation claims "
+                f"check-doc-claims: no `const {name}` in {source.relative_to(_REPO)}; "
+                f"the allocation claims "
                 f"derived from it cannot be checked, so do not leave them unchecked"
             )
         pins[name] = int(found.group(1).replace("_", ""))

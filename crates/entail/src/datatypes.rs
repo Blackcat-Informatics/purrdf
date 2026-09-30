@@ -230,14 +230,14 @@ mod tests {
     use super::LiteralIndex;
     use crate::lists::{DT_EQUAL_RELATION, DT_ILL_TYPED_RELATION, DT_VALUE_RELATION};
 
-    /// `xsd:integer`.
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    /// `xsd:string`.
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
     /// `xsd:byte`.
-    const XSD_BYTE: &str = "http://www.w3.org/2001/XMLSchema#byte";
+    use purrdf_xsd::datatype::XSD_BYTE;
     /// `xsd:decimal`.
-    const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+    use purrdf_xsd::datatype::XSD_DECIMAL;
+    /// `xsd:integer`.
+    use purrdf_xsd::datatype::XSD_INTEGER;
+    /// `xsd:string`.
+    use purrdf_xsd::datatype::XSD_STRING;
 
     /// An index over one typed literal, under the surface the store would hold it by.
     fn index_of(pairs: &[(&str, &str, &str)]) -> LiteralIndex {

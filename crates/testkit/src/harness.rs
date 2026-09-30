@@ -138,14 +138,7 @@ pub struct Trial {
     body: Body,
 }
 
-impl fmt::Debug for Trial {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Trial")
-            .field("name", &self.name)
-            .field("ignored", &self.ignored)
-            .finish_non_exhaustive()
-    }
-}
+purrdf_hash::debug_non_exhaustive!(Trial { name, ignored });
 
 impl Trial {
     /// A case named `name` that runs `body`. A panic in `body` fails the case.
@@ -582,6 +575,19 @@ pub fn print_line(line: &str) {
     platform::print_raw(&text);
 }
 
+/// A determinism digest: `compute` run with every host clock and entropy source
+/// withdrawn ([`without_host_clock_or_entropy`]), reported on one
+/// `determinism-digest case=<case> digest=<16 hex digits> corpus_len=<n>` line
+/// ([`print_line`]) for the cross-target determinism scripts to compare, and
+/// returned. `corpus_len` is the size of the corpus the digest covers.
+pub fn report_digest(case: &str, corpus_len: usize, compute: impl FnOnce() -> u64) -> u64 {
+    let value = without_host_clock_or_entropy(compute);
+    print_line(&format!(
+        "determinism-digest case={case} digest={value:016x} corpus_len={corpus_len}"
+    ));
+    value
+}
+
 /// Run `computation` with every host clock and entropy source withdrawn, and
 /// return its value.
 ///
@@ -799,7 +805,7 @@ fn install_panic_hook() {
             let location = info
                 .location()
                 .map_or_else(String::new, |location| format!(" at {location}"));
-            let payload = payload_text(info.payload());
+            let payload = panic_message(info.payload()).unwrap_or("Box<dyn Any>");
             let handled = CAPTURE.with(|slot| {
                 let Ok(mut slot) = slot.try_borrow_mut() else {
                     return false;
@@ -828,14 +834,14 @@ fn install_panic_hook() {
     });
 }
 
-fn payload_text(payload: &(dyn Any + Send)) -> String {
-    if let Some(text) = payload.downcast_ref::<&str>() {
-        (*text).to_owned()
-    } else if let Some(text) = payload.downcast_ref::<String>() {
-        text.clone()
-    } else {
-        "Box<dyn Any>".to_owned()
-    }
+/// The message a panic carried: its `&str` or `String` payload, the two types
+/// `panic!` produces; `None` for any other payload. Every runner here that
+/// reports a caught panic reads it through this one function.
+pub(crate) fn panic_message(payload: &(dyn Any + Send)) -> Option<&str> {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
 }
 
 /// Run one case body under `catch_unwind`, capturing its panic message.
@@ -1008,29 +1014,29 @@ use platform::Console;
 /// The command line, environment, console and clock: the process's natively,
 /// the runner's host on wasm32.
 #[cfg(not(target_arch = "wasm32"))]
-mod platform {
+pub(crate) mod platform {
     use std::io::{self, IsTerminal as _, Write};
     use std::time::Instant;
 
     use super::Report;
 
     /// The arguments after the program name.
-    pub(super) fn args() -> Vec<String> {
+    pub(crate) fn args() -> Vec<String> {
         std::env::args().skip(1).collect()
     }
 
     /// An environment variable, lossily decoded.
-    pub(super) fn env_var(name: &str) -> Option<String> {
+    pub(crate) fn env_var(name: &str) -> Option<String> {
         std::env::var_os(name).map(|value| value.to_string_lossy().into_owned())
     }
 
     /// Write `text` to standard error.
-    pub(super) fn print_error(text: &str) {
+    pub(crate) fn print_error(text: &str) {
         eprint!("{text}");
     }
 
     /// Write `text` to standard output under one lock, and flush it.
-    pub(super) fn print_raw(text: &str) {
+    pub(crate) fn print_raw(text: &str) {
         let mut out = io::stdout().lock();
         if let Err(error) = out.write_all(text.as_bytes()).and_then(|()| out.flush()) {
             panic!("failed printing to stdout: {error}");
@@ -1047,7 +1053,7 @@ mod platform {
     }
 
     /// Nothing to report: the process's exit status is `main`'s.
-    pub(super) const fn report_exit(_status: u8) {}
+    pub(crate) const fn report_exit(_status: u8) {}
 
     /// Natively a panicking case unwinds and the run goes on: nothing to arm.
     pub(super) const fn arm(
@@ -1063,14 +1069,14 @@ mod platform {
 
     pub(super) const fn fail_armed(_message: &str) {}
 
-    pub(super) struct Stopwatch(Instant);
+    pub(crate) struct Stopwatch(Instant);
 
     impl Stopwatch {
-        pub(super) fn start() -> Self {
+        pub(crate) fn start() -> Self {
             Self(Instant::now())
         }
 
-        pub(super) fn seconds(&self) -> f64 {
+        pub(crate) fn seconds(&self) -> f64 {
             self.0.elapsed().as_secs_f64()
         }
     }
@@ -1101,25 +1107,25 @@ mod platform {
 }
 
 #[cfg(target_arch = "wasm32")]
-mod platform {
+pub(crate) mod platform {
     use std::io::{self, Write};
 
     use super::{Outcome, Report};
     use crate::host;
 
-    pub(super) fn args() -> Vec<String> {
+    pub(crate) fn args() -> Vec<String> {
         (0..host::arg_count()).map(host::arg).collect()
     }
 
-    pub(super) fn env_var(name: &str) -> Option<String> {
+    pub(crate) fn env_var(name: &str) -> Option<String> {
         host::env_var(name)
     }
 
-    pub(super) fn print_error(text: &str) {
+    pub(crate) fn print_error(text: &str) {
         host::write_stderr(text);
     }
 
-    pub(super) fn print_raw(text: &str) {
+    pub(crate) fn print_raw(text: &str) {
         host::write_stdout(text);
     }
 
@@ -1132,7 +1138,7 @@ mod platform {
         1
     }
 
-    pub(super) fn report_exit(status: u8) {
+    pub(crate) fn report_exit(status: u8) {
         host::exit(status);
     }
 
@@ -1166,14 +1172,14 @@ mod platform {
     }
 
     /// The run's start, in the host's milliseconds.
-    pub(super) struct Stopwatch(f64);
+    pub(crate) struct Stopwatch(f64);
 
     impl Stopwatch {
-        pub(super) fn start() -> Self {
+        pub(crate) fn start() -> Self {
             Self(host::now_millis())
         }
 
-        pub(super) fn seconds(&self) -> f64 {
+        pub(crate) fn seconds(&self) -> f64 {
             (host::now_millis() - self.0) / 1000.0
         }
     }

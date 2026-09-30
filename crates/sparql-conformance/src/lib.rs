@@ -5,7 +5,7 @@
 //! Native W3C SPARQL 1.1 conformance harness.
 //!
 //! Discovers `mf:` test manifests, runs each case against the native
-//! [`purrdf_sparql_eval`] engine (zero oxigraph Store), and diffs the result
+//! [`purrdf_sparql_eval`] engine, and diffs the result
 //! against the expected SPARQL Results (SRX/SRJ) or canonical N-Quads. The
 //! `harness = false` test target `tests/sparql_conformance.rs` runs one case per
 //! `manifest.ttl` that [`paths::suite_manifests`] discovers under `suite/`; each
@@ -35,12 +35,12 @@
 //! enter a published `.crate`.
 
 pub mod compare;
+pub mod ledger;
 pub mod manifest;
 pub mod mode_restricted;
 pub mod owl2;
 pub mod owl2_rl;
 pub mod paths;
-pub mod rif_xml;
 pub mod rs_resultset;
 pub mod run;
 pub mod service;
@@ -186,7 +186,3 @@ fn verdict_of(case: &SparqlTestCase) -> Verdict {
 fn log_xfail(iri: &str, reason: XfailReason, msg: &str) {
     eprintln!("[xfail: {}] {iri} — {msg}", reason.label());
 }
-
-#[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;

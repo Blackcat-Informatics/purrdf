@@ -48,7 +48,7 @@ const FOCUS: &str =
 
 /// `(conforms, results)` of a SARIF log, each result as its JSON text.
 fn verdict(sarif: &str) -> (bool, Vec<String>) {
-    let log: serde_json::Value = serde_json::from_str(sarif).expect("SARIF is JSON");
+    let log = purrdf_lex::json::read(sarif).expect("SARIF is JSON");
     let run = &log["runs"][0];
     let conforms = run["properties"]["shaclConforms"]
         .as_bool()

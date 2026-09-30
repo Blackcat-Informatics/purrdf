@@ -13,12 +13,10 @@
 //! (GTS metadata, suppressions) is passed in explicitly as an [`RdfLookaside`]
 //! (C0.6: it lives in the bundle envelope, not the hot graph).
 
-use std::collections::HashMap;
-
-use ciborium::value::Value;
 use purrdf_gts::codec::CodecError;
 use purrdf_gts::model::{Graph, Suppression, Term, TermKind};
 use purrdf_gts::writer::Writer;
+use purrdf_lex::cbor::Value;
 
 use crate::ir::RdfDataset;
 use crate::{
@@ -26,8 +24,7 @@ use crate::{
     RdfTerm,
 };
 
-const MAX_TERM_NESTING_DEPTH: usize = 16;
-
+use purrdf_events::MAX_TERM_NESTING_DEPTH;
 /// Convert a frozen [`RdfDataset`] into a canonical GTS [`Writer`].
 ///
 /// `lookaside` carries the out-of-band envelope material (GTS metadata,
@@ -119,14 +116,14 @@ pub fn to_gts(
 
 struct InternState {
     terms: Vec<Term>,
-    index: HashMap<RdfTerm, usize>,
+    index: crate::FastMap<RdfTerm, usize>,
 }
 
 impl InternState {
     fn new() -> Self {
         Self {
             terms: Vec::new(),
-            index: HashMap::new(),
+            index: crate::FastMap::default(),
         }
     }
 }
@@ -360,9 +357,9 @@ fn metadata_value_to_cbor(value: &RdfMetadataValue) -> Value {
     match value {
         RdfMetadataValue::Null => Value::Null,
         RdfMetadataValue::Bool(b) => Value::Bool(*b),
-        RdfMetadataValue::Integer(i) => match ciborium::value::Integer::try_from(*i) {
+        RdfMetadataValue::Integer(i) => match purrdf_lex::cbor::Integer::try_from(*i) {
             Ok(integer) => Value::Integer(integer),
-            Err(_) => Value::Integer(ciborium::value::Integer::from(if *i < 0 {
+            Err(_) => Value::Integer(purrdf_lex::cbor::Integer::from(if *i < 0 {
                 i64::MIN
             } else {
                 i64::MAX
@@ -447,7 +444,7 @@ mod tests {
 
     /// Re-render the round-tripped GTS graph to N-Quads through the kernel's own IR
     /// importer + RDFC-1.0 canonicalizer — never the purrdf-gts codec (purrdf-gts is the
-    /// purrdf.gts container layer only, and rdf-core is the oxigraph-free kernel below
+    /// purrdf.gts container layer only, and rdf-core is the kernel below
     /// purrdf, so the native `serialize_dataset` is out of reach here). For the
     /// single-quad fixtures below the canonical document is identical to the written
     /// quad line; multi-quad callers get a deterministic bytewise-sorted document.

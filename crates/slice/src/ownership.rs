@@ -28,10 +28,11 @@
 //! text-searched) so that an IRI mentioned only inside a string literal never
 //! produces a dependency edge.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use purrdf::{RdfDataset, TermId, TermRef};
+use purrdf_core::FastMap;
 use purrdf_sparql_algebra::{ParserOptions, SparqlParser};
 
 use crate::artifact::{ArtifactRecord, ArtifactRole};
@@ -46,21 +47,22 @@ use crate::vocab::SliceVocab;
 // namespace, `sliceDependsOn`, …) comes from the catalog's caller-supplied
 // [`SliceVocab`](crate::vocab::SliceVocab).
 
-const RDFS_IS_DEFINED_BY: &str = "http://www.w3.org/2000/01/rdf-schema#isDefinedBy";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_iri::vocab::rdfs::IS_DEFINED_BY as RDFS_IS_DEFINED_BY;
+use purrdf_iri::vocab::{owl, rdf, rdfs};
 
 /// The `rdf:type` object IRIs whose subjects are considered declared vocabulary
 /// terms subject to ownership checking.  Subjects in the vocab namespace typed
 /// with any of these are "declared terms" even when they have no
 /// `rdfs:isDefinedBy`.
 const VOCAB_TERM_TYPES: &[&str] = &[
-    "http://www.w3.org/2002/07/owl#Class",
-    "http://www.w3.org/2002/07/owl#ObjectProperty",
-    "http://www.w3.org/2002/07/owl#DatatypeProperty",
-    "http://www.w3.org/2002/07/owl#AnnotationProperty",
-    "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property",
-    "http://www.w3.org/2000/01/rdf-schema#Class",
-    "http://www.w3.org/2000/01/rdf-schema#Datatype",
+    owl::CLASS,
+    owl::OBJECT_PROPERTY,
+    owl::DATATYPE_PROPERTY,
+    owl::ANNOTATION_PROPERTY,
+    rdf::PROPERTY,
+    rdfs::CLASS,
+    rdfs::DATATYPE,
 ];
 
 /// A slice IRI (the public, persistent identity of a compilation unit). Never a
@@ -181,6 +183,21 @@ pub enum ReconciliationStatus {
     Forbidden,
 }
 
+impl ReconciliationStatus {
+    /// The stable lowercase token the status is written as — in the analysis graph's
+    /// status literal and in every host binding (`matched`, `undeclared`, `stale`,
+    /// `forbidden`).
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Matched => "matched",
+            Self::Undeclared => "undeclared",
+            Self::Stale => "stale",
+            Self::Forbidden => "forbidden",
+        }
+    }
+}
+
 /// A single computed cross-slice dependency edge with retained evidence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DependencyEdge {
@@ -257,7 +274,7 @@ pub enum OwnershipDiagnostic {
 #[derive(Debug, Clone)]
 pub struct OwnershipReport {
     /// The validated ownership table, keyed by term IRI.
-    pub ownership: HashMap<NamedNode, TermOwnership>,
+    pub ownership: FastMap<NamedNode, TermOwnership>,
     /// All computed dependency edges, with evidence and reconciliation status.
     pub edges: Vec<DependencyEdge>,
     /// All diagnostics surfaced during analysis.
@@ -324,7 +341,7 @@ impl<'a> OwnershipAnalyzer<'a> {
     /// the evidence-bearing dependency graph from *validated* ownership only.
     pub fn analyze(&self) -> Result<OwnershipReport, SliceError> {
         let mut diagnostics = Vec::new();
-        let mut rdf_facts: HashMap<(usize, usize), RdfArtifactFacts> = HashMap::new();
+        let mut rdf_facts: FastMap<(usize, usize), RdfArtifactFacts> = FastMap::default();
 
         // ── Phase 1: declared ownership (rdfs:isDefinedBy), per slice ────────
         //
@@ -378,7 +395,7 @@ impl<'a> OwnershipAnalyzer<'a> {
         // Iterate over the UNION of `declared_terms` (typed as OWL/RDFS vocab
         // constructs) and `claims` (terms with rdfs:isDefinedBy).  Terms that
         // are declared but have no rdfs:isDefinedBy yield OwnershipStatus::Unowned.
-        let mut ownership: HashMap<NamedNode, TermOwnership> = HashMap::new();
+        let mut ownership: FastMap<NamedNode, TermOwnership> = FastMap::default();
         let all_terms: BTreeSet<NamedNode> = declared_terms
             .iter()
             .chain(claims.keys())
@@ -450,7 +467,7 @@ impl<'a> OwnershipAnalyzer<'a> {
         //
         // RFC §10 step 5: build dependencies only from *validated* ownership
         // data. A conflicted / mismatched / unowned term contributes no edge.
-        let mut validated_owner: HashMap<NamedNode, SliceIri> = HashMap::new();
+        let mut validated_owner: FastMap<NamedNode, SliceIri> = FastMap::default();
         for (term, rec) in &ownership {
             if matches!(rec.status, OwnershipStatus::Validated) {
                 validated_owner.insert(term.clone(), rec.declared_owner.clone());
@@ -614,7 +631,7 @@ impl<'a> OwnershipAnalyzer<'a> {
 
 fn collect_reference_evidence<'a>(
     referenced: impl Iterator<Item = &'a NamedNode>,
-    validated_owner: &HashMap<NamedNode, SliceIri>,
+    validated_owner: &FastMap<NamedNode, SliceIri>,
     from: &SliceIri,
     kind: EdgeKind,
     from_evidence: &ArtifactEvidence,
@@ -773,7 +790,7 @@ fn collect_slice_depends_on(record: &SliceRecord) -> BTreeSet<SliceIri> {
 /// datatype IRI (the lexical form is NOT mined), and a quoted triple's components.
 /// A blank node contributes no IRI. The frozen IR always expands a literal's
 /// datatype (C0.1), so a plain `xsd:string` / `rdf:langString` literal mines the
-/// expanded datatype exactly as oxigraph's `lit.datatype()` did.
+/// expanded datatype IRI.
 ///
 /// The walk runs over a work list in depth-first order: a literal's datatype is visited
 /// next, and a quoted triple's subject is visited next with its predicate and object held
@@ -855,7 +872,7 @@ fn extract_query_iris(
     Ok(out)
 }
 
-fn insert_oxiri(node: &purrdf_sparql_algebra::NamedNode, out: &mut BTreeSet<NamedNode>) {
+fn insert_iri(node: &purrdf_sparql_algebra::NamedNode, out: &mut BTreeSet<NamedNode>) {
     if let Ok(nn) = NamedNode::new(node.as_str()) {
         out.insert(nn);
     }
@@ -866,7 +883,7 @@ fn walk_named_node_pattern(
     out: &mut BTreeSet<NamedNode>,
 ) {
     if let purrdf_sparql_algebra::NamedNodePattern::NamedNode(n) = p {
-        insert_oxiri(n, out);
+        insert_iri(n, out);
     }
 }
 
@@ -910,9 +927,9 @@ fn collect_iris(root: Reach<'_>, out: &mut BTreeSet<NamedNode>) {
             Reach::Term(t) => {
                 use purrdf_sparql_algebra::TermPattern as T;
                 match t {
-                    T::NamedNode(n) => insert_oxiri(n, out),
+                    T::NamedNode(n) => insert_iri(n, out),
                     // Only the datatype IRI counts, never the lexical form.
-                    T::Literal(lit) => insert_oxiri(&literal_datatype(lit), out),
+                    T::Literal(lit) => insert_iri(&literal_datatype(lit), out),
                     T::Triple(t) => pending.push(Reach::Triple(t)),
                     T::BlankNode(_) | T::Variable(_) => {}
                 }
@@ -922,10 +939,10 @@ fn collect_iris(root: Reach<'_>, out: &mut BTreeSet<NamedNode>) {
             Reach::Ground(t) => {
                 use purrdf_sparql_algebra::GroundTerm as GT;
                 match t {
-                    GT::NamedNode(n) => insert_oxiri(n, out),
-                    GT::Literal(lit) => insert_oxiri(&literal_datatype(lit), out),
+                    GT::NamedNode(n) => insert_iri(n, out),
+                    GT::Literal(lit) => insert_iri(&literal_datatype(lit), out),
                     GT::Triple(tri) => {
-                        insert_oxiri(&tri.predicate, out);
+                        insert_iri(&tri.predicate, out);
                         pending.extend([Reach::Ground(&tri.subject), Reach::Ground(&tri.object)]);
                     }
                     // Injection-only variant (native `$this` substitution): never
@@ -945,7 +962,7 @@ fn path_iris<'a>(
 ) {
     use purrdf_sparql_algebra::PropertyPathExpression as P;
     match p {
-        P::NamedNode(n) => insert_oxiri(n, out),
+        P::NamedNode(n) => insert_iri(n, out),
         P::Reverse(a) | P::ZeroOrMore(a) | P::OneOrMore(a) | P::ZeroOrOne(a) => {
             pending.push(Reach::Path(a));
         }
@@ -955,7 +972,7 @@ fn path_iris<'a>(
         }
         P::NegatedPropertySet(elems) => {
             for e in elems {
-                insert_oxiri(&e.predicate, out);
+                insert_iri(&e.predicate, out);
             }
         }
         // A predicate wildcard references no named predicate to collect.
@@ -970,10 +987,10 @@ fn expression_iris<'a>(
 ) {
     use purrdf_sparql_algebra::Expression as E;
     match e {
-        E::NamedNode(n) => insert_oxiri(n, out),
+        E::NamedNode(n) => insert_iri(n, out),
         // A literal in an expression (e.g. a FILTER comparison string) is NOT a
         // term reference; only its datatype IRI is.
-        E::Literal(lit) => insert_oxiri(&literal_datatype(lit), out),
+        E::Literal(lit) => insert_iri(&literal_datatype(lit), out),
         E::Variable(_) | E::Bound(_) => {}
         E::Or(operands) | E::And(operands) => pending.extend(operands.iter().map(Reach::Expr)),
         E::Arithmetic(first, steps) => {
@@ -996,7 +1013,7 @@ fn expression_iris<'a>(
         E::FunctionCall(func, args) => {
             match func {
                 // An IRI-named external function references the slice defining it.
-                purrdf_sparql_algebra::Function::Custom(n) => insert_oxiri(n, out),
+                purrdf_sparql_algebra::Function::Custom(n) => insert_iri(n, out),
                 // A recognized extension function (e.g. heldIn) depends on the
                 // slice that declares its vocabulary term. The parsed call keeps
                 // the ORIGINAL IRI from the query text (the extension namespace
@@ -1089,7 +1106,7 @@ fn pattern_iris<'a>(
             for (_var, agg_expr) in aggregates {
                 use purrdf_sparql_algebra::AggregateFunction as AF;
                 if let AF::Custom(n) = agg_expr.function() {
-                    insert_oxiri(n, out);
+                    insert_iri(n, out);
                 }
                 pending.extend(agg_expr.args().iter().map(Reach::Expr));
             }
@@ -1108,6 +1125,19 @@ mod rdf_fact_tests {
     use super::*;
 
     const EX: &str = "https://example.org/vocab/";
+
+    /// Each status writes its own stable token.
+    #[test]
+    fn reconciliation_status_tokens_are_the_stable_lowercase_names() {
+        let tokens = [
+            ReconciliationStatus::Matched,
+            ReconciliationStatus::Undeclared,
+            ReconciliationStatus::Stale,
+            ReconciliationStatus::Forbidden,
+        ]
+        .map(ReconciliationStatus::token);
+        assert_eq!(tokens, ["matched", "undeclared", "stale", "forbidden"]);
+    }
 
     #[test]
     fn one_ir_walk_collects_ownership_and_nested_rdf12_references() {
@@ -1217,10 +1247,11 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = purrdf_core::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::WellFormed,
+                purrdf_core::term_fixture::TermShape::WellFormed,
             );
             let mut builder = RdfDatasetBuilder::new();
             let object = builder.intern_value(&value);

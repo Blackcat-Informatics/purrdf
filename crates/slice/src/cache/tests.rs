@@ -132,6 +132,58 @@ fn rename_invariance_all_phases() {
     }
 }
 
+/// Every phase's source-unit key is frozen over a fixed slice: each root is the Merkle
+/// root over that phase's leaf, so the five pins hold the five phase domains and the
+/// Merkle-root domain. A moved root invalidates every build cache already on disk.
+#[test]
+fn every_phase_key_is_frozen() {
+    let iri = format!("{NS}slice/alpha");
+    let term = format!("{NS}Alpha");
+    let dir = TempDir::for_unit_test().unwrap();
+    let core = dir.path().join("slices").join("core");
+    write_slice(&core, "alpha", &iri, &term, &[], "# comment v1\n");
+    let (catalog, edges) = discover(dir.path());
+    let roots: Vec<(Phase, String)> = [
+        Phase::Parse,
+        Phase::Syntax,
+        Phase::Shacl,
+        Phase::Reason,
+        Phase::Bundle,
+    ]
+    .into_iter()
+    .map(|phase| {
+        let key = source_unit_key(phase, &catalog, &edges, &iri, &toolchain()).unwrap();
+        (phase, key.root)
+    })
+    .collect();
+    let expected: Vec<(Phase, String)> = [
+        (
+            Phase::Parse,
+            "3a3e153ff118438575a512f09de19537279efcf861ff377442310d0bfeb41ad7",
+        ),
+        (
+            Phase::Syntax,
+            "93a4cbc97974e09f2da02c52f148cc251991eed9d4f9366f4ced01f46165c686",
+        ),
+        (
+            Phase::Shacl,
+            "f7646fbf6e3a0d8b5002ce55186cbc1c8acbc6d18bbd1c3ad8e3393b38e77f79",
+        ),
+        (
+            Phase::Reason,
+            "c3f426e57271d6c6ce404a317594d859548847f2bc9c4e4840a7cf07b43a7cf1",
+        ),
+        (
+            Phase::Bundle,
+            "7cb14ff9af8b2fb25a4250f8f4ce8380c6af9c1f8c6475fdd127c76a505855e9",
+        ),
+    ]
+    .into_iter()
+    .map(|(phase, root)| (phase, root.to_owned()))
+    .collect();
+    assert_eq!(roots, expected);
+}
+
 /// Acceptance 2 — **comment-only invariance of the reasoning key**: changing a
 /// comment in a module (raw bytes differ, canonical RDF identical) leaves the
 /// REASONING-phase key unchanged, while the SYNTAX (byte-sensitive) key changes.

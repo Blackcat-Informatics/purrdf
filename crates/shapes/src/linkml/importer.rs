@@ -5,13 +5,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::json_model::{Map, Object, Value, ValueKind};
 use ::purrdf::RdfLocation;
+use ::purrdf::RdfTextDirection;
 use ::purrdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_loss_ledger};
-use serde_json::{Map, Value};
 
 use super::{
-    LinkmlDocument, LinkmlError, LinkmlPackage, LinkmlSlotDiagnostic, LinkmlSlotDisposition,
-    LinkmlSlotRename, is_linkml_identifier, parse_linkml, pointer_escape, projection, write_linkml,
+    LinkmlDocument, LinkmlError, LinkmlPackage, LinkmlSlotDisposition, is_linkml_identifier,
+    parse_linkml, projection, required_string, write_linkml,
 };
 use crate::schema_import::{ImportedShapes, SchemaImportConfig, import_schema_value_from};
 use crate::term::Term;
@@ -194,7 +195,14 @@ fn verify_slot_reports(package: &LinkmlPackage) -> Result<(), LinkmlError> {
                 rename.source_path
             )));
         }
-        let class = verify_report_context(package, rename, root)?;
+        let class = verify_source_context(
+            package,
+            &rename.source_class,
+            &rename.emitted_class,
+            &rename.source_path,
+            &rename.source_name,
+            root,
+        )?;
         let attribute = class
             .get("attributes")
             .and_then(Value::as_object)
@@ -271,7 +279,14 @@ fn verify_slot_reports(package: &LinkmlPackage) -> Result<(), LinkmlError> {
                 diagnostic.source_path
             )));
         }
-        let class = verify_diagnostic_context(package, diagnostic, root)?;
+        let class = verify_source_context(
+            package,
+            &diagnostic.source_class,
+            &diagnostic.emitted_class,
+            &diagnostic.source_path,
+            &diagnostic.source_name,
+            root,
+        )?;
         if diagnostic.disposition != LinkmlSlotDisposition::Skipped
             || diagnostic.new_slot_name.is_some()
             || diagnostic.emitted_slot_uri.is_some()
@@ -363,45 +378,18 @@ where
     Ok(())
 }
 
-fn verify_report_context<'a>(
-    package: &LinkmlPackage,
-    rename: &LinkmlSlotRename,
-    root: &'a Map<String, Value>,
-) -> Result<&'a Map<String, Value>, LinkmlError> {
-    verify_source_context(
-        package,
-        &rename.source_class,
-        &rename.emitted_class,
-        &rename.source_path,
-        &rename.source_name,
-        root,
-    )
-}
-
-fn verify_diagnostic_context<'a>(
-    package: &LinkmlPackage,
-    diagnostic: &LinkmlSlotDiagnostic,
-    root: &'a Map<String, Value>,
-) -> Result<&'a Map<String, Value>, LinkmlError> {
-    verify_source_context(
-        package,
-        &diagnostic.source_class,
-        &diagnostic.emitted_class,
-        &diagnostic.source_path,
-        &diagnostic.source_name,
-        root,
-    )
-}
-
 fn verify_source_context<'a>(
     package: &LinkmlPackage,
     source_class: &str,
     emitted_class: &str,
     source_path: &str,
     source_name: &str,
-    root: &'a Map<String, Value>,
-) -> Result<&'a Map<String, Value>, LinkmlError> {
-    let suffix = format!("/properties/{}", pointer_escape(source_name));
+    root: &'a Object,
+) -> Result<&'a Object, LinkmlError> {
+    let suffix = format!(
+        "/properties/{}",
+        purrdf_iri::json_pointer::escape_token(source_name)
+    );
     if !source_path.ends_with(&suffix) {
         return Err(LinkmlError::new(format!(
             "LinkML package slot report path {source_path:?} does not name source property {source_name:?}"
@@ -454,13 +442,13 @@ fn verify_generated_slot_name(
 }
 
 struct NativeImporter {
-    root: Map<String, Value>,
+    root: Object,
     prefixes: BTreeMap<String, String>,
     default_prefix: String,
-    classes: Map<String, Value>,
-    enums: Map<String, Value>,
-    types: Map<String, Value>,
-    slots: Map<String, Value>,
+    classes: Object,
+    enums: Object,
+    types: Object,
+    slots: Object,
     kinds: BTreeMap<String, ElementKind>,
     identities: BTreeMap<String, String>,
     reverse_identities: BTreeMap<String, String>,
@@ -621,9 +609,9 @@ impl NativeImporter {
             .filter_map(|name| self.identities.get(name).cloned())
             .collect();
         Ok((
-            Value::Object(Map::from_iter([(
+            crate::json_model::object(Map::from_iter([(
                 "$defs".to_owned(),
-                Value::Object(definitions),
+                crate::json_model::object(definitions),
             )])),
             ignored_class_iris,
         ))
@@ -634,7 +622,7 @@ impl NativeImporter {
             if self.root.contains_key(key) {
                 self.record(
                     "schema-identity-dropped",
-                    &format!("#/{}", pointer_escape(key)),
+                    &format!("#/{}", purrdf_iri::json_pointer::escape_token(key)),
                 );
             }
         }
@@ -681,8 +669,8 @@ impl NativeImporter {
                             "unknown-keyword-dropped",
                             &format!(
                                 "#/prefixes/{}/{}",
-                                pointer_escape(&prefix),
-                                pointer_escape(key)
+                                purrdf_iri::json_pointer::escape_token(&prefix),
+                                purrdf_iri::json_pointer::escape_token(key)
                             ),
                         );
                     }
@@ -705,7 +693,7 @@ impl NativeImporter {
             ) {
                 self.record(
                     "unknown-keyword-dropped",
-                    &format!("#/{}", pointer_escape(&key)),
+                    &format!("#/{}", purrdf_iri::json_pointer::escape_token(&key)),
                 );
             }
         }
@@ -734,7 +722,7 @@ impl NativeImporter {
         let mut properties = Map::new();
         let mut required = BTreeSet::new();
 
-        let mut local_slots = BTreeMap::<String, (Map<String, Value>, String)>::new();
+        let mut local_slots = BTreeMap::<String, (Object, String)>::new();
         if let Some(names) = object.get("slots") {
             let names = names
                 .as_array()
@@ -775,12 +763,17 @@ impl NativeImporter {
                 let usage = usage.as_object().ok_or_else(|| {
                     LinkmlError::new(format!(
                         "{path}/slot_usage/{} must be a mapping",
-                        pointer_escape(slot_name)
+                        purrdf_iri::json_pointer::escape_token(slot_name)
                     ))
                 })?;
-                let usage_path = format!("{path}/slot_usage/{}", pointer_escape(slot_name));
+                let usage_path = format!(
+                    "{path}/slot_usage/{}",
+                    purrdf_iri::json_pointer::escape_token(slot_name)
+                );
                 if let Some((slot, slot_path)) = local_slots.get_mut(slot_name) {
-                    slot.extend(usage.clone());
+                    for (key, value) in usage {
+                        crate::json_model::insert_sorted(slot, key.clone(), value.clone());
+                    }
                     *slot_path = usage_path;
                 } else if object.contains_key("is_a") || object.contains_key("mixins") {
                     // LinkML permits slot_usage to override an inherited slot,
@@ -805,7 +798,7 @@ impl NativeImporter {
                 let slot = slot.as_object().ok_or_else(|| {
                     LinkmlError::new(format!(
                         "{path}/attributes/{} must be a mapping",
-                        pointer_escape(slot_name)
+                        purrdf_iri::json_pointer::escape_token(slot_name)
                     ))
                 })?;
                 if local_slots
@@ -813,7 +806,10 @@ impl NativeImporter {
                         slot_name.clone(),
                         (
                             slot.clone(),
-                            format!("{path}/attributes/{}", pointer_escape(slot_name)),
+                            format!(
+                                "{path}/attributes/{}",
+                                purrdf_iri::json_pointer::escape_token(slot_name)
+                            ),
                         ),
                     )
                     .is_some()
@@ -847,7 +843,7 @@ impl NativeImporter {
             let pivot_path = format!(
                 "{}/properties/{}",
                 definition_path(self.identity(name)?),
-                pointer_escape(&property_identity)
+                purrdf_iri::json_pointer::escape_token(&property_identity)
             );
             self.map_location(&pivot_path, &slot_path);
             self.map_expression_locations(&pivot_path, &slot_path, &slot, &property_schema);
@@ -869,7 +865,10 @@ impl NativeImporter {
                 required.insert(property_identity);
             }
         }
-        schema.insert("properties".to_owned(), Value::Object(properties));
+        schema.insert(
+            "properties".to_owned(),
+            crate::json_model::object(properties),
+        );
         if !required.is_empty() {
             schema.insert(
                 "required".to_owned(),
@@ -910,7 +909,10 @@ impl NativeImporter {
                 if !matches!(key.as_str(), "allowed" | "range_expression") {
                     self.record(
                         "unknown-keyword-dropped",
-                        &format!("{path}/extra_slots/{}", pointer_escape(key)),
+                        &format!(
+                            "{path}/extra_slots/{}",
+                            purrdf_iri::json_pointer::escape_token(key)
+                        ),
                     );
                 }
             }
@@ -943,7 +945,9 @@ impl NativeImporter {
                 self.record("schema-identity-dropped", &format!("{path}/mixins/{index}"));
             }
         }
-        self.apply_compositions(&object, &path, visiting, depth, &mut schema, true)?;
+        let mut target = Object::from_iter(std::mem::take(&mut schema));
+        self.apply_compositions(&object, &path, visiting, depth, &mut target, true)?;
+        schema = target.into_iter().collect();
         if !inherited.is_empty() {
             let existing = schema
                 .remove("allOf")
@@ -977,17 +981,17 @@ impl NativeImporter {
             &definition_path(self.identity(name)?),
             &path,
             &object,
-            &Value::Object(schema.clone()),
+            &crate::json_model::object(schema.clone()),
         );
         visiting.remove(&format!("class:{name}"));
-        let value = Value::Object(schema);
+        let value = crate::json_model::object(schema);
         self.class_cache.insert(name.to_owned(), value.clone());
         Ok(value)
     }
 
     fn slot_schema(
         &mut self,
-        slot: &Map<String, Value>,
+        slot: &Object,
         path: &str,
         visiting: &mut BTreeSet<String>,
         depth: usize,
@@ -1029,7 +1033,7 @@ impl NativeImporter {
                     &format!("{path}/list_elements_ordered"),
                 );
             }
-            Value::Object(array)
+            crate::json_model::object(array)
         } else {
             if slot.contains_key("list_elements_unique")
                 || slot.contains_key("list_elements_ordered")
@@ -1055,7 +1059,7 @@ impl NativeImporter {
 
     fn expression_schema(
         &mut self,
-        expression: &Map<String, Value>,
+        expression: &Object,
         path: &str,
         visiting: &mut BTreeSet<String>,
         depth: usize,
@@ -1072,7 +1076,7 @@ impl NativeImporter {
                     .ok_or_else(|| LinkmlError::new(format!("{path}/range must be a string")))?;
                 self.range_schema(range, visiting, depth + 1, &format!("{path}/range"))?
             }
-            None => Value::Object(Map::new()),
+            None => crate::json_model::object(Map::new()),
         };
         let object = schema.as_object_mut().ok_or_else(|| {
             LinkmlError::new(format!(
@@ -1107,7 +1111,7 @@ impl NativeImporter {
             }
             "Any" | "any" => {
                 self.record("value-term-kind-widened", path);
-                return Ok(Value::Object(Map::new()));
+                return Ok(crate::json_model::object(Map::new()));
             }
             _ => None,
         };
@@ -1116,7 +1120,7 @@ impl NativeImporter {
             if let Some(format) = format {
                 schema.insert("format".to_owned(), Value::String(format.to_owned()));
             }
-            return Ok(Value::Object(schema));
+            return Ok(crate::json_model::object(schema));
         }
         match self.kinds.get(range).copied() {
             Some(ElementKind::Class) if self.ignored_class_names.contains(range) => {
@@ -1128,10 +1132,15 @@ impl NativeImporter {
                     self.class_schema(range, visiting, depth)
                 }
             }
-            Some(ElementKind::Class | ElementKind::Enum) => Ok(Value::Object(Map::from_iter([(
-                "$ref".to_owned(),
-                Value::String(format!("#/$defs/{}", pointer_escape(self.identity(range)?))),
-            )]))),
+            Some(ElementKind::Class | ElementKind::Enum) => {
+                Ok(crate::json_model::object(Map::from_iter([(
+                    "$ref".to_owned(),
+                    Value::String(format!(
+                        "#/$defs/{}",
+                        purrdf_iri::json_pointer::escape_token(self.identity(range)?)
+                    )),
+                )])))
+            }
             Some(ElementKind::Type) => self.type_schema(range, visiting, depth),
             None => Err(LinkmlError::new(format!(
                 "{path} names unknown LinkML range {range:?}"
@@ -1214,7 +1223,10 @@ impl NativeImporter {
         }
         let mut members = Vec::new();
         for (text, definition) in values {
-            let member_path = format!("{path}/permissible_values/{}", pointer_escape(text));
+            let member_path = format!(
+                "{path}/permissible_values/{}",
+                purrdf_iri::json_pointer::escape_token(text)
+            );
             let member = match definition {
                 Value::Null => Value::String(text.clone()),
                 Value::String(description) => {
@@ -1228,7 +1240,7 @@ impl NativeImporter {
                         let meaning = meaning.as_str().ok_or_else(|| {
                             LinkmlError::new(format!("{member_path}/meaning must be a string"))
                         })?;
-                        Value::Object(Map::from_iter([(
+                        crate::json_model::object(Map::from_iter([(
                             "@id".to_owned(),
                             Value::String(self.expand_iri(meaning, &member_path)?),
                         )]))
@@ -1240,17 +1252,23 @@ impl NativeImporter {
                             if !value.is_string() {
                                 return Err(LinkmlError::new(format!(
                                     "{member_path}/{} must be a string",
-                                    pointer_escape(key)
+                                    purrdf_iri::json_pointer::escape_token(key)
                                 )));
                             }
                             self.record(
                                 "enum-metadata-dropped",
-                                &format!("{member_path}/{}", pointer_escape(key)),
+                                &format!(
+                                    "{member_path}/{}",
+                                    purrdf_iri::json_pointer::escape_token(key)
+                                ),
                             );
                         } else if key != "meaning" {
                             self.record(
                                 "unknown-keyword-dropped",
-                                &format!("{member_path}/{}", pointer_escape(key)),
+                                &format!(
+                                    "{member_path}/{}",
+                                    purrdf_iri::json_pointer::escape_token(key)
+                                ),
                             );
                         }
                     }
@@ -1269,21 +1287,21 @@ impl NativeImporter {
                 if !value.is_string() {
                     return Err(LinkmlError::new(format!(
                         "{path}/{} must be a string",
-                        pointer_escape(key)
+                        purrdf_iri::json_pointer::escape_token(key)
                     )));
                 }
                 self.record(
                     "annotation-dropped",
-                    &format!("{path}/{}", pointer_escape(key)),
+                    &format!("{path}/{}", purrdf_iri::json_pointer::escape_token(key)),
                 );
             } else if !matches!(key.as_str(), "enum_uri" | "permissible_values") {
                 self.record(
                     "unknown-keyword-dropped",
-                    &format!("{path}/{}", pointer_escape(key)),
+                    &format!("{path}/{}", purrdf_iri::json_pointer::escape_token(key)),
                 );
             }
         }
-        Ok(Value::Object(Map::from_iter([(
+        Ok(crate::json_model::object(Map::from_iter([(
             "enum".to_owned(),
             Value::Array(members),
         )])))
@@ -1291,15 +1309,15 @@ impl NativeImporter {
 
     fn apply_scalar_fields(
         &self,
-        source: &Map<String, Value>,
-        target: &mut Map<String, Value>,
+        source: &Object,
+        target: &mut Object,
         path: &str,
     ) -> Result<(), LinkmlError> {
         if let Some(pattern) = source.get("pattern") {
             let pattern = pattern
                 .as_str()
                 .ok_or_else(|| LinkmlError::new(format!("{path}/pattern must be a string")))?;
-            target.insert("pattern".to_owned(), Value::String(pattern.to_owned()));
+            crate::json_model::insert_sorted(target, "pattern", Value::String(pattern.to_owned()));
         }
         for (native, schema) in [("minimum_value", "minimum"), ("maximum_value", "maximum")] {
             if let Some(value) = source.get(native) {
@@ -1308,7 +1326,7 @@ impl NativeImporter {
                         "{path}/{native} must be a number"
                     )));
                 }
-                target.insert(schema.to_owned(), value.clone());
+                crate::json_model::insert_sorted(target, schema, value.clone());
             }
         }
         let equality = match (source.get("equals_string"), source.get("equals_number")) {
@@ -1336,18 +1354,18 @@ impl NativeImporter {
             (None, None) => None,
         };
         if let Some(equality) = equality {
-            target.insert("const".to_owned(), equality);
+            crate::json_model::insert_sorted(target, "const", equality);
         }
         Ok(())
     }
 
     fn apply_compositions(
         &mut self,
-        source: &Map<String, Value>,
+        source: &Object,
         path: &str,
         visiting: &mut BTreeSet<String>,
         depth: usize,
-        target: &mut Map<String, Value>,
+        target: &mut Object,
         class_expression: bool,
     ) -> Result<(), LinkmlError> {
         for (native, schema) in [
@@ -1379,7 +1397,7 @@ impl NativeImporter {
                     translated
                 });
             }
-            target.insert(schema.to_owned(), Value::Array(translated));
+            crate::json_model::insert_sorted(target, schema, Value::Array(translated));
         }
         if let Some(branches) = source.get("none_of") {
             let branches = branches
@@ -1406,19 +1424,19 @@ impl NativeImporter {
             let negated = if translated.len() == 1 {
                 translated.pop().expect("length checked")
             } else {
-                Value::Object(Map::from_iter([(
+                crate::json_model::object(Map::from_iter([(
                     "anyOf".to_owned(),
                     Value::Array(translated),
                 )]))
             };
-            target.insert("not".to_owned(), negated);
+            crate::json_model::insert_sorted(target, "not", negated);
         }
         Ok(())
     }
 
     fn class_expression_schema(
         &mut self,
-        expression: &Map<String, Value>,
+        expression: &Object,
         path: &str,
         visiting: &mut BTreeSet<String>,
         depth: usize,
@@ -1432,8 +1450,9 @@ impl NativeImporter {
         } else {
             None
         };
-        let mut own = Map::from_iter([("type".to_owned(), Value::String("object".to_owned()))]);
-        self.apply_compositions(expression, path, visiting, depth, &mut own, true)?;
+        let mut target = Object::new().with("type", "object");
+        self.apply_compositions(expression, path, visiting, depth, &mut target, true)?;
+        let own: Map<String, Value> = target.into_iter().collect();
         if let Some(slot_conditions) = expression.get("slot_conditions") {
             let slot_conditions = slot_conditions.as_object().ok_or_else(|| {
                 LinkmlError::new(format!("{path}/slot_conditions must be a mapping"))
@@ -1442,7 +1461,7 @@ impl NativeImporter {
                 if !condition.is_object() {
                     return Err(LinkmlError::new(format!(
                         "{path}/slot_conditions/{} must be a mapping",
-                        pointer_escape(slot)
+                        purrdf_iri::json_pointer::escape_token(slot)
                     )));
                 }
             }
@@ -1469,10 +1488,10 @@ impl NativeImporter {
         }
         if let Some(parent) = parent {
             if has_own_semantics {
-                Ok(Value::Object(Map::from_iter([
+                Ok(crate::json_model::object(Map::from_iter([
                     (
                         "allOf".to_owned(),
-                        Value::Array(vec![parent, Value::Object(own)]),
+                        Value::Array(vec![parent, crate::json_model::object(own)]),
                     ),
                     ("type".to_owned(), Value::String("object".to_owned())),
                 ])))
@@ -1480,16 +1499,11 @@ impl NativeImporter {
                 Ok(parent)
             }
         } else {
-            Ok(Value::Object(own))
+            Ok(crate::json_model::object(own))
         }
     }
 
-    fn slot_identity(
-        &self,
-        name: &str,
-        slot: &Map<String, Value>,
-        path: &str,
-    ) -> Result<String, LinkmlError> {
+    fn slot_identity(&self, name: &str, slot: &Object, path: &str) -> Result<String, LinkmlError> {
         if name.starts_with('@') {
             if slot.contains_key("slot_uri") {
                 return Err(LinkmlError::new(format!(
@@ -1573,7 +1587,7 @@ impl NativeImporter {
                 .is_some_and(|attributes| {
                     ["@id", "@type", "@annotation"]
                         .iter()
-                        .all(|key| attributes.contains_key(*key))
+                        .all(|key| attributes.contains_key(key))
                 });
         }
         name == "Annotation"
@@ -1644,9 +1658,9 @@ impl NativeImporter {
                 members.insert("items".to_owned(), items);
             }
         }
-        Ok(Some(serde_json::json!({
+        Ok(Some(crate::json_model::json!({
             "type": "object",
-            "properties": { "@list": Value::Object(members) },
+            "properties": { "@list": crate::json_model::object(members) },
             "required": ["@list"]
         })))
     }
@@ -1664,16 +1678,20 @@ impl NativeImporter {
             })?;
             if optional_bool(id, "required", "#/classes/helper/attributes/@id")? == Some(true) {
                 // An IRI or blank-node reference states its `@id` label pattern.
-                let mut id_schema = serde_json::json!({ "type": "string" });
+                let mut id_schema = crate::json_model::json!({ "type": "string" });
                 if let Some(pattern) = id.get("pattern") {
                     let pattern = pattern.as_str().ok_or_else(|| {
                         LinkmlError::new(format!(
                             "#/classes/{name}/attributes/@id/pattern must be a string"
                         ))
                     })?;
-                    id_schema["pattern"] = Value::String(pattern.to_owned());
+                    crate::json_model::set_member(
+                        &mut id_schema,
+                        "pattern",
+                        Value::String(pattern.to_owned()),
+                    );
                 }
-                return Ok(Some(serde_json::json!({
+                return Ok(Some(crate::json_model::json!({
                     "type": "object",
                     "properties": { "@id": id_schema },
                     "required": ["@id"]
@@ -1694,13 +1712,15 @@ impl NativeImporter {
                     "#/classes/{name}/attributes/@value must be a mapping"
                 ))
             })?;
-            let mut value_schema = serde_json::json!({ "type": "string" });
+            let mut value_schema = crate::json_model::json!({ "type": "string" });
             match value.get("range").and_then(Value::as_str) {
                 Some("string") | None => {}
-                Some("datetime") => value_schema["format"] = Value::from("date-time"),
-                Some("date") => value_schema["format"] = Value::from("date"),
-                Some("time") => value_schema["format"] = Value::from("time"),
-                Some("uri") => value_schema["format"] = Value::from("uri"),
+                Some("datetime") => {
+                    crate::json_model::set_member(&mut value_schema, "format", "date-time");
+                }
+                Some("date") => crate::json_model::set_member(&mut value_schema, "format", "date"),
+                Some("time") => crate::json_model::set_member(&mut value_schema, "format", "time"),
+                Some("uri") => crate::json_model::set_member(&mut value_schema, "format", "uri"),
                 Some(_) => return Ok(None),
             }
             if let Some(pattern) = value.get("pattern") {
@@ -1709,9 +1729,13 @@ impl NativeImporter {
                         "#/classes/{name}/attributes/@value/pattern must be a string"
                     ))
                 })?;
-                value_schema["pattern"] = Value::String(pattern.to_owned());
+                crate::json_model::set_member(
+                    &mut value_schema,
+                    "pattern",
+                    Value::String(pattern.to_owned()),
+                );
             }
-            return Ok(Some(serde_json::json!({
+            return Ok(Some(crate::json_model::json!({
                 "type": "object",
                 "properties": {
                     "@value": value_schema,
@@ -1737,7 +1761,7 @@ impl NativeImporter {
             if optional_bool(value, "required", "#/classes/helper/attributes/@value")? == Some(true)
                 && datatype.get("range").and_then(Value::as_str) == Some("string")
             {
-                return Ok(Some(serde_json::json!({
+                return Ok(Some(crate::json_model::json!({
                     "type": "object",
                     "properties": {
                         "@value": {},
@@ -1753,12 +1777,14 @@ impl NativeImporter {
             && attributes.contains_key("@direction")
         {
             // A directional language-tagged literal (`rdf:dirLangString`).
-            return Ok(Some(serde_json::json!({
+            return Ok(Some(crate::json_model::json!({
                 "type": "object",
                 "properties": {
                     "@value": { "type": "string" },
                     "@language": { "type": "string" },
-                    "@direction": { "enum": ["ltr", "rtl"] }
+                    "@direction": {
+                        "enum": [RdfTextDirection::Ltr.as_str(), RdfTextDirection::Rtl.as_str()]
+                    }
                 },
                 "required": ["@value", "@language", "@direction"]
             })));
@@ -1786,16 +1812,20 @@ impl NativeImporter {
             {
                 // A `sh:languageIn` object states its tag pattern; the object of
                 // any language-tagged literal (`rdf:langString`) states none.
-                let mut language_schema = serde_json::json!({ "type": "string" });
+                let mut language_schema = crate::json_model::json!({ "type": "string" });
                 if let Some(pattern) = language.get("pattern") {
                     let pattern = pattern.as_str().ok_or_else(|| {
                         LinkmlError::new(format!(
                             "#/classes/{name}/attributes/@language/pattern must be a string"
                         ))
                     })?;
-                    language_schema["pattern"] = Value::String(pattern.to_owned());
+                    crate::json_model::set_member(
+                        &mut language_schema,
+                        "pattern",
+                        Value::String(pattern.to_owned()),
+                    );
                 }
-                return Ok(Some(serde_json::json!({
+                return Ok(Some(crate::json_model::json!({
                     "type": "object",
                     "properties": {
                         "@value": { "type": "string" },
@@ -1810,7 +1840,7 @@ impl NativeImporter {
 
     fn audit_element_fields(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         path: &str,
         known: &[&str],
     ) -> Result<(), LinkmlError> {
@@ -1819,12 +1849,12 @@ impl NativeImporter {
                 if !value.is_string() {
                     return Err(LinkmlError::new(format!(
                         "{path}/{} must be a string",
-                        pointer_escape(key)
+                        purrdf_iri::json_pointer::escape_token(key)
                     )));
                 }
                 self.record(
                     "annotation-dropped",
-                    &format!("{path}/{}", pointer_escape(key)),
+                    &format!("{path}/{}", purrdf_iri::json_pointer::escape_token(key)),
                 );
             } else if key == "alias" {
                 if !value.is_string() {
@@ -1834,18 +1864,14 @@ impl NativeImporter {
             } else if !known.contains(&key.as_str()) {
                 self.record(
                     "unknown-keyword-dropped",
-                    &format!("{path}/{}", pointer_escape(key)),
+                    &format!("{path}/{}", purrdf_iri::json_pointer::escape_token(key)),
                 );
             }
         }
         Ok(())
     }
 
-    fn audit_slot_fields(
-        &mut self,
-        object: &Map<String, Value>,
-        path: &str,
-    ) -> Result<(), LinkmlError> {
+    fn audit_slot_fields(&mut self, object: &Object, path: &str) -> Result<(), LinkmlError> {
         let known = [
             "slot_uri",
             "alias",
@@ -1874,11 +1900,7 @@ impl NativeImporter {
         self.audit_element_fields(object, path, &known)
     }
 
-    fn audit_expression_fields(
-        &mut self,
-        object: &Map<String, Value>,
-        path: &str,
-    ) -> Result<(), LinkmlError> {
+    fn audit_expression_fields(&mut self, object: &Object, path: &str) -> Result<(), LinkmlError> {
         self.audit_element_fields(
             object,
             path,
@@ -1901,7 +1923,7 @@ impl NativeImporter {
         &mut self,
         pivot_path: &str,
         native_path: &str,
-        source: &Map<String, Value>,
+        source: &Object,
         translated: &Value,
     ) {
         let scalar_path = if translated
@@ -1971,11 +1993,8 @@ impl NativeImporter {
     }
 }
 
-fn section<'a>(
-    root: &'a Map<String, Value>,
-    name: &str,
-) -> Result<&'a Map<String, Value>, LinkmlError> {
-    static EMPTY: std::sync::OnceLock<Map<String, Value>> = std::sync::OnceLock::new();
+fn section<'a>(root: &'a Object, name: &str) -> Result<&'a Object, LinkmlError> {
+    static EMPTY: std::sync::OnceLock<Object> = std::sync::OnceLock::new();
     root.get(name)
         .map(|value| {
             value
@@ -1983,10 +2002,10 @@ fn section<'a>(
                 .ok_or_else(|| LinkmlError::new(format!("#/{name} must be a mapping")))
         })
         .transpose()
-        .map(|value| value.unwrap_or_else(|| EMPTY.get_or_init(Map::new)))
+        .map(|value| value.unwrap_or_else(|| EMPTY.get_or_init(Object::new)))
 }
 
-fn document_prefixes(root: &Map<String, Value>) -> Result<BTreeMap<String, String>, LinkmlError> {
+fn document_prefixes(root: &Object) -> Result<BTreeMap<String, String>, LinkmlError> {
     let prefixes = root
         .get("prefixes")
         .and_then(Value::as_object)
@@ -2002,13 +2021,13 @@ fn document_prefixes(root: &Map<String, Value>) -> Result<BTreeMap<String, Strin
                     .ok_or_else(|| {
                         LinkmlError::new(format!(
                             "#/prefixes/{} requires string prefix_reference",
-                            pointer_escape(prefix)
+                            purrdf_iri::json_pointer::escape_token(prefix)
                         ))
                     })?,
                 _ => {
                     return Err(LinkmlError::new(format!(
                         "#/prefixes/{} must be a string or mapping",
-                        pointer_escape(prefix)
+                        purrdf_iri::json_pointer::escape_token(prefix)
                     )));
                 }
             };
@@ -2018,40 +2037,25 @@ fn document_prefixes(root: &Map<String, Value>) -> Result<BTreeMap<String, Strin
 }
 
 fn validate_absolute(value: &str, path: &str) -> Result<String, LinkmlError> {
-    let iri = purrdf_iri::parse(value).map_err(|error| {
-        LinkmlError::new(format!("{path} forms invalid IRI {value:?}: {error}"))
-    })?;
-    if !iri.has_scheme() {
-        return Err(LinkmlError::new(format!(
+    match purrdf_iri::BaseIri::parse(value) {
+        Ok(_) => Ok(value.to_owned()),
+        Err(purrdf_iri::IriError::NonAbsoluteBase(_)) => Err(LinkmlError::new(format!(
             "{path} forms relative IRI {value:?}"
-        )));
+        ))),
+        Err(error) => Err(LinkmlError::new(format!(
+            "{path} forms invalid IRI {value:?}: {error}"
+        ))),
     }
-    Ok(value.to_owned())
 }
 
-fn required_string<'a>(
-    object: &'a Map<String, Value>,
-    key: &str,
-    path: &str,
-) -> Result<&'a str, LinkmlError> {
-    object
-        .get(key)
-        .and_then(Value::as_str)
-        .ok_or_else(|| LinkmlError::new(format!("{path} must be a string")))
-}
-
-fn required_bool(object: &Map<String, Value>, key: &str, path: &str) -> Result<bool, LinkmlError> {
+fn required_bool(object: &Object, key: &str, path: &str) -> Result<bool, LinkmlError> {
     object
         .get(key)
         .and_then(Value::as_bool)
         .ok_or_else(|| LinkmlError::new(format!("{path} must be a boolean")))
 }
 
-fn optional_bool(
-    object: &Map<String, Value>,
-    key: &str,
-    path: &str,
-) -> Result<Option<bool>, LinkmlError> {
+fn optional_bool(object: &Object, key: &str, path: &str) -> Result<Option<bool>, LinkmlError> {
     object
         .get(key)
         .map(|value| {
@@ -2062,11 +2066,7 @@ fn optional_bool(
         .transpose()
 }
 
-fn optional_u64(
-    object: &Map<String, Value>,
-    key: &str,
-    path: &str,
-) -> Result<Option<u64>, LinkmlError> {
+fn optional_u64(object: &Object, key: &str, path: &str) -> Result<Option<u64>, LinkmlError> {
     object
         .get(key)
         .map(|value| {
@@ -2078,11 +2078,14 @@ fn optional_u64(
 }
 
 fn element_path(section: &str, name: &str) -> String {
-    format!("#/{section}/{}", pointer_escape(name))
+    format!(
+        "#/{section}/{}",
+        purrdf_iri::json_pointer::escape_token(name)
+    )
 }
 
 fn definition_path(key: &str) -> String {
-    format!("#/$defs/{}", pointer_escape(key))
+    format!("#/$defs/{}", purrdf_iri::json_pointer::escape_token(key))
 }
 
 fn remap_location(subject: &str, mappings: &BTreeMap<String, String>) -> String {
@@ -2104,13 +2107,13 @@ fn remap_location(subject: &str, mappings: &BTreeMap<String, String>) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_model::json;
     use crate::json_schema::{CompiledSchema, Namespaces};
     use crate::linkml::{LinkmlConfig, emit_linkml};
     use crate::schema_import::SchemaDatatypeMap;
     use crate::shapes::{Constraint, Path};
-    use serde_json::json;
 
-    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+    use purrdf_xsd::datatype::XSD_NS as XSD;
 
     fn config() -> SchemaImportConfig {
         let namespaces = Namespaces::new(
@@ -2406,10 +2409,7 @@ mod tests {
             }
         });
         let compiled = CompiledSchema {
-            schema_json: format!(
-                "{}\n",
-                serde_json::to_string_pretty(&schema).expect("schema serializes")
-            ),
+            schema_json: format!("{}\n", crate::json_model::write_pretty(&schema)),
             openapi_json: "{}\n".to_owned(),
             losses: LossLedger::new(),
         };
@@ -2465,8 +2465,8 @@ mod tests {
         let mut bad_document = package;
         let renamed = bad_document.slot_renames[0].clone();
         let mut value = bad_document.document.as_value().clone();
-        value["classes"][&renamed.emitted_class]["attributes"][&renamed.new_slot_name]["slot_uri"] =
-            Value::String("ex:tampered".to_owned());
+        value["classes"][renamed.emitted_class.as_str()]["attributes"]
+            [renamed.new_slot_name.as_str()]["slot_uri"] = Value::String("ex:tampered".to_owned());
         bad_document.document = LinkmlDocument::from_value(value).expect("valid tampered document");
         bad_document.yaml = write_linkml(&bad_document.document).expect("tampered YAML");
         bad_document.canonical_yaml.clone_from(&bad_document.yaml);

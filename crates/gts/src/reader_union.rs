@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use std::collections::{HashMap, HashSet};
+use crate::{FastMap, FastSet};
 
-use ciborium::value::Value;
+use purrdf_lex::cbor::Value;
 
 use crate::model::{Graph, Quad, Suppression, Term, TermKind, Triple3};
-use crate::reader::{as_idx, as_text, text_or};
+use crate::reader::{as_idx, text_or};
 use crate::reader_index::DigestIndex;
 use crate::wire::map_get;
 
@@ -54,13 +54,13 @@ struct Unioner {
     out: Graph,
     blob_index: DigestIndex,
     blob_meta_index: DigestIndex,
-    intern: HashMap<InternKey, usize>,
+    intern: FastMap<InternKey, usize>,
     /// Union id of every segment term already mapped, by `(segment, term id)`. A term
     /// is mapped once: a later reference — a component shared by two triple terms, or
     /// the component a triple's key and its output both name — takes its id from here
     /// instead of walking the term's components again, so mapping a chain costs time
     /// linear in its length.
-    mapped: HashMap<(usize, usize), usize>,
+    mapped: FastMap<(usize, usize), usize>,
 }
 
 /// Where a term being mapped by [`Unioner::map_term`] stands: each stage waits for the
@@ -305,7 +305,7 @@ impl Unioner {
             let mapped: Vec<(Value, Value)> = entries
                 .iter()
                 .map(|(k, v)| {
-                    let key = as_text(k);
+                    let key = k.as_text();
                     if (kind == "term" || kind == "reifier") && key == Some("id") {
                         if let Some(tid) = as_idx(v)
                             && tid < n
@@ -348,7 +348,7 @@ impl Unioner {
 /// Union per-segment folds into one value-interned [`Graph`].
 pub(crate) fn union_segments(segments: &[Graph]) -> Graph {
     let mut u = Unioner::default();
-    let mut seen: HashSet<Quad> = HashSet::new();
+    let mut seen: FastSet<Quad> = FastSet::default();
     for (seg_idx, seg) in segments.iter().enumerate() {
         for &(s, p, o, gq) in &seg.quads {
             let q: Quad = (
@@ -477,15 +477,6 @@ mod term_walk_tests {
         new_id
     }
 
-    /// A SplitMix64 draw from the counter at `state`.
-    const fn splitmix64(state: &mut u64) -> u64 {
-        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = *state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
     fn term(kind: TermKind, value: Option<String>) -> Term {
         Term {
             kind,
@@ -503,16 +494,11 @@ mod term_walk_tests {
     /// term itself), triple terms state their components or reach them through a
     /// reifier row, and labels, values and shapes repeat so the union deduplicates.
     fn generated(seed: u64) -> Graph {
-        /// A draw below `n` from the counter at `state`.
-        fn draw(state: &mut u64, n: usize) -> usize {
-            let n = u64::try_from(n).expect("a small bound fits");
-            usize::try_from(splitmix64(state) % n).expect("a draw below a small bound fits")
-        }
-        let mut state = seed;
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(seed);
         let mut graph = Graph::default();
-        let len = 2 + draw(&mut state, 12);
+        let len = 2 + rng.below_usize(12);
         for index in 0..len {
-            let kind = if index == 0 { 0 } else { draw(&mut state, 6) };
+            let kind = if index == 0 { 0 } else { rng.below_usize(6) };
             let next = match kind {
                 0 => term(
                     TermKind::Iri,
@@ -524,17 +510,17 @@ mod term_walk_tests {
                 ),
                 2 => {
                     let mut literal = term(TermKind::Literal, Some("7".to_owned()));
-                    literal.datatype = Some(draw(&mut state, index));
+                    literal.datatype = Some(rng.below_usize(index));
                     literal
                 }
                 3 => {
                     let mut triple = term(TermKind::Triple, None);
                     triple.triple = Some((
-                        draw(&mut state, index),
-                        draw(&mut state, index),
-                        draw(&mut state, index),
+                        rng.below_usize(index),
+                        rng.below_usize(index),
+                        rng.below_usize(index),
                     ));
-                    triple.reifier = (index % 2 == 0).then(|| draw(&mut state, index));
+                    triple.reifier = (index % 2 == 0).then(|| rng.below_usize(index));
                     triple
                 }
                 4 => {
@@ -542,9 +528,9 @@ mod term_walk_tests {
                     let mut triple = term(TermKind::Triple, None);
                     triple.reifier = Some(index);
                     let components = (
-                        draw(&mut state, index),
-                        draw(&mut state, index),
-                        draw(&mut state, index),
+                        rng.below_usize(index),
+                        rng.below_usize(index),
+                        rng.below_usize(index),
                     );
                     graph.reifiers.push((index, components, None));
                     triple
@@ -552,11 +538,11 @@ mod term_walk_tests {
                 _ => {
                     let mut triple = term(TermKind::Triple, None);
                     let components = (
-                        draw(&mut state, index),
-                        draw(&mut state, index),
-                        draw(&mut state, index),
+                        rng.below_usize(index),
+                        rng.below_usize(index),
+                        rng.below_usize(index),
                     );
-                    let rid = draw(&mut state, index);
+                    let rid = rng.below_usize(index);
                     graph.reifiers.push((rid, components, None));
                     triple.reifier = Some(rid);
                     triple
@@ -595,30 +581,26 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_chain_maps_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut seg = Graph::default();
-                for iri in ["s", "p", "o"] {
-                    seg.terms.push(term(
-                        TermKind::Iri,
-                        Some(format!("http://example.org/{iri}")),
-                    ));
-                }
-                let mut below = 2;
-                for _ in 0..LEVELS {
-                    let mut triple = term(TermKind::Triple, None);
-                    triple.triple = Some((0, 1, below));
-                    seg.terms.push(triple);
-                    below = seg.terms.len() - 1;
-                }
-                let mut union = Unioner::default();
-                let mapped = union.map_term(&seg, 0, below);
-                assert_eq!(mapped, LEVELS + 2, "every component precedes its triple");
-                assert_eq!(union.out.terms.len(), LEVELS + 3);
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the mapping did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut seg = Graph::default();
+            for iri in ["s", "p", "o"] {
+                seg.terms.push(term(
+                    TermKind::Iri,
+                    Some(format!("http://example.org/{iri}")),
+                ));
+            }
+            let mut below = 2;
+            for _ in 0..LEVELS {
+                let mut triple = term(TermKind::Triple, None);
+                triple.triple = Some((0, 1, below));
+                seg.terms.push(triple);
+                below = seg.terms.len() - 1;
+            }
+            let mut union = Unioner::default();
+            let mapped = union.map_term(&seg, 0, below);
+            assert_eq!(mapped, LEVELS + 2, "every component precedes its triple");
+            assert_eq!(union.out.terms.len(), LEVELS + 3);
+        })
+        .expect("the thread starts");
     }
 }

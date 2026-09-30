@@ -9,7 +9,7 @@
 //!
 //! Native backing: solution cells are `purrdf_core::TermValue`,
 //! CONSTRUCT triples are `RdfTriple` and CONSTRUCT quads are `RdfQuad`. The engine is
-//! `NativeSparqlEngine`; the oxigraph `QueryResults` type is gone from this surface.
+//! `NativeSparqlEngine`.
 //!
 //! # Two CONSTRUCT result types, chosen by what the result carries
 //!
@@ -61,18 +61,19 @@ use std::time::{Duration, Instant};
 
 use purrdf_core::{GraphMatch, ResourceVector};
 use purrdf_sparql_eval::{
-    AggregateRegistry, BudgetExhausted, CancellationFlag, EvalError, GovernedOutcome,
-    GovernedUpdateOutcome, GovernorEvidence, IndexGeneration, MemoryRelation, NativeSparqlEngine,
-    ParserOptions, PartialAnswers, PathDirection, PathGraph, PathLimits, PathStep,
-    PathWitnessRelation, PropertyFunction, PropertyFunctionRegistry, QueryGovernors,
-    RelationWitness, ResourceDimension, ShortestPathWitnessRelation, StandpointPredicates,
-    StopCause, StopSignal, TrippedGovernor, WallDeadline,
+    BudgetExhausted, CancellationFlag, EvalError, GovernedOutcome, GovernedUpdateOutcome,
+    GovernorEvidence, IndexGeneration, MemoryRelation, NativeSparqlEngine, ParserOptions,
+    PartialAnswers, PathDirection, PathGraph, PathLimits, PathStep, PathWitnessRelation,
+    PropertyFunction, PropertyFunctionRegistry, QueryGovernors, RelationWitness, ResourceDimension,
+    ShortestPathWitnessRelation, StandpointPredicates, StopCause, StopSignal, TrippedGovernor,
+    WallDeadline,
 };
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyString};
 
 use super::io::{PyRdfFormat, serialize_quads, serialize_triples};
+use super::store::next_quad;
 use super::term::{PyQuad, PyTriple, PyVariable, extract_term_value, term_to_py};
 use crate::attestation::Attestation;
 use crate::{GovernedEntailment, RdfDataset, RdfQuad, RdfTerm, RdfTriple, SparqlResult, TermValue};
@@ -688,33 +689,7 @@ fn build_relation(
     }
 }
 
-/// Build the [`AggregateRegistry`] for one query/update call from the caller's
-/// `aggregate_namespace` keyword, or `None` when it is unset.
-///
-/// This is the ENTIRE Python surface for purrdf's first-party statistical aggregate set
-/// (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
-/// `FIRST`, `LAST`, `TOPK` — see `purrdf_sparql_eval::stat_agg`):
-/// [`AggregateRegistry::register_statistical_aggregates`] takes only an IRI namespace
-/// string, so it crosses the Python boundary exactly the way `property_fn_namespaces`
-/// does, with no per-aggregate marshaling and no Python callable involved. The GENERAL
-/// custom-aggregate seam (`purrdf_sparql_eval::agg_fn::AggregateRegistry::register`, an
-/// arbitrary `init`/`step`/`combine`/`finish` closure) is Rust-host-only — a fold has no
-/// data-only reduction the way a property-function relation does — and this binding
-/// exposes no surface for it, not even a namespace-only one, because there is no
-/// namespace-only ENTRY POINT for an arbitrary aggregate the way there is for the
-/// closed statistical set.
-///
-/// `namespace` is caller configuration, never a purrdf-owned vocabulary: omitting the
-/// keyword leaves every one of the ten names an ordinary unregistered custom-aggregate
-/// IRI, refused at prepare time exactly as any other unregistered `AGG(<iri>, …)` call.
-pub(super) fn build_aggregates(namespace: Option<String>) -> Option<AggregateRegistry> {
-    let namespace = namespace?;
-    let mut registry = AggregateRegistry::new();
-    registry.register_statistical_aggregates(&namespace);
-    Some(registry)
-}
-
-/// SELECT results, materialized. Mirrors the oxigraph Python `QuerySolutions`.
+/// SELECT results, materialized (`QuerySolutions`).
 #[pyclass(name = "QuerySolutions")]
 #[derive(Debug)]
 pub struct PyQuerySolutions {
@@ -757,7 +732,7 @@ impl PyQuerySolutions {
     }
 }
 
-/// A single SELECT solution row. Mirrors the oxigraph Python `QuerySolution`.
+/// A single SELECT solution row (`QuerySolution`).
 #[pyclass(name = "QuerySolution")]
 #[derive(Debug)]
 pub struct PyQuerySolution {
@@ -769,7 +744,7 @@ pub struct PyQuerySolution {
 impl PyQuerySolution {
     /// Look a binding up by variable name (`str`), `Variable`, or position
     /// (`int`). An unbound variable yields `None`; an unknown name is a
-    /// `KeyError`, matching the oxigraph Python API.
+    /// `KeyError`.
     fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<Option<Py<PyAny>>> {
         let index = if let Ok(i) = key.extract::<usize>() {
             if i >= self.row.len() {
@@ -798,8 +773,7 @@ impl PyQuerySolution {
     }
 }
 
-/// Default-graph CONSTRUCT/DESCRIBE results, materialized. Mirrors the oxigraph
-/// Python `QueryTriples`.
+/// Default-graph CONSTRUCT/DESCRIBE results, materialized (`QueryTriples`).
 ///
 /// This is the result object for a CONSTRUCT/DESCRIBE whose statements ALL land in
 /// the default graph — the plain SPARQL 1.1 template, and every `DESCRIBE`. A
@@ -898,12 +872,8 @@ impl PyQueryQuads {
     }
 
     fn __next__(mut slf: PyRefMut<'_, Self>, py: Python<'_>) -> PyResult<Option<Py<PyQuad>>> {
-        if slf.pos >= slf.quads.len() {
-            return Ok(None);
-        }
-        let quad = slf.quads[slf.pos].clone();
-        slf.pos += 1;
-        Ok(Some(Py::new(py, PyQuad { inner: quad })?))
+        let slf = &mut *slf;
+        next_quad(py, &slf.quads, &mut slf.pos)
     }
 
     fn __len__(&self) -> usize {
@@ -1065,7 +1035,7 @@ fn render_graph_name(term: &RdfTerm) -> String {
     }
 }
 
-/// An ASK result. Mirrors the oxigraph Python `QueryBoolean`.
+/// An ASK result (`QueryBoolean`).
 #[pyclass(name = "QueryBoolean")]
 #[derive(Debug)]
 pub struct PyQueryBoolean {
@@ -1111,10 +1081,10 @@ pub(crate) fn materialize_results(py: Python<'_>, result: SparqlResult) -> PyRes
                 .into_iter()
                 .map(|row| {
                     row.into_iter()
-                        .map(|cell| cell.map(term_value_to_rdf))
-                        .collect()
+                        .map(|cell| cell.map(term_value_to_rdf).transpose())
+                        .collect::<PyResult<_>>()
                 })
-                .collect();
+                .collect::<PyResult<_>>()?;
             Ok(Py::new(
                 py,
                 PyQuerySolutions {
@@ -1164,59 +1134,16 @@ fn materialize_graph(py: Python<'_>, graph: &RdfDataset) -> PyResult<Py<PyAny>> 
 }
 
 /// Lower a dataset-independent [`TermValue`] (the SPARQL egress cell type) into the
-/// owned [`RdfTerm`] the Python term layer wraps.
-pub(crate) fn term_value_to_rdf(value: TermValue) -> RdfTerm {
-    match value {
-        TermValue::Iri(iri) => RdfTerm::Iri(iri),
-        TermValue::Blank { label, scope } => {
-            RdfTerm::BlankNode(scope.qualify_label(&label).into_owned())
-        }
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => RdfTerm::Literal(crate::RdfLiteral {
-            // The native IR carries the datatype IRI by value (always present); the
-            // owned model keeps a plain or language-tagged literal
-            // datatype-less, so collapse those back to `None` for term parity.
-            datatype: collapse_synthetic_datatype(&datatype, language.as_ref(), direction),
-            lexical_form,
-            language,
-            direction,
-        }),
-        TermValue::Triple { s, p, o } => RdfTerm::triple(RdfTriple::new(
-            term_value_to_rdf(s.into_inner()),
-            term_value_predicate(p.into_inner()),
-            term_value_to_rdf(o.into_inner()),
-        )),
-    }
-}
-
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-
-/// Drop the `TermValue` synthetic datatype IRI when it is the one the owned model
-/// leaves implicit: `xsd:string` for a plain literal, and the language datatype
-/// selected by base direction for a tagged literal. Other datatypes stay verbatim.
-fn collapse_synthetic_datatype(
-    datatype: &str,
-    language: Option<&String>,
-    direction: Option<purrdf_core::model::RdfTextDirection>,
-) -> Option<String> {
-    if language.is_some() {
-        return (datatype != crate::RdfLiteral::language_datatype_iri(direction))
-            .then(|| datatype.to_owned());
-    }
-    (datatype != XSD_STRING).then(|| datatype.to_owned())
-}
-
-/// A triple-term predicate `TermValue` must be an IRI; fall back to its lexical form
-/// for any other (ill-formed) shape so the conversion is total.
-fn term_value_predicate(value: TermValue) -> String {
-    match value {
-        TermValue::Iri(iri) => iri,
-        other => term_value_to_rdf(other).to_string(),
-    }
+/// owned [`RdfTerm`] the Python term layer wraps, through [`TermValue::into_rdf_term`].
+///
+/// # Errors
+///
+/// `ValueError` for a triple term whose predicate is not an IRI: RDF 1.2 has no such
+/// term, and none is fabricated for it.
+pub(crate) fn term_value_to_rdf(value: TermValue) -> PyResult<RdfTerm> {
+    value
+        .into_rdf_term()
+        .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -1239,6 +1166,8 @@ pub struct PyCancellationToken {
 
 #[pymethods]
 impl PyCancellationToken {
+    /// `CancellationToken()` — a fresh, uncancelled token. A written-out function
+    /// because `#[new]` exports only a function of the `#[pymethods]` block.
     #[new]
     fn new() -> Self {
         Self::default()
@@ -1439,39 +1368,31 @@ pub(super) struct GovernorArgs {
 
 impl GovernorArgs {
     /// Engage these ceilings, plus `cancel` and the interpreter's signal flag, as one
-    /// call's [`QueryGovernors`].
+    /// call's [`QueryGovernors`], through [`purrdf_validate::governors::from_parts`]: the
+    /// `METERED` base with each named ceiling engaged, so every outcome carries evidence
+    /// to size the next budget from and the stop signal is polled inside long-running
+    /// operators as well as between them.
     ///
-    /// # Why the base is `METERED` rather than `UNBOUNDED`
+    /// # Errors
     ///
-    /// Two reasons, and both are about what a governed call promises. First, every
-    /// outcome — including a complete one — carries evidence a caller can size the next
-    /// budget from; `UNBOUNDED` reports nothing, because it charges nothing. Second, the
-    /// evaluator polls the stop signal every `STOP_POLL_FUEL` units of fuel *and* at each
-    /// algebra node it enters; with fuel disengaged only the second of those runs, so a
-    /// query spending a long time inside one operator would notice a cancellation or a
-    /// Ctrl-C late. Metering costs a saturating add per charge point and buys prompt
-    /// interruption on every query shape, which is the trade a caller who asked for
-    /// governors has already chosen.
-    fn engage(self, cancel: Option<&PyCancellationToken>) -> (QueryGovernors, Arc<PyStopWatch>) {
+    /// `ValueError` when the parts do not describe a configuration.
+    fn engage(
+        self,
+        cancel: Option<&PyCancellationToken>,
+    ) -> PyResult<(QueryGovernors, Arc<PyStopWatch>)> {
         let watch = Arc::new(PyStopWatch::new(self.deadline_ms, cancel));
-        let mut governors = QueryGovernors::METERED;
-        if let Some(fuel) = self.fuel {
-            governors = governors.with_fuel(fuel);
-        }
-        if let Some(rows) = self.max_answers {
-            governors = governors.with_max_answers(rows);
-        }
-        if let Some(cells) = self.max_intermediate_cells {
-            governors = governors.with_max_intermediate_cells(cells);
-        }
-        if let Some(bytes) = self.max_scratch_bytes {
-            governors = governors.with_max_scratch_bytes(bytes);
-        }
-        if let Some(requests) = self.max_remote_requests {
-            governors = governors.with_max_remote_requests(requests);
-        }
+        let parts = purrdf_validate::governors::GovernorParts {
+            fuel: self.fuel,
+            max_answers: self.max_answers,
+            max_intermediate_cells: self.max_intermediate_cells,
+            max_scratch_bytes: self.max_scratch_bytes,
+            max_remote_requests: self.max_remote_requests,
+            no_ceiling: false,
+        };
         let signal: Arc<dyn StopSignal> = Arc::<PyStopWatch>::clone(&watch);
-        (governors.with_stop_signal(signal), watch)
+        let governors = purrdf_validate::governors::from_parts(&parts, Some(signal))
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        Ok((governors, watch))
     }
 }
 
@@ -1500,7 +1421,7 @@ pub(super) fn run_governed<T: Send>(
     cancel: Option<&PyCancellationToken>,
     run: impl FnOnce(&QueryGovernors) -> PyResult<T> + Send,
 ) -> PyResult<T> {
-    let (governors, watch) = args.engage(cancel);
+    let (governors, watch) = args.engage(cancel)?;
     let outcome = py.detach(|| run(&governors));
     if let Some(raised) = watch.take_interrupt() {
         return Err(raised);
@@ -1831,10 +1752,7 @@ impl PyQueryOutcome {
     }
 
     fn __repr__(&self) -> String {
-        match &self.tripped {
-            None => "<QueryOutcome complete>".to_owned(),
-            Some(tripped) => format!("<QueryOutcome tripped={}>", tripped.get().label()),
-        }
+        outcome_repr("QueryOutcome", "complete", self.tripped.as_ref())
     }
 }
 
@@ -1935,10 +1853,16 @@ impl PyUpdateOutcome {
     }
 
     fn __repr__(&self) -> String {
-        match &self.tripped {
-            None => "<UpdateOutcome applied>".to_owned(),
-            Some(tripped) => format!("<UpdateOutcome tripped={}>", tripped.get().label()),
-        }
+        outcome_repr("UpdateOutcome", "applied", self.tripped.as_ref())
+    }
+}
+
+/// A governed outcome's `repr`: `<Kind finished>` when no governor tripped, else
+/// `<Kind tripped=dimension>`. The one rendering the query and update outcomes share.
+fn outcome_repr(kind: &str, finished: &str, tripped: Option<&Py<PyTrippedGovernor>>) -> String {
+    match tripped {
+        None => format!("<{kind} {finished}>"),
+        Some(tripped) => format!("<{kind} tripped={}>", tripped.get().label()),
     }
 }
 

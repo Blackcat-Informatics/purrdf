@@ -125,12 +125,12 @@ use std::sync::Arc;
 use ::purrdf::RdfDataset;
 use purrdf_core::dataset_view::{DatasetView, GraphMatch};
 use purrdf_core::graph_roles::{GraphRoleIndex, GraphRoles};
-use purrdf_core::imports::{ImportMap, UnanchoredImport, declared_import_targets};
+use purrdf_core::imports::{ImportKeyError, ImportMap, UnanchoredImport, declared_import_targets};
 pub use purrdf_core::imports::{VersionConflict, VersionConflictKind};
 use purrdf_core::ir::{TermRef, TermValue};
 
 /// `sh:shapesGraph`: on a data-graph anchor, a link to a graph the shapes graph includes.
-pub const SH_SHAPES_GRAPH_LINK: &str = "http://www.w3.org/ns/shacl#shapesGraph";
+pub use purrdf_iri::vocab::sh::SHAPES_GRAPH_PROPERTY as SH_SHAPES_GRAPH_LINK;
 
 /// The documents a shapes graph's `owl:imports` resolve to, and the IRIs the shapes graph
 /// was read from.
@@ -169,7 +169,7 @@ pub const SH_SHAPES_GRAPH_LINK: &str = "http://www.w3.org/ns/shacl#shapesGraph";
 ///     .expect("every import resolves");
 /// assert_eq!(parsed.node_shapes.len(), 1);
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ShapesImports {
     /// The kernel's table: ontology IRI → document, plus the loaded IRIs.
     map: ImportMap,
@@ -181,11 +181,18 @@ pub struct ShapesImports {
     links: Vec<String>,
 }
 
+purrdf_hash::default_from_new!(ShapesImports);
+
 impl ShapesImports {
-    /// A table that supplies no document and declares no loaded IRI.
+    /// A table that supplies no document and declares no loaded IRI; [`Default`]
+    /// delegates here.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            map: ImportMap::default(),
+            prefixes: BTreeMap::new(),
+            links: Vec::new(),
+        }
     }
 
     /// Build a table from `(ontology IRI, Turtle document)` pairs — the spelling every
@@ -219,16 +226,9 @@ impl ShapesImports {
         dataset: Arc<RdfDataset>,
         prefixes: Vec<(String, String)>,
     ) -> Result<(), ShapesImportError> {
-        check_import_iri(iri)?;
-        if self.map.get(iri).is_some() {
-            return Err(ShapesImportError::InvalidEntry {
-                iri: iri.to_owned(),
-                reason: "the import table names this IRI twice, and one IRI names one \
-                         document; keeping either would be a choice made for the caller"
-                    .to_owned(),
-            });
-        }
-        self.map.insert(iri, dataset);
+        self.map
+            .try_insert(iri, dataset)
+            .map_err(|error| key_refusal(iri, &error))?;
         self.prefixes.insert(iri.to_owned(), prefixes);
         Ok(())
     }
@@ -245,7 +245,9 @@ impl ShapesImports {
     /// [`ShapesImportError::InvalidEntry`] for an unusable `iri` (see
     /// [`insert`](Self::insert)) or a document that is not Turtle.
     pub fn insert_turtle(&mut self, iri: &str, turtle: &str) -> Result<(), ShapesImportError> {
-        check_import_iri(iri)?;
+        self.map
+            .check_key(iri)
+            .map_err(|error| key_refusal(iri, &error))?;
         let document =
             crate::text_ingest::parse_turtle_document(turtle, Some(iri)).map_err(|errors| {
                 ShapesImportError::InvalidEntry {
@@ -336,20 +338,11 @@ impl ShapesImports {
     }
 }
 
-/// Refuse an import-table key no `owl:imports` object could ever equal.
-fn check_import_iri(iri: &str) -> Result<(), ShapesImportError> {
-    match purrdf_iri::is_absolute(iri) {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(ShapesImportError::InvalidEntry {
-            iri: iri.to_owned(),
-            reason: "the key is not an absolute IRI, so no owl:imports object — absolute once \
-                     parsed — can ever equal it, and the document would never be used"
-                .to_owned(),
-        }),
-        Err(error) => Err(ShapesImportError::InvalidEntry {
-            iri: iri.to_owned(),
-            reason: format!("the key is not an IRI: {error}"),
-        }),
+/// The core key policy's refusal of `iri` ([`ImportMap::try_insert`]) as this crate's typed error.
+fn key_refusal(iri: &str, error: &ImportKeyError) -> ShapesImportError {
+    ShapesImportError::InvalidEntry {
+        iri: iri.to_owned(),
+        reason: error.to_string(),
     }
 }
 

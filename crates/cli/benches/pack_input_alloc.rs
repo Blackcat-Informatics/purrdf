@@ -23,6 +23,7 @@
 //! rebuild has large *allocated bytes*. Conflating the two would hide exactly the
 //! trade-off this benchmark exists to quantify.
 
+use purrdf_alloc_probe::{report_peak, resident_kib as rss_kb};
 use std::hint::black_box;
 
 use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
@@ -36,33 +37,13 @@ mod support;
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
-/// The process resident set size in KiB, read from `/proc/self/statm` (field 2 is the
-/// resident page count). Linux-only; on any other platform this reports `0` and only
-/// the allocator figures carry the evidence.
-fn rss_kb() -> u64 {
-    #[cfg(target_os = "linux")]
-    {
-        let statm = std::fs::read_to_string("/proc/self/statm").unwrap_or_default();
-        let resident_pages: u64 = statm
-            .split_whitespace()
-            .nth(1)
-            .and_then(|field| field.parse().ok())
-            .unwrap_or(0);
-        // 4 KiB pages on every Linux target this runs on; a report-only figure.
-        resident_pages * 4
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        0
-    }
-}
-
 fn report(label: &str, peak_allocated_bytes: i64, rss_before_kb: u64, rss_after_kb: u64) {
-    println!(
-        "[pack_input_alloc] {label}: peak_allocated_bytes={peak_allocated_bytes} \
-         rss_delta_kb={}",
-        i64::try_from(rss_after_kb).unwrap_or(i64::MAX)
-            - i64::try_from(rss_before_kb).unwrap_or(i64::MAX),
+    report_peak(
+        "pack_input_alloc",
+        label,
+        peak_allocated_bytes,
+        rss_before_kb,
+        rss_after_kb,
     );
 }
 

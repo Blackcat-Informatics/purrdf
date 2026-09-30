@@ -44,6 +44,7 @@ use core::convert::Infallible;
 use core::ops::ControlFlow;
 
 use purrdf_core::TermValue;
+use purrdf_hash::frame::frame_le;
 
 use crate::error::TextError;
 
@@ -98,6 +99,12 @@ pub(crate) fn encode_term(value: &TermValue, out: &mut Vec<u8>) {
 /// unseeded, and the encoding depends on no ambient state, so the same sequence
 /// yields the same bytes on every target and in every process.
 ///
+/// It opens with no hash domain. The digest is its own kind — a term-sequence
+/// fingerprint — and is compared only against another fingerprint of the same
+/// kind, never against a digest of another preimage family; and it is a
+/// published identity that callers record, so prefixing a domain now would
+/// change every recorded value.
+///
 /// # Errors
 ///
 /// None: every term has an encoding, at any nesting depth.
@@ -122,11 +129,11 @@ fn encode_node(value: &TermValue, out: &mut Vec<u8>) {
     match value {
         TermValue::Iri(iri) => {
             out.push(TAG_IRI);
-            push_str(iri, out);
+            frame_le(out, iri.as_bytes());
         }
         TermValue::Blank { label, scope } => {
             out.push(TAG_BLANK);
-            push_str(label, out);
+            frame_le(out, label.as_bytes());
             out.extend_from_slice(&scope.ordinal().to_le_bytes());
         }
         TermValue::Literal {
@@ -136,12 +143,12 @@ fn encode_node(value: &TermValue, out: &mut Vec<u8>) {
             direction,
         } => {
             out.push(TAG_LITERAL);
-            push_str(lexical_form, out);
-            push_str(datatype, out);
+            frame_le(out, lexical_form.as_bytes());
+            frame_le(out, datatype.as_bytes());
             match language {
                 Some(tag) => {
                     out.push(PRESENT);
-                    push_str(tag, out);
+                    frame_le(out, tag.as_bytes());
                 }
                 None => out.push(ABSENT),
             }
@@ -160,20 +167,6 @@ fn encode_node(value: &TermValue, out: &mut Vec<u8>) {
     }
 }
 
-/// Append `text` as a little-endian `u64` byte length followed by its UTF-8
-/// bytes — the one self-delimiting string form this encoding uses.
-///
-/// Visible to the crate so the index fingerprints — which interleave terms with
-/// language tags, dictionary entries and counts — write their strings through
-/// this same length-prefixed form rather than inventing a second one.
-pub(crate) fn push_str(text: &str, out: &mut Vec<u8>) {
-    let bytes = text.as_bytes();
-    // `usize` is at most 64 bits on every target this workspace builds for
-    // (x86-64 and wasm32, where it is 32), so the length always fits.
-    out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-    out.extend_from_slice(bytes);
-}
-
 #[cfg(test)]
 mod tests {
     use purrdf_core::TermBox;
@@ -182,7 +175,7 @@ mod tests {
 
     use super::{
         FINGERPRINT_BYTES, TAG_BLANK, TAG_IRI, TAG_LITERAL, TAG_TRIPLE, encode_term,
-        fingerprint_terms, push_str,
+        fingerprint_terms, frame_le,
     };
 
     /// Encode one term into a fresh buffer, for tests that only care about the
@@ -414,11 +407,11 @@ mod tests {
         match value {
             TermValue::Iri(iri) => {
                 out.push(TAG_IRI);
-                push_str(iri, out);
+                frame_le(out, iri.as_bytes());
             }
             TermValue::Blank { label, scope } => {
                 out.push(TAG_BLANK);
-                push_str(label, out);
+                frame_le(out, label.as_bytes());
                 out.extend_from_slice(&scope.ordinal().to_le_bytes());
             }
             TermValue::Literal { .. } => {
@@ -464,28 +457,24 @@ mod tests {
     #[test]
     fn a_hundred_thousand_level_term_encodes_on_a_128_kib_thread() {
         const LEVELS: u32 = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let innermost = TermValue::iri("https://example.org/x");
-                let deep = nest(innermost.clone(), LEVELS);
-                let level = 1
-                    + encode(&TermValue::iri("https://example.org/p")).len()
-                    + encode(&TermValue::iri("https://example.org/o")).len();
-                let bytes = encode(&deep);
-                assert_eq!(
-                    bytes.len(),
-                    LEVELS as usize * level + encode(&innermost).len()
-                );
-                assert!(
-                    bytes[..LEVELS as usize]
-                        .iter()
-                        .all(|&tag| tag == TAG_TRIPLE)
-                );
-                drop(deep);
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the encoder did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let innermost = TermValue::iri("https://example.org/x");
+            let deep = nest(innermost.clone(), LEVELS);
+            let level = 1
+                + encode(&TermValue::iri("https://example.org/p")).len()
+                + encode(&TermValue::iri("https://example.org/o")).len();
+            let bytes = encode(&deep);
+            assert_eq!(
+                bytes.len(),
+                LEVELS as usize * level + encode(&innermost).len()
+            );
+            assert!(
+                bytes[..LEVELS as usize]
+                    .iter()
+                    .all(|&tag| tag == TAG_TRIPLE)
+            );
+            drop(deep);
+        })
+        .expect("the thread starts");
     }
 }

@@ -19,7 +19,9 @@ use purrdf_sparql_algebra::{
     ArithmeticOperator, Child, Expression, Function, GraphPattern, Literal, NamedNode,
     NamedNodePattern, NonEmpty, TermPattern, TriplePattern, Variable,
 };
+use purrdf_testkit::rng::{LCG64_MMIX_INCREMENT, lcg64_next};
 
+use super::compile::is_triple_constructor;
 use super::{ExprProgram, Linked};
 use crate::DetHashMap;
 use crate::error::EvalError;
@@ -28,9 +30,9 @@ use crate::expr as helpers;
 use crate::scratch::SolutionTerm;
 use crate::solution::VarSchema;
 
-const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+use purrdf_xsd::datatype::XSD_NS as XSD;
+use purrdf_xsd::datatype::XSD_STRING;
 const EX: &str = "http://example.org/";
 
 type Ctx<'d> = EvalCtx<'d, Arc<RdfDataset>>;
@@ -63,25 +65,25 @@ impl Walker {
             Expression::Variable(v) => Ok(schema.index_of(v).and_then(|c| row[c])),
             Expression::Bound(v) => {
                 let bound = schema.index_of(v).and_then(|c| row[c]).is_some();
-                Ok(Some(helpers::bool_term(ctx, bound)))
+                Ok(Some(helpers::intern_boolean(ctx, bound)))
             }
             Expression::Or(operands) => {
                 let mut value = Some(false);
                 for operand in operands {
                     value = helpers::kleene_or(value, self.ebv(operand, row, schema, ctx)?);
                 }
-                Ok(value.map(|b| helpers::bool_term(ctx, b)))
+                Ok(value.map(|b| helpers::intern_boolean(ctx, b)))
             }
             Expression::And(operands) => {
                 let mut value = Some(true);
                 for operand in operands {
                     value = helpers::kleene_and(value, self.ebv(operand, row, schema, ctx)?);
                 }
-                Ok(value.map(|b| helpers::bool_term(ctx, b)))
+                Ok(value.map(|b| helpers::intern_boolean(ctx, b)))
             }
             Expression::Not(a) => {
                 let v = self.ebv(a, row, schema, ctx)?;
-                Ok(v.map(|b| helpers::bool_term(ctx, !b)))
+                Ok(v.map(|b| helpers::intern_boolean(ctx, !b)))
             }
             Expression::Equal(a, b) => {
                 let ta = self.term(a, row, schema, ctx)?;
@@ -119,7 +121,7 @@ impl Walker {
                 let ta = self.term(a, row, schema, ctx)?;
                 let tb = self.term(b, row, schema, ctx)?;
                 Ok(match (ta, tb) {
-                    (Some(x), Some(y)) => Some(helpers::bool_term(ctx, x == y)),
+                    (Some(x), Some(y)) => Some(helpers::intern_boolean(ctx, x == y)),
                     _ => None,
                 })
             }
@@ -146,7 +148,7 @@ impl Walker {
                     match self.term(item, row, schema, ctx)? {
                         Some(candidate) => match helpers::in_candidate(ctx, target, &tv, candidate)
                         {
-                            Some(true) => return Ok(Some(helpers::bool_term(ctx, true))),
+                            Some(true) => return Ok(Some(helpers::intern_boolean(ctx, true))),
                             Some(false) => {}
                             None => saw_error = true,
                         },
@@ -156,12 +158,12 @@ impl Walker {
                 Ok(if saw_error {
                     None
                 } else {
-                    Some(helpers::bool_term(ctx, false))
+                    Some(helpers::intern_boolean(ctx, false))
                 })
             }
             Expression::Exists(pattern) => {
                 let found = helpers::exists(pattern, row, schema, ctx)?;
-                Ok(Some(helpers::bool_term(ctx, found)))
+                Ok(Some(helpers::intern_boolean(ctx, found)))
             }
             Expression::Arithmetic(first, steps) => {
                 let mut value = self.term(first, row, schema, ctx)?;
@@ -248,7 +250,7 @@ impl Walker {
                     Function::StrStarts => h.starts_with(n.as_str()),
                     _ => h.ends_with(n.as_str()),
                 };
-                return Ok(Some(helpers::bool_term(ctx, holds)));
+                return Ok(Some(helpers::intern_boolean(ctx, holds)));
             }
             Function::Regex => {
                 let text = self.string_arg(args.first(), row, schema, ctx)?;
@@ -259,7 +261,7 @@ impl Walker {
                 };
                 let flags = flags.map_or_default(|(f, _)| f);
                 return Ok(helpers::cached_regex(ctx, &pattern, &flags)
-                    .map(|re| helpers::bool_term(ctx, re.as_regex().is_match(&text))));
+                    .map(|re| helpers::intern_boolean(ctx, re.as_regex().is_match(&text))));
             }
             Function::LangMatches => {
                 let (Some((tag, _)), Some((range, _))) = (
@@ -268,10 +270,14 @@ impl Walker {
                 ) else {
                     return Ok(None);
                 };
-                return Ok(Some(helpers::bool_term(
+                return Ok(Some(helpers::intern_boolean(
                     ctx,
                     helpers::lang_matches(&tag, &range),
                 )));
+            }
+            Function::Triple if args.len() == 3 && is_triple_constructor(&args[2]) => {
+                let value = self.triple_value(args, row, schema, ctx)?;
+                return Ok(value.and_then(|value| helpers::intern(ctx, value)));
             }
             _ => {}
         }
@@ -283,6 +289,34 @@ impl Walker {
             );
         }
         helpers::apply_function(function, &vals, ctx, None)
+    }
+
+    /// The triple term a constructor over `args` builds, uninterned, its object built
+    /// the same way when it is a constructor too.
+    fn triple_value(
+        &mut self,
+        args: &[Expression],
+        row: &[Option<Term>],
+        schema: &VarSchema,
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Option<TermValue>, EvalError> {
+        let subject = self
+            .term(&args[0], row, schema, ctx)?
+            .map(|t| helpers::value_of(ctx, t));
+        let predicate = self
+            .term(&args[1], row, schema, ctx)?
+            .map(|t| helpers::value_of(ctx, t));
+        let object = match &args[2] {
+            Expression::FunctionCall(Function::Triple, inner)
+                if is_triple_constructor(&args[2]) =>
+            {
+                self.triple_value(inner, row, schema, ctx)?
+            }
+            object => self
+                .term(object, row, schema, ctx)?
+                .map(|t| helpers::value_of(ctx, t)),
+        };
+        Ok(helpers::triple_value(subject, predicate, object))
     }
 
     fn string_arg(
@@ -302,7 +336,7 @@ impl Walker {
             {
                 Ok(Some((
                     lit.value().to_owned(),
-                    lit.language().map(str::to_ascii_lowercase),
+                    lit.language().map(purrdf_iri::langtag::identity_fold),
                 )))
             }
             Expression::FunctionCall(Function::Str, inner) if inner.len() == 1 => {
@@ -317,9 +351,10 @@ impl Walker {
             }
             Expression::FunctionCall(Function::Lang, inner) if inner.len() == 1 => {
                 let lexical = match &inner[0] {
-                    Expression::Literal(lit) => {
-                        Some(lit.language().map_or_default(str::to_ascii_lowercase))
-                    }
+                    Expression::Literal(lit) => Some(
+                        lit.language()
+                            .map_or_default(purrdf_iri::langtag::identity_fold),
+                    ),
                     other => self
                         .term(other, row, schema, ctx)?
                         .and_then(|term| helpers::lang_lexical_term(ctx, term)),
@@ -533,9 +568,9 @@ fn assert_same(expr: &Expression, context: &str) {
 
 #[test]
 fn the_vm_matches_the_tree_walk_over_every_suite_expression() {
-    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let suites = manifest.join("../sparql-conformance");
-    let vectors = manifest.join("../../vectors");
+    let root = purrdf_testkit::paths::workspace_root();
+    let suites = root.join("crates/sparql-conformance");
+    let vectors = root.join("vectors");
     let mut files = Vec::new();
     // The conformance suites and corpus, and the vendored SEP-0009 and governor
     // vectors, whose queries are the ones dense in composite-datatype function calls.
@@ -587,11 +622,8 @@ struct Choices(u64);
 
 impl Choices {
     fn next(&mut self, bound: usize) -> usize {
-        self.0 = self
-            .0
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        ((self.0 >> 33) % bound as u64) as usize
+        let state = lcg64_next(&mut self.0, LCG64_MMIX_INCREMENT);
+        ((state >> 33) % bound as u64) as usize
     }
 }
 
@@ -786,6 +818,53 @@ fn generate(choices: &mut Choices, budget: &mut usize) -> Expression {
     }
 }
 
+/// A generated chain of triple term constructors, each level's object the level below:
+/// subjects and predicates that are IRIs, blank nodes, variables, literals (a type error,
+/// so unbound) and minted blank nodes; an innermost object that may be a language-tagged
+/// literal or unbound; and the chain read as a term, tested with `isTRIPLE`, compared, or
+/// taken apart with `OBJECT`.
+fn triple_chain(choices: &mut Choices) -> Expression {
+    let iri = |local: &str| Expression::NamedNode(NamedNode::new_unchecked(format!("{EX}{local}")));
+    let mut expr = match choices.next(4) {
+        0 => var("c"),
+        1 => Expression::Literal(Literal::new_lang("chat", "FR", None)),
+        2 => call(Function::BNode, Vec::new()),
+        _ => leaf(choices),
+    };
+    for _ in 0..=choices.next(5) {
+        let subject = match choices.next(6) {
+            0 => var("a"),
+            1 => call(Function::BNode, Vec::new()),
+            2 => Expression::Literal(Literal::new_simple("not a subject")),
+            _ => iri("s"),
+        };
+        let predicate = match choices.next(5) {
+            0 => var("b"),
+            1 => Expression::Literal(Literal::new_simple("not a predicate")),
+            _ => iri("p"),
+        };
+        expr = call(Function::Triple, vec![subject, predicate, expr]);
+    }
+    match choices.next(4) {
+        0 => call(Function::IsTriple, vec![expr]),
+        1 => Expression::SameTerm(Child::new(expr.clone()), Child::new(expr)),
+        2 => call(Function::Object, vec![expr]),
+        _ => expr,
+    }
+}
+
+/// **A nested triple term constructor evaluates as the tree walk evaluates it**: the same
+/// value or error, the same bytes minted — its outermost term alone — the same charges
+/// and the same blank-node state.
+#[test]
+fn the_vm_matches_the_tree_walk_over_nested_triple_constructors() {
+    let mut choices = Choices(0x7219_1E5E);
+    for index in 0..500 {
+        let expr = triple_chain(&mut choices);
+        assert_same(&expr, &format!("triple chain {index}"));
+    }
+}
+
 #[test]
 fn the_vm_matches_the_tree_walk_over_generated_expressions() {
     let mut choices = Choices(0x0DD5_EED5);
@@ -802,22 +881,11 @@ fn the_vm_matches_the_tree_walk_over_generated_expressions() {
 
 const DEPTH: usize = 100_000;
 
-/// Run `f` on a thread whose stack is 128 KiB: a recursion over a 100 000-deep
-/// expression would need far more.
-fn on_small_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    std::thread::Builder::new()
-        .stack_size(128 * 1024)
-        .spawn(f)
-        .expect("the thread spawns")
-        .join()
-        .expect("the evaluation finishes on a 128 KiB stack")
-}
-
 /// Compile, link and run `expr` over the empty row, on a fresh context.
 fn evaluate(expr: &Expression) -> Option<TermValue> {
     let ds = RdfDatasetBuilder::new().freeze().expect("an empty dataset");
     let mut ctx = EvalCtx::new(&ds);
-    let schema = VarSchema::new();
+    let schema = VarSchema::default();
     let program = Arc::new(ExprProgram::compile(expr));
     let mut linked = Linked::link(program, expr, &schema, &mut ctx);
     let term = linked.term(&[], &schema, &mut ctx).expect("no hard error");
@@ -826,7 +894,7 @@ fn evaluate(expr: &Expression) -> Option<TermValue> {
 
 #[test]
 fn a_deep_arithmetic_chain_evaluates_on_a_small_stack() {
-    let value = on_small_stack(|| {
+    let value = purrdf_stack::on_stack(128 * 1024, || {
         // `1 + (1 + (1 + … 1))`: the right operand nests, so the tree is DEPTH deep.
         let mut expr = int(1);
         for _ in 0..DEPTH {
@@ -836,15 +904,61 @@ fn a_deep_arithmetic_chain_evaluates_on_a_small_stack() {
             );
         }
         evaluate(&expr)
-    });
+    })
+    .expect("the thread spawns");
     // DEPTH additions of 1 onto the innermost 1.
     let expected = (DEPTH + 1).to_string();
     assert_eq!(value, Some(literal(&expected, "integer")));
 }
 
+/// **A hundred thousand nested triple term constructors build one term, interned once.**
+/// Interning every level's whole term — each up to the whole chain — cost the square of
+/// the depth in time and memory; the chain is built as one value, and the scratch holds
+/// its outermost term, the subject and predicate constants, and nothing else.
+#[test]
+fn a_deep_triple_constructor_chain_interns_its_outermost_term_once() {
+    let (value, computed) = purrdf_stack::on_stack(128 * 1024, || {
+        let iri =
+            |local: &str| Expression::NamedNode(NamedNode::new_unchecked(format!("{EX}{local}")));
+        let mut expr = int(7);
+        for _ in 0..DEPTH {
+            expr = call(Function::Triple, vec![iri("s"), iri("p"), expr]);
+        }
+        let ds = RdfDatasetBuilder::new().freeze().expect("an empty dataset");
+        let mut ctx = EvalCtx::new(&ds);
+        let schema = VarSchema::default();
+        let program = Arc::new(ExprProgram::compile(&expr));
+        let mut linked = Linked::link(program, &expr, &schema, &mut ctx);
+        let term = linked.term(&[], &schema, &mut ctx).expect("no hard error");
+        let value = term.map(|term| helpers::value_of(&ctx, term));
+        let computed = ctx.scratch.computed_count();
+        drop(linked);
+        drop(expr);
+        (value.map(|value| triple_depth_and_core(&value)), computed)
+    })
+    .expect("the thread spawns");
+    assert_eq!(value, Some((DEPTH, literal("7", "integer"))));
+    assert_eq!(
+        computed, 4,
+        "the scratch holds the two IRIs, the integer and the outermost triple term"
+    );
+}
+
+/// How many triple terms `value` nests, and the innermost object; the value is dropped
+/// over a work list, as the term's own drop takes it apart.
+fn triple_depth_and_core(value: &TermValue) -> (usize, TermValue) {
+    let mut depth = 0;
+    let mut at = value;
+    while let TermValue::Triple { o, .. } = at {
+        depth += 1;
+        at = o;
+    }
+    (depth, at.clone())
+}
+
 #[test]
 fn a_deep_if_nest_evaluates_on_a_small_stack() {
-    let value = on_small_stack(|| {
+    let value = purrdf_stack::on_stack(128 * 1024, || {
         // Alternating `IF(true, e, 0)` and `IF(false, 0, e)`: every level takes the
         // branch holding the nest, so the answer is the innermost value.
         let mut expr = int(7);
@@ -864,13 +978,14 @@ fn a_deep_if_nest_evaluates_on_a_small_stack() {
             };
         }
         evaluate(&expr)
-    });
+    })
+    .expect("the thread spawns");
     assert_eq!(value, Some(literal("7", "integer")));
 }
 
 #[test]
 fn a_deep_coalesce_nest_evaluates_on_a_small_stack() {
-    let value = on_small_stack(|| {
+    let value = purrdf_stack::on_stack(128 * 1024, || {
         // `COALESCE(?unbound, COALESCE(?unbound, … 5))`: every level's first item is
         // unbound, so every level falls through to the nest and the answer is 5.
         let mut expr = int(5);
@@ -878,19 +993,21 @@ fn a_deep_coalesce_nest_evaluates_on_a_small_stack() {
             expr = Expression::Coalesce(vec![var("unbound"), expr].into());
         }
         evaluate(&expr)
-    });
+    })
+    .expect("the thread spawns");
     assert_eq!(value, Some(literal("5", "integer")));
 }
 
 #[test]
 fn a_deep_not_nest_evaluates_on_a_small_stack() {
-    let value = on_small_stack(|| {
+    let value = purrdf_stack::on_stack(128 * 1024, || {
         let mut expr = boolean(true);
         for _ in 0..DEPTH {
             expr = Expression::Not(Child::new(expr));
         }
         evaluate(&expr)
-    });
+    })
+    .expect("the thread spawns");
     // An even number of negations of `true` is `true`, an odd number `false`.
     let expected = if DEPTH.is_multiple_of(2) {
         "true"

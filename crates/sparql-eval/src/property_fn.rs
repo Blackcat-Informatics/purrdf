@@ -2084,7 +2084,7 @@ pub struct PfDescriptor {
 /// with identical declarations — `crate::property_fn_plan::registry_fingerprint`
 /// folds this id in ahead of the declaration digest so those two registries can
 /// never be mistaken for each other by a prepared plan's identity.
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct PropertyFunctionRegistry {
     id: crate::registry_id::RegistryId,
     relations: DetHashMap<String, Arc<dyn PropertyFunction>>,
@@ -2117,11 +2117,20 @@ impl core::fmt::Debug for PropertyFunctionRegistry {
     }
 }
 
+purrdf_hash::default_from_new!(PropertyFunctionRegistry);
+
 impl PropertyFunctionRegistry {
-    /// An empty registry.
+    /// An empty registry with a freshly minted instance id; [`Default`] delegates here.
+    ///
+    /// Unlike [`Self::EMPTY`], whose id is the reserved empty one, a registry built here
+    /// is its own instance: two built independently are never mistaken for each other.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            id: crate::registry_id::RegistryId::default(),
+            relations: DetHashMap::default(),
+            ranked: DetHashMap::default(),
+        }
     }
 
     /// The canonical empty registry — the non-optional "no relations

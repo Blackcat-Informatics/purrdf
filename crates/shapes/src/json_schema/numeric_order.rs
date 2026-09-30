@@ -26,6 +26,8 @@
 use std::cmp::Ordering;
 use std::fmt::Write as _;
 
+use purrdf_xsd::bigint::BigInt;
+
 /// The `whiteSpace` `collapse` facet's trim (the four code points XSD names).
 pub(super) const WS: &str = "[\\t\\n\\r ]*";
 
@@ -69,7 +71,7 @@ impl Decimal {
     /// Parse an `xsd:decimal` lexical form (after the `collapse` trim), or an
     /// `xsd:integer` one when `integer` is set; `None` when it is not one.
     pub(super) fn parse(lexical: &str, integer: bool) -> Option<Self> {
-        let lexical = lexical.trim_matches(['\t', '\n', '\r', ' ']);
+        let lexical = purrdf_iri::terminals::trim_ws(lexical);
         let (negative, body) = match lexical.as_bytes().first() {
             Some(b'-') => (true, &lexical[1..]),
             Some(b'+') => (false, &lexical[1..]),
@@ -84,25 +86,21 @@ impl Decimal {
         valid.then(|| Self::normalized(negative, int, frac))
     }
 
-    /// `numerator × 2^exponent`, exactly.
+    /// `numerator × 2^exponent`, exactly ([`BigInt::from_binary`]), as digit
+    /// strings.
     fn from_binary(numerator: i128, exponent: i32) -> Self {
-        let negative = numerator < 0;
-        let mut digits = Digits::from_u128(numerator.unsigned_abs());
-        if exponent >= 0 {
-            for _ in 0..exponent {
-                digits.mul_small(2);
-            }
-            Self::normalized(negative, &digits.to_string(), "")
-        } else {
-            let places = exponent.unsigned_abs() as usize;
-            for _ in 0..places {
-                digits.mul_small(5);
-            }
-            let text = digits.to_string();
-            let text = format!("{}{text}", "0".repeat(places.saturating_sub(text.len())));
-            let (int, frac) = text.split_at(text.len() - places);
-            Self::normalized(negative, int, frac)
-        }
+        let (mantissa, scale) = BigInt::from_binary(numerator, exponent);
+        let text = mantissa.to_decimal_string();
+        let (negative, digits) = text
+            .strip_prefix('-')
+            .map_or((false, text.as_str()), |digits| (true, digits));
+        let places = usize::try_from(scale).expect("a binary exponent's scale fits usize");
+        let padded = format!(
+            "{}{digits}",
+            "0".repeat(places.saturating_sub(digits.len()))
+        );
+        let (int, frac) = padded.split_at(padded.len() - places);
+        Self::normalized(negative, int, frac)
     }
 
     /// The nearest `f64` (the decimal promoted to double).
@@ -175,49 +173,6 @@ impl Ord for Decimal {
             (false, false) => magnitude(self, other),
             (true, true) => magnitude(other, self),
         }
-    }
-}
-
-/// A non-negative big integer as little-endian base-10⁹ limbs.
-struct Digits(Vec<u32>);
-
-impl Digits {
-    const BASE: u64 = 1_000_000_000;
-
-    fn from_u128(mut value: u128) -> Self {
-        let mut limbs = Vec::new();
-        while value > 0 {
-            limbs.push(u32::try_from(value % u128::from(Self::BASE)).expect("limb < 10^9"));
-            value /= u128::from(Self::BASE);
-        }
-        Self(limbs)
-    }
-
-    fn mul_small(&mut self, factor: u64) {
-        let mut carry = 0_u64;
-        for limb in &mut self.0 {
-            let product = u64::from(*limb) * factor + carry;
-            *limb = u32::try_from(product % Self::BASE).expect("limb < 10^9");
-            carry = product / Self::BASE;
-        }
-        while carry > 0 {
-            self.0
-                .push(u32::try_from(carry % Self::BASE).expect("limb < 10^9"));
-            carry /= Self::BASE;
-        }
-    }
-}
-
-impl std::fmt::Display for Digits {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Some((last, rest)) = self.0.split_last() else {
-            return f.write_str("0");
-        };
-        write!(f, "{last}")?;
-        for limb in rest.iter().rev() {
-            write!(f, "{limb:09}")?;
-        }
-        Ok(())
     }
 }
 

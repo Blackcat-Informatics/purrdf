@@ -11,7 +11,7 @@
 //! ## The seam
 //!
 //! Unlike the transitional design, the [`FnoCatalog`] is now BUILT IN RUST — the
-//! oxigraph-free FnO correspondence lowering
+//! FnO correspondence lowering
 //! (`crates/logic-compile/src/projections/fno.rs`) discovers the
 //! projection functions + cells from the slice framework + the repo DSL tree,
 //! reads each input predicate's ontology `rdfs:range` (the fail-closed untyped-param
@@ -30,29 +30,25 @@
 //! subjects reuse the slice-emitter-computed labels purely so the model is
 //! self-documenting.
 
+use crate::collections::{ListVocab, build_rdf_list};
 use crate::{RdfLiteral, RdfQuad, RdfTerm, turtle};
 
 // --------------------------------------------------------------------------- //
 // Vocabulary
 // --------------------------------------------------------------------------- //
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
-const RDFS_LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
-const RDFS_COMMENT: &str = "http://www.w3.org/2000/01/rdf-schema#comment";
-const RDFS_SEE_ALSO: &str = "http://www.w3.org/2000/01/rdf-schema#seeAlso";
+use purrdf_iri::vocab::rdfs::COMMENT as RDFS_COMMENT;
+use purrdf_iri::vocab::rdfs::LABEL as RDFS_LABEL;
+use purrdf_iri::vocab::rdfs::SEE_ALSO as RDFS_SEE_ALSO;
 
-const SKOS_DEFINITION: &str = "http://www.w3.org/2004/02/skos/core#definition";
+use purrdf_iri::vocab::skos::DEFINITION as SKOS_DEFINITION;
 
-const OWL_ONTOLOGY: &str = "http://www.w3.org/2002/07/owl#Ontology";
+use purrdf_iri::vocab::owl::ONTOLOGY as OWL_ONTOLOGY;
 
 const DCTERMS_IS_PART_OF: &str = "http://purl.org/dc/terms/isPartOf";
 const DCTERMS_FORMAT: &str = "http://purl.org/dc/terms/format";
-
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 
 /// The `https://w3id.org/function/ontology#` (fno) namespace.
 const FNO: &str = "https://w3id.org/function/ontology#";
@@ -260,15 +256,6 @@ fn plain(text: &str) -> RdfTerm {
     RdfTerm::literal(RdfLiteral::simple(text.to_owned()))
 }
 
-/// An `xsd:boolean` literal term (`"true"`/`"false"`), matching rdflib's
-/// `Literal(bool)` lexical form.
-fn boolean(value: bool) -> RdfTerm {
-    RdfTerm::literal(RdfLiteral::typed(
-        if value { "true" } else { "false" },
-        XSD_BOOLEAN,
-    ))
-}
-
 /// Build the typed model's quads in the EXACT shape `emit_fno` / `_emit_fnom`
 /// produced — the same triple set, datatypes, and language tags.
 ///
@@ -392,7 +379,9 @@ pub fn to_quads(catalog: &FnoCatalog) -> Vec<RdfQuad> {
         quads.push(RdfQuad::new(
             p.clone(),
             format!("{FNO}required"),
-            boolean(param.required),
+            crate::TermValue::boolean(param.required)
+                .into_rdf_term()
+                .expect("a boolean literal is no triple term"),
         ));
         if let Some(label) = &param.label {
             quads.push(RdfQuad::new(p.clone(), RDFS_LABEL, en(label)));
@@ -501,14 +490,6 @@ fn attach_list(
     items: &[RdfTerm],
     tag: &str,
 ) {
-    if items.is_empty() {
-        quads.push(RdfQuad::new(
-            subject.clone(),
-            predicate,
-            RdfTerm::iri(RDF_NIL),
-        ));
-        return;
-    }
     let subj_id = match subject {
         RdfTerm::Iri(iri) => iri.as_str(),
         RdfTerm::BlankNode(label) => label.as_str(),
@@ -518,19 +499,20 @@ fn attach_list(
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { '_' })
         .collect();
-    let cells: Vec<RdfTerm> = (0..items.len())
-        .map(|i| RdfTerm::blank_node(format!("l_{safe}_{tag}_{i}")))
-        .collect();
-    quads.push(RdfQuad::new(subject.clone(), predicate, cells[0].clone()));
-    for (i, item) in items.iter().enumerate() {
-        quads.push(RdfQuad::new(cells[i].clone(), RDF_FIRST, item.clone()));
-        let rest = if i + 1 < items.len() {
-            cells[i + 1].clone()
-        } else {
-            RdfTerm::iri(RDF_NIL)
-        };
-        quads.push(RdfQuad::new(cells[i].clone(), RDF_REST, rest));
-    }
+    // The link precedes the cells, so it is placed once the head is known.
+    let link_at = quads.len();
+    let head = build_rdf_list(
+        items.iter().cloned(),
+        &ListVocab::rdf_terms(),
+        |i| RdfTerm::blank_node(format!("l_{safe}_{tag}_{i}")),
+        |cell, predicate, object| {
+            let RdfTerm::Iri(predicate) = predicate else {
+                unreachable!("the list vocabulary is IRIs")
+            };
+            quads.push(RdfQuad::new(cell, predicate, object));
+        },
+    );
+    quads.insert(link_at, RdfQuad::new(subject.clone(), predicate, head));
 }
 
 /// Serialize a [`FnoCatalog`]'s typed model to N-Triples text (the rdflib-parseable
@@ -547,6 +529,7 @@ pub fn to_ntriples(catalog: &FnoCatalog) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_iri::vocab::rdf::{FIRST as RDF_FIRST, NIL as RDF_NIL, REST as RDF_REST};
 
     /// A hand-built catalog: one function with one required + one optional param,
     /// one profile implementation, and one mapping with two param-var bindings and
@@ -652,8 +635,11 @@ mod tests {
     #[test]
     fn required_is_an_xsd_boolean_literal() {
         let quads = to_quads(&sample_catalog());
-        let t = RdfTerm::literal(RdfLiteral::typed("true", XSD_BOOLEAN));
-        let f = RdfTerm::literal(RdfLiteral::typed("false", XSD_BOOLEAN));
+        let t = RdfTerm::literal(RdfLiteral::typed("true", purrdf_xsd::datatype::XSD_BOOLEAN));
+        let f = RdfTerm::literal(RdfLiteral::typed(
+            "false",
+            purrdf_xsd::datatype::XSD_BOOLEAN,
+        ));
         assert!(
             has_obj(&quads, &format!("{FNO}required"), &t),
             "required true"

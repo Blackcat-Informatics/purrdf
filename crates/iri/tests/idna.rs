@@ -83,15 +83,18 @@ enum Lane {
     Mapped,
 }
 
+/// Code point to its General_Category short name.
+type GeneralCategories = std::collections::HashMap<char, String, purrdf_hash::fixed::FixedState>;
+
 /// The General_Category of every assigned code point, read from the vendored
 /// `UnicodeData.txt` — independently of the generated tables under test.
-fn general_categories() -> std::collections::HashMap<char, String> {
+fn general_categories() -> GeneralCategories {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/unicode/17.0.0/UnicodeData.txt"
     );
     let text = std::fs::read_to_string(path).expect("UnicodeData.txt is vendored");
-    let mut map = std::collections::HashMap::new();
+    let mut map = std::collections::HashMap::with_hasher(purrdf_hash::fixed::FixedState::new());
     let mut first: Option<u32> = None;
     for line in text.lines() {
         let fields: Vec<&str> = line.split(';').collect();
@@ -115,7 +118,7 @@ fn general_categories() -> std::collections::HashMap<char, String> {
 
 /// Whether RFC 5892 §3 can admit `c` at all: it is LDH (§2.5), a JoinControl
 /// (§2.8), a §2.6 PVALID or CONTEXTO exception, or LetterDigits (§2.1).
-fn letter_digits_or_earlier_rule(c: char, gc: &std::collections::HashMap<char, String>) -> bool {
+fn letter_digits_or_earlier_rule(c: char, gc: &GeneralCategories) -> bool {
     matches!(c, '-' | '0'..='9' | 'a'..='z' | '\u{200C}' | '\u{200D}')
         || matches!(
             c,
@@ -151,7 +154,7 @@ impl Row {
     fn verdict(
         &self,
         lane: Lane,
-        gc: &std::collections::HashMap<char, String>,
+        gc: &GeneralCategories,
     ) -> Result<(&str, Option<&str>), Excluded> {
         let (Some(source), Some(to_unicode), Some(to_ascii_n)) =
             (&self.source, &self.to_unicode, &self.to_ascii_n)

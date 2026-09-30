@@ -24,12 +24,12 @@
 //!   carry into an RDF dataset (segment ledger, sidecars, metadata, blob references,
 //!   suppressions, opaque nodes, signatures) is reported as loss-ledger entries with the
 //!   counts and segment head ids the importer actually returned. See
-//!   [`source`](crate::source) for why the `bnode-scope-flatten` contract entry is NOT
+//!   [`source`] for why the `bnode-scope-flatten` contract entry is NOT
 //!   attached on this path.
 //! * **Two or more sources** — the positional `IN` plus each repeatable `--input`, in
 //!   command-line order — are merged with `RdfDataset::union`: order-independent,
 //!   duplicate-collapsing at freeze, and standardize-apart per source. See
-//!   [`ingest`](crate::ingest) for the full contract and for the zero-copy trade a pack
+//!   [`ingest`] for the full contract and for the zero-copy trade a pack
 //!   in a multi-source list pays.
 //!
 //! Every lane threads the same `--base`, `--transport`, diagnostics and ledger; a flag

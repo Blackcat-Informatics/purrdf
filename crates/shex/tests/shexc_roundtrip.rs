@@ -17,9 +17,13 @@
 //! loss, and the whole corpus is round-tripped (not just a sample); the
 //! XFAIL ledger is empty and any entry must actually fail.
 
+#[path = "support/corpus.rs"]
+mod corpus;
+
+use corpus::shex_files;
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use purrdf_shex::{parse_shexc, to_shexc};
 
@@ -68,22 +72,6 @@ const MUST_ROUND_TRIP: &[&str] = &[
 /// every schema that parses round-trips exactly.
 const XFAIL_ROUND_TRIP: &[(&str, &str)] = &[];
 
-fn corpus() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors/shexTest/schemas")
-}
-
-fn shex_files(dir: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = fs::read_dir(dir)
-        .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
-        .filter_map(|entry| {
-            let path = entry.ok()?.path();
-            (path.extension().is_some_and(|x| x == "shex")).then_some(path)
-        })
-        .collect();
-    files.sort();
-    files
-}
-
 fn stem(path: &Path) -> String {
     path.file_stem()
         .and_then(|s| s.to_str())
@@ -94,7 +82,7 @@ fn stem(path: &Path) -> String {
 /// `parse → to_shexc → parse` must be the identity on every parseable schema.
 #[test]
 fn schemas_shexc_round_trip() {
-    let dir = corpus();
+    let dir = corpus::schemas();
     let files = shex_files(&dir);
     let xfail: BTreeSet<&str> = XFAIL_ROUND_TRIP.iter().map(|(name, _)| *name).collect();
     assert_eq!(
@@ -146,7 +134,7 @@ fn schemas_shexc_round_trip() {
 /// The diverse must-pass set round-trips (guards against silent coverage loss).
 #[test]
 fn diverse_documents_round_trip() {
-    let dir = corpus();
+    let dir = corpus::schemas();
     let mut missing = Vec::new();
     let mut failed = Vec::new();
     for name in MUST_ROUND_TRIP {

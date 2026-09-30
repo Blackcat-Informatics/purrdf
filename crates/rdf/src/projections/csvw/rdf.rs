@@ -3,13 +3,14 @@
 
 //! Normative CSVW-to-RDF conversion.
 
-use std::borrow::Cow;
+use super::table::table_fragment_iri;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use purrdf_core::collections::{ListVocab, build_rdf_list};
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
-use purrdf_iri::terminals::{ByteClass, byte_run_count};
-use serde_json::Value;
+use purrdf_iri::percent;
+use purrdf_lex::json::{Object, Value};
 
 use super::super::ProjectionError;
 use super::config::{CsvwConfig, CsvwMode};
@@ -142,7 +143,7 @@ impl Converter<'_> {
             }
             let predicate_iri = match &column.inherited.property_url {
                 Some(template) => expand_url(template, &cell_variables, &table.url, self.config)?,
-                None => fragment_iri(&table.url, &column.name)?,
+                None => table_fragment_iri(&table.url, &column.name, "CSVW")?,
             };
             let predicate = self.builder.intern_iri(&predicate_iri);
             if cell.is_null && !(column.virtual_column && column.inherited.value_url.is_some()) {
@@ -185,25 +186,27 @@ impl Converter<'_> {
     }
 
     fn emit_list(&mut self, cell: &CsvwCell, table: usize, row: usize, column: usize) -> TermId {
-        let nil = self
-            .builder
-            .intern_iri(&self.config.vocabulary().rdf("nil"));
-        let first_predicate = self.rdf("first");
-        let rest_predicate = self.rdf("rest");
-        let mut nodes = Vec::with_capacity(cell.values.len());
-        for index in 0..cell.values.len() {
-            nodes.push(self.blank(&format!("list-{table}-{row}-{column}-{index}")));
-        }
-        for (index, value) in cell.values.iter().enumerate() {
-            let object = self.value_literal(value);
-            self.quad(nodes[index], first_predicate, object);
-            self.quad(
-                nodes[index],
-                rest_predicate,
-                nodes.get(index + 1).copied().unwrap_or(nil),
-            );
-        }
-        nodes[0]
+        let nil = self.rdf("nil");
+        let vocab = ListVocab {
+            first: self.rdf("first"),
+            rest: self.rdf("rest"),
+            nil,
+        };
+        let cells: Vec<TermId> = (0..cell.values.len())
+            .map(|index| self.blank(&format!("list-{table}-{row}-{column}-{index}")))
+            .collect();
+        let members: Vec<TermId> = cell
+            .values
+            .iter()
+            .map(|value| self.value_literal(value))
+            .collect();
+        let builder = &mut self.builder;
+        build_rdf_list(
+            members,
+            &vocab,
+            |index| cells[index],
+            |subject, predicate, object| builder.push_quad(subject, predicate, object, None),
+        )
     }
 
     fn emit_annotations(
@@ -264,7 +267,11 @@ impl Converter<'_> {
                         self.quad(node, type_predicate, object);
                     }
                 }
-                for (property, value) in object {
+                // Properties in name order, whatever order a caller-built model
+                // holds them in, so node allocation is a function of content.
+                let mut members = object.iter().collect::<Vec<_>>();
+                members.sort_by(|left, right| left.0.cmp(right.0));
+                for (property, value) in members {
                     if property.starts_with('@') {
                         continue;
                     }
@@ -286,34 +293,32 @@ impl Converter<'_> {
                 self.config.vocabulary().xsd("boolean"),
             )]),
             Value::Number(number) => {
-                let datatype = if number.is_i64() || number.is_u64() {
+                let datatype = if number.as_i64().is_some() || number.as_u64().is_some() {
                     self.config.vocabulary().xsd("integer")
                 } else {
                     self.config.vocabulary().xsd("double")
                 };
-                let lexical = serde_json::to_string(&crate::json_value::Binary64(value)).map_err(
-                    |error| ProjectionError::integrity(format!("CSVW numeric annotation: {error}")),
-                )?;
+                let lexical = crate::json_number::binary64_lexeme(number).map_err(|error| {
+                    ProjectionError::integrity(format!("CSVW numeric annotation: {error}"))
+                })?;
                 Ok(vec![self.typed_literal(&lexical, datatype)])
             }
             Value::Null => Ok(Vec::new()),
         }
     }
 
-    fn annotation_literal(
-        &mut self,
-        object: &serde_json::Map<String, Value>,
-    ) -> Result<TermId, ProjectionError> {
+    fn annotation_literal(&mut self, object: &Object) -> Result<TermId, ProjectionError> {
         let value = object.get("@value").ok_or_else(|| {
             ProjectionError::integrity("CSVW annotation value object lacks @value")
         })?;
         let lexical = match value {
             Value::String(value) => value.clone(),
             Value::Bool(value) => value.to_string(),
-            Value::Number(_) => serde_json::to_string(&crate::json_value::Binary64(value))
-                .map_err(|error| {
+            Value::Number(number) => {
+                crate::json_number::binary64_lexeme(number).map_err(|error| {
                     ProjectionError::integrity(format!("CSVW numeric annotation: {error}"))
-                })?,
+                })?
+            }
             _ => {
                 return Err(ProjectionError::integrity(
                     "CSVW annotation @value is not atomic",
@@ -328,9 +333,9 @@ impl Converter<'_> {
             None
         } else if let Some(Value::String(datatype)) = object.get("@type") {
             Some(expand_jsonld_iri(datatype, self.config)?)
-        } else if value.is_boolean() {
+        } else if matches!(value, Value::Bool(_)) {
             Some(self.config.vocabulary().xsd("boolean"))
-        } else if value.is_number() {
+        } else if matches!(value, Value::Number(_)) {
             Some(if value.as_i64().is_some() || value.as_u64().is_some() {
                 self.config.vocabulary().xsd("integer")
             } else {
@@ -441,9 +446,9 @@ fn expand_url(
         if name == "_name" {
             output.push_str(value);
         } else if operator == Some('+') {
-            output.push_str(&percent_encode_reserved(value));
+            percent::push_encoded(&mut output, value, percent::URI_TEMPLATE_RESERVED);
         } else {
-            output.push_str(&percent_encode(value));
+            percent::push_encoded(&mut output, value, percent::UNRESERVED);
         }
         rest = &after[close + 1..];
     }
@@ -463,167 +468,6 @@ fn expand_url(
         .map_err(|error| ProjectionError::term(format!("invalid expanded CSVW URL: {error}")))
 }
 
-/// The `{+name}` (reserved) expansion: every byte [`reserved_byte`] admits is
-/// written as itself and every other byte as `%XX`, borrowing `value` when
-/// nothing needs encoding.
-fn percent_encode_reserved(value: &str) -> Cow<'_, str> {
-    let Some(first) = find_first_reserved_escape(value.as_bytes()) else {
-        return Cow::Borrowed(value);
-    };
-    let mut output = String::with_capacity(value.len() + 2);
-    push_percent_encoded(value, first, find_first_reserved_escape, &mut output);
-    Cow::Owned(output)
-}
-
-/// The bytes the reserved expansion percent-encodes: every byte
-/// [`reserved_byte`] does not admit (the C0 controls, space, `"`, `<`, `>`,
-/// `\`, `^`, `` ` ``, `{`, `|`, `}`, DEL and every non-ASCII byte).
-const RESERVED_ESCAPE_TABLE: [u8; 256] = {
-    let mut table = [0_u8; 256];
-    let mut b: u8 = 0;
-    loop {
-        if !reserved_byte(b) {
-            table[b as usize] = 1;
-        }
-        if b == u8::MAX {
-            break;
-        }
-        b += 1;
-    }
-    table
-};
-
-const RESERVED_ESCAPES: ByteClass<{ byte_run_count(&RESERVED_ESCAPE_TABLE) }> =
-    ByteClass::from_table(RESERVED_ESCAPE_TABLE);
-
-/// The offset of the first byte of `bytes` the reserved expansion encodes.
-///
-/// Out of line, so the class compiles to one kernel with its runs folded in as
-/// constants.
-#[inline(never)]
-fn find_first_reserved_escape(bytes: &[u8]) -> Option<usize> {
-    RESERVED_ESCAPES.find_first(bytes)
-}
-
-/// Append `value` to `output` with every byte `find` stops at written as
-/// `%XX` (uppercase hex) and every other byte as itself; `first` is the offset
-/// of the first stop.
-///
-/// Both encoded classes hold every non-ASCII byte, so a run between two stops
-/// is ASCII and begins and ends on a `char` boundary. The position after a stop
-/// may fall inside a multi-byte scalar, but then the next byte is a stop too
-/// and the run there is empty, so it is never sliced.
-fn push_percent_encoded(
-    value: &str,
-    first: usize,
-    find: impl Fn(&[u8]) -> Option<usize>,
-    output: &mut String,
-) {
-    const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
-    let bytes = value.as_bytes();
-    let mut run_start = 0;
-    let mut hit = first;
-    loop {
-        if hit > run_start {
-            output.push_str(&value[run_start..hit]);
-        }
-        let byte = bytes[hit];
-        output.push('%');
-        output.push(char::from(HEX_UPPER[usize::from(byte >> 4)]));
-        output.push(char::from(HEX_UPPER[usize::from(byte & 0xF)]));
-        run_start = hit + 1;
-        match find(&bytes[run_start..]) {
-            Some(offset) => hit = run_start + offset,
-            None => break,
-        }
-    }
-    output.push_str(&value[run_start..]);
-}
-
-const fn reserved_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric()
-        || matches!(
-            byte,
-            b'-' | b'.'
-                | b'_'
-                | b'~'
-                | b':'
-                | b'/'
-                | b'?'
-                | b'#'
-                | b'['
-                | b']'
-                | b'@'
-                | b'!'
-                | b'$'
-                | b'&'
-                | b'\''
-                | b'('
-                | b')'
-                | b'*'
-                | b'+'
-                | b','
-                | b';'
-                | b'='
-                | b'%'
-        )
-}
-
-fn fragment_iri(table_url: &str, name: &str) -> Result<String, ProjectionError> {
-    let base = purrdf_iri::parse(table_url)
-        .map_err(|error| ProjectionError::term(format!("invalid CSVW table URL: {error}")))?;
-    base.resolve(&format!("#{name}"))
-        .map(|iri| iri.as_str().to_owned())
-        .map_err(|error| ProjectionError::term(format!("invalid CSVW property URL: {error}")))
-}
-
-/// The `{name}` (simple) expansion: every byte [`unreserved_byte`] admits is
-/// written as itself and every other byte as `%XX`.
-fn percent_encode(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    match find_first_unreserved_escape(value.as_bytes()) {
-        Some(first) => {
-            push_percent_encoded(value, first, find_first_unreserved_escape, &mut output);
-        }
-        None => output.push_str(value),
-    }
-    output
-}
-
-/// RFC 3986's `unreserved`: ASCII letters and digits, `-`, `.`, `_` and `~`.
-const fn unreserved_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
-}
-
-/// The bytes the simple expansion percent-encodes: every byte
-/// [`unreserved_byte`] does not admit.
-const UNRESERVED_ESCAPE_TABLE: [u8; 256] = {
-    let mut table = [0_u8; 256];
-    let mut b: u8 = 0;
-    loop {
-        if !unreserved_byte(b) {
-            table[b as usize] = 1;
-        }
-        if b == u8::MAX {
-            break;
-        }
-        b += 1;
-    }
-    table
-};
-
-const UNRESERVED_ESCAPES: ByteClass<{ byte_run_count(&UNRESERVED_ESCAPE_TABLE) }> =
-    ByteClass::from_table(UNRESERVED_ESCAPE_TABLE);
-
-/// The offset of the first byte of `bytes` the simple expansion encodes.
-///
-/// Out of line, so the class compiles to one kernel with its runs folded in as
-/// constants.
-#[inline(never)]
-fn find_first_unreserved_escape(bytes: &[u8]) -> Option<usize> {
-    UNRESERVED_ESCAPES.find_first(bytes)
-}
-
 fn expand_jsonld_iri(value: &str, config: &CsvwConfig) -> Result<String, ProjectionError> {
     // CSVW's fixed class names and metadata-base fallback are profile rules layered
     // above the caller-supplied context; compact-IRI processing stays in CsvwContext.
@@ -641,125 +485,4 @@ fn expand_jsonld_iri(value: &str, config: &CsvwConfig) -> Result<String, Project
     base.resolve(value)
         .map(|iri| iri.as_str().to_owned())
         .map_err(|error| ProjectionError::term(format!("invalid CSVW JSON-LD IRI: {error}")))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        RESERVED_ESCAPES, UNRESERVED_ESCAPES, percent_encode, percent_encode_reserved,
-        reserved_byte, unreserved_byte,
-    };
-    use std::borrow::Cow;
-    use std::fmt::Write as _;
-
-    /// The per-byte reserved expansion the scan replaced, kept as the oracle.
-    fn percent_encode_reserved_reference(value: &str) -> Cow<'_, str> {
-        let Some(first_escape) = value.bytes().position(|byte| !reserved_byte(byte)) else {
-            return Cow::Borrowed(value);
-        };
-        let mut output = String::with_capacity(value.len() + 2);
-        output.push_str(&value[..first_escape]);
-        for &byte in &value.as_bytes()[first_escape..] {
-            if reserved_byte(byte) {
-                output.push(char::from(byte));
-            } else {
-                let _ = write!(output, "%{byte:02X}");
-            }
-        }
-        Cow::Owned(output)
-    }
-
-    /// The per-byte simple expansion the scan replaced, kept as the oracle.
-    fn percent_encode_reference(value: &str) -> String {
-        let mut output = String::with_capacity(value.len());
-        for byte in value.bytes() {
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-                output.push(char::from(byte));
-            } else {
-                let _ = write!(output, "%{byte:02X}");
-            }
-        }
-        output
-    }
-
-    /// Every ASCII scalar and non-ASCII scalars of each UTF-8 width, each
-    /// placed after every prefix length 0 to 40 of a plain run (so across the
-    /// sixteen-byte chunks and into the tail), alone, doubled, and followed by
-    /// plain text, other stops and a second scalar.
-    fn samples() -> Vec<String> {
-        let mut scalars: Vec<char> = (0_u8..=0x7F).map(char::from).collect();
-        scalars.extend([
-            '\u{85}',
-            '\u{a0}',
-            '\u{e9}',
-            '\u{2028}',
-            '\u{feff}',
-            '\u{1f600}',
-        ]);
-        let mut out = vec![String::new()];
-        for &c in &scalars {
-            for prefix in 0..=40 {
-                let plain = "a/b".repeat(prefix / 3 + 1);
-                let head = &plain[..prefix.min(plain.len())];
-                out.push(format!("{head}{c}"));
-                out.push(format!("{head}{c}{c}"));
-                out.push(format!("{head}{c}tail-0123456789-ABCDEFGHIJ"));
-                out.push(format!("{head}{c} %{{}}\u{e9}{head}\u{1f600}"));
-            }
-        }
-        out
-    }
-
-    #[test]
-    fn reserved_expansion_scan_equals_the_per_byte_encoder() {
-        for byte in 0_u8..=u8::MAX {
-            assert_eq!(
-                RESERVED_ESCAPES.contains(byte),
-                !reserved_byte(byte),
-                "{byte:#04x}"
-            );
-        }
-        for value in samples() {
-            let expected = percent_encode_reserved_reference(&value);
-            let actual = percent_encode_reserved(&value);
-            assert_eq!(actual, expected, "{value:?}");
-            assert_eq!(
-                matches!(actual, Cow::Borrowed(_)),
-                matches!(expected, Cow::Borrowed(_)),
-                "{value:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn simple_expansion_scan_equals_the_per_byte_encoder() {
-        for byte in 0_u8..=u8::MAX {
-            assert_eq!(
-                UNRESERVED_ESCAPES.contains(byte),
-                !unreserved_byte(byte),
-                "{byte:#04x}"
-            );
-        }
-        for value in samples() {
-            assert_eq!(
-                percent_encode(&value),
-                percent_encode_reference(&value),
-                "{value:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn reserved_expansion_borrows_unchanged_iris_and_encodes_only_on_demand() {
-        let unchanged = "https://example.org/a/b?x=y#fragment";
-        assert!(matches!(
-            percent_encode_reserved(unchanged),
-            Cow::Borrowed(value) if value == unchanged
-        ));
-
-        assert_eq!(
-            percent_encode_reserved("https://example.org/na\u{ef}ve path"),
-            Cow::<str>::Owned("https://example.org/na%C3%AFve%20path".to_owned())
-        );
-    }
 }

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! End-to-end latency harness for the succinct `pack` codec:
@@ -11,17 +11,17 @@
 //! [`PackView`] for a few representative pattern shapes, and [`verify_pack`] (the
 //! certified-projection RDFC-1.0 recompute). Report-only — no timing/speedup
 //! assertion, matching this workspace's bench discipline (see
-//! `crates/rdf-core/benches/pack_bits.rs` and `ir_layout.rs`); criterion's stdout
+//! `crates/rdf-core/benches/pack_bits.rs` and `ir_layout.rs`); the harness's stdout
 //! summary is the report.
 
 use std::sync::Arc;
 
-use criterion::{Criterion, criterion_group, criterion_main};
 use purrdf_core::ir::pack::dict::PackDict;
 use purrdf_core::{
     BlankScope, DatasetView, GraphMatch, PackBuilder, PackView, RdfDataset, RdfDatasetBuilder,
     RdfLiteral, RdfTextDirection, restore_pack, verify_pack,
 };
+use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
 /// Number of subject "rows" generated. Each row emits four quads (see
 /// [`build_dataset`]), so the frozen dataset — and the pack built from it — is a
@@ -121,7 +121,7 @@ fn build_literal_heavy_dataset() -> Arc<RdfDataset> {
 
 /// Dictionary encode alone: [`PackDict::encode`] (term collection, closure,
 /// canonical sort, PFC record encoding) over the literal-heavy fixture.
-fn bench_dict_encode(c: &mut Criterion) {
+fn bench_dict_encode(c: &mut Bench) {
     let ds = build_literal_heavy_dataset();
     let encoded = PackDict::encode(&ds);
     println!(
@@ -137,7 +137,7 @@ fn bench_dict_encode(c: &mut Criterion) {
 }
 
 /// Encode: [`PackBuilder::build_bytes`] over the representative dataset.
-fn bench_build_bytes(c: &mut Criterion) {
+fn bench_build_bytes(c: &mut Bench) {
     let ds = build_dataset();
     let mut group = c.benchmark_group("pack_query_build_bytes");
     group.bench_function("build_bytes", |b| {
@@ -152,7 +152,7 @@ fn bench_build_bytes(c: &mut Criterion) {
 
 /// Open: [`PackView::from_bytes`] over already-built pack bytes (magic/version/
 /// section-digest verification plus dictionary decode).
-fn bench_from_bytes(c: &mut Criterion) {
+fn bench_from_bytes(c: &mut Bench) {
     let ds = build_dataset();
     let bytes = PackBuilder::build_bytes(&ds).expect("representative dataset packs");
     let mut group = c.benchmark_group("pack_query_from_bytes");
@@ -164,7 +164,7 @@ fn bench_from_bytes(c: &mut Criterion) {
 
 /// Restore: open an already-built pack and materialize the complete frozen
 /// `RdfDataset` without passing through an RDF text serialization.
-fn bench_restore_pack(c: &mut Criterion) {
+fn bench_restore_pack(c: &mut Bench) {
     let ds = build_dataset();
     let bytes = PackBuilder::build_bytes(&ds).expect("representative dataset packs");
     let mut group = c.benchmark_group("pack_query_restore");
@@ -176,7 +176,7 @@ fn bench_restore_pack(c: &mut Criterion) {
 
 /// Query the compressed form: `quads_for_pattern`, iterated to completion, over a
 /// warm [`PackView`], for the four representative shapes [`build_dataset`] sets up.
-fn bench_quads_for_pattern(c: &mut Criterion) {
+fn bench_quads_for_pattern(c: &mut Bench) {
     let ds = build_dataset();
     let bytes = PackBuilder::build_bytes(&ds).expect("representative dataset packs");
     let pack = PackView::from_bytes(&bytes).expect("pack opens");
@@ -231,7 +231,7 @@ fn bench_quads_for_pattern(c: &mut Criterion) {
 
 /// The certified-projection verifier: [`verify_pack`]'s independent RDFC-1.0
 /// reconstruct-and-recompute over already-built pack bytes.
-fn bench_verify_pack(c: &mut Criterion) {
+fn bench_verify_pack(c: &mut Bench) {
     let ds = build_dataset();
     let bytes = PackBuilder::build_bytes(&ds).expect("representative dataset packs");
     let mut group = c.benchmark_group("pack_query_verify");
@@ -241,7 +241,7 @@ fn bench_verify_pack(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
+bench_group!(
     benches,
     bench_dict_encode,
     bench_build_bytes,
@@ -250,4 +250,4 @@ criterion_group!(
     bench_quads_for_pattern,
     bench_verify_pack
 );
-criterion_main!(benches);
+bench_main!(benches);

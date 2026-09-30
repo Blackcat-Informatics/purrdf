@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Profiling harness for the analyzer's Unicode layer: case folding,
@@ -21,7 +21,7 @@
 //! Report-only: nothing here asserts a timing; behaviour is fixed by the test
 //! suite.
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 use purrdf_text::unicode;
 
 /// Repeat `unit` until the text is at least `bytes` long.
@@ -67,7 +67,7 @@ fn classes() -> [(&'static str, String); 4] {
     ]
 }
 
-fn unicode_layer(criterion: &mut Criterion) {
+fn unicode_layer(criterion: &mut Bench) {
     let mut group = criterion.benchmark_group("purrdf_text_unicode");
     let mut scratch = String::new();
     for (class, text) in classes() {
@@ -102,5 +102,5 @@ fn unicode_layer(criterion: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, unicode_layer);
-criterion_main!(benches);
+bench_group!(benches, unicode_layer);
+bench_main!(benches);

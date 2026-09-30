@@ -11,7 +11,7 @@
 //! RDF/XML. The graph layout mirrors exactly what the parser produces, so parse and
 //! serialize are inverses.
 //!
-//! The [`SerializeGraph`] filter matches `oxigraph/backend.rs:333-391` exactly:
+//! The [`SerializeGraph`] filter:
 //! `DefaultGraph` emits the default-graph quads plus ALL statement rows
 //! (reifiers/annotations); `Named(g)` emits only that graph's quads as triples and NO
 //! statement rows; `Dataset` keeps graph names for TriG/N-Quads but falls back to the
@@ -51,7 +51,7 @@ use super::media_type::{NativeRdfFormat, classify};
 use super::ser_model::{SerAnnotationRow, SerGraph, SerReifierRow, SerTerm, SerTermKind};
 use crate::dataset_view::ViewTermId;
 use crate::ir::TermRef;
-use crate::{DatasetView, FastHasher, FastMap, RdfDiagnostic, RdfTextDirection, SerializeGraph};
+use crate::{DatasetView, FastHasher, FastMap, RdfDiagnostic, SerializeGraph};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
 use purrdf_core::sink::{TextSink, WriterDrain};
 use purrdf_core::{Nested, try_fold_nested};
@@ -91,7 +91,7 @@ const fn blank_label_alphabet(format: NativeRdfFormat) -> LabelAlphabet {
 /// The `xsd:string` datatype IRI: a literal of this datatype with no language is a
 /// plain literal and is emitted WITHOUT an explicit `^^<…>`, so it round-trips back to
 /// the same plain form (matching the purrdf-gts native projection).
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// Serialize a frozen [`RdfDataset`](crate::RdfDataset) to RDF text of `media_type`, honoring the
 /// [`SerializeGraph`] selection. Returns the serialized bytes.
@@ -729,7 +729,7 @@ pub(crate) fn build_ser_graph<D: DatasetView>(
         SerGraphInterner::with_capacity(dataset.term_count(), blank_label_alphabet(format));
 
     // Which quad rows to emit, and whether the statement layer (reifiers/annotations)
-    // participates — matching the oxigraph backend's filter exactly.
+    // participates, per the [`SerializeGraph`] filter contract.
     let mut graph = SerGraph {
         terms: Vec::new(),
         quads: Vec::with_capacity(dataset.len_hint().unwrap_or(0)),
@@ -785,7 +785,7 @@ pub(crate) fn build_ser_graph<D: DatasetView>(
                 let o = interner.intern(dataset, quad.o)?;
                 graph.quads.push((s, p, o, None));
             }
-            // A named-graph selection emits NO statement rows (oxigraph parity).
+            // A named-graph selection emits NO statement rows.
         }
     }
 
@@ -990,7 +990,7 @@ impl<I: ViewTermId> SerGraphInterner<I> {
                     value: Some(lexical.to_owned()),
                     datatype: datatype_slot,
                     lang: language.map(str::to_owned),
-                    direction: direction.map(direction_str),
+                    direction: direction.map(|direction| direction.as_str().to_owned()),
                     reifier: None,
                 })
             }
@@ -1104,13 +1104,6 @@ fn iri_str_of<D: DatasetView>(dataset: &D, id: D::Id) -> Result<&str, RdfDiagnos
             "native-codec-datatype-not-iri",
             format!("a literal datatype must be an IRI, got {other:?}"),
         )),
-    }
-}
-
-fn direction_str(direction: RdfTextDirection) -> String {
-    match direction {
-        RdfTextDirection::Ltr => "ltr".to_owned(),
-        RdfTextDirection::Rtl => "rtl".to_owned(),
     }
 }
 
@@ -1409,10 +1402,11 @@ mod term_walk_tests {
         for seed in 0..300_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = purrdf_core::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::WellFormed,
+                purrdf_core::term_fixture::TermShape::WellFormed,
             );
             nested += usize::from(budget < 7);
             let mut builder = RdfDatasetBuilder::new();

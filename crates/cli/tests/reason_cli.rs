@@ -32,49 +32,14 @@
 //! regime, and both of those are ordinary usage errors (exit 2). A `.purrpck` pack
 //! source exercises the pack→dataset reconstruction path inside `reason`.
 
-use std::path::Path;
-use std::process::{Command, Output};
-
 mod support;
+use support::{path, purrdf, run, stderr, write_file};
 
 /// The rdf:type IRI, spelled out (the inferred-triple assertions key on it).
 const RDF_TYPE: &str = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>";
 
 /// A normative RIF-in-XML rule document: `?x a ex:Cat` ⟹ `?x a ex:Animal`.
 const RIF_RULES: &str = "<Document xmlns=\"http://www.w3.org/2007/rif#\"><payload><Group><sentence><Forall><declare><Var>x</Var></declare><formula><Implies><if><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/Cat</Const></slot></Frame></if><then><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/Animal</Const></slot></Frame></then></Implies></formula></Forall></sentence></Group></payload></Document>";
-
-/// A `Command` for the built `purrdf` binary.
-fn purrdf() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_purrdf"))
-}
-
-/// Run `purrdf` with `args`, returning the captured [`Output`].
-fn run(args: &[&str]) -> Output {
-    purrdf()
-        .args(args)
-        .output()
-        .expect("spawn the built purrdf binary")
-}
-
-/// stderr of an [`Output`] as a `String`, for diagnostics + boundary assertions.
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
-}
-
-/// Join a name onto `dir`, returning it as an owned `String` (the shape [`run`] wants).
-fn path(dir: &Path, name: &str) -> String {
-    dir.join(name)
-        .to_str()
-        .expect("temp path is valid UTF-8")
-        .to_owned()
-}
-
-/// Write `contents` to `dir/name`, returning the path.
-fn write_file(dir: &Path, name: &str, contents: &str) -> String {
-    let p = path(dir, name);
-    std::fs::write(&p, contents).expect("write fixture file");
-    p
-}
 
 /// The non-empty, trimmed lines of a file as a sorted `Vec` (a set-equality helper for
 /// line-based N-Triples output).

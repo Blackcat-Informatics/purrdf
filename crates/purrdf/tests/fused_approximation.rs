@@ -16,16 +16,14 @@
 //! answer in which nothing co-occurs, every row would carry one contribution,
 //! and the test would pass while proving nothing about composition.
 
+use purrdf_hnsw::fixture::params;
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
 
-#[path = "support/rng.rs"]
-mod rng;
+use purrdf_testkit::rng::signed_unit_next_nonzero;
 
 use purrdf::hnsw::relation::{HnswSpace, RankedHnswRegistration, register_ranked_hnsw_relation};
-use purrdf::hnsw::{HnswIndex, Params, VectorMatrix, profile};
+use purrdf::hnsw::{HnswIndex, VectorMatrix, profile};
 use purrdf::sparql::{
     CandidateDomains, Completeness, IndexGeneration, KnnGuard, OrderFidelity,
     PropertyFunctionRegistry, RankFidelity, TermKind,
@@ -37,7 +35,9 @@ const TEXT_PRODUCER: &str = "https://example.org/pf/search";
 const TEXT_STRATUM: &str = "https://example.org/stratum/lexical";
 const HNSW_PRODUCER: &str = "https://example.org/pf/nearest";
 const HNSW_STRATUM: &str = "https://example.org/stratum/vector";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_xsd::datatype::XSD_INTEGER;
+
+use purrdf::retrieval::block_on;
 
 /// The entities BOTH producers name. One corpus, ranked twice under two laws,
 /// which is the shape a fused answer exists for.
@@ -50,26 +50,6 @@ const ENTITIES: [(&str, &str); 4] = [
 
 fn entity_iri(local: &str) -> String {
     format!("https://example.org/{local}")
-}
-
-/// The ladder's futures are awaited in one task and never cross a thread
-/// boundary, so a parking waker is the whole runtime they need.
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
 }
 
 /// A provider that reports nothing: both producers declare finite row bounds
@@ -147,7 +127,10 @@ fn registry() -> PropertyFunctionRegistry {
 fn vector_space() -> Arc<HnswSpace> {
     let dims = 4;
     let rows = ENTITIES.len();
-    let data = rng::linear_unit_values(0x51DE_0000_1234_ABCD_u64, rows * dims);
+    let mut state = 0x51DE_0000_1234_ABCD_u64;
+    let data: Vec<f64> = (0..rows * dims)
+        .map(|_| signed_unit_next_nonzero(&mut state, 0.125))
+        .collect();
     let matrix = VectorMatrix::new(rows, dims, data).expect("a valid matrix");
     let index = HnswIndex::build(matrix, &DistanceMetric::SquaredEuclidean, params())
         .expect("the graph builds");
@@ -157,10 +140,6 @@ fn vector_space() -> Arc<HnswSpace> {
         .collect();
     let guard = KnnGuard::new(rows as u64, rows as u64).expect("a valid guard");
     Arc::new(HnswSpace::from_index(index, terms, guard).expect("a valid space"))
-}
-
-fn params() -> Params {
-    Params::new(4, 8, 16, 8).expect("valid parameters")
 }
 
 /// A request that reaches both producers: lexical text for the inverted index,

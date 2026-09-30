@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! OWL-Direct classification benchmark: building a whole class taxonomy.
@@ -33,7 +33,7 @@
 
 use std::sync::Arc;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, TermId};
 use purrdf_entail::reasoner::Reasoner;
@@ -43,20 +43,20 @@ use purrdf_entail::reasoner::Reasoner;
 /// one it may put in a term.
 const EX: &str = "http://example.org/";
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-const RDFS_SUBCLASSOF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
-const RDFS_SUBPROPERTYOF: &str = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf";
-const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
-const OWL_OBJECTPROPERTY: &str = "http://www.w3.org/2002/07/owl#ObjectProperty";
-const OWL_TRANSITIVEPROPERTY: &str = "http://www.w3.org/2002/07/owl#TransitiveProperty";
-const OWL_EQUIVALENTCLASS: &str = "http://www.w3.org/2002/07/owl#equivalentClass";
-const OWL_INTERSECTIONOF: &str = "http://www.w3.org/2002/07/owl#intersectionOf";
-const OWL_RESTRICTION: &str = "http://www.w3.org/2002/07/owl#Restriction";
-const OWL_ONPROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
-const OWL_SOMEVALUESFROM: &str = "http://www.w3.org/2002/07/owl#someValuesFrom";
+use purrdf_iri::vocab::owl::CLASS as OWL_CLASS;
+use purrdf_iri::vocab::owl::EQUIVALENT_CLASS as OWL_EQUIVALENTCLASS;
+use purrdf_iri::vocab::owl::INTERSECTION_OF as OWL_INTERSECTIONOF;
+use purrdf_iri::vocab::owl::OBJECT_PROPERTY as OWL_OBJECTPROPERTY;
+use purrdf_iri::vocab::owl::ON_PROPERTY as OWL_ONPROPERTY;
+use purrdf_iri::vocab::owl::RESTRICTION as OWL_RESTRICTION;
+use purrdf_iri::vocab::owl::SOME_VALUES_FROM as OWL_SOMEVALUESFROM;
+use purrdf_iri::vocab::owl::TRANSITIVE_PROPERTY as OWL_TRANSITIVEPROPERTY;
+use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+use purrdf_iri::vocab::rdf::REST as RDF_REST;
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASSOF;
+use purrdf_iri::vocab::rdfs::SUB_PROPERTY_OF as RDFS_SUBPROPERTYOF;
 
 /// A synthetic `EL` terminology over `classes` named classes.
 ///
@@ -127,7 +127,7 @@ fn terminology(classes: usize) -> Arc<RdfDataset> {
     b.freeze().expect("freeze")
 }
 
-fn bench_classify(c: &mut Criterion) {
+fn bench_classify(c: &mut Bench) {
     let mut group = c.benchmark_group("owl_direct_classify");
     for classes in [32usize, 128, 512] {
         let dataset = terminology(classes);
@@ -144,5 +144,5 @@ fn bench_classify(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_classify);
-criterion_main!(benches);
+bench_group!(benches, bench_classify);
+bench_main!(benches);

@@ -18,6 +18,9 @@
 //! the `sparql:` namespace, by the SPARQL Working Group's own `sparql-ns.ttl`,
 //! which SHACL 1.2 Node Expressions §5 makes callable).
 
+#[path = "support/turtle.rs"]
+mod turtle;
+
 use std::sync::Arc;
 
 use purrdf_shapes::data::ShaclData;
@@ -35,52 +38,25 @@ const PREFIXES: &str = r"
 @prefix xsd:    <http://www.w3.org/2001/XMLSchema#> .
 ";
 
-/// The single `sh:expression` node expression a fixture declares.
-fn expression_of(shapes_ttl: &str) -> NodeExpr {
-    let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).expect("shapes parse");
-    let mut found: Vec<NodeExpr> = shapes
-        .node_shapes
-        .iter()
-        .flat_map(|shape| &shape.constraints)
-        .filter_map(|c| match c {
-            Constraint::Expression { expr, .. } => Some(expr.clone()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        found.len(),
-        1,
-        "the fixture must declare exactly one sh:expression"
-    );
-    found.remove(0)
-}
-
 /// Evaluate the fixture's `sh:expression` over `data_ttl` from `ex:<focus>`,
 /// returning the output nodes in the order the evaluator produced them.
 ///
 /// The SPARQL view is the DATA graph, which is what a `sh:select` node expression
 /// is defined to query ("executed against the focus graph").
 fn outputs(data_ttl: &str, shapes_ttl: &str, focus: &str) -> Vec<String> {
-    let expr = expression_of(shapes_ttl);
+    let expr = turtle::expression_of(PREFIXES, shapes_ttl);
     let data: Arc<_> =
         parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parse");
     let store = ShaclData::new(Arc::clone(&data), data, None);
     let focus_term = Term::NamedNode(NamedNode::new_unchecked(format!(
         "http://example.org/ns#{focus}"
     )));
-    let mut guard = RecursionGuard::new();
+    let mut guard = RecursionGuard::default();
     eval_node_expr(&store, &focus_term, &expr, &mut guard)
         .expect("node expression evaluates")
         .iter()
         .map(ToString::to_string)
         .collect()
-}
-
-/// The shapes-load error a malformed fixture produces.
-fn load_error(shapes_ttl: &str) -> String {
-    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None)
-        .expect_err("the fixture must be refused at shapes-load")
-        .to_string()
 }
 
 /// The canonical rendering of `ex:<local>`.
@@ -159,7 +135,8 @@ fn select_expression_resolves_prefixed_names_through_sh_prefixes() {
 /// shapes-LOAD failure rather than a silent take-the-first-column.
 #[test]
 fn select_expression_projecting_two_variables_is_a_load_error() {
-    let err = load_error(
+    let err = turtle::load_error(
+        PREFIXES,
         r#"ex:S a sh:NodeShape ; sh:expression [
              sh:select "SELECT ?a ?b WHERE { $this ex:child ?a . $this ex:child ?b }" ] ."#,
     );
@@ -172,7 +149,8 @@ fn select_expression_projecting_two_variables_is_a_load_error() {
 /// An unparsable `sh:select` is refused at shapes-load, not at the first focus node.
 #[test]
 fn select_expression_with_an_unparsable_query_is_a_load_error() {
-    let err = load_error(
+    let err = turtle::load_error(
+        PREFIXES,
         r#"ex:S a sh:NodeShape ; sh:expression [ sh:select "SELECT ?x WHERE { $this" ] ."#,
     );
     assert!(
@@ -184,8 +162,10 @@ fn select_expression_with_an_unparsable_query_is_a_load_error() {
 /// A non-SELECT body is likewise refused at load.
 #[test]
 fn select_expression_that_is_an_ask_is_a_load_error() {
-    let err =
-        load_error(r#"ex:S a sh:NodeShape ; sh:expression [ sh:select "ASK { $this ?p ?o }" ] ."#);
+    let err = turtle::load_error(
+        PREFIXES,
+        r#"ex:S a sh:NodeShape ; sh:expression [ sh:select "ASK { $this ?p ?o }" ] ."#,
+    );
     assert!(err.contains("must be a SELECT query"), "got: {err}");
 }
 
@@ -230,7 +210,10 @@ fn sparql_expr_and_its_expanded_select_agree() {
 /// and the refusal names the key the author actually wrote.
 #[test]
 fn sparql_expr_that_does_not_parse_is_a_load_error() {
-    let err = load_error(r#"ex:S a sh:NodeShape ; sh:expression [ sh:sparqlExpr "STRLEN(" ] ."#);
+    let err = turtle::load_error(
+        PREFIXES,
+        r#"ex:S a sh:NodeShape ; sh:expression [ sh:sparqlExpr "STRLEN(" ] ."#,
+    );
     assert!(
         err.contains("sh:sparqlExpr node expression") && err.contains("unparsable"),
         "got: {err}"
@@ -241,7 +224,8 @@ fn sparql_expr_that_does_not_parse_is_a_load_error() {
 /// two different node-expression kinds already is.
 #[test]
 fn a_node_with_both_select_and_sparql_expr_is_ambiguous() {
-    let err = load_error(
+    let err = turtle::load_error(
+        PREFIXES,
         r#"ex:S a sh:NodeShape ; sh:expression [
              sh:select "SELECT ?x WHERE {}" ; sh:sparqlExpr "1" ] ."#,
     );
@@ -397,13 +381,14 @@ fn sparql_ns_equality_names_all_lower_to_the_same_operator() {
 /// produced node is an RDF 1.2 triple term — not an IRI, not a blank reifier.
 #[test]
 fn sparql_triple_constructs_an_rdf12_triple_term() {
-    let expr = expression_of(
+    let expr = turtle::expression_of(
+        PREFIXES,
         r"ex:S a sh:NodeShape ; sh:expression [ sparql:triple ( ex:s ex:p ex:o ) ] .",
     );
     let data: Arc<_> = parse_turtle_to_dataset(PREFIXES, None).expect("data parse");
     let store = ShaclData::new(Arc::clone(&data), data, None);
     let focus = Term::NamedNode(NamedNode::new_unchecked("http://example.org/ns#a"));
-    let mut guard = RecursionGuard::new();
+    let mut guard = RecursionGuard::default();
     let out = eval_node_expr(&store, &focus, &expr, &mut guard).expect("sparql:triple evaluates");
 
     let [Term::Triple(triple)] = out.as_slice() else {
@@ -472,7 +457,10 @@ fn sparql_ns_call_arguments_are_node_expressions() {
 /// expressions. A refusal, never a silent empty answer.
 #[test]
 fn sparql_ns_aggregate_name_is_a_load_error() {
-    let err = load_error(r"ex:S a sh:NodeShape ; sh:expression [ sparql:agg-sum ( 1 2 ) ] .");
+    let err = turtle::load_error(
+        PREFIXES,
+        r"ex:S a sh:NodeShape ; sh:expression [ sparql:agg-sum ( 1 2 ) ] .",
+    );
     assert!(err.contains("SPARQL AGGREGATE"), "got: {err}");
     assert!(err.contains("shnex:sum"), "got: {err}");
 }
@@ -482,8 +470,10 @@ fn sparql_ns_aggregate_name_is_a_load_error() {
 /// `shnex:exists`.
 #[test]
 fn sparql_ns_exists_functional_form_is_a_load_error() {
-    let err =
-        load_error(r"ex:S a sh:NodeShape ; sh:expression [ sparql:filter-exists ( ex:a ) ] .");
+    let err = turtle::load_error(
+        PREFIXES,
+        r"ex:S a sh:NodeShape ; sh:expression [ sparql:filter-exists ( ex:a ) ] .",
+    );
     assert!(err.contains("GRAPH PATTERN"), "got: {err}");
     assert!(err.contains("shnex:exists"), "got: {err}");
 }
@@ -492,7 +482,10 @@ fn sparql_ns_exists_functional_form_is_a_load_error() {
 /// than evaluated into nothing.
 #[test]
 fn an_unknown_sparql_ns_name_is_a_load_error() {
-    let err = load_error(r"ex:S a sh:NodeShape ; sh:expression [ sparql:notAFunction ( 1 ) ] .");
+    let err = turtle::load_error(
+        PREFIXES,
+        r"ex:S a sh:NodeShape ; sh:expression [ sparql:notAFunction ( 1 ) ] .",
+    );
     assert!(
         err.contains("is not a callable SPARQL 1.2 function name"),
         "got: {err}"
@@ -503,7 +496,10 @@ fn an_unknown_sparql_ns_name_is_a_load_error() {
 /// shapes-load, named as such.
 #[test]
 fn a_sparql_ns_operator_with_the_wrong_arity_is_a_load_error() {
-    let err = load_error(r"ex:S a sh:NodeShape ; sh:expression [ sparql:add ( 1 2 3 ) ] .");
+    let err = turtle::load_error(
+        PREFIXES,
+        r"ex:S a sh:NodeShape ; sh:expression [ sparql:add ( 1 2 3 ) ] .",
+    );
     assert!(err.contains("exactly 2 arguments"), "got: {err}");
 }
 
@@ -596,7 +592,8 @@ fn a_call_site_may_carry_the_annotations_an_expression_constraint_reads() {
 /// not remove the check.
 #[test]
 fn two_real_function_predicates_on_one_node_are_still_ambiguous() {
-    let err = load_error(
+    let err = turtle::load_error(
+        PREFIXES,
         "ex:S a sh:NodeShape ;
              sh:expression [ sparql:strlen ( \"a\" ) ; sparql:abs ( -1 ) ] .",
     );
@@ -657,7 +654,8 @@ fn a_select_expression_resolves_sh_prefixes_declared_on_the_shape() {
 /// invents namespaces.
 #[test]
 fn an_undeclared_prefix_in_a_select_expression_is_still_a_load_error() {
-    let err = load_error(
+    let err = turtle::load_error(
+        PREFIXES,
         r#"ex:S a sh:NodeShape ;
              sh:expression [ sh:select "SELECT ?child WHERE { $this nosuch:child ?child }" ] ."#,
     );
@@ -824,7 +822,10 @@ fn sparql_encode_is_encode_for_uri() {
 /// defines is still refused.
 #[test]
 fn the_spelling_aliases_do_not_admit_unknown_names() {
-    let err = load_error(r"ex:S a sh:NodeShape ; sh:expression [ sparql:notAFunction ( 1 ) ] .");
+    let err = turtle::load_error(
+        PREFIXES,
+        r"ex:S a sh:NodeShape ; sh:expression [ sparql:notAFunction ( 1 ) ] .",
+    );
     assert!(
         err.contains("is not a callable SPARQL 1.2 function name"),
         "got: {err}"

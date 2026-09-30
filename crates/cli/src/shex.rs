@@ -11,7 +11,7 @@
 //!
 //! # The output is the ShapeMap specification's result shape map, and there is no `--format`
 //!
-//! [`ResultShapeMap::to_result_json`](purrdf_shex::ResultShapeMap::to_result_json) is
+//! `ResultShapeMap::to_result_json` is
 //! `purrdf-shex`'s single rendered form: a JSON array of `{"node","shape","status","reason"?}`
 //! objects with a fixed field order, in the engine's own deterministic association order
 //! (query selectors de-duplicate their matches and sort by term string). A `--format` flag
@@ -72,19 +72,19 @@
 //!   relative IRI with no `--base`, is a fault in the argument and needs no schema and no data
 //!   graph to see — yet it surfaced from inside `validate_shape_map`, after both documents had
 //!   been read, as exit 1. [`check_map_syntax`] now parses it through the SAME
-//!   [`purrdf_shex::parse_shape_map`] the validator uses, before anything is opened, and
+//!   `purrdf_shex::parse_shape_map` the validator uses, before anything is opened, and
 //!   reports exit 2. A relative reference there also gets a remedy naming `--base`, because the
 //!   library's own remedy names `@base`/`xml:base` document directives and a `MAP` is argv text
 //!   no document reaches.
 //! * the **`--import` ontology-IRI half** is matched against the schema's `IMPORT` IRIs, which
 //!   are absolute, AND is the base its document parses under — so a relative or malformed half
 //!   can do neither job. It used to surface as exit 1 from the imported document's parser,
-//!   after that document had been read. [`resolve_import_pairs`] now decides every pair's whole
+//!   after that document had been read. [`crate::argv_documents::parse_import_pairs`] now decides every pair's whole
 //!   argument shape — the `=`, both halves, `-`, duplicates, the syntax its extension implies,
-//!   and the half's absoluteness through the shared [`purrdf_iri::BaseIri`] — with no I/O at
+//!   and the half's absoluteness through the shared [`purrdf_iri::BaseScope`] — with no I/O at
 //!   all, so the FIRST malformed pair is reported before the FIRST file is opened.
 //!
-//! What deliberately did NOT move is [`purrdf_shex::ShexError::UnknownShape`]: a `MAP` naming a
+//! What deliberately did NOT move is `purrdf_shex::ShexError::UnknownShape`: a `MAP` naming a
 //! label the schema does not declare cannot be detected until the schema is loaded and its
 //! import closure walked, so it sits on the runtime side of the same line and stays exit 1.
 //! The two used to share one error channel out of `validate_shape_map`; they are split rather
@@ -129,7 +129,7 @@
 //!   `BASE` directive inside the schema still wins over the retrieval IRI (§5.1.1);
 //! * each **`--import IRI=FILE`** document is parsed under the IMPORT IRI, because that is
 //!   the name the importing schema gave it — the per-document base
-//!   [`purrdf_shex::resolve_imports`] documents as its injection boundary;
+//!   `purrdf_shex::resolve_imports` documents as its injection boundary;
 //! * the **shape map** is command-line text with no retrieval IRI at all, so `--base` is the
 //!   only base it can ever have and it legitimately takes one. That asymmetry is stated on
 //!   `--base`'s help rather than left to be discovered.
@@ -172,7 +172,8 @@ use purrdf::shex::{
 };
 use purrdf_rdf::JsonLdSerializeOptions;
 
-use crate::cli::{CliRdfFormat, CliShexFormat, LedgerTarget};
+use crate::argv_documents::{ImportRole, parse_import_pairs, refuse_shared_stdin};
+use crate::cli::{CliRdfFormat, CliShexFormat, LedgerTarget, refuse_document_flags};
 use crate::error::CliError;
 use crate::{format, sink, source};
 
@@ -203,8 +204,26 @@ pub(crate) struct ShexOptions<'a> {
 
 /// Run the `shex` subcommand.
 pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Result<(), CliError> {
-    refuse_document_flags(ledger_target, options.jsonld_options)?;
-    refuse_two_stdins(options)?;
+    // Refuse the two global document flags, which name outputs this command does not produce.
+    //
+    // `--loss-ledger` records what a CONVERSION dropped, and this command converts nothing: the
+    // data graph is parsed straight into the IR the validator reads, and the answer is a result
+    // shape map. `--jsonld-options` configures a JSON-LD/YAML-LD serializer, and none runs — the
+    // result shape map is the ShapeMap specification's own JSON, not JSON-LD. Both flags are
+    // GLOBAL, so an unrefused one would be accepted and silently do nothing.
+    refuse_document_flags(
+        ledger_target,
+        options.jsonld_options,
+        "--loss-ledger records what a conversion dropped, and `shex` converts nothing for \
+             you: the data graph is parsed straight into the IR the validator reads, and the \
+             answer is a result shape map. There is no ledger to surface",
+        "--jsonld-options configures a JSON-LD/YAML-LD serializer, and `shex` runs none: \
+             its answer is the ShapeMap specification's result shape map, not JSON-LD",
+    )?;
+    refuse_shared_stdin(&[
+        ("--schema".to_owned(), options.schema),
+        ("--data".to_owned(), options.data),
+    ])?;
     // EVERY command-line decision happens here, before a single document is opened, so a fault
     // in an ARGUMENT is reported against the argument (exit 2) rather than surfacing later out
     // of a parser that no longer knows the value came from the command line.
@@ -391,7 +410,7 @@ fn read_schema(
     base: Option<&str>,
 ) -> Result<Schema, CliError> {
     let syntax = resolve_schema_format(explicit, path, "--schema", SyntaxOverride::SchemaFrom)?;
-    let text = read_text(path, "--schema")?;
+    let text = source::read_text(path, "--schema")?;
     match syntax {
         CliShexFormat::Shexc => parse_shexc(&text, base),
         CliShexFormat::Shexj => parse_shexj(&text, base),
@@ -517,84 +536,28 @@ struct ImportPair<'a> {
     syntax: CliShexFormat,
 }
 
-/// Decide every `--import IRI=FILE` ARGUMENT, with no I/O at all.
-///
-/// A malformed pair is a usage error naming the argument, never a skipped import: a schema
-/// folded without a document the operator supplied is a different schema. Because nothing here
-/// touches the filesystem, the FIRST bad pair is reported before the FIRST file is opened —
-/// where the old shape read pair one from disk before noticing that pair two had no `=`.
-///
-/// # The ontology-IRI half must be absolute
-///
-/// It does two jobs and neither admits a relative reference: it is MATCHED against the schema's
-/// `IMPORT` IRIs, which are absolute by the time the schema parser is done with them, and it is
-/// the BASE the imported document parses under (the per-document base
-/// [`purrdf_shex::resolve_imports`] documents as its injection boundary). So it is checked with
-/// [`purrdf_iri::BaseIri::parse`] — the workspace's shared "valid IRI with a scheme" primitive,
-/// the same gate `--base` passes at the clap boundary — and a failure carries
-/// [`purrdf_iri::IriError::diagnostic_code`]. It used to be discovered by the imported
-/// document's parser instead, which meant reading a file to learn that an ARGUMENT was
-/// malformed, and reporting it as a runtime failure rather than a usage one.
+/// Decide every `--import IRI=FILE` ARGUMENT, with no I/O at all: the shared
+/// [`parse_import_pairs`] rules (a malformed pair, a `-` path, a relative or repeated IRI half
+/// are usage errors before the first file is opened), then the syntax each path's own extension
+/// classifies it as.
 fn resolve_import_pairs<'a>(options: &ShexOptions<'a>) -> Result<Vec<ImportPair<'a>>, CliError> {
-    let mut pairs: Vec<ImportPair<'a>> = Vec::with_capacity(options.imports.len());
-    for spec in options.imports {
-        let Some((iri, path)) = spec.split_once('=') else {
-            return Err(CliError::Usage(format!(
-                "--import {spec}: an import pair is `IRI=FILE` — the schema IRI the document \
-                 imports, then the local document that resolves it — and this one has no `=`"
-            )));
-        };
-        if iri.is_empty() || path.is_empty() {
-            return Err(CliError::Usage(format!(
-                "--import {spec}: both halves of `IRI=FILE` are required — the IRI names what \
-                 the schema imports, and the path names the document that is it"
-            )));
-        }
-        if path == "-" {
-            return Err(CliError::Usage(format!(
-                "--import {spec}: an imported schema's syntax is inferred from its own path \
-                 extension, and `-` has none. Write the document to a `.shex`/`.shexj` path"
-            )));
-        }
-        if let Err(error) = purrdf_iri::BaseIri::parse(iri) {
-            return Err(import_iri_refusal(spec, iri, &error));
-        }
-        if pairs.iter().any(|seen| seen.iri == iri) {
-            return Err(CliError::Usage(format!(
-                "--import {iri}=…: the IRI is named twice, and one IRI resolves to one \
-                 document; the second pair would be read and never used"
-            )));
-        }
-        let syntax =
-            resolve_schema_format(None, path, &format!("--import {iri}"), SyntaxOverride::None)?;
-        pairs.push(ImportPair {
-            spec,
-            iri,
-            path,
-            syntax,
-        });
-    }
-    Ok(pairs)
-}
-
-/// The refusal for an `--import` whose own ontology-IRI half is not an absolute IRI.
-///
-/// It names the FLAG, the pair as written and the offending half, and carries the shared
-/// [`purrdf_iri::IriError::diagnostic_code`]. Exit **2**: nothing was read to discover it.
-fn import_iri_refusal(spec: &str, iri: &str, error: &purrdf_iri::IriError) -> CliError {
-    let code = error.diagnostic_code();
-    if code == "iri-non-absolute-base" {
-        return CliError::Usage(format!(
-            "--import {spec}: {code}: the ontology-IRI half `{iri}` is a relative IRI reference. \
-             It is matched against the schema's `IMPORT` IRIs, which are absolute, and it is \
-             also the base the imported document parses under — a relative reference can do \
-             neither. This is a command-line value, so no `BASE` in any document reaches it: \
-             write the half as the absolute IRI the schema's `IMPORT` names"
-        ));
-    }
-    CliError::Usage(format!(
-        "--import {spec}: {code}: the ontology-IRI half `{iri}` is not a usable IRI: {error}"
-    ))
+    parse_import_pairs(options.imports, ImportRole::SHEX_SCHEMA)?
+        .into_iter()
+        .map(|pair| {
+            let syntax = resolve_schema_format(
+                None,
+                pair.path,
+                &format!("--import {}", pair.iri),
+                SyntaxOverride::None,
+            )?;
+            Ok(ImportPair {
+                spec: pair.spec,
+                iri: pair.iri,
+                path: pair.path,
+                syntax,
+            })
+        })
+        .collect()
 }
 
 /// Read and parse each DECIDED `--import` pair into `(iri, schema)`.
@@ -608,7 +571,7 @@ fn read_import_table(pairs: &[ImportPair<'_>]) -> Result<Vec<(String, Schema)>, 
         // Parsed with the import IRI as its base, which is the per-document base resolution
         // `purrdf_shex::resolve_imports` documents its injection boundary as satisfying.
         let what = format!("--import {}", pair.iri);
-        let text = read_text(pair.path, &what)?;
+        let text = source::read_text(pair.path, &what)?;
         let schema = match pair.syntax {
             CliShexFormat::Shexc => parse_shexc(&text, Some(pair.iri)),
             CliShexFormat::Shexj => parse_shexj(&text, Some(pair.iri)),
@@ -617,13 +580,6 @@ fn read_import_table(pairs: &[ImportPair<'_>]) -> Result<Vec<(String, Schema)>, 
         table.push((pair.iri.to_owned(), schema));
     }
     Ok(table)
-}
-
-/// Read `path` (or stdin) as UTF-8 text.
-fn read_text(path: &str, what: &str) -> Result<String, CliError> {
-    let bytes = source::read_bytes(path)?;
-    String::from_utf8(bytes)
-        .map_err(|error| CliError::Runtime(format!("{what} {path}: not UTF-8 text: {error}")))
 }
 
 /// Refuse a schema whose verdict would rest on semantics this boundary cannot supply.
@@ -734,50 +690,4 @@ impl Survey {
             self.triple(member);
         }
     }
-}
-
-/// Refuse a command line that reads standard input twice.
-///
-/// `--schema` and `--data` may each be `-`, and at most one of them may be — the same
-/// one-stdin invariant `entails` and `validate` enforce. `--import` paths cannot be `-` at all
-/// (their syntax comes from the path extension), so they are refused earlier and separately.
-fn refuse_two_stdins(options: &ShexOptions<'_>) -> Result<(), CliError> {
-    if options.schema == "-" && options.data == "-" {
-        return Err(CliError::Usage(
-            "--schema and --data both read standard input, and there is only one: a process has \
-             a single stdin stream, so the schema and the data graph would each get part of one \
-             document. Give one of them a path"
-                .to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-/// Refuse the two global document flags, which name outputs this command does not produce.
-///
-/// `--loss-ledger` records what a CONVERSION dropped, and this command converts nothing: the
-/// data graph is parsed straight into the IR the validator reads, and the answer is a result
-/// shape map. `--jsonld-options` configures a JSON-LD/YAML-LD serializer, and none runs — the
-/// result shape map is the ShapeMap specification's own JSON, not JSON-LD. Both flags are
-/// GLOBAL, so an unrefused one would be accepted and silently do nothing.
-fn refuse_document_flags(
-    ledger_target: &LedgerTarget,
-    jsonld_options: Option<&JsonLdSerializeOptions>,
-) -> Result<(), CliError> {
-    if ledger_target.is_requested() {
-        return Err(CliError::Usage(
-            "--loss-ledger records what a conversion dropped, and `shex` converts nothing for \
-             you: the data graph is parsed straight into the IR the validator reads, and the \
-             answer is a result shape map. There is no ledger to surface"
-                .to_owned(),
-        ));
-    }
-    if jsonld_options.is_some() {
-        return Err(CliError::Usage(
-            "--jsonld-options configures a JSON-LD/YAML-LD serializer, and `shex` runs none: \
-             its answer is the ShapeMap specification's result shape map, not JSON-LD"
-                .to_owned(),
-        ));
-    }
-    Ok(())
 }

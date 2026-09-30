@@ -30,6 +30,9 @@ path = "src/lib.rs"
 # string round-trip. purrdf-core is wasm32-unknown-unknown-clean, keeping this
 # crate wasm-clean (MAXIMAL PORTABILITY).
 purrdf-core = { workspace = true }
+# The lexical layer: the workspace's one XML reader (RIF-in-XML) and the canonical term
+# syntax the store surface is spelled in.
+purrdf-lex = { workspace = true }
 # The DL-clause IR, the contract hash and the budget report. The reasoning report
 # names the calculus a closure was minted under with purrdf-datalog's own
 # `contract_hash`, so a consumer can refuse a cached verdict from another calculus
@@ -49,7 +52,6 @@ purrdf-xsd = { workspace = true }
 # growing a second copy of RFC-3986 §5.2. Zero-dependency, wasm32-unknown-unknown-clean
 # foundation crate, already a transitive dependency through purrdf-core.
 purrdf-iri = { workspace = true }
-roxmltree = { workspace = true }
 # The content digest a justification is IDENTIFIED by. PurRDF mints no vocabulary, so a
 # derivation is not named by a fabricated IRI: it is addressed by BLAKE3 over the canonical
 # N-Quads of the axiom set, which is version-stable across releases and across targets in a
@@ -60,8 +62,9 @@ purrdf-hash = { workspace = true }
 hashbrown = { workspace = true }
 
 [dev-dependencies]
-# Report-only chase microbenchmark; `make bench` lane, excluded from `make check`.
-criterion = { workspace = true }
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
 # Generates the random small knowledge bases the OWL-Direct tableau is checked against in
 # `owl_dl::oracle`, where every generated verdict is compared with a naive exponential
 # model-enumeration oracle. Driven from a FIXED seed, so the corpus is identical on every

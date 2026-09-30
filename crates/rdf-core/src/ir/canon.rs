@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Native **full W3C RDFC-1.0** RDF Dataset Canonicalization, oxigraph-free.
+//! Native **full W3C RDFC-1.0** RDF Dataset Canonicalization.
 //!
 //! This module is the canonicalization authority for the purrdf family. It
-//! replaces `oxrdf`'s `Dataset::canonicalize` ( oxigraph eviction) and
 //! supersedes the simplified FNV signature comparator that `compare.rs` used to
 //! carry: it implements the real algorithm — *Hash First Degree Quads* (§4.6),
 //! initial canonical assignment (§4.4), and *Hash N-Degree Quads* (§4.8) with
@@ -156,11 +155,9 @@ use crate::dataset_view::{
     DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView, GraphMatch, ViewTermId,
     checkpointed_drain,
 };
-use crate::iri_escape::push_escaped;
-use purrdf_iri::terminals::{ByteClass, byte_run_count};
-
-/// `xsd:string` — the implicit datatype that N-Quads writes bare (no `^^<…>`).
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_lex::term_syntax::{
+    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri, write_literal,
+};
 
 /// The IRI namespace the RDF 1.2 overlay lowers into, reserved by this profile.
 ///
@@ -190,7 +187,7 @@ const SENTINEL_ANNOTATION_GRAPH: &str = "urn:purrdf:rdfc:annotation";
 /// IRI at all — so it is rendered as literal text ([`Component::FlatReifier`]) rather
 /// than resolved through an interned [`TermId`], the same mechanism
 /// [`SENTINEL_REIFIES`] itself already uses for the overlay shape.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 /// The canonical blank-label prefix (`c14n0`, `c14n1`, …) mandated by RDFC-1.0.
 const CANON_PREFIX: &str = "c14n";
 /// The temporary-issuer prefix used inside the n-degree search (RDFC-1.0 §4.5/4.8).
@@ -310,8 +307,7 @@ pub const CANON_PRESENTATION_FLAT_ASSERTION_ID: &str = "flat-assertion";
 pub const CANON_PRESENTATION_FLAT_ASSERTION_VERSION: u32 = 1;
 
 /// The RDFC-1.0 hash algorithm. SHA-256 is the default; SHA-384 is the spec's
-/// alternative (RDFC-1.0 §3, exercised by W3C suite `test075`). EXTEND beyond
-/// `oxrdf`, which only offered SHA-256.
+/// alternative (RDFC-1.0 §3, exercised by W3C suite `test075`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CanonHash {
     /// SHA-256 (the RDFC-1.0 default).
@@ -359,14 +355,12 @@ impl Ord for HashHex {
 /// Lowercase-hex a raw digest (32 bytes for SHA-256, 48 for SHA-384) into a [`HashHex`].
 fn hex_of(digest: &[u8]) -> HashHex {
     let mut buf = [0u8; 96];
-    const LUT: &[u8; 16] = b"0123456789abcdef";
-    for (i, byte) in digest.iter().enumerate() {
-        buf[2 * i] = LUT[(byte >> 4) as usize];
-        buf[2 * i + 1] = LUT[(byte & 0x0f) as usize];
-    }
+    let len = purrdf_hash::hex::encode_to_slice(digest, &mut buf)
+        .expect("a SHA-256 or SHA-384 digest renders in 96 digits")
+        .len();
     HashHex {
         buf,
-        len: (digest.len() * 2) as u8,
+        len: len as u8,
     }
 }
 
@@ -451,7 +445,7 @@ pub struct Canonicalized<Id = TermId> {
 /// Canonicalize `ds` under profile [`CANON_PROFILE_ID`] (RDFC-1.0 with SHA-256,
 /// extended by the RDF 1.2 overlay).
 ///
-/// Deterministic and oxigraph-free.
+/// Deterministic.
 ///
 /// # Panics
 /// **Trusted callers only.** Hard-`panic!`s on either refusal: an n-degree search
@@ -1060,10 +1054,7 @@ impl<R: FnMut(RelabelSource<'_>, TermId)> TermMapper for CanonicalRelabeler<'_, 
 
     fn record_reifier_predicate(&mut self, builder: &super::builder::RdfDatasetBuilder) {
         if let Some(target) = builder.reifies_predicate() {
-            (self.record)(
-                RelabelSource::IndirectIri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies"),
-                target,
-            );
+            (self.record)(RelabelSource::IndirectIri(RDF_REIFIES), target);
         }
     }
 }
@@ -1406,7 +1397,7 @@ impl<Id: ViewTermId> Sentinels<Id> {
 /// a blank node.
 ///
 /// The quad subject and the statement layer's reifier slot carry the same rule at
-/// freeze time (`require_asserted_subject`), so on a frozen dataset it holds already;
+/// freeze time (`require_subject`), so on a frozen dataset it holds already;
 /// it is checked anyway because the fold's whole safety argument is that the shape it
 /// recognizes is EXACTLY the shape the lowering emits, and a shape test that assumes
 /// away one of its conjuncts is not exact.
@@ -2625,11 +2616,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
 
     fn write_slot(&self, slot: Slot<D::Id>, render: BlankRender<'_, D::Id>, out: &mut String) {
         match slot {
-            Slot::Sentinel(iri) => {
-                out.push('<');
-                write_iri_escaped(iri, out);
-                out.push('>');
-            }
+            Slot::Sentinel(iri) => write_iri(iri, out),
             Slot::Term(id) => self.write_term(id, render, out),
             Slot::AnnotationGraph(g) => {
                 // `None`: bare annotation sentinel — byte-identical to the pre-graph
@@ -2637,9 +2624,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 // annotation stays lossless and never collides with a genuine quad
                 // (which never carries two graph tokens). Not re-parsed — this string
                 // is only hashed / byte-compared as the canonical oracle.
-                out.push('<');
-                write_iri_escaped(SENTINEL_ANNOTATION_GRAPH, out);
-                out.push('>');
+                write_iri(SENTINEL_ANNOTATION_GRAPH, out);
                 if let Some(g) = g {
                     out.push(' ');
                     self.write_term(g, render, out);
@@ -2679,15 +2664,8 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 Step::Term(id) => id,
             };
             match self.ds.resolve(id) {
-                TermRef::Iri(iri) => {
-                    out.push('<');
-                    write_iri_escaped(iri, out);
-                    out.push('>');
-                }
-                TermRef::Blank { .. } => {
-                    out.push_str("_:");
-                    out.push_str(render.label(id));
-                }
+                TermRef::Iri(iri) => write_iri(iri, out),
+                TermRef::Blank { .. } => write_blank(render.label(id), out),
                 TermRef::Literal {
                     lexical,
                     datatype,
@@ -2695,36 +2673,25 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     direction,
                 } => {
                     let rendered = self.render_composite_lexical(lexical, datatype, render);
-                    out.push('"');
-                    write_literal_escaped(&rendered, out);
-                    out.push('"');
-                    if let Some(lang) = language {
-                        out.push('@');
-                        out.push_str(lang);
-                        if let Some(dir) = direction {
-                            out.push_str("--");
-                            out.push_str(dir.as_str());
-                        }
-                    } else {
-                        let dt = match self.ds.resolve(datatype) {
-                            TermRef::Iri(iri) => iri,
-                            other => {
-                                unreachable!("literal datatype must be an IRI, got {other:?}")
-                            }
-                        };
-                        if dt != XSD_STRING {
-                            out.push_str("^^<");
-                            write_iri_escaped(dt, out);
-                            out.push('>');
-                        }
-                    }
+                    let TermRef::Iri(dt) = self.ds.resolve(datatype) else {
+                        unreachable!("literal datatype must be an IRI")
+                    };
+                    write_literal(
+                        &rendered,
+                        dt,
+                        language,
+                        direction.map(crate::RdfTextDirection::as_str),
+                        out,
+                    );
                 }
                 TermRef::Triple { s, p, o } => {
-                    // RDF-1.2 triple term: `<<( <s> <p> <o> )>>` (the form
-                    // oxigraph/Jena parse).
-                    out.push_str("<<( ");
+                    // RDF-1.2 triple term: `<<( <s> <p> <o> )>>` (the RDF 1.2
+                    // N-Quads form).
+                    out.push_str(TRIPLE_TERM_OPEN);
+                    out.push(' ');
                     held.extend([
-                        Step::Text(" )>>"),
+                        Step::Text(TRIPLE_TERM_CLOSE),
+                        Step::Text(" "),
                         Step::Term(o),
                         Step::Text(" "),
                         Step::Term(p),
@@ -2822,221 +2789,6 @@ fn next_permutation(a: &mut [usize]) -> bool {
     a.swap(i - 1, j);
     a[i..].reverse();
     true
-}
-
-/// Escape an IRI for `<…>` N-Quads form.
-///
-/// Which scalars ride as `\uXXXX` is decided by
-/// [`is_iriref_escape_required`](crate::iri_escape::is_iriref_escape_required)
-/// and the emission is [`push_escaped`](crate::iri_escape::push_escaped), the one
-/// implementation of both — see that module for the production
-/// (`IRIREF ::= '<' ( [^#x00-#x20<>"{}|^`\] | UCHAR )* '>'`, Turtle 1.2 §6.5
-/// `[18t]`) and for why egress escapes DEL and the C1 block, which the grammar
-/// permits raw. Clean ASCII IRIs pass through unchanged.
-fn write_iri_escaped(iri: &str, out: &mut String) {
-    push_escaped(iri, out);
-}
-
-/// The bytes a canonical N-Quads literal escapes, as a class table: `"`, `\`,
-/// the C0 controls and DEL. Every member is ASCII and every member is escaped,
-/// so every byte the scan stops at is an escape and everything between two
-/// stops rides verbatim — including all non-ASCII, the C1 block among it.
-const LITERAL_ESCAPE_TABLE: [u8; 256] = {
-    let mut table = [0_u8; 256];
-    let mut b = 0;
-    while b < 0x20 {
-        table[b] = 1;
-        b += 1;
-    }
-    table[b'"' as usize] = 1;
-    table[b'\\' as usize] = 1;
-    table[0x7F] = 1;
-    table
-};
-
-const LITERAL_ESCAPES: ByteClass<{ byte_run_count(&LITERAL_ESCAPE_TABLE) }> =
-    ByteClass::from_table(LITERAL_ESCAPE_TABLE);
-
-/// The offset of the first byte of `bytes` a canonical N-Quads literal escapes.
-#[inline(never)]
-fn find_first_literal_escape(bytes: &[u8]) -> Option<usize> {
-    LITERAL_ESCAPES.find_first(bytes)
-}
-
-/// Upper-case hex digits, for the `\u00XX` spelling.
-const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
-
-/// Append the escape of `b`, a member of [`LITERAL_ESCAPE_TABLE`].
-fn push_literal_escape(b: u8, out: &mut String) {
-    match b {
-        b'\\' => out.push_str("\\\\"),
-        b'"' => out.push_str("\\\""),
-        b'\n' => out.push_str("\\n"),
-        b'\r' => out.push_str("\\r"),
-        b'\t' => out.push_str("\\t"),
-        0x08 => out.push_str("\\b"),
-        0x0C => out.push_str("\\f"),
-        // The other C0 controls and DEL, as `\u00XX` in upper-case hex: the
-        // bytes `write!(out, "\\u{:04X}", b)` produces.
-        _ => {
-            out.push_str("\\u00");
-            out.push(char::from(HEX_UPPER[usize::from(b >> 4)]));
-            out.push(char::from(HEX_UPPER[usize::from(b & 0xF)]));
-        }
-    }
-}
-
-/// Append `value` escaped for a `"…"` canonical N-Quads string.
-///
-/// The canonical N-Triples `ECHAR` set (`\\`, `\"`, `\n`, `\r`, `\t`, `\b`,
-/// `\f`); every other C0 control and U+007F (DEL) becomes `\uXXXX` in upper-case
-/// hex, and every other scalar — all non-ASCII, the C1 block included — rides
-/// verbatim as UTF-8. The W3C RDFC-1.0 test suite pins that last point (test060
-/// carries the C1 block raw in a literal), unlike an IRI, where the writer
-/// escapes the full control range.
-///
-/// This is the one implementation of the law for every writer that answers to
-/// canonical N-Quads bytes; the entailment engine's surface form delegates here.
-/// One chunked scan finds each byte to escape, and every run between two of them
-/// is copied whole.
-///
-/// ```
-/// use purrdf_core::ir::canon::write_literal_escaped;
-///
-/// let mut out = String::new();
-/// write_literal_escaped("a\"b\\c\n\u{8}\u{1}\u{7f}\u{85}é", &mut out);
-/// assert_eq!(out, "a\\\"b\\\\c\\n\\b\\u0001\\u007F\u{85}é");
-/// ```
-pub fn write_literal_escaped(value: &str, out: &mut String) {
-    let bytes = value.as_bytes();
-    let mut at = 0;
-    while let Some(offset) = find_first_literal_escape(&bytes[at..]) {
-        let hit = at + offset;
-        out.push_str(&value[at..hit]);
-        push_literal_escape(bytes[hit], out);
-        at = hit + 1;
-    }
-    out.push_str(&value[at..]);
-}
-
-#[cfg(test)]
-mod escape_tests {
-    use super::{find_first_literal_escape, write_iri_escaped, write_literal_escaped};
-    use crate::iri_escape::is_iriref_escape_required;
-    use std::fmt::Write as _;
-
-    /// The per-`char` writers the clean-run forms replaced, kept verbatim as the
-    /// oracle: RDFC-1.0 output bytes are whatever these produced.
-    fn reference_iri(iri: &str, out: &mut String) {
-        for ch in iri.chars() {
-            if is_iriref_escape_required(ch) {
-                reference_u_escape(ch, out);
-            } else {
-                out.push(ch);
-            }
-        }
-    }
-
-    fn reference_literal(value: &str, out: &mut String) {
-        for ch in value.chars() {
-            match ch {
-                '\\' => out.push_str("\\\\"),
-                '"' => out.push_str("\\\""),
-                '\n' => out.push_str("\\n"),
-                '\r' => out.push_str("\\r"),
-                '\t' => out.push_str("\\t"),
-                '\u{08}' => out.push_str("\\b"),
-                '\u{0c}' => out.push_str("\\f"),
-                c if (c as u32) < 0x20 || c as u32 == 0x7f => reference_u_escape(c, out),
-                c => out.push(c),
-            }
-        }
-    }
-
-    fn reference_u_escape(ch: char, out: &mut String) {
-        let cp = ch as u32;
-        if cp <= 0xFFFF {
-            let _ = write!(out, "\\u{cp:04X}");
-        } else {
-            let _ = write!(out, "\\U{cp:08X}");
-        }
-    }
-
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        const fn next(&mut self) -> u64 {
-            purrdf_testkit::rng::splitmix64_next(&mut self.0)
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            usize::try_from(self.next() % n as u64).expect("below n")
-        }
-    }
-
-    /// Every ASCII scalar (so every special byte), the whole `0xC2` block (the
-    /// C1 controls), and non-ASCII neighbours in every UTF-8 width.
-    fn alphabet() -> Vec<char> {
-        let mut out: Vec<char> = (0_u8..0x80).map(char::from).collect();
-        out.extend(('\u{80}'..='\u{BF}').chain([
-            '\u{E9}',
-            '\u{FF}',
-            '\u{2028}',
-            '\u{FFFD}',
-            '\u{FFFF}',
-            '\u{1F408}',
-            '\u{10FFFF}',
-        ]));
-        out
-    }
-
-    #[test]
-    fn clean_run_writers_agree_with_the_per_char_writers() {
-        let alphabet = alphabet();
-        let mut rng = SplitMix(0x00CA_0010_E5CA_9E00);
-        let mut escaped_past_first_chunk = 0_usize;
-        for len in (0..=70).chain([127, 128, 129, 255, 1000, 4099]) {
-            for _ in 0..40 {
-                let value: String = (0..len)
-                    .map(|_| {
-                        if rng.below(5) == 0 {
-                            alphabet[rng.below(alphabet.len())]
-                        } else {
-                            'q'
-                        }
-                    })
-                    .collect();
-                for (skip, _) in value.char_indices().take(4) {
-                    let input = &value[skip..];
-                    let (mut got, mut expected) = (String::from("<"), String::from("<"));
-                    write_iri_escaped(input, &mut got);
-                    reference_iri(input, &mut expected);
-                    assert_eq!(got, expected, "iri {input:?}");
-                    let (mut got, mut expected) = (String::from("\""), String::from("\""));
-                    write_literal_escaped(input, &mut got);
-                    reference_literal(input, &mut expected);
-                    assert_eq!(got, expected, "literal {input:?}");
-                    escaped_past_first_chunk += usize::from(
-                        find_first_literal_escape(input.as_bytes()).is_some_and(|i| i >= 16),
-                    );
-                }
-            }
-        }
-        assert!(
-            escaped_past_first_chunk > 0,
-            "the chunked path found escapes"
-        );
-    }
-
-    #[test]
-    fn c1_rides_raw_in_a_literal_and_escaped_in_an_iri() {
-        let (mut literal, mut iri) = (String::new(), String::new());
-        write_literal_escaped("\u{85}\u{7f}", &mut literal);
-        write_iri_escaped("\u{85}\u{7f}", &mut iri);
-        assert_eq!(literal, "\u{85}\\u007F");
-        assert_eq!(iri, "\\u0085\\u007F");
-    }
 }
 
 #[cfg(test)]

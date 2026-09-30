@@ -56,6 +56,14 @@
 //! exclude a sibling test either: the tests in this binary carry no lock and run
 //! concurrently, each measuring only its own thread.
 
+#[path = "support/aggregates.rs"]
+mod aggregates;
+mod support;
+
+use aggregates::{Fold, FoldAggregate};
+use purrdf_core::term_fixture::one_quad;
+use support::{fan_out, with_env};
+
 use std::sync::Arc;
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
@@ -63,9 +71,8 @@ use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
 };
 use purrdf_sparql_eval::{
-    AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, CustomAggregate, EvalError,
-    ExtensionEnv, InternedOutcome, MemoryRelation, NativeSparqlEngine, PropertyFunctionRegistry,
-    QueryOptions, Volatility,
+    AggregateRegistry, ExtensionEnv, InternedOutcome, MemoryRelation, NativeSparqlEngine,
+    PropertyFunctionRegistry, QueryOptions,
 };
 
 #[global_allocator]
@@ -183,14 +190,12 @@ const QUERY: &str = "SELECT ?o WHERE { ?this <http://example.org/p> ?o }";
 
 /// `:s{i} :p :o{i}` for `i` in `0..subjects`.
 fn dataset(subjects: u32) -> Arc<RdfDataset> {
-    let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("http://example.org/p");
-    for i in 0..subjects {
-        let s = b.intern_iri(&format!("http://example.org/s{i}"));
-        let o = b.intern_iri(&format!("http://example.org/o{i}"));
-        b.push_quad(s, p, o, None);
-    }
-    b.freeze().expect("freeze")
+    fan_out(
+        subjects as usize,
+        "http://example.org/p",
+        |i| format!("http://example.org/s{i}"),
+        |i| format!("http://example.org/o{i}"),
+    )
 }
 
 fn iri(i: u32) -> TermValue {
@@ -961,12 +966,11 @@ fn relation_registry() -> PropertyFunctionRegistry {
 /// other by row count OR by content, so the test can assert on the rows rather
 /// than merely on `is_err()`/`len()`.
 fn relation_dataset() -> Arc<RdfDataset> {
-    let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&format!("{REL_EX}graph_only"));
-    let p = b.intern_iri(&format!("{REL_NS}memberOf"));
-    let o = b.intern_iri(&format!("{REL_EX}graph_only_team"));
-    b.push_quad(s, p, o, None);
-    b.freeze().expect("freeze fixture")
+    one_quad(
+        &format!("{REL_EX}graph_only"),
+        &format!("{REL_NS}memberOf"),
+        &format!("{REL_EX}graph_only_team"),
+    )
 }
 
 /// The extension environment `registry` describes, which is what a query text is
@@ -975,10 +979,6 @@ fn relation_dataset() -> Arc<RdfDataset> {
 fn relations_env(registry: &PropertyFunctionRegistry) -> ExtensionEnv {
     ExtensionEnv::over_relations(registry.clone())
         .expect("the fixture relation declares without panicking")
-}
-
-fn with_relations(env: &ExtensionEnv) -> QueryOptions<'_> {
-    QueryOptions::new().with_env(env)
 }
 
 /// Read `RELATION_QUERY`'s `(?person, ?team)` rows out of an interned outcome as
@@ -1025,7 +1025,7 @@ fn executing_a_prepared_plan_under_a_mismatched_property_function_registry_is_re
         .prepare_execution(RELATION_QUERY, None, &[], QueryOptions::EMPTY)
         .expect("prepare with no registry parses as ordinary data");
 
-    let refused = engine.execute(&mut stale, &*ds, with_relations(&env), |_| ());
+    let refused = engine.execute(&mut stale, &*ds, with_env(&env), |_| ());
     let error = refused.expect_err(
         "a plan prepared with no registry must be refused when executed under one, not \
          silently evaluated as a graph scan over the ordinary triple pattern it was admitted \
@@ -1038,10 +1038,10 @@ fn executing_a_prepared_plan_under_a_mismatched_property_function_registry_is_re
     // `graph_only_team`, which is what a silently-dropped registry would have
     // answered instead (see `relation_dataset`'s doc comment for the oracle).
     let mut matched = engine
-        .prepare_execution(RELATION_QUERY, None, &[], with_relations(&env))
+        .prepare_execution(RELATION_QUERY, None, &[], with_env(&env))
         .expect("prepare with the registry lowers the predicate to a call");
     let rows = engine
-        .execute(&mut matched, &*ds, with_relations(&env), person_team_rows)
+        .execute(&mut matched, &*ds, with_env(&env), person_team_rows)
         .expect("a plan and options that agree on the registry must execute");
     assert_eq!(
         rows,
@@ -1068,129 +1068,20 @@ fn executing_a_prepared_plan_under_a_mismatched_property_function_registry_is_re
 const SUM_IRI: &str = "https://example.org/agg#sum";
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 
-/// A running integer sum over its single argument's lexical form.
-struct SumAccumulator {
-    total: i64,
-}
-
-impl AggregateAccumulator for SumAccumulator {
-    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        if let Some(TermValue::Literal { lexical_form, .. }) = args.first()
-            && let Ok(n) = lexical_form.parse::<i64>()
-        {
-            self.total += n;
-        }
-        Ok(())
-    }
-
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
-        if let Some(TermValue::Literal { lexical_form, .. }) = other.finish()?
-            && let Ok(n) = lexical_form.parse::<i64>()
-        {
-            self.total += n;
-        }
-        Ok(())
-    }
-
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
-        self
-    }
-
-    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        Ok(Some(TermValue::typed_literal(
-            self.total.to_string(),
-            XSD_INTEGER,
-        )))
-    }
-}
-
-struct SumAggregate;
-
-impl CustomAggregate for SumAggregate {
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
-    fn volatility(&self) -> Volatility {
-        Volatility::Stable
-    }
-    fn algebraic_class(&self) -> AlgebraicClass {
-        AlgebraicClass::Commutative
-    }
-    fn state_bound(&self) -> u64 {
-        0
-    }
-    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
-        Box::new(SumAccumulator { total: 0 })
-    }
-}
-
-/// Declares IDENTICALLY to [`SumAggregate`] (arity, volatility, algebraic class,
-/// state bound) but computes a PRODUCT — the oracle: a SUM over the fixture below
-/// is 15, a PRODUCT is 40, so the two cannot be confused by accident.
-struct ProductAccumulator {
-    total: i64,
-}
-
-impl AggregateAccumulator for ProductAccumulator {
-    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        if let Some(TermValue::Literal { lexical_form, .. }) = args.first()
-            && let Ok(n) = lexical_form.parse::<i64>()
-        {
-            self.total *= n;
-        }
-        Ok(())
-    }
-
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
-        if let Some(TermValue::Literal { lexical_form, .. }) = other.finish()?
-            && let Ok(n) = lexical_form.parse::<i64>()
-        {
-            self.total *= n;
-        }
-        Ok(())
-    }
-
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
-        self
-    }
-
-    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        Ok(Some(TermValue::typed_literal(
-            self.total.to_string(),
-            XSD_INTEGER,
-        )))
-    }
-}
-
-struct ProductAggregate;
-
-impl CustomAggregate for ProductAggregate {
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
-    fn volatility(&self) -> Volatility {
-        Volatility::Stable
-    }
-    fn algebraic_class(&self) -> AlgebraicClass {
-        AlgebraicClass::Commutative
-    }
-    fn state_bound(&self) -> u64 {
-        0
-    }
-    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
-        Box::new(ProductAccumulator { total: 1 })
-    }
-}
+// The SUM and the PRODUCT are `support/aggregates.rs`'s [`FoldAggregate`]: the PRODUCT
+// declares IDENTICALLY to the SUM (arity, volatility, algebraic class, state bound) but
+// computes a PRODUCT — the oracle: a SUM over the fixture below is 15, a PRODUCT is 40, so
+// the two cannot be confused by accident.
 
 fn sum_registry() -> AggregateRegistry {
-    let mut registry = AggregateRegistry::new();
-    registry.register(SUM_IRI, Arc::new(SumAggregate));
+    let mut registry = AggregateRegistry::default();
+    registry.register(SUM_IRI, Arc::new(FoldAggregate::stable(Fold::Sum)));
     registry
 }
 
 fn product_registry() -> AggregateRegistry {
-    let mut registry = AggregateRegistry::new();
-    registry.register(SUM_IRI, Arc::new(ProductAggregate));
+    let mut registry = AggregateRegistry::default();
+    registry.register(SUM_IRI, Arc::new(FoldAggregate::stable(Fold::Product)));
     registry
 }
 
@@ -1199,10 +1090,6 @@ fn product_registry() -> AggregateRegistry {
 fn aggregates_env(registry: &AggregateRegistry) -> ExtensionEnv {
     ExtensionEnv::over_aggregates(registry.clone())
         .expect("the fixture aggregate declares without panicking")
-}
-
-fn with_aggregates(env: &ExtensionEnv) -> QueryOptions<'_> {
-    QueryOptions::new().with_env(env)
 }
 
 /// `ex:val` = {1, 2, 2, 10}: SUM = 15, PRODUCT = 40 — a PRODUCT answer here could
@@ -1263,9 +1150,9 @@ fn executing_a_prepared_plan_under_a_mismatched_aggregate_registry_is_refused_bu
 
     // (a) Prepared under registry A (SUM), executed under registry B (PRODUCT).
     let mut prepared = engine
-        .prepare_execution(&query, None, &[], with_aggregates(&env_a))
+        .prepare_execution(&query, None, &[], with_env(&env_a))
         .expect("registry A admits and arity-checks the call");
-    let refused = engine.execute(&mut prepared, &*ds, with_aggregates(&env_b), |_| ());
+    let refused = engine.execute(&mut prepared, &*ds, with_env(&env_b), |_| ());
     let error = refused.expect_err(
         "a plan prepared under registry A must be refused when executed under registry B, \
          never silently computed under B's different accumulator",
@@ -1274,10 +1161,10 @@ fn executing_a_prepared_plan_under_a_mismatched_aggregate_registry_is_refused_bu
 
     // (b) The neighbour: the SAME registry instance at both prepare and execute.
     let mut matched = engine
-        .prepare_execution(&query, None, &[], with_aggregates(&env_a))
+        .prepare_execution(&query, None, &[], with_env(&env_a))
         .expect("registry A admits and arity-checks the call");
     let total = engine
-        .execute(&mut matched, &*ds, with_aggregates(&env_a), total_cell)
+        .execute(&mut matched, &*ds, with_env(&env_a), total_cell)
         .expect("the SAME registry instance must be accepted at execution");
     assert_eq!(total, 15, "1 + 2 + 2 + 10, never the PRODUCT's 40");
 }

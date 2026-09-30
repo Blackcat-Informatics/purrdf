@@ -721,6 +721,45 @@ impl Drop for WholeProcessWindow {
     }
 }
 
+/// The process resident set size in KiB, read from `/proc/self/statm` (field 2 is
+/// the resident page count). Linux-only; on any other platform this reports `0` and
+/// only the allocator figures carry the evidence.
+#[must_use]
+pub fn resident_kib() -> u64 {
+    #[cfg(target_os = "linux")]
+    {
+        let statm = std::fs::read_to_string("/proc/self/statm").unwrap_or_default();
+        let resident_pages: u64 = statm
+            .split_whitespace()
+            .nth(1)
+            .and_then(|field| field.parse().ok())
+            .unwrap_or(0);
+        // 4 KiB pages on every Linux target this runs on; a report-only figure.
+        resident_pages * 4
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        0
+    }
+}
+
+/// Print one peak-allocation line of the `bench` report:
+/// `[bench] label: peak_allocated_bytes=… rss_delta_kb=…`, the resident-set change
+/// taken from two [`resident_kib`] readings around the measured region.
+pub fn report_peak(
+    bench: &str,
+    label: &str,
+    peak_allocated_bytes: i64,
+    rss_before_kb: u64,
+    rss_after_kb: u64,
+) {
+    println!(
+        "[{bench}] {label}: peak_allocated_bytes={peak_allocated_bytes} rss_delta_kb={}",
+        i64::try_from(rss_after_kb).unwrap_or(i64::MAX)
+            - i64::try_from(rss_before_kb).unwrap_or(i64::MAX),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use std::hint::black_box;

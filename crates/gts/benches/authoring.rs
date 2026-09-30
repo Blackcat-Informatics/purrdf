@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! GTS authoring and reader hot-path benchmarks.
@@ -23,10 +23,10 @@
 //! (`read_to_sink_with_options`) never reaches rayon: it walks frames one at a
 //! time on the calling thread, so its probes stay per-thread.
 
-use ciborium::value::Value;
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use ed25519_dalek::SigningKey;
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, WholeProcessWindow};
+use purrdf_ed25519::SigningKey;
+use purrdf_lex::cbor::Value;
+use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main, black_box};
 
 use purrdf_gts::codec::encode_chain;
 use purrdf_gts::compact::{CompactionParams, DictPlan, DictStrategy, compact_streamable};
@@ -179,7 +179,7 @@ fn canonical_graph() -> Graph {
 /// `Writer::deterministic` over the canonical graph: term remap (identity
 /// keys + nesting depth), the cached-key quad/suppression sorts, and the
 /// per-blob metadata lookup. Report-only.
-fn bench_canonical_authoring(c: &mut Criterion) {
+fn bench_canonical_authoring(c: &mut Bench) {
     let graph = canonical_graph();
     let window = CurrentThreadWindow::open();
     let bytes = Writer::deterministic(&graph, "bench")
@@ -207,7 +207,7 @@ fn bench_canonical_authoring(c: &mut Criterion) {
 }
 
 /// `mmr::root` over a long frame-id list (the peaks-only fold). Report-only.
-fn bench_mmr_root(c: &mut Criterion) {
+fn bench_mmr_root(c: &mut Bench) {
     let frame_ids: Vec<Vec<u8>> = (0..MMR_FRAME_IDS)
         .map(|idx| seeded_payload(32, idx))
         .collect();
@@ -232,7 +232,7 @@ fn bench_mmr_root(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_rsyncable_zstd(c: &mut Criterion) {
+fn bench_rsyncable_zstd(c: &mut Bench) {
     let payload = deterministic_payload(PAYLOAD_LEN);
     let chain = vec!["zstd-rsyncable".to_string()];
 
@@ -251,7 +251,7 @@ fn bench_rsyncable_zstd(c: &mut Criterion) {
 /// transport layer both buffered (`decode_transport`) and streamed
 /// (`transport_reader` drained in 64 KiB reads), plus the `gzip` transform's
 /// encode. Report-only.
-fn bench_transport_nq_gz(c: &mut Criterion) {
+fn bench_transport_nq_gz(c: &mut Bench) {
     use std::fmt::Write as _;
     use std::io::Read as _;
 
@@ -310,7 +310,7 @@ fn bench_transport_nq_gz(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_snapshot_authoring(c: &mut Criterion) {
+fn bench_snapshot_authoring(c: &mut Bench) {
     let graph = graph_with_quads(ROWS);
     let payload = graph.snapshot_payload();
     let window = CurrentThreadWindow::open();
@@ -369,7 +369,7 @@ fn verify_container() -> Vec<u8> {
     data
 }
 
-fn bench_verify(c: &mut Criterion) {
+fn bench_verify(c: &mut Bench) {
     let data = verify_container();
 
     let mut group = c.benchmark_group("gts_verify");
@@ -428,7 +428,7 @@ fn many_blob_container(count: usize, metadata: bool) -> Vec<u8> {
     writer.into_bytes()
 }
 
-fn bench_reader_scaling(c: &mut Criterion) {
+fn bench_reader_scaling(c: &mut Bench) {
     let mut group = c.benchmark_group("gts_reader_scaling");
     group.sample_size(10);
     for count in [1, 4, 16, 256, 1024, 4096, 16384] {
@@ -491,7 +491,7 @@ fn bench_reader_scaling(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_reader_union(c: &mut Criterion) {
+fn bench_reader_union(c: &mut Bench) {
     let mut group = c.benchmark_group("gts_reader_union");
     group.sample_size(10);
     for per_segment in [256, 4096] {
@@ -529,7 +529,7 @@ fn bench_reader_union(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_reader_decryption(c: &mut Criterion) {
+fn bench_reader_decryption(c: &mut Bench) {
     use purrdf_gts::cose::{decrypt0, encrypt0};
 
     let mut key = [0; 32];
@@ -628,7 +628,7 @@ fn dict_compaction_source() -> Vec<u8> {
 /// Streamable compaction with a FastCOVER-trained in-band pack dictionary
 /// (GTS-SPEC §5 `"dct"`, §8.5 `zstd` `dct` parameter) — report-only, no
 /// speedup assertion.
-fn bench_dict_compaction(c: &mut Criterion) {
+fn bench_dict_compaction(c: &mut Bench) {
     let source = dict_compaction_source();
 
     let mut group = c.benchmark_group("gts_compact");
@@ -652,7 +652,7 @@ fn bench_dict_compaction(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
+bench_group!(
     benches,
     bench_rsyncable_zstd,
     bench_transport_nq_gz,
@@ -665,4 +665,4 @@ criterion_group!(
     bench_reader_union,
     bench_reader_decryption
 );
-criterion_main!(benches);
+bench_main!(benches);

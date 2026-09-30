@@ -535,7 +535,7 @@ non-normative:
 | `k=8` composed sources over a small base | 0.87 ms | 1.00 ms |
 
 At `k=32` composed sources the picture stops being clean: wall-clock measurement
-puts the view path at 3.75 ms, while the criterion medians over the same shape
+puts the view path at 3.75 ms, while the bench medians over the same shape
 favour the flat path. **The two measurement methods disagree**, and a disagreement
 is reported as a disagreement rather than resolved by picking the flattering
 number. The mechanism does not break the tie either: by `k=32` the
@@ -612,7 +612,7 @@ The carrier types, the ledger family and the canonicalization entry points are
 re-exported from the `purrdf_core` and `purrdf_rdf` crate roots; the ingestion
 receipt and its refusals live in `purrdf_rdf::gts_compose`.
 
-The measurement shapes quoted above are the ones the criterion benches build:
+The measurement shapes quoted above are the ones the benches build:
 `crates/rdf-core/benches/shared_views.rs` for carrier traversal and for the
 stable-cache pack output path (its `pack_output` group observes flat, composite,
 delta and selection variants separately, per the acceptance contract), and

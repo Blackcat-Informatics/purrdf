@@ -4,16 +4,16 @@
 //! GTS-codec-hygiene gate — the boundary lock for the native RDF codec seam.
 //!
 //! The whole RDF codec seam is now native. `crates/rdf/src/native_codecs/` parses and
-//! serializes RDF on the first-party IR with NO `purrdf_gts` codec and NO oxigraph in the
-//! middle, and the JSON-LD / YAML-LD surfaces no longer call purrdf-gts codecs. The ONLY
-//! legitimate remaining `purrdf_gts::` use is purrdf.gts CONTAINER I/O — the file/structural
+//! serializes RDF on the first-party IR with NO `purrdf_gts` codec in the middle, and the
+//! JSON-LD / YAML-LD surfaces no longer call purrdf-gts codecs. The ONLY legitimate
+//! remaining `purrdf_gts::` use is purrdf.gts CONTAINER I/O — the file/structural
 //! seam (reader / writer / model / verify / policy / codec::CodecError / ulid / …). This
 //! gate is a STRUCTURAL source scan, mirroring the carrier-purity gate's shape (line-comment
 //! stripping + an allow-list + negative-arm self-tests so the detector can never silently
 //! pass), that LOCKS that boundary in three rules:
 //!
-//!   RULE 1 — the codec seam is TOTALLY clean: no `purrdf_gts` token AND no oxigraph-family
-//!            token anywhere (production OR test) under `crates/rdf/src/native_codecs/`.
+//!   RULE 1 — the codec seam is TOTALLY clean: no `purrdf_gts` token anywhere (production
+//!            OR test) under `crates/rdf/src/native_codecs/`.
 //!
 //!   RULE 2 — RDF-codec ENTRYPOINTS are banned in PRODUCTION AND TEST across all
 //!            `crates/*/src`: the `purrdf_gts::` codec call surfaces (nquads / trig / yamlld /
@@ -23,11 +23,7 @@
 //!            ulid, codec::, openpgp, examples) are EXPLICITLY allowed and must not be
 //!            flagged.
 //!
-//!   RULE 3 — oxigraph-family tokens are banned in PRODUCTION across all `crates/*/src`
-//!            (oxigraph is removed from the workspace; this keeps it out at the SOURCE
-//!            level, complementing the crate-dependency `rdf-core-hygiene` gate).
-//!
-//!   RULE 4 — purrdf-gts CODEC feature edges (`rdf-codecs` / `yaml-ld`) are banned in every
+//!   RULE 3 — purrdf-gts CODEC feature edges (`rdf-codecs` / `yaml-ld`) are banned in every
 //!            `crates/*/Cargo.toml`. A dead-but-enabled codec feature LINKS the purrdf-gts
 //!            codec surface even when no source token (RULE 2) calls it, so this manifest
 //!            scan fails closed where the source scan is blind.
@@ -38,24 +34,7 @@
 
 use std::path::{Path, PathBuf};
 
-/// The oxigraph crate family. None of these may appear in production source anywhere in
-/// `crates/*/src`, and none may appear ANYWHERE under `native_codecs/`.
-const OXIGRAPH_TOKENS: [&str; 11] = [
-    "oxigraph",
-    "oxrdf",
-    "oxsdatatypes",
-    "oxiri",
-    "spargebra",
-    "spareval",
-    "sparopt",
-    "sparesults",
-    "oxttl",
-    "oxrdfio",
-    "oxrdfxml",
-];
-// NOTE: `oxjsonld` is a substring of nothing else and is the JSON-LD oxigraph codec; it is
-// caught by the `oxrdfio`/`oxjsonld` family. Keep it explicit:
-const OXJSONLD_TOKEN: &str = "oxjsonld";
+use purrdf_testkit::paths::workspace_root;
 
 /// The `purrdf_gts::` RDF-codec ENTRYPOINTS banned in production. These are the codec call
 /// surfaces (text RDF serialize/parse + the purrdf-gts RDF-dataset model/adapters). Each is
@@ -93,25 +72,9 @@ const ALLOWED_GTS_CONTAINER_PREFIXES: [&str; 11] = [
 /// codec surface (text + RDF/XML + JSON-LD-star), which is banned: purrdf-gts is the purrdf.gts
 /// CONTAINER layer only, and all RDF codec work is native (`crates/rdf/src/native_codecs/`).
 /// The container features (e.g. `duckdb`) and the value model are fine; only these are
-/// forbidden. RULE 4 fails closed if a manifest re-introduces one (the source-token RULE 2 is
+/// forbidden. RULE 3 fails closed if a manifest re-introduces one (the source-token RULE 2 is
 /// blind to a dead-but-linked Cargo feature).
 const FORBIDDEN_GTS_CODEC_FEATURES: [&str; 2] = ["rdf-codecs", "yaml-ld"];
-
-/// The workspace root: walk up from this crate's manifest dir until a `crates/` directory
-/// is found alongside a `Cargo.toml`. The test's CWD/`CARGO_MANIFEST_DIR` is the crate dir
-/// (`crates/rdf`), so we ascend to the directory that CONTAINS `crates/`.
-fn workspace_root() -> PathBuf {
-    let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    loop {
-        if dir.join("crates").is_dir() && dir.join("Cargo.toml").is_file() {
-            return dir;
-        }
-        assert!(
-            dir.pop(),
-            "gts-codec-hygiene: could not locate the workspace root (no ancestor with a `crates/` dir)"
-        );
-    }
-}
 
 /// Every `.rs` file under each `crates/*/src` directory, as `(crate-relative label, path)`.
 /// The label is workspace-root-relative for legible violation messages.
@@ -127,7 +90,7 @@ fn crate_src_rust_files(root: &Path) -> Vec<(String, PathBuf)> {
         let entry = entry.expect("dir entry");
         let src = entry.path().join("src");
         if src.is_dir() {
-            collect_rust_files(&src, root, &mut out);
+            out.extend(rust_files_under(&src, root));
         }
     }
     out.sort();
@@ -159,40 +122,23 @@ fn crate_manifests(root: &Path) -> Vec<(String, PathBuf)> {
     out
 }
 
-/// Every `.rs` file under a directory tree, recursively.
+/// Every `.rs` file under a directory tree, recursively, labelled relative to `root`.
 fn rust_files_under(dir: &Path, root: &Path) -> Vec<(String, PathBuf)> {
-    let mut out = Vec::new();
-    collect_rust_files(dir, root, &mut out);
-    out.sort();
-    out
-}
-
-fn collect_rust_files(dir: &Path, root: &Path, out: &mut Vec<(String, PathBuf)>) {
-    for entry in std::fs::read_dir(dir)
-        .unwrap_or_else(|e| panic!("gts-codec-hygiene: cannot read {}: {e}", dir.display()))
-    {
-        let entry = entry.expect("dir entry");
-        let path = entry.path();
-        if path.is_dir() {
-            collect_rust_files(&path, root, out);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+    let mut paths = Vec::new();
+    purrdf_testkit::paths::collect_rs(dir, &mut paths);
+    let mut out: Vec<(String, PathBuf)> = paths
+        .into_iter()
+        .map(|path| {
             let label = path
                 .strip_prefix(root)
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .into_owned();
-            out.push((label, path));
-        }
-    }
-}
-
-/// The PRODUCTION region of a Rust source: everything before the first top-level
-/// `#[cfg(test)]` attribute (the in-crate test modules, which legitimately build oracles).
-fn production_region(source: &str) -> &str {
-    match source.find("\n#[cfg(test)]") {
-        Some(idx) => &source[..idx],
-        None => source,
-    }
+            (label, path)
+        })
+        .collect();
+    out.sort();
+    out
 }
 
 /// Strip Rust line-comments so a doc-comment NAMING a forbidden token is not a false
@@ -209,63 +155,11 @@ fn strip_line_comments(source: &str) -> String {
         .join("\n")
 }
 
-/// All oxigraph-family tokens (including `oxjsonld`).
-fn oxigraph_tokens() -> Vec<&'static str> {
-    let mut v = OXIGRAPH_TOKENS.to_vec();
-    v.push(OXJSONLD_TOKEN);
-    v
-}
-
-/// True if `line` REFERENCES the oxigraph-family crate `token` as code — i.e. the token
-/// appears as a whole identifier (word boundaries on both sides) used as a path/import:
-/// `token::…`, `use token…`, or `extern crate token`. This deliberately does NOT match:
-///   * a substring of a larger identifier (e.g. the local `insert_oxiri` fn — the `r` after
-///     `oxiri` is an identifier char, so there is no trailing word boundary), and
-///   * a bare mention in PROSE inside a string literal (e.g. `"the oxigraph/PyO3 adapter"`
-///     or `"decodable via the oxigraph path"` — neither is followed by `::` and neither is
-///     a `use`/`extern crate` import), which is documentation of the architecture, not a
-///     dependency. Real oxigraph CODE always reaches the crate through a `::` path segment
-///     or an import, so this captures every genuine usage while staying free of false
-///     positives. (The crate-DEP `rdf-core-hygiene` gate independently bans the manifest
-///     dependency; this is the complementary source-level lock.)
-fn references_oxigraph_crate(line: &str, token: &str) -> bool {
-    let is_ident_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
-    let bytes = line.as_bytes();
-    let mut from = 0usize;
-    while let Some(rel) = line[from..].find(token) {
-        let start = from + rel;
-        let end = start + token.len();
-        // Left word boundary: preceding char must not be an identifier char.
-        let left_ok = start == 0 || !is_ident_char(line[..start].chars().next_back().unwrap());
-        // Right word boundary: following char must not be an identifier char.
-        let after = &line[end..];
-        let right_ok = after.chars().next().is_none_or(|c| !is_ident_char(c));
-        if left_ok && right_ok {
-            // A whole-identifier match. Treat it as a CODE reference only when it is a
-            // path segment (`token::`) or an import (`use token` / `extern crate token`).
-            let trimmed = line.trim_start();
-            let is_path = after.starts_with("::");
-            let is_use = trimmed.starts_with(&format!("use {token}"))
-                || trimmed.contains(&format!("use {token}::"));
-            let is_extern = trimmed.starts_with(&format!("extern crate {token}"));
-            if is_path || is_use || is_extern {
-                return true;
-            }
-        }
-        from = end.max(start + 1);
-        if from >= bytes.len() {
-            break;
-        }
-    }
-    false
-}
-
 // ---------------------------------------------------------------------------------------
-// RULE 1 — native_codecs is totally clean (no purrdf_gts, no oxigraph, prod OR test).
+// RULE 1 — native_codecs is totally clean (no purrdf_gts, prod OR test).
 // ---------------------------------------------------------------------------------------
 
-/// Scan the WHOLE source (production AND test) for any `purrdf_gts` token or any
-/// oxigraph-family token. Returns `(token, line snippet)` violations.
+/// Scan the WHOLE source (production AND test) for any `purrdf_gts` token. Returns `(token, line snippet)` violations.
 fn scan_native_codecs_violations(label: &str, source: &str) -> Vec<(String, String)> {
     let code = strip_line_comments(source);
     let mut violations = Vec::new();
@@ -275,14 +169,6 @@ fn scan_native_codecs_violations(label: &str, source: &str) -> Vec<(String, Stri
                 "purrdf_gts".to_string(),
                 format!("{label}:{} | {}", lineno + 1, line.trim()),
             ));
-        }
-        for token in oxigraph_tokens() {
-            if references_oxigraph_crate(line, token) {
-                violations.push((
-                    token.to_string(),
-                    format!("{label}:{} | {}", lineno + 1, line.trim()),
-                ));
-            }
         }
     }
     violations
@@ -315,28 +201,7 @@ fn scan_gts_codec_entrypoints(label: &str, source: &str) -> Vec<(String, String)
 }
 
 // ---------------------------------------------------------------------------------------
-// RULE 3 — oxigraph-family tokens banned in PRODUCTION across all crates/*/src.
-// ---------------------------------------------------------------------------------------
-
-fn scan_oxigraph_production(label: &str, source: &str) -> Vec<(String, String)> {
-    let prod = production_region(source);
-    let code = strip_line_comments(prod);
-    let mut violations = Vec::new();
-    for (lineno, line) in code.lines().enumerate() {
-        for token in oxigraph_tokens() {
-            if references_oxigraph_crate(line, token) {
-                violations.push((
-                    token.to_string(),
-                    format!("{label}:{} | {}", lineno + 1, line.trim()),
-                ));
-            }
-        }
-    }
-    violations
-}
-
-// ---------------------------------------------------------------------------------------
-// RULE 4 — purrdf-gts CODEC feature edges banned in every crates/*/Cargo.toml manifest.
+// RULE 3 — purrdf-gts CODEC feature edges banned in every crates/*/Cargo.toml manifest.
 // ---------------------------------------------------------------------------------------
 
 /// Strip TOML line comments (`# …`) so a comment NAMING a forbidden feature is not a false
@@ -402,9 +267,8 @@ fn native_codecs_seam_is_totally_clean() {
     assert!(
         all.is_empty(),
         "RULE 1 FAILED: the native RDF codec seam (crates/rdf/src/native_codecs/) must be \
-         100% free of purrdf_gts AND oxigraph-family tokens (production OR test). The codec \
-         operates on the first-party IR with NO purrdf-gts codec and NO oxigraph in the \
-         middle. Violations:\n{}",
+         100% free of purrdf_gts tokens (production OR test). The codec operates on the \
+         first-party IR with NO purrdf-gts codec in the middle. Violations:\n{}",
         render(&all)
     );
 }
@@ -427,22 +291,6 @@ fn no_gts_rdf_codec_entrypoint_anywhere() {
 }
 
 #[test]
-fn no_oxigraph_in_production_source() {
-    let root = workspace_root();
-    let mut all: Vec<(String, String)> = Vec::new();
-    for (label, path) in crate_src_rust_files(&root) {
-        all.extend(scan_oxigraph_production(&label, &read(&path)));
-    }
-    assert!(
-        all.is_empty(),
-        "RULE 3 FAILED: an oxigraph-family token appears in PRODUCTION source. Oxigraph is \
-         removed from the workspace; RDF semantics are native (purrdf / purrdf_core). \
-         Violations:\n{}",
-        render(&all)
-    );
-}
-
-#[test]
 fn no_gts_codec_feature_edge_in_manifests() {
     let root = workspace_root();
     let mut all: Vec<(String, String)> = Vec::new();
@@ -451,7 +299,7 @@ fn no_gts_codec_feature_edge_in_manifests() {
     }
     assert!(
         all.is_empty(),
-        "RULE 4 FAILED: a crates/*/Cargo.toml enables a purrdf-gts RDF codec feature \
+        "RULE 3 FAILED: a crates/*/Cargo.toml enables a purrdf-gts RDF codec feature \
          (rdf-codecs / yaml-ld). That LINKS the purrdf-gts codec surface even though no source \
          calls it (RULE 2 cannot see a dead Cargo feature). purrdf-gts is purrdf.gts CONTAINER \
          I/O ONLY — drop the codec feature; RDF codec work is native (crates/rdf/src/\
@@ -485,27 +333,6 @@ fn serialize(d: &RdfDataset) -> String {
         assert!(
             v.iter().any(|(t, _)| t == "purrdf_gts"),
             "RULE 1 detector must flag any purrdf_gts token in native_codecs, got {v:?}"
-        );
-    }
-
-    #[test]
-    fn rule1_flags_oxigraph_even_in_test_region() {
-        // RULE 1 scans the WHOLE file (prod AND test), so an oxigraph oracle in a
-        // native_codecs test must ALSO be flagged — the seam is totally clean.
-        let with_test_oracle = r"
-fn parse(b: &[u8]) -> RdfDataset { native(b) }
-
-#[cfg(test)]
-mod tests {
-    use oxigraph::store::Store;
-    fn oracle() { let _ = Store::new(); }
-}
-";
-        let v =
-            scan_native_codecs_violations("crates/rdf/src/native_codecs/x.rs", with_test_oracle);
-        assert!(
-            v.iter().any(|(t, _)| t == "oxigraph"),
-            "RULE 1 detector must flag oxigraph in the TEST region of native_codecs too, got {v:?}"
         );
     }
 
@@ -584,74 +411,23 @@ fn f() { native(); }
         );
     }
 
-    // --- RULE 3 negative arm -----------------------------------------------------------
+    // --- RULE 3 manifest-feature arms --------------------------------------------------
 
     #[test]
-    fn rule3_flags_oxigraph_family_in_production() {
-        for token in oxigraph_tokens() {
-            let src = format!("use {token}::thing;\nfn f() {{ let _ = {token}_call(); }}\n");
-            let v = scan_oxigraph_production("crates/x/src/y.rs", &src);
-            assert!(
-                v.iter().any(|(t, _)| t == token),
-                "RULE 3 detector must flag the oxigraph-family token `{token}`, got {v:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn rule3_does_not_flag_prose_or_identifier_substrings() {
-        // The token is precise — a CODE reference (`::` path / `use` / `extern crate`), not
-        // a substring of a larger identifier nor a bare mention in string-literal prose.
-        let benign = r#"
-fn insert_oxiri(node: &NamedNode, out: &mut Set) { out.insert(node); }
-fn f() {
-    insert_oxiri(&n, &mut out);
-    return Err(format!("codec is not decodable via the oxigraph path; use nquads"));
-    let _ = "the oxigraph/PyO3 adapter re-exports the ring-fenced core";
-}
-"#;
-        let v = scan_oxigraph_production("crates/x/src/y.rs", benign);
-        assert!(
-            v.is_empty(),
-            "RULE 3 must NOT flag the local `insert_oxiri` fn nor prose mentions of oxigraph, got {v:?}"
-        );
-    }
-
-    #[test]
-    fn rule3_excludes_the_cfg_test_region() {
-        let with_test_ox = r"
-fn f() { native(); }
-
-#[cfg(test)]
-mod tests {
-    use oxigraph::store::Store;
-    fn oracle() { let _ = Store::new(); }
-}
-";
-        let v = scan_oxigraph_production("crates/x/src/y.rs", with_test_ox);
-        assert!(
-            v.is_empty(),
-            "RULE 3 (production-only) must exclude the #[cfg(test)] region, got {v:?}"
-        );
-    }
-
-    // --- RULE 4 manifest-feature arms --------------------------------------------------
-
-    #[test]
-    fn rule4_flags_the_cross_crate_codec_feature_edge() {
+    fn rule3_flags_the_cross_crate_codec_feature_edge() {
         for feat in FORBIDDEN_GTS_CODEC_FEATURES {
             let manifest =
                 format!("[features]\ngts = [\"dep:purrdf-gts\", \"purrdf-gts/{feat}\"]\n");
             let v = scan_gts_codec_feature_edges("crates/x/Cargo.toml", &manifest);
             assert!(
                 v.iter().any(|(t, _)| t == feat),
-                "RULE 4 must flag the cross-crate `purrdf-gts/{feat}` feature edge, got {v:?}"
+                "RULE 3 must flag the cross-crate `purrdf-gts/{feat}` feature edge, got {v:?}"
             );
         }
     }
 
     #[test]
-    fn rule4_flags_the_dependency_feature_edge() {
+    fn rule3_flags_the_dependency_feature_edge() {
         for feat in FORBIDDEN_GTS_CODEC_FEATURES {
             let manifest = format!(
                 "[dependencies]\npurrdf-gts = {{ version = \"0.9.11\", features = [\"{feat}\"] }}\n"
@@ -659,13 +435,13 @@ mod tests {
             let v = scan_gts_codec_feature_edges("crates/x/Cargo.toml", &manifest);
             assert!(
                 v.iter().any(|(t, _)| t == feat),
-                "RULE 4 must flag the `purrdf-gts {{ features = [\"{feat}\"] }}` dependency edge, got {v:?}"
+                "RULE 3 must flag the `purrdf-gts {{ features = [\"{feat}\"] }}` dependency edge, got {v:?}"
             );
         }
     }
 
     #[test]
-    fn rule4_allows_container_only_gts_dependencies() {
+    fn rule3_allows_container_only_gts_dependencies() {
         // The plain container dependency and the `duckdb` container feature are fine — only the
         // RDF codec features are forbidden. A comment naming a codec feature is not an edge.
         let manifest = r#"
@@ -674,22 +450,12 @@ purrdf-gts = { version = "0.9.11", features = ["duckdb"] }
 # historically this enabled purrdf-gts/rdf-codecs; the codec is native now.
 
 [features]
-gts = ["dep:purrdf-gts", "dep:roxmltree"]
+gts = ["dep:purrdf-gts", "dep:regex"]
 "#;
         let v = scan_gts_codec_feature_edges("crates/x/Cargo.toml", manifest);
         assert!(
             v.is_empty(),
-            "RULE 4 must NOT flag a container-only purrdf-gts dependency nor a comment, got {v:?}"
-        );
-    }
-
-    #[test]
-    fn workspace_root_is_locatable_and_carries_the_crates_dir() {
-        let root = workspace_root();
-        assert!(
-            root.join("crates").join("rdf").join("src").is_dir(),
-            "workspace root {} must contain crates/rdf/src",
-            root.display()
+            "RULE 3 must NOT flag a container-only purrdf-gts dependency nor a comment, got {v:?}"
         );
     }
 }

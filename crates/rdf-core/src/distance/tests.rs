@@ -52,66 +52,13 @@ pub(super) fn exact_compiled() -> &'static [Path] {
 
 // ---- the executed-path requirement -------------------------------------------------
 
-/// The variable a CI job sets to name the dispatch paths its host must execute, as a
-/// comma-separated list of [`Path::name`]s.
-///
-/// Read by the test harness only. Unset, every test still asserts it executed every path
-/// the host runs; set, a listed path the host cannot run, or that a test did not
-/// execute, fails the run -- which is how a job on an emulated or known processor
-/// proves a path ran rather than that it was merely compiled.
-pub(super) const REQUIRE_PATHS_VAR: &str = "PURRDF_REQUIRE_DISPATCH_PATHS";
-
-/// Every dispatch path, by which a required name is resolved.
-const ALL_PATHS: [Path; 8] = [
-    Path::Portable,
-    Path::Avx2,
-    Path::Sse2,
-    Path::Avx2Fma,
-    Path::Avx512f,
-    Path::Neon,
-    Path::WasmSimd128,
-    Path::WasmScalar,
-];
-
-/// The paths [`REQUIRE_PATHS_VAR`] names, in its order, or none when it is unset.
-///
-/// # Panics
-///
-/// When the variable is set but names no path, is not UTF-8, or names something that
-/// is not a path: a misspelt requirement must fail rather than require nothing.
-pub(super) fn required_paths() -> Vec<Path> {
-    let Some(value) = std::env::var_os(REQUIRE_PATHS_VAR) else {
-        return Vec::new();
-    };
-    let value = value
-        .into_string()
-        .unwrap_or_else(|raw| panic!("{REQUIRE_PATHS_VAR} is not UTF-8: {raw:?}"));
-    let known = ALL_PATHS.map(Path::name).join(", ");
-    let mut paths = Vec::new();
-    for name in value
-        .split(',')
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-    {
-        let path = ALL_PATHS
-            .into_iter()
-            .find(|path| path.name() == name)
-            .unwrap_or_else(|| {
-                panic!(
-                    "{REQUIRE_PATHS_VAR} names `{name}`, which is not a dispatch path; the \
-                     paths are: {known}"
-                )
-            });
-        if !paths.contains(&path) {
-            paths.push(path);
-        }
-    }
-    assert!(
-        !paths.is_empty(),
-        "{REQUIRE_PATHS_VAR} is set but names no path ({value:?}); the paths are: {known}"
-    );
-    paths
-}
+/// The variable naming the dispatch paths a host must execute
+/// (`distance:<path>` entries, or `1` for every path the host is expected to
+/// run). Unset, every test still asserts it executed every path the host runs;
+/// set, a required path the host cannot run, or that a test did not execute,
+/// fails the run -- which is how a job on an emulated or known processor proves
+/// a path ran rather than that it was merely compiled.
+pub(super) const REQUIRE_PATHS_VAR: &str = purrdf_hash::dispatch::REQUIRE_SIMD_PATHS;
 
 /// The dispatch paths a test actually ran a kernel on, recorded as it runs them.
 #[derive(Default)]
@@ -266,7 +213,7 @@ impl Stream {
 
     /// A value in `[-1, 1)`.
     pub(super) fn signed(&mut self) -> f64 {
-        ((self.next_u64() >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0)
+        purrdf_testkit::rng::signed_unit(self.next_u64())
     }
 
     /// One component of the adversarial class `class`.
@@ -754,41 +701,21 @@ fn a_misshapen_matrix_is_refused_and_a_well_shaped_one_is_not() {
 #[test]
 fn family_contract_digest_unchanged_by_arithmetic() {
     use crate::{
-        AppliedStage, ArtifactIdentity, ArtifactIdentityKind, ContentDigest, DimensionalityPolicy,
-        DistanceMetric, EmbeddingFamilyContract, PrefixPostprocessing, StageImplementation,
-        VectorDtype,
+        AppliedStage, DimensionalityPolicy, DistanceMetric, EmbeddingFamilyContract,
+        PrefixPostprocessing, VectorDtype,
     };
 
-    fn identity(name: &str) -> ArtifactIdentity {
-        ArtifactIdentity::new(
-            format!("https://example.org/{name}"),
-            "application/octet-stream",
-            ContentDigest::of(name.as_bytes()),
-            None,
-            ArtifactIdentityKind::Single,
-        )
-        .expect("artifact identity")
-    }
-    fn stage(name: &str) -> AppliedStage {
-        AppliedStage::Applied(
-            StageImplementation::new(
-                format!("https://example.org/{name}"),
-                ContentDigest::of(name.as_bytes()),
-                "application/octet-stream",
-                vec![1],
-            )
-            .expect("stage"),
-        )
-    }
+    const FX: crate::purremb_fixture::Identities =
+        crate::purremb_fixture::Identities::at("https://example.org/");
     let contract = EmbeddingFamilyContract {
-        model: identity("model"),
-        engine: identity("engine"),
-        tokenizer: identity("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F32,
@@ -1027,74 +954,6 @@ fn every_probe_row_is_distinct_and_names_its_departure() {
 
 // ---- x86: MXCSR on both widths --------------------------------------------------
 
-/// The current thread's MXCSR.
-#[cfg(any(
-    target_arch = "x86_64",
-    all(target_arch = "x86", target_feature = "sse2")
-))]
-fn read_mxcsr() -> u32 {
-    let mut value: u32 = 0;
-    // SAFETY: `stmxcsr` stores the 32-bit MXCSR, and nothing else, to a live, aligned,
-    // writable `u32` on this stack frame.
-    unsafe {
-        core::arch::asm!(
-            "stmxcsr [{ptr}]",
-            ptr = in(reg) &raw mut value,
-            options(nostack, preserves_flags),
-        );
-    }
-    value
-}
-
-/// Load `value` into the current thread's MXCSR.
-#[cfg(any(
-    target_arch = "x86_64",
-    all(target_arch = "x86", target_feature = "sse2")
-))]
-fn write_mxcsr(value: u32) {
-    // SAFETY: `ldmxcsr` loads MXCSR from a live, aligned `u32`. Every value loaded here
-    // differs from the saved register only in the FTZ, DAZ and rounding-control fields,
-    // `Mxcsr` restores the saved value on every exit including a panic, and the register
-    // is per-thread, so no other test observes it.
-    unsafe {
-        core::arch::asm!(
-            "ldmxcsr [{ptr}]",
-            ptr = in(reg) &raw const value,
-            options(nostack, preserves_flags, readonly),
-        );
-    }
-}
-
-/// MXCSR loaded with a value for as long as the guard lives; the saved value is restored
-/// when it drops, including by unwinding.
-#[cfg(any(
-    target_arch = "x86_64",
-    all(target_arch = "x86", target_feature = "sse2")
-))]
-struct Mxcsr(u32);
-
-#[cfg(any(
-    target_arch = "x86_64",
-    all(target_arch = "x86", target_feature = "sse2")
-))]
-impl Mxcsr {
-    fn load(value: u32) -> Self {
-        let saved = read_mxcsr();
-        write_mxcsr(value);
-        Self(saved)
-    }
-}
-
-#[cfg(any(
-    target_arch = "x86_64",
-    all(target_arch = "x86", target_feature = "sse2")
-))]
-impl Drop for Mxcsr {
-    fn drop(&mut self) {
-        write_mxcsr(self.0);
-    }
-}
-
 /// MXCSR flush-to-zero.
 #[cfg(any(
     target_arch = "x86_64",
@@ -1162,19 +1021,19 @@ fn mxcsr_departures() -> [(&'static str, u32, Vec<usize>, FloatEnvironmentError)
 fn the_probe_alone_refuses_every_mxcsr_departure() {
     // The probe, not the register read: this is the refusal every target without a
     // register reader relies on, exercised where the environment can be set.
-    let saved = read_mxcsr();
+    let saved = control::mxcsr();
     for (name, bits, rows, refusal) in mxcsr_departures() {
         let (failing, outcome) = {
-            let _loaded = Mxcsr::load(saved | bits);
+            let _loaded = control::Mxcsr::load(saved | bits);
             (failing_rows(), env::probe())
         };
-        assert_eq!(read_mxcsr(), saved, "the register was restored");
+        assert_eq!(control::mxcsr(), saved, "the register was restored");
         assert_eq!(indices(failing), rows, "{name}: the rows that must fail");
         assert_eq!(outcome, Err(refusal), "{name}: the probe's refusal");
     }
     // The valid neighbour: the saved register loaded through the same guard passes.
     let (failing, outcome) = {
-        let _loaded = Mxcsr::load(saved);
+        let _loaded = control::Mxcsr::load(saved);
         (failing_rows(), env::probe())
     };
     assert_eq!(indices(failing), Vec::<usize>::new());
@@ -1187,12 +1046,12 @@ fn the_probe_alone_refuses_every_mxcsr_departure() {
     all(target_arch = "x86", target_feature = "sse2")
 ))]
 fn resolve_under_mxcsr(value: u32) -> Result<Resolved<Exact>, FloatEnvironmentError> {
-    let saved = read_mxcsr();
+    let saved = control::mxcsr();
     let outcome = {
-        let _loaded = Mxcsr::load(value);
+        let _loaded = control::Mxcsr::load(value);
         Exact::resolve()
     };
-    assert_eq!(read_mxcsr(), saved, "the register was restored");
+    assert_eq!(control::mxcsr(), saved, "the register was restored");
     outcome
 }
 
@@ -1202,7 +1061,7 @@ fn resolve_under_mxcsr(value: u32) -> Result<Resolved<Exact>, FloatEnvironmentEr
 ))]
 #[test]
 fn resolve_refuses_every_mxcsr_departure_and_answers_the_default() {
-    let saved = read_mxcsr();
+    let saved = control::mxcsr();
     for (name, bits, _, probe) in mxcsr_departures() {
         let refused = resolve_under_mxcsr(saved | bits);
         // On x86_64 the register is read first, so the refusal names it; on 32-bit x86
@@ -1235,41 +1094,6 @@ fn resolve_refuses_every_mxcsr_departure_and_answers_the_default() {
 
 // ---- aarch64: FPCR ---------------------------------------------------------------
 
-/// Load `value` into the current thread's FPCR.
-#[cfg(target_arch = "aarch64")]
-fn write_fpcr(value: u64) {
-    // SAFETY: FPCR is writable at EL0. The values written here differ from the saved
-    // register only in the FZ and rounding-mode fields, `Fpcr` restores the saved value
-    // on every exit including a panic, and the register is per-thread.
-    unsafe {
-        core::arch::asm!(
-            "msr fpcr, {value}",
-            value = in(reg) value,
-            options(nostack, preserves_flags),
-        );
-    }
-}
-
-/// FPCR loaded with a value for as long as the guard lives.
-#[cfg(target_arch = "aarch64")]
-struct Fpcr(u64);
-
-#[cfg(target_arch = "aarch64")]
-impl Fpcr {
-    fn load(value: u64) -> Self {
-        let saved = env::fpcr();
-        write_fpcr(value);
-        Self(saved)
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-impl Drop for Fpcr {
-    fn drop(&mut self) {
-        write_fpcr(self.0);
-    }
-}
-
 /// Every FPCR departure, the probe rows it must fail, and the refusal the probe returns.
 /// FZ flushes subnormal operands as well as results, so both flush rows fail under it.
 #[cfg(target_arch = "aarch64")]
@@ -1290,18 +1114,18 @@ fn fpcr_departures() -> [(&'static str, u64, Vec<usize>, FloatEnvironmentError);
 #[cfg(target_arch = "aarch64")]
 #[test]
 fn the_probe_alone_refuses_every_fpcr_departure() {
-    let saved = env::fpcr();
+    let saved = control::fpcr();
     for (name, bits, rows, refusal) in fpcr_departures() {
         let (failing, outcome) = {
-            let _loaded = Fpcr::load(saved | bits);
+            let _loaded = control::Fpcr::load(saved | bits);
             (failing_rows(), env::probe())
         };
-        assert_eq!(env::fpcr(), saved, "the register was restored");
+        assert_eq!(control::fpcr(), saved, "the register was restored");
         assert_eq!(indices(failing), rows, "{name}: the rows that must fail");
         assert_eq!(outcome, Err(refusal), "{name}: the probe's refusal");
     }
     let (failing, outcome) = {
-        let _loaded = Fpcr::load(saved);
+        let _loaded = control::Fpcr::load(saved);
         (failing_rows(), env::probe())
     };
     assert_eq!(indices(failing), Vec::<usize>::new());
@@ -1311,10 +1135,10 @@ fn the_probe_alone_refuses_every_fpcr_departure() {
 #[cfg(target_arch = "aarch64")]
 #[test]
 fn resolve_refuses_every_fpcr_departure_by_register() {
-    let saved = env::fpcr();
+    let saved = control::fpcr();
     for (name, bits, _, probe) in fpcr_departures() {
         let refused = {
-            let _loaded = Fpcr::load(saved | bits);
+            let _loaded = control::Fpcr::load(saved | bits);
             Exact::resolve()
         };
         let evidence = FloatEnvironmentEvidence::Register {
@@ -1330,7 +1154,7 @@ fn resolve_refuses_every_fpcr_departure_by_register() {
         assert_eq!(refused, Err(expected), "{name} must be refused by name");
     }
     let resolved = {
-        let _loaded = Fpcr::load(saved);
+        let _loaded = control::Fpcr::load(saved);
         Exact::resolve()
     };
     assert!(resolved.is_ok(), "the valid neighbour resolves");

@@ -3036,7 +3036,7 @@ mod tests {
     use crate::admission::ProbedDepth;
 
     const NEIGHBOURS: &str = "https://example.org/pf/neighbours";
-    const INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    use purrdf_core::datatype::XSD_INTEGER as INTEGER;
 
     /// A self-bounding producer's declaration surface, and nothing behind it: the
     /// candidate at 0, a seed at 1, the depth at 2, a score at 3. Never opened — the

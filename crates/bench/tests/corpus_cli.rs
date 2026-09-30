@@ -12,9 +12,11 @@
 //! executable exactly the way an operator invokes it, so every assertion here pins the shipped
 //! surface rather than a library call that merely resembles it.
 
+mod support;
+
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
+use support::unique_tag;
 
 use purrdf_bench::{CLASS_MIX_PER_MILLE, CORPUS_PROFILE_ID, CorpusSpec, ROW_MIX_PER_MILLE};
 
@@ -62,21 +64,6 @@ fn whole(quads: u64, iris: u64, seed: u64) -> Vec<u8> {
     ]);
     assert_eq!(code, 0, "the whole run must succeed; stderr:\n{err}");
     out
-}
-
-/// A monotonically increasing counter, so every call to [`unique_tag`] in this process is
-/// distinct even across parallel test threads.
-static UNIQUE: AtomicU64 = AtomicU64::new(0);
-
-/// A filesystem-unique fragment: this process's id plus a monotonic counter. Parallel test
-/// threads within one `cargo test` run (and separate runs, which get different process ids)
-/// never collide on the same name.
-fn unique_tag() -> String {
-    format!(
-        "{}-{}",
-        std::process::id(),
-        UNIQUE.fetch_add(1, Ordering::Relaxed)
-    )
 }
 
 /// A path under the OS temp dir, unique per call and tagged with `test_name` so a leftover
@@ -231,8 +218,9 @@ fn manifest_reports_every_field_correctly() {
         "manifest run must not write to stderr; got:\n{err}"
     );
 
-    let value: serde_json::Value =
-        serde_json::from_slice(&out).expect("manifest must be valid JSON");
+    let value: purrdf_lex::json::Value =
+        purrdf_lex::json::read_slice(&out, purrdf_lex::json::Limits::DEFAULT)
+            .expect("manifest must be valid JSON");
     assert_eq!(
         value["profile"], CORPUS_PROFILE_ID,
         "profile must equal the profile id"
@@ -247,7 +235,7 @@ fn manifest_reports_every_field_correctly() {
     let (start, end) = spec.shard_range();
     assert_eq!(
         value["shard_rows"],
-        serde_json::json!([start, end]),
+        purrdf_lex::json::Value::array([start, end]),
         "shard_rows must equal the library's shard_range() for this spec"
     );
 
@@ -258,7 +246,7 @@ fn manifest_reports_every_field_correctly() {
     // enumerating the corpus, which is what streaming at full scale exists to avoid.
     assert_eq!(
         value["emitted_lines"],
-        serde_json::json!(end - start),
+        purrdf_lex::json::Value::from(end - start),
         "emitted_lines must be exactly end - start from shard_range()"
     );
 
@@ -283,7 +271,9 @@ fn manifest_reports_every_field_correctly() {
     let mut class_total = 0u64;
     for (name, share) in CLASS_MIX_PER_MILLE {
         assert_eq!(
-            class_mix.get(name).and_then(serde_json::Value::as_u64),
+            class_mix
+                .get(name)
+                .and_then(purrdf_lex::json::Value::as_u64),
             Some(u64::from(share)),
             "class {name} must carry its declared per-mille share"
         );
@@ -302,7 +292,7 @@ fn manifest_reports_every_field_correctly() {
     let mut row_total = 0u64;
     for (name, share) in ROW_MIX_PER_MILLE {
         assert_eq!(
-            row_mix.get(name).and_then(serde_json::Value::as_u64),
+            row_mix.get(name).and_then(purrdf_lex::json::Value::as_u64),
             Some(u64::from(share)),
             "row kind {name} must carry its declared per-mille share"
         );
@@ -310,8 +300,8 @@ fn manifest_reports_every_field_correctly() {
     }
     assert_eq!(row_total, 1_000, "the row mix must sum to 1000");
 
-    // The manifest names every field it carries and nothing else: a field added without a
-    // matching assertion above would go unpinned.
+    // The manifest names every field it carries, in the order it writes them, and nothing
+    // else: a field added without a matching assertion above would go unpinned.
     let top_level: Vec<&str> = value
         .as_object()
         .expect("the manifest must be a JSON object")
@@ -321,16 +311,16 @@ fn manifest_reports_every_field_correctly() {
     assert_eq!(
         top_level,
         vec![
+            "profile",
+            "seed",
+            "quads",
+            "iris",
+            "shard",
+            "shards",
+            "shard_rows",
             "emitted_lines",
             "entity_class_mix_per_mille",
-            "iris",
-            "profile",
-            "quads",
             "row_mix_per_mille",
-            "seed",
-            "shard",
-            "shard_rows",
-            "shards",
         ],
         "every manifest field must be covered by an assertion in this test"
     );
@@ -356,8 +346,9 @@ fn manifest_emitted_lines_equals_the_lines_the_same_invocation_produces() {
         manifest_args.push("--manifest");
         let (code, out, err) = run(&manifest_args);
         assert_eq!(code, 0, "manifest run must succeed; stderr:\n{err}");
-        let value: serde_json::Value =
-            serde_json::from_slice(&out).expect("manifest must be valid JSON");
+        let value: purrdf_lex::json::Value =
+            purrdf_lex::json::read_slice(&out, purrdf_lex::json::Limits::DEFAULT)
+                .expect("manifest must be valid JSON");
         let claimed = value["emitted_lines"]
             .as_u64()
             .expect("emitted_lines must be an unsigned integer");
@@ -399,8 +390,9 @@ fn manifest_honours_out_writing_to_file_with_empty_stdout() {
     );
 
     let contents = std::fs::read(&path).expect("read manifest file");
-    let _: serde_json::Value =
-        serde_json::from_slice(&contents).expect("file must hold valid JSON");
+    let _: purrdf_lex::json::Value =
+        purrdf_lex::json::read_slice(&contents, purrdf_lex::json::Limits::DEFAULT)
+            .expect("file must hold valid JSON");
     std::fs::remove_file(&path).expect("cleanup manifest file");
 }
 

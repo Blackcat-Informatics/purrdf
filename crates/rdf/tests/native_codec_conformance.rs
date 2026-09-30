@@ -4,7 +4,7 @@
 //! W3C RDF 1.2 syntax-suite **round-trip** conformance gate for the native
 //! `purrdf` text codecs (acceptance: "W3C syntax test suites round-trip").
 //!
-//! This harness is deliberately **oxigraph-free**: a green run proves the native Turtle /
+//! A green run of this harness proves the native Turtle /
 //! TriG / N-Triples / N-Quads / RDF-XML codecs parse and round-trip the official W3C
 //! suites with no Store dependency ( end-state).
 //!
@@ -29,6 +29,7 @@
 //! The harness always prints a per-format and overall summary — nothing is skipped
 //! silently.
 
+use purrdf_gts::files::media_type_for_path;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -50,8 +51,7 @@ use purrdf_rdf::{
 ///   triple-term entry is no longer rendered as a reifier statement.
 /// - The former **G3** lenient-lexical trade-off is gone: the native language-tag
 ///   validator accepts PurRDF's long private-use subtags (`x-purrdf-norwegiannynorsk`)
-///   while still REJECTING the genuinely-malformed W3C negative cases — strictly better
-///   than the old oxttl `.lenient()` path.
+///   while still REJECTING the genuinely-malformed W3C negative cases.
 ///
 /// Keep this empty; add an entry only with a documented, approved codec-level reason.
 const KNOWN_GAPS: &[(&str, &str)] = &[];
@@ -128,19 +128,6 @@ const RDFT: &str = "http://www.w3.org/ns/rdftest#";
 /// Corpus root, relative to the crate dir (where `cargo test` runs).
 fn corpus_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus/w3c")
-}
-
-/// Map a result-file extension to the media type its OWN parser uses (eval results are
-/// N-Triples for triple formats, N-Quads for quad formats).
-fn media_type_for_ext(path: &Path) -> &'static str {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("nt") => "application/n-triples",
-        Some("nq") => "application/n-quads",
-        Some("ttl") => "text/turtle",
-        Some("trig") => "application/trig",
-        Some("rdf") => "application/rdf+xml",
-        other => panic!("unknown result extension {other:?} for {}", path.display()),
-    }
 }
 
 /// Read a manifest's `mf:assumedTestBase` IRI.
@@ -234,7 +221,7 @@ fn enumerate(suite: &Suite, submanifest: &str) -> Vec<Case> {
             (Kind::Eval, Some(result_iri)) => {
                 let result_file = result_iri.rsplit('/').next().unwrap().to_owned();
                 let result_path = dir.join(&result_file);
-                let result_mt = media_type_for_ext(&result_path);
+                let result_mt = media_type_for_path(&result_path);
                 let result_base = format!("{base}{result_file}");
                 (Some(result_path), Some(result_base), Some(result_mt))
             }
@@ -380,7 +367,7 @@ fn w3c_rdf12_syntax_suites_round_trip() {
 
     // Inline lexical-form preservation cases (B2 fidelity): a full parse → serialize →
     // re-parse must preserve the literal lexical form byte-for-byte. The native path
-    // must NOT canonicalize the way the oxigraph Store does.
+    // must NOT value-space-canonicalize literals.
     lexical_form_preserved_verbatim();
 
     let mut problems = Vec::new();

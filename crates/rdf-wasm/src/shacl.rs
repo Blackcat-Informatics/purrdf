@@ -1764,6 +1764,7 @@ impl ShaclFailure for ShaclProductRefusal {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use purrdf_lex::json;
 
     const SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
         @prefix ex: <http://example.org/> .\n\
@@ -1819,15 +1820,15 @@ pub(crate) mod tests {
             "sh:path ex:age ;",
             "sh:path ex:age ; sh:severity sh:Warning ;",
         );
-        let conforms = |disallows: Option<&[String]>| -> serde_json::Value {
+        let conforms = |disallows: Option<&[String]>| -> json::Value {
             let sarif = validate_to_sarif_impl(&shapes, None, DATA, disallows, &[], &[], None)
                 .expect("sarif produced");
-            let log: serde_json::Value = serde_json::from_str(&sarif).expect("json");
+            let log: json::Value = json::read(&sarif).expect("json");
             log["runs"][0]["properties"]["shaclConforms"].clone()
         };
-        assert_eq!(conforms(None), serde_json::json!(false));
+        assert_eq!(conforms(None), json::Value::Bool(false));
         let violation = ["http://www.w3.org/ns/shacl#Violation".to_owned()];
-        assert_eq!(conforms(Some(&violation)), serde_json::json!(true));
+        assert_eq!(conforms(Some(&violation)), json::Value::Bool(true));
         assert!(validate_to_sarif_impl(&shapes, None, DATA, Some(&[]), &[], &[], None).is_err());
         assert!(
             validate_to_sarif_impl(
@@ -2741,7 +2742,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
     /// beside one, and two selectors beside one.
     #[test]
     fn wasm_eval_node_expr_selectors() {
-        const SH: &str = "http://www.w3.org/ns/shacl#";
+        use purrdf_core::vocab::sh::NS as SH;
         let eval = |expr: ExprInputs<'_>| {
             eval_node_expr_impl(
                 TOOLS_SHAPES,
@@ -2947,7 +2948,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
         )
         .expect("N-Quads is UTF-8");
         let results = |sarif: &str| -> usize {
-            let log: serde_json::Value = serde_json::from_str(sarif).expect("json");
+            let log: json::Value = json::read(sarif).expect("json");
             log["runs"][0]["results"]
                 .as_array()
                 .expect("a completed run always carries results")

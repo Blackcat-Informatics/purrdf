@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Report-only phase separation for the SHACL prepared-shapes product.
@@ -62,14 +62,14 @@
 
 use std::sync::Arc;
 
-use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
 use purrdf_shapes::engine::{PreparedShapes, parse_shapes};
 use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};
+use purrdf_testkit::bench::{BatchSize, Bench, bench_group, bench_main, black_box};
 
 #[path = "support/product.rs"]
 mod fixture;
 
-fn bench_product_reuse(c: &mut Criterion) {
+fn bench_product_reuse(c: &mut Bench) {
     let source = fixture::shapes_source();
     let prepared = fixture::prepared(&source);
     let product = fixture::encode(&prepared);
@@ -160,5 +160,5 @@ fn bench_product_reuse(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_product_reuse);
-criterion_main!(benches);
+bench_group!(benches, bench_product_reuse);
+bench_main!(benches);

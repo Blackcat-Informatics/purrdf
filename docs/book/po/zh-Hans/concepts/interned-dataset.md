@@ -75,12 +75,12 @@ assert_eq!(ds.quad_count(), 1);
 
 文本编解码器*不在*内核中——解析与序列化位于上一层的
 [`purrdf-rdf`](https://docs.rs/purrdf-rdf)。这一划分让内核保持小巧，其不变量可在
-crate 边界上强制执行：没有 oxigraph，没有 PyO3（一道卫生门禁断言依赖树），
+crate 边界上强制执行：没有 PyO3（一道卫生门禁断言依赖树），
 `wasm32` 干净，且 IR 层不含文件 IO。
 
 ## 为何如此设计
 
-布局由测量而非断言决定：criterion 基准
+布局由测量而非断言决定：基准
 `crates/rdf-core/benches/ir_layout.rs` 在分配次数、内存高水位与端到端延迟上比较
 结构数组、数组结构与谓词邻接三种布局——最终采用的布局就是胜出的那个。参见
 [性能](../project/performance.md)。

@@ -1,17 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Report-only latency harness for the succinct `pack` primitives
 //! (`crate::ir::pack::bits`): [`IntVector::get`], and [`RankSelect`]'s
 //! `rank1`/`select1`, each at a few sizes. No timing/speedup assertion —
-//! criterion's stdout summary is the report.
+//! the harness's stdout summary is the report.
 
-use criterion::{Criterion, criterion_group, criterion_main};
 use purrdf_core::ir::pack::bits::{BitVec, IntVector, RankSelect};
+use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
 /// The `IntVector`/bitmap sizes exercised, small to large enough to cross several
 /// rank/select superblock (512-bit) boundaries.
@@ -39,7 +39,7 @@ fn build_rank_select(n: usize) -> RankSelect {
     b.freeze()
 }
 
-fn bench_int_vector_get(c: &mut Criterion) {
+fn bench_int_vector_get(c: &mut Bench) {
     let mut group = c.benchmark_group("pack_bits_int_vector_get");
     for &n in &SIZES {
         let v = build_int_vector(n);
@@ -56,7 +56,7 @@ fn bench_int_vector_get(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_rank1(c: &mut Criterion) {
+fn bench_rank1(c: &mut Bench) {
     let mut group = c.benchmark_group("pack_bits_rank1");
     for &n in &SIZES {
         let rs = build_rank_select(n);
@@ -74,7 +74,7 @@ fn bench_rank1(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_select1(c: &mut Criterion) {
+fn bench_select1(c: &mut Bench) {
     let mut group = c.benchmark_group("pack_bits_select1");
     for &n in &SIZES {
         let rs = build_rank_select(n);
@@ -94,5 +94,5 @@ fn bench_select1(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_int_vector_get, bench_rank1, bench_select1);
-criterion_main!(benches);
+bench_group!(benches, bench_int_vector_get, bench_rank1, bench_select1);
+bench_main!(benches);

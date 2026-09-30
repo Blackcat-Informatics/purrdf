@@ -6,7 +6,7 @@ Run standalone (``python scan_order_repro.py``) or spawned by
 ``test_scan_order_determinism.py`` — one fresh interpreter per invocation, so each
 run draws its own process-random seeds (thread hash seed, ASLR, etc.) exactly the
 way the field report that motivated this test did. It builds the SAME tiny dataset
-via ``purrdf.Store`` (mirroring oxigraph's mutable, COW-delta-backed store), runs a
+via ``purrdf.Store`` (the mutable, COW-delta-backed store), runs a
 plain unordered projection plus GROUP_CONCAT/FIRST/LAST over the same scan, and
 prints the results as one JSON line so the parent test can diff them across many
 independent processes.

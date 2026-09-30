@@ -7,11 +7,28 @@
 //! and relational projection shims: scoped quad lookup, term accessors, language
 //! tag projection, RDF list walking, statement-layer access, and the compact
 //! dictionary-encoded database rows.
+//!
+//! IRI compaction ([`GtsFoldView::curie`]) is [`purrdf_iri::contract`] over the
+//! caller's [`GtsFoldViewConfig::curie_prefixes`] and a built-in table of W3C
+//! Recommendation namespaces only (`rdf`, `rdfs`, `owl`, `xsd`, `skos`): the longest
+//! matching namespace wins. Any other vocabulary, schema.org included, compacts only
+//! when the caller supplies its prefix.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
+use purrdf_core::collections::{SoleObject, walk_rdf_list};
 use purrdf_gts::model::{BlobEntry, Graph, Quad, Term, TermKind, Triple3, language_tag_refusal};
+use purrdf_iri::PrefixMap;
+use purrdf_iri::langtag::identity_fold;
+#[cfg(test)]
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+use purrdf_iri::vocab::rdf::{
+    FIRST as RDF_FIRST, NIL as RDF_NIL, REST as RDF_REST, TYPE as RDF_TYPE,
+};
+use purrdf_iri::vocab::{owl, rdf, rdfs, skos};
+use purrdf_lex::term_syntax;
+use purrdf_xsd::datatype::{XSD_NS as XSD, XSD_STRING};
 
 use crate::RdfDiagnostic;
 use crate::gts_resolve::ensure_terms_terminate;
@@ -20,15 +37,6 @@ use crate::gts_resolve::ensure_terms_terminate;
 pub const DEFAULT_SCOPE: &str = "";
 /// Sentinel scope name selecting every quad regardless of graph.
 pub const ALL_SCOPE: &str = "__all__";
-
-const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-#[cfg(test)]
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 
 /// The consumer-ontology language vocabulary the fold view scans to build its
 /// internal→BCP-47 retag map (mirrors the `StatementMetadataVocab` pattern in
@@ -63,14 +71,19 @@ impl LanguageVocab {
 }
 
 /// Consumer configuration for [`GtsFoldView`]: the optional language vocabulary
-/// (drives the retag map) and any extra CURIE prefix entries consulted (in
-/// order, before the built-in W3C/schema.org table) when compacting IRIs for
+/// (drives the retag map) and any extra CURIE prefix entries consulted, beside the
+/// built-in W3C Recommendation table, when compacting IRIs for
 /// [`PublicValue::Iri`] / [`GtsFoldView::curie`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GtsFoldViewConfig {
     /// The language vocabulary; `None` leaves the retag map empty.
     pub language_vocab: Option<LanguageVocab>,
-    /// Extra `(prefix, namespace)` CURIE entries, highest priority first.
+    /// Extra `(prefix, namespace)` CURIE entries. An IRI compacts under the
+    /// LONGEST namespace any entry or the built-in W3C table names; an entry
+    /// rebinds a built-in prefix of the same name, and of two entries naming one
+    /// prefix the first wins. Any namespace outside the built-in table
+    /// (schema.org, an application ontology, …) compacts only when it is listed
+    /// here.
     pub curie_prefixes: Vec<(String, String)>,
 }
 
@@ -200,7 +213,8 @@ pub struct GtsFoldView {
     spo: BTreeMap<ScopeKey, BTreeMap<usize, Vec<(usize, usize)>>>,
     po: BTreeMap<ScopeKey, BTreeMap<(usize, usize), Vec<usize>>>,
     tag_map: BTreeMap<String, String>,
-    curie_prefixes: Vec<(String, String)>,
+    /// The built-in table overlaid with the caller's prefixes.
+    curie_prefixes: PrefixMap,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -248,7 +262,7 @@ fn ensure_language_tags_readable(graph: &Graph) -> Result<(), RdfDiagnostic> {
 impl GtsFoldView {
     /// A view with no consumer vocabulary: the retag map stays empty (no
     /// namespace scanning is fabricated) and CURIE compaction uses only the
-    /// built-in W3C/schema.org prefixes. Pass a [`GtsFoldViewConfig`] via
+    /// built-in W3C Recommendation prefixes. Pass a [`GtsFoldViewConfig`] via
     /// [`GtsFoldView::with_config`] to supply the consumer's language vocab
     /// and CURIE prefixes.
     ///
@@ -292,7 +306,7 @@ impl GtsFoldView {
             spo: BTreeMap::new(),
             po: BTreeMap::new(),
             tag_map: BTreeMap::new(),
-            curie_prefixes: config.curie_prefixes,
+            curie_prefixes: curie_prefix_map(config.curie_prefixes),
         };
         view.build_iri_index();
         view.build_quad_indexes();
@@ -415,16 +429,11 @@ impl GtsFoldView {
         self.iri_index.get(iri).copied()
     }
 
-    /// Compact an IRI to a CURIE using the consumer-supplied prefixes first,
-    /// then the built-in W3C/schema.org table; unmatched IRIs are returned
-    /// unchanged.
+    /// Compact an IRI to a CURIE under the longest matching namespace of the
+    /// consumer-supplied prefixes and the built-in W3C Recommendation table
+    /// ([`purrdf_iri::contract`]); unmatched IRIs are returned unchanged.
     pub fn curie(&self, iri: &str) -> String {
-        for (prefix, namespace) in &self.curie_prefixes {
-            if let Some(local) = iri.strip_prefix(namespace.as_str()) {
-                return format!("{prefix}:{local}");
-            }
-        }
-        curie(iri)
+        purrdf_iri::contract(iri, &self.curie_prefixes).unwrap_or_else(|| iri.to_owned())
     }
 
     /// All quads visible in a scope. `scope` is `None` for the default graph,
@@ -528,24 +537,46 @@ impl GtsFoldView {
             .is_some_and(|rows| rows.contains(&(p_tid, o_tid)))
     }
 
-    /// Walk an RDF Collection (`rdf:first`/`rdf:rest`) from its head node and
-    /// return the member term ids in order. The walk stops at `rdf:nil` and is
-    /// cycle-safe (a revisited node terminates the walk).
+    /// The members, in order, of the RDF Collection headed by `head_tid` within
+    /// the scope, read by the strict walker
+    /// ([`purrdf_core::collections::walk_rdf_list`]) every reader of a collection
+    /// shares.
+    ///
+    /// A well-formed list yields all its members. A malformed one yields the
+    /// members read before the walk stopped ([`ListError::members`](purrdf_core::ListError)):
+    /// a cycle ends at the revisited cell, and a cell with no or several
+    /// `rdf:first`, or no or several `rdf:rest`, ends the list there rather
+    /// than having one of its values picked. A head that is `rdf:nil`, or no
+    /// list at all, yields nothing.
     pub fn rdf_list(&self, head_tid: usize, scope: Option<&str>) -> Vec<usize> {
-        let nil = self.tid_of_iri(RDF_NIL);
-        let mut out = Vec::new();
-        let mut seen = BTreeSet::new();
-        let mut current = Some(head_tid);
-        while let Some(tid) = current {
-            if Some(tid) == nil || !seen.insert(tid) {
-                break;
-            }
-            if let Some(first) = self.value(tid, RDF_FIRST, scope) {
-                out.push(first);
-            }
-            current = self.value(tid, RDF_REST, scope);
-        }
-        out
+        let Some(key) = self.scope_key(scope) else {
+            return Vec::new();
+        };
+        let (first, rest) = (self.tid_of_iri(RDF_FIRST), self.tid_of_iri(RDF_REST));
+        walk_rdf_list(
+            head_tid,
+            self.tid_of_iri(RDF_NIL),
+            |cell| self.sole_object(cell, first, key),
+            |cell| self.sole_object(cell, rest, key),
+        )
+        .unwrap_or_else(|error| error.members)
+    }
+
+    /// How many distinct objects `(s_tid, p_tid, ?o)` has within the scope,
+    /// counted up to two without allocating.
+    fn sole_object(&self, s_tid: usize, p_tid: Option<usize>, key: ScopeKey) -> SoleObject<usize> {
+        let Some(p_tid) = p_tid else {
+            return SoleObject::None;
+        };
+        SoleObject::of(
+            self.spo
+                .get(&key)
+                .and_then(|idx| idx.get(&s_tid))
+                .into_iter()
+                .flatten()
+                .filter(|&&(p, _)| p == p_tid)
+                .map(|&(_, o)| o),
+        )
     }
 
     /// The purrdf-gts 0.9.11 reifier rows `(reifier_id, (s,p,o), graph?)`. purrdf's
@@ -590,7 +621,7 @@ impl GtsFoldView {
                 lang.clone()
             };
             if !public.eq_ignore_ascii_case("en") {
-                tags.insert(public.to_ascii_lowercase());
+                tags.insert(identity_fold(&public));
             }
         }
         tags
@@ -750,7 +781,7 @@ impl GtsFoldView {
         let mut by_bcp: BTreeMap<String, Vec<LitRow>> = BTreeMap::new();
         for &tid in candidates {
             let bcp = self.public_bcp47_for(tid);
-            let key = bcp.as_deref().unwrap_or("").to_ascii_lowercase();
+            let key = identity_fold(bcp.as_deref().unwrap_or(""));
             let original = self.lang(tid).unwrap_or("").to_string();
             by_bcp
                 .entry(key)
@@ -767,10 +798,7 @@ impl GtsFoldView {
         if requested.is_empty() {
             return vec!["en".to_string()];
         }
-        requested
-            .iter()
-            .map(|tag| tag.to_ascii_lowercase())
-            .collect()
+        requested.iter().map(|tag| identity_fold(tag)).collect()
     }
 
     fn select_literal(
@@ -867,7 +895,7 @@ pub fn relational_rows(graph: &Graph) -> Result<RelationalRows, String> {
             .map(|(id, term)| {
                 (
                     id,
-                    term_kind_int(term.kind),
+                    term.kind.to_wire(),
                     term.value.clone(),
                     term.datatype,
                     term.lang.clone(),
@@ -905,17 +933,8 @@ fn graph_term_for_scope(scope: ScopeKey) -> Option<usize> {
     }
 }
 
-fn term_kind_int(kind: TermKind) -> u8 {
-    match kind {
-        TermKind::Iri => 0,
-        TermKind::Literal => 1,
-        TermKind::Bnode => 2,
-        TermKind::Triple => 3,
-    }
-}
-
 fn is_internal_tag(lang: &str) -> bool {
-    let lower = lang.to_ascii_lowercase();
+    let lower = identity_fold(lang);
     let Some(suffix) = lower.strip_prefix("x-purrdf-") else {
         return false;
     };
@@ -926,7 +945,7 @@ fn is_internal_tag(lang: &str) -> bool {
 }
 
 fn rank_language(lang: &str) -> (u8, String) {
-    let lower = lang.to_ascii_lowercase();
+    let lower = identity_fold(lang);
     let rank = u8::from(lower != "x-purrdf-english");
     (rank, lower)
 }
@@ -939,18 +958,16 @@ fn best_tagged(by_bcp: &BTreeMap<String, Vec<LitRow>>) -> Option<(&str, &LitRow)
         .min_by(|a, b| rank_language(&a.1.2).cmp(&rank_language(&b.1.2)))
 }
 
-/// Render one term as its N-Quads token, resolving a quoted triple's components to
-/// the leaves.
+/// Render one term as its canonical N-Quads token ([`term_syntax`]), resolving a quoted
+/// triple's components to the leaves.
 ///
 /// A quoted triple is written over a work list: its opening `<<( ` at once, then its
 /// subject next, with the separators, the predicate, the object and the closing ` )>>`
-/// held back in that order until the subject's whole nesting is written. A typed
-/// literal's datatype is written next after its `^^`.
+/// held back in that order until the subject's whole nesting is written.
 ///
 /// # Termination
 ///
-/// The walk follows the two structural edges a term carries — a quoted triple's
-/// `(s, p, o)` and a literal's datatype — with no depth bound and no visited set,
+/// The walk follows a quoted triple's `(s, p, o)` with no depth bound and no visited set,
 /// because the graph it walks has already been proven to terminate. Every route to a
 /// `Graph` inside this module runs through [`GtsFoldView::with_config`], which
 /// refuses a self-reaching term table outright. Keep it that way: a new constructor
@@ -973,39 +990,33 @@ fn render_term(graph: &Graph, tid: usize) -> String {
         };
         let term = &graph.terms[tid];
         match term.kind {
-            TermKind::Iri => {
-                let _ = write!(out, "<{}>", term.value.as_deref().unwrap_or(""));
-            }
+            TermKind::Iri => term_syntax::write_iri(term.value.as_deref().unwrap_or(""), &mut out),
             TermKind::Bnode => match term.value.as_ref() {
-                Some(value) => {
-                    let _ = write!(out, "_:{value}");
-                }
+                Some(value) => term_syntax::write_blank(value, &mut out),
                 None => {
                     let _ = write!(out, "_:b{tid}");
                 }
             },
-            TermKind::Literal => {
-                let _ = write!(
-                    out,
-                    "\"{}\"",
-                    nt_escape(term.value.as_deref().unwrap_or(""))
-                );
-                if let Some(lang) = &term.lang {
-                    if let Some(direction) = term.direction.as_deref() {
-                        let _ = write!(out, "@{lang}--{direction}");
-                    } else {
-                        let _ = write!(out, "@{lang}");
-                    }
-                } else if let Some(datatype) = term.datatype {
-                    out.push_str("^^");
-                    next = Some(Piece::Term(datatype));
-                }
-            }
+            // A tagged literal's datatype is implied by its tag and never written, so
+            // only an untagged one resolves its datatype term (GTS-SPEC §7.1 defaults
+            // an absent one to `xsd:string`, which the canonical form leaves bare).
+            TermKind::Literal => term_syntax::write_literal(
+                term.value.as_deref().unwrap_or(""),
+                term.datatype
+                    .and_then(|datatype| graph.terms.get(datatype))
+                    .and_then(|datatype| datatype.value.as_deref())
+                    .unwrap_or(XSD_STRING),
+                term.lang.as_deref(),
+                term.lang.as_ref().and(term.direction.as_deref()),
+                &mut out,
+            ),
             TermKind::Triple => match graph.triple_of(tid) {
                 Some((s, p, o)) => {
-                    out.push_str("<<( ");
+                    out.push_str(term_syntax::TRIPLE_TERM_OPEN);
+                    out.push(' ');
                     held.extend([
-                        Piece::Text(" )>>"),
+                        Piece::Text(term_syntax::TRIPLE_TERM_CLOSE),
+                        Piece::Text(" "),
                         Piece::Term(o),
                         Piece::Text(" "),
                         Piece::Term(p),
@@ -1022,44 +1033,27 @@ fn render_term(graph: &Graph, tid: usize) -> String {
     out
 }
 
-fn nt_escape(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for c in value.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04X}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out
-}
-
-fn curie(iri: &str) -> String {
-    for (prefix, namespace) in PREFIXES {
-        if let Some(local) = iri.strip_prefix(namespace) {
-            return format!("{prefix}:{local}");
-        }
-    }
-    iri.to_string()
-}
-
-/// Built-in CURIE prefixes: well-known public vocabularies only. Consumer
-/// namespaces (e.g. an application ontology) are supplied via
-/// [`GtsFoldViewConfig::curie_prefixes`] and are consulted first.
+/// Built-in CURIE prefixes: W3C Recommendation namespaces only. Every other
+/// namespace (schema.org, an application ontology, …) is caller-supplied via
+/// [`GtsFoldViewConfig::curie_prefixes`], which may also rebind these prefixes.
 const PREFIXES: &[(&str, &str)] = &[
-    ("schema", "https://schema.org/"),
-    ("rdf", RDF),
-    ("rdfs", "http://www.w3.org/2000/01/rdf-schema#"),
-    ("owl", "http://www.w3.org/2002/07/owl#"),
+    ("rdf", rdf::NS),
+    ("rdfs", rdfs::NS),
+    ("owl", owl::NS),
     ("xsd", XSD),
-    ("skos", "http://www.w3.org/2004/02/skos/core#"),
+    ("skos", skos::NS),
 ];
+
+/// [`PREFIXES`] overlaid with the caller's entries: a caller prefix rebinds a
+/// built-in of the same name, and of two caller entries naming one prefix the
+/// first is kept.
+fn curie_prefix_map(caller: Vec<(String, String)>) -> PrefixMap {
+    let mut map: PrefixMap = PREFIXES.iter().copied().collect();
+    for (prefix, namespace) in caller.into_iter().rev() {
+        map.insert(prefix, namespace);
+    }
+    map
+}
 
 #[cfg(test)]
 mod tests {
@@ -1068,7 +1062,7 @@ mod tests {
     use purrdf_gts::writer::Writer;
 
     const EX: &str = "https://example.org/";
-    const RDFS_LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
+    use purrdf_iri::vocab::rdfs::LABEL as RDFS_LABEL;
 
     fn iri(value: &str) -> Term {
         Term {
@@ -1215,6 +1209,57 @@ mod tests {
         assert_eq!(view.annotations(), &[(16, 17, 18, None)]);
     }
 
+    /// A view over `quads` among the terms `cat`, `dog`, `_:l1`, `_:l2`,
+    /// `rdf:first`, `rdf:rest`, `rdf:nil` (ids 0 to 6).
+    fn list_view(quads: &[(usize, usize, usize, Option<usize>)]) -> GtsFoldView {
+        let mut writer = Writer::new("dist");
+        writer.add_terms(&[
+            iri(&(EX.to_string() + "cat")),
+            iri(&(EX.to_string() + "dog")),
+            bnode("l1"),
+            bnode("l2"),
+            iri(RDF_FIRST),
+            iri(RDF_REST),
+            iri(RDF_NIL),
+        ]);
+        writer.add_quads(quads);
+        GtsFoldView::new(purrdf_gts::reader::read(&writer.to_bytes(), true, None))
+            .expect("the fixture graph's terms terminate")
+    }
+
+    /// The strict walk ends a malformed list where it breaks: at a cycle, at a
+    /// cell with two `rdf:first` values (neither is picked), and at a cell with
+    /// none; a well-formed neighbour reads whole.
+    #[test]
+    fn rdf_list_stops_where_the_collection_is_malformed() {
+        let whole = list_view(&[
+            (2, 4, 0, None),
+            (2, 5, 3, None),
+            (3, 4, 1, None),
+            (3, 5, 6, None),
+        ]);
+        assert_eq!(whole.rdf_list(2, None), vec![0, 1]);
+        let cycle = list_view(&[
+            (2, 4, 0, None),
+            (2, 5, 3, None),
+            (3, 4, 1, None),
+            (3, 5, 2, None),
+        ]);
+        assert_eq!(cycle.rdf_list(2, None), vec![0, 1]);
+        let ambiguous = list_view(&[
+            (2, 4, 0, None),
+            (2, 5, 3, None),
+            (3, 4, 0, None),
+            (3, 4, 1, None),
+            (3, 5, 6, None),
+        ]);
+        assert_eq!(ambiguous.rdf_list(2, None), vec![0]);
+        let missing = list_view(&[(2, 4, 0, None), (2, 5, 3, None), (3, 5, 6, None)]);
+        assert_eq!(missing.rdf_list(2, None), vec![0]);
+        assert_eq!(whole.rdf_list(6, None), Vec::<usize>::new());
+        assert_eq!(whole.rdf_list(0, None), Vec::<usize>::new());
+    }
+
     #[test]
     fn language_boundary_reads_tag_map_across_all_scopes() {
         // The language vocabulary is CALLER-supplied: this fixture mints its
@@ -1283,6 +1328,59 @@ mod tests {
         assert!(bare.tag_map().is_empty());
     }
 
+    /// A one-term graph holding the schema.org `Person` class IRI.
+    fn schema_org_graph() -> Graph {
+        let mut writer = Writer::new("dist");
+        writer.add_terms(&[iri("https://schema.org/Person")]);
+        purrdf_gts::reader::read(&writer.to_bytes(), true, None)
+    }
+
+    #[test]
+    fn a_schema_org_iri_stays_a_full_iri_without_a_caller_prefix() {
+        let view = GtsFoldView::new(schema_org_graph()).expect("terms terminate");
+        assert_eq!(
+            view.curie("https://schema.org/Person"),
+            "https://schema.org/Person"
+        );
+        assert_eq!(
+            view.public_value(0),
+            PublicValue::Iri("https://schema.org/Person".to_string())
+        );
+    }
+
+    #[test]
+    fn a_schema_org_iri_compacts_under_a_caller_supplied_prefix() {
+        let view = GtsFoldView::with_config(
+            schema_org_graph(),
+            GtsFoldViewConfig {
+                language_vocab: None,
+                curie_prefixes: vec![("schema".to_string(), "https://schema.org/".to_string())],
+            },
+        )
+        .expect("terms terminate");
+        assert_eq!(view.curie("https://schema.org/Person"), "schema:Person");
+        assert_eq!(
+            view.public_value(0),
+            PublicValue::Iri("schema:Person".to_string())
+        );
+    }
+
+    #[test]
+    fn w3c_recommendation_iris_compact_without_a_caller_prefix() {
+        let view = GtsFoldView::new(schema_org_graph()).expect("terms terminate");
+        assert_eq!(view.curie(RDFS_LABEL), "rdfs:label");
+        assert_eq!(view.curie(RDF_TYPE), "rdf:type");
+        assert_eq!(view.curie(&(XSD.to_string() + "integer")), "xsd:integer");
+        assert_eq!(
+            view.curie("http://www.w3.org/2002/07/owl#Class"),
+            "owl:Class"
+        );
+        assert_eq!(
+            view.curie("http://www.w3.org/2004/02/skos/core#Concept"),
+            "skos:Concept"
+        );
+    }
+
     #[test]
     fn relational_rows_keep_dictionary_ids() {
         let view = test_view();
@@ -1343,7 +1441,10 @@ mod term_walk_tests {
     use purrdf_core::{Nested, TermValue, try_fold_nested};
     use purrdf_gts::model::{Graph, Term, TermKind};
 
-    use super::{nt_escape, render_term};
+    use purrdf_lex::term_syntax::{write_blank, write_iri, write_literal};
+    use purrdf_xsd::datatype::XSD_STRING;
+
+    use super::render_term;
 
     /// Lower `value` into `graph`'s term table, a triple term naming its own components,
     /// and return its term id.
@@ -1402,37 +1503,67 @@ mod term_walk_tests {
     /// The recursive reference of [`render_term`].
     fn reference(graph: &Graph, tid: usize) -> String {
         let term = &graph.terms[tid];
+        let mut out = String::new();
         match term.kind {
-            TermKind::Iri => format!("<{}>", term.value.as_deref().unwrap_or("")),
-            TermKind::Bnode => term
-                .value
-                .as_ref()
-                .map_or_else(|| format!("_:b{tid}"), |value| format!("_:{value}")),
-            TermKind::Literal => {
-                let lit = format!("\"{}\"", nt_escape(term.value.as_deref().unwrap_or("")));
-                if let Some(lang) = &term.lang {
-                    return term.direction.as_deref().map_or_else(
-                        || format!("{lit}@{lang}"),
-                        |direction| format!("{lit}@{lang}--{direction}"),
-                    );
-                }
-                term.datatype.map_or_else(
-                    || lit.clone(),
-                    |datatype| format!("{lit}^^{}", reference(graph, datatype)),
-                )
-            }
-            TermKind::Triple => graph.triple_of(tid).map_or_else(
-                || format!("_:unbound_triple_{tid}"),
-                |(s, p, o)| {
-                    format!(
-                        "<<( {} {} {} )>>",
-                        reference(graph, s),
-                        reference(graph, p),
-                        reference(graph, o)
-                    )
-                },
+            TermKind::Iri => write_iri(term.value.as_deref().unwrap_or(""), &mut out),
+            TermKind::Bnode => match term.value.as_deref() {
+                Some(value) => write_blank(value, &mut out),
+                None => out = format!("_:b{tid}"),
+            },
+            TermKind::Literal => write_literal(
+                term.value.as_deref().unwrap_or(""),
+                term.datatype
+                    .and_then(|datatype| graph.terms[datatype].value.as_deref())
+                    .unwrap_or(XSD_STRING),
+                term.lang.as_deref(),
+                term.lang.as_ref().and(term.direction.as_deref()),
+                &mut out,
             ),
+            TermKind::Triple => {
+                out = graph.triple_of(tid).map_or_else(
+                    || format!("_:unbound_triple_{tid}"),
+                    |(s, p, o)| {
+                        format!(
+                            "<<( {} {} {} )>>",
+                            reference(graph, s),
+                            reference(graph, p),
+                            reference(graph, o)
+                        )
+                    },
+                );
+            }
         }
+        out
+    }
+
+    /// An N-Quads token is a canonical term: an IRI's forbidden scalars ride as
+    /// `UCHAR`, and a literal's body is escaped with every canonical `ECHAR`.
+    #[test]
+    fn the_token_escapes_iris_and_literal_bodies_canonically() {
+        let mut graph = Graph::default();
+        let iri = lower(
+            &mut graph,
+            &TermValue::Iri("http://example.org/a b<c>".to_owned()),
+        );
+        assert_eq!(
+            render_term(&graph, iri),
+            "<http://example.org/a\\u0020b\\u003Cc\\u003E>"
+        );
+        let plain = lower(
+            &mut graph,
+            &TermValue::Iri("http://example.org/a".to_owned()),
+        );
+        assert_eq!(render_term(&graph, plain), "<http://example.org/a>");
+        let literal = lower(
+            &mut graph,
+            &TermValue::Literal {
+                lexical_form: "q\"\u{8}\u{c}\u{85}".to_owned(),
+                datatype: XSD_STRING.to_owned(),
+                language: None,
+                direction: None,
+            },
+        );
+        assert_eq!(render_term(&graph, literal), "\"q\\\"\\b\\f\u{85}\"");
     }
 
     /// The work-list renderer spells every generated term exactly as the recursive
@@ -1443,10 +1574,11 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = purrdf_core::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::Any,
+                purrdf_core::term_fixture::TermShape::Any,
             );
             nested += usize::from(budget < 7);
             let mut graph = Graph::default();
@@ -1465,23 +1597,18 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_rendered_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = crate::test_terms::triple_chain(LEVELS);
-                let mut graph = Graph::default();
-                let id = lower(&mut graph, &value);
-                drop(value);
-                let rendered = render_term(&graph, id);
-                let level =
-                    "<<( <http://example.org/s> <http://example.org/p> ".len() + " )>>".len();
-                assert_eq!(
-                    rendered.len(),
-                    LEVELS * level + "<http://example.org/o>".len()
-                );
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the renderer did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            let mut graph = Graph::default();
+            let id = lower(&mut graph, &value);
+            drop(value);
+            let rendered = render_term(&graph, id);
+            let level = "<<( <http://example.org/s> <http://example.org/p> ".len() + " )>>".len();
+            assert_eq!(
+                rendered.len(),
+                LEVELS * level + "<http://example.org/o>".len()
+            );
+        })
+        .expect("the thread starts");
     }
 }

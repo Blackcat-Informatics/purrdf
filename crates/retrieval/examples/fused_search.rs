@@ -74,17 +74,15 @@
 //! Every IRI here is the host's own `example.org` vocabulary. PurRDF mints none,
 //! and there is no default producer, stratum or weight to fall back on.
 
+use purrdf_core::purremb_fixture::Identities;
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, DimensionalityPolicy, DistanceMetric, EmbeddingBuilder,
-    EmbeddingFamilyContract, MatrixInput, MatrixRow, PrefixPostprocessing, ProjectionSpec,
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTermTarget, StageImplementation, TargetId,
-    TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId, parse_iri,
+    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
+    DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract, MatrixInput, MatrixRow,
+    PrefixPostprocessing, ProjectionSpec, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTermTarget,
+    TargetId, TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId, parse_iri,
 };
 use purrdf_retrieval::{
     AdmissionEnvironment, Completeness, DecayRule, Fixed, FusionProfile, Iri, OrderFidelity,
@@ -96,6 +94,8 @@ use purrdf_sparql_eval::{
     PropertyFunctionRegistry, ServiceLevel, TermKind,
 };
 use purrdf_text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
+
+use purrdf_retrieval::block_on;
 
 /// The predicate the lexical corpus is indexed over.
 const NOTE: &str = "https://example.org/note";
@@ -180,30 +180,7 @@ fn text_index(data: &RdfDataset) -> TextIndex {
     TextIndex::from_dataset(data, &config).expect("the index builds over the fixture dataset")
 }
 
-/// A fixture artifact identity, distinct per `name`.
-fn identity(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        subject(name),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("the host's artifact identity is well formed")
-}
-
-/// A fixture applied stage, distinct per `name`.
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            subject(name),
-            ContentDigest::of(name.as_bytes()),
-            "application/octet-stream",
-            vec![1],
-        )
-        .expect("the host's stage is well formed"),
-    )
-}
+const FX: Identities = Identities::at("https://example.org/");
 
 /// Encode a sealed PURREMB artifact holding one vector per corpus document under
 /// the squared-Euclidean metric.
@@ -243,14 +220,14 @@ fn artifact() -> (
     declared.sort_unstable_by_key(|target| target.id);
 
     let contract = EmbeddingFamilyContract {
-        model: identity("model"),
-        engine: identity("engine"),
-        tokenizer: identity("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F64,
@@ -466,30 +443,6 @@ impl Statistics for NoStatistics {
 
     fn selectivity_ppm(&self, _subject: &Iri, _term: &RequestTerm) -> Option<u64> {
         None
-    }
-}
-
-/// Drive one future to completion on this thread.
-///
-/// The ladder's futures are awaited in a single task and never cross a thread
-/// boundary, so a parking waker is the whole runtime they need; a host that
-/// already has an executor awaits `search` on that instead.
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
     }
 }
 

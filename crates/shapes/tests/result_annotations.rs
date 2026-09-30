@@ -16,13 +16,15 @@
 //! report graph, beside a control row (the same constraint without the annotation)
 //! that carries none — so an annotation silently dropped cannot pass.
 
+#[path = "support/turtle.rs"]
+mod turtle;
+
 use std::sync::Arc;
 
 use purrdf::RdfDataset;
 use purrdf_shapes::engine::{PreparedShapes, parse_shapes, validate_dataset_with_shapes_graph};
 use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};
 use purrdf_shapes::report::ValidationReport;
-use purrdf_shapes::shapes::Shapes;
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 
 const PREFIXES: &str = "
@@ -34,31 +36,18 @@ const PREFIXES: &str = "
 
 const DATA: &str = "ex:a ex:p ex:b . ex:b ex:tag \"urgent\" .";
 
-fn load(shapes_ttl: &str) -> Result<Shapes, String> {
-    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).map_err(String::from)
-}
-
-#[track_caller]
-fn refused(shapes_ttl: &str, needle: &str) {
-    let error = load(shapes_ttl).expect_err("the shapes graph must be refused at load");
-    assert!(
-        error.contains(needle),
-        "refusal must mention {needle:?}: {error}"
-    );
-}
-
-#[track_caller]
-fn loads(shapes_ttl: &str) -> Shapes {
-    load(shapes_ttl).unwrap_or_else(|error| panic!("the valid neighbour must load: {error}"))
-}
-
 fn data() -> Arc<RdfDataset> {
     parse_turtle_to_dataset(&format!("{PREFIXES}{DATA}"), None).expect("data parses")
 }
 
 #[track_caller]
 fn validate(shapes_ttl: &str) -> ValidationReport {
-    validate_dataset_with_shapes_graph(&data(), &loads(shapes_ttl), None).expect("validation runs")
+    validate_dataset_with_shapes_graph(
+        &data(),
+        &turtle::loads_neighbour(PREFIXES, shapes_ttl),
+        None,
+    )
+    .expect("validation runs")
 }
 
 /// Every result's annotations as `(property, value)` N-Triples strings.
@@ -236,54 +225,69 @@ fn a_prepared_product_keeps_the_annotations() {
 
 #[test]
 fn a_var_name_that_is_no_sparql_variable_is_refused_and_a_bare_name_loads() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         &sparql_constraint(
             "sh:resultAnnotation [ sh:annotationProperty ex:label ; sh:annotationVarName \"?tag\" ] ;",
         ),
         "SPARQL variable name",
     );
-    loads(&sparql_constraint(
-        "sh:resultAnnotation [ sh:annotationProperty ex:label ; sh:annotationVarName \"tag\" ] ;",
-    ));
+    turtle::loads_neighbour(
+        PREFIXES,
+        &sparql_constraint(
+            "sh:resultAnnotation [ sh:annotationProperty ex:label ; sh:annotationVarName \"tag\" ] ;",
+        ),
+    );
 }
 
 #[test]
 fn an_annotation_needs_exactly_one_iri_property() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         &sparql_constraint(
             "sh:resultAnnotation [ sh:annotationProperty ex:a1, ex:a2 ; sh:annotationVarName \"tag\" ] ;",
         ),
         "exactly one value for the property sh:annotationProperty",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         &sparql_constraint("sh:resultAnnotation [ sh:annotationVarName \"tag\" ] ;"),
         "exactly one value for the property sh:annotationProperty",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         &sparql_constraint("sh:resultAnnotation \"tag\" ;"),
         "IRIs or blank nodes",
     );
-    loads(&sparql_constraint(
-        "sh:resultAnnotation [ sh:annotationProperty ex:a1 ; sh:annotationVarName \"tag\" ] ;",
-    ));
+    turtle::loads_neighbour(
+        PREFIXES,
+        &sparql_constraint(
+            "sh:resultAnnotation [ sh:annotationProperty ex:a1 ; sh:annotationVarName \"tag\" ] ;",
+        ),
+    );
 }
 
 #[test]
 fn a_report_property_as_annotation_is_refused_and_an_application_property_loads() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         &sparql_constraint(
             "sh:resultAnnotation [ sh:annotationProperty sh:focusNode ; sh:annotationVarName \"tag\" ] ;",
         ),
         "validation-report vocabulary",
     );
-    loads(&sparql_constraint(
-        "sh:resultAnnotation [ sh:annotationProperty ex:focus ; sh:annotationVarName \"tag\" ] ;",
-    ));
+    turtle::loads_neighbour(
+        PREFIXES,
+        &sparql_constraint(
+            "sh:resultAnnotation [ sh:annotationProperty ex:focus ; sh:annotationVarName \"tag\" ] ;",
+        ),
+    );
 }
 
 #[test]
 fn an_unknown_term_on_an_annotation_node_is_refused() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         &sparql_constraint(
             "sh:resultAnnotation [ sh:annotationProperty ex:label ; sh:annotationVarNmae \"tag\" ] ;",
         ),
@@ -298,21 +302,24 @@ fn an_unknown_term_on_an_annotation_node_is_refused() {
 /// `sh:SPARQLUpdateExecutable` resource no shape reads loads.
 #[test]
 fn describe_and_update_are_refused_wherever_the_loader_reads_and_load_elsewhere() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         &sparql_constraint("sh:update \"DELETE WHERE { ?s ?p ?o }\" ;"),
         "no SHACL specification executes",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:describe \"DESCRIBE ?x\" .",
         "no SHACL specification executes",
     );
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:C a sh:ConstraintComponent ; sh:parameter [ sh:path ex:q ] ; sh:validator ex:V .
          ex:V a sh:SPARQLAskValidator ; sh:ask \"ASK {}\" ; sh:update \"CLEAR ALL\" .",
         "no SHACL specification executes",
     );
-    loads(&sparql_constraint(""));
-    loads(
+    turtle::loads_neighbour(PREFIXES, &sparql_constraint(""));
+    turtle::loads_neighbour(PREFIXES,
         "ex:Cleanup a sh:SPARQLUpdateExecutable ; sh:update \"CLEAR ALL\" .
          ex:Peek a sh:SPARQLDescribeExecutable ; sh:describe \"DESCRIBE <http://example.org/ns#a>\" .
          ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:class ex:Thing .",
@@ -324,15 +331,25 @@ fn describe_and_update_are_refused_wherever_the_loader_reads_and_load_elsewhere(
 /// carrying an `sh:select` is refused; the SELECT-only neighbours load.
 #[test]
 fn a_query_a_node_never_runs_is_refused() {
-    refused(&sparql_constraint("sh:ask \"ASK {}\" ;"), "shacl#ask");
-    refused(&sparql_constraint("sh:mesage \"typo\" ;"), "shacl#mesage");
-    refused(
+    turtle::refused(
+        PREFIXES,
+        &sparql_constraint("sh:ask \"ASK {}\" ;"),
+        "shacl#ask",
+    );
+    turtle::refused(
+        PREFIXES,
+        &sparql_constraint("sh:mesage \"typo\" ;"),
+        "shacl#mesage",
+    );
+    turtle::refused(
+        PREFIXES,
         "ex:C a sh:ConstraintComponent ; sh:parameter [ sh:path ex:q ] ; sh:validator ex:V .
          ex:V a sh:SPARQLAskValidator ; sh:ask \"ASK {}\" ; sh:select \"SELECT $this WHERE {}\" .",
         "never runs",
     );
-    loads(&sparql_constraint("sh:message \"fine\" ;"));
-    loads(
+    turtle::loads_neighbour(PREFIXES, &sparql_constraint("sh:message \"fine\" ;"));
+    turtle::loads_neighbour(
+        PREFIXES,
         "ex:C a sh:ConstraintComponent ; sh:parameter [ sh:path ex:q ] ; sh:validator ex:V .
          ex:V a sh:SPARQLAskValidator ; sh:ask \"ASK {}\" .",
     );
@@ -342,7 +359,8 @@ fn a_query_a_node_never_runs_is_refused() {
 /// JavaScript engine.
 #[test]
 fn shacl_js_is_refused_as_not_shacl_1_2() {
-    refused(
+    turtle::refused(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:js [ sh:jsFunctionName \"f\" ] .",
         "not part of SHACL 1.2",
     );

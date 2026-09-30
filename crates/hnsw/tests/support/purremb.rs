@@ -15,21 +15,19 @@
 #![allow(dead_code, unreachable_pub)]
 
 use purrdf_core::IndexGuardView;
+use purrdf_core::distance::Reassociated;
 use purrdf_core::distance::{Arithmetic, Exact};
+use purrdf_core::purremb_fixture::{Identities, reseal, section_span};
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, DerivedIndex, DimensionalityPolicy, DistanceMetric,
-    EffectivePrefix, EmbeddingBuilder, EmbeddingFamily, EmbeddingFamilyContract, EmbeddingTarget,
-    EmbeddingView, ExtensionTarget, IndexBuildDeterminism, IndexCoordinates, IndexGuardContract,
-    IndexLossContract, IndexPayloadStorage, MatrixInput, MatrixRow, PURREMB_HEADER_LENGTH,
-    PrefixPostprocessing, RdfDatasetBuilder, SECTION_INDEX_PAYLOAD, StageImplementation, TargetId,
-    TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId, derive_artifact_root,
+    AppliedStage, ArtifactIdentity, CanonicalMetadataInput, CertifiedPurrpckSource, DerivedIndex,
+    DimensionalityPolicy, DistanceMetric, EffectivePrefix, EmbeddingBuilder, EmbeddingFamily,
+    EmbeddingFamilyContract, EmbeddingTarget, EmbeddingView, ExtensionTarget,
+    IndexBuildDeterminism, IndexCoordinates, IndexGuardContract, IndexLossContract,
+    IndexPayloadStorage, MatrixInput, MatrixRow, PrefixPostprocessing, RdfDatasetBuilder,
+    SECTION_INDEX_PAYLOAD, TargetId, TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
     verify_embedding,
 };
-use purrdf_hnsw::{HnswIndex, Params, VectorMatrix, guard, level::splitmix64};
-
-/// Directory entry length in the PURREMB v1 framing.
-const DIRECTORY_ENTRY_LENGTH: usize = 64;
+use purrdf_hnsw::{HnswIndex, IndexArithmetic, Params, VectorMatrix, guard, level::splitmix64};
 
 /// One fixture context: everything needed to rebuild the artifact with a different index.
 struct Context {
@@ -101,13 +99,13 @@ impl Fixture {
             dims,
             dims,
             params,
-            HnswIndex::build_reassociated,
-            guard::load_reassociated,
+            purrdf_hnsw::build::<Reassociated>,
+            guard::load::<Reassociated>,
         )
     }
 
     /// The two-pass construction, with the index built by `build` and read back by `load`.
-    fn assemble<A: Arithmetic>(
+    fn assemble<A: IndexArithmetic>(
         rows: usize,
         dims: usize,
         prefix: usize,
@@ -314,14 +312,14 @@ fn context(rows: usize, dims: usize, prefix: usize) -> Context {
         .expect("target set is nonempty and distinct");
 
     let contract = EmbeddingFamilyContract {
-        model: artifact("model"),
-        engine: artifact("engine"),
-        tokenizer: artifact("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F32,
@@ -411,74 +409,8 @@ fn build(context: &Context, indexes: Vec<DerivedIndex>) -> Vec<u8> {
     builder.build().expect("the indexed artifact builds").bytes
 }
 
-fn artifact(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        format!("https://example.org/index/{name}"),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("artifact")
-}
-
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            format!("https://example.org/index/{name}"),
-            ContentDigest::of(name.as_bytes()),
-            "application/cbor",
-            vec![1, 2],
-        )
-        .expect("stage"),
-    )
-}
-
-// ---------------------------------------------------------------------------
-// Framing helpers, shared with `crates/rdf-core/tests/purremb_indexes.rs`
-// ---------------------------------------------------------------------------
-
-fn read_u32(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("u32 field"))
-}
-
-fn read_u64(bytes: &[u8], offset: usize) -> u64 {
-    u64::from_le_bytes(bytes[offset..offset + 8].try_into().expect("u64 field"))
-}
-
-fn directory_entry(bytes: &[u8], kind: u32, instance: u32) -> usize {
-    let count = usize::try_from(read_u32(bytes, 20)).expect("section count");
-    (0..count)
-        .map(|index| PURREMB_HEADER_LENGTH as usize + index * DIRECTORY_ENTRY_LENGTH)
-        .find(|offset| read_u32(bytes, *offset) == kind && read_u32(bytes, *offset + 8) == instance)
-        .expect("section directory entry")
-}
-
-fn section_span(bytes: &[u8], kind: u32, instance: u32) -> (usize, usize) {
-    let entry = directory_entry(bytes, kind, instance);
-    (
-        usize::try_from(read_u64(bytes, entry + 16)).expect("section offset"),
-        usize::try_from(read_u64(bytes, entry + 24)).expect("section length"),
-    )
-}
-
-fn reseal(bytes: &mut [u8], sections: &[(u32, u32)]) {
-    for &(kind, instance) in sections {
-        let entry = directory_entry(bytes, kind, instance);
-        let (offset, length) = section_span(bytes, kind, instance);
-        let digest = ContentDigest::of(&bytes[offset..offset + length]);
-        bytes[entry + 32..entry + 64].copy_from_slice(digest.as_bytes());
-    }
-    let count = usize::try_from(read_u32(bytes, 20)).expect("section count");
-    let directory_end = PURREMB_HEADER_LENGTH as usize + count * DIRECTORY_ENTRY_LENGTH;
-    let mut header = [0u8; PURREMB_HEADER_LENGTH as usize];
-    header.copy_from_slice(&bytes[..PURREMB_HEADER_LENGTH as usize]);
-    header[64..96].fill(0);
-    let root = derive_artifact_root(
-        &header,
-        &bytes[PURREMB_HEADER_LENGTH as usize..directory_end],
-    );
-    bytes[64..96].copy_from_slice(root.as_bytes());
-    let trailer = usize::try_from(read_u64(bytes, 48)).expect("trailer offset");
-    bytes[trailer + 24..trailer + 56].copy_from_slice(root.as_bytes());
-}
+const FX: Identities = Identities {
+    stage_media: "application/cbor",
+    stage_payload: &[1, 2],
+    ..Identities::at("https://example.org/index/")
+};

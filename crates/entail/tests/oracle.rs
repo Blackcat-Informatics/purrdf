@@ -79,137 +79,135 @@ use purrdf_entail::{
 // the engine by construction. Fixture-local terms are all `example.org` — PurRDF mints no
 // vocabulary.
 
-/// `rdf:type`.
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+/// `owl:AllDifferent` — the class `eq-diff2` and `eq-diff3` read a list off.
+use purrdf_iri::vocab::owl::ALL_DIFFERENT as OWL_ALLDIFFERENT;
+/// `owl:AllDisjointClasses`.
+use purrdf_iri::vocab::owl::ALL_DISJOINT_CLASSES as OWL_ALLDISJOINTCLASSES;
+/// `owl:AllDisjointProperties`.
+use purrdf_iri::vocab::owl::ALL_DISJOINT_PROPERTIES as OWL_ALLDISJOINTPROPERTIES;
+/// `owl:allValuesFrom`.
+use purrdf_iri::vocab::owl::ALL_VALUES_FROM as OWL_ALLVALUESFROM;
+/// `owl:AnnotationProperty`.
+use purrdf_iri::vocab::owl::ANNOTATION_PROPERTY as OWL_ANNOTATIONPROPERTY;
+/// `owl:assertionProperty` — a negative property assertion's predicate.
+use purrdf_iri::vocab::owl::ASSERTION_PROPERTY as OWL_ASSERTIONPROPERTY;
+/// `owl:AsymmetricProperty`.
+use purrdf_iri::vocab::owl::ASYMMETRIC_PROPERTY as OWL_ASYMMETRICPROPERTY;
+/// `owl:Class`.
+use purrdf_iri::vocab::owl::CLASS as OWL_CLASS;
+/// `owl:complementOf`.
+use purrdf_iri::vocab::owl::COMPLEMENT_OF as OWL_COMPLEMENTOF;
+/// `owl:DatatypeProperty`.
+use purrdf_iri::vocab::owl::DATATYPE_PROPERTY as OWL_DATATYPEPROPERTY;
+/// `owl:differentFrom` — what `dt-diff` concludes and `eq-diff1` clashes against.
+use purrdf_iri::vocab::owl::DIFFERENT_FROM as OWL_DIFFERENTFROM;
+/// `owl:disjointWith`.
+use purrdf_iri::vocab::owl::DISJOINT_WITH as OWL_DISJOINTWITH;
+/// `owl:distinctMembers` — `owl:AllDifferent`'s other list-valued property.
+use purrdf_iri::vocab::owl::DISTINCT_MEMBERS as OWL_DISTINCTMEMBERS;
+/// `owl:equivalentClass`.
+use purrdf_iri::vocab::owl::EQUIVALENT_CLASS as OWL_EQUIVALENTCLASS;
+/// `owl:equivalentProperty`.
+use purrdf_iri::vocab::owl::EQUIVALENT_PROPERTY as OWL_EQUIVALENTPROPERTY;
+/// `owl:FunctionalProperty`.
+use purrdf_iri::vocab::owl::FUNCTIONAL_PROPERTY as OWL_FUNCTIONALPROPERTY;
+/// `owl:hasKey`.
+use purrdf_iri::vocab::owl::HAS_KEY as OWL_HASKEY;
+/// `owl:hasValue`.
+use purrdf_iri::vocab::owl::HAS_VALUE as OWL_HASVALUE;
+/// `owl:intersectionOf`.
+use purrdf_iri::vocab::owl::INTERSECTION_OF as OWL_INTERSECTIONOF;
+/// `owl:InverseFunctionalProperty`.
+use purrdf_iri::vocab::owl::INVERSE_FUNCTIONAL_PROPERTY as OWL_INVERSEFUNCTIONALPROPERTY;
+/// `owl:inverseOf`.
+use purrdf_iri::vocab::owl::INVERSE_OF as OWL_INVERSEOF;
+/// `owl:IrreflexiveProperty`.
+use purrdf_iri::vocab::owl::IRREFLEXIVE_PROPERTY as OWL_IRREFLEXIVEPROPERTY;
+/// `owl:maxCardinality`.
+use purrdf_iri::vocab::owl::MAX_CARDINALITY as OWL_MAXCARDINALITY;
+/// `owl:maxQualifiedCardinality`.
+use purrdf_iri::vocab::owl::MAX_QUALIFIED_CARDINALITY as OWL_MAXQUALIFIEDCARDINALITY;
+/// `owl:members` — the list-valued property of `owl:AllDifferent` and `owl:AllDisjoint*`.
+use purrdf_iri::vocab::owl::MEMBERS as OWL_MEMBERS;
+/// `owl:Nothing` — `cls-nothing1`'s subject and `cls-nothing2`'s class.
+use purrdf_iri::vocab::owl::NOTHING as OWL_NOTHING;
+/// `owl:ObjectProperty`.
+use purrdf_iri::vocab::owl::OBJECT_PROPERTY as OWL_OBJECTPROPERTY;
+/// `owl:onClass`.
+use purrdf_iri::vocab::owl::ON_CLASS as OWL_ONCLASS;
+/// `owl:onProperty`.
+use purrdf_iri::vocab::owl::ON_PROPERTY as OWL_ONPROPERTY;
+/// `owl:oneOf`.
+use purrdf_iri::vocab::owl::ONE_OF as OWL_ONEOF;
+/// `owl:propertyChainAxiom`.
+use purrdf_iri::vocab::owl::PROPERTY_CHAIN_AXIOM as OWL_PROPERTYCHAINAXIOM;
+/// `owl:propertyDisjointWith`.
+use purrdf_iri::vocab::owl::PROPERTY_DISJOINT_WITH as OWL_PROPERTYDISJOINTWITH;
+/// `owl:sameAs`.
+use purrdf_iri::vocab::owl::SAME_AS as OWL_SAMEAS;
+/// `owl:someValuesFrom`.
+use purrdf_iri::vocab::owl::SOME_VALUES_FROM as OWL_SOMEVALUESFROM;
+/// `owl:sourceIndividual` — a negative property assertion's subject.
+use purrdf_iri::vocab::owl::SOURCE_INDIVIDUAL as OWL_SOURCEINDIVIDUAL;
+/// `owl:SymmetricProperty`.
+use purrdf_iri::vocab::owl::SYMMETRIC_PROPERTY as OWL_SYMMETRIC;
+/// `owl:targetIndividual` — a negative OBJECT-property assertion's object.
+use purrdf_iri::vocab::owl::TARGET_INDIVIDUAL as OWL_TARGETINDIVIDUAL;
+/// `owl:targetValue` — a negative DATA-property assertion's object.
+use purrdf_iri::vocab::owl::TARGET_VALUE as OWL_TARGETVALUE;
+/// `owl:Thing`.
+use purrdf_iri::vocab::owl::THING as OWL_THING;
+/// `owl:TransitiveProperty`.
+use purrdf_iri::vocab::owl::TRANSITIVE_PROPERTY as OWL_TRANSITIVE;
+/// `owl:unionOf`.
+use purrdf_iri::vocab::owl::UNION_OF as OWL_UNIONOF;
+/// `rdf:first`.
+use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+/// `rdf:nil`.
+use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
 /// `rdf:Property`.
-const RDF_PROPERTY: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property";
-/// `rdfs:subClassOf`.
-const RDFS_SUBCLASSOF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
-/// `rdfs:subPropertyOf`.
-const RDFS_SUBPROPERTYOF: &str = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf";
-/// `rdfs:domain`.
-const RDFS_DOMAIN: &str = "http://www.w3.org/2000/01/rdf-schema#domain";
-/// `rdfs:range`.
-const RDFS_RANGE: &str = "http://www.w3.org/2000/01/rdf-schema#range";
-/// `rdfs:Class`.
-const RDFS_CLASS: &str = "http://www.w3.org/2000/01/rdf-schema#Class";
-/// `rdfs:Resource`.
-const RDFS_RESOURCE: &str = "http://www.w3.org/2000/01/rdf-schema#Resource";
-/// `rdfs:Literal`.
-const RDFS_LITERAL: &str = "http://www.w3.org/2000/01/rdf-schema#Literal";
-/// `rdfs:Datatype`.
-const RDFS_DATATYPE: &str = "http://www.w3.org/2000/01/rdf-schema#Datatype";
-/// `rdfs:ContainerMembershipProperty`.
-const RDFS_CONTAINERMEMBERSHIPPROPERTY: &str =
-    "http://www.w3.org/2000/01/rdf-schema#ContainerMembershipProperty";
-/// `rdfs:member`.
-const RDFS_MEMBER: &str = "http://www.w3.org/2000/01/rdf-schema#member";
+use purrdf_iri::vocab::rdf::PROPERTY as RDF_PROPERTY;
 /// `rdf:reifies` — RDF 1.2's reifier property.
 ///
 /// Reserved vocabulary the entailment rules say NOTHING special about: an `rdf:reifies`
 /// annotation triple is an ordinary triple and flows through `prp-dom`, `prp-rng`,
 /// `prp-spo1` and the `scm-*` family exactly as `example.org/p` does. The `reifies_*`
 /// fixtures below enumerate that, position by position and rule by rule.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
-/// `owl:SymmetricProperty`.
-const OWL_SYMMETRIC: &str = "http://www.w3.org/2002/07/owl#SymmetricProperty";
-/// `owl:TransitiveProperty`.
-const OWL_TRANSITIVE: &str = "http://www.w3.org/2002/07/owl#TransitiveProperty";
-/// `owl:inverseOf`.
-const OWL_INVERSEOF: &str = "http://www.w3.org/2002/07/owl#inverseOf";
-/// `owl:equivalentClass`.
-const OWL_EQUIVALENTCLASS: &str = "http://www.w3.org/2002/07/owl#equivalentClass";
-/// `owl:equivalentProperty`.
-const OWL_EQUIVALENTPROPERTY: &str = "http://www.w3.org/2002/07/owl#equivalentProperty";
-/// `xsd:string`.
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-/// `owl:AnnotationProperty`.
-const OWL_ANNOTATIONPROPERTY: &str = "http://www.w3.org/2002/07/owl#AnnotationProperty";
-/// `owl:FunctionalProperty`.
-const OWL_FUNCTIONALPROPERTY: &str = "http://www.w3.org/2002/07/owl#FunctionalProperty";
-/// `owl:InverseFunctionalProperty`.
-const OWL_INVERSEFUNCTIONALPROPERTY: &str =
-    "http://www.w3.org/2002/07/owl#InverseFunctionalProperty";
-/// `owl:propertyChainAxiom`.
-const OWL_PROPERTYCHAINAXIOM: &str = "http://www.w3.org/2002/07/owl#propertyChainAxiom";
-/// `owl:hasKey`.
-const OWL_HASKEY: &str = "http://www.w3.org/2002/07/owl#hasKey";
-/// `owl:sameAs`.
-const OWL_SAMEAS: &str = "http://www.w3.org/2002/07/owl#sameAs";
-/// `owl:Class`.
-const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
-/// `owl:Thing`.
-const OWL_THING: &str = "http://www.w3.org/2002/07/owl#Thing";
-/// `owl:ObjectProperty`.
-const OWL_OBJECTPROPERTY: &str = "http://www.w3.org/2002/07/owl#ObjectProperty";
-/// `owl:DatatypeProperty`.
-const OWL_DATATYPEPROPERTY: &str = "http://www.w3.org/2002/07/owl#DatatypeProperty";
-/// `owl:onProperty`.
-const OWL_ONPROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
-/// `owl:hasValue`.
-const OWL_HASVALUE: &str = "http://www.w3.org/2002/07/owl#hasValue";
-/// `owl:someValuesFrom`.
-const OWL_SOMEVALUESFROM: &str = "http://www.w3.org/2002/07/owl#someValuesFrom";
-/// `owl:allValuesFrom`.
-const OWL_ALLVALUESFROM: &str = "http://www.w3.org/2002/07/owl#allValuesFrom";
-/// `owl:intersectionOf`.
-const OWL_INTERSECTIONOF: &str = "http://www.w3.org/2002/07/owl#intersectionOf";
-/// `owl:unionOf`.
-const OWL_UNIONOF: &str = "http://www.w3.org/2002/07/owl#unionOf";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
+/// `rdf:rest`.
+use purrdf_iri::vocab::rdf::REST as RDF_REST;
+/// `rdf:type`.
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+/// `rdfs:Class`.
+use purrdf_iri::vocab::rdfs::CLASS as RDFS_CLASS;
+/// `rdfs:ContainerMembershipProperty`.
+use purrdf_iri::vocab::rdfs::CONTAINER_MEMBERSHIP_PROPERTY as RDFS_CONTAINERMEMBERSHIPPROPERTY;
+/// `rdfs:Datatype`.
+use purrdf_iri::vocab::rdfs::DATATYPE as RDFS_DATATYPE;
+/// `rdfs:domain`.
+use purrdf_iri::vocab::rdfs::DOMAIN as RDFS_DOMAIN;
 /// `rdfs:label` — a built-in annotation property, and `prp-ap`'s witness.
-const RDFS_LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
-/// `owl:Nothing` — `cls-nothing1`'s subject and `cls-nothing2`'s class.
-const OWL_NOTHING: &str = "http://www.w3.org/2002/07/owl#Nothing";
-/// `owl:differentFrom` — what `dt-diff` concludes and `eq-diff1` clashes against.
-const OWL_DIFFERENTFROM: &str = "http://www.w3.org/2002/07/owl#differentFrom";
-/// `owl:AllDifferent` — the class `eq-diff2` and `eq-diff3` read a list off.
-const OWL_ALLDIFFERENT: &str = "http://www.w3.org/2002/07/owl#AllDifferent";
-/// `owl:members` — the list-valued property of `owl:AllDifferent` and `owl:AllDisjoint*`.
-const OWL_MEMBERS: &str = "http://www.w3.org/2002/07/owl#members";
-/// `owl:distinctMembers` — `owl:AllDifferent`'s other list-valued property.
-const OWL_DISTINCTMEMBERS: &str = "http://www.w3.org/2002/07/owl#distinctMembers";
-/// `owl:IrreflexiveProperty`.
-const OWL_IRREFLEXIVEPROPERTY: &str = "http://www.w3.org/2002/07/owl#IrreflexiveProperty";
-/// `owl:AsymmetricProperty`.
-const OWL_ASYMMETRICPROPERTY: &str = "http://www.w3.org/2002/07/owl#AsymmetricProperty";
-/// `owl:propertyDisjointWith`.
-const OWL_PROPERTYDISJOINTWITH: &str = "http://www.w3.org/2002/07/owl#propertyDisjointWith";
-/// `owl:AllDisjointProperties`.
-const OWL_ALLDISJOINTPROPERTIES: &str = "http://www.w3.org/2002/07/owl#AllDisjointProperties";
-/// `owl:AllDisjointClasses`.
-const OWL_ALLDISJOINTCLASSES: &str = "http://www.w3.org/2002/07/owl#AllDisjointClasses";
-/// `owl:disjointWith`.
-const OWL_DISJOINTWITH: &str = "http://www.w3.org/2002/07/owl#disjointWith";
-/// `owl:complementOf`.
-const OWL_COMPLEMENTOF: &str = "http://www.w3.org/2002/07/owl#complementOf";
-/// `owl:oneOf`.
-const OWL_ONEOF: &str = "http://www.w3.org/2002/07/owl#oneOf";
-/// `owl:maxCardinality`.
-const OWL_MAXCARDINALITY: &str = "http://www.w3.org/2002/07/owl#maxCardinality";
-/// `owl:maxQualifiedCardinality`.
-const OWL_MAXQUALIFIEDCARDINALITY: &str = "http://www.w3.org/2002/07/owl#maxQualifiedCardinality";
-/// `owl:onClass`.
-const OWL_ONCLASS: &str = "http://www.w3.org/2002/07/owl#onClass";
-/// `owl:sourceIndividual` — a negative property assertion's subject.
-const OWL_SOURCEINDIVIDUAL: &str = "http://www.w3.org/2002/07/owl#sourceIndividual";
-/// `owl:assertionProperty` — a negative property assertion's predicate.
-const OWL_ASSERTIONPROPERTY: &str = "http://www.w3.org/2002/07/owl#assertionProperty";
-/// `owl:targetIndividual` — a negative OBJECT-property assertion's object.
-const OWL_TARGETINDIVIDUAL: &str = "http://www.w3.org/2002/07/owl#targetIndividual";
-/// `owl:targetValue` — a negative DATA-property assertion's object.
-const OWL_TARGETVALUE: &str = "http://www.w3.org/2002/07/owl#targetValue";
-/// `xsd:nonNegativeInteger` — the datatype OWL 2 Profiles Table 6 writes every cardinality
-/// literal of `cls-maxc1`, `cls-maxc2` and the four `cls-maxqc*` rules with.
-const XSD_NONNEGATIVEINTEGER: &str = "http://www.w3.org/2001/XMLSchema#nonNegativeInteger";
+use purrdf_iri::vocab::rdfs::LABEL as RDFS_LABEL;
+/// `rdfs:Literal`.
+use purrdf_iri::vocab::rdfs::LITERAL as RDFS_LITERAL;
+/// `rdfs:member`.
+use purrdf_iri::vocab::rdfs::MEMBER as RDFS_MEMBER;
+/// `rdfs:range`.
+use purrdf_iri::vocab::rdfs::RANGE as RDFS_RANGE;
+/// `rdfs:Resource`.
+use purrdf_iri::vocab::rdfs::RESOURCE as RDFS_RESOURCE;
+/// `rdfs:subClassOf`.
+use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASSOF;
+/// `rdfs:subPropertyOf`.
+use purrdf_iri::vocab::rdfs::SUB_PROPERTY_OF as RDFS_SUBPROPERTYOF;
 /// `xsd:integer` — a datatype supported in OWL 2 RL, and NOT one of the three RDF 1.2
 /// Semantics §8 makes mandatory, which is what makes it `dt-type1`'s witness.
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-/// `rdf:first`.
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-/// `rdf:rest`.
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-/// `rdf:nil`.
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+use purrdf_xsd::datatype::XSD_INTEGER;
+/// `xsd:nonNegativeInteger` — the datatype OWL 2 Profiles Table 6 writes every cardinality
+/// literal of `cls-maxc1`, `cls-maxc2` and the four `cls-maxqc*` rules with.
+use purrdf_xsd::datatype::XSD_NON_NEGATIVE_INTEGER as XSD_NONNEGATIVEINTEGER;
+/// `xsd:string`.
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// Fixture class `example.org/A`.
 const EX_A: &str = "http://example.org/A";
@@ -7516,12 +7514,7 @@ fn the_registry_shape_is_pinned() {
                 .iter()
                 .filter(|rule| !implemented(regime).contains(rule))
                 .count();
-            (
-                regime_label(regime),
-                rules(regime).len(),
-                evidenced,
-                unimplemented,
-            )
+            (regime.name(), rules(regime).len(), evidenced, unimplemented)
         })
         .collect();
     assert_eq!(
@@ -7541,20 +7534,6 @@ fn the_registry_shape_is_pinned() {
     for &(_, total, evidenced, unimplemented) in &shape {
         assert_eq!(evidenced, total, "every defined rule must carry evidence");
         assert_eq!(unimplemented, 0, "no defined rule is unimplemented today");
-    }
-}
-
-/// A regime's name, for messages and the shape ratchet. Exhaustive on purpose: a new
-/// `Regime` variant fails to compile here.
-const fn regime_label(regime: Regime) -> &'static str {
-    match regime {
-        Regime::Simple => "Simple",
-        Regime::Rdf => "RDF",
-        Regime::Rdfs => "RDFS",
-        Regime::OwlRl => "OWL-RL",
-        Regime::OwlDirect => "OWL-Direct",
-        Regime::Rif => "RIF",
-        Regime::D => "D",
     }
 }
 

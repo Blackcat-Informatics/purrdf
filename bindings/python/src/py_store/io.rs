@@ -7,8 +7,7 @@
 //! helper the store seam shares.
 //!
 //! Native backing: the parse/serialize cores produce and consume the
-//! oxigraph-free owned model (`RdfQuad` / `RdfTriple`) via the native codecs — no
-//! `oxigraph::model::*` and no `flat_oxigraph_quads_from_dataset` bridge.
+//! owned model (`RdfQuad` / `RdfTriple`) via the native codecs.
 
 use std::sync::Arc;
 
@@ -28,7 +27,7 @@ use crate::{
 
 /// The RDF serialization formats the codebase loads/parses/serializes.
 ///
-/// Mirrors the oxigraph Python `RdfFormat`; the members keep the SCREAMING_SNAKE Python
+/// Exposed to Python as `RdfFormat`; the members keep the SCREAMING_SNAKE Python
 /// spelling (`RdfFormat.TURTLE`).
 #[pyclass(name = "RdfFormat", eq, eq_int, skip_from_py_object)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,8 +49,7 @@ pub(crate) enum PyRdfFormat {
 }
 
 impl PyRdfFormat {
-    /// The native codec format selector: the always-on replacement for the
-    /// oxigraph `RdfFormat` router on the parse/serialize path.
+    /// The native codec format selector on the parse/serialize path.
     pub(crate) fn to_native(self) -> NativeRdfFormat {
         match self {
             Self::TURTLE => NativeRdfFormat::Turtle,
@@ -201,7 +199,7 @@ pub(super) fn dump_quads_with_loss(
 
 // ── Module-level functions ──────────────────────────────────────────────────────
 
-/// Parse RDF bytes/str into a list of `Quad`. Mirrors the oxigraph Python `parse`.
+/// Parse RDF bytes/str into a list of `Quad`.
 ///
 /// Unlike `Store.load`, blank-node labels are preserved verbatim (no renaming),
 /// so canonicalization over the parsed quads is meaningful.
@@ -233,8 +231,7 @@ pub(crate) fn parse(
         .collect()
 }
 
-/// Serialize a `QueryTriples` or a `QueryQuads` in `format`. Mirrors the oxigraph
-/// Python `serialize`: when `output` (a file-like with `.write`) is given the bytes are
+/// Serialize a `QueryTriples` or a `QueryQuads` in `format`. When `output` (a file-like with `.write`) is given the bytes are
 /// written to it and `None` is returned; when `output` is omitted the serialized
 /// `bytes` are returned directly.
 ///
@@ -460,26 +457,4 @@ pub(crate) fn read_input(
     Err(PyTypeError::new_err("input must be bytes or str"))
 }
 
-// `skip_from_py_object` + this hand-written impl, rather than `from_py_object`.
-//
-// `#[pyclass(from_py_object)]` generates exactly this impl with
-// `Clone::clone(&*guard)` as the body. `PyRdfFormat` is `Copy`, so that clone is a copy
-// wearing a `.clone()` -- a real `clippy::clone_on_copy`, and one no `#[allow]`
-// on the enum can reach, because the macro emits the impl as a SIBLING item
-// outside the enum's attribute scope. Writing the impl out and dereferencing
-// through `Copy` removes the clone at its source instead of hiding it.
-//
-// This is a transcription of the pyo3 0.29 expansion, not a redesign: same
-// `Error` type, same `PyClassGuard` extraction, same error path. The
-// `INPUT_TYPE` associated const the macro can also emit is gated on pyo3's
-// `experimental-inspect` feature, which is off here, so there is nothing else to
-// carry over. The Python-visible behaviour is unchanged.
-impl<'a, 'py> FromPyObject<'a, 'py> for PyRdfFormat {
-    type Error = pyo3::pyclass::PyClassGuardError<'a, 'py>;
-
-    fn extract(
-        obj: Borrowed<'a, 'py, PyAny>,
-    ) -> Result<Self, <Self as FromPyObject<'a, 'py>>::Error> {
-        Ok(*obj.extract::<PyClassGuard<'_, Self>>()?)
-    }
-}
+copy_pyclass_from_py_object!(PyRdfFormat);

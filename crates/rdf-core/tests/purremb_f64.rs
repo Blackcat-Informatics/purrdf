@@ -3,36 +3,15 @@
 
 //! Lossless binary64 PURREMB round trip.
 
+use purrdf_core::purremb_fixture::Identities;
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, DimensionalityPolicy, DistanceMetric, EmbeddingBuilder,
-    EmbeddingFamilyContract, EmbeddingView, MatrixInput, MatrixRow, PrefixPostprocessing,
-    ProjectionSpec, RdfDatasetBuilder, StageImplementation, TargetSet, VectorDtype,
+    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
+    DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract, EmbeddingView, MatrixInput,
+    MatrixRow, PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, TargetSet, VectorDtype,
     verify_embedding,
 };
 
-fn artifact(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        format!("https://example.org/{name}"),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("artifact")
-}
-
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            format!("https://example.org/{name}"),
-            ContentDigest::of(name.as_bytes()),
-            "application/octet-stream",
-            vec![1],
-        )
-        .expect("stage"),
-    )
-}
+const FX: Identities = Identities::at("https://example.org/");
 
 #[test]
 fn binary64_bits_and_signed_zero_round_trip() {
@@ -42,14 +21,14 @@ fn binary64_bits_and_signed_zero_round_trip() {
     let target_id = target.id;
     let set = TargetSet::new(vec![target_id]).expect("target set");
     let contract = EmbeddingFamilyContract {
-        model: artifact("model-f64"),
-        engine: artifact("engine-f64"),
-        tokenizer: artifact("tokenizer-f64"),
-        execution: stage("execution-f64"),
-        subject_projection: stage("projection-f64"),
+        model: FX.artifact("model-f64"),
+        engine: FX.artifact("engine-f64"),
+        tokenizer: FX.artifact("tokenizer-f64"),
+        execution: FX.stage("execution-f64"),
+        subject_projection: FX.stage("projection-f64"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling-f64"),
+        pooling: FX.stage("pooling-f64"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F64,

@@ -35,7 +35,7 @@ The PyO3 spellings that change a member's PYTHON name are honoured, because the 
 name is what the stub must declare:
 
 * `#[new]` is `__init__`;
-* `#[pyo3(name = "x")]` renames to `x` (`Store._store_capsule` is the live case) — read
+* `#[pyo3(name = "x")]` renames to `x` (`QuadStore._store_capsule` is the live case) — read
   at the attribute's TOP level only, because inside a `signature = (…)` group the same
   spelling is a parameter called `name` carrying a string default;
 * `#[getter]` / `#[setter]` declare a PROPERTY — under `#[getter(x)]`'s explicit name if
@@ -1033,7 +1033,7 @@ _MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
     # ── `#[pyo3(name = …)]` renames ──
     (
         "a `#[pyo3(name = …)]` renames a method away from its stub declaration",
-        "bindings/python/src/py_store/store.rs",
+        "bindings/python/src/py_store/quad_store.rs",
         lambda text: _swap(
             text, '#[pyo3(name = "_store_capsule")]', '#[pyo3(name = "_store_capsule_v2")]'
         ),

@@ -245,11 +245,13 @@ test("an async job started from inside a sync callback runs and returns", async 
 // Every job runs on a stack region exactly as large as the module's own shadow stack, so
 // the two lanes run out of stack at the same depth: a request the synchronous lane
 // evaluates a job evaluates too, and a request too deep for the one is too deep for the
-// other, refused with the evaluator's own words. Measured on the shipped artifact through
-// `evidence.async.stackHighWaterBytes` (the deepest poll below the region's top): 100
-// nested OPTIONALs reach about 410 000 bytes and 110 about 450 000, so 140 reach past
-// 393 216 bytes and still answer on the region, as they do on the synchronous lane.
-const DEEP_OPTIONAL = 140;
+// other. Nested OPTIONALs end, on both lanes, at the host-stack admission of the query
+// algebra's height (284 nested graph patterns), before the evaluator's frames for them fill a lane:
+// the deepest the synchronous lane answers is found by bisection and run as a job. Measured
+// on the shipped artifact through `evidence.async.stackHighWaterBytes` (the deepest poll
+// below the region's top): 140 nested OPTIONALs reach about 198 600 bytes, 250 about
+// 344 700 and 280 about 384 500, so the deepest admitted polls more than a third of the
+// region down and still answers on it, as it does on the synchronous lane.
 /** The size of every job's stack region, as the module reports it. */
 const REGION_BYTES = asyncStackRegionBytes();
 /** The evaluator's own stack refusal, as a job's error carries it. */
@@ -266,7 +268,32 @@ test("a request as deep as the synchronous lane evaluates answers on a job's reg
   assert.equal(REGION_BYTES, IDLE, "the region is the size of the synchronous lane's stack");
   const engine = new QueryEngine();
   const chain = Dataset.parse(CHAIN, "nquads");
-  const query = nestedOptional(DEEP_OPTIONAL);
+  // The synchronous lane's real end for nested OPTIONALs, by bisection between 64 levels
+  // (which answer) and 2 000 (refused before evaluation starts).
+  const answers = (depth) => {
+    try {
+      return engine.select(chain, nestedOptional(depth)).rowCount === 200;
+    } catch (error) {
+      assert.match(error.message, /native-sparql-(evaluation|host)-stack-exhausted/, `${depth} nested OPTIONALs: a typed refusal`);
+      return false;
+    }
+  };
+  let [deepest, refused] = [64, 2_000];
+  assert.ok(answers(deepest) && !answers(refused));
+  while (refused - deepest > 1) {
+    const mid = (deepest + refused) >> 1;
+    if (answers(mid)) deepest = mid;
+    else refused = mid;
+  }
+  // One level more is the host-stack admission's refusal on both lanes alike.
+  const hostRefusal = (error) => {
+    assert.match(error.message, HOST_STACK_REFUSAL);
+    return true;
+  };
+  assert.throws(() => engine.select(chain, nestedOptional(refused)), hostRefusal);
+  await assert.rejects(engine.queryAsync(chain, nestedOptional(refused)), hostRefusal);
+  assert.equal(stackPointer(), IDLE);
+  const query = nestedOptional(deepest);
   assert.equal(engine.select(chain, query).rowCount, 200, "the synchronous lane answers it");
 
   // Twice: a trap or a region fault would poison the instance or fail the job, and the
@@ -276,7 +303,10 @@ test("a request as deep as the synchronous lane evaluates answers on a job's reg
     assert.equal(answered.isComplete, true);
     assert.equal(answered.result.rowCount, 200);
     const depth = answered.evidence.async.stackHighWaterBytes;
-    assert.ok(depth > 393_216 && depth < REGION_BYTES, `${depth} bytes deep in a ${REGION_BYTES}-byte region`);
+    assert.ok(
+      depth > REGION_BYTES / 3 && depth < REGION_BYTES,
+      `${deepest} nested OPTIONALs: ${depth} bytes deep in a ${REGION_BYTES}-byte region`,
+    );
     assert.equal(stackPointer(), IDLE);
   }
   // The shallow neighbour answers every row too.
@@ -334,13 +364,16 @@ test("a request as deep as the synchronous lane evaluates answers on a job's reg
   assert.equal(engine.select(chain, nestedOptional(64)).rowCount, 200);
 });
 
-// Nesting the parser admits can need more stack than a lane holds. 126 nested `LATERAL`
-// cost the evaluator about 9 KB of shadow stack a level, past the synchronous lane's
-// 1 MiB, and a job's region is exactly as large: on both lanes it is the evaluator's own
-// typed refusal, word for word the same, and the instance is not poisoned. 63 nested
-// `FILTER NOT EXISTS` — a nested `EXISTS` body is substituted when it is evaluated — and
-// 40 nested `LATERAL` are the valid neighbours: both lanes answer them with the rows
-// their semantics give.
+// Nesting the parser admits can need more stack than a lane holds. Nested `FILTER NOT
+// EXISTS` is ended by the evaluator's own stack refusal: each lane's real end is found by
+// bisection, the deepest level answers on both lanes with the rows its semantics give,
+// and one level past the deeper of the two ends is the evaluator's typed refusal on both,
+// word for word the same code and statement, with the instance not poisoned. A job's
+// region is exactly as large as the synchronous lane's shadow stack, but the synchronous
+// call enters the evaluator beneath the export's own frames, so a job's end may sit one
+// level deeper; never shallower, and never more than one level apart. 40 nested
+// `LATERAL` and 63 nested `FILTER NOT EXISTS` — a nested `EXISTS` body is substituted when
+// it is evaluated — are shallow valid neighbours too.
 const NEST_DATA = [1, 2, 3, 4]
   .map((n) => `<${EX}s${n}> <${EX}p> <${EX}o${n}> .`)
   .concat([`<${EX}s1> <${EX}q> <${EX}o1> .`])
@@ -358,29 +391,69 @@ test("admitted nesting answers or is refused on a job's region exactly as on the
   const data = Dataset.parse(NEST_DATA, "nquads");
   const before = data.canonicalize();
   const lateral = (depth) => nestedAround(`?s <${EX}p> ?o LATERAL { `, depth);
+  const notExists = (depth) => nestedAround(`?s <${EX}p> ?o FILTER NOT EXISTS { `, depth);
+  // An odd number of negations of "`?s` has a `<q>`" holds for every subject but `s1`, an
+  // even number only for `s1`.
+  const notExistsRows = (depth) => (depth % 2 ? ["s2", "s3", "s4"] : ["s1"]);
+  const EVALUATION_REFUSAL_START = /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: /;
 
-  // The refusal: the synchronous lane's typed refusal, and the job's, twice — a trap or
-  // a region fault would poison the instance or fail the job, and the second job would
-  // reject with something else. Both lanes refuse with the evaluator's own typed error;
-  // the construct it names is the one whose frame found the stack low, which depends on
-  // where each lane's stack runs out, so the two messages share their code and their
-  // statement, not necessarily the construct.
+  // Each lane's real end, by bisection between 63 levels (which answer) and 2 000
+  // (refused by the host-stack admission before evaluation starts).
+  const lanes = {
+    synchronous: async (query) => engine.select(data, query),
+    job: (query) => engine.selectAsync(data, query),
+  };
+  const ends = {};
+  for (const [lane, run] of Object.entries(lanes)) {
+    const answers = async (depth) => {
+      try {
+        assert.deepEqual(subjectsOf(await run(notExists(depth))), notExistsRows(depth), `${depth} levels, ${lane}`);
+        return true;
+      } catch (error) {
+        assert.match(error.message, /^error native-sparql-(evaluation|host)-stack-exhausted: /, `${depth} levels, ${lane}`);
+        assert.doesNotMatch(error.message, REGION_FAULT);
+        return false;
+      }
+    };
+    let [deepest, refused] = [63, 2_000];
+    assert.ok((await answers(deepest)) && !(await answers(refused)));
+    while (refused - deepest > 1) {
+      const mid = (deepest + refused) >> 1;
+      if (await answers(mid)) deepest = mid;
+      else refused = mid;
+    }
+    ends[lane] = deepest;
+    assert.equal(stackPointer(), IDLE);
+  }
+  const { synchronous, job } = ends;
+  assert.ok(job >= synchronous && job - synchronous <= 1, `the lanes end together: ${JSON.stringify(ends)}`);
+  // A floor, measured with `query.test.mjs`'s: 182 levels of this shape answer
+  // synchronously on the build measured.
+  assert.ok(synchronous >= 181, `${synchronous} levels answer synchronously; 182 did on the build measured`);
+
+  // The refusal, one level past both ends: the synchronous lane's typed refusal, and the
+  // job's, twice — a trap or a region fault would poison the instance or fail the job,
+  // and the second job would reject with something else. Both lanes refuse with the
+  // evaluator's own typed error; the construct it names is the one whose frame found the
+  // stack low, which depends on where each lane's stack runs out, so the two messages
+  // share their code and their statement, not necessarily the construct.
+  const deep = notExists(job + 1);
   let syncRefusal;
-  assert.throws(() => engine.select(data, lateral(126)), (error) => {
+  assert.throws(() => engine.select(data, deep), (error) => {
     syncRefusal = error.message;
     return true;
   });
-  assert.match(syncRefusal, /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: /);
+  assert.match(syncRefusal, EVALUATION_REFUSAL_START);
   for (let attempt = 0; attempt < 2; attempt += 1) {
     await assert.rejects(
-      engine.selectAsync(data, lateral(126)),
+      engine.selectAsync(data, deep),
       (error) => {
-        assert.match(error.message, /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: /);
+        assert.match(error.message, EVALUATION_REFUSAL_START);
         assert.equal(error.code, "native-sparql-evaluation-stack-exhausted", "the job's refusal carries the synchronous lane's code");
         assert.doesNotMatch(error.message, REGION_FAULT);
         return true;
       },
-      "126 nested LATERAL on a job's region",
+      `${job + 1} nested FILTER NOT EXISTS on a job's region`,
     );
     assert.equal(stackPointer(), IDLE);
   }
@@ -388,7 +461,7 @@ test("admitted nesting answers or is refused on a job's region exactly as on the
   // the region, and the evaluator stopped it.
   let governed;
   try {
-    await engine.queryGovernedAsync(data, lateral(126));
+    await engine.queryGovernedAsync(data, deep);
   } catch (error) {
     governed = error;
   }
@@ -400,10 +473,11 @@ test("admitted nesting answers or is refused on a job's region exactly as on the
 
   // The valid neighbours answer on both lanes, with the rows their semantics give.
   for (const [what, query, expected] of [
+    // The deepest level both lanes answer.
+    [`${synchronous} nested FILTER NOT EXISTS`, notExists(synchronous), notExistsRows(synchronous)],
     // Only `s1` has a `<q>`, at every level.
     ["40 nested LATERAL", lateral(40), ["s1"]],
-    // An odd number of negations of "`?s` has a `<q>`": every subject but `s1`.
-    ["63 nested FILTER NOT EXISTS", nestedAround(`?s <${EX}p> ?o FILTER NOT EXISTS { `, 63), ["s2", "s3", "s4"]],
+    ["63 nested FILTER NOT EXISTS", notExists(63), notExistsRows(63)],
   ]) {
     assert.deepEqual(subjectsOf(engine.select(data, query)), expected, `${what}, synchronously`);
     assert.deepEqual(subjectsOf(await engine.selectAsync(data, query)), expected, `${what} on a job's region`);

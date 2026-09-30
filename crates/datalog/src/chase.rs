@@ -117,6 +117,8 @@
 //! no wall clock, no RNG, no filesystem and no thread: the module is
 //! `wasm32-unknown-unknown`-clean.
 
+use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_le_into;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -524,19 +526,7 @@ const WITNESS_LABEL_BYTES: usize = 16;
 ///
 /// Framed like every other field, so a witness digest can never coincide with some other
 /// BLAKE3 digest this crate computes over a different kind of value.
-const WITNESS_DIGEST_TAG: &str = "purrdf-datalog restricted chase witness v1";
-
-/// Lowercase hex digits, for rendering a witness label without a formatter.
-///
-/// Deliberately NOT [`crate::resolve_fol::hex_lower`], this crate's other hex renderer:
-/// [`witness_surface`] runs once per invented witness inside the chase's fixpoint loop
-/// (every round, every firing that needs a fresh existential), so it is a hot path in a way
-/// a contract hash or a derivation id — computed once per result, not once per fact — is
-/// not. A lookup-table index avoids `hex_lower`'s per-byte `write!` formatting machinery on
-/// that path; consolidating the two would trade a measurable amount of per-firing work for
-/// uniformity alone, which this repository's performance discipline does not accept without
-/// a bench showing it is free.
-const HEX_DIGITS: [u8; 16] = *b"0123456789abcdef";
+const WITNESS_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog restricted chase witness v1");
 
 /// The address a Skolem witness is minted against: the SKOLEM FUNCTION APPLICATION that
 /// produced it.
@@ -587,28 +577,19 @@ impl WitnessAddress {
 /// collision-resistant function of the address alone — identical on every target, and
 /// independent of the order witnesses were minted in.
 fn witness_surface(address: &WitnessAddress) -> String {
-    /// Append `bytes` as its `u64` little-endian length followed by the bytes themselves.
-    fn frame(hasher: &mut purrdf_hash::blake3::RecordHasher, bytes: &[u8]) {
-        hasher.update(&(bytes.len() as u64).to_le_bytes());
-        hasher.update(bytes);
-    }
-
     let mut hasher = purrdf_hash::blake3::RecordHasher::new();
-    frame(&mut hasher, WITNESS_DIGEST_TAG.as_bytes());
+    frame_le_into(&mut hasher, WITNESS_DIGEST_TAG.as_bytes());
     hasher.update(&(address.clause as u64).to_le_bytes());
     hasher.update(&(address.ordinal as u64).to_le_bytes());
     hasher.update(&(address.frontier.len() as u64).to_le_bytes());
     for value in &address.frontier {
-        frame(&mut hasher, value.as_bytes());
+        frame_le_into(&mut hasher, value.as_bytes());
     }
     let digest = hasher.finalize();
 
     let mut surface = format!("_:{WITNESS_SCOPE}.");
     surface.push(WITNESS_LABEL_PREFIX);
-    for &byte in &digest.as_bytes()[..WITNESS_LABEL_BYTES] {
-        surface.push(char::from(HEX_DIGITS[usize::from(byte >> 4)]));
-        surface.push(char::from(HEX_DIGITS[usize::from(byte & 0x0f)]));
-    }
+    purrdf_hash::hex::encode_into(&digest.as_bytes()[..WITNESS_LABEL_BYTES], &mut surface);
     surface
 }
 
@@ -631,11 +612,6 @@ pub struct SkolemRegistry {
 }
 
 impl SkolemRegistry {
-    /// A fresh, empty registry.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Mint — or recover — the witness for `address`, returning its blank-node surface.
     fn mint(&mut self, address: WitnessAddress) -> String {
         let surface = witness_surface(&address);
@@ -1396,7 +1372,7 @@ pub fn chase_with(
     let mut state = ChaseState {
         store: edb,
         derivations: Vec::new(),
-        witnesses: SkolemRegistry::new(),
+        witnesses: SkolemRegistry::default(),
         meter: StepMeter::new(options.max_join_steps()),
         options: *options,
     };
@@ -2400,6 +2376,21 @@ mod tests {
         );
     }
 
+    /// The witness label is frozen: a moved label renames every invented blank node a
+    /// chase has ever emitted.
+    #[test]
+    fn a_witness_surface_is_frozen() {
+        let address = WitnessAddress {
+            clause: 1,
+            ordinal: 2,
+            frontier: vec![iri("a"), iri("b")],
+        };
+        assert_eq!(
+            witness_surface(&address),
+            "_:0.wbbdbca6f8eab62b90b50735b5a380b76"
+        );
+    }
+
     /// The witness surface is a pure function of the address: the same address always
     /// renders to the same blank node, and any component change renders to a different one.
     #[test]
@@ -2457,7 +2448,7 @@ mod tests {
             ordinal: 1,
             frontier: vec![iri("a"), iri("b")],
         };
-        let mut registry = SkolemRegistry::new();
+        let mut registry = SkolemRegistry::default();
         assert!(registry.is_empty());
         let first = registry.mint(address.clone());
         let second = registry.mint(address.clone());

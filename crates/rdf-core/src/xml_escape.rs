@@ -210,6 +210,7 @@ pub fn push(value: &str, context: Context, output: &mut String) -> Result<(), In
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_testkit::rng::SplitMix64;
 
     /// The two-pass escaper `push_into` replaced, kept verbatim as the oracle:
     /// a whole validation pass, then a per-`char` replacement pass.
@@ -236,19 +237,6 @@ mod tests {
         }
         let _ = output.write_str(&value[start..]);
         Ok(())
-    }
-
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        const fn next(&mut self) -> u64 {
-            purrdf_testkit::rng::splitmix64_next(&mut self.0)
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            usize::try_from(self.next() % n as u64).expect("below n")
-        }
     }
 
     /// Every special scalar of either context, the non-`Char`s a `str` can
@@ -283,7 +271,7 @@ mod tests {
 
     #[test]
     fn one_pass_agrees_with_the_two_pass_escaper() {
-        let mut rng = SplitMix(0x0E5C_A9E0_0000_0A11);
+        let mut rng = SplitMix64::new(0x0E5C_A9E0_0000_0A11);
         let (mut ok, mut refused, mut overflowed) = (0_usize, 0_usize, 0_usize);
         for len in (0..=70).chain([127, 128, 129, 255, 1000, 4099]) {
             for round in 0..40 {
@@ -299,8 +287,8 @@ mod tests {
                 };
                 let value: String = (0..len)
                     .map(|_| {
-                        if rng.below(density) == 0 {
-                            pool[rng.below(pool.len())]
+                        if rng.below_usize(density) == 0 {
+                            pool[rng.below_usize(pool.len())]
                         } else {
                             'x'
                         }

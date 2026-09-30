@@ -24,17 +24,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ciborium::value::Value;
-use ed25519_dalek::SigningKey;
+use purrdf_ed25519::SigningKey;
 use purrdf_gts::codec::zstd_block_layout;
 use purrdf_gts::compact::{
     CompactionParams, DictPlan, DictSelection, DictStrategy, compact_streamable,
 };
-use purrdf_gts::dict::{dictionary_id, raw_content_dict};
-use purrdf_gts::model::{Graph, Term, TermKind};
+use purrdf_gts::dict::dictionary_id;
+use purrdf_gts::fixture::{fixed_key, shipped_dictionary};
+use purrdf_gts::model::{Graph, Term};
 use purrdf_gts::reader::{read, segment_append_state};
 use purrdf_gts::wire::{iter_items, map_get};
 use purrdf_gts::writer::Writer;
+use purrdf_lex::cbor::Value;
 
 /// The name the caller pins its shipped dictionary under.
 const PINNED_NAME: &str = "shipped-bundle-v1";
@@ -45,26 +46,7 @@ const TIMESTAMP: &str = "2026-01-01T00:00:00Z";
 
 /// A fixed, deterministic Ed25519 packaging key.
 fn packaging_key() -> SigningKey {
-    SigningKey::from_bytes(&[11u8; 32])
-}
-
-/// The caller's SHIPPED dictionary: derived from a corpus that has nothing to do
-/// with any pack compacted below, so "the pack pinned my bytes" cannot pass by
-/// accidentally re-deriving the same thing.
-fn shipped_dictionary() -> Vec<u8> {
-    let corpus: Vec<Vec<u8>> = (0..400u32)
-        .map(|i| {
-            format!(
-                "<https://example.org/slice/logic#c{}> <https://example.org/p/grounds> \
-                 \"a shipped-vocabulary sentence unrelated to any packed content, {}\" .\n",
-                i % 23,
-                i
-            )
-            .into_bytes()
-        })
-        .collect();
-    let refs: Vec<&[u8]> = corpus.iter().map(Vec::as_slice).collect();
-    raw_content_dict(&refs, 8192).expect("the shipped dictionary builds")
+    fixed_key(11)
 }
 
 /// A source log with content blobs of repeated structure.
@@ -89,10 +71,10 @@ fn blobless_source() -> Vec<u8> {
     let mut w = Writer::new("purrdf.gts");
     let mut terms: Vec<Term> = Vec::new();
     for i in 0..24u32 {
-        terms.push(iri(&format!("https://example.org/memory/claim{i}")));
+        terms.push(Term::iri(format!("https://example.org/memory/claim{i}")));
     }
-    terms.push(iri("https://example.org/memory/recalls"));
-    terms.push(iri("https://example.org/memory/session"));
+    terms.push(Term::iri("https://example.org/memory/recalls"));
+    terms.push(Term::iri("https://example.org/memory/session"));
     w.add_terms(&terms);
     let predicate = 24;
     let object = 25;
@@ -101,18 +83,6 @@ fn blobless_source() -> Vec<u8> {
     w.add_quads(&quads);
     w.add_index();
     w.into_bytes()
-}
-
-fn iri(value: &str) -> Term {
-    Term {
-        kind: TermKind::Iri,
-        value: Some(value.to_string()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
 }
 
 /// A plan pinning exactly the caller's bytes under [`PINNED_NAME`], priming

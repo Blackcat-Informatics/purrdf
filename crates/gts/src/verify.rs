@@ -9,10 +9,12 @@
 //! CLIs. Trust-policy findings remain separate from cryptographic validity.
 
 use std::collections::HashMap;
+use std::hash::BuildHasher;
 
-use ciborium::value::Value;
-use ed25519_dalek::VerifyingKey;
+use purrdf_ed25519::VerifyingKey;
+use purrdf_lex::cbor::Value;
 
+use crate::FastMap;
 use crate::cose::verify_signatures;
 use crate::emojihash::{emojihash, emojihash_labels, randomart};
 use crate::model::{Diagnostic, Graph};
@@ -48,20 +50,18 @@ pub struct VerifyOptions {
     pub trust_policy: TrustPolicy,
 }
 
-impl Default for VerifyOptions {
-    fn default() -> Self {
+purrdf_hash::default_from_new!(VerifyOptions);
+
+impl VerifyOptions {
+    /// Release-style defaults, and the [`Default`]: embedded key lookup and signatures
+    /// required.
+    #[must_use]
+    pub fn new() -> Self {
         Self {
             armored_key: None,
             require_signatures: true,
             trust_policy: TrustPolicy::default(),
         }
-    }
-}
-
-impl VerifyOptions {
-    /// Release-style defaults: embedded key lookup and signatures required.
-    pub fn strict() -> Self {
-        Self::default()
     }
 
     /// Use an out-of-band trusted public key instead of embedded metadata.
@@ -140,11 +140,7 @@ pub fn format_fingerprint(fingerprint: &str) -> String {
 
 /// Return the embedded `gts:transportKey` meta value if well-formed.
 pub fn extract_transport_key(graph: &Graph) -> Option<EmbeddedTransportKey> {
-    let value = graph
-        .meta
-        .iter()
-        .find(|(k, _)| k == "gts:transportKey")
-        .map(|(_, v)| v)?;
+    let value = purrdf_lex::assoc::get(&graph.meta, "gts:transportKey")?;
     let Value::Map(entries) = value else {
         return None;
     };
@@ -167,7 +163,7 @@ pub fn extract_transport_key(graph: &Graph) -> Option<EmbeddedTransportKey> {
 
 /// Verify a GTS file with strict defaults: embedded key lookup and signatures required.
 pub fn verify_file(data: &[u8]) -> VerificationResult {
-    verify_file_with_options(data, &VerifyOptions::strict())
+    verify_file_with_options(data, &VerifyOptions::new())
 }
 
 /// Verify a GTS file's embedded signatures with explicit options.
@@ -242,7 +238,7 @@ pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> Verific
         errors.is_empty(),
         "every earlier error path returns before reaching the shared keyring core"
     );
-    let mut keyring = HashMap::with_capacity(1);
+    let mut keyring = FastMap::with_capacity_and_hasher(1, purrdf_hash::fixed::FixedState::new());
     keyring.insert(kid.clone(), public);
     let result = verify_against_keyring(&mut graph, &keyring, options);
 
@@ -272,12 +268,9 @@ pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> Verific
 /// over time (key rotation) verifies as long as each `kid` used is present.
 /// This is the core [`verify_file_with_options`] also uses internally, folded
 /// down to its single resolved key.
-// Pinned to the default hasher: the public surface here mirrors the caller's
-// key store, not a hot lookup path worth generalizing over `BuildHasher`.
-#[allow(clippy::implicit_hasher)]
-pub fn verify_file_with_keyring(
+pub fn verify_file_with_keyring<S: BuildHasher>(
     data: &[u8],
-    keyring: &HashMap<String, VerifyingKey>,
+    keyring: &HashMap<String, VerifyingKey, S>,
 ) -> VerificationResult {
     let mut graph = read(data, true, None);
     let options = VerifyOptions::default();
@@ -316,9 +309,9 @@ struct KeyringVerification {
     ok: bool,
 }
 
-fn verify_against_keyring(
+fn verify_against_keyring<S: BuildHasher>(
     graph: &mut Graph,
-    keyring: &HashMap<String, VerifyingKey>,
+    keyring: &HashMap<String, VerifyingKey, S>,
     options: &VerifyOptions,
 ) -> KeyringVerification {
     verify_signatures(&mut graph.signatures, |candidate| {

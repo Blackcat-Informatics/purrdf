@@ -9,14 +9,15 @@
 //! `purrdf:wasDerivedFrom` audit links. Tool calls are ordinary provenance quads
 //! in the same package.
 
-use std::collections::{HashMap, HashSet};
+use crate::{FastMap, FastSet};
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use ciborium::value::Value;
+use purrdf_hash::Domain;
+use purrdf_lex::cbor::Value;
 
 use crate::model::{Graph, Term, TermKind};
 use crate::reader::{SegmentAppendState, read, read_file_segments, segment_append_state};
@@ -44,6 +45,11 @@ const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
 const XSD_DATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
 const PROFILE: &str = "ai-package";
 const INLINE_PAYLOAD_BUDGET: usize = 4096;
+/// The kind of an assertion id: the hash domain leading its digest and the kind
+/// segment of its `urn:purrdf:` IRI.
+const ASSERTION_KIND: Domain = Domain::new(b"assertion");
+/// The kind of a tool-call id. See [`ASSERTION_KIND`].
+const TOOLCALL_KIND: Domain = Domain::new(b"toolcall");
 /// Declared zstd level for the default authoring profile — the measured knee
 /// (see `purrdf_rdf::gts_compose::DIST_ZSTD_LEVEL`).
 const DEFAULT_ZSTD_LEVEL: i32 = 12;
@@ -439,8 +445,8 @@ impl Memory {
         let created = now_rfc3339();
         let file_len = self.file_len()?;
         let confidence_text = options.confidence.map(|value| value.to_string());
-        let assertion = self.digest_id(
-            "assertion",
+        let assertion = Self::digest_id(
+            ASSERTION_KIND,
             file_len,
             [
                 text,
@@ -581,8 +587,8 @@ impl Memory {
         let created = now_rfc3339();
         let arguments = inline_or_digest(options.arguments);
         let result = inline_or_digest(options.result);
-        let call = self.digest_id(
-            "toolcall",
+        let call = Self::digest_id(
+            TOOLCALL_KIND,
             self.file_len()?,
             [
                 tool,
@@ -679,7 +685,7 @@ impl Memory {
                 Some(min) => claim.confidence.is_some_and(|got| got >= min),
             })
             .collect();
-        let tokens: HashSet<String> = options
+        let tokens: FastSet<String> = options
             .query
             .to_lowercase()
             .split_whitespace()
@@ -692,7 +698,7 @@ impl Memory {
                 .into_iter()
                 .enumerate()
                 .map(|(index, claim)| {
-                    let claim_tokens: HashSet<String> = claim
+                    let claim_tokens: FastSet<String> = claim
                         .text
                         .to_lowercase()
                         .split_whitespace()
@@ -747,8 +753,8 @@ impl Memory {
             return Ok(Vec::new());
         };
         let mut call_ids = Vec::new();
-        let mut props: HashMap<usize, HashMap<String, String>> = HashMap::new();
-        let mut backlinks: HashMap<usize, Vec<String>> = HashMap::new();
+        let mut props: FastMap<usize, FastMap<String, String>> = FastMap::default();
+        let mut backlinks: FastMap<usize, Vec<String>> = FastMap::default();
         for &(s, p, o, _) in &graph.quads {
             let pred = term_value(&graph, p);
             if pred == RDF_TYPE && term_value(&graph, o) == TOOL_CALL {
@@ -871,9 +877,10 @@ impl Memory {
         Ok(())
     }
 
+    /// The id of a `kind` record: BLAKE3 over the kind (its hash domain), the file
+    /// length the record was appended at, and each part, NUL-separated.
     fn digest_id<'a>(
-        &self,
-        kind: &str,
+        kind: Domain,
         file_len: u64,
         parts: impl IntoIterator<Item = &'a str>,
     ) -> String {
@@ -885,7 +892,8 @@ impl Memory {
             hasher.update(part.as_bytes());
         }
         format!(
-            "urn:purrdf:{kind}:blake3:{}",
+            "urn:purrdf:{}:blake3:{}",
+            kind.as_str(),
             purrdf_hash::hex::Lower(hasher.finalize().as_bytes())
         )
     }
@@ -905,7 +913,7 @@ impl Memory {
 /// this, because each claim was its own segment and the cross-segment union
 /// merged the two rows by value before anything consulted them.
 struct SegmentIris {
-    by_value: HashMap<String, usize>,
+    by_value: FastMap<String, usize>,
     appended: Vec<Term>,
     base: usize,
 }
@@ -914,7 +922,7 @@ impl SegmentIris {
     /// Index the segment's IRI rows; the FIRST id wins, which is the one the
     /// segment's reifier and quad rows were authored against.
     fn new(terms: &[Term]) -> Self {
-        let mut by_value: HashMap<String, usize> = HashMap::new();
+        let mut by_value: FastMap<String, usize> = FastMap::default();
         for (id, term) in terms.iter().enumerate() {
             if term.kind == TermKind::Iri
                 && let Some(value) = term.value.as_deref()
@@ -1043,8 +1051,8 @@ fn inline_or_digest(payload: Option<&str>) -> Option<String> {
     }
 }
 
-fn annotations_by_reifier(graph: &Graph) -> HashMap<usize, HashMap<String, String>> {
-    let mut out: HashMap<usize, HashMap<String, String>> = HashMap::new();
+fn annotations_by_reifier(graph: &Graph) -> FastMap<usize, FastMap<String, String>> {
+    let mut out: FastMap<usize, FastMap<String, String>> = FastMap::default();
     for &(rid, p, v, _) in &graph.annotations {
         let pred = term_value(graph, p);
         let value = term_value(graph, v);
@@ -1057,8 +1065,8 @@ fn annotations_by_reifier(graph: &Graph) -> HashMap<usize, HashMap<String, Strin
     out
 }
 
-fn suppressed_terms(graph: &Graph) -> HashSet<usize> {
-    let mut out = HashSet::new();
+fn suppressed_terms(graph: &Graph) -> FastSet<usize> {
+    let mut out = FastSet::default();
     for suppression in &graph.suppressions {
         for target in &suppression.targets {
             let Value::Map(entries) = target else {
@@ -1102,4 +1110,23 @@ fn now_rfc3339() -> String {
             crate::rfc3339::format(secs, since.subsec_nanos()).ok()
         })
         .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ASSERTION_KIND, Memory, TOOLCALL_KIND};
+
+    /// Both record ids are frozen over fixed inputs: a moved id is a changed identity
+    /// for every record already stored.
+    #[test]
+    fn both_record_ids_are_frozen() {
+        assert_eq!(
+            Memory::digest_id(ASSERTION_KIND, 64, ["a claim", "2026-01-01T00:00:00Z"]),
+            "urn:purrdf:assertion:blake3:d7ae440a2e99766f7638bf12172cc52e7d5e67f856b2598a59a1dc0b0ebc4dcb"
+        );
+        assert_eq!(
+            Memory::digest_id(TOOLCALL_KIND, 128, ["a tool", "2026-01-01T00:00:00Z"]),
+            "urn:purrdf:toolcall:blake3:d71edf30dc01bf295ca5535872be281ff771e1dd039358c1e97bd0460428779d"
+        );
+    }
 }

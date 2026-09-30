@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Report-only latency harness for the embedding kNN relation's exhaustive search, under
@@ -25,20 +25,21 @@
 //! All inputs come from a fixed splitmix64 stream. No timing or speedup is asserted, and
 //! the two arithmetics are reported side by side rather than divided into each other.
 
+use purrdf_core::purremb_fixture::Identities;
 use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, DimensionalityPolicy, DistanceMetric, EmbeddingBuilder,
-    EmbeddingFamilyContract, MatrixInput, MatrixRow, PrefixPostprocessing, ProjectionSpec,
-    RdfDatasetBuilder, RdfTermTarget, StageImplementation, TargetSet, TermValue, VectorDtype,
+    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
+    DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract, MatrixInput, MatrixRow,
+    PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, RdfTermTarget, TargetSet, TermValue,
+    VectorDtype,
 };
 use purrdf_sparql_eval::{
     EmbeddingKnnRelation, EmbeddingSpace, KnnGuard, PfArgs, PropertyFunction,
 };
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main};
 use purrdf_testkit::rng::splitmix64_step;
 
 /// The rows in every space.
@@ -69,30 +70,7 @@ fn stream(len: usize, seed: u64) -> Vec<f64> {
         .collect()
 }
 
-/// A fixture artifact identity, distinct per `name`.
-fn identity(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        format!("https://example.org/{name}"),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("artifact identity")
-}
-
-/// A fixture applied stage, distinct per `name`.
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            format!("https://example.org/{name}"),
-            ContentDigest::of(name.as_bytes()),
-            "application/octet-stream",
-            vec![1],
-        )
-        .expect("stage"),
-    )
-}
+const FX: Identities = Identities::at("https://example.org/");
 
 /// Seal `ROWS` rows of `dims` components as a PURREMB artifact under `metric` and open
 /// it as a queryable space.
@@ -123,14 +101,14 @@ fn space(dims: usize, metric: DistanceMetric) -> EmbeddingSpace {
     declared.sort_unstable_by_key(|target| target.id);
 
     let contract = EmbeddingFamilyContract {
-        model: identity("model"),
-        engine: identity("engine"),
-        tokenizer: identity("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F64,
@@ -190,7 +168,7 @@ fn invoke(relation: &dyn PropertyFunction, seed: &TermValue, count: &TermValue) 
     emitted
 }
 
-fn bench_knn_relation(c: &mut Criterion) {
+fn bench_knn_relation(c: &mut Bench) {
     let seed = TermValue::iri(format!("{EX}r{}", ROWS / 3));
     let count = TermValue::typed_literal(K.to_string(), "http://www.w3.org/2001/XMLSchema#integer");
 
@@ -225,5 +203,5 @@ fn bench_knn_relation(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_knn_relation);
-criterion_main!(benches);
+bench_group!(benches, bench_knn_relation);
+bench_main!(benches);

@@ -1529,7 +1529,7 @@ impl CustomAggregate for TotalAggregate {
     }
 }
 
-let mut registry = AggregateRegistry::new();
+let mut registry = AggregateRegistry::default();
 registry.register(
     "https://example.org/agg#total",
     Arc::new(TotalAggregate),
@@ -1601,7 +1601,7 @@ given group shape spends identical fuel to a built-in one. See
 call: `AggregateRegistry::register_statistical_aggregates`:
 
 ```rust,ignore
-let mut registry = AggregateRegistry::new();
+let mut registry = AggregateRegistry::default();
 registry.register_statistical_aggregates("https://example.org/agg#");
 // Now reachable: AGG(<https://example.org/agg#MEDIAN>, ?x), …STDDEV…, …TOPK…
 ```

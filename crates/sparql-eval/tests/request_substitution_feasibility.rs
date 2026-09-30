@@ -105,26 +105,17 @@ impl Kind {
         };
         match self {
             Self::Iri => TermValue::iri(format!("{EX}{name}")),
-            Self::Literal => simple_literal(name),
+            Self::Literal => TermValue::simple_literal(name),
             Self::Blank => blank(),
             Self::Quoted => quoted(TermValue::iri(format!("{EX}{name}"))),
             Self::QuotedWithBlank => quoted(blank()),
-            Self::QuotedWithLiteral => quoted(simple_literal(name)),
+            Self::QuotedWithLiteral => quoted(TermValue::simple_literal(name)),
         }
     }
 
     /// The `n`-th output the table holds for this kind's `name`.
     fn output(self, name: &str, n: u32) -> TermValue {
-        simple_literal(&format!("{}:{name}/{n}", self.tag()))
-    }
-}
-
-fn simple_literal(text: &str) -> TermValue {
-    TermValue::Literal {
-        lexical_form: text.to_owned(),
-        datatype: "http://www.w3.org/2001/XMLSchema#string".into(),
-        language: None,
-        direction: None,
+        TermValue::simple_literal(format!("{}:{name}/{n}", self.tag()))
     }
 }
 

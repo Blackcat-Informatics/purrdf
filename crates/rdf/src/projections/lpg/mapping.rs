@@ -1,7 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use std::borrow::Cow;
+use crate::projections::loss::ensure_sound;
+use crate::projections::loss::record_logical_loss;
+use crate::projections::util::RecordBudget;
+use crate::projections::util::reject_duplicate_keys;
+use crate::projections::util::reject_duplicates;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -13,19 +17,19 @@ use purrdf_core::loss::{
     LOSS_LPG_TRIPLE_TERM_SIDEBAND, LOSS_LPG_TYPE_SEMANTICS_LOWERED, LOSS_LPG_VALUE_INTERPRETED,
 };
 use purrdf_core::{
-    BlankScope, DatasetView, LossEntry, LossLedger, RdfDataset, RdfDatasetBuilder, RdfLiteral,
-    RdfLocation, TermId, check_ledger_sound, lpg_to_rdf_loss_ledger, rdf_to_lpg_loss_ledger,
+    DatasetView, LossLedger, RdfDataset, RdfDatasetBuilder, TermId, lpg_to_rdf_loss_ledger,
+    rdf_to_lpg_loss_ledger,
 };
 
 use super::super::{ProjectionError, ProjectionLimits, ProjectionTerm};
 
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 use super::model::{
     LpgAnnotation, LpgConfig, LpgEdge, LpgGraph, LpgGraphContext, LpgLabel, LpgNode, LpgProperty,
     LpgRdfQuad, LpgReifier, annotation_identifier, collect_node_terms, edge_identifier,
     node_identifier, property_atom, reifier_identifier, statement_identifier,
 };
 use super::stream::{IgnoreProgress, LpgProgressObserver, LpgProjectionReport, MappingProgress};
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// Result of RDF→LPG projection.
 #[derive(Debug, Clone)]
@@ -98,16 +102,16 @@ where
     O: LpgProgressObserver,
 {
     let execution_limits = config.execution_limits();
-    let mut input_budget = RecordBudget::new(execution_limits.max_input_records());
-    let mut model_budget = RecordBudget::new(execution_limits.max_model_records());
+    let mut input_budget = RecordBudget::new(execution_limits.max_input_records(), "LPG");
+    let mut model_budget = RecordBudget::new(execution_limits.max_model_records(), "LPG");
     let mut cache = BTreeMap::new();
     let mut named_graphs = BTreeSet::new();
     let mut declared_graphs = BTreeSet::new();
 
     for graph in view.named_graphs() {
-        input_budget.consume("RDF input")?;
+        input_budget.consume(&[1], "RDF input")?;
         progress.scanned()?;
-        let term = resolve_term(view, graph, config.limits(), &mut cache)?;
+        let term = ProjectionTerm::resolve_cached(view, graph, config.limits(), &mut cache)?;
         if !declared_graphs.insert(term.clone()) {
             return Err(ProjectionError::integrity(
                 "dataset view exposed a duplicate named graph declaration",
@@ -124,7 +128,7 @@ where
     // behavior without constructing a temporary dataset.
     let mut node_types: BTreeMap<ProjectionTerm, BTreeSet<String>> = BTreeMap::new();
     for quad in view.quads() {
-        input_budget.consume("RDF input")?;
+        input_budget.consume(&[1], "RDF input")?;
         progress.scanned()?;
         if context_in_scope(view, quad.g, config, &mut cache)?.is_none() {
             continue;
@@ -133,11 +137,11 @@ where
         if predicate != config.rdf_type() {
             continue;
         }
-        let object = resolve_term(view, quad.o, config.limits(), &mut cache)?;
+        let object = ProjectionTerm::resolve_cached(view, quad.o, config.limits(), &mut cache)?;
         let ProjectionTerm::Iri { value } = object else {
             continue;
         };
-        let subject = resolve_term(view, quad.s, config.limits(), &mut cache)?;
+        let subject = ProjectionTerm::resolve_cached(view, quad.s, config.limits(), &mut cache)?;
         node_types.entry(subject).or_default().insert(value);
     }
 
@@ -147,8 +151,8 @@ where
             continue;
         };
         let predicate = resolve_predicate(view, quad.p, config.limits(), &mut cache)?;
-        let subject = resolve_term(view, quad.s, config.limits(), &mut cache)?;
-        let object = resolve_term(view, quad.o, config.limits(), &mut cache)?;
+        let subject = ProjectionTerm::resolve_cached(view, quad.s, config.limits(), &mut cache)?;
+        let object = ProjectionTerm::resolve_cached(view, quad.o, config.limits(), &mut cache)?;
         let candidate = LpgRdfQuad {
             subject,
             predicate,
@@ -161,7 +165,7 @@ where
         if let LpgGraphContext::Named { name } = &candidate.graph {
             insert_named_graph(&mut named_graphs, name.clone(), &mut model_budget)?;
         }
-        model_budget.consume("LPG model")?;
+        model_budget.consume(&[1], "LPG model")?;
         quads.push(candidate);
     }
     quads.sort();
@@ -170,12 +174,12 @@ where
     let mut reifiers = Vec::new();
     let mut selected_reifiers = BTreeSet::new();
     for quad in view.reifier_quads() {
-        input_budget.consume("RDF input")?;
+        input_budget.consume(&[1], "RDF input")?;
         progress.scanned()?;
         let Some(graph) = context_in_scope(view, quad.g, config, &mut cache)? else {
             continue;
         };
-        let predicate = resolve_term(view, quad.p, config.limits(), &mut cache)?;
+        let predicate = ProjectionTerm::resolve_cached(view, quad.p, config.limits(), &mut cache)?;
         if predicate
             != (ProjectionTerm::Iri {
                 value: RDF_REIFIES.to_owned(),
@@ -185,15 +189,15 @@ where
                 "RDF view exposed a reifier row without the rdf:reifies predicate",
             ));
         }
-        let reifier = resolve_term(view, quad.s, config.limits(), &mut cache)?;
-        let statement = resolve_term(view, quad.o, config.limits(), &mut cache)?;
+        let reifier = ProjectionTerm::resolve_cached(view, quad.s, config.limits(), &mut cache)?;
+        let statement = ProjectionTerm::resolve_cached(view, quad.o, config.limits(), &mut cache)?;
         if !quad_in_scope(&reified_quad(&statement, &graph)?, config, &node_types) {
             continue;
         }
         if let LpgGraphContext::Named { name } = &graph {
             insert_named_graph(&mut named_graphs, name.clone(), &mut model_budget)?;
         }
-        model_budget.consume("LPG model")?;
+        model_budget.consume(&[1], "LPG model")?;
         let mut row = LpgReifier {
             id: String::new(),
             reifier: reifier.clone(),
@@ -209,12 +213,12 @@ where
 
     let mut annotations = Vec::new();
     for quad in view.annotation_quads() {
-        input_budget.consume("RDF input")?;
+        input_budget.consume(&[1], "RDF input")?;
         progress.scanned()?;
         let Some(graph) = context_in_scope(view, quad.g, config, &mut cache)? else {
             continue;
         };
-        let reifier = resolve_term(view, quad.s, config.limits(), &mut cache)?;
+        let reifier = ProjectionTerm::resolve_cached(view, quad.s, config.limits(), &mut cache)?;
         if !selected_reifiers.contains(&(reifier.clone(), graph.clone())) {
             continue;
         }
@@ -222,11 +226,11 @@ where
         if !config.scope().includes_predicate(&predicate) {
             continue;
         }
-        let object = resolve_term(view, quad.o, config.limits(), &mut cache)?;
+        let object = ProjectionTerm::resolve_cached(view, quad.o, config.limits(), &mut cache)?;
         if let LpgGraphContext::Named { name } = &graph {
             insert_named_graph(&mut named_graphs, name.clone(), &mut model_budget)?;
         }
-        model_budget.consume("LPG model")?;
+        model_budget.consume(&[1], "LPG model")?;
         let mut row = LpgAnnotation {
             id: String::new(),
             reifier,
@@ -267,7 +271,7 @@ where
     let mut term_to_node = BTreeMap::new();
     let mut nodes = BTreeMap::new();
     for term in node_terms {
-        model_budget.consume("LPG model")?;
+        model_budget.consume(&[1], "LPG model")?;
         progress.node()?;
         let id = node_identifier(&term, config.limits())?;
         if let Some(existing) = nodes.get(&id) {
@@ -365,15 +369,15 @@ where
     let contract = rdf_to_lpg_loss_ledger();
     for graph_name in &graph.named_graphs {
         let id = node_identifier(graph_name, config.limits())?;
-        record_loss(
+        record_logical_loss(
             &mut ledger,
             &contract,
             LOSS_LPG_NAMED_GRAPH_SIDEBAND,
             "lpg:named-graph",
             &id,
         );
-        if contains_blank(graph_name) {
-            record_loss(
+        if graph_name.contains_blank() {
+            record_logical_loss(
                 &mut ledger,
                 &contract,
                 LOSS_LPG_BLANK_SCOPE_SIDEBAND,
@@ -393,7 +397,7 @@ where
         } else {
             LOSS_LPG_EDGE_SEMANTICS_LOWERED
         };
-        record_loss(&mut ledger, &contract, primary, "lpg:statement", &id);
+        record_logical_loss(&mut ledger, &contract, primary, "lpg:statement", &id);
         record_term_sideband_losses(
             &mut ledger,
             &contract,
@@ -404,7 +408,7 @@ where
         );
     }
     for row in &graph.reifiers {
-        record_loss(
+        record_logical_loss(
             &mut ledger,
             &contract,
             LOSS_LPG_REIFIER_SIDEBAND,
@@ -421,7 +425,7 @@ where
         );
     }
     for row in &graph.annotations {
-        record_loss(
+        record_logical_loss(
             &mut ledger,
             &contract,
             LOSS_LPG_ANNOTATION_SIDEBAND,
@@ -439,7 +443,7 @@ where
     }
     ensure_sound(&ledger, "rdf-1.2-dataset", "lpg")?;
 
-    progress.set_model_records(model_budget.used);
+    progress.set_model_records(model_budget.used());
     let report = progress.finish()?;
 
     Ok(LpgProjection {
@@ -465,7 +469,7 @@ pub fn lift_lpg(graph: &LpgGraph, config: &LpgConfig) -> Result<LpgLiftOutcome, 
     let mut builder = RdfDatasetBuilder::new();
 
     for graph_name in &graph.named_graphs {
-        let id = intern_term(&mut builder, graph_name)?;
+        let id = graph_name.intern(&mut builder)?;
         builder.declare_named_graph(id);
     }
     for node in &graph.nodes {
@@ -480,15 +484,15 @@ pub fn lift_lpg(graph: &LpgGraph, config: &LpgConfig) -> Result<LpgLiftOutcome, 
         push_quad(&mut builder, &edge.rdf)?;
     }
     for row in &graph.reifiers {
-        let reifier = intern_term(&mut builder, &row.reifier)?;
-        let statement = intern_term(&mut builder, &row.statement)?;
+        let reifier = row.reifier.intern(&mut builder)?;
+        let statement = row.statement.intern(&mut builder)?;
         let graph_name = intern_context(&mut builder, &row.graph)?;
         builder.push_reifier_in_graph(reifier, statement, graph_name);
     }
     for row in &graph.annotations {
-        let reifier = intern_term(&mut builder, &row.reifier)?;
+        let reifier = row.reifier.intern(&mut builder)?;
         let predicate = builder.intern_iri(&row.predicate);
-        let object = intern_term(&mut builder, &row.object)?;
+        let object = row.object.intern(&mut builder)?;
         let graph_name = intern_context(&mut builder, &row.graph)?;
         builder.push_annotation_in_graph(reifier, predicate, object, graph_name);
     }
@@ -499,7 +503,7 @@ pub fn lift_lpg(graph: &LpgGraph, config: &LpgConfig) -> Result<LpgLiftOutcome, 
     let mut ledger = LossLedger::new();
     let contract = lpg_to_rdf_loss_ledger();
     for node in &graph.nodes {
-        record_loss(
+        record_logical_loss(
             &mut ledger,
             &contract,
             LOSS_LPG_NODE_ID_INTERPRETED,
@@ -507,7 +511,7 @@ pub fn lift_lpg(graph: &LpgGraph, config: &LpgConfig) -> Result<LpgLiftOutcome, 
             &node.id,
         );
         for label in &node.labels {
-            record_loss(
+            record_logical_loss(
                 &mut ledger,
                 &contract,
                 LOSS_LPG_LABEL_INTERPRETED,
@@ -516,14 +520,14 @@ pub fn lift_lpg(graph: &LpgGraph, config: &LpgConfig) -> Result<LpgLiftOutcome, 
             );
         }
         for property in &node.properties {
-            record_loss(
+            record_logical_loss(
                 &mut ledger,
                 &contract,
                 LOSS_LPG_PROPERTY_KEY_INTERPRETED,
                 "lpg:property",
                 &property.statement_id,
             );
-            record_loss(
+            record_logical_loss(
                 &mut ledger,
                 &contract,
                 LOSS_LPG_VALUE_INTERPRETED,
@@ -533,14 +537,14 @@ pub fn lift_lpg(graph: &LpgGraph, config: &LpgConfig) -> Result<LpgLiftOutcome, 
         }
     }
     for edge in &graph.edges {
-        record_loss(
+        record_logical_loss(
             &mut ledger,
             &contract,
             LOSS_LPG_EDGE_TYPE_INTERPRETED,
             "lpg:edge",
             &edge.id,
         );
-        record_loss(
+        record_logical_loss(
             &mut ledger,
             &contract,
             LOSS_LPG_EDGE_ID_DROPPED,
@@ -556,53 +560,13 @@ pub fn lift_lpg(graph: &LpgGraph, config: &LpgConfig) -> Result<LpgLiftOutcome, 
     })
 }
 
-struct RecordBudget {
-    used: usize,
-    maximum: usize,
-}
-
-impl RecordBudget {
-    const fn new(maximum: usize) -> Self {
-        Self { used: 0, maximum }
-    }
-
-    fn consume(&mut self, description: &str) -> Result<(), ProjectionError> {
-        self.used = self
-            .used
-            .checked_add(1)
-            .ok_or_else(|| ProjectionError::limit("LPG record count overflow"))?;
-        if self.used > self.maximum {
-            return Err(ProjectionError::limit(format!(
-                "{description} exceeds the {}-record LPG limit",
-                self.maximum
-            )));
-        }
-        Ok(())
-    }
-}
-
-fn resolve_term<D: DatasetView>(
-    view: &D,
-    id: D::Id,
-    limits: ProjectionLimits,
-    cache: &mut BTreeMap<D::Id, ProjectionTerm>,
-) -> Result<ProjectionTerm, ProjectionError> {
-    if let Some(term) = cache.get(&id) {
-        return Ok(term.clone());
-    }
-    let term = ProjectionTerm::from_view(view, id, limits)?;
-    let _ = term.to_canonical_json(limits)?;
-    cache.insert(id, term.clone());
-    Ok(term)
-}
-
 fn resolve_predicate<D: DatasetView>(
     view: &D,
     id: D::Id,
     limits: ProjectionLimits,
     cache: &mut BTreeMap<D::Id, ProjectionTerm>,
 ) -> Result<String, ProjectionError> {
-    let predicate = resolve_term(view, id, limits, cache)?;
+    let predicate = ProjectionTerm::resolve_cached(view, id, limits, cache)?;
     let ProjectionTerm::Iri { value } = predicate else {
         return Err(ProjectionError::integrity(
             "RDF view exposed a non-IRI predicate",
@@ -623,7 +587,7 @@ fn context_in_scope<D: DatasetView>(
             .includes_default_graph()
             .then_some(LpgGraphContext::Default));
     };
-    let name = resolve_term(view, id, config.limits(), cache)?;
+    let name = ProjectionTerm::resolve_cached(view, id, config.limits(), cache)?;
     Ok(config
         .scope()
         .includes_named_graph(&name)
@@ -686,16 +650,7 @@ fn insert_named_graph(
     budget: &mut RecordBudget,
 ) -> Result<(), ProjectionError> {
     if graphs.insert(graph) {
-        budget.consume("named graph declaration")?;
-    }
-    Ok(())
-}
-
-fn reject_duplicates<T: Ord>(rows: &[T], description: &str) -> Result<(), ProjectionError> {
-    if rows.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err(ProjectionError::integrity(format!(
-            "dataset view exposed duplicate {description}"
-        )));
+        budget.consume(&[1], "named graph declaration")?;
     }
     Ok(())
 }
@@ -705,35 +660,9 @@ fn reject_duplicate_ids<T>(
     id: impl Fn(&T) -> &str,
     description: &str,
 ) -> Result<(), ProjectionError> {
-    if rows.windows(2).any(|pair| id(&pair[0]) == id(&pair[1])) {
-        return Err(ProjectionError::integrity(format!(
-            "dataset view exposed duplicate or colliding {description}"
-        )));
-    }
-    Ok(())
-}
-
-fn record_loss(
-    ledger: &mut LossLedger,
-    contract: &LossLedger,
-    code: &'static str,
-    logical: &str,
-    subject: &str,
-) {
-    let template = contract
-        .entries()
-        .iter()
-        .find(|entry| entry.code == code)
-        .expect("runtime LPG code must exist in its closed contract");
-    ledger.record(LossEntry {
-        code: Cow::Borrowed(code),
-        from: template.from.clone(),
-        to: template.to.clone(),
-        note: template.note.clone(),
-        location: Some(Box::new(
-            RdfLocation::logical(logical).with_subject(subject),
-        )),
-    });
+    reject_duplicate_keys(rows, id, || {
+        format!("dataset view exposed duplicate or colliding {description}")
+    })
 }
 
 fn record_term_sideband_losses<'a>(
@@ -745,8 +674,10 @@ fn record_term_sideband_losses<'a>(
     subject: &str,
 ) {
     let terms: Vec<&ProjectionTerm> = terms.into_iter().collect();
-    if terms.iter().any(|term| contains_blank(term)) || graph.name().is_some_and(contains_blank) {
-        record_loss(
+    if terms.iter().any(|term| term.contains_blank())
+        || graph.name().is_some_and(ProjectionTerm::contains_blank)
+    {
+        record_logical_loss(
             ledger,
             contract,
             LOSS_LPG_BLANK_SCOPE_SIDEBAND,
@@ -754,8 +685,10 @@ fn record_term_sideband_losses<'a>(
             subject,
         );
     }
-    if terms.iter().any(|term| contains_triple(term)) || graph.name().is_some_and(contains_triple) {
-        record_loss(
+    if terms.iter().any(|term| term.is_triple())
+        || graph.name().is_some_and(ProjectionTerm::is_triple)
+    {
+        record_logical_loss(
             ledger,
             contract,
             LOSS_LPG_TRIPLE_TERM_SIDEBAND,
@@ -764,7 +697,7 @@ fn record_term_sideband_losses<'a>(
         );
     }
     if !matches!(graph, LpgGraphContext::Default) {
-        record_loss(
+        record_logical_loss(
             ledger,
             contract,
             LOSS_LPG_NAMED_GRAPH_SIDEBAND,
@@ -774,30 +707,10 @@ fn record_term_sideband_losses<'a>(
     }
 }
 
-fn contains_blank(term: &ProjectionTerm) -> bool {
-    match term {
-        ProjectionTerm::Blank { .. } => true,
-        ProjectionTerm::Triple {
-            subject,
-            predicate,
-            object,
-        } => contains_blank(subject) || contains_blank(predicate) || contains_blank(object),
-        ProjectionTerm::Iri { .. } | ProjectionTerm::Literal { .. } => false,
-    }
-}
-
-fn contains_triple(term: &ProjectionTerm) -> bool {
-    matches!(term, ProjectionTerm::Triple { .. })
-}
-
-fn ensure_sound(ledger: &LossLedger, from: &str, to: &str) -> Result<(), ProjectionError> {
-    check_ledger_sound(ledger, from, to).map_err(ProjectionError::integrity)
-}
-
 fn push_quad(builder: &mut RdfDatasetBuilder, quad: &LpgRdfQuad) -> Result<(), ProjectionError> {
-    let subject = intern_term(builder, &quad.subject)?;
+    let subject = quad.subject.intern(builder)?;
     let predicate = builder.intern_iri(&quad.predicate);
-    let object = intern_term(builder, &quad.object)?;
+    let object = quad.object.intern(builder)?;
     let graph = intern_context(builder, &quad.graph)?;
     builder.push_quad(subject, predicate, object, graph);
     Ok(())
@@ -807,46 +720,7 @@ fn intern_context(
     builder: &mut RdfDatasetBuilder,
     context: &LpgGraphContext,
 ) -> Result<Option<TermId>, ProjectionError> {
-    context
-        .name()
-        .map(|name| intern_term(builder, name))
-        .transpose()
-}
-
-fn intern_term(
-    builder: &mut RdfDatasetBuilder,
-    term: &ProjectionTerm,
-) -> Result<TermId, ProjectionError> {
-    Ok(match term {
-        ProjectionTerm::Iri { value } => builder.intern_iri(value),
-        ProjectionTerm::Blank { label, scope } => builder.intern_blank(label, BlankScope(*scope)),
-        ProjectionTerm::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => builder.intern_literal(RdfLiteral {
-            lexical_form: lexical.clone(),
-            datatype: Some(datatype.clone()),
-            language: language.clone(),
-            direction: direction.map(Into::into),
-        }),
-        ProjectionTerm::Triple {
-            subject,
-            predicate,
-            object,
-        } => {
-            let subject = intern_term(builder, subject)?;
-            let ProjectionTerm::Iri { value: predicate } = predicate.as_ref() else {
-                return Err(ProjectionError::integrity(
-                    "triple-term predicate is not an IRI",
-                ));
-            };
-            let predicate = builder.intern_iri(predicate);
-            let object = intern_term(builder, object)?;
-            builder.intern_triple(subject, predicate, object)
-        }
-    })
+    context.name().map(|name| name.intern(builder)).transpose()
 }
 
 #[cfg(test)]
@@ -862,6 +736,7 @@ mod tests {
         LOSS_LPG_PROPERTY_KEY_INTERPRETED, LOSS_LPG_REIFIER_SIDEBAND,
         LOSS_LPG_TRIPLE_TERM_SIDEBAND, LOSS_LPG_TYPE_SEMANTICS_LOWERED, LOSS_LPG_VALUE_INTERPRETED,
     };
+    use purrdf_core::{BlankScope, RdfLiteral};
     use purrdf_core::{
         PackBuilder, PackView, RdfTextDirection, assert_ledger_complete, datasets_isomorphic,
     };

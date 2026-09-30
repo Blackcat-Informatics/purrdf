@@ -34,7 +34,7 @@
 //!   flat path ships.
 
 use purrdf_core::TermBox;
-use std::cell::Cell;
+use purrdf_core::term_fixture::{ProbeFault, RowBudget};
 use std::sync::Arc;
 
 use purrdf_rdf::dataset_view::ViewOperationStatus;
@@ -49,11 +49,15 @@ use purrdf_rdf::gts_fixtures::{
     keystone_contribution, keystone_delta, keystone_loadout,
 };
 use purrdf_rdf::{
-    BlankScope, CompositeDatasetView, CompositeSource, DatasetMut, DatasetView, DeltaDatasetView,
-    FallibleDatasetView, GraphMatch, MutableDataset, PipelineViewBundle, QuadIds, QuadRef,
-    QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfStoreCapabilities, RdfTextDirection,
-    RetentionLedger, TermId, TermRef, TermValue, ViewLimits, parse_dataset,
+    BlankScope, DatasetMut, DatasetView, DeltaDatasetView, FallibleDatasetView, GraphMatch,
+    MutableDataset, PipelineViewBundle, QuadIds, QuadValues, RdfDataset, RdfDatasetBuilder,
+    RdfLiteral, RdfStoreCapabilities, RdfTextDirection, RetentionLedger, TermId, TermRef,
+    TermValue, ViewLimits, parse_dataset,
 };
+
+#[path = "support/blank_identity.rs"]
+mod blank_identity;
+use blank_identity::composite_over;
 
 /// Declared in source A and left empty; declared AND filled in source B.
 const SHARED: &str = "https://example.org/shared";
@@ -146,16 +150,6 @@ fn source_b() -> Arc<RdfDataset> {
     )
     .expect("source B parses");
     with_declarations(&parsed, &[])
-}
-
-/// A single-source composite view over `dataset`, in an explicitly SHARED blank
-/// identity space so the view reports the source's own `(label, scope)` pairs.
-fn composite_over(dataset: &Arc<RdfDataset>) -> CompositeDatasetView {
-    CompositeDatasetView::from_shared_sources(
-        vec![CompositeSource::new(Arc::clone(dataset))],
-        ViewLimits::default(),
-    )
-    .expect("a single retained source composes")
 }
 
 /// A delta view over `dataset` with an EMPTY delta: the same RDF surface,
@@ -796,18 +790,6 @@ fn an_unrepresentable_quoted_triple_is_named_in_its_own_text() {
 // A purpose-built probe view: budgeted faulting + capability claims
 // ---------------------------------------------------------------------------
 
-/// The probe view's operational root cause.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ProbeFault(&'static str);
-
-impl std::fmt::Display for ProbeFault {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0)
-    }
-}
-
-impl std::error::Error for ProbeFault {}
-
 /// A view that delegates to a frozen dataset but can (a) fault after a fixed
 /// number of ordinary rows, exactly as a lazy operational backend does, and (b)
 /// claim a statement-layer capability its accessors do not answer for.
@@ -815,8 +797,7 @@ impl std::error::Error for ProbeFault {}
 struct ProbeView {
     inner: Arc<RdfDataset>,
     /// Ordinary rows still yieldable before the view faults.
-    budget: Cell<usize>,
-    faulted: Cell<bool>,
+    budget: RowBudget,
     /// Capability claims asserted ON TOP of the inner dataset's own.
     claim_reifiers: bool,
     claim_annotations: bool,
@@ -829,8 +810,7 @@ impl ProbeView {
     fn honest(inner: Arc<RdfDataset>) -> Self {
         Self {
             inner,
-            budget: Cell::new(usize::MAX),
-            faulted: Cell::new(false),
+            budget: RowBudget::new(usize::MAX),
             claim_reifiers: false,
             claim_annotations: false,
             enumerate_statements: true,
@@ -839,16 +819,18 @@ impl ProbeView {
 
     /// Faults after `budget` ordinary rows.
     fn budgeted(inner: Arc<RdfDataset>, budget: usize) -> Self {
-        let view = Self::honest(inner);
-        view.budget.set(budget);
-        view
+        Self {
+            budget: RowBudget::new(budget),
+            ..Self::honest(inner)
+        }
     }
 
     /// Already failed before the first read.
     fn pre_faulted(inner: Arc<RdfDataset>) -> Self {
-        let view = Self::honest(inner);
-        view.faulted.set(true);
-        view
+        Self {
+            budget: RowBudget::faulted(),
+            ..Self::honest(inner)
+        }
     }
 
     /// Claims the RDF 1.2 statement layer while its accessors answer NOTHING for
@@ -880,20 +862,6 @@ impl ProbeView {
     fn empty_claim(inner: Arc<RdfDataset>) -> Self {
         Self::honest_claim(inner)
     }
-
-    /// Spend one row of budget; the view faults when it runs out.
-    fn spend(&self) -> bool {
-        match self.budget.get().checked_sub(1) {
-            Some(left) => {
-                self.budget.set(left);
-                true
-            }
-            None => {
-                self.faulted.set(true);
-                false
-            }
-        }
-    }
 }
 
 impl DatasetView for ProbeView {
@@ -901,16 +869,7 @@ impl DatasetView for ProbeView {
     type ProbePlan = ();
 
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
-        self.inner.quads().take_while(|_| self.spend())
-    }
-
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
-        self.quads().map(|q| QuadRef {
-            s: self.resolve(q.s),
-            p: self.resolve(q.p),
-            o: self.resolve(q.o),
-            g: q.g.map(|g| self.resolve(g)),
-        })
+        self.budget.take(self.inner.quads())
     }
 
     fn resolve(&self, id: TermId) -> TermRef<'_> {
@@ -969,15 +928,7 @@ impl FallibleDatasetView for ProbeView {
     type Evidence = usize;
 
     fn operation_status(&self) -> ViewOperationStatus<ProbeFault, usize> {
-        let evidence = self.budget.get();
-        if self.faulted.get() {
-            ViewOperationStatus::Failed {
-                error: ProbeFault("the probe view exhausted its row budget"),
-                evidence,
-            }
-        } else {
-            ViewOperationStatus::Ready { evidence }
-        }
+        self.budget.status()
     }
 }
 

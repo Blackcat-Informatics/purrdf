@@ -9,7 +9,6 @@
 //! executed, and every restricted answer is compared against the unrestricted answer of
 //! the same request without the parameter — which the fixture makes different.
 
-use std::fmt::Write as _;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -42,15 +41,7 @@ fn post(
 
 /// Percent-encode everything but the unreserved characters, as a form encoder would.
 fn enc(text: &str) -> String {
-    let mut out = String::new();
-    for byte in text.bytes() {
-        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
-            out.push(char::from(byte));
-        } else {
-            write!(out, "%{byte:02X}").expect("writing to a String cannot fail");
-        }
-    }
-    out
+    purrdf_iri::percent::encode(text, purrdf_iri::percent::UNRESERVED).into_owned()
 }
 
 fn ok(result: Result<ProtocolRequest, ProtocolError>) -> ProtocolRequest {

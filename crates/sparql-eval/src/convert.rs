@@ -11,26 +11,16 @@
 //! matches the dataset's interned (already-lowercased) form.
 
 use purrdf_core::TermBox;
-use purrdf_core::{RdfTextDirection, TermValue};
+use purrdf_core::TermValue;
 use purrdf_sparql_algebra::{
-    BaseDirection, Child, GroundTerm, Literal, NamedNode, NamedNodePattern, TermPattern,
-    TriplePattern,
+    Child, GroundTerm, Literal, NamedNode, NamedNodePattern, TermPattern, TriplePattern,
 };
 
 use crate::error::EvalError;
 
-/// Map the algebra's RDF-1.2 base direction to the IR's.
-#[inline]
-pub(crate) fn map_direction(direction: BaseDirection) -> RdfTextDirection {
-    match direction {
-        BaseDirection::Ltr => RdfTextDirection::Ltr,
-        BaseDirection::Rtl => RdfTextDirection::Rtl,
-    }
-}
-
 /// An IRI term value.
 #[inline]
-pub(crate) fn named_node_to_value(node: &NamedNode) -> TermValue {
+pub fn named_node_to_value(node: &NamedNode) -> TermValue {
     TermValue::Iri(node.as_str().to_owned())
 }
 
@@ -43,7 +33,8 @@ pub(crate) fn named_node_to_value(node: &NamedNode) -> TermValue {
 /// it queries — so `BIND("[_:b, 42]"^^cdt:List AS ?l)` names a node distinct from
 /// the `_:b` of a Turtle file the query is evaluated against, exactly as two
 /// Turtle files that both write `_:b` name two nodes. Without a scope of its own
-/// the query-authored label lands at [`BlankScope::DEFAULT`] — which is precisely
+/// the query-authored label lands at
+/// [`BlankScope::DEFAULT`](purrdf_core::ir::BlankScope::DEFAULT) — which is precisely
 /// where a directly-parsed document's blanks live — and the two collapse onto one
 /// node.
 ///
@@ -61,7 +52,7 @@ pub(crate) fn named_node_to_value(node: &NamedNode) -> TermValue {
 /// enforces the query half of that reservation directly — a value at this scope is
 /// never promoted to a dataset term — so the separation does not rest on the
 /// dataset merely happening not to hold the label.
-pub(crate) const QUERY_BLANK_SCOPE: purrdf_core::BlankScope = purrdf_core::BlankScope(u32::MAX);
+pub const QUERY_BLANK_SCOPE: purrdf_core::BlankScope = purrdf_core::BlankScope(u32::MAX);
 
 /// A literal term value, with the language tag lowercased to match the IR's C0.1
 /// interned identity (so a query literal resolves to the dataset's stored form).
@@ -79,7 +70,7 @@ pub(crate) const QUERY_BLANK_SCOPE: purrdf_core::BlankScope = purrdf_core::Blank
 /// (`_unchecked`) form because an ill-formed composite lexical form in a query is
 /// diagnosed by the evaluator's own CDT parse, which reports it against the query
 /// rather than refusing a document.
-pub(crate) fn literal_to_value(lit: &Literal) -> TermValue {
+pub fn literal_to_value(lit: &Literal) -> TermValue {
     let datatype = lit.datatype().as_str();
     // C0.1: a language tag determines a string datatype, so the literal is never
     // composite — so the binding is only ever reached for an untagged literal.
@@ -95,8 +86,8 @@ pub(crate) fn literal_to_value(lit: &Literal) -> TermValue {
     TermValue::Literal {
         lexical_form,
         datatype: datatype.to_owned(),
-        language: lit.language().map(str::to_ascii_lowercase),
-        direction: lit.direction().map(map_direction),
+        language: lit.language().map(purrdf_iri::langtag::identity_fold),
+        direction: lit.direction(),
     }
 }
 
@@ -111,7 +102,7 @@ pub(crate) fn literal_to_value(lit: &Literal) -> TermValue {
 /// Returns [`EvalError::Unsupported`] if any component is a variable: matching a
 /// quoted triple term whose components *bind* variables (structural triple-term
 /// matching) is not supported for any caller of this helper, not only BGPs; only fully-ground quoted triples resolve to a single interned id.
-pub(crate) fn ground_triple_pattern_to_value(
+pub fn ground_triple_pattern_to_value(
     pattern: &TriplePattern,
     site: &str,
 ) -> Result<TermValue, EvalError> {
@@ -135,7 +126,7 @@ pub(crate) fn ground_triple_pattern_to_value(
 ///
 /// [`EvalError::Unsupported`] naming `site` when a variable stands anywhere in the
 /// pattern: in a quoted triple's subject, predicate or object, or as the whole term.
-pub(crate) fn ground_term_pattern_to_value(
+pub fn ground_term_pattern_to_value(
     pattern: &TermPattern,
     site: &str,
 ) -> Result<TermValue, EvalError> {
@@ -205,7 +196,7 @@ pub(crate) fn ground_term_pattern_to_value(
 /// A quoted triple is assembled bottom-up over a work list — its subject, predicate and
 /// object each converted fully in that order — so a term nested to any depth costs no
 /// machine stack.
-pub(crate) fn ground_term_to_value(term: &GroundTerm) -> TermValue {
+pub fn ground_term_to_value(term: &GroundTerm) -> TermValue {
     /// One pending step: convert a term, or assemble the triple whose three
     /// components were converted last.
     enum Step<'a> {
@@ -348,22 +339,20 @@ mod term_walk_tests {
 
     /// A deterministic choice sequence.
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 12,
             }
         }
 
         fn choose(&mut self, n: usize) -> usize {
-            let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
-                .expect("a draw below the count fits")
+            self.state.below_usize(n)
         }
 
         fn spend(&mut self) -> bool {
@@ -479,44 +468,40 @@ mod term_walk_tests {
     /// is refused, naming the site, without walking off the stack either.
     #[test]
     fn a_hundred_thousand_level_term_converts_on_a_128_kib_thread() {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(|| {
-                let mut deep = TermPattern::NamedNode(iri("o"));
-                let mut variable = TermPattern::Variable(Variable::new("o"));
-                let mut cell = GroundTerm::NamedNode(iri("o"));
-                for _ in 0..DEPTH {
-                    deep = TermPattern::Triple(Child::new(TriplePattern {
-                        subject: TermPattern::NamedNode(iri("s")),
-                        predicate: NamedNodePattern::NamedNode(iri("p")),
-                        object: deep,
-                    }));
-                    variable = TermPattern::Triple(Child::new(TriplePattern {
-                        subject: TermPattern::NamedNode(iri("s")),
-                        predicate: NamedNodePattern::NamedNode(iri("p")),
-                        object: variable,
-                    }));
-                    cell = GroundTerm::Triple(Child::new(GroundTriple {
-                        subject: GroundTerm::NamedNode(iri("s")),
-                        predicate: iri("p"),
-                        object: cell,
-                    }));
-                }
-                let value = ground_term_pattern_to_value(&deep, SITE).expect("a ground pattern");
-                assert_eq!(nesting(&value), DEPTH);
-                drop(value);
-                let error = ground_term_pattern_to_value(&variable, SITE)
-                    .expect_err("a variable at the innermost object");
-                assert!(error.to_string().contains(SITE), "{error}");
-                let value = ground_term_to_value(&cell);
-                assert_eq!(nesting(&value), DEPTH);
-                drop(value);
-                drop(deep);
-                drop(variable);
-                drop(cell);
-            })
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned");
+        purrdf_stack::on_stack(SMALL_STACK, || {
+            let mut deep = TermPattern::NamedNode(iri("o"));
+            let mut variable = TermPattern::Variable(Variable::new("o"));
+            let mut cell = GroundTerm::NamedNode(iri("o"));
+            for _ in 0..DEPTH {
+                deep = TermPattern::Triple(Child::new(TriplePattern {
+                    subject: TermPattern::NamedNode(iri("s")),
+                    predicate: NamedNodePattern::NamedNode(iri("p")),
+                    object: deep,
+                }));
+                variable = TermPattern::Triple(Child::new(TriplePattern {
+                    subject: TermPattern::NamedNode(iri("s")),
+                    predicate: NamedNodePattern::NamedNode(iri("p")),
+                    object: variable,
+                }));
+                cell = GroundTerm::Triple(Child::new(GroundTriple {
+                    subject: GroundTerm::NamedNode(iri("s")),
+                    predicate: iri("p"),
+                    object: cell,
+                }));
+            }
+            let value = ground_term_pattern_to_value(&deep, SITE).expect("a ground pattern");
+            assert_eq!(nesting(&value), DEPTH);
+            drop(value);
+            let error = ground_term_pattern_to_value(&variable, SITE)
+                .expect_err("a variable at the innermost object");
+            assert!(error.to_string().contains(SITE), "{error}");
+            let value = ground_term_to_value(&cell);
+            assert_eq!(nesting(&value), DEPTH);
+            drop(value);
+            drop(deep);
+            drop(variable);
+            drop(cell);
+        })
+        .expect("spawn");
     }
 }

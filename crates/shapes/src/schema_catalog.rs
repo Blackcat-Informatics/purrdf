@@ -8,33 +8,14 @@
 //! emitters. It deliberately is not a second public schema algebra: the public
 //! carrier remains [`CompiledSchema`].
 
-use std::error::Error;
-use std::fmt;
-
-use serde_json::{Map, Value};
+use crate::json_model::{Object, Value, ValueKind};
 
 use crate::json_schema::CompiledSchema;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SchemaCatalogError {
-    message: String,
+purrdf_lex::message_error! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct SchemaCatalogError;
 }
-
-impl SchemaCatalogError {
-    fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for SchemaCatalogError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
-    }
-}
-
-impl Error for SchemaCatalogError {}
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CompiledSchemaCatalog {
@@ -110,7 +91,7 @@ impl CompiledSchemaCatalog {
         Ok(Self { document })
     }
 
-    pub(crate) fn definitions(&self) -> &Map<String, Value> {
+    pub(crate) fn definitions(&self) -> &Object {
         self.document
             .as_object()
             .and_then(|root| root.get("$defs"))
@@ -119,29 +100,56 @@ impl CompiledSchemaCatalog {
     }
 }
 
-fn invalid_json_error(error: &serde_json::Error) -> SchemaCatalogError {
+fn invalid_json_error(error: &purrdf_lex::json::Error) -> SchemaCatalogError {
     SchemaCatalogError::new(format!(
         "CompiledSchema.schema_json is not valid JSON: {error}"
     ))
 }
 
+/// Read the catalog document under `limits`, refusing a repeated member name
+/// (RFC 7493 §2.3): a schema whose `$defs` named one definition twice would
+/// otherwise mean whichever copy a reader happened to keep.
+///
+/// `limits.depth` counts open arrays and objects (the root is one) and is
+/// capped at 128.
 fn parse_bounded_document(
     input: &str,
     limits: SchemaCatalogLimits,
 ) -> Result<Value, SchemaCatalogError> {
-    purrdf::json_value::parse(
-        input.as_bytes(),
-        purrdf::json_value::Limits {
-            bytes: limits.input_bytes,
-            values: limits.nodes,
-            depth: limits.depth,
-            string_bytes: limits.string_bytes,
+    use purrdf_lex::json::ErrorKind;
+
+    if input.len() > limits.input_bytes {
+        return Err(SchemaCatalogError::new(format!(
+            "JSON input exceeds byte limit {}",
+            limits.input_bytes
+        )));
+    }
+    let mut document = purrdf_lex::json::read_with(
+        input,
+        purrdf_lex::json::Limits {
+            max_depth: limits.depth.min(128),
+            max_values: u64::try_from(limits.nodes).unwrap_or(u64::MAX),
+            max_string_bytes: limits.string_bytes,
+            unique_members: true,
         },
     )
-    .map_err(|error| match error {
-        purrdf::json_value::Error::Limit(message) => SchemaCatalogError::new(message),
-        purrdf::json_value::Error::Syntax(error) => invalid_json_error(&error),
-    })
+    .map_err(|error| {
+        let at = error.offset();
+        match error.kind() {
+            ErrorKind::Depth { limit } => SchemaCatalogError::new(format!(
+                "JSON nesting limit {limit}: input exceeds depth limit at byte {at}"
+            )),
+            ErrorKind::Values { limit } => {
+                SchemaCatalogError::new(format!("more than {limit} JSON nodes at byte {at}"))
+            }
+            ErrorKind::StringBytes { limit } => SchemaCatalogError::new(format!(
+                "JSON string longer than {limit} bytes at byte {at}"
+            )),
+            _ => invalid_json_error(&error),
+        }
+    })?;
+    document.sort_keys();
+    Ok(document)
 }
 
 fn validate_definition_limit(
@@ -167,12 +175,11 @@ pub(crate) fn reference_key(reference: &str) -> Option<String> {
     if encoded.contains('/') {
         return None;
     }
-    pointer_unescape(encoded)
+    purrdf_iri::json_pointer::unescape_token(encoded).map(std::borrow::Cow::into_owned)
 }
 
-pub(crate) fn pointer_escape(value: &str) -> String {
-    value.replace('~', "~0").replace('/', "~1")
-}
+/// An RFC 6901 reference token escaped for a `#/$defs/…` pointer.
+pub(crate) use purrdf_iri::json_pointer::escape_token as pointer_escape;
 
 pub(crate) const fn schema_map_keywords() -> &'static [&'static str] {
     &[
@@ -206,7 +213,7 @@ pub(crate) const fn schema_single_keywords() -> &'static [&'static str] {
 
 fn validate_schema(
     value: &Value,
-    definitions: &Map<String, Value>,
+    definitions: &Object,
     path: &str,
 ) -> Result<(), SchemaCatalogError> {
     let Value::Object(object) = value else {
@@ -250,7 +257,7 @@ fn validate_schema(
     }
 
     for keyword in schema_map_keywords() {
-        if let Some(children) = object.get(*keyword) {
+        if let Some(children) = object.get(keyword) {
             let children = children.as_object().ok_or_else(|| {
                 SchemaCatalogError::new(format!("{path}/{keyword} must be an object"))
             })?;
@@ -264,7 +271,7 @@ fn validate_schema(
         }
     }
     for keyword in schema_array_keywords() {
-        if let Some(children) = object.get(*keyword) {
+        if let Some(children) = object.get(keyword) {
             let children = children.as_array().ok_or_else(|| {
                 SchemaCatalogError::new(format!("{path}/{keyword} must be an array"))
             })?;
@@ -274,39 +281,113 @@ fn validate_schema(
         }
     }
     for keyword in schema_single_keywords() {
-        if let Some(child) = object.get(*keyword) {
+        if let Some(child) = object.get(keyword) {
             validate_schema(child, definitions, &format!("{path}/{keyword}"))?;
         }
     }
     Ok(())
 }
 
-fn pointer_unescape(value: &str) -> Option<String> {
-    let mut output = String::with_capacity(value.len());
-    let mut characters = value.chars();
-    while let Some(character) = characters.next() {
-        if character != '~' {
-            output.push(character);
-            continue;
-        }
-        match characters.next()? {
-            '0' => output.push('~'),
-            '1' => output.push('/'),
-            _ => return None,
-        }
+/// Whether `keyword` is a JSON Schema 2020-12 annotation-only keyword: a core
+/// identifier or comment (`$schema`, `$id`, `$anchor`, `$dynamicAnchor`,
+/// `$vocabulary`, `$comment`), a Meta-Data vocabulary keyword (2020-12 Validation
+/// §9), or an `x-` extension. None of them constrains an instance, so a projection
+/// may skip them without changing what a schema accepts.
+pub(crate) fn is_annotation_keyword(keyword: &str) -> bool {
+    keyword.starts_with("x-")
+        || matches!(
+            keyword,
+            "$schema"
+                | "$id"
+                | "$anchor"
+                | "$dynamicAnchor"
+                | "$vocabulary"
+                | "$comment"
+                | "title"
+                | "description"
+                | "default"
+                | "examples"
+                | "deprecated"
+                | "readOnly"
+                | "writeOnly"
+        )
+}
+
+/// Whether `keyword` is an assertion or applicator keyword of JSON Schema 2020-12
+/// (Core §10, Validation §6–§8) or the `additionalItems` its predecessors used. A
+/// key that is neither this nor [`is_annotation_keyword`] is an assertion a
+/// schema-language projection cannot see, and must refuse rather than drop.
+pub(crate) fn known_schema_keyword(keyword: &str) -> bool {
+    matches!(
+        keyword,
+        "$ref"
+            | "$defs"
+            | "type"
+            | "enum"
+            | "const"
+            | "allOf"
+            | "anyOf"
+            | "oneOf"
+            | "not"
+            | "if"
+            | "then"
+            | "else"
+            | "properties"
+            | "required"
+            | "patternProperties"
+            | "additionalProperties"
+            | "dependentRequired"
+            | "dependentSchemas"
+            | "propertyNames"
+            | "minProperties"
+            | "maxProperties"
+            | "items"
+            | "prefixItems"
+            | "additionalItems"
+            | "contains"
+            | "minContains"
+            | "maxContains"
+            | "uniqueItems"
+            | "minItems"
+            | "maxItems"
+            | "unevaluatedItems"
+            | "unevaluatedProperties"
+            | "minimum"
+            | "maximum"
+            | "exclusiveMinimum"
+            | "exclusiveMaximum"
+            | "multipleOf"
+            | "minLength"
+            | "maxLength"
+            | "pattern"
+            | "format"
+            | "contentEncoding"
+            | "contentMediaType"
+            | "contentSchema"
+    )
+}
+
+/// Normalise an emitted source text's tail to exactly one newline, the single
+/// convention every schema-language projection's output follows.
+pub(crate) fn finish_text(mut text: String) -> String {
+    while text.ends_with("\n\n") {
+        text.pop();
     }
-    Some(output)
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_model::json;
     use ::purrdf::loss::LossLedger;
-    use serde_json::json;
 
     fn compiled(schema: &Value) -> CompiledSchema {
         CompiledSchema {
-            schema_json: serde_json::to_string(schema).expect("fixture serializes"),
+            schema_json: crate::json_model::write_compact(schema),
             openapi_json: "{}\n".to_owned(),
             losses: LossLedger::new(),
         }
@@ -347,7 +428,7 @@ mod tests {
             for (index, lexical) in lexicals.iter().enumerate() {
                 let correct: f64 = lexical.parse().expect("decimal");
                 assert_eq!(
-                    properties[format!("ex:v{index}")]["minimum"]
+                    properties[format!("ex:v{index}").as_str()]["minimum"]
                         .as_f64()
                         .map(f64::to_bits),
                     Some(correct.to_bits()),
@@ -539,7 +620,7 @@ mod tests {
                 "more than 3 JSON nodes",
             ),
             (
-                r#"{"$defs":{"longer" trailing"#,
+                r#"{"$defs":{"longer": trailing"#,
                 SchemaCatalogLimits {
                     input_bytes: 1_024,
                     definitions: 10,
@@ -547,7 +628,7 @@ mod tests {
                     nodes: 10,
                     string_bytes: 5,
                 },
-                "6-byte string; limit is 5",
+                "JSON string longer than 5 bytes",
             ),
             (
                 r#"{"$defs":{"A":{"properties":{"x":{ trailing"#,
@@ -586,10 +667,11 @@ mod tests {
             string_bytes: 100,
         };
         assert!(parse_bounded_document(r#"{"a":1,"\u0061":2}"#, limits).is_err());
+        assert!(parse_bounded_document(r#"{"a":1,"\u0062":2}"#, limits).is_ok());
     }
 
     #[test]
-    fn bounded_parser_matches_serde_json_value_semantics() {
+    fn bounded_parser_matches_the_unbounded_reader() {
         for source in [
             "null",
             "true",
@@ -600,7 +682,7 @@ mod tests {
             r#"[null,true,-1,2.5,"x"]"#,
             r#"{"a":2,"nested":{"items":[false,"z"]}}"#,
         ] {
-            let expected = serde_json::from_str::<Value>(source).expect("serde JSON fixture");
+            let expected = purrdf_lex::json::read(source).expect("JSON fixture");
             let actual = parse_bounded_document(
                 source,
                 SchemaCatalogLimits {

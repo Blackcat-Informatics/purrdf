@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Parsing and evaluating requests nested many levels deep, per nesting construct.
@@ -40,16 +40,17 @@
 //! Report-only, `cargo bench -p purrdf-sparql-eval --bench deep_nesting` (the
 //! `make bench` lane) — excluded from `make check`. No timing is asserted.
 
+use purrdf_testkit::text::nested;
 use std::hint::black_box;
 use std::sync::Arc;
 
-use criterion::{Criterion, criterion_group, criterion_main};
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, SparqlEngine, SparqlRequest,
     SparqlResult,
 };
 use purrdf_sparql_algebra::SparqlParser;
 use purrdf_sparql_eval::{EvalError, NativeSparqlEngine};
+use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
 const EX: &str = "http://example.org/";
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
@@ -78,12 +79,7 @@ fn dataset() -> Arc<RdfDataset> {
     builder.freeze().expect("the deep-nesting dataset")
 }
 
-/// `open` written `n` times around `core`, closed by `close` written `n` times.
-fn nested(open: &str, core: &str, close: &str, n: usize) -> String {
-    format!("{}{core}{}", open.repeat(n), close.repeat(n))
-}
-
-/// One nesting construct: its criterion id and its query text at a depth.
+/// One nesting construct: its bench id and its query text at a depth.
 struct Construct {
     name: &'static str,
     text: fn(usize) -> String,
@@ -240,7 +236,7 @@ fn deepest(data: &Arc<RdfDataset>, construct: &Construct) -> usize {
 
 /// Measure `construct` at `depth`, parse alone and whole cold request.
 fn bench_at(
-    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    group: &mut purrdf_testkit::bench::BenchmarkGroup<'_>,
     data: &Arc<RdfDataset>,
     construct: &Construct,
     depth: usize,
@@ -266,7 +262,7 @@ fn bench_at(
     });
 }
 
-fn bench_deep_nesting(c: &mut Criterion) {
+fn bench_deep_nesting(c: &mut Bench) {
     let data = dataset();
     let mut group = c.benchmark_group("deep_nesting");
     group.sample_size(10);
@@ -292,5 +288,5 @@ fn bench_deep_nesting(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_deep_nesting);
-criterion_main!(benches);
+bench_group!(benches, bench_deep_nesting);
+bench_main!(benches);

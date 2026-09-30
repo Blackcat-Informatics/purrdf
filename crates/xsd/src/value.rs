@@ -99,6 +99,17 @@ impl XsdValue {
         }
     }
 
+    /// Whether the value is in the SPARQL numeric tower (SPARQL 1.1 §17.1,
+    /// "numeric"): an integer of any integer-family datatype, a decimal, a float
+    /// or a double. Booleans, strings, temporal and binary values are not.
+    #[must_use]
+    pub const fn is_numeric(&self) -> bool {
+        matches!(
+            self,
+            Self::Integer { .. } | Self::Decimal(_) | Self::Float(_) | Self::Double(_)
+        )
+    }
+
     /// The canonical lexical form of this value (XSD canonical mapping).
     ///
     /// # Examples
@@ -310,6 +321,18 @@ pub enum XsdError {
         /// A short, stable explanation of what is indeterminate and why.
         reason: &'static str,
     },
+}
+
+impl XsdError {
+    /// [`XsdError::InvalidLexical`] for `lexical` read as `datatype`: the one
+    /// constructor every lexical-space check reports its refusal through.
+    pub(crate) fn invalid(datatype: XsdDatatype, lexical: &str, reason: &'static str) -> Self {
+        Self::InvalidLexical {
+            datatype,
+            lexical: lexical.to_owned(),
+            reason,
+        }
+    }
 }
 
 impl std::fmt::Display for XsdError {

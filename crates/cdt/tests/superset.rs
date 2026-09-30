@@ -49,8 +49,8 @@ fn superset_1_a_triple_term_parses_renders_and_round_trips() {
     let value = assert_round_trips(lexical);
     assert_eq!(
         value.canonical_lexical(),
-        "[<<(<http://example.org/s> <http://example.org/p> \
-         \"1\"^^<http://www.w3.org/2001/XMLSchema#integer>)>>]"
+        "[<<( <http://example.org/s> <http://example.org/p> \
+         \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> )>>]"
     );
 }
 

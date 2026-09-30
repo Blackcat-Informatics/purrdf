@@ -1,0 +1,2660 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+# The helpers ledger: one row per job — a piece of functionality the workspace
+# implements exactly once — naming its single home, what it replaces, and the
+# sanctioned second implementations. Read by crates/helper-census and by
+# scripts/check-shared-helpers.py (in `make check`); the IRI resolver gate
+# (scripts/check-iri-resolver-singleton.py) reads its exemptions from here too.
+#
+# [[job]] — every key is required; an empty array states "none".
+#   id                = the row id, used by `--census <id>` and `--count <id>`.
+#   summary           = what the job is, in one line.
+#   home              = the single implementation, `crate::path::item`; it must
+#                       resolve (through re-exports) to a defined item. The home
+#                       CRATE is the job's home: a forbidden match elsewhere is a
+#                       copy, and copies inside the home crate are the isomorphic
+#                       group rule's business.
+#   entry_points      = further public paths to the same implementation (aliases,
+#                       re-exports, thin shims); each must resolve.
+#   spec              = the specification or contract the home implements.
+#   vectors           = repo-relative frozen vector files; each must exist.
+#   bench             = `package:bench-target` ids; each must be a bench target.
+#   sites             = scripts/simd-asm-manifest.toml site ids; every symbol a
+#                       site measures must lie in the home crate.
+#   replaces_external = external packages the home replaces; each must be banned
+#                       in scripts/check-banned-deps.py.
+#   enforced          = true: a forbidden match outside the home fails the gate.
+#                       false: the job still has copies; --census and --count
+#                       report them. A job with no copies left must be enforced.
+#
+# [job.forbidden] — what may not appear outside the home crate.
+#   constants    = integer literals, any spelling, compared by value
+#                  (`0xcbf2_9ce4_8422_2325` is its decimal spelling too).
+#   fingerprints = helper-census ids: `body:<hex>` (a structural body shape),
+#                  `shim:<hex>` (a forwarder shape), `table:hex-lower` or
+#                  `table:hex-upper` (a hex-digit table in shipping code), or a
+#                  census rule over every first-party file, tests and benches
+#                  included (`rule:std-default-hasher`: a std HashMap/HashSet
+#                  left on its random default hasher; `rule:hex-format-loop`: a
+#                  `{:02x}`/`{:02X}` format inside a loop or closure;
+#                  `rule:hex-pair-radix`: `u8::from_str_radix(_, 16)`;
+#                  `rule:hex-table`: a hex-digit table, exempt inside the home
+#                  package), or a rule another gate computes
+#                  over shipping code (from scripts/check-hash-domains.py:
+#                  `rule:raw-hash-domain`, a domain-shaped literal handed to a
+#                  hasher without a purrdf_hash::Domain; `rule:shared-hash-domain`,
+#                  one domain opening hashers in two functions of its file), or
+#                  a literal rule over shipping code (`rule:vocabulary-literal`:
+#                  a string literal equal to or starting with a namespace
+#                  constant — a `NS` or `*_NS` const — declared under the job's
+#                  home and entry-point modules, outside those modules, an
+#                  embedded Turtle/SPARQL document excepted; `rule:home-literal`:
+#                  a string literal equal to one the home item's own bodies
+#                  spell, outside the home item; `rule:sole-name`: a function
+#                  inside the home crate that a `names` pattern matches is a copy
+#                  unless it is the home or an entry point). A body or shim fingerprint
+#                  must still match some unit.
+#   names        = regular expressions over function and constant names (a bound
+#                  redeclared under a home's name is a copy; a value such as 16
+#                  or 128 is too common to forbid by `constants`).
+#
+# [[job.variant]] — a sanctioned second implementation; each is re-checked on
+# every run, and one that no longer matches anything is STALE and fails.
+#   symbol    = the variant, `crate::path::item`; must resolve, in `file`.
+#   file      = the repo-relative file that defines it.
+#   detector  = what it is exempt from: `isomorphic` (it may share a body shape
+#               with the home), `forbidden` (it may hold a forbidden pattern),
+#               a rule id of the IRI resolver gate, or a rule of
+#               scripts/check-hash-domains.py: `shared-hash-domain` (the named
+#               domain may open two constructions) or `undomained-digest` (the
+#               named function may compute a digest with no domain).
+#   criterion = why it may exist: `a` (a specification or conformance suite
+#               requires the difference), `b` (a tangible benefit its
+#               documentation states), `c` (a measured, significant speedup that
+#               cannot be centralised), or `layering` (its callers cannot reach
+#               the home).
+#   anchor    = the documented item that states the reason; it must resolve and
+#               carry documentation.
+#   reason    = the reason, in one or two sentences.
+#
+# The census walks shipping code and every test, bench and example target (each a
+# crate named `<package>::test_crate::<target>`, `bench_crate`, `example_crate`); a
+# file several targets declare is fingerprinted once, under the first. A body is
+# compared in its value form: borrows, derefs, `ref`, the value adapters
+# (`.as_str()`, `.clone()`, `.to_owned()`, …), a full-range reindex, `let` type
+# annotations and type-only turbofishes are dropped, local names are renamed and
+# field names kept; a body of 20 to 29 tokens is compared with its literals
+# verbatim, a longer one with them abstracted. Names, constants and fingerprints
+# of a job apply to test code too; the literal rules read shipping code only.
+#
+# [[distinct]] — a set of items that share a body or forwarder shape and share no
+# job, so no [[job.variant]] can name them. Each row sanctions exactly one group:
+# the census group of its `kind` whose member set EQUALS `members`. A group that
+# gains a member is reported again, so a new clone of a sanctioned shape still
+# fails; a row that equals no current group, or names a member that is no longer
+# defined, is STALE and fails. Every key is required.
+#   members   = the group's members, `crate::path::item`, as `--check` names them;
+#               two or more. A symbol two members share (two trait impls on one
+#               type) is listed once per member.
+#   kind      = `body` (an isomorphic-bodies group) or `shim` (an isomorphic-shims
+#               group).
+#   criterion = why the members stay apart, as for a variant: `a`, `b`, `c` or
+#               `layering`.
+#   anchor    = the documented item that states the reason; it must resolve and
+#               carry documentation.
+#   reason    = the reason, in one or two sentences.
+
+[[job]]
+id = "iri-reference-resolution"
+summary = "RFC 3986 reference resolution: the base-precedence chain and the reference arithmetic"
+home = "purrdf_iri::BaseScope"
+entry_points = ["purrdf_iri::Iri::resolve", "purrdf_core::BaseIri", "purrdf_core::parse_iri"]
+spec = "RFC 3986 section 5.1 (establishing a base) and section 5.2 (relative resolution), over RFC 3987 IRIs"
+vectors = []
+bench = ["purrdf-iri:parse"]
+sites = []
+replaces_external = ["fluent-uri", "url"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['remove_dot_segments$', 'merge_paths?$']
+
+[[job.variant]]
+symbol = "purrdf_gts::files::validate_symlink_target"
+file = "crates/gts/src/files.rs"
+detector = "dot-segment-loop"
+criterion = "b"
+anchor = "purrdf_gts::files::validate_symlink_target"
+reason = "Archive symlink targets are member paths, not IRI references: an escape above the extraction root must be refused, where RFC 3986 dot-segment removal clamps at the root and would turn a rejected zip-slip into a silently rewritten path."
+
+[[job.variant]]
+symbol = "purrdf_rdf::native_codecs::okf::reader::resolve_link_path"
+file = "crates/rdf/src/native_codecs/okf/reader.rs"
+detector = "dot-segment-loop"
+criterion = "b"
+anchor = "purrdf_rdf::native_codecs::okf::reader::resolve_link_path"
+reason = "OKF bundle-relative Markdown link targets are member paths inside the bundle's file tree; a link that climbs above the bundle root is refused, which RFC 3986 dot-segment removal would clamp instead."
+
+[[job.variant]]
+symbol = "purrdf_rdf::projections::research_object::config::ResearchObjectIdentity::resolve_relative"
+file = "crates/rdf/src/projections/research_object/config.rs"
+detector = "resolver-fn"
+criterion = "b"
+anchor = "purrdf_rdf::projections::research_object::config::ResearchObjectIdentity::resolve_relative"
+reason = "Not a resolver: it first refuses every input a resolver would have to reason about (absolute, dot-segment, query, fragment, backslash) and then concatenates under a caller-owned base, so nothing of RFC 3986 section 5.2 is re-implemented."
+
+[[job]]
+id = "fixed-key-table-hash"
+summary = "The fixed-key table hasher behind every workspace hash map and set"
+home = "purrdf_hash::fixed::FixedState"
+entry_points = [
+    "purrdf_core::FastHasher",
+    "purrdf_core::FastMap",
+    "purrdf_core::FastSet",
+]
+spec = "the frozen FixedHasher self-vectors: a fixed compile-time key schedule, build-specific and never persisted"
+vectors = [
+    "crates/hash-conformance/tests/vectors/fixed_hasher_aes_vectors.txt",
+    "crates/hash-conformance/tests/vectors/fixed_hasher_portable_vectors.txt",
+]
+bench = ["purrdf-hash-conformance:hasher"]
+sites = ["hash.fixed-compress"]
+replaces_external = ["ahash", "foldhash"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "fixed-hasher-everywhere"
+summary = "No std hash map or set is left on its per-process random default hasher, in shipping code, tests or benches"
+home = "purrdf_hash::fixed::FixedState"
+entry_points = ["purrdf_core::FastMap", "purrdf_core::FastSet"]
+spec = "byte determinism: a map's iteration order must not vary from one process to the next"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:std-default-hasher", "rule:default-hasher-new"]
+names = []
+
+[[job]]
+id = "hash-domain"
+summary = "Every hash domain-separation string is a registered purrdf_hash::Domain constant, unique and prefix-free across the workspace"
+home = "purrdf_hash::Domain"
+entry_points = []
+spec = "scripts/check-hash-domains.py: one preimage family per domain, no domain a byte-prefix of another, no domain-shaped literal handed to a hasher outside a Domain; the registry table in crates/hash/README.md"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:raw-hash-domain", "rule:shared-hash-domain"]
+names = []
+
+[[job.variant]]
+symbol = "purrdf_datalog::cache::CONTRACT_DIGEST_TAG"
+file = "crates/datalog/src/cache.rs"
+detector = "shared-hash-domain"
+criterion = "a"
+anchor = "purrdf_datalog::cache::CONTRACT_DIGEST_TAG"
+reason = "One ContractHash kind at two refinement levels: the guarded re-fold hashes a 32-byte BLAKE3 contract digest where the other layout frames the calculus version, so a cross-layout collision is computationally infeasible, and a new domain would move every guarded program's published contract hash."
+
+[[job.variant]]
+symbol = "purrdf_text::term_bytes::fingerprint_terms"
+file = "crates/text/src/term_bytes.rs"
+detector = "undomained-digest"
+criterion = "a"
+anchor = "purrdf_text::term_bytes::fingerprint_terms"
+reason = "A term-sequence fingerprint is its own kind, compared only with another fingerprint, and a published identity callers record; a domain prefix would change every recorded value."
+
+[[job.variant]]
+symbol = "purrdf_text::index::TextIndex::analyzer_fingerprint"
+file = "crates/text/src/index.rs"
+detector = "undomained-digest"
+criterion = "a"
+anchor = "purrdf_text::index::TextIndex::analyzer_fingerprint"
+reason = "The analyzer profile id is absorbed first and already names the family; the fingerprint is its own kind and a published identity, so a registered domain would change every recorded value."
+
+[[job.variant]]
+symbol = "purrdf_core::artifact::identity::Identity::refresh"
+file = "crates/rdf-core/src/artifact/identity.rs"
+detector = "undomained-digest"
+criterion = "a"
+anchor = "purrdf_core::artifact::identity::Identity::refresh"
+reason = "An artifact identity digest is its own kind, compared only with another identity digest, and is sealed into every artifact header; a domain would break every artifact already written."
+
+[[job]]
+id = "blake3"
+summary = "BLAKE3-256, one-shot and streaming, with caller-scheduled subtrees"
+home = "purrdf_hash::blake3::hash"
+entry_points = ["purrdf_hash::blake3::Streaming", "purrdf_hash::blake3::Hash"]
+spec = "the BLAKE3 specification (O'Connor, Aumasson, Neves, Wilcox-O'Hearn), unkeyed hash mode"
+vectors = [
+    "crates/hash-conformance/tests/vectors/blake3_differential_vectors.txt",
+    "crates/hash-conformance/tests/vectors/blake3_random_vectors.txt",
+]
+bench = ["purrdf-hash-conformance:digests"]
+sites = ["blake3.hash-many-dispatch", "blake3.single-block"]
+replaces_external = ["blake3", "arrayref", "arrayvec", "constant_time_eq"]
+enforced = true
+
+[job.forbidden]
+constants = ["0x6a09_e667", "0xbb67_ae85", "0x5be0_cd19"]
+fingerprints = []
+names = []
+
+[[job]]
+id = "splitmix64"
+summary = "The SplitMix64 generator, its self-composed step and its 64-bit finaliser"
+home = "purrdf_hash::mix"
+entry_points = [
+    "purrdf_hash::mix::splitmix64_next",
+    "purrdf_hash::mix::splitmix64_step",
+    "purrdf_hash::mix::splitmix64_finalize",
+    "purrdf_hash::mix::GOLDEN_GAMMA",
+    "purrdf_testkit::rng::splitmix64_next",
+    "purrdf_testkit::rng::splitmix64_step",
+    "purrdf_hnsw::level::splitmix64",
+    "purrdf_bench::splitmix64",
+]
+spec = "SplitMix64 (Steele, Lea and Flood, OOPSLA 2014): golden-ratio increment 0x9E3779B97F4A7C15, finaliser multipliers 0xBF58476D1CE4E5B9 and 0x94D049BB133111EB with shifts 30, 27 and 31"
+vectors = ["crates/hash-conformance/tests/vectors/splitmix64_differential_vectors.txt"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = ["0x9e37_79b9_7f4a_7c15", "0xbf58_476d_1ce4_e5b9", "0x94d0_49bb_1331_11eb"]
+fingerprints = []
+names = ['^splitmix(64)?(_next|_step|_finali[sz]e)?$']
+
+[[job]]
+id = "fnv1a64"
+summary = "FNV-1a 64-bit over bytes, from the offset basis or folded into a caller's state"
+home = "purrdf_hash::fnv"
+entry_points = [
+    "purrdf_hash::fnv::fnv1a64",
+    "purrdf_hash::fnv::fold",
+    "purrdf_hash::fnv::BASIS",
+    "purrdf_hash::fnv::PRIME",
+]
+spec = "FNV-1a 64-bit (Fowler, Noll and Vo; draft-eastlake-fnv): offset basis 0xCBF29CE484222325, prime 0x100000001B3, XOR then multiply modulo 2^64"
+vectors = ["crates/hash-conformance/tests/vectors/fnv1a64_differential_vectors.txt"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = ["0xcbf2_9ce4_8422_2325", "0x100_0000_01b3"]
+fingerprints = []
+names = ['^fnv(1a?)?(_?64)?$']
+
+[[job]]
+id = "md5"
+summary = "MD5 message digest, one-shot and streaming"
+home = "purrdf_hash::md5::Md5"
+entry_points = []
+spec = "RFC 1321"
+vectors = ["crates/hash-conformance/tests/vectors/md5_differential_vectors.txt"]
+bench = ["purrdf-hash-conformance:digests"]
+sites = []
+replaces_external = ["md-5"]
+enforced = true
+
+[job.forbidden]
+constants = ["0xd76a_a478", "0xe8c7_b756"]
+fingerprints = []
+names = []
+
+[[job]]
+id = "sha1"
+summary = "SHA-1 message digest, one-shot and streaming, with the x86 SHA and Armv8 SHA1 instruction paths"
+home = "purrdf_hash::sha1::Sha1"
+entry_points = []
+spec = "FIPS 180-4 section 6.1"
+vectors = ["crates/hash-conformance/tests/vectors/sha1_differential_vectors.txt"]
+bench = ["purrdf-hash-conformance:digests"]
+sites = ["hash.sha1-block"]
+replaces_external = ["sha1"]
+enforced = true
+
+[job.forbidden]
+constants = ["0x5a82_7999", "0x6ed9_eba1", "0x8f1b_bcdc", "0xca62_c1d6", "0xc3d2_e1f0"]
+fingerprints = []
+names = []
+
+[[job]]
+id = "sha3"
+summary = "SHA3-224/256/384/512 and the Keccak-f[1600] permutation"
+home = "purrdf_hash::sha3::Sha3"
+entry_points = ["purrdf_hash::sha3::keccak_f1600"]
+spec = "FIPS 202"
+vectors = [
+    "crates/hash-conformance/tests/vectors/sha3_224_differential_vectors.txt",
+    "crates/hash-conformance/tests/vectors/sha3_256_differential_vectors.txt",
+    "crates/hash-conformance/tests/vectors/sha3_384_differential_vectors.txt",
+    "crates/hash-conformance/tests/vectors/sha3_512_differential_vectors.txt",
+]
+bench = ["purrdf-hash-conformance:digests"]
+sites = []
+replaces_external = ["sha3", "keccak"]
+enforced = true
+
+[job.forbidden]
+constants = ["0x8000_0000_8000_8008", "0x8000_0000_0000_808a"]
+fingerprints = []
+names = []
+
+[[job]]
+id = "crc32"
+summary = "CRC-32/ISO-HDLC with the pclmulqdq and Armv8 CRC32 instruction paths"
+home = "purrdf_hash::crc32::Crc32"
+entry_points = []
+spec = "CRC-32/ISO-HDLC (ISO 3309, ITU-T V.42): reflected polynomial 0x04C11DB7, initial and final XOR 0xFFFFFFFF"
+vectors = ["crates/hash-conformance/tests/vectors/crc32_differential_vectors.txt"]
+bench = ["purrdf-hash-conformance:digests"]
+sites = ["hash.crc32-update"]
+replaces_external = ["crc32fast"]
+enforced = true
+
+[job.forbidden]
+constants = ["0xedb8_8320", "0x1_04c1_1db7"]
+fingerprints = []
+names = []
+
+[[job]]
+id = "deflate-gzip"
+summary = "DEFLATE and gzip: streaming decoder and deterministic encoder"
+home = "purrdf_deflate::Inflater"
+entry_points = ["purrdf_deflate::Deflater", "purrdf_deflate::GzipDecoder", "purrdf_deflate::GzipWriter"]
+spec = "RFC 1951 (DEFLATE) and RFC 1952 (gzip)"
+vectors = []
+bench = ["purrdf-deflate:gzip"]
+sites = ["deflate.match-copy", "deflate.hash-windows"]
+replaces_external = ["flate2", "miniz_oxide", "adler2", "simd-adler32"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "match-length"
+summary = "The first-mismatch index: the length of the common prefix of two byte strings, word-parallel inline for short keys and vector-dispatched for the encoder's candidate windows"
+home = "purrdf_deflate::common_prefix_len"
+entry_points = ["purrdf_deflate::backend::Backend::match_length"]
+spec = "the index of the first differing byte of two byte strings, or the shorter length when one is a prefix of the other; the frozen answers in match_length_vectors.txt, replayed by every kernel path"
+vectors = ["crates/deflate/tests/vectors/match_length_vectors.txt"]
+bench = ["purrdf-deflate:gzip", "purrdf-core:pack_query"]
+sites = ["deflate.match-length"]
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:xor-first-mismatch"]
+names = ['^(common_prefix_len|match_length_portable)$']
+
+[[job]]
+id = "csvw-dialect-csv"
+summary = "The W3C CSVW dialect CSV reader and writer"
+home = "purrdf_core::csv::Reader"
+entry_points = ["purrdf_core::csv::Writer", "purrdf_core::csv::Dialect", "purrdf_core::csv::read_table"]
+spec = "W3C Metadata Vocabulary for Tabular Data, section 5.9 (dialect descriptions), over RFC 4180"
+vectors = []
+bench = []
+sites = ["core.csv-field"]
+replaces_external = ["csv", "csv-core"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "strongly-connected-components"
+summary = "Iterative Tarjan strongly connected components over an adjacency list"
+home = "purrdf_core::graph::tarjan_scc"
+entry_points = []
+spec = "Tarjan 1972, iterative formulation: components in reverse topological order"
+vectors = []
+bench = []
+sites = []
+replaces_external = ["petgraph"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "small-vector"
+summary = "The inline small-vector type"
+home = "purrdf_core::SmallVec"
+entry_points = []
+spec = "the SmallVec API contract: inline storage up to the array's capacity, then a heap spill"
+vectors = []
+bench = []
+sites = []
+replaces_external = ["smallvec"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "hex"
+summary = "Base16: rendering bytes in either case, reading either-case and canonical-lowercase text, the single hex digit, and the 32-byte digest value"
+home = "purrdf_hash::hex::encode"
+entry_points = [
+    "purrdf_hash::hex::Lower",
+    "purrdf_hash::hex::Upper",
+    "purrdf_hash::hex::encode_into",
+    "purrdf_hash::hex::encode_to_slice",
+    "purrdf_hash::hex::decode",
+    "purrdf_hash::hex::decode_canonical",
+    "purrdf_hash::hex::decode_32",
+    "purrdf_hash::hex::decode_32_canonical",
+    "purrdf_hash::hex::nibble",
+    "purrdf_hash::hex::nibble_canonical",
+    "purrdf_hash::hex::Digest32",
+]
+spec = "RFC 4648 section 8 (base16); the xsd:hexBinary lexical space of XML Schema 1.1 Part 2 section 3.3.15, read in either case; the canonical lowercase form of a content address"
+vectors = [
+    "crates/hash-conformance/tests/vectors/hex_vectors.txt",
+    "crates/hash-conformance/tests/vectors/hex_digit_vectors.txt",
+]
+bench = ["purrdf-hash-conformance:digests"]
+sites = ["hash.hex-encode", "hash.hex-lower", "hash.hex-decode"]
+replaces_external = ["hex"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:hex-table", "rule:hex-format-loop", "rule:hex-pair-radix"]
+names = ['^(hex_value|hex_val|hex_digit|hex_nibble|lower_hex_value|unhex|encode_hex|decode_hex)$']
+
+[[job]]
+id = "json-schema-validation"
+summary = "JSON Schema validation, drafts 2020-12, 2019-09 and 07"
+home = "purrdf_jsonschema::Schema"
+entry_points = ["purrdf_jsonschema::Registry"]
+spec = "JSON Schema Core and Validation, drafts 2020-12, 2019-09 and 07, checked by the JSON-Schema-Test-Suite"
+vectors = []
+bench = ["purrdf-jsonschema:validate"]
+sites = []
+replaces_external = ["boon", "appendlist"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "byte-exact-goldens"
+summary = "Byte-exact checked-in golden files for tests"
+home = "purrdf_testkit::assert_golden"
+entry_points = []
+spec = "the testkit golden contract: the checked-in bytes are the expectation; a mismatch fails and names the file"
+vectors = []
+bench = []
+sites = []
+replaces_external = ["insta", "similar", "console"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "test-temporary-paths"
+summary = "Temporary directories and files for tests, under the target directory"
+home = "purrdf_testkit::TempDir"
+entry_points = ["purrdf_testkit::NamedTempFile", "purrdf_testkit::temp_dir", "purrdf_testkit::temp_file"]
+spec = "the testkit temporary-path contract: created under the target directory, removed on drop"
+vectors = []
+bench = []
+sites = []
+replaces_external = ["tempfile"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "bench-harness"
+summary = "The micro-benchmark harness every harness = false bench target runs on: warm-up, flat sampling, the median with its MAD and a seeded bootstrap interval, baselines and a fixed-schema estimates file"
+home = "purrdf_testkit::bench"
+entry_points = ["purrdf_testkit::bench::Bench", "purrdf_testkit::bench_group", "purrdf_testkit::bench_main"]
+spec = "the purrdf_testkit::bench contract: type 7 quantiles, the unscaled MAD, a 95% percentile bootstrap of the median over 10000 resamples seeded from the benchmark id through purrdf_hash::mix, Tukey fences on the IQR, and the schema-1 estimates.json documented in docs/BENCHMARKS.md"
+vectors = []
+bench = []
+sites = []
+replaces_external = ["criterion"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^bootstrap_(median|change)$', '^classify_outliers$', '^median_absolute_deviation$']
+
+[[job]]
+id = "escape-decode"
+summary = "Decoding the escapes of the RDF, SPARQL, ShEx, XML and JSON grammars: UCHAR, ECHAR, an XML character reference, a JSON string escape, and every hex digit and code point they spell"
+home = "purrdf_lex::terminals::decode_uchar"
+entry_points = [
+    "purrdf_lex::terminals::decode_uchar_at",
+    "purrdf_lex::terminals::echar_value",
+    "purrdf_lex::terminals::expand_uchars",
+    "purrdf_lex::terminals::decode_char_ref",
+    "purrdf_lex::json_escape::decode_escape",
+    "purrdf_lex::json_escape::decode_u_escape",
+    "purrdf_lex::json_escape::unescape",
+    "purrdf_iri::terminals",
+    "purrdf_iri::json_escape",
+    "purrdf_hash::hex::parse_u32",
+]
+spec = "UCHAR and ECHAR of RDF 1.2 Turtle section 6.5 and SPARQL 1.2 section 19.8; XML 1.0 Fifth Edition production 66 CharRef with the Legal Character constraint; RFC 8259 section 7 string escapes, surrogate pairs required"
+vectors = [
+    "crates/lex/tests/vectors/escape_vectors.txt",
+    "crates/lex/tests/vectors/uchar_scalar_vectors.txt",
+    "crates/lex/tests/vectors/json_string_vectors.txt",
+    "crates/lex/tests/vectors/json_unit_vectors.txt",
+]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:hex-digit-radix"]
+names = ['^(hex4|read_hex4|read_code_unit|parse_unicode_escape|escaped_char|unescape_iri|uchar_expanded|decode_uchar|decode_char_ref|hex_scalar)$']
+
+[[job]]
+id = "grammar-ws"
+summary = "The WS terminal every grammar reader skips and trims: SPACE, TAB, LINE FEED and CARRIAGE RETURN, never FORM FEED"
+home = "purrdf_lex::terminals::skip_ws"
+entry_points = [
+    "purrdf_lex::terminals::trim_ws",
+    "purrdf_lex::terminals::find_first_trivia",
+]
+spec = "WS of RDF 1.2 Turtle section 6.5 and SPARQL 1.2 section 19.8; S of XML 1.0 production 3; ws of RFC 8259 section 2: the same four scalars"
+vectors = []
+bench = ["purrdf-lex:scan"]
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:grammar-ws"]
+names = []
+
+[[job]]
+id = "json-pointer"
+summary = "RFC 6901 JSON Pointer reference tokens: the ~0/~1 escape, pointer parsing and the array-index token"
+home = "purrdf_lex::json_pointer::escape_token"
+entry_points = [
+    "purrdf_lex::json_pointer::push_token",
+    "purrdf_lex::json_pointer::unescape_token",
+    "purrdf_lex::json_pointer::tokens",
+    "purrdf_lex::json_pointer::array_index",
+    "purrdf_iri::json_pointer",
+]
+spec = "RFC 6901 sections 3 and 4"
+vectors = ["crates/lex/tests/vectors/json_pointer_vectors.txt"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:json-pointer-escape"]
+names = ['^(pointer_escape|pointer_unescape|escape_json_pointer\w*|unescape_token|escape_token)$']
+
+[[job]]
+id = "percent-encoding"
+summary = "Percent-encoding over the sets the specifications define, strict and form-urlencoded decoding, and RFC 3986 normalization"
+home = "purrdf_lex::percent::encode"
+entry_points = [
+    "purrdf_lex::percent::push_encoded",
+    "purrdf_lex::percent::push_triplet",
+    "purrdf_lex::percent::decode",
+    "purrdf_lex::percent::decode_form",
+    "purrdf_lex::percent::normalize",
+    "purrdf_iri::percent",
+]
+spec = "RFC 3986 sections 2.1, 2.3, 3.2.2, 3.3, 3.5 and 6.2.2; RFC 3987 section 3.1; RFC 6570 section 3.2.3; the WHATWG URL application/x-www-form-urlencoded parser"
+vectors = [
+    "crates/lex/tests/vectors/percent_unreserved_vectors.txt",
+    "crates/lex/tests/vectors/percent_unreserved_slash_vectors.txt",
+    "crates/lex/tests/vectors/percent_sub_delims_vectors.txt",
+    "crates/lex/tests/vectors/percent_path_vectors.txt",
+    "crates/lex/tests/vectors/percent_fragment_vectors.txt",
+    "crates/lex/tests/vectors/percent_uri_template_reserved_vectors.txt",
+    "crates/lex/tests/vectors/percent_non_ascii_vectors.txt",
+    "crates/lex/tests/vectors/percent_decode_vectors.txt",
+    "crates/lex/tests/vectors/percent_decode_form_vectors.txt",
+    "crates/lex/tests/vectors/percent_normalize_vectors.txt",
+]
+bench = []
+sites = ["lex.percent-encode"]
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(percent_encode\w*|percent_decode\w*|pct_normalize|pct_decode|pct_encode|fragment_encode|encode_for_uri|push_percent_encoded)$']
+
+[[job]]
+id = "range-table-search"
+summary = "Membership of a scalar in a sorted table of inclusive ranges"
+home = "purrdf_lex::terminals::in_ranges"
+entry_points = ["purrdf_iri::terminals"]
+spec = "binary search over a table sorted by its lower bounds with no overlapping ranges"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^in_ranges$']
+
+[[job]]
+id = "byte-search"
+summary = "The first occurrence of one or two bytes known only at run time"
+home = "purrdf_lex::scan::find_byte"
+entry_points = ["purrdf_lex::scan::find_byte2", "purrdf_lex::scan::find_byte_pair", "purrdf_iri::scan"]
+spec = "the first offset whose byte equals a needle, or none; for a pair, the first offset whose byte is one of the lead bytes and whose byte a fixed gap later is one of the trail bytes"
+vectors = ["crates/lex/tests/vectors/find_byte_vectors.txt"]
+bench = ["purrdf-lex:scan"]
+sites = []
+replaces_external = ["memchr"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(find_first_byte|find_first_of|memchr[23]?)$']
+
+[[job]]
+id = "w3c-vocab"
+summary = "The W3C vocabulary terms and namespaces, and the XSD datatype IRIs, named by constant rather than spelt out as strings"
+home = "purrdf_iri::vocab"
+entry_points = ["purrdf_xsd::datatype", "purrdf_core::vocab", "purrdf_core::datatype"]
+spec = "the namespace documents of the W3C Recommendations each vocab module names (RDF 1.2 Concepts, RDF 1.2 Schema, OWL 2, SHACL, SKOS, PROV-O and the rest) and XML Schema 1.1 Part 2 for the datatypes"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:vocabulary-literal"]
+names = []
+
+[[job.variant]]
+symbol = "purrdf_lex::term_syntax::XSD_STRING"
+file = "crates/lex/src/term_syntax.rs"
+detector = "forbidden"
+criterion = "layering"
+anchor = "purrdf_lex::term_syntax::XSD_STRING"
+reason = "The RDF 1.2 term syntax writer lives in purrdf-lex, which depends only on purrdf-hash and so cannot reach purrdf-xsd or purrdf-iri; it names xsd:string once to elide it from the canonical form."
+
+[[job.variant]]
+symbol = "purrdf_lex::xml::reader::XML_NAMESPACE"
+file = "crates/lex/src/xml/reader.rs"
+detector = "forbidden"
+criterion = "layering"
+anchor = "purrdf_lex::xml::reader::XML_NAMESPACE"
+reason = "The one XML reader lives in purrdf-lex, below purrdf-iri, and must check the reserved xml namespace binding Namespaces in XML 1.0 section 3 fixes; it names that namespace once."
+
+[[job]]
+id = "text-direction"
+summary = "The RDF 1.2 base direction: one enum, its ltr/rtl token, the parse of that token and the is-a-direction predicate; a second token table, JSON-enum spelling or predicate body (renamed or not) fails the gate"
+home = "purrdf_events::TextDirection"
+entry_points = ["purrdf_cdt::TextDirection", "purrdf_core::RdfTextDirection", "purrdf_sparql_algebra::ast::BaseDirection", "purrdf_gts::model::is_literal_direction"]
+spec = "RDF 1.2 Concepts section 3.3 (the base direction of a directional language-tagged string is ltr or rtl)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:home-literal"]
+names = []
+
+[[job]]
+id = "frame-le"
+summary = "Length framing: a variable-length field as its u64 little-endian length then its bytes, appended to a buffer or streamed into a digest, and the big-endian label-and-value framing of three published identities"
+home = "purrdf_hash::frame::frame_le"
+entry_points = ["purrdf_hash::frame::frame_le_into", "purrdf_hash::frame::frame_be_labelled"]
+spec = "the framing contract of purrdf_hash::frame: frame(field) = u64_le(len(field)) || field, byte-identical on every target; the frozen answers in frame_le_vectors.txt"
+vectors = ["crates/hash-conformance/tests/vectors/frame_le_vectors.txt"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:length-prefix-frame"]
+names = []
+
+[[job.variant]]
+symbol = "purrdf_geo::relation::Digest::field"
+file = "crates/geo/src/relation.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_geo::relation::Digest::field"
+reason = "The geo index source fingerprint frames its strings behind big-endian lengths into FNV-1a; it is a published identity that verify_binding compares with fingerprints recorded by earlier runs and the geo determinism goldens pin, so its byte order is frozen."
+
+[[job.variant]]
+symbol = "purrdf_datalog::resolve_fol::frame"
+file = "crates/datalog/src/resolve_fol.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_datalog::resolve_fol::frame"
+reason = "The tabling call-pattern key is text: a decimal length and a colon before each field, rendered into a String whose frozen spellings the canonical-key tests hold, so its notation cannot become a binary frame."
+
+[[job]]
+id = "le-bytes"
+summary = "Fixed-width little-endian integers read from and written into byte buffers at an offset, bounds-checked"
+home = "purrdf_core::bytes::read_u32_le"
+entry_points = ["purrdf_core::bytes::read_u64_le", "purrdf_core::bytes::put_u32_le", "purrdf_core::bytes::put_u64_le"]
+spec = "little-endian integers of the type's own width, read through first_chunk and written through first_chunk_mut; an offset where the integer does not fit is None, never a panic"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:le-slice-int"]
+names = []
+
+[[job]]
+id = "align-up"
+summary = "Rounding an offset up to an alignment through the standard library's checked form"
+home = "purrdf_core::bytes"
+entry_points = []
+spec = "checked_next_multiple_of on u64 and usize: the rounded offset, or None where it would overflow"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:align-up-mask"]
+names = []
+
+[[job]]
+id = "div-ceil"
+summary = "Ceiling division without the overflow of the hand-written n + d - 1: std div_ceil on unsigned integers, retrieval's ceil_div on i128"
+home = "purrdf_retrieval::reciprocal_rank::ceil_div"
+entry_points = []
+spec = "the quotient rounded toward positive infinity for a positive divisor; the unsigned integers' stable div_ceil, and ceil_div where the signed div_ceil is not stable"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:div-ceil-by-hand"]
+names = []
+
+[[job]]
+id = "wide-arith"
+summary = "Exact u128 arithmetic past u128: the 256-bit product, the wide division, the fused a × b / c, and the greatest common divisor"
+home = "purrdf_xsd::wide::mul_div"
+entry_points = ["purrdf_xsd::wide::wide_mul", "purrdf_xsd::wide::div_wide", "purrdf_xsd::wide::gcd"]
+spec = "schoolbook multiplication over 64-bit halves, restoring binary long division, and Euclid's algorithm, over u128"
+vectors = [
+    "crates/xsd/tests/vectors/wide_vectors.txt",
+    "crates/xsd/tests/vectors/gcd_vectors.txt",
+]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(wide_mul|mul_wide|div_wide|mul_div|gcd_u128|u128_gcd)$']
+
+[[job]]
+id = "bigint"
+summary = "The arbitrary-precision integer: exact products, remainders, powers of two and five, digit-string parsing, and dyadic rationals written out as decimals"
+home = "purrdf_xsd::bigint::BigInt"
+entry_points = [
+    "purrdf_xsd::BigInt",
+    "purrdf_xsd::bigint::BigInt::from_digits",
+    "purrdf_xsd::bigint::BigInt::from_binary",
+    "purrdf_xsd::bigint::BigInt::mul_small",
+    "purrdf_xsd::bigint::BigInt::mul_pow5",
+    "purrdf_xsd::bigint::BigInt::mul",
+    "purrdf_xsd::bigint::BigInt::rem",
+    "purrdf_xsd::json_number::cmp",
+]
+spec = "exact integer arithmetic in sign-magnitude base 10^9; RFC 8259 section 6 numbers compared by value"
+vectors = [
+    "crates/xsd/tests/vectors/binary_decimal_vectors.txt",
+    "crates/xsd/tests/vectors/json_number_vectors.txt",
+]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(mul_small|mul_pow5|mul_by_small|from_binary|from_digits|div_two|is_multiple_of|pow10|cmp_exact)$']
+
+[[job.variant]]
+symbol = "purrdf_xsd::numeric::Decimal::cmp_exact"
+file = "crates/xsd/src/numeric.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_xsd::numeric::Decimal"
+reason = "The xsd:decimal value space this crate models is an i128 mantissa at a scale of at most 18 digits, which XSD 1.1 permits a processor to bound; a literal past it is refused, so its comparison is fixed-width integer arithmetic, not a big integer."
+
+[[job.variant]]
+symbol = "purrdf_shapes::json_schema::numeric_order::Decimal::from_binary"
+file = "crates/shapes/src/json_schema/numeric_order.rs"
+detector = "forbidden"
+criterion = "b"
+anchor = "purrdf_shapes::json_schema::numeric_order::Decimal"
+reason = "The numeric-order patterns are written digit by digit, so a range bound is kept as its integer and fraction digit strings; the dyadic expansion itself is BigInt::from_binary, which this converts to those strings."
+
+[[job.variant]]
+symbol = "purrdf_geo::exact::Int::pow10"
+file = "crates/geo/src/exact.rs"
+detector = "forbidden"
+criterion = "c"
+anchor = "purrdf_geo::exact::Int"
+reason = "The geometry kernel's integers are binary 64-bit limbs with an inline small-vector, whose adds, multiplies and shifts are the pinned site geo.exact-limbs; base-10^9 limbs would put a division by 10^9 into every carry of the predicates' inner loops."
+
+[[job]]
+id = "calendar"
+summary = "The proleptic Gregorian calendar: leap years, month lengths, and day numbers to and from civil dates"
+home = "purrdf_xsd::temporal::days_from_civil"
+entry_points = [
+    "purrdf_xsd::temporal::civil_from_days",
+    "purrdf_xsd::temporal::days_in_month",
+    "purrdf_xsd::temporal::is_leap",
+    "purrdf_xsd::days_from_civil",
+]
+spec = "XSD 1.1 Part 2 Appendix D.3 (the proleptic Gregorian calendar); H. Hinnant's days_from_civil and civil_from_days"
+vectors = ["crates/xsd/tests/vectors/calendar_vectors.txt"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(days_from_civil|civil_from_days|civil_from_day_number|days_in_month|is_leap|is_leap_year|day_number)$']
+
+[[job]]
+id = "rfc3339"
+summary = "RFC 3339 internet date and time: the date-time, full-date and full-time readers and the canonical UTC writer"
+home = "purrdf_xsd::rfc3339::parse"
+entry_points = [
+    "purrdf_xsd::rfc3339::parse_date",
+    "purrdf_xsd::rfc3339::parse_time",
+    "purrdf_xsd::rfc3339::format",
+    "purrdf_xsd::rfc3339::Separator",
+    "purrdf_xsd::rfc3339::LeapSecond",
+]
+spec = "RFC 3339 sections 5.6 to 5.8 and Appendix D; the separator (T or t, or also a space) and the leap-second day (month end, or any day) are the parameters the citing grammars differ on"
+vectors = ["crates/xsd/tests/vectors/rfc3339_vectors.txt"]
+bench = ["purrdf-gts:rfc3339"]
+sites = ["xsd.rfc3339-lexical"]
+replaces_external = ["time"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(full_date|full_time|date_time|parse_datetime|parse_rfc3339|format_rfc3339)$']
+
+[[job.variant]]
+symbol = "purrdf_xsd::temporal::parse_datetime"
+file = "crates/xsd/src/temporal.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_xsd::temporal::parse_datetime"
+reason = "xsd:dateTime is not RFC 3339: its year may be negative or wider than four digits, its timezone is optional and bounded at 14:00, and it has no leap second; it shares the calendar with RFC 3339 and nothing else."
+
+[[job]]
+id = "numeric-predicate"
+summary = "Whether a datatype or value is numeric or an integer, and the xsd:integer and xsd:decimal lexical spaces"
+home = "purrdf_xsd::XsdDatatype::is_numeric"
+entry_points = [
+    "purrdf_xsd::XsdDatatype::is_integer_family",
+    "purrdf_xsd::XsdValue::is_numeric",
+    "purrdf_xsd::numeric::is_integer_lexical",
+    "purrdf_xsd::numeric::is_decimal_lexical",
+]
+spec = "SPARQL 1.1 section 17.1 (numeric); XSD 1.1 Part 2 sections 3.3.3.1 and 3.4.13.1 (the decimal and integer lexical spaces)"
+vectors = ["crates/xsd/tests/vectors/numeric_predicate_vectors.txt"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(is_numeric_xsd|is_numeric_datatype|numeric_datatype|numeric_datatype_name|is_integer_datatype|is_integer_lexical|is_decimal_lexical)$']
+
+[[job]]
+id = "unicode-normalization"
+summary = "Unicode normalization: NFC, NFD, NFKC and NFKD, the NFC verdict and the canonical combining class, as streaming stages over the one generated table set, at the one Unicode version every Unicode table is generated from"
+home = "purrdf_lex::unicode::nfc"
+entry_points = [
+    "purrdf_lex::unicode::nfd",
+    "purrdf_lex::unicode::nfkc",
+    "purrdf_lex::unicode::nfkd",
+    "purrdf_lex::unicode::is_nfc",
+    "purrdf_lex::unicode::ccc",
+    "purrdf_lex::unicode::Decompose",
+    "purrdf_lex::unicode::Compose",
+    "purrdf_lex::unicode::drive",
+    "purrdf_lex::unicode::UNICODE_VERSION",
+    "purrdf_text::unicode::nfc",
+]
+spec = "UAX 15 (Unicode Normalization Forms) and the Unicode core specification sections 3.11 and 3.12, over the Unicode Character Database named by purrdf_lex::unicode::UNICODE_VERSION"
+vectors = [
+    "crates/lex/tests/vectors/unicode_normalization_vectors.txt",
+    "crates/lex/tests/vectors/normalization_differential_vectors.txt",
+]
+bench = ["purrdf-text:analysis"]
+sites = []
+replaces_external = ["unicode-normalization"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(nfc|nfd|nfkc|nfkd|is_nfc|is_nfd|is_nfkc|is_nfkd|to_nfc|to_nfd|ccc|combining_class|canonical_combining_class|compose_pair|unicode_version)$']
+
+[[job.variant]]
+symbol = "purrdf_core::xsd_regex::blocks::unicode_version"
+file = "crates/rdf-core/src/xsd_regex/blocks.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_core::xsd_regex::blocks::unicode_version"
+reason = "The XSD block-escape table must agree with the Unicode tables of the regex engine every translated pattern runs on, so it is pinned to the version the locked regex-syntax embeds rather than to purrdf_lex::unicode::UNICODE_VERSION; scripts/check-generated.sh fails when regex-syntax moves without it."
+
+[[job]]
+id = "term-conversion"
+summary = "Converting a term between the dataset-independent TermValue, the owned RdfTerm model and a view's ids: one lift, one lowering and one id-to-value resolution, blank-node scope kept"
+home = "purrdf_core::TermValue"
+entry_points = [
+    "purrdf_core::NonIriPredicate",
+    "purrdf_core::DatasetView",
+    "purrdf_core::TermLookupError",
+]
+spec = "RDF 1.2 Concepts section 3.1 (a triple term's predicate is an IRI); the IR identity contract: a literal's datatype expanded and its language tag folded by purrdf_iri::langtag::identity_fold (ASCII lowercase, per BCP 47 case-insensitivity), blank-node scope part of identity, an owned blank label carrying its scope in the injective envelope BlankScope::qualify_label writes"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(rdf_term_to_term_value|value_to_rdf_term|rdf_term_to_value_scoped|collapse_synthetic_datatype|term_value_predicate|memoized_term_value|memoized_value_of|literal_to_term_value|blank_value_from_external_label|blank_value_scoped|leaf_rdf_term|triple_rdf_term|owned_value)$']
+
+[[job]]
+id = "term-constructor"
+summary = "The computed xsd:integer and xsd:boolean literal values a function, a relation or an aggregate answers with"
+home = "purrdf_core::TermValue"
+entry_points = []
+spec = "XSD 1.1 Part 2 sections 3.3.2.2 (the boolean canonical representation) and 3.4.13.2 (the integer canonical representation)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(integer_term|bool_term|boolean_term|integer_literal|count_term|index_term)$']
+
+[[job]]
+id = "json-document"
+summary = "Reading, holding and writing a JSON document: the pull reader, the value whose numbers keep their lexemes, the strict record reader and the deterministic compact and pretty writers"
+home = "purrdf_lex::json::read"
+entry_points = [
+    "purrdf_lex::json::Value",
+    "purrdf_lex::json::Reader",
+    "purrdf_lex::json::write_compact",
+    "purrdf_lex::json::write_pretty",
+    "purrdf_lex::json::occurrences",
+    "purrdf_lex::json::record::Record",
+]
+spec = "RFC 8259 (the JSON grammar and its string escapes), RFC 6901 for the pointer each error names"
+vectors = []
+bench = []
+sites = ["json.parser-string", "json.parser-whitespace"]
+replaces_external = ["serde_json", "serde", "serde_core", "serde_derive", "itoa", "ryu", "zmij", "indexmap", "equivalent"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(parse_json_value|json_parse_value|parse_json_number|metadata_value_from_json)$']
+
+[[job]]
+id = "yaml-document"
+summary = "Reading and writing a YAML 1.2 document over the JSON data model"
+home = "purrdf_lex::yaml::read"
+entry_points = ["purrdf_lex::yaml::write", "purrdf_lex::yaml::read_with"]
+spec = "YAML 1.2.2 (the core schema, block and flow styles, anchors and aliases under a node bound)"
+vectors = []
+bench = []
+sites = []
+replaces_external = ["serde_yaml_ng", "unsafe-libyaml"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(json_to_yaml|yaml_uses_anchor_or_alias|validate_yaml_tree|validate_yaml_value|yaml_value_error)$']
+
+[[job]]
+id = "cbor-codec"
+summary = "Encoding and decoding CBOR: the shortest-form head, as-is and core deterministic encoding, and well-formed and deterministic decoding"
+home = "purrdf_lex::cbor::encode"
+entry_points = [
+    "purrdf_lex::cbor::Value",
+    "purrdf_lex::cbor::canonical",
+    "purrdf_lex::cbor::decode",
+    "purrdf_lex::cbor::write_canonical_map",
+    "purrdf_lex::cbor::head::write_head",
+]
+spec = "RFC 8949 (section 4.2.1 core deterministic encoding; section 3 the data item heads)"
+vectors = []
+bench = []
+sites = []
+replaces_external = ["ciborium", "ciborium-io", "ciborium-ll", "half", "crunchy", "zerocopy", "zerocopy-derive"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(write_cbor_type_len|write_cbor_head|write_cbor_text|write_cbor_bytes)$']
+
+[[job]]
+id = "xml-reader"
+summary = "Reading an XML document: namespace-resolved elements, attributes and text, entities from the internal subset only, depth bounded, no machine-stack recursion"
+home = "purrdf_lex::xml::Document"
+entry_points = ["purrdf_lex::xml::Reader"]
+spec = "XML 1.0 Fifth Edition (section 5.1, a non-validating processor) and Namespaces in XML 1.0"
+vectors = []
+bench = []
+sites = []
+replaces_external = ["roxmltree"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(guard_xml_nesting|XmlParser)$']
+
+[[job]]
+id = "literal-and-iri-escape"
+summary = "Escaping a literal body for its carrier (canonical N-Triples, XML text, Turtle long string) and an IRIREF body"
+home = "purrdf_lex::literal_escape::write"
+entry_points = ["purrdf_lex::literal_escape::escape", "purrdf_lex::iri_escape::push_escaped", "purrdf_core::iri_escape"]
+spec = "RDF 1.2 N-Triples section 7 (the canonical form's ECHAR and UCHAR), RDF 1.2 Turtle STRING_LITERAL_LONG_QUOTE, XML 1.0 section 2.2 Char"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(escape_literal|nt_escape|turtle_escape|write_literal_escaped|escape_iri|write_iriref_escaped|is_iri_forbidden)$']
+
+[[job]]
+id = "term-syntax"
+summary = "Writing an RDF 1.2 term in its canonical text form: IRI, literal with language, direction and datatype, blank node and triple term"
+home = "purrdf_lex::term_syntax::write_literal"
+entry_points = ["purrdf_lex::term_syntax::write_iri", "purrdf_lex::term_syntax::write_blank", "purrdf_core::write_term_value"]
+spec = "RDF 1.2 N-Triples section 7 (the canonical form, xsd:string implicit, the '<<( s p o )>>' triple term)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(leaf_term_string|term_surface_text|render_term_value)$']
+
+[[job]]
+id = "crockford-base32"
+summary = "Crockford Base32, the text form of a 128-bit ULID"
+home = "purrdf_lex::crockford::write_u128"
+entry_points = ["purrdf_lex::crockford::parse_u128", "purrdf_lex::crockford::encode_u128"]
+spec = "Crockford Base32 (the ULID specification's text encoding)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(crockford_encode|crockford_decode|ulid_text|encode_ulid)$']
+
+[[job]]
+id = "rdf-collection"
+summary = "Walking, building and classifying an RDF collection: the strict member walk, the cell builder and the JSON-LD convertible-list analysis"
+home = "purrdf_core::DatasetView"
+entry_points = ["purrdf_core::collections::build_rdf_list", "purrdf_core::collections::convertible_list_cells"]
+spec = "RDF 1.2 Semantics section 9 (collections), JSON-LD 1.1 API section 8.4.2 (list conversion)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:rdf-list-walk"]
+names = ['^(single_object|list_members_of|rdf_list_members)$']
+
+[[job.variant]]
+symbol = "purrdf_shapes::schema_import::ImportContext::import_node_list"
+file = "crates/shapes/src/schema_import.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_shapes::schema_import::ImportContext::import_node_list"
+reason = "It reads a JSON Schema document back: `rdf:first` and `rdf:rest` are the property keys of the list conjunct the schema emitter wrote, matched as JSON, and no RDF collection is walked."
+
+[[job]]
+id = "thread-stack"
+summary = "Running a closure on a thread with a stated stack, and refusing a request past the wasm32 shadow-stack floor"
+home = "purrdf_stack::on_stack"
+entry_points = ["purrdf_stack::on_stack_scoped"]
+spec = "the stack contract purrdf_stack documents (native: a thread of exactly the requested stack; wasm32: inline under the floor, refused past it)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(on_thread|run_on_big_stack|with_big_stack)$']
+
+[[job]]
+id = "test-workspace-paths"
+summary = "The workspace root and the Rust sources under it, for tests and generators"
+home = "purrdf_testkit::paths::workspace_root"
+entry_points = ["purrdf_testkit::paths::collect_rs", "purrdf_testkit::paths::workspace_root_from"]
+spec = "the Cargo workspace layout (the manifest that declares [workspace])"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(repo_root)$']
+
+[[job]]
+id = "query-host-plumbing"
+summary = "What every host (CLI, C ABI, wasm, Python) shares around a query: its provenance record, its governor ceilings, the results-format name and the statistical-aggregate registry its namespace setting requests"
+home = "purrdf_validate::governors::from_parts"
+entry_points = ["purrdf_validate::query::provenance", "purrdf_validate::governors::from_update_parts", "purrdf_sparql_results::SparqlResultsFormat::from_name", "purrdf_validate::query::statistical_aggregates"]
+spec = "SPARQL 1.1 Protocol section 2.1 (results formats by media type) and the governor ceilings purrdf_validate::governors documents"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(build_query_provenance|validate_update_governors|resolve_results_format|build_aggregates|build_aggregate_registry)$']
+
+[[job]]
+id = "ed25519"
+summary = "Ed25519 keys, signing and strict verification"
+home = "purrdf_ed25519::SigningKey"
+entry_points = ["purrdf_ed25519::VerifyingKey", "purrdf_ed25519::Signature"]
+spec = "RFC 8032 section 5.1 (Ed25519), verified strictly: canonical S, canonical point encodings, small-order key and R refused"
+vectors = ["crates/ed25519/tests/vectors/signing_vectors.txt", "crates/ed25519/tests/vectors/verify_vectors.txt", "crates/ed25519/tests/vectors/key_decoding_vectors.txt", "crates/ed25519/tests/vectors/strictness_vectors.txt"]
+bench = []
+sites = []
+replaces_external = ["ed25519-dalek", "curve25519-dalek", "curve25519-dalek-derive", "fiat-crypto", "ed25519", "signature", "subtle", "zeroize"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "prefixed-name"
+summary = "Compacting an IRI to a prefixed name under the longest admitted namespace, and splitting its local name"
+home = "purrdf_iri::contract_where"
+entry_points = ["purrdf_iri::contract", "purrdf_iri::local_name", "purrdf_iri::split_local_name"]
+spec = "W3C CURIE Syntax 1.0; RDF 1.2 Turtle PN_LOCAL and the XML NCName where a syntax admits its own names"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(curie_prefix_of|namespace_and_local|split_iri_local)$']
+
+[[job]]
+id = "media-type-by-extension"
+summary = "The media type a file extension names: the GTS files profile (tar entries carry no media type), slice artifacts, the slice RDF loader and the SPARQL conformance data-file loaders"
+home = "purrdf_gts::files::media_type_for_extension"
+entry_points = ["purrdf_gts::files::media_type_for_path", "purrdf_gts::files::media_type_for_path_among"]
+spec = "IANA media type registry; the RDF syntax types the native codecs register"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = [
+    '(media_?type|mime|content_?type)(_.*)?_(ext|extension|path|file|suffix|of|for|from|by)(_|$)',
+    '(^|_)(ext|extension|path|file|suffix|guess|infer|detect|sniff)(_.*)?_(media_?type|mime|content_?type)(_|$)',
+    '^(guess|infer|detect|sniff)_(media_?type|mime|content_?type)$',
+]
+
+[[job.variant]]
+symbol = "purrdf_slice::rdf_query::rdf_media_type_for_path"
+file = "crates/slice/src/rdf_query.rs"
+detector = "forbidden"
+criterion = "b"
+anchor = "purrdf_slice::rdf_query::rdf_media_type_for_path"
+reason = "A thin call of the home's purrdf_gts::files::media_type_for_path_among: it names the native RDF syntaxes the loader accepts and Turtle as the fallback, which the loader needs and the shared table cannot say. It holds no extension table and no filter loop; the SPARQL conformance data_media_type calls the same filter."
+
+[[job]]
+id = "datalog-shortest-path"
+summary = "The breadth-first shortest path a Datalog stratification diagnostic reports as its cycle, over rule indices and predicate symbols alike"
+home = "purrdf_datalog::paths::shortest_path"
+entry_points = []
+spec = "breadth-first search over lexically ordered adjacency: the reported cycle is a pure function of the program"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(shortest_rule_path|shortest_dependency_path)$']
+
+[[job]]
+id = "datalog-stratum-relaxation"
+summary = "The stratum relaxation (a head sits at its body's stratum, one higher across a negative or aggregating edge) that the predicate stratification and the rule-schedule layering both run"
+home = "purrdf_datalog::paths::relax_strata"
+entry_points = []
+spec = "the standard stratification: the least assignment with stratum(head) >= stratum(body) + [edge is negative], terminating exactly when no closed edge sits in a cycle"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(relax_strata|relax_strata_.*|stratum_relaxation|relax_stratum)$']
+
+[[job]]
+id = "rif-seminaive-fixpoint"
+summary = "The least-fixpoint evaluation of a definite Horn rule set: RIF-Core rules are translated to Datalog clauses and run on the one semi-naive engine, with no private delta loop"
+home = "purrdf_datalog::seminaive::evaluate_until"
+entry_points = []
+spec = "semi-naive bottom-up evaluation of definite Horn rules to the least model, one delta per round, under the engine's limits and stop signal"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(fire_rule|match_pivot|join_remaining|match_join_candidate|semi_naive_chase|seminaive_fixpoint)$']
+
+[[job]]
+id = "term-nesting-depth"
+summary = "The triple-term nesting bound every resolver, importer, writer and validator enforces"
+home = "purrdf_events::MAX_TERM_NESTING_DEPTH"
+entry_points = []
+spec = "RDF 1.2 triple terms nest; a sink bounds resolution depth so a cyclic or absurdly nested term hard-fails (crates/rdf-events/src/lib.rs)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^MAX_(GTS_)?TERM_(NESTING_)?DEPTH$']
+
+[[job]]
+id = "schema-nesting-depth"
+summary = "The JSON Schema nesting bound and the guard the emitters share"
+home = "purrdf_shapes::limits::MAX_SCHEMA_DEPTH"
+entry_points = ["purrdf_shapes::limits::ensure_depth"]
+spec = "one depth ceiling for every JSON Schema surface: importer, TypeScript and GraphQL emitters, Pydantic generator (crates/shapes/src/limits.rs)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:sole-name"]
+names = ['^MAX_SCHEMA_DEPTH$', '^ensure_depth$']
+
+[[job]]
+id = "cli-shared-stdin"
+summary = "Refusing a command line in which two documents read standard input: one helper names every reader in one message"
+home = "purrdf_cli::argv_documents::refuse_shared_stdin"
+entry_points = []
+spec = "a process has a single standard input stream; a second reader would get part of one document (usage error, exit 2)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:home-literal"]
+names = []
+
+[[job]]
+id = "cli-import-pairs"
+summary = "Parsing and deciding the `--import IRI=FILE` command-line pairs for every subcommand: shape, halves, `-`, absolute IRI half and repeated IRI"
+home = "purrdf_cli::argv_documents::parse_import_pairs"
+entry_points = []
+spec = "the `--import IRI=FILE` contract of purrdf_cli::argv_documents: an absolute IRI half carried verbatim, decided from the arguments alone (usage error, exit 2)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:home-literal"]
+names = []
+
+[[job]]
+id = "blank-label-hex-escape"
+summary = "Escaping bytes into the blank-label alphabet: ASCII-alphanumerics pass, every other byte becomes `-` plus two lowercase hex digits (genid segments and minted-blank tags)"
+home = "purrdf_core::ir::skolem::escape_label_bytes_into"
+entry_points = []
+spec = "the injective `-xx` escape decoded by purrdf_core::ir::skolem's strict lowercase genid decoder (RDF 1.2 skolemization)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["body:c4507d4c291794b4"]
+names = []
+
+[[job]]
+id = "frozen-nesting-bound"
+summary = "The triple-term nesting bound a frozen dataset vouches for; composed views take the widest bound of their parts"
+home = "purrdf_core::ir::dataset::RdfDataset::triple_term_nesting_bound"
+entry_points = ["purrdf_core::dataset_view::widest_nesting_bound"]
+spec = "RdfDatasetBuilder::freeze refuses a triple term nested past purrdf_events::MAX_TERM_NESTING_DEPTH, so every frozen dataset is bounded there"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["shim:676d6014a0e29d48"]
+names = []
+
+[[job]]
+id = "import-key-policy"
+summary = "One import-table key policy: a key is an absolute IRI and names one document, at every insertion site"
+home = "purrdf_core::imports::ImportMap::try_insert"
+entry_points = ["purrdf_core::imports::ImportMap::check_key"]
+spec = "OWL 2 Structural Specification section 3.4 (owl:imports names an absolute ontology IRI) and SHACL 1.2 Core section 6.1: an import-table key that no owl:imports object can equal is configuration that silently never applies, and one IRI names one document"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ["^check_import_(iri|key|table)$"]
+
+[[job]]
+id = "rules-dispatch"
+summary = "One rules-dispatch entry and one limit-knob mapping: a SHACL shapes graph's rules or a SPARQL 1.2 RL rule set run under the four rule-evaluation limits"
+home = "purrdf_shapes::rules::run_rules"
+entry_points = ["purrdf_shapes::run_rules", "purrdf_shapes::rules::RuleLimits::rule_options", "purrdf_shapes::rules::RuleLimits::infer_options"]
+spec = "SHACL 1.2 Rules and SPARQL 1.2 RL section C: one rule run is bounded by the same four limits whichever host or rule language runs it"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ["^(rule|infer)_options$", "^run_rules_(dispatch|for_host)$"]
+
+[[distinct]]
+members = [
+    "purrdf_gts::model::Graph::reifier",
+    "purrdf_rdf::native_codecs::ser_model::SerGraph::reifier",
+]
+kind = "body"
+criterion = "layering"
+anchor = "purrdf_rdf::native_codecs::ser_model::SerGraph"
+reason = "The native codec's serialization model may not depend on the GTS crate (tests/gts_codec_hygiene.rs), so it keeps its own first-row reifier lookup over the same row shape as the GTS model's."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::constraints::ValueNode::to_term",
+    "purrdf_shapes::engine::FocusNode::to_term",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_shapes::constraints::ValueNode"
+reason = "A value node's `Foreign` arm keeps a node-expression term verbatim even when the dataset interns it, while a focus node is `Foreign` only when the dataset does not intern its term; the two enums share arms, not a guarantee, so each keeps its own accessor."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::constraints::ValueNode::interned",
+    "purrdf_shapes::engine::FocusNode::id",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_shapes::constraints::ValueNode"
+reason = "A value node's `Foreign` arm keeps a node-expression term verbatim even when the dataset interns it, while a focus node is `Foreign` only when the dataset does not intern its term; the two enums share arms, not a guarantee, so each keeps its own accessor."
+
+[[distinct]]
+members = [
+    "purrdf_native::py_store::query::PyCancellationToken::new",
+    "purrdf_wasm::async_query::ServiceCatalog::new",
+    "purrdf_wasm::factory::DataFactory::new",
+    "purrdf_wasm::query::CancellationToken::new",
+    "purrdf_wasm::query::QueryEngine::new",
+    "purrdf_wasm::stream::Sink::new",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_wasm::factory::DataFactory::new"
+reason = "`#[wasm_bindgen(constructor)]` and PyO3's `#[new]` export only a function written in the annotated impl block, so each exported type's constructor is a one-line call of its own `Default`."
+
+[[distinct]]
+members = [
+    "purrdf_core::bundle::UnitMetadata::new",
+    "purrdf_shapes::error::PrebindingViolation::new",
+    "purrdf_slice::cache::ToolchainContext::new",
+    "purrdf_sparql_eval::eval::StandpointPredicates::new",
+]
+kind = "shim"
+criterion = "b"
+anchor = "helper_census::normalize::shim_form"
+reason = "Field-wise constructors of four unrelated types, each moving two `impl Into<String>` arguments into its own two fields; they share the spelling of a struct literal, not a computation."
+
+[[distinct]]
+members = [
+    "purrdf_core::distance::dispatch::avx2::distance_bounded",
+    "purrdf_core::distance::dispatch::avx512f::distance_bounded",
+    "purrdf_core::distance::dispatch::portable::distance_bounded",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_core::distance::dispatch::avx2"
+reason = "The portable, AVX2 and AVX-512F wrappers are separate compilations of the one generic body under their own target features, and each is a symbol scripts/simd-asm-manifest.toml pins and measures for its path."
+
+[[distinct]]
+members = [
+    "purrdf_core::distance::dispatch::avx2::distances_indexed",
+    "purrdf_core::distance::dispatch::avx512f::distances_indexed",
+    "purrdf_core::distance::dispatch::portable::distances_indexed",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_core::distance::dispatch::avx2"
+reason = "The portable, AVX2 and AVX-512F wrappers are separate compilations of the one generic body under their own target features, and each is a symbol scripts/simd-asm-manifest.toml pins and measures for its path."
+
+[[distinct]]
+members = [
+    "purrdf_core::distance::dispatch::avx2::distance",
+    "purrdf_core::distance::dispatch::avx512f::distance",
+    "purrdf_core::distance::dispatch::portable::distance",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_core::distance::dispatch::avx2"
+reason = "The portable, AVX2 and AVX-512F wrappers are separate compilations of the one generic body under their own target features, and each is a symbol scripts/simd-asm-manifest.toml pins and measures for its path."
+
+[[distinct]]
+members = [
+    "purrdf_core::distance::dispatch::avx2::distances",
+    "purrdf_core::distance::dispatch::avx512f::distances",
+    "purrdf_core::distance::dispatch::portable::distances",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_core::distance::dispatch::avx2"
+reason = "The portable, AVX2 and AVX-512F wrappers are separate compilations of the one generic body under their own target features, and each is a symbol scripts/simd-asm-manifest.toml pins and measures for its path."
+
+[[distinct]]
+members = [
+    "purrdf_lex::walk::Nested::from",
+    "purrdf_retrieval::iri::Term::from",
+    "purrdf_retrieval::plan::StatisticsEntries::try_from",
+]
+kind = "shim"
+criterion = "b"
+anchor = "helper_census::normalize::shim_form"
+reason = "Each conversion forwards to its own type's `new`, the one constructor that type's invariant lives in; `Self::new(value)` names a different function in each."
+
+[[distinct]]
+members = [
+    "purrdf_iri::base::BaseScope::empty",
+    "purrdf_sparql_algebra::tree::Args::new",
+]
+kind = "shim"
+criterion = "b"
+anchor = "helper_census::normalize::shim_form"
+reason = "The empty value of two unrelated newtypes over a `Vec`, a base-resolution scope and an algebra argument list; they share the spelling `Self(Vec::new())`, not a job."
+
+[[distinct]]
+members = [
+    "purrdf_deflate::gzip::decompress",
+    "purrdf_deflate::inflate::decompress",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_deflate::gzip::decompress"
+reason = "Default-limit entry points of two formats, gzip members (RFC 1952) and a raw DEFLATE stream (RFC 1951), each forwarding to its own module's `decompress_with_limit`."
+
+[[distinct]]
+members = [
+    "purrdf_core::content_id::Blake3ContentId::from_raw",
+    "purrdf_core::content_store::ContentDigest::from_raw",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_core::content_id::Blake3ContentId"
+reason = "The BLAKE3 GTS reference domain and the SHA-256 blob-store domain are separate types so a digest of one algorithm can never stand for the other; each wraps raw bytes as its own type."
+
+[[distinct]]
+members = [
+    "purrdf_core::ir::embedding::wire::SectionDescriptor::new",
+    "purrdf_core::ir::embedding::wire::SectionPayload::new",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_core::ir::embedding::wire::SectionDescriptor"
+reason = "A payload owns its encoded bytes and a descriptor carries only the length of bytes streamed later; each constructor keys its own record by the shared `SectionKey`."
+
+[[distinct]]
+members = [
+    "purrdf_core::sink::DrainError::new",
+    "purrdf_shapes::product::error::ShapesProductError::new",
+]
+kind = "shim"
+criterion = "b"
+anchor = "helper_census::normalize::shim_form"
+reason = "Field-wise constructors of two unrelated error types, a sink drain failure and a shapes product refusal, each pairing its own classification with a message."
+
+[[distinct]]
+members = [
+    "purrdf_core::dataset_view::DatasetView::annotation_quads",
+    "purrdf_core::dataset_view::DatasetView::reifier_quads",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_core::dataset_view::DatasetView::annotation_quads"
+reason = "Capability-gated defaults of two separate side tables, annotations and reifier bindings: a backend without the layer yields nothing, and a backend with one overrides each method on its own."
+
+[[distinct]]
+members = [
+    "purrdf_lex::json::read::read",
+    "purrdf_lex::yaml::read::read",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_lex::yaml::read::read"
+reason = "Default-limit entry points of two grammars, JSON and YAML 1.2, each forwarding to its own module's `read_with`."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::error::IllFormedDeclaration::new",
+    "purrdf_sparql_eval::service::ServiceDenial::new",
+]
+kind = "shim"
+criterion = "b"
+anchor = "helper_census::normalize::shim_form"
+reason = "Field-wise constructors of two unrelated types, a SHACL declaration syntax violation and a SERVICE capability denial, each moving its own three fields into place."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::projections::okf::config::OkfFrontmatterMappings::new",
+    "purrdf_rdf::projections::okf::config::OkfLinkSection::new",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_rdf::projections::util::validated"
+reason = "Both already call the one validate-then-return, `validated`; what remains in each is its own type's field list and its own `validate`."
+
+[[distinct]]
+members = [
+    "purrdf_json::profile::Vocabulary::standard",
+    "purrdf_markdown::profile::Vocabulary::standard",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_markdown::profile::Vocabulary::standard"
+reason = "Each codec crate names its own vocabulary under its own designated namespace: two different vocabularies with no shared job, whose constructors share only the `Self::under(STANDARD_NAMESPACE)` spelling."
+
+[[distinct]]
+members = [
+    "purrdf_core::diagnostic::RdfLocation::file",
+    "purrdf_core::diagnostic::RdfLocation::logical",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_core::diagnostic::RdfLocation::file"
+reason = "The two constructors set different fields of a location, the physical file path SARIF records and the logical label."
+
+[[distinct]]
+members = [
+    "purrdf_columnar::plain_bench::PlainInt64::from_rows",
+    "purrdf_sparql_algebra::tree::Args::from_iter",
+]
+kind = "shim"
+criterion = "b"
+anchor = "helper_census::normalize::shim_form"
+reason = "Collecting constructors of two unrelated newtypes, a plain benchmark column and an algebra argument list; they share the spelling `Self(iter.into_iter().collect())`, not a job."
+
+[[distinct]]
+members = [
+    "purrdf_hash::arch::aarch64::sha1_blocks",
+    "purrdf_hash::arch::x86_64::sha1_blocks",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_hash::arch::x86_64::sha1_blocks"
+reason = "Per-architecture safe entries, each around its own module's SHA-1 kernel (SHA-NI on x86_64, the Armv8 SHA1 instructions on aarch64), the kernels scripts/simd-asm-manifest.toml pins."
+
+[[distinct]]
+members = [
+    "purrdf_lex::json::record::DecodeError::from",
+    "purrdf_lex::json::record::DecodeError::from",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_lex::json::record::DecodeError::custom"
+reason = "Two `From` impls on one error type for different sources, the lex reader's `Error` and the rdf projections' `ProjectionError`, both routed through the one `DecodeError::custom`."
+
+[[distinct]]
+members = [
+    "purrdf_core::ir::paged::provider::CountingDemandProvider::new",
+    "purrdf_core::ir::paged::provider::InMemoryPageProvider::new",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_core::ir::paged::provider::CountingDemandProvider::new"
+reason = "Initial-generation shims of two page providers, frozen pages and per-page rebuild thunks, each forwarding to its own type's `with_generation`."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::projections::okf::mapping::project_okf_terms",
+    "purrdf_rdf::projections::skos::mapping::project_skos",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_rdf::projections::skos::mapping::project_skos"
+reason = "The public entry points of two projections, OKF bundles and SKOS views, each running its own module's `Projector` under its own configuration."
+
+[[distinct]]
+members = [
+    "purrdf_shex::lexer::tokenize",
+    "purrdf_sparql_algebra::lexer::tokenize",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_shex::lexer::tokenize"
+reason = "The ShExC and SPARQL grammars have different terminals, so each crate's `tokenize` runs its own `Lexer`; they share only the spelling `Lexer::new(input).run()`."
+
+[[distinct]]
+members = [
+    "purrdf_hash::arch::aarch64::hex_encode",
+    "purrdf_hash::arch::x86_64::hex_encode",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_hash::arch::x86_64::hex_encode"
+reason = "Per-architecture safe entries, each around its own module's base16 kernel (SSSE3 on x86_64, NEON on aarch64), each a symbol scripts/simd-asm-manifest.toml pins."
+
+[[distinct]]
+members = [
+    "purrdf_retrieval::test_crate::boundary::ScriptedStream::next",
+    "purrdf_retrieval::test_crate::wasm_determinism::ScriptedStream::next",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_retrieval::test_crate::wasm_determinism::ScriptedStream"
+reason = "Two different mock streams: wasm_determinism's states its contract and attestation per fixture and always ends exhausted, boundary's states one contract and ends with the receipt its script names; only the one-line pop in `next` is spelled alike, and merging them would change what each test's mock does."
+
+[[distinct]]
+members = [
+    "purrdf_retrieval::test_crate::boundary::LazyStream::exclusion",
+    "purrdf_retrieval::test_crate::boundary::ScriptedStream::exclusion",
+    "purrdf_retrieval::test_crate::fusion_frontier_alloc::LazyStream::exclusion",
+    "purrdf_retrieval::test_crate::multimodal_read_bound::ScriptedStream::exclusion",
+    "purrdf_retrieval::test_crate::wasm_determinism::ScriptedStream::exclusion",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_retrieval::RankedStream::exclusion"
+reason = "RankedStream::exclusion deliberately has no default (its documentation says why), so every stream type that declares no exclusion basis must spell the one honest body, `Err(ExclusionUnavailable)`; these are five different mock stream types, each answering the required method for itself."
+
+[[distinct]]
+members = [
+    "purrdf_retrieval::test_crate::multimodal_read_bound::Reads::rows",
+    "purrdf_retrieval::test_crate::supplied_exclusion_lookup::Reads::rows",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_retrieval::test_crate::supplied_exclusion_lookup::CountingProducer"
+reason = "Each file's Reads and CountingProducer is its own mock (multimodal_read_bound's also counts work, holds fewer rows than it declares, reads in reverse and reports a service level; supplied_exclusion_lookup's answers `everything` lookups and moves its generation); the accessor reads each mock's own counters."
+
+[[distinct]]
+members = [
+    "purrdf_retrieval::test_crate::multimodal_read_bound::CountingProducer::generation",
+    "purrdf_retrieval::test_crate::supplied_exclusion_lookup::CountingProducer::generation",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_retrieval::test_crate::supplied_exclusion_lookup::CountingProducer"
+reason = "Two different mock producers' own generation accessor over their own `generations` field; sharing it would mean merging two mocks whose behaviour each test depends on differing."
+
+[[distinct]]
+members = [
+    "purrdf_retrieval::test_crate::multimodal_read_bound::CountingProducer::rows_per_invocation",
+    "purrdf_retrieval::test_crate::supplied_exclusion_lookup::CountingProducer::rows_per_invocation",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_retrieval::test_crate::supplied_exclusion_lookup::CountingProducer"
+reason = "The required PropertyFunction::rows_per_invocation of two different mock producers, each declaring its own ROWS; the mocks differ in holdings, order, work and lookup answers, so they are not one fixture."
+
+[[distinct]]
+members = [
+    "purrdf_retrieval::test_crate::real_producers::text_config",
+    "purrdf_text::test_crate::determinism::config",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_text::test_crate::determinism::config"
+reason = "Two crates' fixtures over different predicates (text's NOTE is http://example.org/note, retrieval's is https://example.org/note) that happen to share a constant's name and the TextIndex config spelling; the values differ, so neither can call the other."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::test_crate::product_refusal::certify",
+    "purrdf_validate::product::certify_shapes_product",
+]
+kind = "shim"
+criterion = "layering"
+anchor = "purrdf_validate::product::certify_shapes_product"
+reason = "purrdf-validate depends on purrdf-shapes, so the shapes crate's own product-codec tests cannot reach the host wrapper without a dev-dependency back-edge; both are the one-line forward to ShapesProduct::open(..)?.certify(), and the test exercises the shapes crate's codec, not the host surface."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::test_crate::product_refusal::rebuild",
+    "purrdf_validate::product::rebuild_shapes_product",
+]
+kind = "shim"
+criterion = "layering"
+anchor = "purrdf_validate::product::rebuild_shapes_product"
+reason = "purrdf-validate sits above purrdf-shapes; the shapes crate's product-refusal tests spell the same forward to ShapesProduct::rebuild under the empty host against the codec they test, which they cannot reach through the host crate without a dependency back-edge."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::test_crate::product_refusal::admit_expecting",
+    "purrdf_validate::product::admit_shapes_product_expecting",
+]
+kind = "shim"
+criterion = "layering"
+anchor = "purrdf_validate::product::admit_shapes_product_expecting"
+reason = "purrdf-validate sits above purrdf-shapes; the shapes crate's product-refusal tests spell the same forward to ShapesProduct::admit_expecting under the empty host against the codec they test, which they cannot reach through the host crate without a dependency back-edge."
+
+[[distinct]]
+members = [
+    "purrdf_shex::shapemap::is_string_literal_content",
+    "purrdf_shex::test_crate::scanner_boundary_sweep::string_literal_content",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_shex::test_crate::scanner_boundary_sweep::string_literal_content"
+reason = "The sweep's STRING_LITERAL2 content class is a deliberate independent transcription of the production the shape-map scanner implements; where the two must agree scalar for scalar the sweep is a table oracle, which calling the scanner's own predicate would destroy."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_eval::test_crate::flat_property_paths::Step::path",
+    "purrdf_sparql_eval::test_crate::flat_property_paths::Step::triple",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_eval::test_crate::flat_property_paths::Step"
+reason = "Two renderings of one generated step: its property-path text and its §18.4 triple pattern between two terms. Same four-arm shape, different output grammar; each generated query needs both."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_eval::test_crate::recursion_free::optional_spine_expected",
+    "purrdf_sparql_eval::test_crate::recursion_free::uncorrelated_lateral_expected",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_eval::test_crate::recursion_free::optional_spine_expected"
+reason = "Each is the oracle for a different generated shape (an OPTIONAL spine, an uncorrelated LATERAL nest); they share the two-column table shape and hold different expected answers."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_eval::bench_crate::cost_based_bgp_planner::support::iri",
+    "purrdf_sparql_eval::test_crate::embedding_knn_e2e::iri",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_sparql_eval::test_crate::embedding_knn_e2e::iri"
+reason = "Same spelling over different namespaces: the shared support mints under http://example.org/, the k-NN fixture under https://example.org/d/, which its artifact targets and query prefixes are written against."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_conformance::test_crate::governor_corpus::CorpusSumAggregate::arity",
+    "purrdf_sparql_eval::test_crate::property_function_value_sources::FirstLiteral::arity",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_sparql_eval::test_crate::property_function_value_sources::FirstLiteral"
+reason = "The required CustomAggregate::arity of two unrelated fixture aggregates (a corpus SUM, a first-literal picker) in different packages; each declares its own single-argument arity."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_eval::construct::graph_triple_count",
+    "purrdf_sparql_eval::test_crate::governed_query::statement_count",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_sparql_eval::test_crate::governed_query::statement_count"
+reason = "The test deliberately writes the answer-cap denomination out from the caller's side rather than borrowing the evaluator's count, so a governor that came to count something else is caught from outside instead of agreeing by construction."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_eval::test_crate::correlated_call_arguments::render_q",
+    "purrdf_sparql_eval::test_crate::property_function_value_sources::render",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_sparql_eval::test_crate::property_function_value_sources::render"
+reason = "Same spelling, different targets: each forwards to its own file's key_of, and the two key_of functions key IRIs, blank nodes and triple terms differently."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::test_crate::backend_seam_streams::dataset",
+    "purrdf_rdf::test_crate::sink_contract::dataset",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_rdf::test_crate::backend_seam_streams::dataset"
+reason = "Two streaming fixtures with their own row text: the backend-seam one pads every row to cross the drain window from a single call, the sink-contract one tags rows so several datasets in one test stay distinguishable. Merging them would change the bytes each test streams and asserts."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::native_codecs::serialize::blank_label_alphabet",
+    "purrdf_rdf::test_crate::blank_label_egress::emitted_alphabet",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_rdf::test_crate::blank_label_egress::emitted_alphabet"
+reason = "The test restates the per-format blank-label alphabet independently of the serializer's table, on purpose, so the egress matrix cross-checks it; calling the shipping table would grade the table against itself."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::bench_crate::native_codecs::nquads_fixture",
+    "purrdf_rdf::bench_crate::native_codecs::nquads_fixture_escape_heavy",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_rdf::bench_crate::native_codecs::nquads_fixture_escape_heavy"
+reason = "Two different benchmark inputs: clean numeric literals exercise the escape fast path's clean-run copy, escape-laden literals exercise its boundary branch. Only the loop shape is shared."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::bench_crate::projections::push_iri",
+    "purrdf_rdf::projections::util::push_iri_triple",
+]
+kind = "body"
+criterion = "layering"
+anchor = "purrdf_rdf::projections::util::push_iri_triple"
+reason = "The bench is a separate crate that reaches only purrdf-rdf's public API, and the four-line builder helper is crate-private projection plumbing, not public surface."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::native_codecs::jsonld::expand::graph_quad",
+    "purrdf_rdf::test_crate::property_roundtrip::diff_quad_from_parts",
+]
+kind = "body"
+criterion = "layering"
+anchor = "purrdf_rdf::test_crate::property_roundtrip::diff_quad_from_parts"
+reason = "The JSON-LD expander's quad-in-optional-graph helper is private to the expander; the property test builds its generated quads through the public RdfQuad API and cannot reach it."
+
+[[distinct]]
+members = [
+    "purrdf_gts::example_crate::streaming_sink_bench::CountingEventSink::close_scope",
+    "purrdf_gts::test_crate::event_bridge::CollectSink::close_scope",
+    "purrdf_gts::test_crate::event_bridge::IndexSink::annotation",
+    "purrdf_gts::test_crate::event_bridge::IndexSink::close_scope",
+    "purrdf_gts::test_crate::event_bridge::IndexSink::quad",
+    "purrdf_gts::test_crate::event_bridge::IndexSink::reifier",
+    "purrdf_gts::test_crate::event_bridge::IndexSink::term",
+    "purrdf_gts::test_crate::language_tag_gate::LiteralCapture::annotation",
+    "purrdf_gts::test_crate::language_tag_gate::LiteralCapture::close_scope",
+    "purrdf_gts::test_crate::language_tag_gate::LiteralCapture::quad",
+    "purrdf_gts::test_crate::language_tag_gate::LiteralCapture::reifier",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_gts::event_stream::GtsEventSink"
+reason = "Required RdfEventSink methods of four different test and example sink types, each answering its own no-op Continue; the trait has no default for them, so every sink type must spell its own."
+
+[[distinct]]
+members = [
+    "purrdf_gts::example_crate::streaming_sink_bench::CountingEventSink::open_scope",
+    "purrdf_gts::test_crate::event_bridge::IndexSink::open_scope",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_gts::event_stream::GtsEventSink"
+reason = "Required RdfEventSink::open_scope of two different sink types that both stay in the default scope; the trait has no default for it."
+
+[[distinct]]
+members = [
+    "purrdf_iri::test_crate::property::extension",
+    "purrdf_iri::test_crate::property::private_use",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_iri::test_crate::property::private_use"
+reason = "Two RFC 5646 productions (extension: a non-x singleton and 2-8 character subtags; privateuse: the x marker and 1-8 character subtags) generated by the same prefix-plus-subtags shape; the regexes are the grammar and differ."
+
+[[distinct]]
+members = [
+    "purrdf_core::bench_crate::pack_index_compare::pack_index::FoqIndexes::predicate_count",
+    "purrdf_core::bench_crate::pack_index_compare::pack_index::WaveletIndexes::predicate_count",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_core::bench_crate::pack_index_compare::pack_index::WaveletIndexes"
+reason = "The two arms of the index-encoding comparison: each finds the predicate's positions in its own encoding (posting lists vs a wavelet matrix), and keeping them as separate methods lets each arm of the benchmark measure only its own index with no shared dispatch."
+
+[[distinct]]
+members = [
+    "purrdf_testkit::test_crate::prop::BuggyStack::init",
+    "purrdf_testkit::test_crate::prop::GoodStack::init",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_testkit::test_crate::prop::GoodStack"
+reason = "Each system under test constructs itself from the model state as SystemUnderTest requires; the property test exists to run a defective and a correct implementation side by side, so they are two types by design."
+
+[[distinct]]
+members = [
+    "purrdf_alloc_probe::widen_u64",
+    "purrdf_core::bench_crate::purremb::fixture::usize_to_u64",
+]
+kind = "shim"
+criterion = "layering"
+anchor = "purrdf_alloc_probe::widen_u64"
+reason = "Both spell the std saturating conversion u64::try_from(n).unwrap_or(u64::MAX): the probe's is private to its allocation ledger, the bench's converts counts to throughput; a shared home would mean publishing a one-expression std idiom from the allocator probe."
+
+[[distinct]]
+members = [
+    "purrdf_core::ir::composite::owned_value",
+    "purrdf_core::test_crate::pack_dataset_view::values::to_value",
+]
+kind = "shim"
+criterion = "layering"
+anchor = "purrdf_core::ir::composite::owned_value"
+reason = "Both forward to the one implementation, DatasetView::term_value, with the same expect; owned_value is crate-private and unreachable from integration tests, so the tests' support module forwards to the public trait method itself."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::test_crate::blank_focus_relation_prebinding::bodies",
+    "purrdf_sparql_eval::bench_crate::regex_eval::queries",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_eval::bench_crate::regex_eval::queries"
+reason = "Two unrelated tables of three (name, query text) pairs: the SHACL test's three pushdown-unreachable positions and the bench's three measured regex shapes. They share only the array-of-format! shape; the queries are the data each measures."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::test_crate::gts_codec_hygiene::render",
+    "purrdf_shapes::report::annotations_sort_key",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_shapes::report::annotations_sort_key"
+reason = "The shared shape is the map-format-join idiom only: one renders a hygiene test's violation list as indented markdown lines, the other builds a SHACL result's annotation sort key with record separators. Different formats, different jobs."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_algebra::test_crate::ast_snapshot::Form::label",
+    "purrdf_sparql_eval::protocol::OperationKind::as_str",
+]
+kind = "body"
+criterion = "layering"
+anchor = "purrdf_sparql_eval::protocol::OperationKind::as_str"
+reason = "The AST snapshot test labels each golden entry by the grammar it was read with; the protocol's operation kind lives in purrdf-sparql-eval, above purrdf-sparql-algebra, which its tests cannot depend on. They share the two words SPARQL itself names the forms with."
+
+[[distinct]]
+members = [
+    "purrdf_retrieval::bench_crate::on_demand_read::Producer::arity",
+    "purrdf_retrieval::test_crate::on_demand_receipt::IndexedProducer::arity",
+    "purrdf_retrieval::test_crate::seed_whitespace::Silent::arity",
+    "purrdf_shapes::test_crate::blank_focus_relation_prebinding::SelfRelation::arity",
+    "purrdf_shapes::test_crate::conformance_memo::AskCountingRelation::arity",
+    "purrdf_shapes::test_crate::exists_relation_prebinding::Approved::arity",
+    "purrdf_shapes::test_crate::product_refusal::EmptyRelation::arity",
+    "purrdf_shapes::test_crate::relation_incompleteness::AttestingRelation::arity",
+    "purrdf_sparql_conformance::mode_restricted::BoundSubjectLookup::arity",
+    "purrdf_sparql_conformance::test_crate::governor_corpus::ScriptedRelation::arity",
+    "purrdf_sparql_eval::fixture::OneRowRelation::arity",
+    "purrdf_sparql_eval::bench_crate::relation_attestation_alloc::IndexedRelation::arity",
+    "purrdf_sparql_eval::test_crate::call_cursor::Ranked::arity",
+    "purrdf_sparql_eval::test_crate::correlated_call_arguments::Table::arity",
+    "purrdf_sparql_eval::test_crate::prepared_parameters::Related::arity",
+    "purrdf_sparql_eval::test_crate::prepared_parameters::Owns::arity",
+    "purrdf_sparql_eval::test_crate::property_function_e2e::DeclaredHugeRelation::arity",
+    "purrdf_sparql_eval::test_crate::property_function_value_sources::Expand::arity",
+    "purrdf_sparql_eval::test_crate::property_function_value_sources::Pairs::arity",
+    "purrdf_sparql_eval::test_crate::ranked_retrieval_fingerprint::FixtureRelation::arity",
+    "purrdf_sparql_eval::test_crate::relation_witness::AttestingRelation::arity",
+    "purrdf_sparql_eval::test_crate::request_substitution_feasibility::Table::arity",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_sparql_eval::PropertyFunction::arity"
+reason = "PropertyFunction::arity is a required method with no default: every relation type declares its own positional arity. These are twenty-two different relation types (test and bench mocks, the conformance harness's bound-subject lookup, the one-row fixture) that each happen to take one subject and one object argument."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::shacl_corpora::CorpusRelation::arity",
+    "purrdf_sparql_eval::test_crate::prepared_admission::SubjectBoundRelation::arity",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_sparql_eval::PropertyFunction::arity"
+reason = "The required PropertyFunction::arity of two different relation types (the SHACL corpus relation and an admission-test mock), each declaring its own one-to-one arity; spelt through fully qualified paths, so they group apart from the other one-to-one relations."
+
+[[distinct]]
+members = [
+    "purrdf_retrieval::test_crate::exclusion_lookup::DeclaredRelation::open",
+    "purrdf_retrieval::test_crate::planner_golden::MockProducer::open",
+    "purrdf_shapes::test_crate::product_refusal::EmptyRelation::open",
+]
+kind = "shim"
+criterion = "a"
+anchor = "purrdf_sparql_eval::PropertyFunction::open"
+reason = "PropertyFunction::open is a required method: three different mock relations each open their own file's empty cursor (`EmptyCursor` is a distinct type in each test), because what each test exercises is the declaration, never the rows."
+
+[[distinct]]
+members = [
+    "purrdf::test_crate::blank_label_injectivity::parse",
+    "purrdf_rdf::test_crate::blank_label_injectivity::parse",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_rdf::parse_dataset"
+reason = "Each test parses its N-Triples probe through its own crate's public entry: the facade test proves the query-visible half of the blank-label contract through purrdf's re-export, the codec test the document-level half through purrdf-rdf; the parse itself is the one home both name."
+
+[[distinct]]
+members = [
+    "purrdf_entail::entails::homomorphism::index_key",
+    "purrdf_sparql_eval::test_crate::options_sources::render",
+]
+kind = "shim"
+criterion = "layering"
+anchor = "purrdf_entail::entails::homomorphism::index_key"
+reason = "The entailment checker's homomorphism index key is private to purrdf-entail, which sits above purrdf-sparql-eval; the evaluator's test renders terms for comparison with the same IRI-else-Debug spelling and cannot reach it."
+
+[[distinct]]
+members = [
+    "purrdf_hash::crc32::Crc32::checksum",
+    "purrdf_hash::md5::Md5::digest",
+    "purrdf_hash::sha1::Sha1::digest",
+    "purrdf_hash::sha3::Sha3::digest",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_hash::Digest"
+reason = "Each algorithm's typed one-shot (`new`, `update`, `finalize`) over its own hasher, returning its own output type (a `u32` CRC, a 16-, 20- or 28-to-64-byte array); the object-safe `Digest` trait that serves run-time choice cannot return those types, so the one-shot is spelt per algorithm."
+
+[[distinct]]
+members = [
+    "purrdf_hash::backend::Crc32Backend::checksum",
+    "purrdf_hash::backend::Sha1Backend::digest",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_hash::backend::Sha1Backend::digest"
+reason = "Each backend enum's one-shot pinned to its own kernel path, over its own hasher type and output type (a SHA-1 array, a CRC-32 `u32`); they share only the new-update-finalize idiom every hasher has."
+
+[[distinct]]
+members = [
+    "purrdf_lex::cbor::value::Value::as_array",
+    "purrdf_lex::cbor::value::Value::as_array_mut",
+    "purrdf_lex::json::value::Value::as_array",
+    "purrdf_lex::json::value::Value::as_array_mut",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_lex::cbor::value::Value"
+reason = "The shared and the exclusive borrow of the array variant, on the CBOR data model (RFC 8949) and on the JSON one (RFC 8259) — two enums with different variant sets; Rust spells `&` and `&mut` accessors separately and each enum answers for its own variant."
+
+[[distinct]]
+members = [
+    "purrdf_lex::cbor::value::Value::as_map",
+    "purrdf_lex::cbor::value::Value::as_map_mut",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_lex::cbor::value::Value"
+reason = "The shared and the exclusive borrow of one variant: Rust spells a `&` and a `&mut` accessor separately, and each is the whole of its job."
+
+[[distinct]]
+members = [
+    "purrdf_lex::json::value::Value::as_object",
+    "purrdf_lex::json::value::Value::as_object_mut",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_lex::json::value::Value"
+reason = "The shared and the exclusive borrow of one variant: Rust spells a `&` and a `&mut` accessor separately, and each is the whole of its job."
+
+[[distinct]]
+members = [
+    "purrdf_lex::cbor::value::Value::as_bool",
+    "purrdf_lex::json::value::Value::as_bool",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_lex::cbor::value::Value"
+reason = "The boolean accessor of two data models' own value enums (RFC 8949 CBOR, RFC 8259 JSON), each matching its own variant; the enums differ in every other variant and cannot share a type."
+
+[[distinct]]
+members = [
+    "purrdf_core::lookaside::RdfMetadataValue::as_text",
+    "purrdf_lex::cbor::value::Value::as_text",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_core::lookaside::RdfMetadataValue"
+reason = "The text accessor of two unrelated enums — a CBOR data item and a lookaside metadata value — each matching its own `Text` variant; they share a one-arm match, not a job."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_algebra::algebra::GraphPattern::as_property_function",
+    "purrdf_sparql_algebra::algebra::GraphPattern::as_property_function_mut",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_algebra::algebra::GraphPattern"
+reason = "The shared and the exclusive borrow of one variant: Rust spells a `&` and a `&mut` accessor separately, and each is the whole of its job."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_algebra::algebra::OrderExpression::expression",
+    "purrdf_sparql_algebra::algebra::OrderExpression::expression_mut",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_algebra::algebra::OrderExpression"
+reason = "The shared and the exclusive borrow of the ordered expression: Rust spells a `&` and a `&mut` accessor separately, and each is the whole of its job."
+
+[[distinct]]
+members = [
+    "purrdf_shex::parser::Parser::peek_kw",
+    "purrdf_shapes::srl::syntax::SrlParser::at_kw",
+    "purrdf_sparql_algebra::parser::Parser::peek_kw",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_shex::lexer::tokenize"
+reason = "Each grammar's own parser cursor over its own token enum (ShExC, SRL, SPARQL have different terminals, so each crate runs its own lexer): the case-insensitive keyword test matches that grammar's `Token::Word` and shares only its spelling with the others."
+
+[[distinct]]
+members = [
+    "purrdf_shex::parser::Parser::eat_kw",
+    "purrdf_sparql_algebra::parser::Parser::eat_kw",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_shex::lexer::tokenize"
+reason = "Each grammar's own parser cursor over its own token enum (ShExC and SPARQL have different terminals): consuming a keyword advances that parser's own position over that grammar's tokens."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::native_codecs::text_parse::DocParser::eat",
+    "purrdf_shapes::srl::syntax::SrlParser::eat",
+    "purrdf_sparql_algebra::parser::Parser::eat",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_shex::lexer::tokenize"
+reason = "Each grammar's own parser cursor (Turtle/TriG, SRL, SPARQL) advancing over its own token enum; the grammars' terminals differ, so the token types and the cursors do too, and the three share only the consume-on-match spelling."
+
+[[distinct]]
+members = [
+    "purrdf_geo::wkt::Cursor::eat",
+    "purrdf_jsonschema::ecma::Parser::eat",
+    "purrdf_shex::parser::Parser::eat",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_shex::lexer::tokenize"
+reason = "Three scanners over three alphabets — WKT bytes, ECMA-262 pattern characters, ShExC tokens — each consuming its own unit on a match; nothing but the consume-on-match spelling is shared."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::srl::syntax::SrlParser::peek",
+    "purrdf_shex::parser::Parser::peek",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_shex::lexer::tokenize"
+reason = "Each grammar's own parser cursor (SRL, ShExC) looking at its own token enum; the grammars' terminals differ, so the token types do too."
+
+[[distinct]]
+members = [
+    "purrdf_shex::error::ShexError::locate",
+    "purrdf_sparql_algebra::error::ParseError::locate",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_algebra::error::ParseError::locate"
+reason = "Each error type's public `locate` API over its own byte offset; the line-and-column arithmetic is the one `purrdf_iri::LineIndex` both call, and what remains is each type's own forward to it."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_eval::expr::string_arg_value",
+    "purrdf_sparql_eval::expr::string_arg_value_owned",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_eval::expr::string_arg_value_owned"
+reason = "The by-value twin moves the lexical form and language out of a `TermValue` the caller is about to drop instead of cloning them, which its documentation states saves two `String` clones per evaluated string argument; the borrowed one serves callers that keep the value."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_eval::knn::metric::Kernel::distance_bounded",
+    "purrdf_sparql_eval::knn::metric::Kernel::distance_bounded_reassociated",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_eval::knn::metric::Kernel::distance_bounded_reassociated"
+reason = "Two entry points typed by arithmetic contract: one takes the exact handle, the other the reassociated one, so a caller cannot reach a reassociated fold through the exact door; both forward to the one bounded kernel."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::projections::csvw::model::CsvwTableDirection::from",
+    "purrdf_rdf::projections::csvw::model::CsvwTextDirection::from",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_rdf::projections::csvw::model::CsvwTableDirection"
+reason = "CSVW defines a column's `textDirection` (auto, ltr, rtl, inherit) and a table's `tableDirection` (auto, ltr, rtl) as two properties with different value sets; each enum maps an RDF base direction into its own."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_conformance::owl2::GradedCase::ledgered",
+    "purrdf_sparql_conformance::owl2_rl::GradedCase::ledgered",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_conformance::ledger::LedgeredCase"
+reason = "Each corpus's `GradedCase` adapts its own gap enum (OWL 2 or OWL 2 RL) to the shared `LedgeredCase` trait, where the counting lives once; the adapter is the per-type seam, not a second implementation."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::shapes::ClosedTypeIndex::entries",
+    "purrdf_sparql_eval::witness::RelationWitness::iter",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_eval::witness::RelationWitness::iter"
+reason = "Two unrelated types' ordered iterators over their own maps (closed-by-types properties, relation attestations), each borrowing its value in the form its callers read; they share an iterator-adapter shape, not a job."
+
+[[distinct]]
+members = [
+    "purrdf_native::py_store::query::PyQueryQuads::serialize",
+    "purrdf_native::py_store::query::PyQueryTriples::serialize",
+]
+kind = "body"
+criterion = "layering"
+anchor = "purrdf_native::py_store::query::PyQueryQuads"
+reason = "PyO3 exposes a method only through each class's own `#[pymethods]` block, so the triple and the quad result classes each declare `serialize`; both forward to the one `serialize_bytes`."
+
+[[distinct]]
+members = [
+    "purrdf_rdf::projections::research_object::model::ResearchValue::as_iri",
+    "purrdf_rdf::projections::term::ProjectionTerm::as_iri",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_rdf::projections::term::ProjectionTerm::as_iri"
+reason = "The IRI accessor of two different enums — a projection term and a research-object value — each matching its own `Iri` variant; they share a one-arm match, not a job."
+
+[[distinct]]
+members = [
+    "purrdf_core::bytes::put_u32_le",
+    "purrdf_core::bytes::put_u64_le",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_core::bytes::put_u64_le"
+reason = "The typed public entry points of the one bounded little-endian write (`put_le`): each fixes the width its callers write, and both forward to the same private kernel."
+
+[[distinct]]
+members = [
+    "purrdf_entail::Regime::name",
+    "purrdf_entail::Regime::token",
+]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_entail::Regime::token"
+reason = "Two spellings of the regime set: `name` is the last segment of the SPARQL entailment-regime IRI (`OWL-RL`), which `from_iri` reads back, and `token` is the lowercase host spelling (`owl-rl`) every CLI and binding accepts; the same match over different string tables."
+
+[[job]]
+id = "seeded-permutation"
+summary = "A deterministic, unbiased Fisher-Yates permutation of a slice from a seed, for order-independence tests"
+home = "purrdf_testkit::rng::permute"
+entry_points = []
+spec = "Fisher-Yates shuffle (Durstenfeld's in-place form) over Xoshiro256::up_to, which redraws instead of reducing modulo the bound"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^permute$', '^shuffle(d)?$']
+
+[[job.variant]]
+symbol = "purrdf_hash::arch::blake3_rows::permute"
+file = "crates/hash/src/arch/blake3_rows.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_hash::arch::blake3_rows::permute"
+reason = "BLAKE3's message-word permutation between rounds: a fixed shuffle of sixteen words the specification defines, sharing only a name with a seeded shuffle of a slice."
+
+[[job]]
+id = "lcg64-mmix"
+summary = "The 64-bit linear congruential generator with Knuth's MMIX multiplier, for frozen fixtures"
+home = "purrdf_hash::mix::lcg64_next"
+entry_points = [
+    "purrdf_hash::mix::LCG64_MULTIPLIER",
+    "purrdf_hash::mix::LCG64_MMIX_INCREMENT",
+    "purrdf_testkit::rng::lcg64_next",
+]
+spec = "Knuth's MMIX generator: multiplier 6364136223846793005, increment 1442695040888963407, modulo 2^64"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = ["6364136223846793005", "1442695040888963407"]
+fingerprints = []
+names = ['^lcg(64)?(_next|_step)?$']
+
+[[job]]
+id = "xorshift64"
+summary = "Marsaglia's xorshift64 step with the shift triple (13, 7, 17), for fixtures and frozen vectors generated from it"
+home = "purrdf_testkit::rng::xorshift64_next"
+entry_points = []
+spec = "Marsaglia, Xorshift RNGs (2003): x ^= x << 13; x ^= x >> 7; x ^= x << 17 on a non-zero 64-bit state"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^xorshift(64)?(_next|_step)?$']
+
+[[job]]
+id = "float-control-register"
+summary = "Reading and writing the thread's floating-point control register (MXCSR on x86, FPCR on aarch64) for the float-environment tests"
+home = "purrdf_core::distance::control::mxcsr"
+entry_points = [
+    "purrdf_core::distance::control::set_mxcsr",
+    "purrdf_core::distance::control::Mxcsr",
+    "purrdf_core::distance::control::fpcr",
+    "purrdf_core::distance::control::set_fpcr",
+    "purrdf_core::distance::control::Fpcr",
+]
+spec = "Intel SDM vol. 1 section 10.2.3 (MXCSR, STMXCSR and LDMXCSR) and the Arm ARM (FPCR, MRS and MSR): the one assembly wrapper per register, safe over the defined bits"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(read|write|set|get)_(mxcsr|fpcr)$', '^(mxcsr|fpcr)$']
+
+[[job]]
+id = "purremb-fixture"
+summary = "The PURREMB artifact and stage identities a test or bench declares an embedding family contract with"
+home = "purrdf_core::purremb_fixture::Identities"
+entry_points = ["purrdf_core::purremb_fixture::Identities::at"]
+spec = "PURREMB family contract identities: an artifact identity and an applied stage, each derived from a name, an IRI base and the digest of the name's bytes"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^purremb_(artifact|stage)$', '^fixture_(artifact|stage)$']
+
+[[job]]
+id = "counting-allocator"
+summary = "The counting global allocator and its measurement windows every allocation test and bench measures with"
+home = "purrdf_alloc_probe::CountingAllocator"
+entry_points = [
+    "purrdf_alloc_probe::CurrentThreadWindow",
+    "purrdf_alloc_probe::WholeProcessWindow",
+    "purrdf_alloc_probe::Measurement",
+]
+spec = "the purrdf_alloc_probe contract: allocation count, requested bytes, retained bytes and peak working set over a window, from a GlobalAlloc that delegates to System"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^record_(allocation|deallocation)$', '^(live|peak)_bytes$']
+
+[[job]]
+id = "reifier-rows"
+summary = "The flat rdf:reifies and annotation rows of a dataset's statement layer, graph-scoped, built once"
+home = "purrdf_rdf::flat_rdf_quads"
+entry_points = ["purrdf_rdf::flat_rdf_quads_from_dataset"]
+spec = "RDF 1.2 Concepts section 3 (reifiers and triple terms) and RDF 1.2 Semantics section 9 (rdf:reifies is asserted in the graph that declares the reifier)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:reifier-quad-new"]
+names = []
+
+[[job]]
+id = "term-pattern-variables"
+summary = "The variables a SPARQL term or triple pattern mentions, quoted triple terms included, over one work-list walk every analysis shares"
+home = "purrdf_sparql_algebra::TermPattern::for_each_variable"
+entry_points = [
+    "purrdf_sparql_algebra::TermPattern::collect_variables",
+    "purrdf_sparql_algebra::TermPattern::collect_variable_names",
+    "purrdf_sparql_algebra::TriplePattern::collect_variable_names",
+]
+spec = "SPARQL 1.2 section 18.2 (term and triple patterns, RDF 1.2 triple terms in subject and object position): every variable of a pattern, at every triple-term depth, without recursion"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(collect_)?(term|triple)_pattern_var(s|iable|iables)$']
+
+[[job]]
+id = "wasm-host-clock"
+summary = "The wasm host's Date.now import, declared once where every user reaches it; a second #[wasm_bindgen] Date.now import fails the gate"
+home = "purrdf_sparql_eval::wasm_host::date_now"
+entry_points = []
+spec = "wasm_bindgen imports one symbol per declaration, so a second Date.now declaration is a second host binding for the same clock; the host seal of scripts/check-wasm-test-runner.sh replaces the global, and every reader must reach it through one import"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:wasm-import-date-now"]
+names = []
+
+[[job.variant]]
+symbol = "testkit_wasm_host_fixture::host::date_now"
+file = "crates/testkit/src/bin/wasm_host_fixture.rs"
+detector = "forbidden"
+criterion = "layering"
+anchor = "purrdf_testkit::harness::without_host_clock_or_entropy"
+reason = "The fixture proves the wasm32 runner's host seal by reading the raw Date.now global itself, outside the seal and inside it; purrdf-testkit sits below purrdf-sparql-eval (its dev-dependency), so the fixture cannot reach the evaluator's import, and routing through it would test that import instead of the seal."
+
+[[job]]
+id = "wasm-host-reflect-get"
+summary = "The wasm host's Reflect.get import, declared once in purrdf-wasm's host module; a second #[wasm_bindgen] Reflect.get import fails the gate"
+home = "purrdf_wasm::host::reflect_get"
+entry_points = []
+spec = "wasm_bindgen imports one symbol per declaration; the catch form maps a throwing getter to an Err the caller turns into its own refusal"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:wasm-import-reflect-get"]
+names = []

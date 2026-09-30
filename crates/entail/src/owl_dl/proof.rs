@@ -130,6 +130,8 @@
 //! a clock, so [`DlProof::encode`] is byte-identical run to run and on `wasm32`, exactly as
 //! the `Decision` it accompanies is.
 
+use purrdf_hash::Domain;
+use purrdf_hash::frame::{frame_le, frame_le_into};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -137,7 +139,6 @@ use purrdf_core::RdfDataset;
 use purrdf_datalog::clause::HeadForm;
 
 use crate::EntailError;
-use crate::digest_hex::hex;
 use crate::owl_dl::Kb;
 use crate::owl_dl::clause::{BodyAtom, ClauseSet, DlClause, HeadAtom, derive};
 use crate::owl_dl::concept::{Decomp, Role};
@@ -151,10 +152,10 @@ use crate::report::Construct;
 ///
 /// Bumped whenever the encoding changes shape, so bytes written under an older layout can
 /// never be decoded as if they were current.
-const PROOF_ENCODING_TAG: &str = "purrdf-owl-dl-proof-v3";
+const PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-owl-dl-proof-v3");
 
 /// Domain-separation tag for [`contract_digest`].
-const CONTRACT_DIGEST_TAG: &str = "purrdf-owl-dl-contract-v1";
+const CONTRACT_DIGEST_TAG: Domain = Domain::new(b"purrdf-owl-dl-contract-v1");
 
 /// The identity of the DECISION CALCULUS a proof term was produced under.
 ///
@@ -1376,23 +1377,30 @@ pub(crate) struct RecorderMark {
     data_clashes: usize,
 }
 
+/// Append `step` to one of a [`Recorder`]'s lists unless the list already holds
+/// [`MAX_RECORDED_STEPS`], answering with the step's index.
+///
+/// Every list the recorder keeps is capped by this one rule: past the ceiling the step
+/// is dropped, `truncated` is set, and the answer is `None`, so a truncated proof is
+/// refused wholesale rather than replayed with a hole in it.
+fn record_capped<T>(list: &mut Vec<T>, truncated: &mut bool, step: T) -> Option<usize> {
+    if list.len() >= MAX_RECORDED_STEPS {
+        *truncated = true;
+        return None;
+    }
+    list.push(step);
+    Some(list.len() - 1)
+}
+
 impl Recorder {
     /// Record a clash step, up to the declared ceiling.
     pub(crate) fn clash(&mut self, step: ClashStep) {
-        if self.clashes.len() >= MAX_RECORDED_STEPS {
-            self.truncated = true;
-            return;
-        }
-        self.clashes.push(step);
+        record_capped(&mut self.clashes, &mut self.truncated, step);
     }
 
     /// Record a merge, up to the declared ceiling.
     pub(crate) fn merge(&mut self, step: MergeStep) {
-        if self.merges.len() >= MAX_RECORDED_STEPS {
-            self.truncated = true;
-            return;
-        }
-        self.merges.push(step);
+        record_capped(&mut self.merges, &mut self.truncated, step);
     }
 
     /// Whether the run wrote nothing down at all.
@@ -1411,11 +1419,7 @@ impl Recorder {
 
     /// Record a concrete-domain clash, up to the declared ceiling.
     pub(crate) fn data_clash(&mut self, node: NodeRef) {
-        if self.data_clashes.len() >= MAX_RECORDED_STEPS {
-            self.truncated = true;
-            return;
-        }
-        self.data_clashes.push(node);
+        record_capped(&mut self.data_clashes, &mut self.truncated, node);
     }
 
     /// Record a branch point, up to the declared ceiling, answering with its index.
@@ -1424,12 +1428,7 @@ impl Recorder {
     /// branch tree is refused wholesale by [`DlProof::replay_refutation`] rather than walked
     /// with a hole in it.
     pub(crate) fn branch(&mut self, step: BranchStep) -> Option<usize> {
-        if self.branches.len() >= MAX_RECORDED_STEPS {
-            self.truncated = true;
-            return None;
-        }
-        self.branches.push(step);
-        Some(self.branches.len() - 1)
+        record_capped(&mut self.branches, &mut self.truncated, step)
     }
 
     /// File `outcome` against alternative `ordinal` of branch point `branch`.
@@ -2559,8 +2558,8 @@ impl std::fmt::Debug for DlProofContext {
     /// binds rather than by what it holds.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DlProofContext")
-            .field("input", &hex(self.input))
-            .field("contract", &hex(self.contract))
+            .field("input", &purrdf_hash::hex::encode(&self.input))
+            .field("contract", &purrdf_hash::hex::encode(&self.contract))
             .field("clauses", &self.clauses.count())
             .finish_non_exhaustive()
     }
@@ -2823,14 +2822,14 @@ impl DlProof {
     pub fn bound_to(&self, ctx: &DlProofContext) -> Result<(), DlProofError> {
         if ctx.input != self.input {
             return Err(DlProofError::InputMismatch {
-                expected: hex(ctx.input),
-                stated: hex(self.input),
+                expected: purrdf_hash::hex::encode(&ctx.input),
+                stated: purrdf_hash::hex::encode(&self.input),
             });
         }
         if ctx.contract != self.contract {
             return Err(DlProofError::ContractMismatch {
-                expected: hex(ctx.contract),
-                stated: hex(self.contract),
+                expected: purrdf_hash::hex::encode(&ctx.contract),
+                stated: purrdf_hash::hex::encode(&self.contract),
             });
         }
         if self.trust_base != TrustBaseEntry::ALL {
@@ -3578,7 +3577,7 @@ impl DlProof {
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        frame(&mut out, PROOF_ENCODING_TAG.as_bytes());
+        frame_le(&mut out, PROOF_ENCODING_TAG.as_bytes());
         out.extend_from_slice(&self.input);
         out.extend_from_slice(&self.contract);
         out.push(self.answer.ordinal());
@@ -3668,7 +3667,7 @@ impl DlProof {
     /// [`Self::digest`] as 64 lowercase hex characters.
     #[must_use]
     pub fn digest_hex(&self) -> String {
-        hex(self.digest())
+        purrdf_hash::hex::encode(&self.digest())
     }
 
     /// Rebuild a proof from [`Self::encode`]d bytes.
@@ -4835,8 +4834,8 @@ pub fn try_ontology_identity(ontology: &RdfDataset) -> Result<[u8; 32], purrdf_c
 /// for the caller's data.
 fn contract_digest(clauses: &ClauseSet) -> [u8; 32] {
     let mut hasher = purrdf_hash::blake3::RecordHasher::new();
-    frame_hash(&mut hasher, CONTRACT_DIGEST_TAG.as_bytes());
-    frame_hash(&mut hasher, CALCULUS_VERSION.as_bytes());
+    frame_le_into(&mut hasher, CONTRACT_DIGEST_TAG.as_bytes());
+    frame_le_into(&mut hasher, CALCULUS_VERSION.as_bytes());
     hasher.update(&(clauses.count() as u64).to_le_bytes());
     for index in 0..clauses.count() {
         let clause = clauses.clause(index);
@@ -4927,28 +4926,12 @@ fn head_atom_hash(hasher: &mut purrdf_hash::blake3::RecordHasher, atom: &HeadAto
 }
 
 // ── Byte plumbing ───────────────────────────────────────────────────────────────
-//
-// The hex renderer used to live here too, as its own `char::from_digit` loop; it is now
-// `crate::digest_hex::hex`, the one first-party renderer this crate's three digest-bearing
-// proof modules share (see that module's doc comment for why).
 
 /// A [`DlProofError::Malformed`] carrying `detail`.
 pub(crate) fn malformed(detail: &str) -> DlProofError {
     DlProofError::Malformed {
         detail: detail.to_owned(),
     }
-}
-
-/// Append a length-prefixed byte string.
-fn frame(out: &mut Vec<u8>, bytes: &[u8]) {
-    out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-    out.extend_from_slice(bytes);
-}
-
-/// Fold a length-prefixed byte string into a hasher.
-fn frame_hash(hasher: &mut purrdf_hash::blake3::RecordHasher, bytes: &[u8]) {
-    hasher.update(&(bytes.len() as u64).to_le_bytes());
-    hasher.update(bytes);
 }
 
 /// Append a [`NodeRef`].
@@ -5203,20 +5186,22 @@ impl<'a> Reader<'a> {
 
     /// Take a little-endian `u32`.
     pub(crate) fn u32(&mut self) -> Result<u32, DlProofError> {
-        let bytes: [u8; 4] = self
-            .take(4)?
-            .try_into()
-            .map_err(|_| malformed("a u32 field is four bytes"))?;
-        Ok(u32::from_le_bytes(bytes))
+        Ok(u32::from_le_bytes(self.array()?))
+    }
+
+    /// Take the next `N` bytes as an array.
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], DlProofError> {
+        let (head, rest) = self
+            .bytes
+            .split_first_chunk()
+            .ok_or_else(|| malformed("the proof stream ended mid-field"))?;
+        self.bytes = rest;
+        Ok(*head)
     }
 
     /// Take a little-endian `u64` as a `usize`, refusing one this target cannot hold.
     pub(crate) fn length(&mut self) -> Result<usize, DlProofError> {
-        let bytes: [u8; 8] = self
-            .take(8)?
-            .try_into()
-            .map_err(|_| malformed("a length field is eight bytes"))?;
-        usize::try_from(u64::from_le_bytes(bytes))
+        usize::try_from(u64::from_le_bytes(self.array()?))
             .map_err(|_| malformed("a length field exceeds this target's usize"))
     }
 
@@ -5228,18 +5213,12 @@ impl<'a> Reader<'a> {
     /// perfectly well formed — a host-dependent rejection, which is the one thing a shared
     /// wire format must never have.
     pub(crate) fn u64(&mut self) -> Result<u64, DlProofError> {
-        let bytes: [u8; 8] = self
-            .take(8)?
-            .try_into()
-            .map_err(|_| malformed("a counter field is eight bytes"))?;
-        Ok(u64::from_le_bytes(bytes))
+        Ok(u64::from_le_bytes(self.array()?))
     }
 
     /// Take 32 digest bytes.
     pub(crate) fn digest(&mut self) -> Result<[u8; 32], DlProofError> {
-        self.take(32)?
-            .try_into()
-            .map_err(|_| malformed("a digest field is thirty-two bytes"))
+        self.array()
     }
 
     /// Take a length-prefixed byte string.
@@ -5505,12 +5484,12 @@ mod tests {
     const EX_D: &str = "http://example.org/D";
     /// A fixture property.
     const EX_P: &str = "http://example.org/p";
-    /// `rdf:type`.
-    const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
     /// `owl:disjointWith`.
-    const OWL_DISJOINT_WITH: &str = "http://www.w3.org/2002/07/owl#disjointWith";
+    use purrdf_iri::vocab::owl::DISJOINT_WITH as OWL_DISJOINT_WITH;
+    /// `rdf:type`.
+    use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
     /// `rdfs:subClassOf`.
-    const RDFS_SUBCLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+    use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASS_OF;
 
     /// A tiny triple sink over the frozen IR.
     struct Fixture {
@@ -5743,6 +5722,23 @@ mod tests {
         assert_eq!(first.encode(), again.encode(), "two runs, one proof");
         assert_eq!(first.digest(), again.digest());
         assert_eq!(first.digest_hex().len(), 64);
+    }
+
+    /// The proof digest and the calculus contract are frozen over the fixture refutation: a
+    /// moved value is a changed published proof identity.
+    #[test]
+    fn the_proof_digest_and_contract_are_frozen() {
+        let (_, proof, _) = refutation();
+        assert_eq!(
+            proof.digest_hex(),
+            "ea40ad68088874796ccb64b6521d89d677a826858cc39cdef0dda82fb58b22a8",
+            "the proof digest moved"
+        );
+        assert_eq!(
+            purrdf_hash::hex::Lower(&proof.contract()).to_string(),
+            "521a1c7e7b2f6e27b2df2e16744077fa5df333aa5554d64b68e388d09bddb361",
+            "the calculus contract moved"
+        );
     }
 
     /// `decode(encode(p))` is `p`, and re-encodes to the identical bytes.
@@ -6550,7 +6546,7 @@ mod tests {
     #[test]
     fn an_unknown_node_kind_is_rejected() {
         let mut out = Vec::new();
-        frame(&mut out, PROOF_ENCODING_TAG.as_bytes());
+        frame_le(&mut out, PROOF_ENCODING_TAG.as_bytes());
         out.extend_from_slice(&[0_u8; 32]);
         out.extend_from_slice(&[0_u8; 32]);
         out.push(ProofAnswer::Inconsistent.ordinal());
@@ -6569,7 +6565,7 @@ mod tests {
     #[test]
     fn an_out_of_range_boundary_ordinal_is_rejected() {
         let mut out = Vec::new();
-        frame(&mut out, PROOF_ENCODING_TAG.as_bytes());
+        frame_le(&mut out, PROOF_ENCODING_TAG.as_bytes());
         out.extend_from_slice(&[0_u8; 32]);
         out.extend_from_slice(&[0_u8; 32]);
         out.push(ProofAnswer::Consistent.ordinal());
@@ -7649,5 +7645,21 @@ mod tests {
         let empty = RdfDatasetBuilder::new().freeze().expect("empty freezes");
         let ctx = DlProofContext::of_ontology(&empty).expect("an empty graph is an OWL graph");
         assert_eq!(ctx.clause_count(), ctx.clause_count());
+    }
+
+    /// The last step under the ceiling is kept at its index; the next one is dropped and
+    /// marks the recording truncated.
+    #[test]
+    fn record_capped_keeps_steps_up_to_the_ceiling_and_marks_the_first_drop() {
+        let mut list: Vec<usize> = (0..MAX_RECORDED_STEPS - 1).collect();
+        let mut truncated = false;
+        assert_eq!(
+            record_capped(&mut list, &mut truncated, 7),
+            Some(MAX_RECORDED_STEPS - 1)
+        );
+        assert!(!truncated);
+        assert_eq!(record_capped(&mut list, &mut truncated, 8), None);
+        assert!(truncated);
+        assert_eq!(list.len(), MAX_RECORDED_STEPS);
     }
 }

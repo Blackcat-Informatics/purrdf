@@ -215,11 +215,7 @@ impl Md5 {
     }
 }
 
-impl Default for Md5 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::default_from_new!(Md5);
 
 impl fmt::Debug for Md5 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

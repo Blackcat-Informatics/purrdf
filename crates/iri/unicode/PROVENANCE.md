@@ -5,9 +5,15 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 # Provenance of the vendored Unicode Character Database
 
-This directory is the workspace's one vendored copy of the Unicode Character
-Database. `purrdf-iri` owns it because it is the lowest Unicode-aware crate in
-the workspace.
+This directory is the workspace's vendored copy of the Unicode Character
+Database at its current version. Every Unicode table in the workspace but one
+is generated from it by `crates/lex/examples/gen_unicode_tables.rs`, at the
+version `purrdf_lex::unicode::UNICODE_VERSION` names; the generator refuses a
+file of another release. It is not the only vendored UCD file:
+`purrdf-core` keeps its own `Blocks.txt` at Unicode 16.0.0
+(`crates/rdf-core/vendor/unicode/`), pinned to the version of the Unicode
+tables embedded in the locked `regex-syntax`, which its XSD regular-expression
+block escapes must agree with.
 
 Every file is vendored verbatim, carries the Unicode-3.0 licence declared in
 `REUSE.toml` (text in `LICENSES/Unicode-3.0.txt`), and is held byte-frozen by

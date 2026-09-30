@@ -140,6 +140,7 @@ use std::sync::Arc;
 use purrdf_core::artifact::{ArtifactBuilder, ArtifactError, ArtifactSpec, ArtifactView, Identity};
 use purrdf_core::governor::{ResourceDimension, TrippedGovernor};
 use purrdf_core::ir::pack::bits::{read_varint, write_varint};
+use purrdf_hash::hex::Lower;
 /// The three registry types [`HostBindings::new`] binds, re-exported here.
 ///
 /// A caller wiring host implementations into a restore has to NAME these types, and
@@ -166,6 +167,7 @@ pub(crate) mod identity;
 #[cfg(test)]
 mod tests;
 
+use error::malformed;
 pub use error::{ProductDimension, ShapesProductError};
 
 // ---------------------------------------------------------------------------
@@ -502,12 +504,6 @@ impl HostBindings<'static> {
 // ---------------------------------------------------------------------------
 // Refusals
 // ---------------------------------------------------------------------------
-
-/// Refuse: the product's bytes are structurally invalid in a way no other
-/// dimension names.
-fn malformed(message: impl Into<String>) -> ShapesProductError {
-    ShapesProductError::new(ProductDimension::Malformed, message)
-}
 
 /// Map an [`ArtifactError`] onto the admission [`ProductDimension`] that names it.
 ///
@@ -1293,7 +1289,7 @@ impl<'a> ShapesProductView<'a> {
         // exists to rule out. The value built here is not redundant either way: it
         // is what the restored `Shapes` must carry for identity row 6 to be the row
         // a parse of this graph would have produced.
-        let mut functions = UserFunctionRegistry::new();
+        let mut functions = UserFunctionRegistry::default();
         let native_list = crate::shapes::register_declared_sparql_functions(
             &dataset,
             &self.provenance,
@@ -1342,7 +1338,7 @@ impl<'a> ShapesProductView<'a> {
             rules: parts.rules,
             box_role_vocab: parts.box_role_vocab,
             functions: Arc::new(functions),
-            aggregates: Arc::new(AggregateRegistry::new()),
+            aggregates: Arc::new(AggregateRegistry::default()),
             validation_options: crate::engine::ValidationOptions::default(),
             target_types: parts.target_types,
             shapes_graph: parts.shapes_graph,
@@ -1521,8 +1517,8 @@ impl<'a> ShapesProductView<'a> {
                  the shapes graph you named, or read the binding of the product you meant off \
                  the artifact itself — `purrdf shacl explain` prints it on its `identity-digest` \
                  line, in exactly this spelling",
-                hex(declared),
-                hex(expected)
+                Lower(declared),
+                Lower(expected)
             ),
         ))
     }
@@ -1557,8 +1553,8 @@ impl<'a> ShapesProductView<'a> {
                  product, or restore it with `rebuild`, which re-derives the shapes graph from the \
                  dataset the product carries instead of trusting a memo written against a model \
                  this build no longer has",
-                hex(&self.stage_id),
-                hex(&STAGE_ID)
+                Lower(&self.stage_id),
+                Lower(&STAGE_ID)
             ),
         ))
     }
@@ -1623,17 +1619,4 @@ impl<'a> ShapesProductView<'a> {
             ),
         ))
     }
-}
-
-/// Lowercase-hex a 32-byte digest for a refusal message.
-///
-/// A local helper rather than a shared utility: this module owes nothing to any
-/// layer above it, and a digest renderer is four lines.
-fn hex(digest: &[u8; 32]) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::with_capacity(64);
-    for byte in digest {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
 }

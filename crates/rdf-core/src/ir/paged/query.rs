@@ -8,19 +8,18 @@
 //! a query engine then samples [`FallibleDatasetView::operation_status`] before it can
 //! publish any internally-computed rows as a complete result.
 
-use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
 
 use crate::RdfStoreCapabilities;
 use crate::dataset_view::{DatasetView, FallibleDatasetView, GraphMatch, ViewOperationStatus};
 use crate::governor::{ResourceDimension, ResourceVector, StopCause};
-use crate::ir::{GlobalTermId, QuadIds, QuadRef, RdfDataset, TermId, TermValue};
+use crate::ir::{GlobalTermId, QuadIds, RdfDataset, TermId, TermValue};
 
 use super::admission::{self, PageAdmission};
 use super::summary::{PageStream, PageSummary};
 use super::{
     PageFault, PageFaultKind, PageGeneration, PageId, PageMaterialization, PagedDataset,
-    map_quad_to_global, summary_drift_message,
+    summary_drift_message,
 };
 
 /// Exact resource ceilings for one [`PagedQueryView`].
@@ -534,8 +533,8 @@ impl<'dataset> PagedQueryView<'dataset> {
             let local =
                 TermId::from_index(u32::try_from(local_index).expect("page term index fits u32"));
             let global = slot.translation.to_global(local);
-            if materialization.dataset.term_value(local)
-                != self.dataset.dictionary.term_value(global)
+            if materialization.dataset.term_value(local).ok()
+                != Some(self.dataset.dictionary.term_value(global))
             {
                 return Err(PagedQueryError::InvalidData {
                     page: id,
@@ -619,17 +618,8 @@ impl DatasetView for PagedQueryView<'_> {
         self.dataset.pages.iter().flat_map(move |slot| {
             self.page(slot.id).into_iter().flat_map(move |page| {
                 page.quads()
-                    .map(move |quad| map_quad_to_global(&slot.translation, quad))
+                    .map(move |quad| quad.map_ids(|id| slot.translation.to_global(id)))
             })
-        })
-    }
-
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_, GlobalTermId>> + '_ {
-        self.quads().map(move |quad| QuadRef {
-            s: self.dataset.dictionary.resolve(quad.s),
-            p: self.dataset.dictionary.resolve(quad.p),
-            o: self.dataset.dictionary.resolve(quad.o),
-            g: quad.g.map(|graph| self.dataset.dictionary.resolve(graph)),
         })
     }
 
@@ -660,7 +650,7 @@ impl DatasetView for PagedQueryView<'_> {
                 admitted.into_iter().flat_map(move |local| {
                     self.page(slot.id).into_iter().flat_map(move |page| {
                         page.quads_for_pattern_indexed(local.s, local.p, local.o, local.g)
-                            .map(move |quad| map_quad_to_global(&slot.translation, quad))
+                            .map(move |quad| quad.map_ids(|id| slot.translation.to_global(id)))
                     })
                 })
             },
@@ -747,17 +737,14 @@ impl DatasetView for PagedQueryView<'_> {
     }
 
     fn stats_fingerprint(&self) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.dataset.total_quads.hash(&mut hasher);
-        self.dataset.dictionary.len().hash(&mut hasher);
-        hasher.finish()
+        crate::hash::stats_fingerprint(self.dataset.total_quads, self.dataset.dictionary.len())
     }
 
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
         self.dataset.pages.iter().flat_map(move |slot| {
             self.page(slot.id).into_iter().flat_map(move |page| {
                 page.reifier_quads()
-                    .map(move |quad| map_quad_to_global(&slot.translation, quad))
+                    .map(move |quad| quad.map_ids(|id| slot.translation.to_global(id)))
             })
         })
     }
@@ -783,7 +770,7 @@ impl DatasetView for PagedQueryView<'_> {
                 .flat_map(move |local_reifier| {
                     self.page(slot.id).into_iter().flat_map(move |page| {
                         page.reifier_quads_of(local_reifier)
-                            .map(move |quad| map_quad_to_global(&slot.translation, quad))
+                            .map(move |quad| quad.map_ids(|id| slot.translation.to_global(id)))
                     })
                 })
         })
@@ -793,7 +780,7 @@ impl DatasetView for PagedQueryView<'_> {
         self.dataset.pages.iter().flat_map(move |slot| {
             self.page(slot.id).into_iter().flat_map(move |page| {
                 page.annotation_quads()
-                    .map(move |quad| map_quad_to_global(&slot.translation, quad))
+                    .map(move |quad| quad.map_ids(|id| slot.translation.to_global(id)))
             })
         })
     }
@@ -857,7 +844,7 @@ impl DatasetView for PagedQueryView<'_> {
             let slot = &self.dataset.pages[index];
             self.page(slot.id).into_iter().flat_map(move |page| {
                 page.reifier_quads()
-                    .map(move |quad| map_quad_to_global(&slot.translation, quad))
+                    .map(move |quad| quad.map_ids(|id| slot.translation.to_global(id)))
                     .filter(move |quad| g.matches(quad.g))
             })
         })
@@ -885,7 +872,7 @@ impl DatasetView for PagedQueryView<'_> {
             let slot = &self.dataset.pages[index];
             self.page(slot.id).into_iter().flat_map(move |page| {
                 page.annotation_quads()
-                    .map(move |quad| map_quad_to_global(&slot.translation, quad))
+                    .map(move |quad| quad.map_ids(|id| slot.translation.to_global(id)))
                     .filter(move |quad| g.matches(quad.g))
             })
         })

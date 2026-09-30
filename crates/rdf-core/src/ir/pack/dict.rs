@@ -68,16 +68,19 @@ use std::cmp::Ordering;
 use std::convert::Infallible;
 use std::fmt;
 
+use purrdf_deflate::common_prefix_len;
 use purrdf_iri::IriError;
 
 use crate::dataset_view::DatasetView;
 use crate::hash::{FastMap, FastSet};
 use crate::ir::composite::owned_value;
-use crate::ir::term::{StrRange, arena_str};
+use crate::ir::term::{StrRange, arena_str, canonical_kind_tag};
 use crate::ir::term_walk::{Nested, try_fold_nested};
 use crate::{BlankScope, RdfTextDirection, TermRef, TermValue};
 
-use super::bits::{IntVector, IntVectorRef, PackBitsError, bits_for, read_varint, write_varint};
+use super::bits::{
+    IntVector, IntVectorRef, PackBitsError, bits_for, read_header_u64, read_varint, write_varint,
+};
 
 /// The `rdf:reifies` predicate IRI — the RDF 1.2 reification indirection edge
 /// (`reifier rdf:reifies <<( s p o )>>`). A local mirror of the same private
@@ -87,7 +90,7 @@ use super::bits::{IntVector, IntVectorRef, PackBitsError, bits_for, read_varint,
 /// tuple stores it directly (`RdfDataset::reifier_quads` looks it up by value).
 /// [`PackDict::encode`]'s side-table closure fold-in (below) mirrors that same
 /// condition so [`super::side::SideTables`] can mint a unified id for it.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// The unified term-identity space this module mints: a plain, 1-based `u64` (id `0`
 /// is never assigned). A pure type alias, not a newtype — the outer `PackView` seam
@@ -159,19 +162,6 @@ impl From<PackBitsError> for PackDictError {
             PackBitsError::Malformed(reason) => Self::Malformed(reason),
         }
     }
-}
-
-/// Read an 8-byte little-endian header field at `*pos`, advancing `*pos` past it.
-/// A small local mirror of `bits::read_header_u64` (private to that module).
-fn read_u64_header(bytes: &[u8], pos: &mut usize) -> Result<u64, PackDictError> {
-    let end = *pos + 8;
-    let slice = bytes.get(*pos..end).ok_or(PackDictError::Truncated {
-        needed: end,
-        found: bytes.len(),
-    })?;
-    let value = u64::from_le_bytes(slice.try_into().expect("slice is exactly 8 bytes"));
-    *pos = end;
-    Ok(value)
 }
 
 // ---------------------------------------------------------------------------
@@ -393,33 +383,6 @@ fn read_len_prefixed_str<'a>(bytes: &'a [u8], pos: &mut usize) -> Result<&'a str
     Ok(s)
 }
 
-/// The length, in bytes, of the common leading prefix of `a` and `b`.
-///
-/// Word-parallel: both slices are walked in eight-byte words, and a word pair
-/// is compared as one `u64` XOR. A zero XOR is eight shared bytes; the first
-/// non-zero XOR ends the prefix, and because the words are read little-endian
-/// the first differing byte is the lowest non-zero byte of the XOR, so its
-/// offset in the word is the XOR's trailing-zero count over 8. The bytes after
-/// the last whole word pair are compared one at a time.
-fn common_prefix_len(a: &[u8], b: &[u8]) -> usize {
-    let len = a.len().min(b.len());
-    let (a, b) = (&a[..len], &b[..len]);
-    let (a_words, a_tail) = a.as_chunks::<8>();
-    let (b_words, b_tail) = b.as_chunks::<8>();
-    for (k, (x, y)) in a_words.iter().zip(b_words).enumerate() {
-        let diff = u64::from_le_bytes(*x) ^ u64::from_le_bytes(*y);
-        if diff != 0 {
-            return k * 8 + (diff.trailing_zeros() / u8::BITS) as usize;
-        }
-    }
-    a_words.len() * 8
-        + a_tail
-            .iter()
-            .zip(b_tail)
-            .take_while(|(x, y)| x == y)
-            .count()
-}
-
 // ---------------------------------------------------------------------------
 // PFC encode/decode of the single, unified value list.
 // ---------------------------------------------------------------------------
@@ -472,8 +435,8 @@ fn encode_values(values: &[TermValue], value_to_id: &FastMap<TermValue, PackTerm
 /// order (`1..=n_terms`). Returns the term count.
 fn decode_values(bytes: &[u8], dict: &mut PackDict) -> Result<u64, PackDictError> {
     let mut pos = 0usize;
-    let term_count = read_u64_header(bytes, &mut pos)?;
-    let bucket_count = read_u64_header(bytes, &mut pos)?;
+    let term_count = read_header_u64(bytes, &mut pos)?;
+    let bucket_count = read_header_u64(bytes, &mut pos)?;
     let offsets = IntVectorRef::from_bytes(&bytes[pos..])?;
     if offsets.len() as u64 != bucket_count {
         return Err(PackDictError::Malformed(
@@ -652,14 +615,10 @@ enum DictEntry {
 }
 
 impl DictEntry {
-    /// Match `TermValue::canonical_tag`, which differs from the record wire tags.
+    /// The canonical kind tag, which differs from the record wire tags: the
+    /// [`canonical_kind_tag!`] rank every term value orders by.
     const fn canonical_tag(self) -> u8 {
-        match self {
-            Self::Iri(_) => 0,
-            Self::Literal { .. } => 1,
-            Self::Blank { .. } => 2,
-            Self::Triple { .. } => 3,
-        }
+        canonical_kind_tag!(self)
     }
 }
 
@@ -772,7 +731,7 @@ fn decode_value_list(values_bytes: &[u8], expected_terms: u64) -> Result<PackDic
 /// decoding its records.
 fn peek_term_count(values_bytes: &[u8]) -> Result<u64, PackDictError> {
     let mut pos = 0usize;
-    read_u64_header(values_bytes, &mut pos)
+    Ok(read_header_u64(values_bytes, &mut pos)?)
 }
 
 // ---------------------------------------------------------------------------
@@ -1176,11 +1135,9 @@ impl PackDict {
                         *direction,
                     )
                     .map_err(PackDictError::Malformed)?;
-                    // Test the lowercase fixed point without allocating a second
-                    // tag. Ingress lowercases language tags for RDF term identity.
-                    if language.is_some_and(|tag| {
-                        !tag.chars().flat_map(char::to_lowercase).eq(tag.chars())
-                    }) {
+                    // Test the identity-fold fixed point without allocating a
+                    // second tag. Ingress folds language tags for RDF term identity.
+                    if language.is_some_and(|tag| !purrdf_iri::langtag::is_identity_folded(tag)) {
                         return Err(PackDictError::Malformed(
                             "dict: language tag is not lowercase",
                         ));
@@ -1402,43 +1359,18 @@ impl PackDict {
 mod tests {
     use super::*;
     use crate::TermBox;
+    use crate::backend::TermFactory as _;
     use crate::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
     use purrdf_testkit::prop::prelude::*;
     use std::collections::HashSet;
-
-    /// Intern one dataset-independent value into a builder, recursing for triple
-    /// terms (mirrors `paged_backend.rs`'s `intern_value` helper).
-    fn intern_value(b: &mut RdfDatasetBuilder, v: &TermValue) -> TermId {
-        match v {
-            TermValue::Iri(s) => b.intern_iri(s),
-            TermValue::Blank { label, scope } => b.intern_blank(label, *scope),
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                direction,
-            } => b.intern_literal(RdfLiteral {
-                lexical_form: lexical_form.clone(),
-                datatype: Some(datatype.clone()),
-                language: language.clone(),
-                direction: *direction,
-            }),
-            TermValue::Triple { s, p, o } => {
-                let s = intern_value(b, s);
-                let p = intern_value(b, p);
-                let o = intern_value(b, o);
-                b.intern_triple(s, p, o)
-            }
-        }
-    }
 
     /// Build a frozen dataset from `(s, p, o)` triples in the default graph.
     fn build_dataset(triples: &[(TermValue, TermValue, TermValue)]) -> std::sync::Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         for (s, p, o) in triples {
-            let s = intern_value(&mut b, s);
-            let p = intern_value(&mut b, p);
-            let o = intern_value(&mut b, o);
+            let s = b.intern_value(s);
+            let p = b.intern_value(p);
+            let o = b.intern_value(o);
             b.push_quad(s, p, o, None);
         }
         b.freeze().expect("valid dataset")
@@ -1852,10 +1784,10 @@ mod tests {
         // predicate, or object — so it must still mint a unified id and round-trip
         // via `id_by_value`/`term_value`, agreeing with `predicate_id_by_value`.
         let mut b = RdfDatasetBuilder::new();
-        let s = intern_value(&mut b, &iri("s"));
-        let p = intern_value(&mut b, &iri("p"));
-        let o = intern_value(&mut b, &iri("o"));
-        let g = intern_value(&mut b, &iri("g"));
+        let s = b.intern_value(&iri("s"));
+        let p = b.intern_value(&iri("p"));
+        let o = b.intern_value(&iri("o"));
+        let g = b.intern_value(&iri("g"));
         b.push_quad(s, p, o, Some(g));
         let dataset = b.freeze().expect("valid dataset");
 
@@ -1873,11 +1805,11 @@ mod tests {
         // "g" names the graph of the second quad AND is the subject of the first
         // quad: it must get exactly ONE unified id, not a second duplicate entry.
         let mut b = RdfDatasetBuilder::new();
-        let g = intern_value(&mut b, &iri("g"));
-        let p = intern_value(&mut b, &iri("p"));
-        let o1 = intern_value(&mut b, &iri("o1"));
-        let s2 = intern_value(&mut b, &iri("s2"));
-        let o2 = intern_value(&mut b, &iri("o2"));
+        let g = b.intern_value(&iri("g"));
+        let p = b.intern_value(&iri("p"));
+        let o1 = b.intern_value(&iri("o1"));
+        let s2 = b.intern_value(&iri("s2"));
+        let o2 = b.intern_value(&iri("o2"));
         b.push_quad(g, p, o1, None);
         b.push_quad(s2, p, o2, Some(g));
         let dataset = b.freeze().expect("valid dataset");
@@ -1900,11 +1832,11 @@ mod tests {
         // The side-table term closure must still fold both into the dictionary
         // and round-trip them.
         let mut b = RdfDatasetBuilder::new();
-        let s = intern_value(&mut b, &iri("s"));
-        let p = intern_value(&mut b, &iri("p"));
-        let o = intern_value(&mut b, &iri("o"));
+        let s = b.intern_value(&iri("s"));
+        let p = b.intern_value(&iri("p"));
+        let o = b.intern_value(&iri("o"));
         let triple = b.intern_triple(s, p, o);
-        let reifier = intern_value(&mut b, &iri("r"));
+        let reifier = b.intern_value(&iri("r"));
         b.push_reifier(reifier, triple);
         let dataset = b.freeze().expect("valid dataset");
         assert_eq!(dataset.quad_count(), 0, "reification is side-table only");
@@ -1928,14 +1860,14 @@ mod tests {
         // The annotation's predicate and object appear ONLY in the annotation
         // side-table (never a base quad's subject/predicate/object).
         let mut b = RdfDatasetBuilder::new();
-        let s = intern_value(&mut b, &iri("s"));
-        let p = intern_value(&mut b, &iri("p"));
-        let o = intern_value(&mut b, &iri("o"));
+        let s = b.intern_value(&iri("s"));
+        let p = b.intern_value(&iri("p"));
+        let o = b.intern_value(&iri("o"));
         let triple = b.intern_triple(s, p, o);
-        let reifier = intern_value(&mut b, &iri("r"));
+        let reifier = b.intern_value(&iri("r"));
         b.push_reifier(reifier, triple);
-        let ap = intern_value(&mut b, &iri("confidence"));
-        let ao = intern_value(&mut b, &TermValue::simple_literal("0.9"));
+        let ap = b.intern_value(&iri("confidence"));
+        let ao = b.intern_value(&TermValue::simple_literal("0.9"));
         b.push_annotation(reifier, ap, ao);
         let dataset = b.freeze().expect("valid dataset");
 
@@ -1956,11 +1888,11 @@ mod tests {
     #[test]
     fn rdf_reifies_predicate_gets_unified_id_when_reifiers_present() {
         let mut b = RdfDatasetBuilder::new();
-        let s = intern_value(&mut b, &iri("s"));
-        let p = intern_value(&mut b, &iri("p"));
-        let o = intern_value(&mut b, &iri("o"));
+        let s = b.intern_value(&iri("s"));
+        let p = b.intern_value(&iri("p"));
+        let o = b.intern_value(&iri("o"));
         let triple = b.intern_triple(s, p, o);
-        let reifier = intern_value(&mut b, &iri("r"));
+        let reifier = b.intern_value(&iri("r"));
         // Mirror the ingest path: `rdf:reifies` is interned even though it never
         // appears in any base quad or side-table row tuple directly.
         b.intern_iri(RDF_REIFIES);
@@ -2099,7 +2031,7 @@ mod tests {
 
             // Ground truth: every value the dataset itself ever interned.
             let truth: HashSet<TermValue> = (0..dataset.term_count())
-                .map(|i| dataset.term_value(TermId::from_index(i as u32)))
+                .map(|i| dataset.term_value(TermId::from_index(i as u32)).unwrap())
                 .collect();
 
             for id in 1..=dict.n_terms() {
@@ -2269,66 +2201,6 @@ mod tests {
         assert!(matches!(err, PackDictError::Malformed(_)));
     }
 
-    /// The byte-at-a-time prefix length [`common_prefix_len`] replaced: the
-    /// oracle of the word-parallel version.
-    fn common_prefix_len_bytewise(a: &[u8], b: &[u8]) -> usize {
-        a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count()
-    }
-
-    /// Every split point of a shared prefix, at every length around the word
-    /// size and its multiples, with the first differing byte differing in each
-    /// single bit, and with one side a strict prefix of the other.
-    #[test]
-    fn common_prefix_len_matches_bytewise_at_every_split() {
-        let base: Vec<u8> = (0..40_u8)
-            .map(|i| i.wrapping_mul(37).wrapping_add(11))
-            .collect();
-        for len in 0..=base.len() {
-            let a = &base[..len];
-            for split in 0..=len {
-                for bit in 0..8 {
-                    let mut b = a.to_vec();
-                    if split < len {
-                        b[split] ^= 1 << bit;
-                    }
-                    assert_eq!(
-                        common_prefix_len(a, &b),
-                        common_prefix_len_bytewise(a, &b),
-                        "len {len} split {split} bit {bit}"
-                    );
-                    assert_eq!(
-                        common_prefix_len(&b, a),
-                        common_prefix_len_bytewise(&b, a),
-                        "len {len} split {split} bit {bit} (swapped)"
-                    );
-                }
-                // One side a strict prefix of the other.
-                assert_eq!(common_prefix_len(&a[..split], a), split);
-                assert_eq!(common_prefix_len(a, &a[..split]), split);
-            }
-        }
-    }
-
-    prop_test! {
-        #![prop_config(Config::with_cases(512))]
-
-        /// Random byte strings over a small alphabet (so long shared prefixes
-        /// are common) agree with the bytewise oracle.
-        #[test]
-        fn property_common_prefix_len_matches_bytewise(
-            a in prop::collection::vec(0_u8..3, 0..48),
-            b in prop::collection::vec(0_u8..3, 0..48),
-        ) {
-            prop_assert_eq!(common_prefix_len(&a, &b), common_prefix_len_bytewise(&a, &b));
-            let mut shared = a.clone();
-            shared.extend_from_slice(&b);
-            prop_assert_eq!(
-                common_prefix_len(&shared, &a),
-                common_prefix_len_bytewise(&shared, &a)
-            );
-        }
-    }
-
     // ── The triple-term depth search ───────────────────────────────────────────────
 
     /// The recursive reference of [`PackDict::triple_term_depth`].
@@ -2379,8 +2251,8 @@ mod tests {
     fn the_depth_search_agrees_with_its_recursive_reference_on_generated_graphs() {
         let mut refusals = 0;
         for seed in 0..500_u64 {
-            let mut state = seed;
-            let mut draw = |n: u64| purrdf_testkit::rng::splitmix64_next(&mut state) % n;
+            let mut rng = purrdf_testkit::rng::SplitMix64::new(seed);
+            let mut draw = |n: u64| rng.below(n);
             let len = 1 + draw(10);
             let entries: Vec<DictEntry> = (0..len)
                 .map(|_| {

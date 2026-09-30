@@ -26,19 +26,19 @@
 //! The walk is cycle-guarded: a cyclic or torn `rdf:List` is malformed input and
 //! hard-fails ([`EvalError::Data`]) rather than looping forever.
 
-use purrdf_core::{BlankScope, DatasetView, TermValue};
+use purrdf_core::collections::{ListVocab, SoleObject, build_rdf_list, walk_rdf_list};
+use purrdf_core::{BlankScope, DatasetView, ListError, ListErrorKind, TermValue};
 use purrdf_sparql_algebra::PurrdfFn;
 use purrdf_xsd::XsdValue;
 
-use crate::DetHashSet;
 use crate::error::EvalError;
 use crate::eval::EvalCtx;
-use crate::expr::xsd_of;
+use crate::expr::{arg, intern, intern_boolean, intern_integer, xsd_of};
 use crate::scratch::{SolutionTerm, term_id_to_value};
 
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+use purrdf_iri::vocab::rdf::REST as RDF_REST;
 
 /// Evaluate a PurRDF `rdf:List` extension function.
 ///
@@ -73,7 +73,7 @@ fn list_length<D: DatasetView + Sync>(
         return Ok(None);
     };
     match walk(ctx, head)? {
-        Some(members) => Ok(Some(integer_term(ctx, members.len() as i64))),
+        Some(members) => Ok(Some(intern_integer(ctx, members.len() as i64))),
         None => Ok(None),
     }
 }
@@ -115,7 +115,7 @@ fn list_index_of<D: DatasetView + Sync>(
         return Ok(None);
     };
     match members.iter().position(|m| m == value) {
-        Some(pos) => Ok(Some(integer_term(ctx, pos as i64))),
+        Some(pos) => Ok(Some(intern_integer(ctx, pos as i64))),
         None => Ok(None),
     }
 }
@@ -132,7 +132,10 @@ fn list_contains<D: DatasetView + Sync>(
     let Some(members) = walk(ctx, head)? else {
         return Ok(None);
     };
-    Ok(Some(bool_term(ctx, members.iter().any(|m| m == value))))
+    Ok(Some(intern_boolean(
+        ctx,
+        members.iter().any(|m| m == value),
+    )))
 }
 
 /// `listSlice(list, start, end)` → a fresh `rdf:List` of the members in the
@@ -179,7 +182,8 @@ fn list_concat<D: DatasetView + Sync>(
     Ok(intern(ctx, value))
 }
 
-/// Invent a fresh `rdf:List` carrying `members` in order, returning its head term.
+/// Invent a fresh `rdf:List` carrying `members` in order, returning its head term
+/// ([`build_rdf_list`]).
 ///
 /// Each cell is a fresh blank node (minted from the shared `bnode_counter`, so
 /// labels never collide with CONSTRUCT-template or `BNODE()` blanks). The cell quads
@@ -190,48 +194,31 @@ fn materialize_list<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     members: Vec<TermValue>,
 ) -> TermValue {
-    if members.is_empty() {
-        return iri(RDF_NIL);
-    }
-    let n = members.len();
-    let cells: Vec<TermValue> = (0..n)
-        .map(|_| {
-            ctx.bnode_counter += 1;
+    let prefix = ctx.bnode_mint_prefix.clone();
+    let mut counter = ctx.bnode_counter;
+    let mut constructed = std::mem::take(&mut ctx.constructed);
+    let head = build_rdf_list(
+        members,
+        &ListVocab::term_values(),
+        |_| {
+            counter += 1;
             // Honors the deterministic mint prefix like every other
             // `bnode_counter` mint; `None` keeps the exact `lc{n}` spelling.
-            let label = crate::eval::minted_label(
-                ctx.bnode_mint_prefix.as_deref(),
-                "lc",
-                ctx.bnode_counter,
-            );
             TermValue::Blank {
-                label,
+                label: crate::eval::minted_label(prefix.as_deref(), "lc", counter),
                 scope: BlankScope::DEFAULT,
             }
-        })
-        .collect();
-    for (i, member) in members.into_iter().enumerate() {
-        let rest = if i + 1 < n {
-            cells[i + 1].clone()
-        } else {
-            iri(RDF_NIL)
-        };
-        ctx.constructed
-            .push((cells[i].clone(), iri(RDF_FIRST), member));
-        ctx.constructed
-            .push((cells[i].clone(), iri(RDF_REST), rest));
-    }
-    cells[0].clone()
+        },
+        |cell, predicate, object| constructed.push((cell, predicate, object)),
+    );
+    ctx.bnode_counter = counter;
+    ctx.constructed = constructed;
+    head
 }
 
 // ---------------------------------------------------------------------------
 // internals
 // ---------------------------------------------------------------------------
-
-/// The argument value at index `i`, if bound (not unbound/error).
-fn arg(vals: &[Option<TermValue>], i: usize) -> Option<&TermValue> {
-    vals.get(i).and_then(|v| v.as_ref())
-}
 
 /// Extract a zero-based index from an `xsd:integer`-derived literal.
 fn as_index(value: &TermValue) -> Option<i64> {
@@ -240,65 +227,6 @@ fn as_index(value: &TermValue) -> Option<i64> {
         _ => None,
     }
 }
-
-/// Intern a value to a solution term (promoting to an existing dataset id).
-///
-/// [`None`] when the value carries a language tag the grammar refuses. The list
-/// functions are expressions, so that refusal is SPARQL 1.1 §17.2's unbound
-/// result — see
-/// [`ScratchInterner::intern_checked`](crate::scratch::ScratchInterner::intern_checked).
-///
-/// # This gate is vacuous here today, and is kept anyway
-///
-/// Be honest about what this module handles: unlike `crate::cdt_fn` and
-/// `crate::cdt_unfold`, these six functions do **not** lift members out of a
-/// composite literal's lexical form. They walk an `rdf:List` — `head`, `rdf:first`,
-/// `rdf:rest` — so every member is a term that was already admitted by
-/// `RdfLiteral::validate_components` on its way into the [`RdfDataset`], and
-/// re-judging it cannot change the verdict. `listSlice`/`listConcat` re-`intern`
-/// members they read from that same walk, and the cells they mint are blank
-/// nodes, which carry no tag at all.
-///
-/// It stays because it costs a scan of a field that is [`None`] in the common
-/// case and because [`walk_list`] reads from the per-query CONSTRUCTED buffer as
-/// well as from the frozen dataset — one cheap door rather than two doors whose
-/// difference has to be re-derived every time that buffer gains a writer. A gate
-/// that is vacuous is not the same as a gate that is wrong; claiming it caught
-/// something here would be.
-///
-/// [`RdfDataset`]: purrdf_core::RdfDataset
-fn intern<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    value: TermValue,
-) -> Option<SolutionTerm<D::Id>> {
-    ctx.scratch.intern_checked(ctx.dataset, value)
-}
-
-/// Intern a typed (no-language) literal. Infallible: there is no tag to judge.
-fn typed_term<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    lexical: &str,
-    datatype: &str,
-) -> SolutionTerm<D::Id> {
-    ctx.scratch
-        .intern_datatyped(ctx.dataset, lexical.to_owned(), datatype.to_owned())
-}
-
-/// Intern an `xsd:integer` literal.
-fn integer_term<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    value: i64,
-) -> SolutionTerm<D::Id> {
-    typed_term(ctx, &value.to_string(), XSD_INTEGER)
-}
-
-/// Intern an `xsd:boolean` literal.
-fn bool_term<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>, b: bool) -> SolutionTerm<D::Id> {
-    typed_term(ctx, if b { "true" } else { "false" }, XSD_BOOLEAN)
-}
-
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 
 /// Walk an `rdf:List` from `head`, returning its member values in order.
 ///
@@ -328,154 +256,94 @@ fn walk<D: DatasetView + Sync>(
     // Not a dataset list — it may be a list minted earlier in THIS query, whose cells
     // live only in the per-query constructed buffer (value-constructing functions used
     // nested, e.g. `g:listLength(g:listConcat(?a, ?b))`).
-    match walk_constructed(ctx, head) {
-        Some(result) => result.map(Some),
-        None => Ok(None),
-    }
+    walk_constructed(ctx, head)
 }
 
-/// Walk a list interned in the active dataset (the common case).
+/// Walk a list interned in the active dataset (the common case), under the
+/// query's active graph scope — one graph, or the merge a `FROM` clause names —
+/// with the strict walker ([`walk_rdf_list`]).
 fn walk_dataset<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     head: &TermValue,
 ) -> Result<Option<Vec<TermValue>>, EvalError> {
-    // The list nodes and edges must exist in the active dataset to be walkable.
-    let (Some(first_id), Some(rest_id), Some(nil_id)) = (
-        ctx.dataset.term_id_by_value(&iri(RDF_FIRST)),
-        ctx.dataset.term_id_by_value(&iri(RDF_REST)),
-        ctx.dataset.term_id_by_value(&iri(RDF_NIL)),
-    ) else {
-        // No list vocabulary in the dataset at all — `head` is not a readable list.
-        return Ok(None);
-    };
     let Some(head_id) = ctx.dataset.term_id_by_value(head) else {
         return Ok(None);
     };
-
+    let [first, rest, nil] =
+        [RDF_FIRST, RDF_REST, RDF_NIL].map(|term| ctx.dataset.term_id_by_value(&iri(term)));
     let scope = ctx.active_dataset.scope_for(ctx.active_graph);
-    let mut members: Vec<TermValue> = Vec::new();
-    let mut seen: DetHashSet<D::Id> = DetHashSet::default();
-    let mut cur = head_id;
-    loop {
-        if cur == nil_id {
-            return Ok(Some(members));
+    let objects = |cell, predicate: Option<D::Id>| {
+        let mut sole = SoleObject::None;
+        if let Some(predicate) = predicate {
+            scope.for_each_quad(ctx.dataset, Some(cell), Some(predicate), None, |q| {
+                sole = sole.and(q.o);
+            });
         }
-        if !seen.insert(cur) {
-            return Err(EvalError::data(
-                "cyclic rdf:List (a cell is reachable from itself)",
-            ));
-        }
-
-        // A well-formed cell has exactly one `rdf:first` and one `rdf:rest`. Two of
-        // either makes the cell ambiguous: take no arbitrary, iteration-order-dependent
-        // branch — hard-fail (the malformed-input contract).
-        let mut first_obj: Option<D::Id> = None;
-        let mut first_count = 0usize;
-        scope.for_each_quad(ctx.dataset, Some(cur), Some(first_id), None, |q| {
-            first_obj = Some(q.o);
-            first_count += 1;
-        });
-        if first_count > 1 {
-            return Err(EvalError::data(
-                "rdf:List cell with multiple rdf:first edges",
-            ));
-        }
-        let Some(fo) = first_obj else {
-            // No `rdf:first`: the head is simply not a list (SPARQL error); an
-            // interior cell without `rdf:first` is a torn list (hard fail).
-            if members.is_empty() {
-                return Ok(None);
-            }
-            return Err(EvalError::data("rdf:List cell missing rdf:first"));
-        };
-        members.push(term_id_to_value(ctx.dataset, fo));
-
-        let mut rest_obj: Option<D::Id> = None;
-        let mut rest_count = 0usize;
-        scope.for_each_quad(ctx.dataset, Some(cur), Some(rest_id), None, |q| {
-            rest_obj = Some(q.o);
-            rest_count += 1;
-        });
-        if rest_count > 1 {
-            return Err(EvalError::data(
-                "rdf:List cell with multiple rdf:rest edges",
-            ));
-        }
-        let Some(ro) = rest_obj else {
-            return Err(EvalError::data("rdf:List cell missing rdf:rest"));
-        };
-        cur = ro;
-    }
+        sole
+    };
+    let walked = walk_rdf_list(
+        head_id,
+        nil,
+        |cell| objects(cell, first),
+        |cell| objects(cell, rest),
+    );
+    list_members(head_id, walked).map(|members| {
+        members.map(|ids| {
+            ids.into_iter()
+                .map(|id| term_id_to_value(ctx.dataset, id))
+                .collect()
+        })
+    })
 }
 
 /// Walk a list whose cells live only in the per-query constructed buffer
 /// (`ctx.constructed`) — a list minted by `listSlice`/`listConcat` and read again
-/// within the same query. Returns `None` when `head` is not a constructed-list head
-/// (the caller then treats it as a non-list / unbound); otherwise the same
-/// well-formed / malformed contract as [`walk_dataset`].
+/// within the same query — with the same strict walker as [`walk_dataset`].
+/// `Ok(None)` when `head` is not a constructed-list head (the caller then treats it
+/// as a non-list / unbound).
 fn walk_constructed<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     head: &TermValue,
-) -> Option<Result<Vec<TermValue>, EvalError>> {
-    let first = iri(RDF_FIRST);
-    let rest = iri(RDF_REST);
-    let mut members: Vec<TermValue> = Vec::new();
-    let mut cur = head.clone();
-    let mut at_head = true;
-    loop {
-        if is_nil(&cur) {
-            return Some(Ok(members));
-        }
-        // Our own mints are finite and acyclic; more members than buffered cells means
-        // a cycle (defensive — bounds the walk without needing `Hash` on `TermValue`).
-        if members.len() > ctx.constructed.len() {
-            return Some(Err(EvalError::data(
-                "cyclic rdf:List (a cell is reachable from itself)",
-            )));
-        }
-        let fo = match single_constructed_edge(ctx, &cur, &first) {
-            Err(e) => return Some(Err(e)),
-            Ok(Some(o)) => o,
-            Ok(None) => {
-                // No `rdf:first`: at the head, `head` is simply not a constructed list
-                // (fall through to unbound); mid-list it is a torn cell (hard fail).
-                if at_head {
-                    return None;
-                }
-                return Some(Err(EvalError::data("rdf:List cell missing rdf:first")));
-            }
-        };
-        members.push(fo);
-        let ro = match single_constructed_edge(ctx, &cur, &rest) {
-            Err(e) => return Some(Err(e)),
-            Ok(Some(o)) => o,
-            Ok(None) => return Some(Err(EvalError::data("rdf:List cell missing rdf:rest"))),
-        };
-        cur = ro;
-        at_head = false;
-    }
+) -> Result<Option<Vec<TermValue>>, EvalError> {
+    let [first, rest, nil] = [RDF_FIRST, RDF_REST, RDF_NIL].map(iri);
+    let objects = |cell: &TermValue, predicate: &TermValue| {
+        SoleObject::of(
+            ctx.constructed
+                .iter()
+                .filter(|(s, p, _)| s == cell && p == predicate)
+                .map(|(_, _, o)| o),
+        )
+    };
+    let walked = walk_rdf_list(
+        head,
+        Some(&nil),
+        |cell| objects(cell, &first),
+        |cell| objects(cell, &rest),
+    );
+    list_members(head, walked)
+        .map(|members| members.map(|terms| terms.into_iter().cloned().collect()))
 }
 
-/// The unique object of `(subject, predicate, ?)` in the per-query constructed
-/// buffer: `Ok(None)` if absent, `Ok(Some)` if exactly one, `Err` if more than one
-/// (a multi-edge malformed cell — same hard-fail as the dataset walk).
-fn single_constructed_edge<D: DatasetView + Sync>(
-    ctx: &EvalCtx<'_, D>,
-    subject: &TermValue,
-    predicate: &TermValue,
-) -> Result<Option<TermValue>, EvalError> {
-    let mut found: Option<&TermValue> = None;
-    let mut count = 0usize;
-    for (s, p, o) in &ctx.constructed {
-        if s == subject && p == predicate {
-            found = Some(o);
-            count += 1;
+/// A strict walk's outcome as a list function reads it: the members of a
+/// well-formed list; `None` when `head` itself carries no `rdf:first`, so it is not
+/// a list (a SPARQL error, unbound); and every malformed list
+/// (a cycle, a torn cell, a cell with two of either edge, or an `rdf:nil` carrying
+/// an edge) a hard [`EvalError::Data`].
+fn list_members<Id: Copy + Eq + std::fmt::Debug>(
+    head: Id,
+    walked: Result<Vec<Id>, ListError<Id>>,
+) -> Result<Option<Vec<Id>>, EvalError> {
+    match walked {
+        Ok(members) => Ok(Some(members)),
+        Err(error)
+            if error.kind == ListErrorKind::MissingFirst
+                && error.node == head
+                && error.members.is_empty() =>
+        {
+            Ok(None)
         }
+        Err(error) => Err(EvalError::data(error.to_string())),
     }
-    if count > 1 {
-        return Err(EvalError::data("rdf:List cell with multiple edges"));
-    }
-    Ok(found.cloned())
 }
 
 /// An IRI value.
@@ -585,6 +453,44 @@ mod tests {
              BIND(g:listLength(?l) AS ?n) }}"
         );
         assert_eq!(rows(&ds, &q), vec![vec!["3".to_owned()]]);
+    }
+
+    /// A list whose edges are asserted in two graphs merged by `FROM` is one list:
+    /// the same `rdf:first` in both graphs is one edge. A cell with two distinct
+    /// `rdf:rest` objects across the merge is malformed.
+    #[test]
+    fn a_list_read_through_a_from_merge_counts_each_edge_once() {
+        let build = |second_rest: bool| {
+            let mut b = RdfDatasetBuilder::new();
+            let first = b.intern_iri(super::RDF_FIRST);
+            let rest = b.intern_iri(super::RDF_REST);
+            let nil = b.intern_iri(super::RDF_NIL);
+            let l0 = b.intern_iri("http://ex/l0");
+            let l1 = b.intern_iri("http://ex/l1");
+            let x = b.intern_iri("http://ex/x");
+            let y = b.intern_iri("http://ex/y");
+            let g1 = b.intern_iri("http://ex/g1");
+            let g2 = b.intern_iri("http://ex/g2");
+            b.push_quad(l0, first, x, Some(g1));
+            b.push_quad(l0, rest, l1, Some(g1));
+            b.push_quad(l0, first, x, Some(g2));
+            b.push_quad(l1, first, y, Some(g2));
+            b.push_quad(l1, rest, nil, Some(g2));
+            if second_rest {
+                b.push_quad(l1, rest, l0, Some(g1));
+            }
+            b.freeze().expect("freeze")
+        };
+        let q = format!(
+            "{PREFIX} SELECT ?n FROM <http://ex/g1> FROM <http://ex/g2> WHERE {{ \
+             BIND(g:listLength(<http://ex/l0>) AS ?n) }}"
+        );
+        assert_eq!(rows(&build(false), &q), vec![vec!["2".to_owned()]]);
+        let err = eval_err(&build(true), &q);
+        assert!(
+            err.to_string().contains("more than one rdf:rest"),
+            "got {err}"
+        );
     }
 
     #[test]
@@ -701,7 +607,7 @@ mod tests {
         let q = format!("{PREFIX} SELECT ?n WHERE {{ BIND(g:listLength(<http://ex/l0>) AS ?n) }}");
         let err = eval_err(&ds, &q);
         assert!(matches!(err, EvalError::Data(_)), "got {err:?}");
-        assert!(err.to_string().contains("cyclic"));
+        assert!(err.to_string().contains("rdf:rest chain returns"));
     }
 
     #[test]
@@ -712,8 +618,8 @@ mod tests {
         // NOT SPARQL value-space: "1"^^xsd:decimal is numerically equal but a
         // distinct term, so it does not match.
         use purrdf_core::RdfLiteral;
-        const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-        const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+        use purrdf_xsd::datatype::XSD_DECIMAL;
+        use purrdf_xsd::datatype::XSD_INTEGER;
         let mut b = RdfDatasetBuilder::new();
         let first = b.intern_iri(super::RDF_FIRST);
         let rest = b.intern_iri(super::RDF_REST);
@@ -770,7 +676,7 @@ mod tests {
         let q = format!("{PREFIX} SELECT ?n WHERE {{ BIND(g:listLength(<http://ex/l0>) AS ?n) }}");
         let err = eval_err(&ds, &q);
         assert!(matches!(err, EvalError::Data(_)), "got {err:?}");
-        assert!(err.to_string().contains("missing rdf:rest"), "got {err}");
+        assert!(err.to_string().contains("has no rdf:rest"), "got {err}");
     }
 
     #[test]
@@ -793,7 +699,7 @@ mod tests {
         let q = format!("{PREFIX} SELECT ?n WHERE {{ BIND(g:listLength(<http://ex/l0>) AS ?n) }}");
         let err = eval_err(&ds, &q);
         assert!(matches!(err, EvalError::Data(_)), "got {err:?}");
-        assert!(err.to_string().contains("missing rdf:first"), "got {err}");
+        assert!(err.to_string().contains("has no rdf:first"), "got {err}");
     }
 
     #[test]
@@ -815,7 +721,10 @@ mod tests {
         let q = format!("{PREFIX} SELECT ?n WHERE {{ BIND(g:listLength(<http://ex/l0>) AS ?n) }}");
         let err = eval_err(&ds, &q);
         assert!(matches!(err, EvalError::Data(_)), "got {err:?}");
-        assert!(err.to_string().contains("multiple rdf:first"), "got {err}");
+        assert!(
+            err.to_string().contains("more than one rdf:first"),
+            "got {err}"
+        );
     }
 
     #[test]

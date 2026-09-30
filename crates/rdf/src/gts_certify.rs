@@ -26,10 +26,11 @@
 //! CBOR round-trips so a certificate can be carried and replayed independent
 //! of this crate's in-memory shape.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::hash::BuildHasher;
 
-use ciborium::value::{Integer, Value};
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use purrdf_ed25519::{SigningKey, VerifyingKey};
+use purrdf_lex::cbor::{Integer, Value};
 use sha2::{Digest, Sha256};
 
 use purrdf_gts::compact::{self, CompactionParams, DictPlan};
@@ -44,7 +45,7 @@ use crate::gts::dataset_from_gts_graph;
 use crate::gts_core::diagnostics_to_error;
 use crate::{CanonError, CanonHash, RdfDiagnostic, canonicalize_with, try_canonicalize_with};
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
 /// Blank-node count above which [`refold_digest`] refuses to canonicalize the
 /// content projection (a cheap structural pre-reject; RDFC-1.0's n-degree
@@ -196,7 +197,7 @@ fn provenance_predicates_for_class(class_iri: &str) -> Option<&'static [&'static
 /// leaves a lookalike content node's quads untouched.
 fn provenance_subject_ids(g: &Graph) -> crate::FastSet<usize> {
     // Every reserved-class `rdf:type` object claimed by each subject.
-    let mut reserved_types: HashMap<usize, HashSet<&str>> = HashMap::new();
+    let mut reserved_types: crate::FastMap<usize, crate::FastSet<&str>> = crate::FastMap::default();
     for &(s, p, o, _) in &g.quads {
         if g.terms.get(p).and_then(|t| t.value.as_deref()) != Some(RDF_TYPE) {
             continue;
@@ -315,7 +316,7 @@ fn canonical_digest(projected: &Graph) -> Result<String, CertifyError> {
     }
     let canonical = canonicalize_with(&dataset, CanonHash::Sha256);
     let digest = Sha256::digest(canonical.nquads.as_bytes());
-    Ok(wire::hex(digest.as_slice()))
+    Ok(purrdf_hash::hex::encode(digest.as_slice()))
 }
 
 /// The fallible twin of [`canonical_digest`], for UNTRUSTED input
@@ -336,7 +337,7 @@ fn try_canonical_digest(projected: &Graph) -> Result<String, CertifyError> {
     let canonical =
         try_canonicalize_with(&dataset, CanonHash::Sha256).map_err(CertifyError::CanonRefused)?;
     let digest = Sha256::digest(canonical.nquads.as_bytes());
-    Ok(wire::hex(digest.as_slice()))
+    Ok(purrdf_hash::hex::encode(digest.as_slice()))
 }
 
 /// The fallible twin of [`refold_digest`], for UNTRUSTED input — see
@@ -364,7 +365,7 @@ fn try_effective_digest(g: &Graph) -> Result<String, CertifyError> {
 /// A term-id resolved to its own `value` string, or `None` when the id is
 /// out of range or the resolved term carries no value.
 ///
-/// `ciborium::Value` is not `Hash`/`Eq` — term values are always plain
+/// A CBOR [`Value`] is not `Hash`/`Eq` — term values are always plain
 /// strings (`Term::value: Option<String>`), so resolving straight to
 /// `String` lets [`term_suppressed_values`]/[`quad_suppressed_targets`] use
 /// ordinary hash sets instead of a CBOR-aware comparator.
@@ -387,8 +388,8 @@ fn target_kind(target: &Value) -> Option<&str> {
 /// Term VALUES hidden by every `term`-kind suppression target in `g`
 /// (GTS-SPEC §11: a `term` target hides the term value AND every quad in
 /// which that value appears, in ANY position).
-fn term_suppressed_values(g: &Graph) -> HashSet<String> {
-    let mut hidden = HashSet::new();
+fn term_suppressed_values(g: &Graph) -> crate::FastSet<String> {
+    let mut hidden = crate::FastSet::default();
     for sup in &g.suppressions {
         for t in &sup.targets {
             if target_kind(t) != Some("term") {
@@ -413,8 +414,8 @@ fn term_suppressed_values(g: &Graph) -> HashSet<String> {
 type ValueQuad = (String, String, String, Option<String>);
 
 /// Every `quad`-kind suppression target in `g`, resolved to term VALUES.
-fn quad_suppressed_targets(g: &Graph) -> HashSet<ValueQuad> {
-    let mut hidden = HashSet::new();
+fn quad_suppressed_targets(g: &Graph) -> crate::FastSet<ValueQuad> {
+    let mut hidden = crate::FastSet::default();
     for sup in &g.suppressions {
         for t in &sup.targets {
             if target_kind(t) != Some("quad") {
@@ -638,7 +639,10 @@ fn signatures_bound_ok(pre: &Graph, post: &Graph) -> bool {
 
 /// Every carried `stream:DetachedSignature` in `post` cryptographically
 /// verifies against `keyring`.
-fn signatures_verify_ok(post: &Graph, keyring: &HashMap<String, VerifyingKey>) -> bool {
+fn signatures_verify_ok<S: BuildHasher>(
+    post: &Graph,
+    keyring: &HashMap<String, VerifyingKey, S>,
+) -> bool {
     let nodes = subjects_of_type(post, stream::DETACHED_SIGNATURE);
     for node in nodes {
         let Some(cose_b64) = literal_object(post, Some(node), stream::COSE) else {
@@ -796,13 +800,10 @@ fn suppressions_ok(pre: &Graph, post: &Graph) -> Result<bool, CertifyError> {
 /// canonicalized: the GTS→dataset bridge fails, the blank-count poison guard
 /// trips, or the RDFC-1.0 call budget is exhausted on a symmetric-poison
 /// graph.
-// The keyring mirrors the caller's key store, not a hot lookup path worth
-// generalizing over `BuildHasher` — matches `verify_file_with_keyring`.
-#[allow(clippy::implicit_hasher)]
-pub fn verify_compaction(
+pub fn verify_compaction<S: BuildHasher>(
     pre_bytes: &[u8],
     post_bytes: &[u8],
-    keyring: &HashMap<String, VerifyingKey>,
+    keyring: &HashMap<String, VerifyingKey, S>,
 ) -> Result<CompactionReport, CertifyError> {
     let pre = read(pre_bytes, true, None);
     let post = read(post_bytes, true, None);
@@ -919,12 +920,13 @@ impl CompactionCertificate {
     /// Decode the form written by [`Self::to_canonical_cbor`].
     ///
     /// # Errors
-    /// Returns [`CertifyError::Cbor`] when `bytes` is not valid CBOR, is not a
-    /// map, or is missing/misshapes a required field.
+    /// Returns [`CertifyError::Cbor`] when `bytes` is not exactly one
+    /// well-formed CBOR item (trailing bytes included), is not a map, or is
+    /// missing/misshapes a required field.
     pub fn from_canonical_cbor(bytes: &[u8]) -> Result<Self, CertifyError> {
-        let value: Value = ciborium::de::from_reader(bytes)
+        let value = purrdf_lex::cbor::decode(bytes, purrdf_lex::cbor::Limits::DEFAULT)
             .map_err(|err| CertifyError::Cbor(format!("cannot parse certificate CBOR: {err}")))?;
-        let Value::Map(entries) = value else {
+        let Ok(entries) = value.into_map() else {
             return Err(CertifyError::Cbor(
                 "certificate CBOR root must be a map".to_string(),
             ));

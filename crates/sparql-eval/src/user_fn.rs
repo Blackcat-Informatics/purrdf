@@ -52,6 +52,7 @@
 //! the enclosing operator, not the body, decides which of those two outcomes a
 //! given `Ok(None)` produces.
 
+use purrdf_hash::Domain;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
@@ -345,14 +346,10 @@ pub struct ExprFunction {
     pub(crate) arity: Arity,
 }
 
-impl core::fmt::Debug for ExprFunction {
+purrdf_hash::debug_non_exhaustive!(
     /// The closure body has no `Debug` impl, so only the declared arity is shown.
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ExprFunction")
-            .field("arity", &self.arity)
-            .finish_non_exhaustive()
-    }
-}
+    ExprFunction { arity }
+);
 
 /// A native function's determinism class â the volatility axis of its descriptor
 /// (after PostgreSQL's `provolatile`).
@@ -474,17 +471,12 @@ pub struct NativeFunction {
     pub(crate) volatility: Volatility,
 }
 
-impl core::fmt::Debug for NativeFunction {
+purrdf_hash::debug_non_exhaustive!(
     /// The closure body has no `Debug` impl, so only the declared arity and
     /// volatility are shown (the same two fields the fork-join parallel gate and
     /// the native-dispatch path `eval_native_function` consult).
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("NativeFunction")
-            .field("arity", &self.arity)
-            .field("volatility", &self.volatility)
-            .finish_non_exhaustive()
-    }
-}
+    NativeFunction { arity, volatility }
+);
 
 /// A caller-injected table of user functions, keyed by function IRI. Holds two
 /// independent kinds under two separate tables â SHACL-AF SPARQL-bodied
@@ -522,12 +514,6 @@ impl core::fmt::Debug for UserFunctionRegistry {
 }
 
 impl UserFunctionRegistry {
-    /// An empty registry.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// The canonical empty registry â the non-optional "no scalar functions
     /// registered" value every registry-carrying seam
     /// ([`crate::engine::QueryOptions::functions`],
@@ -963,7 +949,7 @@ impl FnPopulation {
 /// The domain separator every user-function content fingerprint opens with â see
 /// `crate::property_fn_plan`'s constant of the same name for why each registry kind
 /// needs its own.
-const CONTENT_DOMAIN: &str = "purrdf-sparql-eval/user-function-registry";
+const CONTENT_DOMAIN: Domain = Domain::new(b"purrdf-sparql-eval/user-function-registry");
 
 /// A **content-only** fingerprint of one [`FnPopulation`] of `functions`: every
 /// entry's IRI, kind, declared arity and declared type constraints, IRI-sorted,
@@ -1274,10 +1260,7 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     };
 
     let result: Option<TermValue> = match (func.kind, outcome) {
-        (UserFnBody::Ask, Outcome::Boolean(value)) => Some(TermValue::typed_literal(
-            if value { "true" } else { "false" },
-            "http://www.w3.org/2001/XMLSchema#boolean",
-        )),
+        (UserFnBody::Ask, Outcome::Boolean(value)) => Some(TermValue::boolean(value)),
         (UserFnBody::Select, Outcome::Solutions(seq)) => {
             let (variables, rows) = materialize_solutions(&seq, &child);
             // A SHACL-AF function SELECT body yields a single result variable; a
@@ -1531,9 +1514,9 @@ mod tests {
 
     const EX_NATIVE_EVEN: &str = "http://example.org/ns#nativeEven";
 
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-    const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+    use purrdf_xsd::datatype::XSD_BOOLEAN;
+    use purrdf_xsd::datatype::XSD_DOUBLE;
+    use purrdf_xsd::datatype::XSD_INTEGER;
 
     /// A native closure that adds one to its sole integer-literal argument.
     ///
@@ -1762,7 +1745,7 @@ mod tests {
     fn probe(params: &[&str], body: &str, args: &str, outer: &str) -> Option<TermValue> {
         let declared: Vec<UserFnParam> = params.iter().map(|name| int_param(name)).collect();
         let required = declared.len();
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.insert(
             EX_PROBE,
             UserFunction {
@@ -1989,7 +1972,7 @@ mod tests {
     /// A SELECT-bodied function `inc(?n) = ?n + 1` returns the projected value.
     #[test]
     fn select_body_returns_projected_value() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.insert(
             EX_INC,
             UserFunction {
@@ -2031,7 +2014,7 @@ mod tests {
     /// An ASK-bodied function returns an `xsd:boolean`.
     #[test]
     fn ask_body_returns_boolean() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.insert(
             EX_EVEN,
             UserFunction {
@@ -2076,7 +2059,7 @@ mod tests {
     /// mandatory-argument guard (not an unbound `?n`) can suppress the value.
     #[test]
     fn unbound_mandatory_parameter_yields_no_value() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.insert(
             EX_EVEN,
             UserFunction {
@@ -2119,7 +2102,7 @@ mod tests {
     /// A call with the wrong argument count is a hard [`EvalError::Function`].
     #[test]
     fn wrong_arity_is_a_hard_error() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.insert(
             EX_INC,
             UserFunction {
@@ -2160,7 +2143,7 @@ mod tests {
     /// replay the identical value and compare equal.
     #[test]
     fn function_body_state_is_merged_back() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.insert(
             EX_INC,
             UserFunction {
@@ -2203,7 +2186,7 @@ mod tests {
     /// an XSD constructor is a hard error, not a silent unbound.
     #[test]
     fn undefined_function_call_is_a_hard_error() {
-        let registry = UserFunctionRegistry::new();
+        let registry = UserFunctionRegistry::default();
         let ds = empty_dataset();
         let query = "SELECT ((<http://example.org/ns#nope>(1)) AS ?v) WHERE {}".to_owned();
         let err = NativeSparqlEngine::new()
@@ -2229,7 +2212,7 @@ mod tests {
     /// An argument violating a parameter's `sh:datatype` is a hard error.
     #[test]
     fn parameter_datatype_violation_is_a_hard_error() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.insert(
             EX_INC,
             UserFunction {
@@ -2273,7 +2256,7 @@ mod tests {
     /// value and is a hard error.
     #[test]
     fn multi_projection_select_body_is_a_hard_error() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.insert(
             EX_INC,
             UserFunction {
@@ -2310,7 +2293,7 @@ mod tests {
     /// overflowing the stack.
     #[test]
     fn unbounded_recursion_fails_closed() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         // loop(?n) calls loop(?n) â a non-terminating self-recursion.
         registry.insert(
             EX_LOOP,
@@ -2346,7 +2329,7 @@ mod tests {
 
     #[test]
     fn fuel_exhaustion_at_the_invocation_boundary_is_an_expression_trip() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.insert(
             EX_INC,
             UserFunction {
@@ -2381,7 +2364,7 @@ mod tests {
 
     #[test]
     fn governed_recursion_depth_is_typed_exhaustion_not_a_function_error() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.insert(
             EX_LOOP,
             UserFunction {
@@ -2434,7 +2417,7 @@ mod tests {
     /// (The pre-fix code enforced it as a datatype and wrongly hard-failed this.)
     #[test]
     fn return_type_is_informational_not_enforced() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.insert(
             EX_INC,
             UserFunction {
@@ -2481,7 +2464,7 @@ mod tests {
     /// and its return value is interned and reported like any other.
     #[test]
     fn native_function_returns_value() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_native(
             EX_NATIVE_INC,
             Arity::Exact(1),
@@ -2521,7 +2504,7 @@ mod tests {
     /// kind, which sees only argument values.
     #[test]
     fn expr_function_receives_the_query_s_focus_graph() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_expr(
             EX_EXPR_COUNT,
             Arity::Exact(0),
@@ -2571,7 +2554,7 @@ mod tests {
     /// function looked and found nothing".
     #[test]
     fn expr_function_without_a_focus_graph_is_a_hard_error() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_expr(
             EX_EXPR_COUNT,
             Arity::Exact(0),
@@ -2603,7 +2586,7 @@ mod tests {
     /// its own depth cannot recurse without bound.
     #[test]
     fn expr_function_depth_is_seeded_and_bounded() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_expr(
             EX_EXPR_COUNT,
             Arity::Exact(0),
@@ -2652,7 +2635,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "already registered as a SPARQL-bodied function")]
     fn expr_function_collides_with_a_sparql_bodied_iri() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.insert(EX_INC, select_body_function());
         registry.register_expr(
             EX_INC,
@@ -2685,7 +2668,7 @@ mod tests {
 
     /// A registry holding [`even_only_native_body`] at [`EX_NATIVE_EVEN`].
     fn even_only_registry() -> UserFunctionRegistry {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_native(
             EX_NATIVE_EVEN,
             Arity::Exact(1),
@@ -2799,7 +2782,7 @@ mod tests {
     /// would be honest, and it still aborts.
     #[test]
     fn native_function_error_is_a_hard_error() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_native(
             EX_NATIVE_ERR,
             Arity::Exact(1),
@@ -2843,7 +2826,7 @@ mod tests {
         let default_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
 
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_native(
             EX_NATIVE_PANIC,
             Arity::Exact(1),
@@ -2885,7 +2868,7 @@ mod tests {
     /// error, checked before the closure ever runs.
     #[test]
     fn native_function_wrong_arity_is_a_hard_error() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_native(
             EX_NATIVE_ARITY,
             Arity::Exact(1),
@@ -2919,7 +2902,7 @@ mod tests {
     /// (a native function declares no per-parameter optionality).
     #[test]
     fn native_function_unbound_argument_yields_no_value() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_native(
             EX_NATIVE_UNBOUND,
             Arity::Exact(1),
@@ -2962,7 +2945,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "already registered as a SPARQL-bodied function")]
     fn register_native_collision_with_sparql_bodied_panics() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.insert(
             EX_NATIVE_COLLIDE,
             UserFunction {
@@ -2986,7 +2969,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "already registered as a native function")]
     fn insert_collision_with_native_panics() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_native(
             EX_NATIVE_COLLIDE,
             Arity::Exact(1),
@@ -3010,7 +2993,7 @@ mod tests {
     /// single query using both gets the correct result from each.
     #[test]
     fn native_and_sparql_bodied_coexist() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.insert(
             EX_SPARQL_ONLY,
             UserFunction {
@@ -3072,7 +3055,7 @@ mod tests {
     #[test]
     fn native_score_in_filter_pushes_down() {
         const N: usize = 20;
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_native(
             EX_SCORE,
             Arity::Exact(1),
@@ -3100,7 +3083,7 @@ mod tests {
     #[test]
     fn native_score_in_order_by_is_deterministic() {
         const N: usize = 20;
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_native(
             EX_SCORE,
             Arity::Exact(1),
@@ -3149,7 +3132,7 @@ mod tests {
         }
         let ds = b.freeze().expect("freeze");
 
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_native(
             EX_SCORE_NAN,
             Arity::Exact(1),
@@ -3191,7 +3174,7 @@ mod tests {
         // Comfortably above PARALLEL_MIN_ROWS (1024) so the FILTER's row count
         // actually crosses the fork-join threshold.
         const N: usize = 1500;
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_native(
             EX_SCORE,
             Arity::Exact(1),
@@ -3236,7 +3219,7 @@ mod content_fingerprint_tests {
     const EX_OTHER: &str = "http://example.org/ns#other";
     const EX_NATIVE: &str = "http://example.org/ns#native";
     const EX_EXPR: &str = "http://example.org/ns#expr";
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    use purrdf_xsd::datatype::XSD_INTEGER;
 
     /// A fixture body, stored the way a real declaration stores one: as text.
     /// Parsing happens at bind time, against the environment in force — there is
@@ -3276,7 +3259,7 @@ mod content_fingerprint_tests {
 
     /// A registry holding a single SPARQL-bodied function â the declared population.
     fn declared_only() -> UserFunctionRegistry {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.insert(EX_FN, sparql_bodied(1, 1));
         registry
     }
@@ -3299,7 +3282,7 @@ mod content_fingerprint_tests {
 
     #[test]
     fn content_fingerprint_separates_iri() {
-        let mut other = UserFunctionRegistry::new();
+        let mut other = UserFunctionRegistry::default();
         other.insert(EX_OTHER, sparql_bodied(1, 1));
         assert_ne!(
             content_fingerprint(&declared_only(), FnPopulation::Declared).expect("ok"),
@@ -3309,7 +3292,7 @@ mod content_fingerprint_tests {
 
     #[test]
     fn content_fingerprint_separates_arity() {
-        let mut two_params = UserFunctionRegistry::new();
+        let mut two_params = UserFunctionRegistry::default();
         two_params.insert(EX_FN, sparql_bodied(1, 2));
         assert_ne!(
             content_fingerprint(&declared_only(), FnPopulation::Declared).expect("ok"),
@@ -3318,14 +3301,14 @@ mod content_fingerprint_tests {
         );
 
         // The native population's declared `Arity` separates the same way.
-        let mut exact = UserFunctionRegistry::new();
+        let mut exact = UserFunctionRegistry::default();
         exact.register_native(
             EX_NATIVE,
             Arity::Exact(1),
             Volatility::Stable,
             null_native(),
         );
-        let mut at_least = UserFunctionRegistry::new();
+        let mut at_least = UserFunctionRegistry::default();
         at_least.register_native(
             EX_NATIVE,
             Arity::AtLeast(1),
@@ -3340,14 +3323,14 @@ mod content_fingerprint_tests {
 
     #[test]
     fn content_fingerprint_separates_volatility() {
-        let mut stable = UserFunctionRegistry::new();
+        let mut stable = UserFunctionRegistry::default();
         stable.register_native(
             EX_NATIVE,
             Arity::Exact(1),
             Volatility::Stable,
             null_native(),
         );
-        let mut volatile = UserFunctionRegistry::new();
+        let mut volatile = UserFunctionRegistry::default();
         volatile.register_native(
             EX_NATIVE,
             Arity::Exact(1),
@@ -3366,7 +3349,7 @@ mod content_fingerprint_tests {
     /// `append_optional_part` always emits is what guarantees that.
     #[test]
     fn content_fingerprint_separates_parameter_constraints() {
-        let mut typed = UserFunctionRegistry::new();
+        let mut typed = UserFunctionRegistry::default();
         typed.insert(
             EX_FN,
             UserFunction {
@@ -3380,7 +3363,7 @@ mod content_fingerprint_tests {
                 ..sparql_bodied(1, 1)
             },
         );
-        let mut kinded = UserFunctionRegistry::new();
+        let mut kinded = UserFunctionRegistry::default();
         kinded.insert(
             EX_FN,
             UserFunction {
@@ -3413,7 +3396,7 @@ mod content_fingerprint_tests {
     /// act on.
     #[test]
     fn content_fingerprint_partitions_declared_from_injected() {
-        let mut both = UserFunctionRegistry::new();
+        let mut both = UserFunctionRegistry::default();
         both.insert(EX_FN, sparql_bodied(1, 1));
         both.register_expr(EX_EXPR, Arity::Exact(1), null_expr());
 
@@ -3478,11 +3461,13 @@ mod content_fingerprint_tests {
         let empty_injected =
             content_fingerprint(&UserFunctionRegistry::EMPTY, FnPopulation::Injected).expect("ok");
         assert_eq!(
-            content_fingerprint(&UserFunctionRegistry::new(), FnPopulation::Declared).expect("ok"),
+            content_fingerprint(&UserFunctionRegistry::default(), FnPopulation::Declared)
+                .expect("ok"),
             empty_declared
         );
         assert_eq!(
-            content_fingerprint(&UserFunctionRegistry::new(), FnPopulation::Injected).expect("ok"),
+            content_fingerprint(&UserFunctionRegistry::default(), FnPopulation::Injected)
+                .expect("ok"),
             empty_injected
         );
         assert_ne!(empty_declared, empty_injected);
@@ -3505,12 +3490,12 @@ mod content_fingerprint_tests {
     #[test]
     fn the_declared_digest_separates_two_identical_declarations_with_different_bodies() {
         let one = {
-            let mut registry = UserFunctionRegistry::new();
+            let mut registry = UserFunctionRegistry::default();
             registry.insert(EX_FN, sparql_bodied(1, 1));
             registry
         };
         let other = {
-            let mut registry = UserFunctionRegistry::new();
+            let mut registry = UserFunctionRegistry::default();
             let mut func = sparql_bodied(1, 1);
             func.body = body_text("SELECT (2 AS ?result) WHERE {}");
             registry.insert(EX_FN, func);
@@ -3529,7 +3514,7 @@ mod content_fingerprint_tests {
     #[test]
     fn the_declared_digest_is_stable_across_two_identical_builds() {
         let build = || {
-            let mut registry = UserFunctionRegistry::new();
+            let mut registry = UserFunctionRegistry::default();
             registry.insert(EX_FN, sparql_bodied(1, 1));
             registry
         };
@@ -3546,7 +3531,7 @@ mod content_fingerprint_tests {
     /// its relations would compute a different value and refuse a valid restore.
     #[test]
     fn binding_does_not_move_the_declared_digest() {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.insert(EX_FN, sparql_bodied(1, 1));
         let before = content_fingerprint(&registry, FnPopulation::Declared).expect("ok");
         let bound = BoundFunctionRegistry::bound_for_test(registry);

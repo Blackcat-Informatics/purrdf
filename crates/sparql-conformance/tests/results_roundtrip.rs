@@ -50,18 +50,17 @@
 //! The final assertion prints the category tally so the coverage is visible in
 //! every green run, not just inferred from the absence of a failure.
 
+mod support;
+
+use support::{as_solutions, suite_root};
+
 use std::path::{Path, PathBuf};
 
-use purrdf_core::{RdfDatasetBuilder, SparqlResult};
+use purrdf_core::SparqlResult;
 use purrdf_sparql_conformance::compare::compare_results;
 use purrdf_sparql_results::{
     ResultProvenance, from_json, from_json_boolean, from_xml, from_xml_boolean, to_json, to_xml,
 };
-
-/// The `suite/` directory of this crate.
-fn suite_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("suite")
-}
 
 /// Every `.srj`/`.srx` file under `root`, in path order. Sidecar `*.srj.license`/
 /// `*.srx.license` files carry the `license` extension, not `srj`/`srx`, so they
@@ -113,20 +112,6 @@ impl Tally {
             self.ask_json,
             self.ask_xml
         )
-    }
-}
-
-/// Wrap a decoded `SELECT` solution set as the model-level [`SparqlResult`]
-/// [`compare_results`] compares. The `aux` dataset is always empty here: SRJ/SRX
-/// carry no auxiliary graph, and `compare_results`'s `Solutions` arm never
-/// inspects it.
-fn as_solutions(parsed: purrdf_sparql_results::ParsedSolutions) -> SparqlResult {
-    SparqlResult::Solutions {
-        variables: parsed.variables,
-        rows: parsed.rows,
-        aux: RdfDatasetBuilder::new()
-            .freeze()
-            .expect("an empty dataset always freezes"),
     }
 }
 

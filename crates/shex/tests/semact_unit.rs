@@ -6,6 +6,7 @@
 //! inert-by-default and unregistered-extension behaviours; and a custom
 //! registered extension.
 
+use purrdf_core::term_fixture::one_quad;
 use std::cell::RefCell;
 use std::sync::Arc;
 
@@ -16,13 +17,11 @@ use purrdf_shex::{
 };
 
 fn data() -> Arc<RdfDataset> {
-    // s1 <p1> o1
-    let mut b = RdfDatasetBuilder::new();
-    let s1 = b.intern_iri("http://a.example/s1");
-    let p1 = b.intern_iri("http://a.example/p1");
-    let o1 = b.intern_iri("http://a.example/o1");
-    b.push_quad(s1, p1, o1, None);
-    b.freeze().expect("freeze")
+    one_quad(
+        "http://a.example/s1",
+        "http://a.example/p1",
+        "http://a.example/o1",
+    )
 }
 
 /// Validate focus `s1` against shape `S1` with the Test extension registered.
@@ -168,7 +167,7 @@ fn custom_extension_can_veto() {
     )
     .expect("schema parses");
     let data = data();
-    let mut registry = SemActRegistry::new();
+    let mut registry = SemActRegistry::default();
     registry.register(
         "http://example.org/Veto",
         Box::new(
@@ -218,7 +217,7 @@ fn custom_extension_fires_once_per_matched_arc_with_value_and_predicate() {
     .expect("schema parses");
 
     let calls: RefCell<Vec<(Option<String>, Option<TermValue>)>> = RefCell::new(Vec::new());
-    let mut registry = SemActRegistry::new();
+    let mut registry = SemActRegistry::default();
     registry.register(
         EXT,
         Box::new(

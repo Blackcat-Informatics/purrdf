@@ -3,7 +3,11 @@
 
 //! Property constraints retain the identity of their declaring RDF shape.
 
+#[path = "support/terms.rs"]
+mod terms;
+
 use std::sync::Arc;
+use terms::example_org as ex;
 
 use purrdf_shapes::data::{GraphFilter, native_quads};
 use purrdf_shapes::engine::{
@@ -22,12 +26,6 @@ const PREFIXES: &str = r"
     @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
     @prefix meta: <http://example.org/meta/> .
 ";
-
-fn ex(local: &str) -> Term {
-    Term::NamedNode(NamedNode::new_unchecked(format!(
-        "http://example.org/{local}"
-    )))
-}
 
 fn dataset(body: &str) -> Arc<::purrdf::RdfDataset> {
     ::purrdf::parse_dataset(format!("{PREFIXES}{body}").as_bytes(), "text/turtle", None)
@@ -182,7 +180,7 @@ fn reifier_constraint_sources_use_the_property_declaration() {
 /// from its source shape and JSON Pointer, including required-only properties.
 #[test]
 fn imported_properties_have_distinct_deterministic_source_identities() {
-    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+    use purrdf_xsd::datatype::XSD_NS as XSD;
     let config = SchemaImportConfig::new(
         Namespaces::new("ex", &[("ex".to_owned(), "http://example.org/".to_owned())])
             .expect("namespace configuration"),
@@ -198,7 +196,7 @@ fn imported_properties_have_distinct_deterministic_source_identities() {
         )
         .expect("datatype configuration"),
     );
-    let document = serde_json::json!({
+    let document = r#"{
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$defs": {
             "Record": {
@@ -207,10 +205,9 @@ fn imported_properties_have_distinct_deterministic_source_identities() {
                 "required": ["ex:name", "ex:missing"]
             }
         }
-    })
-    .to_string();
-    let imported = import_json_schema(&document, &config).expect("imported schema");
-    let repeated = import_json_schema(&document, &config).expect("repeated import");
+    }"#;
+    let imported = import_json_schema(document, &config).expect("imported schema");
+    let repeated = import_json_schema(document, &config).expect("repeated import");
     let properties = &imported.shapes.node_shapes[0].property_shapes;
     assert_eq!(properties.len(), 2);
     assert_ne!(properties[0].id, properties[1].id);

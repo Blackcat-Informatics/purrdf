@@ -23,8 +23,8 @@ corpora that gate all of it. Issues and pull requests are welcome.
   enforces it (`scripts/check-no-features.py`). PurRDF is a carrier: every consumer
   in every language must observe identical behavior. Do not add optionality; if a
   capability seems optional, discuss it in an issue first.
-- **The kernel stays clean.** `purrdf-core` must not grow dependencies on oxigraph
-  or PyO3 (enforced by `make rdf-core-hygiene`); `purrdf-iri`, `purrdf-xsd`, and
+- **The kernel stays clean.** `purrdf-core` must not grow a dependency on PyO3
+  (enforced by `make rdf-core-hygiene`); `purrdf-iri`, `purrdf-xsd`, and
   `purrdf-events` stay zero-dependency.
 - **Determinism.** Serializers and the GTS writer are byte-deterministic. A change
   that alters emitted bytes must update the affected goldens/vectors and explain why.
@@ -46,7 +46,7 @@ Node is absent.
 make doctor     # what this machine actually enforces (run when a gate prints SKIP)
 make metadata   # regenerate + verify generated artifacts (loss matrices, queries)
 make check      # fmt, build, tests, hygiene gates
-make bench      # criterion benchmarks
+make bench      # purrdf_testkit::bench benchmarks
 make wasm-pkg   # build the ESM/wasm package
 make capi-build # build libpurrdf via cargo-c
 ```

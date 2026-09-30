@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Report-only benchmark for the npm wasm SPARQL wrapper.
@@ -14,7 +14,7 @@
 
 use std::fmt::Write as _;
 
-use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
+use purrdf_testkit::bench::{BatchSize, Bench, bench_group, bench_main, black_box};
 
 use purrdf_wasm::{Dataset, QueryEngine};
 
@@ -38,7 +38,7 @@ fn run_select(engine: &QueryEngine, dataset: &Dataset) -> usize {
         .row_count()
 }
 
-fn bench_query_engine_reuse(c: &mut Criterion) {
+fn bench_query_engine_reuse(c: &mut Bench) {
     let dataset = fixture_dataset();
     let reused = QueryEngine::new();
     assert_eq!(run_select(&reused, &dataset), 32);
@@ -57,5 +57,5 @@ fn bench_query_engine_reuse(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_query_engine_reuse);
-criterion_main!(benches);
+bench_group!(benches, bench_query_engine_reuse);
+bench_main!(benches);

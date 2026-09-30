@@ -9,8 +9,11 @@
 //! reachable from inside the crate governs nothing a consumer can act on, so these tests
 //! are written from exactly the vantage a consumer has.
 
+mod support;
+
+use support::{PollCountdown, fan_out, row_count};
+
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use purrdf_core::{
@@ -81,14 +84,6 @@ fn governed(query: &str, governors: &QueryGovernors) -> GovernedOutcome {
         .expect("a tripped governor is an outcome, not a query error")
 }
 
-/// The row count of a solutions result.
-fn row_count(result: &SparqlResult) -> usize {
-    match result {
-        SparqlResult::Solutions { rows, .. } => rows.len(),
-        other => panic!("expected SELECT solutions, got: {other:?}"),
-    }
-}
-
 /// The first-column IRIs of a solutions result, sorted — the comparable identity of an
 /// answer set.
 fn subjects(result: &SparqlResult) -> Vec<String> {
@@ -131,36 +126,6 @@ fn exhausted(outcome: &GovernedOutcome) -> (TrippedGovernor, &PartialAnswers, &G
         GovernedOutcome::BudgetExhausted(exhausted) => {
             (exhausted.tripped, &exhausted.partial, &exhausted.evidence)
         }
-    }
-}
-
-#[derive(Debug)]
-struct PollCountdown {
-    quiet: usize,
-    polls: AtomicUsize,
-    latched: AtomicBool,
-}
-
-impl PollCountdown {
-    fn new(quiet: usize) -> Arc<Self> {
-        Arc::new(Self {
-            quiet,
-            polls: AtomicUsize::new(0),
-            latched: AtomicBool::new(false),
-        })
-    }
-}
-
-impl StopSignal for PollCountdown {
-    fn poll(&self) -> Option<StopCause> {
-        if self.latched.load(Ordering::Relaxed) {
-            return Some(StopCause::Cancelled);
-        }
-        if self.polls.fetch_add(1, Ordering::Relaxed) < self.quiet {
-            return None;
-        }
-        self.latched.store(true, Ordering::Relaxed);
-        Some(StopCause::Cancelled)
     }
 }
 
@@ -1087,14 +1052,12 @@ const WIDE_EDGES: usize = 2_000;
 /// `edges` subjects on `ex:p`, with zero-padded local names so the first *k* rows of a
 /// scan are the same *k* IRIs whatever `edges` is.
 fn wide_fixture(edges: usize) -> Arc<RdfDataset> {
-    let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri("http://example.org/p");
-    for index in 0..edges {
-        let s = builder.intern_iri(&format!("http://example.org/s{index:06}"));
-        let o = builder.intern_iri(&format!("http://example.org/o{index:06}"));
-        builder.push_quad(s, p, o, None);
-    }
-    builder.freeze().expect("freeze wide fixture")
+    fan_out(
+        edges,
+        "http://example.org/p",
+        |index| format!("http://example.org/s{index:06}"),
+        |index| format!("http://example.org/o{index:06}"),
+    )
 }
 
 /// Every `bgp-candidate-quad` unit the ledger attributes to any node of `explanation`.
@@ -1969,13 +1932,6 @@ fn ledger_attributes_nested_lateral_rhs_rows_to_the_true_output() {
 // The cap over a graph-producing form
 // ---------------------------------------------------------------------------
 
-/// The graph a query returns under `governors`, and whether it completed.
-fn graph_outcome(query: &str, governors: &QueryGovernors) -> GovernedOutcome {
-    NativeSparqlEngine::new()
-        .query_governed(&fixture(), request(query), QueryOptions::EMPTY, governors)
-        .expect("a tripped governor is an outcome, not a query error")
-}
-
 /// Assert the inclusive cap boundary over a graph-producing `query`: a cap equal to the
 /// answer's statement count completes, and one below it trips with the graph truncated to
 /// exactly the cap.
@@ -1985,7 +1941,7 @@ fn graph_outcome(query: &str, governors: &QueryGovernors) -> GovernedOutcome {
 /// would be the wrong meter: one `CONSTRUCT` row can instantiate a whole template, and a
 /// `DESCRIBE` of one bound subject can pull in that subject's entire description.
 fn assert_graph_cap_boundary(query: &str) -> usize {
-    let complete = graph_outcome(query, &QueryGovernors::METERED);
+    let complete = governed(query, &QueryGovernors::METERED);
     let GovernedOutcome::Complete { result, .. } = &complete else {
         panic!("METERED bounds nothing: {complete:?}");
     };
@@ -1993,7 +1949,7 @@ fn assert_graph_cap_boundary(query: &str) -> usize {
     assert!(size > 1, "{query}: the fixture must produce a real graph");
 
     // cap == size: complete. Ceilings are inclusive everywhere in this engine.
-    let at_the_cap = graph_outcome(
+    let at_the_cap = governed(
         query,
         &QueryGovernors::UNBOUNDED.with_max_answers(size as u64),
     );
@@ -2012,7 +1968,7 @@ fn assert_graph_cap_boundary(query: &str) -> usize {
     );
 
     // cap == size - 1: exhausted, at the same boundary a SELECT trips at.
-    let one_below = graph_outcome(
+    let one_below = governed(
         query,
         &QueryGovernors::UNBOUNDED.with_max_answers(size as u64 - 1),
     );
@@ -2081,7 +2037,7 @@ fn the_answer_cap_governs_construct_output_triples_at_the_same_inclusive_boundar
          WHERE { ?s <http://example.org/p> ?o . BIND(?s AS ?r) }",
     );
     assert_eq!(reified, EDGES);
-    let graph = graph_outcome(
+    let graph = governed(
         "CONSTRUCT { ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
                      <<( ?s <http://example.org/p> ?o )>> } \
          WHERE { ?s <http://example.org/p> ?o . BIND(?s AS ?r) }",
@@ -2109,7 +2065,7 @@ fn the_answer_cap_governs_describe_output_triples_at_the_same_inclusive_boundary
 
     // And with no pattern to evaluate at all: `DESCRIBE <iri>` charges the cap against the
     // description it built, which is the only work such a query does.
-    let concrete = graph_outcome(
+    let concrete = governed(
         "DESCRIBE <http://example.org/s0> <http://example.org/s1> <http://example.org/s2>",
         &QueryGovernors::METERED,
     );
@@ -2119,13 +2075,13 @@ fn the_answer_cap_governs_describe_output_triples_at_the_same_inclusive_boundary
     let size = statement_count(graph_of(result));
     assert_eq!(size, 3, "three subjects, one statement each");
     assert!(
-        graph_outcome(
+        governed(
             "DESCRIBE <http://example.org/s0> <http://example.org/s1> <http://example.org/s2>",
             &QueryGovernors::UNBOUNDED.with_max_answers(3),
         )
         .is_complete()
     );
-    let one_below = graph_outcome(
+    let one_below = governed(
         "DESCRIBE <http://example.org/s0> <http://example.org/s1> <http://example.org/s2>",
         &QueryGovernors::UNBOUNDED.with_max_answers(2),
     );

@@ -31,12 +31,13 @@
 //! two that genuinely need quads (the `GRAPH` and `OPTIONAL` compositions) use a
 //! two-graph fixture under `https://example.org/cdt#`.
 
-use std::collections::BTreeMap;
+mod support;
+
+use support::{Row, render_cell, row};
+
 use std::sync::Arc;
 
-use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
-};
+use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult};
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 
 /// The SEP-0009 prologue every query is written under. The namespace is the
@@ -111,21 +112,6 @@ fn ask(query: &str) -> bool {
     }
 }
 
-/// One cell, rendered for comparison. `UNBOUND` is a distinct, assertable value:
-/// half of `UNFOLD`'s corpus turns on a row being PRODUCED with a column unbound
-/// rather than the row being dropped.
-fn cell(value: Option<&TermValue>) -> String {
-    match value {
-        None => "UNBOUND".to_owned(),
-        Some(TermValue::Iri(iri)) => format!("<{iri}>"),
-        Some(TermValue::Literal { lexical_form, .. }) => lexical_form.clone(),
-        Some(TermValue::Blank { label, .. }) => format!("_:{label}"),
-        Some(other) => format!("{other:?}"),
-    }
-}
-
-type Row = BTreeMap<String, String>;
-
 /// A `SELECT` result's rows as variable-keyed maps, in the order the engine
 /// produced them — `UNFOLD`'s output order is normative (list order), so these are
 /// deliberately NOT sorted.
@@ -141,7 +127,10 @@ fn rows(result: &SparqlResult) -> Vec<Row> {
             variables
                 .iter()
                 .cloned()
-                .zip(row.iter().map(|cell_value| cell(cell_value.as_ref())))
+                .zip(
+                    row.iter()
+                        .map(|cell_value| render_cell(cell_value.as_ref())),
+                )
                 .collect()
         })
         .collect()
@@ -158,14 +147,6 @@ fn canonical_integer_list(values: &[i64]) -> String {
         .map(|v| format!("\"{v}\"^^<http://www.w3.org/2001/XMLSchema#integer>"))
         .collect();
     format!("[{}]", items.join(","))
-}
-
-/// Build one expected row from `(variable, rendered-value)` pairs.
-fn row(pairs: &[(&str, &str)]) -> Row {
-    pairs
-        .iter()
-        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-        .collect()
 }
 
 // ---------------------------------------------------------------------------

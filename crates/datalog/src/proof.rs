@@ -66,6 +66,8 @@
 //! and rejects an engine that decided negation too early.
 
 use core::hash::Hasher;
+use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_le;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -86,7 +88,7 @@ use crate::store::{Bound, Fact, RelationStore};
 ///
 /// Bumped whenever the encoding changes shape, so bytes written under an older layout can
 /// never be decoded as if they were current.
-const PROOF_ENCODING_TAG: &str = "purrdf-datalog-proof-v1";
+const PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-datalog-proof-v1");
 
 /// Wire kind byte: an axiom (assertion) leaf.
 const KIND_AXIOM: u8 = 0;
@@ -414,11 +416,6 @@ pub struct ProofArena {
 }
 
 impl ProofArena {
-    /// A fresh, empty arena.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// The number of interned terms.
     pub fn len(&self) -> usize {
         self.terms.len()
@@ -529,13 +526,7 @@ impl ProofArena {
     /// [`crate::store::TermInterner`]'s are, so a foreign id is a programming error rather
     /// than a data state.
     fn term(&self, id: ProofId) -> &ProofTerm {
-        self.terms.get(id.index()).unwrap_or_else(|| {
-            panic!(
-                "ProofId {id:?} was not minted by this arena (len {}): proof ids are \
-                 per-arena handles and must never cross arena boundaries",
-                self.terms.len()
-            )
-        })
+        id.slot_in(&self.terms, "ProofId", "proof")
     }
 
     // ── The checker ─────────────────────────────────────────────────────────────
@@ -760,7 +751,7 @@ impl ProofArena {
             .collect();
 
         let mut out = Vec::new();
-        frame(&mut out, PROOF_ENCODING_TAG.as_bytes());
+        frame_le(&mut out, PROOF_ENCODING_TAG.as_bytes());
         out.extend_from_slice(&(order.len() as u64).to_le_bytes());
         for &index in &order {
             match &self.terms[index] {
@@ -868,7 +859,7 @@ impl ProofArena {
             return Err(Self::malformed("a proof has at least one node"));
         }
 
-        let mut arena = Self::new();
+        let mut arena = Self::default();
         let mut ids: Vec<ProofId> = Vec::new();
         for position in 0..count {
             let kind = reader.byte()?;
@@ -946,7 +937,7 @@ impl EvaluationProofs {
                 .cmp(&(derivations[right].proof_height(), derivations[right].fact()))
         });
 
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let mut built: BTreeMap<&Fact, ProofId> = BTreeMap::new();
         for &index in &order {
             let derivation = &derivations[index];
@@ -1115,16 +1106,10 @@ fn negated_atom_is_satisfied(
 
 // ── Wire primitives ─────────────────────────────────────────────────────────────
 
-/// Length-prefix `bytes` into `out`.
-fn frame(out: &mut Vec<u8>, bytes: &[u8]) {
-    out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-    out.extend_from_slice(bytes);
-}
-
 /// Length-prefix a fact's four surfaces into `out`, in `(s, p, o, g)` order.
 fn frame_fact(out: &mut Vec<u8>, fact: &Fact) {
     for surface in [&fact.subject, &fact.predicate, &fact.object, &fact.graph] {
-        frame(out, surface.as_bytes());
+        frame_le(out, surface.as_bytes());
     }
 }
 
@@ -1169,10 +1154,12 @@ impl<'a> Reader<'a> {
 
     /// Read one little-endian `u64`.
     fn u64(&mut self) -> Result<u64, ProofError> {
-        let bytes = self.take(8)?;
-        let mut buffer = [0u8; 8];
-        buffer.copy_from_slice(bytes);
-        Ok(u64::from_le_bytes(buffer))
+        let (bytes, rest) = self
+            .rest
+            .split_first_chunk()
+            .ok_or_else(|| ProofArena::malformed("the proof encoding ends inside a field"))?;
+        self.rest = rest;
+        Ok(u64::from_le_bytes(*bytes))
     }
 
     /// Read one little-endian `u64` as a `usize`.
@@ -1274,7 +1261,7 @@ mod tests {
 
     /// A hand-built, VALID proof of `t(a, c)` over [`chain_rules`], plus its arena.
     fn chain_proof() -> (ProofArena, ProofId) {
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let first = arena.axiom(fact("a", P, "b"));
         let second = arena.axiom(fact("b", P, "c"));
         let root = arena.by_rule(fact("a", T, "c"), 0, &[first, second]);
@@ -1401,7 +1388,7 @@ mod tests {
             DlClause::datalog(atom("?s", T, "?o"), vec![atom("?s", Q, "?o")]),
         ];
 
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let first = arena.axiom(fact("a", P, "b"));
         let second = arena.axiom(fact("b", P, "c"));
 
@@ -1456,7 +1443,7 @@ mod tests {
         let edb = chain_edb();
         let ctx = ProofContext::new(&rules, &edb, &edb);
 
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let first = arena.axiom(fact("a", P, "b"));
 
         // The second body atom has no premise at all.
@@ -1514,7 +1501,7 @@ mod tests {
         let edb = chain_edb();
         let ctx = ProofContext::new(&rules, &edb, &edb);
 
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let first = arena.axiom(fact("a", P, "b"));
         let second = arena.axiom(fact("b", P, "c"));
         let tampered = arena.by_rule(fact("a", T, "zzz"), 0, &[first, second]);
@@ -1669,7 +1656,7 @@ mod tests {
         let rules = chain_rules();
         let edb = chain_edb();
         let ctx = ProofContext::new(&rules, &edb, &edb);
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let first = arena.axiom(fact("a", P, "b"));
         let second = arena.axiom(fact("b", P, "c"));
         // `t(a, a)` is not in the least model; no permutation of the real premises yields it.
@@ -1708,7 +1695,7 @@ mod tests {
         let edb = store_of(&[("a", base, "b"), ("c", base, "d"), ("a", Q, "b")]);
         let ctx = ProofContext::new(&rules, &edb, &edb);
 
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         // `c base d` has no `q`, so the step holds.
         let allowed_premise = arena.axiom(fact("c", base, "d"));
         let allowed = arena.by_rule(fact("c", R, "d"), 0, &[allowed_premise]);
@@ -1742,7 +1729,7 @@ mod tests {
         let edb = store_of(&[("a", base, "b"), ("c", base, "d"), ("a", Q, "zzz")]);
         let ctx = ProofContext::new(&rules, &edb, &edb);
 
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let allowed_premise = arena.axiom(fact("c", base, "d"));
         let allowed = arena.by_rule(fact("c", R, "d"), 0, &[allowed_premise]);
         assert_eq!(arena.check(allowed, &ctx), Ok(fact("c", R, "d")));
@@ -1790,7 +1777,7 @@ mod tests {
     /// Structurally identical proofs intern to ONE id, so a shared subproof is stored once.
     #[test]
     fn structurally_identical_proofs_share_one_node() {
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let left = arena.axiom(fact("a", P, "b"));
         let right = arena.axiom(fact("a", P, "b"));
         assert_eq!(left, right, "identical axioms intern once");
@@ -1841,7 +1828,7 @@ mod tests {
 
         // The SAME proof built through a different interning sequence — an unrelated term
         // interned first, so every arena id moves — encodes to the same bytes.
-        let mut shifted = ProofArena::new();
+        let mut shifted = ProofArena::default();
         let _unrelated = shifted.axiom(fact("z", P, "z"));
         let second = shifted.axiom(fact("b", P, "c"));
         let first = shifted.axiom(fact("a", P, "b"));
@@ -1863,11 +1850,21 @@ mod tests {
         assert_eq!(decoded.goal(decoded_root), &fact("a", T, "c"));
     }
 
+    /// The proof digest is frozen: a moved digest renames every proof term.
+    #[test]
+    fn the_proof_digest_is_frozen() {
+        let (arena, root) = chain_proof();
+        assert_eq!(
+            purrdf_hash::hex::Lower(&arena.digest(root)).to_string(),
+            "f0a9ff8c6ea22b070ff42b9cd0afbfb9517f4e88ad44913e1a093a51311642fb"
+        );
+    }
+
     /// A shared subproof is emitted ONCE and referenced twice, so the encoding is linear in
     /// the DAG rather than in its paths.
     #[test]
     fn a_shared_subproof_is_emitted_once() {
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let shared = arena.axiom(fact("a", P, "a"));
         let root = arena.by_rule(fact("a", T, "a"), 0, &[shared, shared]);
         let (decoded, decoded_root) =
@@ -1925,7 +1922,7 @@ mod tests {
 
         // An empty proof.
         let mut empty = Vec::new();
-        frame(&mut empty, PROOF_ENCODING_TAG.as_bytes());
+        frame_le(&mut empty, PROOF_ENCODING_TAG.as_bytes());
         empty.extend_from_slice(&0u64.to_le_bytes());
         assert!(matches!(
             ProofArena::decode(&empty),
@@ -1934,12 +1931,12 @@ mod tests {
 
         // A non-UTF-8 surface.
         let mut bad_utf8 = Vec::new();
-        frame(&mut bad_utf8, PROOF_ENCODING_TAG.as_bytes());
+        frame_le(&mut bad_utf8, PROOF_ENCODING_TAG.as_bytes());
         bad_utf8.extend_from_slice(&1u64.to_le_bytes());
         bad_utf8.push(KIND_AXIOM);
-        frame(&mut bad_utf8, &[0xff, 0xfe]);
+        frame_le(&mut bad_utf8, &[0xff, 0xfe]);
         for _ in 0..3 {
-            frame(&mut bad_utf8, b"");
+            frame_le(&mut bad_utf8, b"");
         }
         assert!(matches!(
             ProofArena::decode(&bad_utf8),
@@ -2004,7 +2001,7 @@ mod tests {
         let edb = store_of(&[("a", P, "a"), ("a", P, "b")]);
         let ctx = ProofContext::new(&rules, &edb, &edb);
 
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let diagonal = arena.axiom(fact("a", P, "a"));
         let ok = arena.by_rule(fact("a", T, "a"), 0, &[diagonal]);
         assert_eq!(arena.check(ok, &ctx), Ok(fact("a", T, "a")));
@@ -2122,7 +2119,7 @@ mod tests {
         )];
         let edb = RelationStore::new();
         let ctx = ProofContext::new(&rules, &edb, &edb);
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let expected = fact("https://example.org/a", T, "https://example.org/b");
         let root = arena.by_rule(expected.clone(), 0, &[]);
         assert_eq!(arena.check(root, &ctx), Ok(expected));

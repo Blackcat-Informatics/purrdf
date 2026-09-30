@@ -17,31 +17,17 @@
 //! for canonical-CBOR byte-exactness; the tests here are the purrdf-local
 //! functional/drift guard on top of that (see `docs/GTS-CONFORMANCE.md` §2).
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-
-use ciborium::value::Value;
-use ed25519_dalek::SigningKey;
 use purrdf_gts::compact::DictPlan;
 use purrdf_gts::reader::read;
-use purrdf_gts::wire::{iter_items, map_get};
+use purrdf_rdf::FastMap;
 use purrdf_rdf::gts_certify::{compact_and_certify, verify_compaction};
 
+#[path = "support/vectors.rs"]
+mod vectors;
+use purrdf_rdf::gts_dict_vectors::streamable_packaging_key;
+use vectors::{header_carries_dct_entry, read_vector};
+
 const TIMESTAMP: &str = "2026-01-01T00:00:00Z";
-
-/// The fixed packaging signing key (`kid` "pack") — matches
-/// `gen_streamable_vectors::packaging_key`.
-fn packaging_key() -> SigningKey {
-    SigningKey::from_bytes(&[11u8; 32])
-}
-
-fn vectors_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors")
-}
-
-fn read_vector(name: &str) -> Vec<u8> {
-    std::fs::read(vectors_dir().join(name)).unwrap_or_else(|err| panic!("read {name}: {err}"))
-}
 
 #[test]
 fn frozen_vector_folds_cleanly_and_carries_the_source_content() {
@@ -78,7 +64,7 @@ fn frozen_vector_is_byte_identical_to_a_fresh_regeneration() {
         DictPlan::undicted(),
         TIMESTAMP,
         false,
-        (packaging_key(), "pack".to_string()),
+        (streamable_packaging_key(), "pack".to_string()),
     )
     .expect("streamable compaction over the frozen source succeeds");
 
@@ -102,8 +88,11 @@ fn frozen_vector_independently_verifies_the_facets_this_repo_can_check() {
     // `signatures_verify` can never independently verify here and is
     // deliberately not asserted. Every other §10.1 preservation facet is
     // checkable with only the packaging key this binary controls.
-    let mut keyring = HashMap::new();
-    keyring.insert("pack".to_string(), packaging_key().verifying_key());
+    let mut keyring = FastMap::default();
+    keyring.insert(
+        "pack".to_string(),
+        streamable_packaging_key().verifying_key(),
+    );
 
     let report = verify_compaction(&source, &frozen, &keyring).expect("verify_compaction succeeds");
     assert!(
@@ -129,27 +118,6 @@ fn frozen_vector_independently_verifies_the_facets_this_repo_can_check() {
         "every suppression present in the source must be carried forward, and the \
          effective (post-suppression) digest must agree pre/post: {report:?}"
     );
-}
-
-/// Whether the file's header item (the first CBOR item, §3.1) carries a
-/// non-empty `"dct"` map (§5) — the authoritative, upstream-defined signal
-/// that a pack dictionary was actually pinned in-band (matches
-/// `crates/rdf/tests/dict_vectors.rs::header_carries_dct_entry`, the same
-/// mechanism vector 31 (`31-dict-trained.gts`) uses to prove its `"dct"`
-/// entry IS present; reused here to prove the opposite for 25b).
-fn header_carries_dct_entry(bytes: &[u8]) -> bool {
-    let (items, _torn) = iter_items(bytes);
-    let Some((_, first)) = items.first() else {
-        return false;
-    };
-    let inner = match first {
-        Value::Tag(_, inner) => inner.as_ref(),
-        other => other,
-    };
-    let Value::Map(entries) = inner else {
-        return false;
-    };
-    matches!(map_get(entries, "dct"), Some(Value::Map(dct)) if !dct.is_empty())
 }
 
 #[test]

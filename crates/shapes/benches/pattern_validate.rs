@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Per-constraint cost of the SHACL `sh:pattern` arm's `OnceLock` cache.
@@ -26,16 +26,29 @@
 //! cache's whole claim is that cost is independent of how many value nodes it
 //! serves.
 //!
+//! A second group, `shacl_pattern_long_values`, validates 1,024 value nodes of
+//! 4 KiB of lowercase filler, each ending with the text every pattern matches,
+//! against one `sh:pattern` each. It measures the required-literal prefilter
+//! `CompiledPattern::is_match` runs in front of the `regex` engine (built
+//! without its own literal prefilter): `needle` (a literal), `foo.*bar` (a
+//! literal prefix), `\d{4}-\d{2}` (a required `-` a bounded distance into the
+//! match), `NEEDLE` under `sh:flags "i"`, `[0-9][a-z][0-9]` (no literal:
+//! the control), and `^[a-z]`, answered by a check of each value's first byte,
+//! which leaves the row as the cost of validation itself (target discovery, the
+//! focus-node sort's canonical IRI comparisons, value-node collection).
+//!
 //! Report-only, `cargo bench -p purrdf-shapes --bench pattern_validate` (the
 //! `make bench` lane) — excluded from `make check`. No timing is asserted.
 
+use purrdf_testkit::text::lowercase_filler as filler;
 use std::sync::Arc;
 
-use criterion::{
-    BatchSize, BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main,
-};
 use purrdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
 use purrdf_shapes::engine::{parse_shapes, validate_projected_dataset};
+use purrdf_testkit::bench::{
+    BatchSize, Bench, BenchmarkId, Throughput, bench_group, bench_main, black_box,
+};
+use purrdf_testkit::rng::SplitMix64;
 
 const BENCH_EX: &str = "https://example.org/shacl-pattern/";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -79,7 +92,7 @@ ex:WidgetShape a sh:NodeShape ;
     (dataset, shapes)
 }
 
-fn bench_pattern_validate(c: &mut Criterion) {
+fn bench_pattern_validate(c: &mut Bench) {
     let mut group = c.benchmark_group("shacl_pattern_validate");
     group.sample_size(10);
 
@@ -134,5 +147,82 @@ fn bench_pattern_validate(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_pattern_validate);
-criterion_main!(benches);
+/// The text every value ends with, which every long-value pattern matches.
+const MATCH_TAIL: &str = " foo needle bar 2026-09 x1a2";
+
+/// Value nodes in the long-value dataset.
+const LONG_VALUES: usize = 1024;
+
+/// `LONG_VALUES` `ex:Doc` subjects with one 4 KiB `ex:text` literal each, all
+/// ending with [`MATCH_TAIL`]. Seeded, so the dataset is the same every run.
+fn long_value_dataset() -> Arc<RdfDataset> {
+    let mut rng = SplitMix64::new(0x0047_2600_BE4C_0003);
+    let mut builder = RdfDatasetBuilder::new();
+    let rdf_type = builder.intern_iri(RDF_TYPE);
+    let doc = builder.intern_iri(&format!("{BENCH_EX}Doc"));
+    let text = builder.intern_iri(&format!("{BENCH_EX}text"));
+    for i in 0..LONG_VALUES {
+        let subject = builder.intern_iri(&format!("{BENCH_EX}doc-{i}"));
+        builder.push_quad(subject, rdf_type, doc, None);
+        let mut value = filler(&mut rng, 4096);
+        value.push_str(MATCH_TAIL);
+        let literal = builder.intern_literal(RdfLiteral::simple(value));
+        builder.push_quad(subject, text, literal, None);
+    }
+    builder.freeze().expect("freeze SHACL long-value fixture")
+}
+
+/// `(case name, Turtle string literal of the pattern, sh:flags)`.
+const LONG_CASES: &[(&str, &str, &str)] = &[
+    ("literal", "needle", ""),
+    ("prefix_unbounded", "foo.*bar", ""),
+    ("inner_bounded", r"\\d{4}-\\d{2}", ""),
+    ("literal_i", "NEEDLE", "i"),
+    ("control_no_literal", "[0-9][a-z][0-9]", ""),
+    ("anchored_class", "^[a-z]", ""),
+];
+
+fn bench_pattern_long_values(c: &mut Bench) {
+    let dataset = long_value_dataset();
+    let mut group = c.benchmark_group("shacl_pattern_long_values");
+    group.sample_size(10);
+    group.throughput(Throughput::Elements(LONG_VALUES as u64));
+    for &(label, pattern, flags) in LONG_CASES {
+        let flags = if flags.is_empty() {
+            String::new()
+        } else {
+            format!("sh:flags \"{flags}\" ;")
+        };
+        let shapes_ttl = format!(
+            r#"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <{BENCH_EX}> .
+
+ex:DocShape a sh:NodeShape ;
+    sh:targetClass ex:Doc ;
+    sh:property [ sh:path ex:text ; sh:pattern "{pattern}" ; {flags} ] .
+"#
+        );
+        let shapes = parse_shapes(&shapes_ttl, None).expect("SHACL long-value shapes parse");
+        // Untimed sanity: every value conforms, so the timed region matches
+        // every value rather than measuring the violation path.
+        let report = validate_projected_dataset(Arc::clone(&dataset), &shapes)
+            .expect("SHACL long-value fixture validates");
+        assert!(
+            report.conforms,
+            "SHACL long-value fixture must conform for {label}"
+        );
+        group.bench_function(BenchmarkId::new(label, LONG_VALUES), |bencher| {
+            bencher.iter(|| {
+                let report = validate_projected_dataset(Arc::clone(&dataset), black_box(&shapes))
+                    .expect("SHACL long-value fixture validates");
+                assert!(report.conforms);
+                black_box(report);
+            });
+        });
+    }
+    group.finish();
+}
+
+bench_group!(benches, bench_pattern_validate, bench_pattern_long_values);
+bench_main!(benches);

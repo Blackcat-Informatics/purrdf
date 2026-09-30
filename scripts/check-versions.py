@@ -202,7 +202,7 @@ def internal_pin_violations(meta: dict, version: str) -> list[str]:
 _CRATES_ARRAY_RE = re.compile(
     r"(?:PURRDF_RELEASE_CRATES|crates)=\(\s*(.*?)\s*\)", re.DOTALL
 )
-_CRATE_TOKEN_RE = re.compile(r"^purrdf(?:-[a-z]+)*$")
+_CRATE_TOKEN_RE = re.compile(r"^purrdf(?:-[a-z0-9]+)*$")
 
 # The one file the release set is defined in, and the files that must consume it
 # by sourcing rather than by restating it.

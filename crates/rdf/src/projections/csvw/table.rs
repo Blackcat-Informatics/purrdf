@@ -6,7 +6,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::csv::{CsvErrorKind, Dialect, Encoding, LineTerminators, Trim, read_table};
-use purrdf_iri::terminals::{is_ws, is_xml_name_char, is_xml_name_start_char};
+use purrdf_iri::langtag::identity_fold;
+use purrdf_iri::terminals::{self, is_ws, is_xml_name_char, is_xml_name_start_char};
 use purrdf_xsd::{XsdDatatype, parse as parse_xsd, value_cmp};
 use regex::Regex;
 
@@ -136,7 +137,7 @@ fn parse_table(
                 warnings,
             ));
         }
-        let row_url = row_url(&table.url, source_number)?;
+        let row_url = table_fragment_iri(&table.url, &format!("row={source_number}"), "CSVW")?;
         let titles = row_titles(&table.schema.row_titles, &table.schema.columns, &cells);
         table.rows.push(CsvwRow {
             number: row_index + 1,
@@ -231,7 +232,7 @@ fn reconcile_schema(
                     .and_then(|values| values.first())
                     .map_or_else(
                         || format!("_col.{}", index + 1),
-                        |title| percent_encode(title),
+                        |title| super::metadata::column_name_from_title(title),
                     )
             };
             table.schema.columns.push(default_column(
@@ -350,7 +351,7 @@ fn header_titles(
     if values.is_empty() {
         CsvwNaturalLanguage::new()
     } else {
-        BTreeMap::from([(language.unwrap_or("und").to_ascii_lowercase(), values)])
+        BTreeMap::from([(identity_fold(language.unwrap_or("und")), values)])
     }
 }
 
@@ -394,27 +395,6 @@ fn default_column(
         inherited,
         annotations: CsvwAnnotations::new(),
     }
-}
-
-fn percent_encode(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'~') {
-            output.push(char::from(byte));
-        } else {
-            use std::fmt::Write as _;
-            let _ = write!(output, "%{byte:02X}");
-        }
-    }
-    output
-}
-
-fn row_url(table_url: &str, source_number: usize) -> Result<String, ProjectionError> {
-    let base = purrdf_iri::parse(table_url)
-        .map_err(|error| ProjectionError::term(format!("invalid CSVW table URL: {error}")))?;
-    base.resolve(&format!("#row={source_number}"))
-        .map(|iri| iri.as_str().to_owned())
-        .map_err(|error| ProjectionError::term(format!("invalid CSVW row URL: {error}")))
 }
 
 fn row_titles(names: &[String], columns: &[CsvwColumn], cells: &[CsvwCell]) -> Vec<String> {
@@ -524,7 +504,7 @@ fn parse_component(
                 source: source.clone(),
                 lexical: source,
                 datatype: config.vocabulary().xsd("string"),
-                language: language.map(str::to_ascii_lowercase),
+                language: language.map(identity_fold),
                 direction,
             };
         }
@@ -535,7 +515,7 @@ fn parse_component(
         lexical,
         datatype: datatype.id.clone().unwrap_or_else(|| datatype.base.clone()),
         language: language_datatype
-            .then(|| language.map(str::to_ascii_lowercase))
+            .then(|| language.map(identity_fold))
             .flatten(),
         direction: language_datatype.then_some(direction).flatten(),
     }
@@ -568,10 +548,14 @@ fn normalize_lexical(
         (Some(local), Some(CsvwDatatypeFormat::Pattern(pattern))) if temporal_datatype(local) => {
             parse_temporal_pattern(source, pattern, local)
         }
-        (Some(local), Some(CsvwDatatypeFormat::Pattern(pattern))) if numeric_datatype(local) => {
+        (Some(local), Some(CsvwDatatypeFormat::Pattern(pattern)))
+            if XsdDatatype::from_local(local).is_some_and(XsdDatatype::is_numeric) =>
+        {
             normalize_number(source, Some(pattern), '.', None, local)
         }
-        (Some(local), Some(CsvwDatatypeFormat::Numeric(format))) if numeric_datatype(local) => {
+        (Some(local), Some(CsvwDatatypeFormat::Numeric(format)))
+            if XsdDatatype::from_local(local).is_some_and(XsdDatatype::is_numeric) =>
+        {
             normalize_number(
                 source,
                 format.pattern.as_deref(),
@@ -581,7 +565,8 @@ fn normalize_lexical(
             )
         }
         (Some(local), Some(CsvwDatatypeFormat::Pattern(pattern)))
-            if !numeric_datatype(local) && !temporal_datatype(local) =>
+            if !XsdDatatype::from_local(local).is_some_and(XsdDatatype::is_numeric)
+                && !temporal_datatype(local) =>
         {
             let regex = Regex::new(&format!("^(?:{pattern})$"))
                 .map_err(|_| "invalid CSVW regular-expression format".to_owned())?;
@@ -908,37 +893,35 @@ pub(super) fn validate_xsd_language(value: &str) -> Result<(), String> {
 ///   failed spelled `cafe` + U+0301, though the two are canonically equivalent
 ///   and NFD is what many exporters emit.
 fn valid_xml_name(value: &str, colon: bool) -> bool {
-    let colon_ok = |character: char| colon || character != ':';
+    if !colon {
+        return terminals::is_ncname(value);
+    }
     let mut chars = value.chars();
-    chars
-        .next()
-        .is_some_and(|character| is_xml_name_start_char(character) && colon_ok(character))
-        && chars.all(|character| is_xml_name_char(character) && colon_ok(character))
+    chars.next().is_some_and(is_xml_name_start_char) && chars.all(is_xml_name_char)
 }
 
-fn numeric_datatype(local: &str) -> bool {
-    matches!(
-        local,
-        "integer"
-            | "long"
-            | "int"
-            | "short"
-            | "byte"
-            | "unsignedLong"
-            | "unsignedInt"
-            | "unsignedShort"
-            | "unsignedByte"
-            | "nonNegativeInteger"
-            | "positiveInteger"
-            | "nonPositiveInteger"
-            | "negativeInteger"
-            | "decimal"
-            | "float"
-            | "double"
-    )
+/// Resolve the fragment `#fragment` against the table URL `table_url`: a row
+/// (`row=N`) or column property IRI of the table. `owner` names the table's
+/// projection in a refusal.
+///
+/// # Errors
+///
+/// Returns a term error for an invalid table URL or resolved IRI.
+pub(super) fn table_fragment_iri(
+    table_url: &str,
+    fragment: &str,
+    owner: &str,
+) -> Result<String, ProjectionError> {
+    let base = purrdf_iri::parse(table_url)
+        .map_err(|error| ProjectionError::term(format!("invalid {owner} table URL: {error}")))?;
+    base.resolve(&format!("#{fragment}"))
+        .map(|iri| iri.as_str().to_owned())
+        .map_err(|error| ProjectionError::term(format!("invalid {owner} fragment URL: {error}")))
 }
 
-fn temporal_datatype(local: &str) -> bool {
+/// Whether the XSD local name `local` is one of the date/time datatypes a
+/// CSVW format pattern applies to (CSVW Metadata §6.4.4).
+pub(super) fn temporal_datatype(local: &str) -> bool {
     matches!(local, "date" | "time" | "dateTime" | "dateTimeStamp")
 }
 
@@ -1019,7 +1002,7 @@ fn normalize_number(
 }
 
 fn integer_datatype(local: &str) -> bool {
-    numeric_datatype(local) && !matches!(local, "decimal" | "float" | "double")
+    XsdDatatype::from_local(local).is_some_and(XsdDatatype::is_integer_family)
 }
 
 fn validate_number_pattern(pattern: &str) -> Result<(), String> {
@@ -1260,13 +1243,13 @@ fn validate_value_facets(
 }
 
 fn parse_bound(
-    value: &serde_json::Value,
+    value: &purrdf_lex::json::Value,
     datatype: XsdDatatype,
 ) -> Result<purrdf_xsd::XsdValue, String> {
     let lexical = match value {
-        serde_json::Value::String(value) => value.clone(),
-        serde_json::Value::Number(value) => value.to_string(),
-        serde_json::Value::Bool(value) => value.to_string(),
+        purrdf_lex::json::Value::String(value) => value.clone(),
+        purrdf_lex::json::Value::Number(value) => value.lexeme().to_owned(),
+        purrdf_lex::json::Value::Bool(value) => value.to_string(),
         _ => return Err("CSVW datatype facet is not atomic".to_owned()),
     };
     parse_xsd(&lexical, datatype).map_err(|error| format!("invalid CSVW datatype facet: {error}"))

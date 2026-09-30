@@ -122,20 +122,13 @@ fn subjects_of(ds: &impl ShaclRead, pred: &NamedNode) -> Vec<TermId> {
     result
 }
 
-/// Collect distinct objects of `(?, pred, ?)` across all graphs. Dedup is on the
-/// interned [`TermId`] (`Copy`).
+/// The distinct objects of `(?, pred, ?)` across all graphs:
+/// [`DatasetView::objects_of_predicate`](::purrdf::DatasetView::objects_of_predicate)
+/// of the interned predicate, nothing when it is not interned.
 fn objects_of(ds: &impl ShaclRead, pred: &NamedNode) -> Vec<TermId> {
-    let Some(pid) = resolve_pred(ds, pred) else {
-        return Vec::new();
-    };
-    let mut seen: IdSet = IdSet::default();
-    let mut result = Vec::new();
-    for q in quads_for_pattern_ids(ds, None, Some(pid), None, GraphFilter::AnyGraph) {
-        if seen.insert(q.o) {
-            result.push(q.o);
-        }
-    }
-    result
+    resolve_pred(ds, pred).map_or_else(Vec::new, |pid| {
+        ::purrdf::DatasetView::objects_of_predicate(ds, pid, ::purrdf::GraphMatch::Any)
+    })
 }
 
 /// A focus node identity together with the binding it was minted against.
@@ -369,6 +362,22 @@ impl BoundShapes {
     }
 }
 
+/// File `term` under its dataset identity when `dataset` interns it, else under
+/// the term itself: the one split every target set keeps, so a membership test
+/// never materializes an interned node and a foreign one is still found.
+fn insert_resolved(
+    dataset: &impl ShaclRead,
+    term: Term,
+    ids: &mut IdSet,
+    foreign: &mut FastSet<Term>,
+) {
+    if let Some(id) = resolve_id(dataset, &term) {
+        ids.insert(id);
+    } else {
+        foreign.insert(term);
+    }
+}
+
 impl PreparedTargets {
     /// Resolve one shape's declared targets against an already-bound dataset.
     ///
@@ -487,20 +496,24 @@ impl PreparedTargets {
         Ok(prepared)
     }
 
+    /// Record an explicit target node.
     fn insert_explicit(&mut self, dataset: &impl ShaclRead, term: Term) {
-        if let Some(id) = resolve_id(dataset, &term) {
-            self.explicit_ids.insert(id);
-        } else {
-            self.explicit_foreign.insert(term);
-        }
+        insert_resolved(
+            dataset,
+            term,
+            &mut self.explicit_ids,
+            &mut self.explicit_foreign,
+        );
     }
 
+    /// Record a node a SHACL-SPARQL `sh:ask` target's SELECT enumerated.
     fn insert_enumerated(&mut self, dataset: &impl ShaclRead, term: Term) {
-        if let Some(id) = resolve_id(dataset, &term) {
-            self.enumerated_ids.insert(id);
-        } else {
-            self.enumerated_foreign.insert(term);
-        }
+        insert_resolved(
+            dataset,
+            term,
+            &mut self.enumerated_ids,
+            &mut self.enumerated_foreign,
+        );
     }
 
     /// Whether this shape's targets contain `focus` — **the definition** of
@@ -3249,32 +3262,15 @@ pub fn validate_projected_dataset_with_shapes_graph(
 /// `rdf:reifies` triples and statement annotations as plain triples.
 pub fn project_dataset(data: &RdfDataset) -> Result<Arc<RdfDataset>, String> {
     use ::purrdf::RdfDatasetBuilder;
-    use purrdf::{RdfQuad, RdfTerm};
 
     let mut builder = RdfDatasetBuilder::new();
 
-    for mut quad in data.owned_quads() {
-        // FlattenToDefaultGraph: drop the source graph name.
+    // The base quads, then the reifier and annotation rows, in the one flat order
+    // `purrdf::flat_rdf_quads` gives them; FlattenToDefaultGraph drops each source
+    // graph name.
+    for mut quad in ::purrdf::flat_rdf_quads(data) {
         quad.graph_name = None;
         builder.push_owned_quad(&quad);
-    }
-
-    // Reifiers → `(reifier, rdf:reifies, <<triple>>)` triples.
-    for reifier in data.owned_reifiers() {
-        builder.push_owned_quad(&RdfQuad::new(
-            reifier.reifier,
-            RDF_REIFIES,
-            RdfTerm::triple(reifier.statement),
-        ));
-    }
-
-    // Annotations → `(reifier, predicate, object)` triples.
-    for annotation in data.owned_annotations() {
-        builder.push_owned_quad(&RdfQuad::new(
-            annotation.reifier,
-            annotation.predicate,
-            annotation.object,
-        ));
     }
 
     builder.freeze().map_err(|e| e.to_string())
@@ -3284,10 +3280,6 @@ pub fn project_dataset(data: &RdfDataset) -> Result<Arc<RdfDataset>, String> {
 pub(crate) fn shacl_dataset_from_dataset(data: &RdfDataset) -> Result<Arc<RdfDataset>, String> {
     project_dataset(data)
 }
-
-/// The `rdf:reifies` predicate IRI, used to project reifier bindings into the
-/// quad table so SHACL's reifier-shape lookups can find them.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
 /// Parse a SHACL shapes graph from a Turtle string, resolving its relative IRI
 /// references against `base`.
@@ -3999,7 +3991,7 @@ mod tests {
     #[test]
     fn parse_shapes_reports_all_syntax_errors() {
         // Two independently-malformed Turtle STATEMENTS, separated by a valid one.
-        // oxttl recovers at statement granularity (resync on the `.` terminator),
+        // The Turtle parser recovers at statement granularity (resync on the `.` terminator),
         // so BOTH errors must surface in one report — proving the accumulator is
         // real, not a one-element surface. (A lexer-level break such as an
         // unterminated string literal instead consumes to EOF and yields a single
@@ -5414,7 +5406,7 @@ mod tests {
 
     /// A fresh registry with [`AggSum`] registered under [`AGG_IRI`].
     fn sum_aggregate_registry() -> purrdf_sparql_eval::AggregateRegistry {
-        let mut registry = purrdf_sparql_eval::AggregateRegistry::new();
+        let mut registry = purrdf_sparql_eval::AggregateRegistry::default();
         registry.register(AGG_IRI, Arc::new(AggSum));
         registry
     }

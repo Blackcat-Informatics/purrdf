@@ -170,8 +170,8 @@ pub fn compare_results(
         }
         (l, r) => Err(format!(
             "result kind mismatch: {} vs {}",
-            result_kind(l),
-            result_kind(r)
+            l.query_form(),
+            r.query_form()
         )),
     }
 }
@@ -238,7 +238,7 @@ fn compare_eval(case: &SparqlTestCase, result: &SparqlResult, ordered: bool) -> 
         (ExpectedResult::Graph(path), SparqlResult::Graph(actual)) => {
             let expected_bytes =
                 std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-            let media = media_type_of(path);
+            let media = crate::run::data_media_type(path);
             let expected = purrdf::parse_dataset(&expected_bytes, media, None)
                 .map_err(|e| format!("parse expected graph {}: {e}", path.display()))?;
             let actual_canon = purrdf_core::canonicalize(actual).nquads;
@@ -255,8 +255,8 @@ fn compare_eval(case: &SparqlTestCase, result: &SparqlResult, ordered: bool) -> 
         )),
         (ExpectedResult::None, _) => Err("evaluation case has no expected result".to_owned()),
         (expected, actual) => Err(format!(
-            "result-kind mismatch: expected {expected:?}, got a {}",
-            result_kind(actual)
+            "result-kind mismatch: expected {expected:?}, got a {} result",
+            actual.query_form()
         )),
     }
 }
@@ -312,7 +312,7 @@ const SOLUTION_SCOPE: BlankScope = BlankScope(2);
 
 /// `xsd:integer` — the datatype of the ordinal literal pinning row position in
 /// the ordered-comparison encoding.
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_core::datatype::XSD_INTEGER;
 
 /// Encode a whole solution set as canonical RDFC-1.0 N-Quads.
 ///
@@ -455,25 +455,6 @@ fn read_boolean(path: &Path, json: bool) -> Result<bool, String> {
         purrdf_sparql_results::from_xml_boolean(&bytes)
     }
     .map_err(|e| format!("parse expected boolean {}: {e}", path.display()))
-}
-
-/// Map a result file's extension to a native RDF media type.
-fn media_type_of(path: &Path) -> &'static str {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("nt") => "application/n-triples",
-        Some("nq") => "application/n-quads",
-        Some("rdf") => "application/rdf+xml",
-        _ => "text/turtle",
-    }
-}
-
-/// A short label for a result kind, for diagnostics.
-fn result_kind(result: &SparqlResult) -> &'static str {
-    match result {
-        SparqlResult::Solutions { .. } => "SELECT solutions",
-        SparqlResult::Boolean(_) => "ASK boolean",
-        SparqlResult::Graph(_) => "graph",
-    }
 }
 
 #[cfg(test)]
@@ -754,7 +735,7 @@ mod term_walk_tests {
     //! Result-value interning against its recursive reference, and at a hundred thousand
     //! levels on a 128 KiB thread.
 
-    use crate::test_terms::TermShape;
+    use purrdf_core::term_fixture::TermShape;
     use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermId, TermValue};
 
     use super::{VALUE_SCOPE, intern_term_value};
@@ -790,7 +771,12 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(&mut state, &mut budget, TermShape::Any);
+            let value = purrdf_core::term_fixture::term_value(
+                &mut state,
+                purrdf_testkit::rng::splitmix64_next,
+                &mut budget,
+                TermShape::Any,
+            );
             let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
             assert_eq!(
                 intern_term_value(&mut found, &value),
@@ -811,15 +797,11 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_value_interns_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = crate::test_terms::triple_chain(LEVELS);
-                let mut builder = RdfDatasetBuilder::new();
-                assert_eq!(intern_term_value(&mut builder, &value).index(), LEVELS + 2);
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("interning did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            let mut builder = RdfDatasetBuilder::new();
+            assert_eq!(intern_term_value(&mut builder, &value).index(), LEVELS + 2);
+        })
+        .expect("the thread starts");
     }
 }

@@ -384,9 +384,7 @@
 //! instead and ends `"exhausted"`, `"depth_reached"` or `"ceiling_reached"`.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::future::Future;
 use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
 
 use pyo3::create_exception;
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -396,6 +394,7 @@ use pyo3::types::{PyBytes, PyDict, PyList, PyString};
 use crate::attestation::Attestation;
 use crate::hnsw::relation::{HnswRelation, HnswSpace};
 use crate::hnsw::{HnswIndex, Params as HnswGraphParams, VectorMatrix};
+use crate::py_shex::data_media_type;
 use crate::retrieval::{
     AdmissionEnvironment, ClassWidth, CompiledRetrieval, CounterReading, CrossingRank, DecayRule,
     DepthCause, Fixed, FusionProfile, Iri, Metric, Plan, PlanError, PlanId, PlannedResolution,
@@ -404,7 +403,7 @@ use crate::retrieval::{
     UnservedReason,
 };
 use crate::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
-use crate::{NativeRdfFormat, RdfDataset, TermValue, parse_dataset};
+use crate::{RdfDataset, TermValue, parse_dataset};
 use purrdf_core::DistanceMetric;
 use purrdf_sparql_eval::{
     CandidateDomains, Completeness, DomainTag, EmbeddingKnnRelation, EmbeddingSpace,
@@ -664,18 +663,6 @@ struct Call {
 }
 
 // ── pure-Rust cores (PyO3-free, exercised through the pytest suite) ──────────
-
-/// Map the Python-surface data format name onto the native codec's media type.
-fn data_media_type(format: &str) -> Result<&'static str, String> {
-    match format {
-        "turtle" => Ok(NativeRdfFormat::Turtle.media_type()),
-        "ntriples" => Ok(NativeRdfFormat::NTriples.media_type()),
-        "nquads" => Ok(NativeRdfFormat::NQuads.media_type()),
-        other => Err(format!(
-            "unknown data format `{other}` (expected \"turtle\", \"ntriples\", or \"nquads\")"
-        )),
-    }
-}
 
 /// Parse one caller-supplied IRI through the layer's own validator.
 fn retrieval_iri(role: &str, text: &str) -> Result<Iri, String> {
@@ -1058,7 +1045,10 @@ fn run_search(call: &Call, profile: &FusionProfile) -> Result<SearchResult, Stri
         statistics: &call.statistics,
         fusion_profile: None,
     };
-    block_on(crate::retrieval::search(
+    // The ladder's futures are awaited in one task and never cross a thread
+    // boundary, so the retrieval crate's parking executor drives the real async
+    // entry point rather than a second, synchronous one.
+    crate::retrieval::block_on(crate::retrieval::search(
         &call.request,
         &registry,
         &call.statistics,
@@ -1067,32 +1057,6 @@ fn run_search(call: &Call, profile: &FusionProfile) -> Result<SearchResult, Stri
         profile,
     ))
     .map_err(|e| e.to_string())
-}
-
-/// Drive one future to completion on this thread.
-///
-/// The ladder's futures are awaited in a single task and never cross a thread
-/// boundary — `search` documents exactly that on its own `future_not_send`
-/// reasoning — so a parking waker is the whole runtime they need. This binding
-/// therefore drives the real async entry point rather than asking the Rust side
-/// for a second, synchronous one.
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
 }
 
 // ── argument conversion ──────────────────────────────────────────────────────
@@ -2085,8 +2049,12 @@ fn plan_dict<'py>(py: Python<'py>, planned: &Plan) -> PyResult<Bound<'py, PyDict
     }
     out.set_item("producer_decisions", decisions)?;
 
+    // A dict keeps insertion order, so the strata go in sorted by name rather
+    // than in the map's hash order.
     let depths = PyDict::new(py);
-    for (stratum, depth) in &planned.stratum_depths {
+    let mut sorted: Vec<_> = planned.stratum_depths.iter().collect();
+    sorted.sort_unstable_by(|left, right| left.0.as_str().cmp(right.0.as_str()));
+    for (stratum, depth) in sorted {
         depths.set_item(stratum.as_str(), depth)?;
     }
     out.set_item("stratum_depths", depths)?;

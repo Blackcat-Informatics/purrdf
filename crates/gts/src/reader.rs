@@ -11,10 +11,12 @@
 //! `"unverified"` and `encrypt`-class frames degrade to `missing-key` opaque
 //! nodes. Callers that hold content keys can use [`read_with_options`].
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
+
+use crate::{FastMap, FastSet};
 use std::io::Read;
 
-use ciborium::value::Value;
+use purrdf_lex::cbor::{self, Value};
 
 use crate::codec::{
     Codec, CodecError, decode_chain, decode_chain_bounded, decode_chain_with_decrypt_bounded,
@@ -31,15 +33,12 @@ use crate::reader_rows::{
 use crate::reader_union::union_segments;
 use crate::stream::DIGEST as STREAM_DIGEST;
 use crate::wire::{
-    MAGIC, VERSION, content_id, digest_str, header_id, hex, iter_items, map_get, unwrap_header,
+    MAGIC, VERSION, content_id, digest_label, digest_str, header_id, iter_items, map_get,
+    unwrap_header,
 };
 
 pub(crate) fn as_i128(v: &Value) -> Option<i128> {
-    if let Value::Integer(i) = v {
-        Some(i128::from(*i))
-    } else {
-        None
-    }
+    v.as_integer().map(i128::from)
 }
 
 /// Coerce a value to a non-negative index, else `None` (Python `_as_int`).
@@ -47,16 +46,8 @@ pub(crate) fn as_idx(v: &Value) -> Option<usize> {
     as_i128(v).and_then(|n| usize::try_from(n).ok())
 }
 
-pub(crate) fn as_text(v: &Value) -> Option<&str> {
-    if let Value::Text(t) = v {
-        Some(t)
-    } else {
-        None
-    }
-}
-
 pub(crate) fn text_or<'a>(v: Option<&'a Value>, default: &'a str) -> &'a str {
-    v.and_then(as_text).unwrap_or(default)
+    v.and_then(Value::as_text).unwrap_or(default)
 }
 
 fn diag_code_for(reason: &str) -> &'static str {
@@ -79,8 +70,8 @@ pub fn public_blob_digest(value: &Value) -> Option<String> {
     };
     match map_get(entries, "digest") {
         Some(Value::Text(text)) if text.starts_with("blake3:") => Some(text.clone()),
-        Some(Value::Text(text)) => Some(format!("blake3:{text}")),
-        Some(Value::Bytes(bytes)) if bytes.len() == 32 => Some(format!("blake3:{}", hex(bytes))),
+        Some(Value::Text(text)) => Some(["blake3:", text].concat()),
+        Some(Value::Bytes(bytes)) if bytes.len() == 32 => Some(digest_label(bytes)),
         _ => None,
     }
 }
@@ -118,7 +109,7 @@ fn term_depends_on_anchor(
     term_id: usize,
     anchor: usize,
     pending: (usize, Triple3),
-    seen: &mut HashSet<usize>,
+    seen: &mut FastSet<usize>,
 ) -> bool {
     if term_id == anchor {
         return true;
@@ -141,7 +132,7 @@ fn term_depends_on_anchor(
 /// `rf` implicit — the term whose own id IS `rid`. Miss an anchor and the loop
 /// is recorded rather than refused.
 fn reifier_binding_is_recursive(graph: &Graph, rid: usize, triple: Triple3) -> bool {
-    let mut seen: HashSet<usize> = HashSet::new();
+    let mut seen: FastSet<usize> = FastSet::default();
     graph
         .terms
         .iter()
@@ -300,7 +291,7 @@ impl FrameContext<'_> {
         let Some(bytes) = source.get(self.range.start..self.range.end) else {
             return false;
         };
-        let Ok(Value::Map(map)) = ciborium::de::from_reader::<Value, _>(bytes) else {
+        let Ok(Ok(map)) = cbor::decode(bytes, cbor::Limits::DEFAULT).map(Value::into_map) else {
             return false;
         };
         content_id(&map) == self.content_id
@@ -530,14 +521,14 @@ struct Folder<'g, 's, 'k> {
     content_key: Option<&'k ContentKeyResolver<'k>>,
     segment_index: usize,
     materialize: bool,
-    catalog: HashMap<i128, Codec>,
+    catalog: FastMap<i128, Codec>,
     blob_index: DigestIndex,
     blob_meta_index: DigestIndex,
     // Layout-state bookkeeping (§3.3): intact index frames seen, digests the
     // graph has described via stream:digest so far, and each inline blob's
     // arrival (frame index, digest, was-it-described-at-arrival).
     index_records: Vec<IndexRecord>,
-    described: HashSet<String>,
+    described: FastSet<String>,
     blob_events: Vec<(usize, String, bool)>,
     // Reifier ids seen bound to more than one triple, with the frame index of
     // the rebinding row. Legitimate on its own (§7.1 `tt`); only ambiguous for a
@@ -727,7 +718,7 @@ impl Folder<'_, '_, '_> {
             if blob {
                 return Ok(Value::Bytes(decoded));
             }
-            return ciborium::de::from_reader(&decoded[..])
+            return cbor::decode(&decoded, cbor::Limits::DEFAULT)
                 .map_err(|e| PayloadError::Damaged(e.to_string()));
         }
         if blob
@@ -807,7 +798,9 @@ impl Folder<'_, '_, '_> {
         for raw in rows {
             let Value::Map(entries) = raw else { continue };
             let kind = TermKind::from_wire(map_get(entries, "k").and_then(as_i128));
-            let value = map_get(entries, "v").and_then(as_text).map(str::to_string);
+            let value = map_get(entries, "v")
+                .and_then(Value::as_text)
+                .map(str::to_string);
             // This row's id, read before any decode that can raise a diagnostic:
             // diagnostics land in `self.g.diagnostics`, never in `self.g.terms`,
             // so the id a refusal quotes is the id this row goes on to take.
@@ -845,7 +838,7 @@ impl Folder<'_, '_, '_> {
             // tag and the grammar refused it". The base-direction arm below
             // needs that distinction: the two cases must not fold to the same
             // outcome, because only one of them is a defect in the input.
-            let (lang, lang_refused) = match map_get(entries, "l").and_then(as_text) {
+            let (lang, lang_refused) = match map_get(entries, "l").and_then(Value::as_text) {
                 Some(tag) => match language_tag_refusal(tag) {
                     Some(code) => {
                         self.diag(
@@ -871,8 +864,8 @@ impl Folder<'_, '_, '_> {
             // diagnostic. The writer filters direction before emitting it, so a
             // value here can only have come from a foreign container, which is
             // precisely the case a diagnostic is for.
-            let direction = match map_get(entries, "dir").and_then(as_text) {
-                Some(value) if matches!(value, "ltr" | "rtl") => Some(value.to_string()),
+            let direction = match map_get(entries, "dir").and_then(Value::as_text) {
+                Some(value) if crate::model::is_literal_direction(value) => Some(value.to_string()),
                 Some(value) => {
                     self.diag(
                         "DamagedFrame",
@@ -1097,7 +1090,7 @@ impl Folder<'_, '_, '_> {
         let pub_meta = declared_metadata
             .filter(|value| matches!(value, Value::Map(_)))
             .cloned();
-        let encoded_len = d.and_then(Value::as_bytes).map_or(0, Vec::len);
+        let encoded_len = d.and_then(Value::as_bytes).map_or(0, <[u8]>::len);
         let chain = match map_get(frame, "x") {
             Some(Value::Array(ids)) if !ids.is_empty() => match self.resolve_codecs(ids) {
                 Ok(chain) => chain,
@@ -1122,8 +1115,8 @@ impl Folder<'_, '_, '_> {
         };
 
         if chain.iter().any(|codec| codec.cls == "encrypt") {
-            match self.payload(frame, true) {
-                Ok(Value::Bytes(bytes)) => {
+            match self.payload(frame, true).map(Value::into_bytes) {
+                Ok(Ok(bytes)) => {
                     let digest = digest_str(&bytes);
                     if let Some(meta) = pub_meta {
                         self.blob_meta_index
@@ -1187,7 +1180,7 @@ impl Folder<'_, '_, '_> {
             }
             self.emit_blob(
                 &digest,
-                d.and_then(Value::as_bytes).map(Vec::as_slice),
+                d.and_then(Value::as_bytes),
                 &chain,
                 declared_metadata,
                 d.is_some(),
@@ -1218,8 +1211,8 @@ impl Folder<'_, '_, '_> {
         let Some(Value::Bytes(_)) = d else {
             return;
         };
-        match self.payload(frame, true) {
-            Ok(Value::Bytes(bytes)) => {
+        match self.payload(frame, true).map(Value::into_bytes) {
+            Ok(Ok(bytes)) => {
                 let digest = digest_str(&bytes);
                 if let Some(meta) = pub_meta {
                     self.blob_meta_index
@@ -1272,7 +1265,7 @@ impl Folder<'_, '_, '_> {
     fn h_meta(&mut self, payload: &Value) {
         if let Value::Map(entries) = payload {
             for (k, v) in entries {
-                let key = as_text(k).map_or_else(|| format!("{k:?}"), str::to_string);
+                let key = k.as_text().map_or_else(|| format!("{k:?}"), str::to_string);
                 self.g.set_meta(key, v.clone());
             }
         }
@@ -1290,7 +1283,7 @@ impl Folder<'_, '_, '_> {
                 .cloned()
                 .collect(),
             reason: map_get(entries, "reason")
-                .and_then(as_text)
+                .and_then(Value::as_text)
                 .map(str::to_string),
             by: map_get(entries, "by").and_then(as_idx),
         };
@@ -1330,7 +1323,7 @@ impl Folder<'_, '_, '_> {
                     Value::Map(term_entries) => Value::Map(
                         term_entries
                             .iter()
-                            .map(|(k, v)| match as_text(k) {
+                            .map(|(k, v)| match k.as_text() {
                                 Some("dt" | "rf") => (k.clone(), sh(v)),
                                 // `tt` is a 3-id row, so it shifts row-wise.
                                 Some("tt") => (k.clone(), sh_row(v)),
@@ -1394,7 +1387,7 @@ impl Folder<'_, '_, '_> {
         }
         if let Some(Value::Map(meta)) = map_get(entries, "meta") {
             for (k, v) in meta {
-                let key = as_text(k).map_or_else(|| format!("{k:?}"), str::to_string);
+                let key = k.as_text().map_or_else(|| format!("{k:?}"), str::to_string);
                 self.g.set_meta(key, v.clone());
             }
         }
@@ -1474,7 +1467,7 @@ impl Folder<'_, '_, '_> {
 }
 
 /// §3.1 boundary rule: a map carrying `"gts"` and lacking `"t"`.
-fn is_header_item(item: &Value) -> bool {
+pub(crate) fn is_header_item(item: &Value) -> bool {
     let inner = match item {
         Value::Tag(_, inner) => inner.as_ref(),
         other => other,
@@ -1488,8 +1481,8 @@ fn is_header_item(item: &Value) -> bool {
 
 /// Parse the header `"dct"` map (§5): named, uncompressed in-band dictionary
 /// bytes that a catalog codec's `"dct"` param references by name.
-fn header_dict_table(header: &[(Value, Value)]) -> HashMap<&str, &[u8]> {
-    let mut out = HashMap::new();
+fn header_dict_table(header: &[(Value, Value)]) -> FastMap<&str, &[u8]> {
+    let mut out = FastMap::default();
     if let Some(Value::Map(entries)) = map_get(header, "dct") {
         for (name, bytes) in entries {
             if let (Value::Text(name), Value::Bytes(bytes)) = (name, bytes) {
@@ -1507,9 +1500,9 @@ fn header_dict_table(header: &[(Value, Value)]) -> HashMap<&str, &[u8]> {
 /// dropped from the map entirely, so any frame referencing it degrades to an
 /// `unknown-codec` opaque node during codec resolution rather than silently
 /// decoding without the dictionary (or against the wrong one).
-fn catalog_from(header: &[(Value, Value)]) -> HashMap<i128, Codec> {
+fn catalog_from(header: &[(Value, Value)]) -> FastMap<i128, Codec> {
     let dict_table = header_dict_table(header);
-    let mut out = HashMap::new();
+    let mut out = FastMap::default();
     if let Some(Value::Map(raw)) = map_get(header, "cat") {
         for (cid, entry) in raw {
             if let (Some(cid), Value::Map(fields)) = (as_i128(cid), entry) {
@@ -1615,7 +1608,9 @@ pub fn segment_append_state(data: &[u8]) -> Result<SegmentAppendState, String> {
                     .map_err(|_| "cannot append: a catalog id is out of range".to_string())?,
                 name: text_or(map_get(fields, "name"), "").to_string(),
                 cls: text_or(map_get(fields, "cls"), "encode").to_string(),
-                dct: map_get(fields, "dct").and_then(as_text).map(str::to_string),
+                dct: map_get(fields, "dct")
+                    .and_then(Value::as_text)
+                    .map(str::to_string),
                 level,
             });
         }
@@ -1816,9 +1811,9 @@ fn next_stream_item<R: Read>(
     reader: &mut StreamingCountingReader<R>,
 ) -> Result<Option<(Value, usize, usize)>, usize> {
     let start = reader.pos;
-    match ciborium::de::from_reader::<Value, _>(&mut *reader) {
-        Ok(item) => Ok(Some((item, start, reader.pos))),
-        Err(_) if reader.pos == start => Ok(None),
+    match cbor::read_from(&mut *reader, cbor::Limits::DEFAULT) {
+        Ok(Some(item)) => Ok(Some((item, start, reader.pos))),
+        Ok(None) => Ok(None),
         Err(_) => Err(start),
     }
 }
@@ -1831,11 +1826,11 @@ struct ActiveStreamingSegment {
     index_offset: usize,
     segment_index: usize,
     valid_header: bool,
-    catalog: HashMap<i128, Codec>,
+    catalog: FastMap<i128, Codec>,
     blob_index: DigestIndex,
     blob_meta_index: DigestIndex,
     index_records: Vec<IndexRecord>,
-    described: HashSet<String>,
+    described: FastSet<String>,
     blob_events: Vec<(usize, String, bool)>,
     // Carried across this segment's frames (each frame gets a fresh `Folder`)
     // so the ambiguity check runs once the whole segment has been seen.
@@ -1873,7 +1868,7 @@ impl ActiveStreamingSegment {
                         },
                     );
                 }
-                if map_get(&header, "gts").and_then(as_text) != Some(MAGIC)
+                if map_get(&header, "gts").and_then(Value::as_text) != Some(MAGIC)
                     || map_get(&header, "v").and_then(as_i128) != Some(i128::from(VERSION))
                 {
                     push_diagnostic(
@@ -1907,7 +1902,7 @@ impl ActiveStreamingSegment {
         let catalog = if valid_header {
             catalog_from(&header)
         } else {
-            HashMap::new()
+            FastMap::default()
         };
         Self {
             g,
@@ -1921,7 +1916,7 @@ impl ActiveStreamingSegment {
             blob_index: DigestIndex::default(),
             blob_meta_index: DigestIndex::default(),
             index_records: Vec::new(),
-            described: HashSet::new(),
+            described: FastSet::default(),
             blob_events: Vec::new(),
             rebound_reifiers: Vec::new(),
         }
@@ -2085,11 +2080,11 @@ impl ActiveStreamingSegment {
                     content_key: None,
                     segment_index: self.segment_index,
                     materialize: false,
-                    catalog: HashMap::new(),
+                    catalog: FastMap::default(),
                     blob_index: std::mem::take(&mut self.blob_index),
                     blob_meta_index: std::mem::take(&mut self.blob_meta_index),
                     index_records: Vec::new(),
-                    described: HashSet::new(),
+                    described: FastSet::default(),
                     blob_events: Vec::new(),
                     rebound_reifiers: std::mem::take(&mut self.rebound_reifiers),
                 };
@@ -2409,7 +2404,7 @@ fn read_segment_with_sink(
             },
         );
     }
-    if map_get(header, "gts").and_then(as_text) != Some(MAGIC)
+    if map_get(header, "gts").and_then(Value::as_text) != Some(MAGIC)
         || map_get(header, "v").and_then(as_i128) != Some(i128::from(VERSION))
     {
         push_diagnostic(
@@ -2447,7 +2442,7 @@ fn read_segment_with_sink(
             blob_index: DigestIndex::default(),
             blob_meta_index: DigestIndex::default(),
             index_records: Vec::new(),
-            described: HashSet::new(),
+            described: FastSet::default(),
             blob_events: Vec::new(),
             rebound_reifiers: Vec::new(),
         };
@@ -2538,4 +2533,61 @@ fn read_segment_with_sink(
     }
     g.segment_streamable.push(info);
     g
+}
+
+#[cfg(test)]
+mod transformed_payload_tests {
+    use purrdf_lex::cbor::Value;
+
+    use super::read;
+    use crate::wire::canonical;
+    use crate::writer::Writer;
+
+    /// A file whose one `terms` frame carries `bytes` through the `gzip`
+    /// transform, so the reader decodes them as the frame's payload item.
+    fn gzip_terms_file(bytes: Vec<u8>) -> Vec<u8> {
+        let mut writer = Writer::new("purrdf.gts");
+        writer.add_frame(
+            "terms",
+            None,
+            Some(bytes),
+            Some(&["gzip".to_string()]),
+            None,
+        );
+        writer.into_bytes()
+    }
+
+    fn one_iri_payload() -> Vec<u8> {
+        canonical(&Value::Array(vec![Value::Map(vec![
+            (Value::from("k"), Value::from(0_u8)),
+            (Value::from("v"), Value::from("https://example.org/s")),
+        ])]))
+    }
+
+    #[test]
+    fn a_transformed_payload_that_is_exactly_one_item_folds() {
+        let graph = read(&gzip_terms_file(one_iri_payload()), false, None);
+        assert_eq!(graph.diagnostics, Vec::new());
+        assert_eq!(graph.terms.len(), 1);
+        assert_eq!(
+            graph.terms[0].value.as_deref(),
+            Some("https://example.org/s")
+        );
+    }
+
+    #[test]
+    fn bytes_after_a_transformed_payload_item_damage_the_frame() {
+        let mut bytes = one_iri_payload();
+        bytes.push(0x00);
+        let graph = read(&gzip_terms_file(bytes), false, None);
+        assert_eq!(graph.terms, Vec::new());
+        assert!(
+            graph
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "DamagedFrame"),
+            "{:?}",
+            graph.diagnostics
+        );
+    }
 }

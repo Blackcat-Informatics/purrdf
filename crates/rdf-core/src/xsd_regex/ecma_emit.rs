@@ -294,7 +294,9 @@ pub fn ecma_262_rust_compatible(pattern: &str) -> bool {
                         {
                             let digit = chars
                                 .next()
-                                .and_then(|c| c.to_digit(16))
+                                .and_then(|c| u8::try_from(c).ok())
+                                .and_then(purrdf_hash::hex::nibble)
+                                .map(u32::from)
                                 .expect("hex digit");
                             let Some(next) =
                                 value.checked_mul(16).and_then(|n| n.checked_add(digit))

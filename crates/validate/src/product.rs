@@ -34,6 +34,8 @@
 use std::sync::Arc;
 
 use purrdf_core::RdfDataset;
+use purrdf_core::artifact::identity::render_value;
+use purrdf_hash::hex::Lower;
 use purrdf_shapes::engine::{self, PreparedShapes};
 use purrdf_shapes::model::BoxRoleVocab;
 use purrdf_shapes::product::{
@@ -465,23 +467,14 @@ pub fn admit_shapes_product_expecting(
 /// A prescriptive message naming the fix when `text` is not 64 hexadecimal digits.
 pub fn parse_identity_digest(text: &str) -> Result<[u8; 32], String> {
     let trimmed = text.trim();
-    if trimmed.len() != 64 || !trimmed.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(format!(
+    purrdf_hash::hex::decode_32(trimmed).ok_or_else(|| {
+        format!(
             "an expected product identity is the 64 hexadecimal digits of the product's input \
              binding, and `{trimmed}` is not that; read the value off the product you mean — \
              `purrdf shacl explain` prints it on its `identity-digest` line — and pass it \
              unchanged"
-        ));
-    }
-
-    let mut digest = [0u8; 32];
-    for (slot, pair) in digest.iter_mut().zip(trimmed.as_bytes().as_chunks::<2>().0) {
-        let text = std::str::from_utf8(pair)
-            .expect("two ASCII hexadecimal digits are valid UTF-8 by the check above");
-        *slot = u8::from_str_radix(text, 16)
-            .expect("two ASCII hexadecimal digits parse as a byte by the check above");
-    }
-    Ok(digest)
+        )
+    })
 }
 
 /// **The forward-compatibility path.** Open `product` and re-derive the preparation
@@ -576,9 +569,9 @@ pub fn certify_shapes_product(product: &[u8]) -> Result<(), ShapesProductError> 
 /// [`rebuild_shapes_product`] is the path that still restores them.
 ///
 /// An identity component's value is rendered as `"text"` when it is printable
-/// UTF-8 and `0x<hex>` otherwise, which is the envelope's own rule for the same
-/// values (`purrdf_core::artifact::IdentityMismatch`'s `Display`) — most of them
-/// are digests, and a digest shown as mojibake helps nobody.
+/// UTF-8 (the empty value as `""`) and `0x<hex>` otherwise, through the
+/// envelope's own renderer ([`purrdf_core::artifact::identity::render_value`]) —
+/// most of them are digests, and a digest shown as mojibake helps nobody.
 ///
 /// # Errors
 ///
@@ -593,16 +586,16 @@ pub fn explain_shapes_product(product: &[u8]) -> Result<String, ShapesProductErr
 
     let mut out = String::new();
     let _ = writeln!(out, "format-version {}", view.format_version());
-    let _ = writeln!(out, "stage-id {}", hex(view.stage_id()));
+    let _ = writeln!(out, "stage-id {}", Lower(view.stage_id()));
     let _ = writeln!(out, "stage-known {}", view.stage_id() == &STAGE_ID);
-    let _ = writeln!(out, "identity-digest {}", hex(identity.digest()));
+    let _ = writeln!(out, "identity-digest {}", Lower(identity.digest()));
     let _ = writeln!(out, "identity-components {}", identity.components().len());
     for component in identity.components() {
         let _ = writeln!(
             out,
             "identity {} {}",
             component.label(),
-            render_component(component.value())
+            render_value(component.value())
         );
     }
     let _ = writeln!(out, "parse-base {}", provenance.base().unwrap_or("none"));
@@ -931,46 +924,26 @@ fn validate_prepared(
 // Rendering helpers
 // ---------------------------------------------------------------------------
 
-/// Lowercase-hex a 32-byte digest.
-fn hex(digest: &[u8; 32]) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::with_capacity(64);
-    for byte in digest {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
-}
-
-/// Render an identity component's value: quoted when it is printable UTF-8,
-/// `0x`-prefixed lowercase hex otherwise. See [`explain_shapes_product`].
-fn render_component(value: &[u8]) -> String {
-    match std::str::from_utf8(value) {
-        Ok(text) if !text.is_empty() && !text.chars().any(char::is_control) => {
-            format!("\"{text}\"")
-        }
-        _ => {
-            use std::fmt::Write as _;
-            let mut out = String::with_capacity(value.len() * 2 + 2);
-            out.push_str("0x");
-            for byte in value {
-                let _ = write!(out, "{byte:02x}");
-            }
-            out
-        }
-    }
-}
-
-/// [`render_component`] over a component that may not exist on one side of a
+/// [`render_value`] over a component that may not exist on one side of a
 /// [`ShapesProductDiff`] at all — rendered as the bare word `missing`, which is
-/// not a value [`render_component`] can ever itself produce (every byte
+/// not a value [`render_value`] can ever itself produce (every byte
 /// string it renders is either quoted text or an `0x`-prefixed hex run).
 fn render_optional_component(value: Option<&[u8]>) -> String {
-    value.map_or_else(|| "missing".to_owned(), render_component)
+    value.map_or_else(|| "missing".to_owned(), render_value)
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+
+    #[test]
+    fn an_identity_component_renders_empty_as_quoted_text_and_bytes_as_hex() {
+        use super::render_optional_component;
+        assert_eq!(render_optional_component(Some(b"")), "\"\"");
+        assert_eq!(render_optional_component(Some(&[0xff, 0x00])), "0xff00");
+        assert_eq!(render_optional_component(Some(b"v1.2")), "\"v1.2\"");
+        assert_eq!(render_optional_component(None), "missing");
+    }
 
     use super::{
         PreparedShapes, ShapesProductError, ShapesProductRefusal, admit_shapes_product,
@@ -1047,8 +1020,8 @@ mod tests {
             "sh:path ex:age ; sh:severity sh:Warning ;",
         );
         let product = pack_shapes_product(&warning, None, &[]).expect("shapes pack");
-        let conforms = |sarif: String| -> serde_json::Value {
-            let log: serde_json::Value = serde_json::from_str(&sarif).expect("json");
+        let conforms = |sarif: String| -> purrdf_lex::json::Value {
+            let log = purrdf_lex::json::read(&sarif).expect("json");
             log["runs"][0]["properties"]["shaclConforms"].clone()
         };
         let relaxed = SarifOptions {
@@ -1066,17 +1039,17 @@ mod tests {
                 validate_with_shapes_product(&product, DATA, &SarifOptions::default())
                     .expect("validates")
             ),
-            serde_json::json!(false)
+            false
         );
         assert_eq!(
             conforms(validate_with_shapes_product(&product, DATA, &relaxed).expect("validates")),
-            serde_json::json!(true)
+            true
         );
         assert_eq!(
             conforms(
                 validate_with_rebuilt_shapes_product(&product, DATA, &relaxed).expect("validates")
             ),
-            serde_json::json!(true)
+            true
         );
     }
 
@@ -1308,7 +1281,7 @@ mod tests {
     fn native_registry() -> purrdf_shapes::product::UserFunctionRegistry {
         use purrdf_sparql_eval::{Arity, Volatility};
 
-        let mut registry = purrdf_shapes::product::UserFunctionRegistry::new();
+        let mut registry = purrdf_shapes::product::UserFunctionRegistry::default();
         registry.register_native(
             NATIVE_FN,
             Arity::Exact(1),
@@ -1329,7 +1302,7 @@ mod tests {
     ) {
         (
             native_registry(),
-            purrdf_shapes::product::AggregateRegistry::new(),
+            purrdf_shapes::product::AggregateRegistry::default(),
             purrdf_shapes::product::PropertyFunctionRegistry::new(),
         )
     }

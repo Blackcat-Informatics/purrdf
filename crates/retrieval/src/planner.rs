@@ -368,8 +368,9 @@
 //! over four billion rows from one producer per invocation, and every depth below
 //! it is derived, recorded and emitted exactly as it was.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
+use purrdf_core::{FastHasher, FastMap};
 use purrdf_sparql_eval::{
     CandidateDomains, DuplicatePolicy, PfDescriptor, PropertyFunctionRegistry, RankedDeclaration,
 };
@@ -673,7 +674,8 @@ pub fn plan(
     // no default is expressible, so the refusal has nothing to guard. The map is
     // a `BTreeMap`, so the walk is ascending by stratum and two plans of one
     // request visit the strata in one order.
-    let mut stratum_depths: HashMap<Iri, u32> = HashMap::with_capacity(surviving.len());
+    let mut stratum_depths: FastMap<Iri, u32> =
+        FastMap::with_capacity_and_hasher(surviving.len(), FastHasher::default());
     let mut stratum_derivations: BTreeMap<Iri, DepthInputs> = BTreeMap::new();
     for (stratum, declaration) in &surviving {
         let reached = terms_at(&request.terms, reaching.get(stratum));

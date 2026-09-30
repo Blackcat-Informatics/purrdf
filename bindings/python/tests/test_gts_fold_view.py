@@ -181,3 +181,32 @@ def test_gts_round_trip_keeps_every_binding_of_one_reifier() -> None:
             ),
         ]
     )
+
+
+_SCHEMA_PERSON = "https://schema.org/Person"
+_RDFS_LABEL = "http://www.w3.org/2000/01/rdf-schema#label"
+
+
+def _iri_view(curie_prefixes: list[tuple[str, str]] | None = None) -> purrdf.GtsFoldViewNative:
+    terms: list[_TermRow] = [
+        (0, _SCHEMA_PERSON, None, None, None, None, None),
+        (0, _RDFS_LABEL, None, None, None, None, None),
+    ]
+    if curie_prefixes is None:
+        return purrdf.GtsFoldViewNative.from_parts(terms, [], [], [])
+    return purrdf.GtsFoldViewNative.from_parts(terms, [], [], [], curie_prefixes)
+
+
+def test_a_schema_org_iri_stays_full_without_a_caller_prefix() -> None:
+    view = _iri_view()
+    assert view.curie(_SCHEMA_PERSON) == _SCHEMA_PERSON
+    assert view.python_value(0) == _SCHEMA_PERSON
+
+
+def test_a_schema_org_iri_compacts_under_a_caller_supplied_prefix() -> None:
+    view = _iri_view([("schema", "https://schema.org/")])
+    assert view.curie(_SCHEMA_PERSON) == "schema:Person"
+
+
+def test_a_w3c_term_compacts_without_a_caller_prefix() -> None:
+    assert _iri_view().curie(_RDFS_LABEL) == "rdfs:label"

@@ -41,9 +41,19 @@ purrdf-iri = { workspace = true }
 # functions return, and `XSD_NS`/`XsdDatatype` for the datatype IRIs they carry.
 # Zero-dependency leaf, so this edge adds nothing to the wasm surface.
 purrdf-xsd = { workspace = true }
+# FNV-1a (`purrdf_hash::fnv`), the specified function the determinism digest
+# folds its output bytes through. The zero-dependency root, already under
+# purrdf-core, so this edge adds nothing to the build.
+purrdf-hash = { workspace = true }
+# The workspace's one RFC 8259 JSON reader, value and writer: a GeoJSON literal
+# is read with every number kept as its source lexeme, and written back
+# deterministically.
+purrdf-lex = { workspace = true }
 
 [dev-dependencies]
-criterion = { workspace = true }
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
 purrdf-sparql-algebra = { workspace = true }
 purrdf-rdf = { workspace = true }
 purrdf-shapes = { workspace = true }
@@ -65,4 +75,11 @@ harness = false
 # rings of growing vertex count (the quadratic the noder has to beat).
 # Report-only.
 name = "relate"
+harness = false
+
+[[bench]]
+# GeoJSON reading through the one shared JSON reader: a ~1 MB FeatureCollection
+# parsed and re-rendered as a JSON tree, and a large MultiPolygon literal read
+# into the exact geometry model. Report-only.
+name = "geojson_parse"
 harness = false

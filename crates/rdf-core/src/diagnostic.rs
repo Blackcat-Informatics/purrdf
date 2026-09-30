@@ -84,7 +84,7 @@ impl RdfLocation {
     /// A source-file (physical) location, by repo-relative path. Pair with
     /// [`with_line`](Self::with_line)/[`with_column`](Self::with_column) for a
     /// sub-file position. This is the file-level anchor that threads into a SARIF
-    /// `physicalLocation` (Task 12).
+    /// `physicalLocation`; [`logical`](Self::logical) sets the label field instead.
     pub fn file(path: impl Into<String>) -> Self {
         Self {
             path: Some(path.into()),

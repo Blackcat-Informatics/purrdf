@@ -66,6 +66,8 @@
 
 use purrdf_core::TermBox;
 use purrdf_core::{RdfDataset, TermValue};
+use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_le;
 use std::convert::Infallible;
 use std::ops::ControlFlow;
 
@@ -74,7 +76,6 @@ use super::certificate::{DlCertificate, DlCompleteness, Verdict};
 use super::classify::ClassHierarchy;
 use super::module::ModuleMethod;
 use super::realize::Realization;
-use crate::digest_hex::hex;
 use crate::owl_dl::graph::Assumptions;
 use crate::owl_dl::proof::{
     CheckReport, DlProof, DlProofContext, DlProofError, MAX_NESTING, ProofAnswer, Reader,
@@ -93,7 +94,7 @@ use crate::report::Construct;
 /// is a kind byte and its own components, and an axiom writes exactly the terms its kind
 /// carries. Bytes written under `v1` therefore cannot be read as if they were current, which is
 /// what the tag is for.
-const SERVICE_ENCODING_TAG: &str = "purrdf-dl-service-proof-v2";
+const SERVICE_ENCODING_TAG: Domain = Domain::new(b"purrdf-dl-service-proof-v2");
 
 /// Wire kind for [`TermValue::Iri`].
 const TERM_IRI: u8 = 0;
@@ -830,8 +831,8 @@ impl ServiceProof {
             .map_err(DlProofError::Canonicalization)?;
         if expected != self.input {
             return Err(DlProofError::InputMismatch {
-                expected: hex(expected),
-                stated: hex(self.input),
+                expected: purrdf_hash::hex::encode(&expected),
+                stated: purrdf_hash::hex::encode(&self.input),
             });
         }
         if self.question != *question || self.service != question.service() {
@@ -1272,7 +1273,7 @@ impl ServiceProof {
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        frame(&mut out, SERVICE_ENCODING_TAG.as_bytes());
+        frame_le(&mut out, SERVICE_ENCODING_TAG.as_bytes());
         out.extend_from_slice(&self.input);
         out.push(self.service.ordinal() as u8);
         out.push(u8::from(self.truncated));
@@ -1309,7 +1310,7 @@ impl ServiceProof {
             match run.proof.as_ref() {
                 Some(proof) => {
                     out.push(1);
-                    frame(&mut out, &proof.encode());
+                    frame_le(&mut out, &proof.encode());
                 }
                 None => out.push(0),
             }
@@ -1339,7 +1340,7 @@ impl ServiceProof {
     /// [`Self::digest`] as 64 lowercase hex characters.
     #[must_use]
     pub fn digest_hex(&self) -> String {
-        hex(self.digest())
+        purrdf_hash::hex::encode(&self.digest())
     }
 
     /// Rebuild a service proof from [`Self::encode`]d bytes.
@@ -1571,16 +1572,6 @@ pub(crate) fn receipt_of(
 }
 
 // ── Byte plumbing ───────────────────────────────────────────────────────────────
-//
-// The hex renderer used to live here too, as its own `char::from_digit` loop; it is now
-// `crate::digest_hex::hex`, the one first-party renderer this crate's three digest-bearing
-// proof modules share (see that module's doc comment for why).
-
-/// Append a length-prefixed byte string.
-fn frame(out: &mut Vec<u8>, bytes: &[u8]) {
-    out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-    out.extend_from_slice(bytes);
-}
 
 /// Append a `usize` as a little-endian `u64`.
 fn length(out: &mut Vec<u8>, value: usize) {
@@ -1599,16 +1590,12 @@ const fn answer_ordinal(answer: ProofAnswer) -> u8 {
 /// Append a term STRUCTURALLY — a kind byte and then that kind's own components, every
 /// variable-length one length-prefixed.
 ///
-/// Not the sort key [`term_key`] builds, and the difference is load-bearing twice over. The key
-/// joins a term's coordinates with separator scalars, so a triple term whose parts contain
-/// those scalars has the same key as a different term — an ambiguity a claim's identity must
-/// not rest on — and it is a PROJECTION, so no decoder can invert it. This encoding is
-/// injective and invertible, which is what lets [`ServiceProof::decode`] exist at all, and it
-/// is still a total order over terms: [`ServiceProof::covers`] sorts by these bytes, and two
-/// terms encode equal exactly when they ARE equal.
-///
-/// The kind byte's ordering agrees with [`term_key`]'s discriminant, so the four term kinds
-/// still do not interleave.
+/// Not [`TermValue`]'s own order, which sorts every sequence a reasoner service answers with:
+/// that order compares terms and writes nothing down, so no decoder could recover a term from
+/// it. This encoding is injective and invertible, which is what lets
+/// [`ServiceProof::decode`] exist at all, and it is still a total order over terms:
+/// [`ServiceProof::covers`] sorts by these bytes, and two terms encode equal exactly when they
+/// ARE equal. The leading kind byte keeps the four term kinds from interleaving.
 ///
 /// The terms are appended in [`TermValue::visit_terms`]'s pre-order: a triple term's kind
 /// byte, then its subject's whole encoding, then its predicate's, then its object's.
@@ -1617,12 +1604,12 @@ fn encode_term(out: &mut Vec<u8>, term: &TermValue) {
         match term {
             TermValue::Iri(iri) => {
                 out.push(TERM_IRI);
-                frame(out, iri.as_bytes());
+                frame_le(out, iri.as_bytes());
             }
             TermValue::Blank { label, scope } => {
                 out.push(TERM_BLANK);
                 out.extend_from_slice(&scope.ordinal().to_le_bytes());
-                frame(out, label.as_bytes());
+                frame_le(out, label.as_bytes());
             }
             TermValue::Literal {
                 lexical_form,
@@ -1631,16 +1618,16 @@ fn encode_term(out: &mut Vec<u8>, term: &TermValue) {
                 direction,
             } => {
                 out.push(TERM_LITERAL);
-                frame(out, datatype.as_bytes());
+                frame_le(out, datatype.as_bytes());
                 match language.as_deref() {
                     Some(tag) => {
                         out.push(1);
-                        frame(out, tag.as_bytes());
+                        frame_le(out, tag.as_bytes());
                     }
                     None => out.push(0),
                 }
                 out.push(direction_ordinal(*direction));
-                frame(out, lexical_form.as_bytes());
+                frame_le(out, lexical_form.as_bytes());
             }
             TermValue::Triple { .. } => out.push(TERM_TRIPLE),
         }
@@ -1828,7 +1815,7 @@ fn encode_receipt(out: &mut Vec<u8>, receipt: &StopReceipt) {
     }
     length(out, receipt.boundaries.len());
     for boundary in &receipt.boundaries {
-        frame(out, boundary.as_bytes());
+        frame_le(out, boundary.as_bytes());
     }
     length(out, receipt.branches_reached);
     length(out, receipt.clashes_found);
@@ -2229,10 +2216,10 @@ mod tests {
     const EX_FISH: &str = "http://example.org/Fish";
     /// A fixture individual.
     const EX_TOM: &str = "http://example.org/tom";
-    /// `rdfs:subClassOf`.
-    const RDFS_SUBCLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
     /// `rdf:type`.
-    const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+    use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+    /// `rdfs:subClassOf`.
+    use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASS_OF;
 
     /// `Cat ⊑ Animal`, `Fish ⊑ Animal`, `tom : Cat` — consistent, with a real taxonomy and a
     /// real realization to bind.
@@ -3767,6 +3754,54 @@ mod tests {
         )
     }
 
+    /// Every service shape's proof digest is frozen: a moved digest is a changed published
+    /// proof identity.
+    #[test]
+    fn every_service_proof_digest_is_frozen() {
+        let digests: Vec<(&str, String)> = every_shape()
+            .into_iter()
+            .map(|(name, proof)| (name, proof.digest_hex()))
+            .collect();
+        let expected: Vec<(&str, String)> = [
+            (
+                "consistency",
+                "991a19126369287fb9e09e26216e8db6763ecbb199fdbf1f4d0426816ec94d76",
+            ),
+            (
+                "class-satisfiability",
+                "52e70203fc4cb012e147a0b85e888f81fdc7c7ab963354575d86b0199a633242",
+            ),
+            (
+                "instance-retrieval",
+                "e7c47de1c95e29d144ce16497a4088df7f6ad0a18b525bafc02f8ac7976eef06",
+            ),
+            (
+                "axiom-entailment",
+                "dca7ae3a2e4e56cb6d58d1b0af58639ee2db4a4a05ecd3166fa268264e69d1c9",
+            ),
+            (
+                "classification",
+                "808261f360bf323b98f1af49979d0ebcf12181284b2fe831e3bb8b8366baecc6",
+            ),
+            (
+                "realization",
+                "f8a004d9e81e361d0c4f69ad883b2d0a51c4a6e701443ec9d911b885a8c3e2cd",
+            ),
+            (
+                "module-extraction",
+                "dc76114a7d7b6a80d869d35e1103b3e60519d863dbd029c9c020d09b1e963cfa",
+            ),
+            (
+                "undecided",
+                "056c64076cc2db1b59f545d4fa5a333a9c707a3d40a1e52504d9aae0b5549a56",
+            ),
+        ]
+        .into_iter()
+        .map(|(name, digest)| (name, digest.to_owned()))
+        .collect();
+        assert_eq!(digests, expected);
+    }
+
     /// **THE ROUND TRIP.** `decode(encode(p))` is `p`, re-encodes to the identical bytes, and
     /// keeps the identical digest — for every shape the services produce and for the term
     /// kinds they do not.
@@ -3961,7 +3996,7 @@ mod tests {
     /// `service`'s ordinal, a decided flag and the full trust base.
     fn forged_header(service: Service) -> Vec<u8> {
         let mut out = Vec::new();
-        frame(&mut out, SERVICE_ENCODING_TAG.as_bytes());
+        frame_le(&mut out, SERVICE_ENCODING_TAG.as_bytes());
         out.extend_from_slice(&[0_u8; 32]);
         out.push(service.ordinal() as u8);
         out.push(0);
@@ -3997,7 +4032,7 @@ mod tests {
         let mut direction = forged_header(Service::ClassSatisfiability);
         direction.push(1);
         direction.push(TERM_LITERAL);
-        frame(&mut direction, b"http://example.org/dt");
+        frame_le(&mut direction, b"http://example.org/dt");
         direction.push(0);
         direction.push(3);
 
@@ -4061,7 +4096,7 @@ mod tests {
         let mut bytes = forged_header(Service::ClassSatisfiability);
         bytes.push(1);
         bytes.push(TERM_IRI);
-        frame(&mut bytes, &[0xff, 0xfe]);
+        frame_le(&mut bytes, &[0xff, 0xfe]);
         assert!(matches!(
             ServiceProof::decode(&bytes),
             Err(DlProofError::Malformed { .. })
@@ -4080,16 +4115,16 @@ mod tests {
         let mut bytes = forged_header(Service::ClassSatisfiability);
         bytes.push(1); // a class-satisfiability question: one term follows.
         bytes.push(TERM_LITERAL);
-        frame(&mut bytes, b"http://example.org/dt");
+        frame_le(&mut bytes, b"http://example.org/dt");
         match tag {
             Some(tag) => {
                 bytes.push(1);
-                frame(&mut bytes, tag.as_bytes());
+                frame_le(&mut bytes, tag.as_bytes());
             }
             None => bytes.push(0),
         }
         bytes.push(0); // no base direction
-        frame(&mut bytes, b"v"); // the lexical form
+        frame_le(&mut bytes, b"v"); // the lexical form
         length(&mut bytes, 0); // no runs
         length(&mut bytes, 0); // no claims
         bytes.push(0); // no stop receipt
@@ -4248,10 +4283,11 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = purrdf_core::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::Any,
+                purrdf_core::term_fixture::TermShape::Any,
             );
             let (mut found, mut expected) = (Vec::new(), Vec::new());
             encode_term(&mut found, &value);
@@ -4265,18 +4301,14 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_encodes_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut leaf = Vec::new();
-                encode_term(&mut leaf, &TermValue::iri("http://example.org/s"));
-                let mut out = Vec::new();
-                encode_term(&mut out, &crate::test_terms::triple_chain(LEVELS));
-                assert_eq!(out.len(), LEVELS * (1 + 2 * leaf.len()) + leaf.len());
-                assert_eq!(out.first(), Some(&TERM_TRIPLE));
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the encoding did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut leaf = Vec::new();
+            encode_term(&mut leaf, &TermValue::iri("http://example.org/s"));
+            let mut out = Vec::new();
+            encode_term(&mut out, &purrdf_core::term_fixture::triple_chain(LEVELS));
+            assert_eq!(out.len(), LEVELS * (1 + 2 * leaf.len()) + leaf.len());
+            assert_eq!(out.first(), Some(&TERM_TRIPLE));
+        })
+        .expect("the thread starts");
     }
 }

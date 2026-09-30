@@ -37,7 +37,7 @@
 //!
 //! # The reassociated index
 //!
-//! [`HnswIndex::build_reassociated`] builds the same graph algorithm under
+//! [`build::<Reassociated>`](build) builds the same graph algorithm under
 //! [`purrdf_core::distance::Reassociated`], whose sums may be reassociated and contracted
 //! to fused multiply-add along the dispatch path a build resolves, the widest this
 //! process runs. It is a second type, `HnswIndex<Reassociated>`, not a mode of the first.
@@ -49,7 +49,7 @@
 //! [`BuildIdentity`](purrdf_core::distance::BuildIdentity) of the compilation: compiler
 //! release and LLVM version, target CPU, optimisation level, debug assertions and codegen
 //! flags -- the implementation is [`IMPLEMENTATION_ID_REASSOCIATED`]
-//! and its evidence revision names the path ([`profile::loss_evidence_reassociated`]).
+//! and its evidence revision names the path ([`profile::loss_evidence_for`]).
 //! Every decode, rebuild verification and search runs the recorded path, whichever path is
 //! widest here: an image built on `x86_64`'s SSE2 or AVX2+FMA path runs on that path on an
 //! AVX-512F processor, whose binary holds every `x86_64` compilation. A process that cannot
@@ -72,7 +72,7 @@
 //! # Example
 //!
 //! ```
-//! use purrdf_hnsw::{build, VectorMatrix, Params};
+//! use purrdf_hnsw::{build, HnswIndex, VectorMatrix, Params};
 //! use purrdf_core::DistanceMetric;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -82,12 +82,15 @@
 //!     vec![0.9, 0.1],
 //! ])?;
 //! let params = Params::new(2, 4, 8, 4)?;
-//! let index = build(matrix, &DistanceMetric::SquaredEuclidean, params)?;
+//! // `HnswIndex` defaults to the exact arithmetic; name `HnswIndex<Reassociated>` for the other.
+//! let index: HnswIndex = build(matrix, &DistanceMetric::SquaredEuclidean, params)?;
 //! let nearest = index.search_rows(0, 2)?;
 //! assert_eq!(nearest.len(), 2);
 //! # Ok(())
 //! # }
 //! ```
+
+#![forbid(unsafe_code)]
 
 mod builder;
 mod graph;
@@ -96,6 +99,8 @@ mod select;
 
 pub mod determinism;
 pub mod error;
+#[doc(hidden)]
+pub mod fixture;
 pub mod guard;
 pub mod level;
 pub mod params;
@@ -119,6 +124,7 @@ use purrdf_core::distance::{
 use rayon::prelude::*;
 
 use crate::graph::{Graph, Recorded, decode_image};
+use crate::sealed::Compiled;
 use crate::search::{DistanceCache, Query, Visited, greedy_descend, search_layer};
 
 /// The canonical image format version.
@@ -250,34 +256,93 @@ pub(crate) type Traverse<A> =
 pub(crate) type BuildGraph<A> =
     fn(&VectorMatrix, Resolved<A>, Kernel, Params, Option<usize>) -> Result<(Graph, Vec<f64>)>;
 
-/// The two walks whose cost is the index's -- the search traversal and the graph build --
-/// compiled for arithmetic `A` in this crate.
-///
-/// Every index holds one, and only the non-generic constructors fill it in
-/// ([`HnswIndex::build`], [`HnswIndex::build_reassociated`], [`HnswIndex::decode`],
-/// [`HnswIndex::decode_reassociated`] and the determinism digest), where `A` is concrete.
-/// So both walks, under both arithmetics, are instantiated here, in `purrdf-hnsw`, rather
-/// than in whichever downstream crate first calls a generic search method: the copy the
-/// asm evidence gate measures is the copy every search, batch and rebuild verification
-/// runs, whoever calls it.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Compiled<A: Arithmetic> {
-    /// Greedy descent, then the layer-0 beam.
-    traverse: Traverse<A>,
-    /// The round-structured build and connectivity repair.
-    pub(crate) build_graph: BuildGraph<A>,
-}
+/// The per-arithmetic hook every [`IndexArithmetic`] carries, out of every other crate's
+/// reach.
+pub(crate) mod sealed {
+    use purrdf_core::distance::{Arithmetic, Exact, Reassociated};
 
-impl<A: Arithmetic> Compiled<A> {
-    /// This crate's compilation of both walks under `A`.
+    use crate::{BuildGraph, HnswIndex, Traverse};
+
+    /// The two walks whose cost is the index's -- the search traversal and the graph
+    /// build -- compiled for arithmetic `A` in this crate.
     ///
-    /// Called only where `A` is concrete, which is what places the instantiation here.
-    pub(crate) fn here() -> Self {
-        Self {
-            traverse: HnswIndex::<A>::traverse,
-            build_graph: builder::build_graph::<A>,
+    /// Every index holds one, and only the per-arithmetic [`Compile`] implementations fill
+    /// it in, each a non-generic function of this crate. So both walks, under both
+    /// arithmetics, are instantiated here, in `purrdf-hnsw`, rather than in whichever
+    /// downstream crate first calls a generic constructor or search method: the copy the
+    /// asm evidence gate measures is the copy every search, batch and rebuild verification
+    /// runs, whoever calls it.
+    #[derive(Debug, Clone, Copy)]
+    pub struct Compiled<A: Arithmetic> {
+        /// Greedy descent, then the layer-0 beam.
+        pub(crate) traverse: Traverse<A>,
+        /// The round-structured build and connectivity repair.
+        pub(crate) build_graph: BuildGraph<A>,
+    }
+
+    impl<A: Arithmetic> Compiled<A> {
+        /// Both walks instantiated under `A`.
+        ///
+        /// Called only from the non-generic [`Compile::compiled`] implementations,
+        /// which is what places the instantiation in this crate.
+        fn here() -> Self {
+            Self {
+                traverse: HnswIndex::<A>::traverse,
+                build_graph: crate::builder::build_graph::<A>,
+            }
         }
     }
+
+    /// The walks this crate compiled for the arithmetic.
+    ///
+    /// Sealed: implemented here for exactly the arithmetics this crate publishes an
+    /// implementation for, so no other crate can name an index arithmetic whose walks it
+    /// compiled itself.
+    pub trait Compile: Arithmetic {
+        /// This crate's compilation of both walks under `Self`.
+        fn compiled() -> Compiled<Self>;
+    }
+
+    /// One non-generic [`Compile`] implementation per listed arithmetic.
+    ///
+    /// Never inlined into a caller: the function pointers it takes are what instantiate
+    /// the walks, and they must be instantiated in this crate, not in the crate that
+    /// calls a generic constructor.
+    macro_rules! compile_here {
+        ($($arithmetic:ty),+) => {$(
+            impl Compile for $arithmetic {
+                #[inline(never)]
+                fn compiled() -> Compiled<Self> {
+                    Compiled::here()
+                }
+            }
+        )+};
+    }
+
+    compile_here!(Exact, Reassociated);
+}
+
+/// An arithmetic an HNSW index can be built, decoded, loaded and verified under.
+///
+/// The closed family of [`Arithmetic`]s this crate publishes an implementation for:
+/// [`Exact`], the default, and [`Reassociated`]. Every constructor is generic over it
+/// ([`build`], [`HnswIndex::decode`], [`guard::load`],
+/// [`relation::HnswSpace::from_artifact`]), and everything that differs between the two is
+/// this trait's: the implementation identifier the profile publishes, and the walks this
+/// crate compiled for the arithmetic. Sealed, because an implementation identifier is a
+/// published contract and the walks must be compiled in this crate.
+pub trait IndexArithmetic: sealed::Compile {
+    /// The derived-index implementation identifier an index under this arithmetic
+    /// publishes: [`IMPLEMENTATION_ID`] or [`IMPLEMENTATION_ID_REASSOCIATED`].
+    const IMPLEMENTATION_ID: &'static str;
+}
+
+impl IndexArithmetic for Exact {
+    const IMPLEMENTATION_ID: &'static str = IMPLEMENTATION_ID;
+}
+
+impl IndexArithmetic for Reassociated {
+    const IMPLEMENTATION_ID: &'static str = IMPLEMENTATION_ID_REASSOCIATED;
 }
 
 /// The kernel `metric` names, or the refusal of a metric no kernel evaluates.
@@ -287,31 +352,36 @@ fn kernel_of(metric: &DistanceMetric) -> Result<Kernel> {
     })
 }
 
-/// Build an index over `matrix` under `metric` and `params`.
+/// Build an index over `matrix` under `metric` and `params`, computing every distance --
+/// at build, in neighbour selection, in search and in rebuild verification -- under
+/// arithmetic `A`.
 ///
-/// A free-function spelling of [`HnswIndex::build`] for callers that prefer it.
+/// Under [`Exact`] the canonical image is the same bytes on every target and dispatch
+/// path. Under [`Reassociated`] the dispatch path is resolved here -- the widest this
+/// process runs -- and the image records it: its distances may differ in their last bits
+/// from the exact index's, so the graph may differ too wherever two candidates nearly
+/// tie, and its recall is measured against the exact oracle exactly as the exact index's
+/// is. Its canonical image is reproducible only by the compiled build that made it, on the
+/// same dispatch path, so the image records the path and the build's [`BuildShape`]; every
+/// later decode, rebuild verification and search runs that path, on any process that can
+/// run it, and refuses one that cannot with [`HnswError::ArithmeticPathUnavailable`] and a
+/// build of another shape with [`HnswError::ArithmeticBuildMismatch`].
 ///
 /// # Errors
 ///
-/// As [`HnswIndex::build`].
-pub fn build(matrix: VectorMatrix, metric: &DistanceMetric, params: Params) -> Result<HnswIndex> {
-    HnswIndex::build(matrix, metric, params)
-}
-
-/// Build an index over `matrix` under `metric` and `params`, computing every distance under
-/// the [`Reassociated`] arithmetic.
-///
-/// A free-function spelling of [`HnswIndex::build_reassociated`].
-///
-/// # Errors
-///
-/// As [`HnswIndex::build_reassociated`].
-pub fn build_reassociated(
+/// [`HnswError::UnsupportedMetric`] if `metric` is a caller-defined extension metric
+/// with no kernel this crate can evaluate.
+/// Otherwise the errors of the builder: the parameter validation matrix, a zero-norm
+/// row under a norm-dividing kernel, a non-finite distance, or
+/// [`HnswError::FloatEnvironment`] for a thread whose float environment is not the IEEE
+/// one. Every arithmetic has a compilation for every target, so the thread's float
+/// environment is the only thing that refuses the arithmetic itself.
+pub fn build<A: IndexArithmetic>(
     matrix: VectorMatrix,
     metric: &DistanceMetric,
     params: Params,
-) -> Result<HnswIndex<Reassociated>> {
-    HnswIndex::build_reassociated(matrix, metric, params)
+) -> Result<HnswIndex<A>> {
+    builder::build_with_batch(matrix, kernel_of(metric)?, params, None)
 }
 
 /// A built HNSW index: the graph, the matrix it was built over, and its identity.
@@ -322,9 +392,9 @@ pub fn build_reassociated(
 /// # The arithmetic is a type parameter, and the default is the exact one
 ///
 /// `A` is the [`Arithmetic`] every distance the index computes -- at build, in neighbour
-/// selection, in search and in rebuild verification -- runs under. [`HnswIndex::build`]
-/// builds the [`Exact`] index, whose canonical image is the same bytes on every target and
-/// dispatch path; [`HnswIndex::build_reassociated`] builds the [`Reassociated`] one, whose
+/// selection, in search and in rebuild verification -- runs under. [`build::<Exact>`](build)
+/// builds the exact index, whose canonical image is the same bytes on every target and
+/// dispatch path; [`build::<Reassociated>`](build) builds the [`Reassociated`] one, whose
 /// distances may be reassociated and contracted along the dispatch path its build
 /// resolved, so its image is bound to that build and that path. They are two types, not
 /// one index with a mode, and neither ever computes a distance under the other's law.
@@ -362,43 +432,69 @@ pub struct HnswIndex<A: Arithmetic = Exact> {
 }
 
 impl HnswIndex {
-    /// Build an index over `matrix` under `metric`, computing every distance under the
-    /// [`Exact`] arithmetic.
+    /// [`build`] under the index's default arithmetic, [`Exact`].
     ///
     /// # Errors
     ///
-    /// [`HnswError::UnsupportedMetric`] if `metric` is a caller-defined extension metric
-    /// with no kernel this crate can evaluate.
-    /// Otherwise the errors of the builder: the parameter validation matrix, a zero-norm
-    /// row under a norm-dividing kernel, a non-finite distance, or
-    /// [`HnswError::FloatEnvironment`] for a thread whose float environment is not the IEEE
-    /// one.
+    /// As [`build`].
     pub fn build(matrix: VectorMatrix, metric: &DistanceMetric, params: Params) -> Result<Self> {
-        builder::build_with_batch(matrix, kernel_of(metric)?, params, None, Compiled::here())
+        build(matrix, metric, params)
     }
+}
 
-    /// Decode an exact index from its canonical image, over the matrix it describes.
+impl<A: IndexArithmetic> HnswIndex<A> {
+    /// Decode an index under `A` from its canonical image, over the matrix it describes.
     ///
     /// The matrix is supplied rather than embedded: the image is the graph and its
     /// identity, while the vectors are the source data the graph was derived from. The
-    /// decoded graph must have one node per matrix row.
+    /// decoded graph must have one node per matrix row. A reassociated image decodes on
+    /// the path it recorded, even one narrower than the widest this process runs, and the
+    /// decoded index searches and verifies on that path.
     ///
     /// # Errors
     ///
     /// [`HnswError::InvalidPayload`] for malformed or structurally invalid bytes,
     /// [`HnswError::VersionMismatch`] for an unimplemented version (a version-1 image among
-    /// them), [`HnswError::ArithmeticMismatch`] for a header naming another arithmetic (a
-    /// reassociated image among them: decode it with [`HnswIndex::decode_reassociated`]),
-    /// [`HnswError::ParameterValidation`] / [`HnswError::ArithmeticOverflow`] if the
-    /// decoded parameters do not describe the matrix, [`HnswError::ZeroNorm`] if the
-    /// decoded kernel needs norms and a row has none, and [`HnswError::FloatEnvironment`]
-    /// if the calling thread's float environment is not the IEEE one.
+    /// them), [`HnswError::ArithmeticMismatch`] for a header that records a code of another
+    /// arithmetic, [`HnswError::ArithmeticPathUnavailable`] for one recorded on a dispatch
+    /// path this process cannot run, [`HnswError::ArithmeticBuildMismatch`] for one recorded
+    /// by a build of another shape, [`HnswError::ParameterValidation`] /
+    /// [`HnswError::ArithmeticOverflow`] if the decoded parameters do not describe the
+    /// matrix, [`HnswError::ZeroNorm`] if the decoded kernel needs norms and a row has none,
+    /// and [`HnswError::FloatEnvironment`] if the calling thread's float environment is not
+    /// the IEEE one.
     pub fn decode(matrix: VectorMatrix, bytes: &[u8]) -> Result<Self> {
-        Self::decode_with(matrix, bytes, Compiled::here())
+        let image = decode_image::<A>(bytes)?;
+        // The recorded path, which every later search and rebuild verification runs; the
+        // norms computed below are arithmetic under the thread's environment, which this
+        // checks too.
+        let here = resolve_recorded::<A>(image.arithmetic.code)?;
+        check_build::<A>(image.arithmetic.shape)?;
+        if image.graph.node_count() != matrix.rows() {
+            return Err(HnswError::InvalidPayload {
+                reason: format!(
+                    "the payload holds {} node(s) but the matrix holds {} row(s)",
+                    image.graph.node_count(),
+                    matrix.rows()
+                ),
+            });
+        }
+        image
+            .params
+            .validate_against(matrix.rows(), matrix.dims())?;
+        let norms = builder::compute_norms(&matrix, here.exact(), image.kernel)?;
+        Ok(Self::new(
+            matrix,
+            image.kernel,
+            image.params,
+            image.graph,
+            norms,
+            here.selected(),
+        ))
     }
 
     /// Whether the graph `bytes` encodes is what `matrix` and its declared identity build,
-    /// under the exact arithmetic.
+    /// under `A`.
     ///
     /// The borrowing form of [`HnswIndex::verify_rebuild`], for a caller that already holds
     /// the vectors and only wants the verdict. It decodes the image, rebuilds from the
@@ -406,87 +502,61 @@ impl HnswIndex {
     /// gigabytes. A structurally invalid payload, a row-count disagreement or a parameter
     /// disagreement are all `Ok(None)`: this answers a question, it does not raise.
     ///
+    /// A reassociated image rebuilds on its recorded path in a build of its recorded shape,
+    /// which compiles to the same code, so an image it does not reproduce is `Ok(None)`, as
+    /// for an exact image.
+    ///
     /// # Errors
     ///
     /// [`HnswError::VersionMismatch`] for an image of another format version and
     /// [`HnswError::ArithmeticMismatch`] for one recorded under another arithmetic. Those
     /// are not a "no": a version-1 image is a real index whose distances were folded
     /// under a different law, and answering `false` would report it as tampered with when
-    /// it is merely a format this build does not rebuild. Otherwise only what the rebuild
-    /// itself can fail on -- a zero norm under a norm-dividing kernel, a non-finite
-    /// distance, or a float environment the arithmetic refuses.
+    /// it is merely a format this build does not rebuild. For the same reason
+    /// [`HnswError::ArithmeticPathUnavailable`] for an image recorded on a dispatch path
+    /// this process cannot run, and [`HnswError::ArithmeticBuildMismatch`] for one recorded
+    /// by a build of another shape: rebuilding it here would recompute every distance with
+    /// other last bits, so the answer would be a "no" that says nothing about the payload.
+    /// Otherwise only what the rebuild itself can fail on -- a zero norm under a
+    /// norm-dividing kernel, a non-finite distance, or a float environment the arithmetic
+    /// refuses.
     pub(crate) fn verify_bytes_against(
         matrix: &VectorMatrix,
         bytes: &[u8],
     ) -> Result<Option<Params>> {
-        Self::verify_bytes_with(matrix, bytes, Compiled::here())
-    }
-}
-
-impl HnswIndex<Reassociated> {
-    /// Build an index over `matrix` under `metric`, computing every distance -- at build,
-    /// in neighbour selection, in search and in rebuild verification -- under the
-    /// [`Reassociated`] arithmetic.
-    ///
-    /// The dispatch path is resolved here -- the widest this process runs -- and the
-    /// image records it. Its distances may differ in their last bits from
-    /// [`HnswIndex::build`]'s, so the graph may differ too wherever two candidates nearly
-    /// tie; its recall is measured against the exact oracle exactly as the exact index's
-    /// is. Its canonical image is reproducible only by the compiled build that made it, on
-    /// the same dispatch path, so the image records the path and the build's
-    /// [`BuildShape`]; every later decode, rebuild verification and search runs that path,
-    /// on any process that can run it, and refuses one that cannot with
-    /// [`HnswError::ArithmeticPathUnavailable`] and a build of another shape with
-    /// [`HnswError::ArithmeticBuildMismatch`].
-    ///
-    /// # Errors
-    ///
-    /// As [`HnswIndex::build`], whose [`HnswError::FloatEnvironment`] refusal is the
-    /// reassociated arithmetic's here: it has a compilation for every target, so the
-    /// thread's float environment is the only thing that refuses it.
-    pub fn build_reassociated(
-        matrix: VectorMatrix,
-        metric: &DistanceMetric,
-        params: Params,
-    ) -> Result<Self> {
-        builder::build_with_batch(matrix, kernel_of(metric)?, params, None, Compiled::here())
-    }
-
-    /// Decode a reassociated index from its canonical image, over the matrix it describes.
-    ///
-    /// # Errors
-    ///
-    /// As [`HnswIndex::decode`], with [`HnswError::ArithmeticMismatch`] for a header that
-    /// records a code of another arithmetic (an exact image among them), and
-    /// [`HnswError::ArithmeticPathUnavailable`] for one recorded on a dispatch path this
-    /// process cannot run, and [`HnswError::ArithmeticBuildMismatch`] for one recorded by a
-    /// build of another shape. A path narrower than the widest this process runs is not
-    /// refused: the decoded index searches and verifies on the path it recorded.
-    pub fn decode_reassociated(matrix: VectorMatrix, bytes: &[u8]) -> Result<Self> {
-        Self::decode_with(matrix, bytes, Compiled::here())
+        // The thread's environment is checked before the payload is read, so a refused
+        // environment is never reported as a payload that failed to decode.
+        A::resolve()?;
+        let image = match decode_image::<A>(bytes) {
+            Ok(image) => image,
+            Err(
+                error @ (HnswError::VersionMismatch { .. } | HnswError::ArithmeticMismatch { .. }),
+            ) => return Err(error),
+            Err(_) => return Ok(None),
+        };
+        // The rebuild runs on the recorded path, in a build of the recorded shape. A path
+        // this process cannot run, or a build of another shape, cannot rebuild the image,
+        // and saying `false` would report a real index as a tampered one.
+        let here = resolve_recorded::<A>(image.arithmetic.code)?;
+        check_build::<A>(image.arithmetic.shape)?;
+        if image.graph.node_count() != matrix.rows()
+            || image
+                .params
+                .validate_against(matrix.rows(), matrix.dims())
+                .is_err()
+        {
+            return Ok(None);
+        }
+        let (rebuilt, _) =
+            (A::compiled().build_graph)(matrix, here, image.kernel, image.params, None)?;
+        let same = rebuilt.canonical_image(image.kernel, &image.params, image.arithmetic)
+            == image
+                .graph
+                .canonical_image(image.kernel, &image.params, image.arithmetic);
+        Ok(same.then_some(image.params))
     }
 
-    /// [`HnswIndex::verify_bytes_against`] for a reassociated image.
-    ///
-    /// # Errors
-    ///
-    /// As [`HnswIndex::verify_bytes_against`], and
-    /// [`HnswError::ArithmeticPathUnavailable`] for an image recorded on a dispatch path
-    /// this process cannot run, or [`HnswError::ArithmeticBuildMismatch`] for one recorded
-    /// by a build of another shape: rebuilding it here would recompute every distance with
-    /// other last bits, so the answer would be a "no" that says nothing about the payload.
-    /// On the recorded path in a build of the recorded shape the rebuild compiles to the
-    /// same code, so an image it does not reproduce is `Ok(None)`, as for an exact image.
-    pub(crate) fn verify_bytes_against_reassociated(
-        matrix: &VectorMatrix,
-        bytes: &[u8],
-    ) -> Result<Option<Params>> {
-        Self::verify_bytes_with(matrix, bytes, Compiled::here())
-    }
-}
-
-impl<A: Arithmetic> HnswIndex<A> {
-    /// Assemble an index from its parts.
+    /// Assemble an index from its parts, holding the walks this crate compiled for `A`.
     pub(crate) fn new(
         matrix: VectorMatrix,
         kernel: Kernel,
@@ -494,7 +564,6 @@ impl<A: Arithmetic> HnswIndex<A> {
         graph: Graph,
         norms: Vec<f64>,
         arithmetic: Selected<A>,
-        compiled: Compiled<A>,
     ) -> Self {
         Self {
             matrix,
@@ -503,11 +572,13 @@ impl<A: Arithmetic> HnswIndex<A> {
             graph,
             norms,
             arithmetic,
-            compiled,
+            compiled: A::compiled(),
             scratch: Mutex::new(Vec::new()),
         }
     }
+}
 
+impl<A: Arithmetic> HnswIndex<A> {
     /// Arithmetic `A` resolved for the calling thread, on the path this index recorded.
     ///
     /// The only way any of this index's compute entries obtains a handle, and it runs on
@@ -576,7 +647,7 @@ impl<A: Arithmetic> HnswIndex<A> {
     /// the dispatch path this index recorded, which only a reassociated index can raise.
     pub fn search_rows(&self, query_row: usize, k: usize) -> Result<Vec<Ranked>> {
         let arithmetic = self.resolve_here()?;
-        let cache = DistanceCache::new();
+        let cache = DistanceCache::default();
         self.with_scratch(|visited| self.search_with(arithmetic, query_row, k, &cache, visited))
     }
 
@@ -595,7 +666,7 @@ impl<A: Arithmetic> HnswIndex<A> {
     /// As [`HnswIndex::search_rows`].
     pub fn search_rows_work(&self, query_row: usize, k: usize) -> Result<(Vec<Ranked>, u64)> {
         let arithmetic = self.resolve_here()?;
-        let cache = DistanceCache::new();
+        let cache = DistanceCache::default();
         let ranked = self
             .with_scratch(|visited| self.search_with(arithmetic, query_row, k, &cache, visited))?;
         Ok((ranked, cache.evaluations()))
@@ -624,7 +695,7 @@ impl<A: Arithmetic> HnswIndex<A> {
     /// IEEE one: the query's norm and every distance would already differ.
     /// [`HnswError::ArithmeticPathUnavailable`] as for [`HnswIndex::search_rows`].
     pub fn search_vector(&self, query: &[f64], k: usize) -> Result<Vec<Ranked>> {
-        let cache = DistanceCache::new();
+        let cache = DistanceCache::default();
         let bound = self.bind_vector(query, &cache)?;
         self.with_scratch(|visited| (self.compiled.traverse)(self, &bound, k, visited))
     }
@@ -635,7 +706,7 @@ impl<A: Arithmetic> HnswIndex<A> {
     ///
     /// As [`HnswIndex::search_vector`].
     pub fn search_vector_work(&self, query: &[f64], k: usize) -> Result<(Vec<Ranked>, u64)> {
-        let cache = DistanceCache::new();
+        let cache = DistanceCache::default();
         let bound = self.bind_vector(query, &cache)?;
         let ranked =
             self.with_scratch(|visited| (self.compiled.traverse)(self, &bound, k, visited))?;
@@ -692,7 +763,7 @@ impl<A: Arithmetic> HnswIndex<A> {
                 || (Visited::new(rows), self.resolve_here()),
                 |(visited, arithmetic), &query_row| {
                     let arithmetic = arithmetic.clone()?;
-                    let cache = DistanceCache::new();
+                    let cache = DistanceCache::default();
                     self.search_with(arithmetic, query_row, k, &cache, visited)
                 },
             )
@@ -765,75 +836,6 @@ impl<A: Arithmetic> HnswIndex<A> {
     pub fn canonical_image(&self) -> Vec<u8> {
         self.graph
             .canonical_image(self.kernel, &self.params, Recorded::of(self.arithmetic))
-    }
-
-    /// Decode an index under `A` from its canonical image.
-    fn decode_with(matrix: VectorMatrix, bytes: &[u8], compiled: Compiled<A>) -> Result<Self> {
-        let image = decode_image::<A>(bytes)?;
-        // The recorded path, which every later search and rebuild verification runs; the
-        // norms computed below are arithmetic under the thread's environment, which this
-        // checks too.
-        let here = resolve_recorded::<A>(image.arithmetic.code)?;
-        check_build::<A>(image.arithmetic.shape)?;
-        if image.graph.node_count() != matrix.rows() {
-            return Err(HnswError::InvalidPayload {
-                reason: format!(
-                    "the payload holds {} node(s) but the matrix holds {} row(s)",
-                    image.graph.node_count(),
-                    matrix.rows()
-                ),
-            });
-        }
-        image
-            .params
-            .validate_against(matrix.rows(), matrix.dims())?;
-        let norms = builder::compute_norms(&matrix, here.exact(), image.kernel)?;
-        Ok(Self::new(
-            matrix,
-            image.kernel,
-            image.params,
-            image.graph,
-            norms,
-            here.selected(),
-            compiled,
-        ))
-    }
-
-    /// Decode `bytes` under `A`, rebuild from `matrix`, and compare.
-    fn verify_bytes_with(
-        matrix: &VectorMatrix,
-        bytes: &[u8],
-        compiled: Compiled<A>,
-    ) -> Result<Option<Params>> {
-        // The thread's environment is checked before the payload is read, so a refused
-        // environment is never reported as a payload that failed to decode.
-        A::resolve()?;
-        let image = match decode_image::<A>(bytes) {
-            Ok(image) => image,
-            Err(
-                error @ (HnswError::VersionMismatch { .. } | HnswError::ArithmeticMismatch { .. }),
-            ) => return Err(error),
-            Err(_) => return Ok(None),
-        };
-        // The rebuild runs on the recorded path, in a build of the recorded shape. A path
-        // this process cannot run, or a build of another shape, cannot rebuild the image,
-        // and saying `false` would report a real index as a tampered one.
-        let here = resolve_recorded::<A>(image.arithmetic.code)?;
-        check_build::<A>(image.arithmetic.shape)?;
-        if image.graph.node_count() != matrix.rows()
-            || image
-                .params
-                .validate_against(matrix.rows(), matrix.dims())
-                .is_err()
-        {
-            return Ok(None);
-        }
-        let (rebuilt, _) = (compiled.build_graph)(matrix, here, image.kernel, image.params, None)?;
-        let same = rebuilt.canonical_image(image.kernel, &image.params, image.arithmetic)
-            == image
-                .graph
-                .canonical_image(image.kernel, &image.params, image.arithmetic);
-        Ok(same.then_some(image.params))
     }
 
     /// Rebuild the index from its own matrix and identity, and report whether the result
@@ -990,15 +992,16 @@ impl<A: Arithmetic> HnswIndex<A> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sealed::Compile as _;
     use purrdf_core::distance::BuildIdentity;
 
     fn fixture(rows: usize, dims: usize) -> VectorMatrix {
         let mut state = 0x0dd0_c0de_1234_5678_u64;
         let mut data = Vec::with_capacity(rows * dims);
         for _ in 0..rows * dims {
-            state = level::splitmix64(state);
-            let value = ((state >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0);
-            data.push(if value == 0.0 { 0.25 } else { value });
+            data.push(purrdf_testkit::rng::signed_unit_step_nonzero(
+                &mut state, 0.25,
+            ));
         }
         VectorMatrix::new(rows, dims, data).expect("valid fixture")
     }
@@ -1058,7 +1061,7 @@ mod tests {
         assert!(index.verify_rebuild().expect("rebuilds"));
 
         let image = index.canonical_image();
-        let decoded = HnswIndex::decode(fixture(48, 4), &image).expect("decodes");
+        let decoded = HnswIndex::<Exact>::decode(fixture(48, 4), &image).expect("decodes");
         assert_eq!(decoded.canonical_image(), image);
         assert_eq!(
             decoded.search_rows(3, 4).expect("searches"),
@@ -1109,11 +1112,11 @@ mod tests {
             actual: 1,
         };
         assert_eq!(
-            HnswIndex::decode(matrix.clone(), &version_one).expect_err("refused"),
+            HnswIndex::<Exact>::decode(matrix.clone(), &version_one).expect_err("refused"),
             refusal
         );
         assert_eq!(
-            HnswIndex::verify_bytes_against(&matrix, &version_one).expect_err("refused"),
+            HnswIndex::<Exact>::verify_bytes_against(&matrix, &version_one).expect_err("refused"),
             refusal,
             "a version-1 image is an index folded under another law, not a tampered one"
         );
@@ -1121,20 +1124,20 @@ mod tests {
         let mut other_arithmetic = image.clone();
         other_arithmetic[60..64].copy_from_slice(&2_u32.to_le_bytes());
         assert!(matches!(
-            HnswIndex::verify_bytes_against(&matrix, &other_arithmetic),
+            HnswIndex::<Exact>::verify_bytes_against(&matrix, &other_arithmetic),
             Err(HnswError::ArithmeticMismatch { actual: 2, .. })
         ));
 
         // The neighbours: the image as built verifies, and a structurally corrupt one of
         // the current version is still an honest "no".
         assert_eq!(
-            HnswIndex::verify_bytes_against(&matrix, &image).expect("verifies"),
+            HnswIndex::<Exact>::verify_bytes_against(&matrix, &image).expect("verifies"),
             Some(params())
         );
         let mut truncated = image;
         truncated.pop();
         assert_eq!(
-            HnswIndex::verify_bytes_against(&matrix, &truncated).expect("answers"),
+            HnswIndex::<Exact>::verify_bytes_against(&matrix, &truncated).expect("answers"),
             None
         );
     }
@@ -1158,8 +1161,7 @@ mod tests {
     }
 
     fn reassociated(matrix: VectorMatrix) -> HnswIndex<Reassociated> {
-        HnswIndex::build_reassociated(matrix, &DistanceMetric::SquaredEuclidean, params())
-            .expect("builds")
+        build::<Reassociated>(matrix, &DistanceMetric::SquaredEuclidean, params()).expect("builds")
     }
 
     /// A reassociated code other than `recorded`: a path some other processor runs.
@@ -1191,14 +1193,14 @@ mod tests {
         assert_eq!(header_code(&image), recorded);
 
         assert!(index.verify_rebuild().expect("the same path rebuilds"));
-        let decoded = HnswIndex::decode_reassociated(matrix.clone(), &image).expect("decodes");
+        let decoded = HnswIndex::<Reassociated>::decode(matrix.clone(), &image).expect("decodes");
         assert_eq!(decoded.canonical_image(), image);
         assert_eq!(
             decoded.search_rows(3, 4).expect("searches"),
             index.search_rows(3, 4).expect("searches")
         );
         assert_eq!(
-            HnswIndex::verify_bytes_against_reassociated(&matrix, &image).expect("verifies"),
+            HnswIndex::<Reassociated>::verify_bytes_against(&matrix, &image).expect("verifies"),
             Some(params())
         );
 
@@ -1207,7 +1209,7 @@ mod tests {
         // hook's.
         let lacking = path_hook::lack(another_path(recorded), recorded);
         assert!(index.verify_rebuild().expect("the same path rebuilds"));
-        assert!(HnswIndex::decode_reassociated(matrix, &image).is_ok());
+        assert!(HnswIndex::<Reassociated>::decode(matrix, &image).is_ok());
         drop(lacking);
     }
 
@@ -1225,7 +1227,7 @@ mod tests {
 
         let lacking = path_hook::lack(recorded, available);
         assert_eq!(
-            HnswIndex::decode_reassociated(matrix.clone(), &image).expect_err("refused"),
+            HnswIndex::<Reassociated>::decode(matrix.clone(), &image).expect_err("refused"),
             refusal
         );
         assert_eq!(
@@ -1235,7 +1237,7 @@ mod tests {
             refusal
         );
         assert_eq!(
-            HnswIndex::verify_bytes_against_reassociated(&matrix, &image)
+            HnswIndex::<Reassociated>::verify_bytes_against(&matrix, &image)
                 .expect_err("refused by name, never `Ok(None)`"),
             refusal
         );
@@ -1262,9 +1264,9 @@ mod tests {
         // The neighbour: able to run the path it recorded, every one of those calls
         // answers.
         assert!(index.verify_rebuild().expect("rebuilds"));
-        assert!(HnswIndex::decode_reassociated(matrix.clone(), &image).is_ok());
+        assert!(HnswIndex::<Reassociated>::decode(matrix.clone(), &image).is_ok());
         assert_eq!(
-            HnswIndex::verify_bytes_against_reassociated(&matrix, &image).expect("verifies"),
+            HnswIndex::<Reassociated>::verify_bytes_against(&matrix, &image).expect("verifies"),
             Some(params())
         );
         assert_eq!(index.search_rows(0, 3).expect("searches").len(), 3);
@@ -1275,9 +1277,9 @@ mod tests {
         let arithmetic =
             Reassociated::resolve_recorded(code).expect("the host runs the recorded path");
         let kernel = Kernel::SquaredEuclidean;
-        let compiled = Compiled::here();
         let (graph, norms) =
-            (compiled.build_graph)(&matrix, arithmetic, kernel, params(), None).expect("builds");
+            (Reassociated::compiled().build_graph)(&matrix, arithmetic, kernel, params(), None)
+                .expect("builds");
         HnswIndex::new(
             matrix,
             kernel,
@@ -1285,7 +1287,6 @@ mod tests {
             graph,
             norms,
             arithmetic.selected(),
-            compiled,
         )
     }
 
@@ -1345,7 +1346,7 @@ mod tests {
                 "the image records the narrower path"
             );
 
-            let decoded = HnswIndex::decode_reassociated(matrix.clone(), &image)
+            let decoded = HnswIndex::<Reassociated>::decode(matrix.clone(), &image)
                 .expect("a host that runs the recorded path decodes it");
             assert_eq!(
                 decoded.arithmetic(),
@@ -1368,7 +1369,7 @@ mod tests {
                     .expect("rebuilds on the recorded path")
             );
             assert_eq!(
-                HnswIndex::verify_bytes_against_reassociated(&matrix, &image)
+                HnswIndex::<Reassociated>::verify_bytes_against(&matrix, &image)
                     .expect("verifies on the recorded path"),
                 Some(params())
             );
@@ -1441,48 +1442,9 @@ mod tests {
         println!("a_narrower_recorded_path_is_run_not_refused exercised: {exercised:?}");
     }
 
-    /// The variable a CI job sets to name the dispatch paths its host must execute, as a
-    /// comma-separated list of path names. Read by the test harness only.
-    const REQUIRE_PATHS_VAR: &str = "PURRDF_REQUIRE_DISPATCH_PATHS";
-
-    /// The paths [`REQUIRE_PATHS_VAR`] names, or none when it is unset. A name that is no
-    /// path, or a variable that names none, panics: a misspelt requirement must fail
-    /// rather than require nothing.
-    fn required_paths() -> Vec<purrdf_core::distance::Path> {
-        use purrdf_core::distance::Path;
-
-        let Some(value) = std::env::var_os(REQUIRE_PATHS_VAR) else {
-            return Vec::new();
-        };
-        let value = value
-            .into_string()
-            .unwrap_or_else(|raw| panic!("{REQUIRE_PATHS_VAR} is not UTF-8: {raw:?}"));
-        let known = profile::PATHS.map(Path::name).join(", ");
-        let mut paths = Vec::new();
-        for name in value
-            .split(',')
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-        {
-            let path = profile::PATHS
-                .into_iter()
-                .find(|path| path.name() == name)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "{REQUIRE_PATHS_VAR} names `{name}`, which is not a dispatch path; \
-                         the paths are: {known}"
-                    )
-                });
-            if !paths.contains(&path) {
-                paths.push(path);
-            }
-        }
-        assert!(
-            !paths.is_empty(),
-            "{REQUIRE_PATHS_VAR} is set but names no path ({value:?}); the paths are: {known}"
-        );
-        paths
-    }
+    /// The variable naming the dispatch paths a host must execute; its `distance`
+    /// entries are read by [`purrdf_core::distance::required_paths`].
+    const REQUIRE_PATHS_VAR: &str = purrdf_hash::dispatch::REQUIRE_SIMD_PATHS;
 
     /// An index is built, searched and verified on every reassociated path this host
     /// runs, each search answering with that path's own kernel bits; and every path
@@ -1527,7 +1489,7 @@ mod tests {
             path == Path::Portable
                 || (cfg!(target_arch = "x86_64") && matches!(path, Path::Avx2 | Path::Avx512f))
         };
-        for path in required_paths() {
+        for path in purrdf_core::distance::required_paths() {
             let refusal = match Reassociated::image_code(path) {
                 Some(code) => match Reassociated::resolve_recorded(code) {
                     Ok(_) => {
@@ -1598,11 +1560,11 @@ mod tests {
             available: widest,
         };
         assert_eq!(
-            HnswIndex::decode_reassociated(matrix.clone(), &image).expect_err("refused"),
+            HnswIndex::<Reassociated>::decode(matrix.clone(), &image).expect_err("refused"),
             refusal
         );
         assert_eq!(
-            HnswIndex::verify_bytes_against_reassociated(&matrix, &image)
+            HnswIndex::<Reassociated>::verify_bytes_against(&matrix, &image)
                 .expect_err("refused by name, never `Ok(None)`"),
             refusal
         );
@@ -1615,9 +1577,9 @@ mod tests {
 
         // The neighbour: the bytes as built decode and verify.
         let built = index.canonical_image();
-        assert!(HnswIndex::decode_reassociated(matrix.clone(), &built).is_ok());
+        assert!(HnswIndex::<Reassociated>::decode(matrix.clone(), &built).is_ok());
         assert_eq!(
-            HnswIndex::verify_bytes_against_reassociated(&matrix, &built).expect("verifies"),
+            HnswIndex::<Reassociated>::verify_bytes_against(&matrix, &built).expect("verifies"),
             Some(params())
         );
     }
@@ -1645,7 +1607,7 @@ mod tests {
         // This host answers as the paths it really runs: it decodes the image exactly
         // when its build holds the portable compilation, and otherwise refuses it naming
         // both paths.
-        let decoded = HnswIndex::decode_reassociated(matrix.clone(), &image);
+        let decoded = HnswIndex::<Reassociated>::decode(matrix.clone(), &image);
         if portable_target {
             let decoded = decoded.expect("a portable-path host decodes a portable-path image");
             assert_eq!(decoded.canonical_image(), image);
@@ -1656,7 +1618,7 @@ mod tests {
             };
             assert_eq!(decoded.expect_err("another target refuses"), refusal);
             assert_eq!(
-                HnswIndex::verify_bytes_against_reassociated(&matrix, &image)
+                HnswIndex::<Reassociated>::verify_bytes_against(&matrix, &image)
                     .expect_err("refused by name, never `Ok(None)`"),
                 refusal
             );
@@ -1669,7 +1631,7 @@ mod tests {
 
         // The exact decoder never reads the portable reassociated code as its own.
         assert!(matches!(
-            HnswIndex::decode(matrix, &image),
+            HnswIndex::<Exact>::decode(matrix, &image),
             Err(HnswError::ArithmeticMismatch { actual: 8, .. })
         ));
     }
@@ -1744,11 +1706,11 @@ mod tests {
             here,
         };
         assert_eq!(
-            HnswIndex::decode_reassociated(matrix.clone(), &patched).expect_err("refused"),
+            HnswIndex::<Reassociated>::decode(matrix.clone(), &patched).expect_err("refused"),
             refusal
         );
         assert_eq!(
-            HnswIndex::verify_bytes_against_reassociated(&matrix, &patched)
+            HnswIndex::<Reassociated>::verify_bytes_against(&matrix, &patched)
                 .expect_err("refused by name, never `Ok(None)`"),
             refusal
         );
@@ -1763,12 +1725,12 @@ mod tests {
 
         // The neighbour: the same-build round trip.
         let decoded =
-            HnswIndex::decode_reassociated(matrix.clone(), &image).expect("this build decodes");
+            HnswIndex::<Reassociated>::decode(matrix.clone(), &image).expect("this build decodes");
         assert_eq!(decoded.canonical_image(), image);
         assert!(decoded.verify_rebuild().expect("rebuilds"));
         assert!(index.verify_rebuild().expect("rebuilds"));
         assert_eq!(
-            HnswIndex::verify_bytes_against_reassociated(&matrix, &image).expect("verifies"),
+            HnswIndex::<Reassociated>::verify_bytes_against(&matrix, &image).expect("verifies"),
             Some(params())
         );
         assert_eq!(
@@ -1821,11 +1783,11 @@ mod tests {
             here,
         };
         assert_eq!(
-            HnswIndex::decode_reassociated(matrix.clone(), &patched).expect_err("refused"),
+            HnswIndex::<Reassociated>::decode(matrix.clone(), &patched).expect_err("refused"),
             refusal
         );
         assert_eq!(
-            HnswIndex::verify_bytes_against_reassociated(&matrix, &patched)
+            HnswIndex::<Reassociated>::verify_bytes_against(&matrix, &patched)
                 .expect_err("refused by name, never `Ok(None)`"),
             refusal
         );
@@ -1841,10 +1803,10 @@ mod tests {
 
         // The neighbour: the unpatched image, whose identity is this build's.
         let decoded =
-            HnswIndex::decode_reassociated(matrix.clone(), &image).expect("this build decodes");
+            HnswIndex::<Reassociated>::decode(matrix.clone(), &image).expect("this build decodes");
         assert!(decoded.verify_rebuild().expect("rebuilds"));
         assert_eq!(
-            HnswIndex::verify_bytes_against_reassociated(&matrix, &image).expect("verifies"),
+            HnswIndex::<Reassociated>::verify_bytes_against(&matrix, &image).expect("verifies"),
             Some(params())
         );
     }
@@ -1867,17 +1829,17 @@ mod tests {
             "path and shape match"
         );
         assert_eq!(
-            HnswIndex::verify_bytes_against_reassociated(&matrix, &perturbed)
+            HnswIndex::<Reassociated>::verify_bytes_against(&matrix, &perturbed)
                 .expect("a build of the recorded shape answers"),
             None
         );
-        let decoded = HnswIndex::decode_reassociated(matrix.clone(), &perturbed)
+        let decoded = HnswIndex::<Reassociated>::decode(matrix.clone(), &perturbed)
             .expect("a perturbed distance still decodes");
         assert_eq!(decoded.arithmetic(), fast.arithmetic(), "the recorded path");
         assert!(!decoded.verify_rebuild().expect("answers"));
         // The neighbour: unperturbed, it verifies.
         assert_eq!(
-            HnswIndex::verify_bytes_against_reassociated(&matrix, &image).expect("verifies"),
+            HnswIndex::<Reassociated>::verify_bytes_against(&matrix, &image).expect("verifies"),
             Some(params())
         );
         assert!(fast.verify_rebuild().expect("rebuilds"));
@@ -1888,13 +1850,14 @@ mod tests {
         let exact_image = exact.canonical_image();
         let exact_perturbed = with_a_perturbed_distance(&exact_image, 72);
         assert_eq!(
-            HnswIndex::verify_bytes_against(&matrix, &exact_perturbed).expect("answers"),
+            HnswIndex::<Exact>::verify_bytes_against(&matrix, &exact_perturbed).expect("answers"),
             None
         );
-        let decoded = HnswIndex::decode(matrix.clone(), &exact_perturbed).expect("decodes");
+        let decoded =
+            HnswIndex::<Exact>::decode(matrix.clone(), &exact_perturbed).expect("decodes");
         assert!(!decoded.verify_rebuild().expect("answers"));
         assert_eq!(
-            HnswIndex::verify_bytes_against(&matrix, &exact_image).expect("verifies"),
+            HnswIndex::<Exact>::verify_bytes_against(&matrix, &exact_image).expect("verifies"),
             Some(params())
         );
     }
@@ -1934,15 +1897,15 @@ mod tests {
             actual: fast.arithmetic().image_code(),
         };
         assert_eq!(
-            HnswIndex::decode(matrix.clone(), &image).expect_err("refused"),
+            HnswIndex::<Exact>::decode(matrix.clone(), &image).expect_err("refused"),
             refusal
         );
         assert_eq!(
-            HnswIndex::verify_bytes_against(&matrix, &image).expect_err("refused"),
+            HnswIndex::<Exact>::verify_bytes_against(&matrix, &image).expect_err("refused"),
             refusal
         );
         // The neighbour: the same bytes decode as the arithmetic that wrote them.
-        assert!(HnswIndex::decode_reassociated(matrix, &image).is_ok());
+        assert!(HnswIndex::<Reassociated>::decode(matrix, &image).is_ok());
     }
 
     #[test]
@@ -1957,15 +1920,15 @@ mod tests {
             actual: Exact::IMAGE_CODE,
         };
         assert_eq!(
-            HnswIndex::decode_reassociated(matrix.clone(), &image).expect_err("refused"),
+            HnswIndex::<Reassociated>::decode(matrix.clone(), &image).expect_err("refused"),
             refusal
         );
         assert_eq!(
-            HnswIndex::verify_bytes_against_reassociated(&matrix, &image).expect_err("refused"),
+            HnswIndex::<Reassociated>::verify_bytes_against(&matrix, &image).expect_err("refused"),
             refusal
         );
         // The neighbour: the same bytes decode as the arithmetic that wrote them.
-        assert!(HnswIndex::decode(matrix, &image).is_ok());
+        assert!(HnswIndex::<Exact>::decode(matrix, &image).is_ok());
     }
 
     #[test]
@@ -1982,8 +1945,8 @@ mod tests {
         // 150 components: two whole 64-element blocks and a tail, at both stored widths.
         for metric in &metrics {
             for matrix in [fixture(40, 150), fixture_f32(40, 150)] {
-                let index = HnswIndex::build_reassociated(matrix.clone(), metric, params())
-                    .expect("builds");
+                let index =
+                    build::<Reassociated>(matrix.clone(), metric, params()).expect("builds");
                 let arithmetic = index
                     .arithmetic()
                     .resolve()
@@ -2114,7 +2077,7 @@ mod tests {
         );
         assert_eq!(
             fast_contract.implementation.revision.as_deref(),
-            Some(profile::loss_evidence_reassociated(fast.arithmetic().path()).as_bytes())
+            Some(profile::loss_evidence_for::<Reassociated>(fast.arithmetic().path()).as_bytes())
         );
     }
 

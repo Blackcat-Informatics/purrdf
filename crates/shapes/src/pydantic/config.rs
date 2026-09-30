@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::Value;
+use crate::json_model::Value;
 
 use super::{PydanticError, is_python_identifier, is_python_keyword};
 
@@ -22,7 +22,6 @@ const MAX_METADATA_DEPTH: usize = 128;
 const MAX_METADATA_NODES: usize = 1_000_000;
 const MAX_ARTIFACTS: usize = 131_072;
 pub(super) const MAX_SCHEMA_BYTES: usize = 16 * 1024 * 1024;
-pub(super) const MAX_SCHEMA_DEPTH: usize = 128;
 pub(super) const MAX_SCHEMA_NODES: usize = 1_000_000;
 pub(super) const MAX_SCHEMA_STRING_BYTES: usize = 16 * 1024 * 1024;
 pub(super) const MAX_ARTIFACT_BYTES: usize = 256 * 1024 * 1024;
@@ -696,16 +695,13 @@ fn checked_add(left: usize, right: usize, role: &str) -> Result<usize, PydanticE
 ///
 /// Returns whether the accepted identifier contains a local-version segment.
 fn validate_pep440(raw: &str) -> Option<bool> {
-    let bytes = raw.as_bytes();
-    let mut start = 0usize;
-    let mut end = bytes.len();
-    while start < end && bytes[start].is_ascii_whitespace() {
-        start += 1;
-    }
-    while end > start && bytes[end - 1].is_ascii_whitespace() {
-        end -= 1;
-    }
-    let bytes = &bytes[start..end];
+    // PEP 440's reference pattern (the `packaging` project's `VERSION_PATTERN`,
+    // matched as `^\s*` ... `\s*$`) admits surrounding whitespace, and `\s` in a
+    // Python `str` pattern is `str.isspace`: the Unicode `White_Space` scalars
+    // plus the four information separators U+001C-U+001F.
+    let bytes = raw
+        .trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
+        .as_bytes();
     if bytes.is_empty() {
         return None;
     }
@@ -858,8 +854,29 @@ fn consume_tag(bytes: &[u8], index: &mut usize, tags: &[&str]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pep440_surrounding_whitespace_is_python_whitespace() {
+        for raw in [
+            "1.0",
+            " 1.0\t",
+            "\u{c}1.0\u{b}",
+            "\u{a0}1.0\u{3000}",
+            "\u{1c}1.0\u{1f}",
+        ] {
+            assert_eq!(validate_pep440(raw), Some(false), "{raw:?}");
+        }
+        assert_eq!(validate_pep440(" 1.0+local "), Some(true));
+    }
+
+    #[test]
+    fn pep440_whitespace_inside_the_version_is_still_refused() {
+        for raw in ["1 .0", "1.0\u{a0}+local", "", " \t "] {
+            assert_eq!(validate_pep440(raw), None, "{raw:?}");
+        }
+    }
     use crate::PydanticConfig;
-    use serde_json::json;
+    use crate::json_model::json;
 
     fn module(path: &str) -> PydanticModuleConfig {
         PydanticModuleConfig::new(path, format!("Caller docs for {path}.")).expect("module")

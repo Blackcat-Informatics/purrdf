@@ -17,6 +17,10 @@
 //! graph patterns. That is a syntax error, and each refusal is paired with the
 //! neighbouring query that keeps the label inside one pattern and must still run.
 
+mod support;
+
+use support::iri;
+
 use std::sync::{Arc, Mutex};
 
 use purrdf_core::{
@@ -30,19 +34,6 @@ use purrdf_sparql_eval::{
 const EX: &str = "http://example.org/";
 /// The relation `( ?subject ) <TAG> ( ?label ?target )`.
 const TAG: &str = "http://example.org/pf/tag";
-
-fn iri(local: &str) -> TermValue {
-    TermValue::iri(format!("{EX}{local}"))
-}
-
-fn text(value: &str) -> TermValue {
-    TermValue::Literal {
-        lexical_form: value.to_owned(),
-        datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
-        language: None,
-        direction: None,
-    }
-}
 
 /// `ex:s1 ex:p ex:r1`, `ex:s2 ex:p ex:r2`, `ex:r1 ex:q "o"`, `ex:r2 ex:w ex:r1`.
 ///
@@ -72,8 +63,8 @@ fn tag_rows() -> MemoryRelation {
         1,
         2,
         vec![
-            vec![iri("s1"), text("x"), iri("r1")],
-            vec![iri("s2"), text("x"), iri("r9")],
+            vec![iri("s1"), TermValue::simple_literal("x"), iri("r1")],
+            vec![iri("s2"), TermValue::simple_literal("x"), iri("r9")],
         ],
     )
     .expect("uniform rows")

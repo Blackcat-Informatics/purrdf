@@ -4,6 +4,7 @@
 //! Adversarial identity, statement-layer, projection and ownership checks.
 
 use purrdf_core::TermBox;
+use purrdf_core::term_fixture::iri;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -22,12 +23,8 @@ use purrdf_core::{
 const P: &str = "http://example.org/p";
 const LIST: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List";
 const MAP: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/Map";
-const REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES;
 type Row = (TermValue, TermValue, TermValue, Option<TermValue>);
-
-fn iri(local: &str) -> TermValue {
-    TermValue::iri(format!("http://example.org/{local}"))
-}
 
 fn owned<D: DatasetView>(view: &D, id: D::Id) -> TermValue {
     match view.resolve(id) {
@@ -770,7 +767,7 @@ fn repeated_snapshots_release_their_deltas_and_keep_nested_payloads_borrowed() {
     .unwrap();
     assert_eq!(composite.stats().work.copied_text_bytes, 0);
     let literal_id = source
-        .term_id_by_value(&source.term_value(literal))
+        .term_id_by_value(&source.term_value(literal).unwrap())
         .unwrap();
     let TermRef::Literal {
         lexical: native, ..

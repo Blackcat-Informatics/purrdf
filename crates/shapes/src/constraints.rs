@@ -12,8 +12,9 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::sync::OnceLock;
 
-use ::purrdf::{FastMap, FastSet, IdSet, RdfTextDirection, TermId, TermRef};
+use ::purrdf::{FastMap, FastSet, GraphMatch, IdSet, RdfTextDirection, TermId, TermRef};
 use purrdf_core::SmallVec;
+use purrdf_core::collections::{ListFault, RdfListWalk};
 
 use crate::data::{GraphFilter, ShaclData, native_quads, quads_for_pattern_ids, resolve_id};
 use crate::engine::FocusNode;
@@ -28,6 +29,13 @@ use crate::shapes::{
     PropertyShape, Shape, annotation_for,
 };
 use crate::term::{Literal, NamedNode, Term, canonical_cmp_ids, term_id_to_native};
+use purrdf_xsd::XsdDatatype;
+use purrdf_xsd::datatype::{
+    XSD_BOOLEAN, XSD_BYTE, XSD_DATE, XSD_DATE_TIME, XSD_DECIMAL, XSD_DOUBLE, XSD_FLOAT, XSD_INT,
+    XSD_INTEGER, XSD_LONG, XSD_NEGATIVE_INTEGER, XSD_NON_NEGATIVE_INTEGER,
+    XSD_NON_POSITIVE_INTEGER, XSD_POSITIVE_INTEGER, XSD_SHORT, XSD_STRING, XSD_TIME,
+    XSD_UNSIGNED_BYTE, XSD_UNSIGNED_INT, XSD_UNSIGNED_LONG, XSD_UNSIGNED_SHORT,
+};
 
 /// Internal value-node currency for the constraint layer.
 ///
@@ -41,6 +49,12 @@ use crate::term::{Literal, NamedNode, Term, canonical_cmp_ids, term_id_to_native
 /// never materialized on the conforming path. Content-needing arms (datatype,
 /// pattern, length, node-kind, numeric/string comparisons) resolve to an owned
 /// [`Term`] on demand, and the report boundary always records an owned [`Term`].
+///
+/// It has the same two arms as [`FocusNode`] and is a separate type because their
+/// `Foreign` arms promise different things: a focus node is `Foreign` only when the
+/// dataset does not intern its term ([`FocusNode::resolve`]), while a value node keeps
+/// a node-expression term verbatim even when the dataset interns it, so the report
+/// shows the term the expression produced.
 #[derive(Clone)]
 enum ValueNode {
     /// An interned value node — carries its `TermId`, resolved to a [`Term`] only
@@ -2540,7 +2554,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 let violates = match (compiled, value.lexical(ds)) {
                     (Err(_), _) => true,   // bad regex → violation on every value node
                     (Ok(_), None) => true, // blank node → violation
-                    (Ok(pattern), Some(lex)) => !pattern.as_regex().is_match(lex),
+                    (Ok(pattern), Some(lex)) => !pattern.is_match(lex),
                 };
                 if violates {
                     emit!(ValidationResult {
@@ -3439,78 +3453,21 @@ pub(crate) fn substitute_path_placeholder<'q>(
 
 // ── Helper functions ───────────────────────────────────────────────────────────
 
-/// Apply the `whiteSpace` = `collapse` normalization every XSD atomic datatype
-/// below fixes, as far as a one-token lexical space can observe it.
-///
-/// XSD 1.1 Part 2 §4.3.6 defines the two steps `collapse` performs:
-///
-/// > `replace` — All occurrences of `#x9` (tab), `#xA` (line feed) and `#xD`
-/// > (carriage return) are replaced with `#x20` (space).
-/// >
-/// > `collapse` — After the processing implied by `replace`, contiguous
-/// > sequences of `#x20`s are collapsed to a single `#x20`, and any `#x20` at
-/// > the start or end of the string are then removed.
-///
-/// So the whole normalization quantifies over exactly four code points — the
-/// same four as XML `S`, "`S ::= (#x20 | #x9 | #xD | #xA)+`" (XML 1.0 5e §2.3
-/// `[3]`) — and [`purrdf_iri::terminals::is_ws_char`] is that class.
-///
-/// # Why trimming is the whole of `collapse` for these datatypes
-///
-/// `collapse` also squeezes INTERNAL runs, which this does not. That is sound
-/// here and only here: every lexical space this helper feeds
-/// (`xsd:integer`, `xsd:decimal`, `xsd:double`, `xsd:float`, `xsd:boolean`) is a
-/// single token containing no `#x20` at all, so an internal run survives
-/// `collapse` as one `#x20` and is refused by the token grammar either way. The
-/// verdict is identical; only the trimming is observable.
-///
-/// # The direction of the error this replaces
-///
-/// These sites called [`str::trim`], which trims the Unicode `White_Space`
-/// property — twenty-six code points where the datatype names four. That is
-/// **over-acceptance**: a SHACL validator handed `"\u{A0}42"` as an
-/// `xsd:integer` stripped the NO-BREAK SPACE and reported a conforming typed
-/// literal, though U+00A0 is not touched by `replace` or `collapse` and the
-/// value is not in `xsd:integer`'s lexical space at all. `sh:datatype`
-/// conformance is a claim about the datatype, so accepting a literal the
-/// datatype refuses makes the report wrong, not merely lenient.
-fn collapse_trim(s: &str) -> &str {
-    s.trim_matches(purrdf_iri::terminals::is_ws_char)
-}
-
-/// `xsd:integer` lexical space: optional sign then one-or-more ASCII digits.
-/// Unbounded — no native-int overflow.
-///
-/// `xsd:integer` fixes `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.4.13), so
-/// the lexical form is trimmed with [`collapse_trim`] and not with
-/// [`str::trim`].
+/// `xsd:integer`'s lexical space after its `whiteSpace` = `collapse` facet
+/// (XSD 1.1 Part 2 §3.4.13): the lexical form is trimmed with
+/// [`trim_ws`](purrdf_iri::terminals::trim_ws) and not with [`str::trim`], then
+/// read by [`purrdf_xsd::numeric::is_integer_lexical`]. Unbounded — no
+/// native-int overflow.
 fn is_xsd_integer_lexical(s: &str) -> bool {
-    let s = collapse_trim(s);
-    let digits = s.strip_prefix(['+', '-']).unwrap_or(s);
-    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+    purrdf_xsd::numeric::is_integer_lexical(purrdf_iri::terminals::trim_ws(s))
 }
 
-/// `xsd:decimal` lexical space: optional sign then digits with an optional
-/// single '.' — NO exponent. At least one digit must be present.
-///
-/// `xsd:decimal` fixes `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.3.3), so the
-/// lexical form is trimmed with [`collapse_trim`] and not with [`str::trim`].
+/// `xsd:decimal`'s lexical space after its `whiteSpace` = `collapse` facet
+/// (XSD 1.1 Part 2 §3.3.3): the lexical form is trimmed with
+/// [`trim_ws`](purrdf_iri::terminals::trim_ws) and not with [`str::trim`], then
+/// read by [`purrdf_xsd::numeric::is_decimal_lexical`] (no exponent).
 fn is_xsd_decimal_lexical(s: &str) -> bool {
-    let s = collapse_trim(s);
-    let body = s.strip_prefix(['+', '-']).unwrap_or(s);
-    if body.is_empty() {
-        return false;
-    }
-    let mut seen_dot = false;
-    let mut seen_digit = false;
-    for b in body.bytes() {
-        match b {
-            b'0'..=b'9' => seen_digit = true,
-            b'.' if !seen_dot => seen_dot = true,
-            _ => return false, // rejects 'e'/'E' (scientific notation) and any other char
-        }
-    }
-    seen_digit
+    purrdf_xsd::numeric::is_decimal_lexical(purrdf_iri::terminals::trim_ws(s))
 }
 
 /// Check that a `Term` satisfies `sh:datatype` requirements.
@@ -3553,57 +3510,40 @@ fn check_datatype_parts(lex: &str, stored_dt: &str, dt_iri: &NamedNode) -> bool 
     xsd_lexical_valid(dt_iri.as_str(), lex)
 }
 
-/// The XSD integer-derived datatype IRIs whose VALUE space is narrower than
-/// `xsd:integer` (so an exact datatype match still requires a range check).
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-
+/// Whether `dt` is an XSD integer-derived datatype IRI whose VALUE space is
+/// narrower than `xsd:integer` (so an exact datatype match still requires a range
+/// check).
 fn is_derived_integer_type(dt: &str) -> bool {
-    matches!(
-        dt,
-        "http://www.w3.org/2001/XMLSchema#nonNegativeInteger"
-            | "http://www.w3.org/2001/XMLSchema#positiveInteger"
-            | "http://www.w3.org/2001/XMLSchema#nonPositiveInteger"
-            | "http://www.w3.org/2001/XMLSchema#negativeInteger"
-            | "http://www.w3.org/2001/XMLSchema#long"
-            | "http://www.w3.org/2001/XMLSchema#int"
-            | "http://www.w3.org/2001/XMLSchema#short"
-            | "http://www.w3.org/2001/XMLSchema#byte"
-            | "http://www.w3.org/2001/XMLSchema#unsignedLong"
-            | "http://www.w3.org/2001/XMLSchema#unsignedInt"
-            | "http://www.w3.org/2001/XMLSchema#unsignedShort"
-            | "http://www.w3.org/2001/XMLSchema#unsignedByte"
-    )
+    dt != XSD_INTEGER && XsdDatatype::from_iri(dt).is_some_and(XsdDatatype::is_integer_family)
 }
 
 /// Lexical-form validity for an exact datatype-IRI match. Unknown datatypes are
 /// accepted (no lexical facet enforced).
 fn xsd_lexical_valid(dt: &str, lex: &str) -> bool {
     match dt {
-        "http://www.w3.org/2001/XMLSchema#integer" => is_xsd_integer_lexical(lex),
-        "http://www.w3.org/2001/XMLSchema#decimal" => is_xsd_decimal_lexical(lex),
+        XSD_INTEGER => is_xsd_integer_lexical(lex),
+        XSD_DECIMAL => is_xsd_decimal_lexical(lex),
         // `xsd:double` / `xsd:float` / `xsd:boolean` each fix
         // `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.3.5, §3.3.4, §3.3.2), so
         // they are trimmed with the four code points `collapse` names and not
         // with `str::trim`'s Unicode `White_Space` property.
-        "http://www.w3.org/2001/XMLSchema#double" => {
-            purrdf_xsd::parse_double_xsd10(collapse_trim(lex)).is_ok()
-        }
-        "http://www.w3.org/2001/XMLSchema#float" => {
-            purrdf_xsd::parse_float_xsd10(collapse_trim(lex)).is_ok()
-        }
-        "http://www.w3.org/2001/XMLSchema#boolean" => {
-            matches!(collapse_trim(lex), "true" | "false" | "1" | "0")
+        XSD_DOUBLE => purrdf_xsd::parse_double_xsd10(purrdf_iri::terminals::trim_ws(lex)).is_ok(),
+        XSD_FLOAT => purrdf_xsd::parse_float_xsd10(purrdf_iri::terminals::trim_ws(lex)).is_ok(),
+        XSD_BOOLEAN => {
+            matches!(
+                purrdf_iri::terminals::trim_ws(lex),
+                "true" | "false" | "1" | "0"
+            )
         }
         _ => true,
     }
 }
 
-/// Whether a literal that oxigraph stored as the canonical base type satisfies a
+/// Whether a literal stored as the canonical base type satisfies a
 /// shape's required XSD *derived* integer type, by validating the lexical value
 /// against the derived type's value space. Every XSD integer-derived type
-/// canonicalizes to `xsd:integer` in oxigraph; only that base is considered here.
+/// canonicalizes to `xsd:integer`; only that base is considered here.
 fn derived_integer_matches(stored_dt: &str, required_dt: &str, lex: &str) -> bool {
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
     if stored_dt != XSD_INTEGER || !is_xsd_integer_lexical(lex) {
         return false;
     }
@@ -3611,7 +3551,7 @@ fn derived_integer_matches(stored_dt: &str, required_dt: &str, lex: &str) -> boo
     // applied: two trims of one lexical form that disagreed about the class
     // would let a value pass the lexical gate and then be re-read differently by
     // the bound check.
-    let trimmed = collapse_trim(lex);
+    let trimmed = purrdf_iri::terminals::trim_ws(lex);
     // For sign-constrained but unbounded types, fall back to a lexical sign check
     // when the magnitude exceeds i128 (astronomically large; never in practice).
     let value = trimmed.parse::<i128>().ok();
@@ -3619,18 +3559,18 @@ fn derived_integer_matches(stored_dt: &str, required_dt: &str, lex: &str) -> boo
     let is_positive = || value.map_or_else(|| !trimmed.starts_with('-'), |n| n > 0);
     let is_zero = || value == Some(0);
     match required_dt {
-        "http://www.w3.org/2001/XMLSchema#nonNegativeInteger" => !is_negative(),
-        "http://www.w3.org/2001/XMLSchema#positiveInteger" => is_positive(),
-        "http://www.w3.org/2001/XMLSchema#nonPositiveInteger" => is_negative() || is_zero(),
-        "http://www.w3.org/2001/XMLSchema#negativeInteger" => is_negative(),
-        "http://www.w3.org/2001/XMLSchema#long" => trimmed.parse::<i64>().is_ok(),
-        "http://www.w3.org/2001/XMLSchema#int" => trimmed.parse::<i32>().is_ok(),
-        "http://www.w3.org/2001/XMLSchema#short" => trimmed.parse::<i16>().is_ok(),
-        "http://www.w3.org/2001/XMLSchema#byte" => trimmed.parse::<i8>().is_ok(),
-        "http://www.w3.org/2001/XMLSchema#unsignedLong" => trimmed.parse::<u64>().is_ok(),
-        "http://www.w3.org/2001/XMLSchema#unsignedInt" => trimmed.parse::<u32>().is_ok(),
-        "http://www.w3.org/2001/XMLSchema#unsignedShort" => trimmed.parse::<u16>().is_ok(),
-        "http://www.w3.org/2001/XMLSchema#unsignedByte" => trimmed.parse::<u8>().is_ok(),
+        XSD_NON_NEGATIVE_INTEGER => !is_negative(),
+        XSD_POSITIVE_INTEGER => is_positive(),
+        XSD_NON_POSITIVE_INTEGER => is_negative() || is_zero(),
+        XSD_NEGATIVE_INTEGER => is_negative(),
+        XSD_LONG => trimmed.parse::<i64>().is_ok(),
+        XSD_INT => trimmed.parse::<i32>().is_ok(),
+        XSD_SHORT => trimmed.parse::<i16>().is_ok(),
+        XSD_BYTE => trimmed.parse::<i8>().is_ok(),
+        XSD_UNSIGNED_LONG => trimmed.parse::<u64>().is_ok(),
+        XSD_UNSIGNED_INT => trimmed.parse::<u32>().is_ok(),
+        XSD_UNSIGNED_SHORT => trimmed.parse::<u16>().is_ok(),
+        XSD_UNSIGNED_BYTE => trimmed.parse::<u8>().is_ok(),
         _ => false,
     }
 }
@@ -3644,10 +3584,40 @@ struct ShaclList {
     head: Option<TermId>,
     /// The number of members.
     len: usize,
-    /// `rdf:first`, which every non-empty list's cells carry.
+    /// `rdf:first`, `rdf:rest` and `rdf:nil` as this data graph interns them.
+    vocab: ListIds,
+}
+
+/// The list vocabulary's ids in one data graph; `None` where it is not interned.
+#[derive(Clone, Copy)]
+struct ListIds {
     first: Option<TermId>,
-    /// `rdf:rest`, likewise.
     rest: Option<TermId>,
+    nil: Option<TermId>,
+}
+
+impl ListIds {
+    fn of(ds: &impl ShaclRead) -> Self {
+        Self {
+            first: ds.term_id_by_iri(rdf::FIRST),
+            rest: ds.term_id_by_iri(rdf::REST),
+            nil: ds.term_id_by_iri(rdf::NIL),
+        }
+    }
+
+    /// The strict walk of the list headed by `head`, over every graph.
+    fn walk<D: ShaclRead>(
+        self,
+        ds: &D,
+        head: TermId,
+    ) -> impl Iterator<Item = Result<TermId, ListFault<TermId>>> + '_ {
+        RdfListWalk::new(
+            head,
+            self.nil,
+            move |cell| ds.sole_object(cell, self.first, GraphMatch::Any),
+            move |cell| ds.sole_object(cell, self.rest, GraphMatch::Any),
+        )
+    }
 }
 
 impl ShaclList {
@@ -3658,111 +3628,43 @@ impl ShaclList {
     /// rdf:first or rdf:rest), or has exactly one value for the property rdf:first
     /// in G and exactly one value for the property rdf:rest in G that is also a
     /// SHACL list in G, and the list does not have itself as a value of the
-    /// property path rdf:rest+ in G."
+    /// property path rdf:rest+ in G." That is the strict walker's definition of
+    /// a well-formed list ([`RdfListWalk`]); a cell is an IRI or a blank node
+    /// because nothing else is the subject of a statement.
     ///
-    /// Every clause is checked in id space and WITHOUT allocating, because the
-    /// list components run once per value node on the change path: a cycle is
-    /// found by Floyd's two-pointer walk (the fast pointer checks every cell's
-    /// shape as it reaches it first), not by a visited set. A value node that is
-    /// not interned is the subject of no quad, so it is a list only as `rdf:nil`.
+    /// The walk is counted in place WITHOUT allocating, because the list
+    /// components run once per value node on the change path. A value node that
+    /// is not interned is the subject of no quad, so it is a list only as
+    /// `rdf:nil`.
     fn of(ds: &impl ShaclRead, value: &ValueNode) -> Option<Self> {
-        let first = ds.term_id_by_iri(rdf::FIRST);
-        let rest = ds.term_id_by_iri(rdf::REST);
-        let nil = ds.term_id_by_iri(rdf::NIL);
+        let vocab = ListIds::of(ds);
         let Some(head) = value.as_id(ds) else {
             let empty = Self {
                 head: None,
                 len: 0,
-                first,
-                rest,
+                vocab,
             };
             return matches!(value, ValueNode::Foreign(Term::NamedNode(n)) if n.as_str() == rdf::NIL)
                 .then_some(empty);
         };
-        // One well-formed step from `cell`: `Ok(None)` at `rdf:nil`,
-        // `Ok(Some(next))` from a proper cell, `Err(())` for anything else.
-        let step = |cell: TermId| -> Result<Option<TermId>, ()> {
-            let head_value = single_object(ds, cell, first)?;
-            let tail = single_object(ds, cell, rest)?;
-            if Some(cell) == nil {
-                return if head_value.is_none() && tail.is_none() {
-                    Ok(None)
-                } else {
-                    Err(())
-                };
-            }
-            if !matches!(ds.resolve(cell), TermRef::Iri(_) | TermRef::Blank { .. }) {
-                return Err(());
-            }
-            match (head_value, tail) {
-                (Some(_), Some(next)) => Ok(Some(next)),
-                _ => Err(()),
-            }
-        };
-        let mut len = 0usize;
-        let mut slow = head;
-        let mut fast = head;
-        // The fast pointer advances two cells per round; every cell is first
-        // reached — and so checked — by it. The slow pointer trails it one cell
-        // per round, over cells the fast pointer has already checked.
-        while let Some(next) = step(fast).ok()? {
-            len += 1;
-            let Some(after) = step(next).ok()? else {
-                break;
-            };
-            len += 1;
-            fast = after;
-            slow = step(slow).ok().flatten()?;
-            if slow == fast {
-                return None;
-            }
-        }
+        let len = vocab
+            .walk(ds, head)
+            .try_fold(0_usize, |len, member| member.map(|_| len + 1))
+            .ok()?;
         Some(Self {
             head: Some(head),
             len,
-            first,
-            rest,
+            vocab,
         })
     }
 
     /// The members, in list order. The structure was checked by [`Self::of`], so
     /// this walk cannot fail; it allocates nothing.
     fn members<D: ShaclRead>(self, ds: &D) -> impl Iterator<Item = TermId> + '_ {
-        let mut cell = self.head;
-        (0..self.len).filter_map(move |_| {
-            let here = cell?;
-            let member = single_object(ds, here, self.first).ok().flatten()?;
-            cell = single_object(ds, here, self.rest).ok().flatten();
-            Some(member)
-        })
+        self.head
+            .into_iter()
+            .flat_map(move |head| self.vocab.walk(ds, head).map_while(Result::ok))
     }
-}
-
-/// The single distinct object of `(subject, predicate, ?)`: `Ok(None)` when there
-/// is none, `Err(())` when there are two. A statement asserted in several named
-/// graphs is still one value.
-fn single_object(
-    ds: &impl ShaclRead,
-    subject: TermId,
-    predicate: Option<TermId>,
-) -> Result<Option<TermId>, ()> {
-    let Some(predicate) = predicate else {
-        return Ok(None);
-    };
-    let mut found: Option<TermId> = None;
-    for quad in quads_for_pattern_ids(
-        ds,
-        Some(subject),
-        Some(predicate),
-        None,
-        GraphFilter::AnyGraph,
-    ) {
-        match found {
-            Some(existing) if existing != quad.o => return Err(()),
-            _ => found = Some(quad.o),
-        }
-    }
-    Ok(found)
 }
 
 /// Check that a `Term` satisfies `sh:nodeKind`.
@@ -3885,40 +3787,19 @@ pub(crate) fn numeric_value(term: &Term) -> Option<f64> {
 /// of [`ValueNode::literal_parts`], so a conforming value node is compared without
 /// ever being materialized into an owned [`Term`].
 fn numeric_parts(lexical: &str, datatype: &str) -> Option<f64> {
-    const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
     // The full XSD numeric lattice: the primitives plus EVERY derived integer
     // datatype. The set must match the rest of the engine (see
     // `instance.rs::numeric_or_bool_scalar`); the previous list omitted the
     // derived/unsigned integers (e.g. `xsd:nonNegativeInteger`), so a faithful
     // `"1"^^xsd:nonNegativeInteger` value read as non-numeric and spuriously
-    // violated every `sh:minInclusive`/`sh:maxInclusive` facet. (The omission was
-    // masked while data round-tripped through oxigraph's NT serializer, which
-    // value-space-normalized such literals to `xsd:integer`; the oxigraph-free
-    // path is the faithful one and exposes the gap.)
-    let local = datatype.strip_prefix(XSD_NS)?;
-    if matches!(
-        local,
-        "integer"
-            | "decimal"
-            | "double"
-            | "float"
-            | "long"
-            | "int"
-            | "short"
-            | "byte"
-            | "nonNegativeInteger"
-            | "positiveInteger"
-            | "nonPositiveInteger"
-            | "negativeInteger"
-            | "unsignedLong"
-            | "unsignedInt"
-            | "unsignedShort"
-            | "unsignedByte"
-    ) {
-        // Every datatype listed above fixes `whiteSpace` = `collapse`, so the
+    // violated every `sh:minInclusive`/`sh:maxInclusive` facet. (The omission is
+    // masked whenever data round-trips through a value-space-normalizing NT
+    // serializer that rewrites such literals to `xsd:integer`.)
+    if XsdDatatype::from_iri(datatype).is_some_and(XsdDatatype::is_numeric) {
+        // Every numeric datatype fixes `whiteSpace` = `collapse`, so the
         // lexical form is trimmed with the four code points that names — see
-        // [`collapse_trim`].
-        collapse_trim(lexical).parse::<f64>().ok()
+        // [`trim_ws`](purrdf_iri::terminals::trim_ws).
+        purrdf_iri::terminals::trim_ws(lexical).parse::<f64>().ok()
     } else {
         None
     }
@@ -3993,23 +3874,21 @@ fn temporal_parts_cmp(
     b_lexical: &str,
     b_datatype: &str,
 ) -> Option<std::cmp::Ordering> {
-    const TEMPORAL: [&str; 3] = [
-        "http://www.w3.org/2001/XMLSchema#dateTime",
-        "http://www.w3.org/2001/XMLSchema#date",
-        "http://www.w3.org/2001/XMLSchema#time",
-    ];
+    const TEMPORAL: [&str; 3] = [XSD_DATE_TIME, XSD_DATE, XSD_TIME];
     if !TEMPORAL.contains(&a_datatype) || !TEMPORAL.contains(&b_datatype) {
         return None;
     }
     // The three datatypes fix `whiteSpace` = `collapse`; a lexical form with an
     // interior space is not one, so the collapse is the trim.
-    let va = purrdf_xsd::parse_by_iri(collapse_trim(a_lexical), a_datatype).ok()??;
-    let vb = purrdf_xsd::parse_by_iri(collapse_trim(b_lexical), b_datatype).ok()??;
+    let va =
+        purrdf_xsd::parse_by_iri(purrdf_iri::terminals::trim_ws(a_lexical), a_datatype).ok()??;
+    let vb =
+        purrdf_xsd::parse_by_iri(purrdf_iri::terminals::trim_ws(b_lexical), b_datatype).ok()??;
     purrdf_xsd::value_cmp(&va, &vb)
 }
 
 /// Term equality: two terms are equal iff their string representations match
-/// (oxigraph's `PartialEq` does the right thing for typed literals).
+/// (`PartialEq` does the right thing for typed literals).
 fn terms_equal(a: &Term, b: &Term) -> bool {
     a == b
 }
@@ -4028,7 +3907,7 @@ const UNIQUE_LANG_INLINE: usize = 8;
 /// duplicated values are `rdf:dirLangString`s (`ar--ltr`), so the message names
 /// exactly the group the result is about.
 fn duplicate_language_message(lang: &str, direction: Option<RdfTextDirection>) -> String {
-    let lang = lang.to_ascii_lowercase();
+    let lang = purrdf_iri::langtag::identity_fold(lang);
     match direction {
         Some(direction) => format!("duplicate language tag: {lang}--{}", direction.as_str()),
         None => format!("duplicate language tag: {lang}"),
@@ -4322,13 +4201,7 @@ fn compare_literal_views(
     a: Option<LiteralView<'_>>,
     b: Option<LiteralView<'_>>,
 ) -> Option<std::cmp::Ordering> {
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-    const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
-    const TEMPORAL: [&str; 3] = [
-        "http://www.w3.org/2001/XMLSchema#dateTime",
-        "http://www.w3.org/2001/XMLSchema#date",
-        "http://www.w3.org/2001/XMLSchema#time",
-    ];
+    const TEMPORAL: [&str; 3] = [XSD_DATE_TIME, XSD_DATE, XSD_TIME];
 
     let (Some(a), Some(b)) = (a, b) else {
         return None;
@@ -4349,8 +4222,8 @@ fn compare_literal_views(
     }
     if da == XSD_BOOLEAN && db == XSD_BOOLEAN {
         // `xsd:boolean` fixes `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.3.2),
-        // so the lexical form is trimmed with [`collapse_trim`].
-        let bool_of = |lex: &str| match collapse_trim(lex) {
+        // so the lexical form is trimmed with [`trim_ws`](purrdf_iri::terminals::trim_ws).
+        let bool_of = |lex: &str| match purrdf_iri::terminals::trim_ws(lex) {
             "true" | "1" => Some(true),
             "false" | "0" => Some(false),
             _ => None,
@@ -4434,8 +4307,8 @@ mod tests {
     }
 
     const EX: &str = "http://example.org/ns#";
-    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
-    const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    use purrdf_iri::vocab::rdf::NS as RDF;
+    use purrdf_xsd::datatype::XSD_NS as XSD;
 
     fn nn(iri: &str) -> Term {
         Term::NamedNode(NamedNode::new_unchecked(iri))
@@ -4561,7 +4434,7 @@ mod tests {
         // integers (e.g. xsd:nonNegativeInteger) made a faithful
         // `"1"^^xsd:nonNegativeInteger` value read as non-numeric and spuriously
         // violate sh:minInclusive/sh:maxInclusive — masked only while data
-        // round-tripped through oxigraph's value-space-normalizing NT serializer.
+        // round-trips through a value-space-normalizing NT serializer.
         for dt in [
             "integer",
             "decimal",
@@ -5329,11 +5202,11 @@ mod tests {
         assert!(component_iri(&results)[0].contains("Datatype"));
     }
 
-    // ── datatype derived-integer (oxigraph canonicalization) ────────────────────
+    // ── datatype derived-integer (canonical base type) ──────────────────────────
 
     #[test]
     fn datatype_derived_nonneg_integer_pass() {
-        // Oxigraph stores "5"^^xsd:nonNegativeInteger as "5"^^xsd:integer, but a
+        // A store may hold "5"^^xsd:nonNegativeInteger as "5"^^xsd:integer, but a
         // shape requiring xsd:nonNegativeInteger must still accept it (value 5 is
         // in range) — matching pySHACL. Pre-fix this produced a false violation.
         let store = load_store(&format!(
@@ -5845,12 +5718,12 @@ mod tests {
         assert!(!matches("ab", r"a[\] ]b", "x"));
     }
 
-    /// `collapse_trim` strips a scalar from an edge if and only if the
+    /// `purrdf_iri::terminals::trim_ws` strips a scalar from an edge if and only if the
     /// `whiteSpace` = `collapse` facet names it — stated as a total function
     /// over every Unicode scalar, so the class cannot drift toward either the
     /// Unicode `White_Space` property or the ASCII one.
     #[test]
-    fn collapse_trim_strips_exactly_the_four_code_points_the_facet_names() {
+    fn whitespace_collapse_trim_strips_exactly_the_four_code_points_the_facet_names() {
         for cp in 0..=0x0010_FFFF_u32 {
             let Some(c) = char::from_u32(cp) else {
                 continue;
@@ -5858,25 +5731,25 @@ mod tests {
             let named = matches!(c, '\u{20}' | '\u{9}' | '\u{D}' | '\u{A}');
             let padded = format!("{c}x{c}");
             assert_eq!(
-                collapse_trim(&padded) == "x",
+                purrdf_iri::terminals::trim_ws(&padded) == "x",
                 named,
                 "{c:?} ({cp:#06X}) must be stripped iff whiteSpace=collapse names it"
             );
         }
-        assert_eq!(collapse_trim(" \t\r\n42\n\r\t "), "42");
-        assert_eq!(collapse_trim("4 2"), "4 2");
-        assert_eq!(collapse_trim(""), "");
-        assert_eq!(collapse_trim("   "), "");
+        assert_eq!(purrdf_iri::terminals::trim_ws(" \t\r\n42\n\r\t "), "42");
+        assert_eq!(purrdf_iri::terminals::trim_ws("4 2"), "4 2");
+        assert_eq!(purrdf_iri::terminals::trim_ws(""), "");
+        assert_eq!(purrdf_iri::terminals::trim_ws("   "), "");
     }
 
     /// XSD lexical spaces are trimmed with the four code points
     /// `whiteSpace` = `collapse` names, not with the Unicode property.
     #[test]
     fn xsd_lexical_forms_collapse_over_xml_s_only() {
-        const INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-        const DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
-        const DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-        const BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+        use purrdf_xsd::datatype::{
+            XSD_BOOLEAN as BOOLEAN, XSD_DECIMAL as DECIMAL, XSD_DOUBLE as DOUBLE,
+            XSD_INTEGER as INTEGER,
+        };
 
         // The valid neighbours, unchanged: `collapse` still strips every one of
         // `#x20`, `#x9`, `#xD` and `#xA`, in any combination and at either end.
@@ -5925,9 +5798,10 @@ mod tests {
     /// gate does, so the two cannot disagree about one literal.
     #[test]
     fn derived_integer_bounds_trim_the_same_class_as_the_lexical_gate() {
-        const INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-        const NON_NEGATIVE: &str = "http://www.w3.org/2001/XMLSchema#nonNegativeInteger";
-        const POSITIVE: &str = "http://www.w3.org/2001/XMLSchema#positiveInteger";
+        use purrdf_xsd::datatype::{
+            XSD_INTEGER as INTEGER, XSD_NON_NEGATIVE_INTEGER as NON_NEGATIVE,
+            XSD_POSITIVE_INTEGER as POSITIVE,
+        };
 
         // Valid neighbours: XML `S` padding still reaches the bound check.
         assert!(derived_integer_matches(INTEGER, NON_NEGATIVE, " 7\t"));

@@ -14,84 +14,24 @@
 //! language-tagged, directional), a scoped blank node, an `rdf:List` collection, and
 //! reifier + annotation side-table rows (including a graph-scoped annotation).
 
+#[path = "support/values.rs"]
+mod values;
 use purrdf_core::TermBox;
+use purrdf_core::term_fixture::iri;
+use purrdf_core::term_fixture::pack_bytes as build_pack_bytes;
 use std::sync::Arc;
+use values::{collect_rows, row_key, to_value};
 
 use purrdf_core::{
-    BlankScope, DatasetView, GraphMatch, PackBuilder, PackView, RdfDataset, RdfDatasetBuilder,
-    RdfLiteral, RdfStoreCapabilities, RdfTextDirection, TermRef, TermValue,
+    BlankScope, DatasetView, GraphMatch, PackView, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+    RdfStoreCapabilities, RdfTextDirection, TermRef, TermValue,
 };
 
 // Well-known RDF Collection vocabulary IRIs (crate-internal constants are not
 // public; these are the standard IRIs, mirroring `tests/paged_backend.rs`).
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-
-/// An `example.org` IRI value.
-fn iri(name: &str) -> TermValue {
-    TermValue::iri(format!("http://example.org/{name}"))
-}
-
-/// Resolve a view id to its dataset-INDEPENDENT `TermValue`, recursing through a
-/// literal's datatype and a triple term's components. Generic over any
-/// `DatasetView`, so the SAME routine reads the reference `RdfDataset` and the
-/// `PackView` under test and lets their rows be compared by value (the two mint
-/// unrelated id spaces, so comparing raw ids would be meaningless).
-fn to_value<V: DatasetView>(v: &V, id: V::Id) -> TermValue {
-    match v.resolve(id) {
-        TermRef::Iri(s) => TermValue::iri(s),
-        TermRef::Blank { label, scope } => TermValue::Blank {
-            label: label.to_owned(),
-            scope,
-        },
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let datatype = match v.resolve(datatype) {
-                TermRef::Iri(s) => s.to_owned(),
-                other => panic!("literal datatype must resolve to an IRI, got {other:?}"),
-            };
-            TermValue::Literal {
-                lexical_form: lexical.to_owned(),
-                datatype,
-                language: language.map(str::to_owned),
-                direction,
-            }
-        }
-        TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: TermBox::new(to_value(v, s)),
-            p: TermBox::new(to_value(v, p)),
-            o: TermBox::new(to_value(v, o)),
-        },
-    }
-}
-
-/// A deterministic sort key for a value row (`TermValue` is not `Ord`; its `Debug`
-/// form is total and dataset-independent).
-fn row_key(row: &[TermValue]) -> String {
-    format!("{row:?}")
-}
-
-/// Collect every quad of the view as sorted `[s, p, o, g?]` value rows via the
-/// generic trait surface only. `g` is rendered as an extra element (a sentinel for
-/// the default graph) so named-graph quads stay distinguishable — mirrors
-/// `tests/paged_backend.rs`'s `collect_rows`.
-fn collect_rows<V: DatasetView>(v: &V) -> Vec<Vec<TermValue>> {
-    let mut rows: Vec<Vec<TermValue>> = v
-        .quads_for_pattern(None, None, None, GraphMatch::Any)
-        .map(|q| {
-            let mut row = vec![to_value(v, q.s), to_value(v, q.p), to_value(v, q.o)];
-            row.push(q.g.map_or_else(|| TermValue::iri("urn:default-graph"), |g| to_value(v, g)));
-            row
-        })
-        .collect();
-    rows.sort_by_key(|r| row_key(r));
-    rows
-}
+use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+use purrdf_iri::vocab::rdf::REST as RDF_REST;
 
 /// A value-keyed graph filter — the write-agnostic twin of `GraphMatch<V::Id>` a
 /// test case can name without committing to either view's id space.
@@ -352,12 +292,6 @@ fn build_fixture() -> Arc<RdfDataset> {
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
-
-/// Build the pack bytes for `dataset` and open a `PackView` over them — the
-/// standard fixture-to-pack path every test below shares.
-fn build_pack_bytes(dataset: &RdfDataset) -> Vec<u8> {
-    PackBuilder::build_bytes(dataset).expect("pack build must succeed for a well-formed fixture")
-}
 
 #[test]
 fn quads_set_equal_source() {

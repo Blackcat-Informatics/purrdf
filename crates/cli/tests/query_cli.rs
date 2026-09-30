@@ -28,10 +28,10 @@
 //! `parseType="Triple"` instead — so the reifier test deliberately uses the annotation
 //! syntax to drive the overlay/projection path.)
 
-use std::process::{Command, Output, Stdio};
+mod support;
+use support::{purrdf, run, stderr, stdout_utf8 as stdout, write_file};
 
-/// The path to the built `purrdf` binary this integration test target links against.
-const PURRDF: &str = env!("CARGO_BIN_EXE_purrdf");
+use std::process::{Output, Stdio};
 
 /// A default-graph fixture with rich term shapes (an IRI object and a plain literal),
 /// enough to drive SELECT / ASK / CONSTRUCT / DESCRIBE over `example.org`.
@@ -43,33 +43,6 @@ const DATA_TTL: &str = concat!(
     "ex:alice ex:knows ex:bob .\n",
     "ex:alice ex:name \"Alice\" .\n",
 );
-
-/// A `Command` for the built `purrdf` binary.
-fn purrdf() -> Command {
-    Command::new(PURRDF)
-}
-
-/// Run `purrdf` with `args`, returning the captured [`Output`].
-fn run(args: &[&str]) -> Output {
-    purrdf().args(args).output().expect("spawn purrdf")
-}
-
-/// stdout of an [`Output`] as a `String`.
-fn stdout(out: &Output) -> String {
-    String::from_utf8(out.stdout.clone()).expect("utf-8 stdout")
-}
-
-/// stderr of an [`Output`] as a `String`, for diagnostics + ledger assertions.
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
-}
-
-/// Write `contents` to `dir/name` and return the path as an owned string.
-fn write_file(dir: &std::path::Path, name: &str, contents: &str) -> String {
-    let p = dir.join(name);
-    std::fs::write(&p, contents).expect("write fixture");
-    p.to_str().expect("utf-8 path").to_owned()
-}
 
 /// The SAME SELECT over (a) a Turtle file and (b) an mmap'd `.purrpck` pack built from
 /// identical data yields byte-identical, non-vacuous results — file/pack query parity.
@@ -146,6 +119,66 @@ fn select_all_four_result_formats_are_non_vacuous_and_deterministic() {
             "SELECT --results-format {fmt} must be byte-deterministic across runs"
         );
     }
+}
+
+/// `--results-format` reads a SPARQL-results name the way every host does: a media type or
+/// an alias, in any ASCII case, names the same format as its short token, byte for byte.
+/// A name that is neither a results format nor an RDF syntax is refused, listing the
+/// accepted tokens, while an RDF syntax alias beside it is still read as one.
+#[test]
+fn a_results_format_is_named_by_token_media_type_or_alias() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
+    let select = "SELECT ?o WHERE { ?s <http://example.org/knows> ?o }";
+    for (name, token) in [
+        ("JSON", "json"),
+        ("srj", "json"),
+        ("application/sparql-results+json", "json"),
+        ("sparql-xml", "xml"),
+        ("application/sparql-results+xml", "xml"),
+        ("text/csv", "csv"),
+        ("TSV", "tsv"),
+        ("text/tab-separated-values", "tsv"),
+    ] {
+        let named = run(&["query", "--data", &ttl, "--results-format", name, select]);
+        let short = run(&["query", "--data", &ttl, "--results-format", token, select]);
+        assert!(
+            named.status.success(),
+            "{name}: stderr:\n{}",
+            stderr(&named)
+        );
+        assert_eq!(named.stdout, short.stdout, "{name} names {token}");
+    }
+
+    let refused = run(&["query", "--data", &ttl, "--results-format", "jsonx", select]);
+    assert_eq!(
+        refused.status.code(),
+        Some(2),
+        "stderr:\n{}",
+        stderr(&refused)
+    );
+    let message = stderr(&refused);
+    for token in ["json", "tsv", "turtle", "yamlld"] {
+        assert!(
+            message.contains(token),
+            "the refusal lists `{token}`: {message}"
+        );
+    }
+    let construct =
+        "CONSTRUCT { ?s <http://example.org/knows> ?o } WHERE { ?s <http://example.org/knows> ?o }";
+    let rdf_alias = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "ttl",
+        construct,
+    ]);
+    assert!(
+        rdf_alias.status.success(),
+        "stderr:\n{}",
+        stderr(&rdf_alias)
+    );
 }
 
 /// An ASK with `--results-format json` returns a JSON boolean result (the W3C
@@ -2911,14 +2944,14 @@ fn sha3_select(spelling: impl Fn(&str) -> String) -> String {
 }
 
 /// The one solution row of a `--results-format json` run, as `alias -> value`.
-fn sha3_row(out: &Output) -> serde_json::Map<String, serde_json::Value> {
+fn sha3_row(out: &Output) -> purrdf_lex::json::Object {
     assert!(
         out.status.success(),
         "a SHA-3 SELECT must exit 0; stderr:\n{}",
         stderr(out)
     );
     let body = stdout(out);
-    let doc: serde_json::Value = serde_json::from_str(&body)
+    let doc: purrdf_lex::json::Value = purrdf_lex::json::read(&body)
         .unwrap_or_else(|e| panic!("--results-format json must emit JSON ({e}); got:\n{body}"));
     let bindings = doc["results"]["bindings"]
         .as_array()
@@ -3031,7 +3064,7 @@ fn the_cli_reads_the_sha3_hyphen_as_part_of_the_name() {
         stderr(&arith)
     );
     let body = stdout(&arith);
-    let doc: serde_json::Value = serde_json::from_str(&body).expect("JSON results");
+    let doc: purrdf_lex::json::Value = purrdf_lex::json::read(&body).expect("JSON results");
     assert_eq!(
         doc["results"]["bindings"][0]["n"]["value"].as_str(),
         Some("60"),

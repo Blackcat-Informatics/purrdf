@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Compile and validation baselines for `purrdf-jsonschema`.
@@ -20,21 +20,22 @@
 //!   cost `from_document` does not pay per call.
 //! * `is_valid/1k` — one compiled schema over 1,000 instances, half invalid.
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_jsonschema::{Metaschemas, Schema};
-use serde_json::{Value, json};
+use purrdf_lex::json::{self, Object, Value};
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 
 fn metaschemas() -> Metaschemas {
     Metaschemas::new(
         purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
             .iter()
-            .map(|&(uri, text)| (uri, serde_json::from_str::<Value>(text).expect("JSON"))),
+            .map(|&(uri, text)| (uri, json::read(text).expect("JSON"))),
     )
     .expect("the draft 2020-12 meta-schemas")
 }
 
 fn small() -> Value {
-    json!({
+    json::read(
+        r#"{
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
@@ -44,26 +45,29 @@ fn small() -> Value {
         },
         "required": ["name"],
         "additionalProperties": false
-    })
+    }"#,
+    )
+    .expect("JSON")
 }
 
 fn ref_chain(length: usize) -> Value {
-    let mut defs = serde_json::Map::new();
+    let mut defs = Object::new();
     for index in 0..length {
         defs.insert(
             format!("d{index}"),
-            json!({"$ref": format!("#/$defs/d{}", index + 1)}),
+            Object::new().with("$ref", format!("#/$defs/d{}", index + 1)),
         );
     }
-    defs.insert(format!("d{length}"), json!({"type": "string"}));
-    json!({
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$defs": defs,
-        "$ref": "#/$defs/d0"
-    })
+    defs.insert(format!("d{length}"), Object::new().with("type", "string"));
+    Value::from(
+        Object::new()
+            .with("$schema", "https://json-schema.org/draft/2020-12/schema")
+            .with("$defs", defs)
+            .with("$ref", "#/$defs/d0"),
+    )
 }
 
-fn bench_from_document(c: &mut Criterion) {
+fn bench_from_document(c: &mut Bench) {
     let set = metaschemas();
     let mut group = c.benchmark_group("from_document");
     let document = small();
@@ -91,20 +95,26 @@ fn bench_from_document(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_metaschemas(c: &mut Criterion) {
+fn bench_metaschemas(c: &mut Bench) {
     c.bench_function("metaschemas/build", |b| b.iter(metaschemas));
 }
 
-fn bench_is_valid(c: &mut Criterion) {
+fn bench_is_valid(c: &mut Bench) {
     let set = metaschemas();
     let schema =
         Schema::from_document(&set, "https://example.org/small.json", small()).expect("compiles");
     let instances: Vec<Value> = (0..1_000)
         .map(|index| {
             if index % 2 == 0 {
-                json!({"name": format!("n{index}"), "age": index, "tags": ["a", "b"]})
+                Value::from(
+                    Object::new()
+                        .with("name", format!("n{index}"))
+                        .with("age", index)
+                        .with("tags", vec!["a", "b"]),
+                )
             } else {
-                json!({"name": "", "age": -1, "tags": ["a", "a"], "extra": true})
+                json::read(r#"{"name": "", "age": -1, "tags": ["a", "a"], "extra": true}"#)
+                    .expect("JSON")
             }
         })
         .collect();
@@ -118,13 +128,30 @@ fn bench_is_valid(c: &mut Criterion) {
                 .count()
         });
     });
+    // One recursive subschema per level of a 1,000-deep instance: the cost
+    // of the evaluator's own bookkeeping per level of nesting.
+    let tree = Schema::from_document(
+        &set,
+        "https://example.org/tree.json",
+        json::read(r##"{"type": "object", "properties": {"child": {"$ref": "#"}}}"##)
+            .expect("JSON"),
+    )
+    .expect("compiles");
+    let mut deep = Value::from(Object::new());
+    for _ in 0..1_000 {
+        deep = Value::from(Object::new().with("child", deep));
+    }
+    group.throughput(Throughput::Elements(1_000));
+    group.bench_function("tree_1000", |b| {
+        b.iter(|| tree.is_valid(black_box(&deep)).expect("evaluation"));
+    });
     group.finish();
 }
 
-criterion_group!(
+bench_group!(
     benches,
     bench_from_document,
     bench_metaschemas,
     bench_is_valid
 );
-criterion_main!(benches);
+bench_main!(benches);

@@ -17,6 +17,10 @@
 //! traversal that diverges on a cycle, or that enumerates a walk twice, is a test that
 //! must go red rather than a test that quietly still passes.
 
+mod support;
+
+use support::{iri, local_dataset};
+
 use purrdf_core::TermBox;
 use std::sync::Arc;
 
@@ -68,18 +72,6 @@ fn parser_options() -> ParserOptions {
     }
 }
 
-/// An engine, unconfigured: parse-time recognition of the caller IRIs now lives on the
-/// [`ExtensionEnv`] every call passes through [`QueryOptions::env`] (see [`env_of`]),
-/// never on the engine itself.
-fn engine() -> NativeSparqlEngine {
-    NativeSparqlEngine::new()
-}
-
-/// A fixture IRI under [`EX`].
-fn iri(local: &str) -> TermValue {
-    TermValue::iri(format!("{EX}{local}"))
-}
-
 /// The asserted statement term a hop over `(ex:s, ex:p, ex:o)` records.
 fn stmt(s: &str, p: &str, o: &str) -> TermValue {
     TermValue::Triple {
@@ -102,18 +94,6 @@ fn text(value: &str) -> TermValue {
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
-
-/// Build a dataset from `(subject, predicate, object)` local names under [`EX`].
-fn dataset(triples: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
-    let mut builder = RdfDatasetBuilder::new();
-    for (s, p, o) in triples {
-        let s = builder.intern_iri(&format!("{EX}{s}"));
-        let p = builder.intern_iri(&format!("{EX}{p}"));
-        let o = builder.intern_iri(&format!("{EX}{o}"));
-        builder.push_quad(s, p, o, None);
-    }
-    builder.freeze().expect("the fixture freezes")
-}
 
 /// Snapshot `alternatives` over `data` as a [`PathGraph`].
 fn snapshot(data: &RdfDataset, alternatives: &[(&str, PathDirection)]) -> Arc<PathGraph> {
@@ -200,7 +180,7 @@ fn run(
     query: &str,
     registry: &ExtensionEnv,
 ) -> Result<Answers, purrdf_core::RdfDiagnostic> {
-    let result = engine().query_with_options_view(
+    let result = NativeSparqlEngine::new().query_with_options_view(
         data,
         SparqlRequest {
             query,
@@ -270,7 +250,7 @@ fn distinct_column(rows: &[Vec<TermValue>], column: usize) -> Vec<TermValue> {
 /// which is what makes `GROUP BY ?pathId` a sound reconstruction of a walk.
 #[test]
 fn a1_a_chain_binds_every_walk_hop_by_hop_through_the_query_surface() {
-    let data = dataset(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "d")]);
+    let data = local_dataset([("a", "p", "b"), ("b", "p", "c"), ("c", "p", "d")]);
     let graph = snapshot(&data, &[("p", PathDirection::Forward)]);
     let registry = env_of(walk_registry(graph, limits(1, 3)));
 
@@ -554,7 +534,7 @@ fn a1_a_chain_binds_every_walk_hop_by_hop_through_the_query_surface() {
 #[test]
 fn a2_the_projection_matches_the_virtuoso_transitivity_reference() {
     // `insert into knows values (1, 2); (1, 3); (2, 4);`
-    let data = dataset(&[
+    let data = local_dataset([
         ("p1", "knows", "p2"),
         ("p1", "knows", "p3"),
         ("p2", "knows", "p4"),
@@ -649,7 +629,7 @@ fn a2_the_projection_matches_the_virtuoso_transitivity_reference() {
 /// complete answer is precisely the wrong answer.
 #[test]
 fn a5_an_unregistered_caller_iri_is_a_hard_failure_not_an_empty_answer() {
-    let data = dataset(&[("a", "p", "b"), ("b", "p", "c")]);
+    let data = local_dataset([("a", "p", "b"), ("b", "p", "c")]);
     let query = q("SELECT ?end WHERE { \
                    ex:a <http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) }");
 
@@ -704,7 +684,7 @@ fn a5_an_unregistered_caller_iri_is_a_hard_failure_not_an_empty_answer() {
 /// quietly return more rows. Pinning the six is what turns over-generation into a failure.
 #[test]
 fn a7_a_cycle_terminates_at_its_closing_hop() {
-    let data = dataset(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "a")]);
+    let data = local_dataset([("a", "p", "b"), ("b", "p", "c"), ("c", "p", "a")]);
     let graph = snapshot(&data, &[("p", PathDirection::Forward)]);
     let registry = env_of(walk_registry(graph, limits(1, 8)));
 
@@ -905,7 +885,7 @@ fn a8_a_triple_term_is_an_intermediate_node_of_a_walk() {
 /// table, and a single query calls both and joins them on the walk's endpoint.
 #[test]
 fn a10_one_registry_serves_a_path_consumer_and_a_scored_retrieval_consumer() {
-    let data = dataset(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "d")]);
+    let data = local_dataset([("a", "p", "b"), ("b", "p", "c"), ("c", "p", "d")]);
     let graph = snapshot(&data, &[("p", PathDirection::Forward)]);
 
     let mut registry = walk_registry(graph, limits(1, 3));
@@ -957,7 +937,7 @@ fn a10_one_registry_serves_a_path_consumer_and_a_scored_retrieval_consumer() {
 fn a12_the_path_guard_hard_fails_and_its_firing_tracks_the_row_licence() {
     // Two candidate walks from ex:a within two hops — a→b and a→b→c — against a guard
     // that permits one.
-    let data = dataset(&[("a", "p", "b"), ("b", "p", "c")]);
+    let data = local_dataset([("a", "p", "b"), ("b", "p", "c")]);
     let graph = snapshot(&data, &[("p", PathDirection::Forward)]);
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
@@ -1012,7 +992,7 @@ fn a12_the_path_guard_hard_fails_and_its_firing_tracks_the_row_licence() {
 /// apart, and gives them two identifiers so `GROUP BY ?pathId` keeps them apart too.
 #[test]
 fn a15_two_statements_joining_one_node_pair_are_two_witnesses() {
-    let data = dataset(&[("a", "p", "b"), ("b", "q", "a")]);
+    let data = local_dataset([("a", "p", "b"), ("b", "q", "a")]);
     let graph = snapshot(
         &data,
         &[("p", PathDirection::Forward), ("q", PathDirection::Inverse)],
@@ -1056,7 +1036,7 @@ fn a16_the_endpoint_projection_agrees_with_p_plus_and_the_divergence_is_pinned()
     //     endpoints are exactly `p+`'s. A node on a cycle reaches ITSELF under `p+`, and
     //     the simple-PREFIX rule (the final node alone may repeat) is what makes the
     //     relation report that too — a strictly simple rule would omit it.
-    let cyclic = dataset(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "a")]);
+    let cyclic = local_dataset([("a", "p", "b"), ("b", "p", "c"), ("c", "p", "a")]);
     let graph = snapshot(&cyclic, &[("p", PathDirection::Forward)]);
     let registry = env_of(walk_registry(graph, limits(1, 8)));
 
@@ -1089,7 +1069,7 @@ fn a16_the_endpoint_projection_agrees_with_p_plus_and_the_divergence_is_pinned()
     //     k = 2, because `a → b → a` is itself simple-prefix — so this asserts the exact
     //     point where they still coincide, which is what makes any future divergence at
     //     this length a visible change rather than a silent one.
-    let two_cycle = dataset(&[("a", "p", "b"), ("b", "p", "a")]);
+    let two_cycle = local_dataset([("a", "p", "b"), ("b", "p", "a")]);
     let two_graph = snapshot(&two_cycle, &[("p", PathDirection::Forward)]);
     let two_registry = env_of(walk_registry(two_graph, limits(2, 2)));
 
@@ -1138,7 +1118,7 @@ fn a17_identifier_stability_is_pinned_for_iris_and_for_blank_nodes() {
     // Two INDEPENDENTLY constructed datasets holding the same IRI-only data. Their term
     // tables were built in different orders, so a digest that folded in a dataset-local
     // id would differ here.
-    let first = dataset(&[("a", "p", "b"), ("b", "p", "c")]);
+    let first = local_dataset([("a", "p", "b"), ("b", "p", "c")]);
     let mut reordered = RdfDatasetBuilder::new();
     let c = reordered.intern_iri(&format!("{EX}c"));
     let p = reordered.intern_iri(&format!("{EX}p"));
@@ -1289,7 +1269,7 @@ fn a18_a_hop_statement_joins_to_its_rdf12_annotation() {
 fn a19_the_expansion_budget_fails_a_fruitless_search_rather_than_answering_empty() {
     // A fan-out: ex:a has three neighbours, each of which has one. Six edges, longest
     // walk two hops.
-    let data = dataset(&[
+    let data = local_dataset([
         ("a", "p", "b"),
         ("a", "p", "c"),
         ("a", "p", "d"),
@@ -1495,7 +1475,7 @@ fn a21_a_step_over_an_annotation_predicate_crosses_both_layers_in_one_walk() {
 /// happens to appear in the term table, which is an interning detail no host can predict.
 #[test]
 fn a22_a_step_alternative_the_dataset_never_mentions_still_leaves_a_usable_step() {
-    let data = dataset(&[("t1", "broader", "t2"), ("t2", "broader", "t3")]);
+    let data = local_dataset([("t1", "broader", "t2"), ("t2", "broader", "t3")]);
     let step = PathStep::new(vec![
         (iri("broader"), PathDirection::Forward),
         (iri("narrower"), PathDirection::Inverse),
@@ -1556,7 +1536,7 @@ fn a22_a_step_alternative_the_dataset_never_mentions_still_leaves_a_usable_step(
 /// cells, and this four-node query was refused.
 #[test]
 fn a23_a_small_graph_is_not_refused_by_a_ceiling_far_above_its_true_cost() {
-    let data = dataset(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "d")]);
+    let data = local_dataset([("a", "p", "b"), ("b", "p", "c"), ("c", "p", "d")]);
     let graph = snapshot(&data, &[("p", PathDirection::Forward)]);
     // The very envelope the rest of this file uses: a generous guard, deliberately far
     // above what this graph could ever need.
@@ -1565,7 +1545,7 @@ fn a23_a_small_graph_is_not_refused_by_a_ceiling_far_above_its_true_cost() {
     let query = q("SELECT ?end ?len ?step ?node ?edge WHERE { \
                    ex:a <http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) \
                    } ORDER BY ?len ?step");
-    let outcome = engine()
+    let outcome = NativeSparqlEngine::new()
         .query_governed(
             &data,
             SparqlRequest {
@@ -1608,14 +1588,14 @@ fn a23_a_small_graph_is_not_refused_by_a_ceiling_far_above_its_true_cost() {
 /// answer, and this one says it is not so small that it stops withholding anything.
 #[test]
 fn a23b_a_ceiling_below_the_true_cost_still_refuses_at_admission() {
-    let data = dataset(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "d")]);
+    let data = local_dataset([("a", "p", "b"), ("b", "p", "c"), ("c", "p", "d")]);
     let graph = snapshot(&data, &[("p", PathDirection::Forward)]);
     let registry = env_of(walk_registry(graph, limits(1, 3)));
 
     let query = q("SELECT ?end ?len ?step ?node ?edge WHERE { \
                    ex:a <http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) \
                    } ORDER BY ?len ?step");
-    let outcome = engine()
+    let outcome = NativeSparqlEngine::new()
         .query_governed(
             &data,
             SparqlRequest {
@@ -1727,7 +1707,7 @@ fn a23b_a_ceiling_below_the_true_cost_still_refuses_at_admission() {
 fn a24_the_shortest_witness_relation_matches_the_virtuoso_shortest_only_reference() {
     // `?o` is unique per row above, so one witness per endpoint is also one row per
     // endpoint — which is what makes the comparison a row-for-row one.
-    let data = dataset(&[
+    let data = local_dataset([
         ("a", "p", "b"),
         ("b", "p", "d"),
         ("a", "p", "c"),

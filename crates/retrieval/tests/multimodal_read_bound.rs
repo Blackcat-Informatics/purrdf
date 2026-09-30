@@ -48,10 +48,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write as _;
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
@@ -71,6 +69,16 @@ use purrdf_sparql_eval::{
 
 mod common;
 
+#[path = "support/lookup.rs"]
+mod lookup;
+#[path = "support/registry.rs"]
+mod registry;
+
+use lookup::{domain_tag, scored, strata};
+use purrdf_retrieval::block_on;
+use purrdf_retrieval::fixture::iri;
+use registry::kernel_iri;
+
 /// The smoothing constant every profile in this file fuses under, read from the
 /// crate's own constant rather than written twice.
 const K: u32 = RECIP_K as u32;
@@ -86,38 +94,6 @@ const ROWS: u64 = 400;
 
 fn ex(suffix: &str) -> String {
     format!("http://example.org/{suffix}")
-}
-
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
-
-fn kernel_iri(text: &str) -> purrdf_core::Iri {
-    purrdf_core::parse_iri(text).expect("fixture IRIs are valid")
-}
-
-fn domain_tag(suffix: &str) -> DomainTag {
-    DomainTag::parse(&ex(suffix)).expect("fixture domain tags are valid IRIs")
-}
-
-/// A minimal single-threaded executor. The mocks never actually pend.
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -412,11 +388,6 @@ const SHARED_BLOCK_SHORT_STREAMS: Configuration = Configuration {
 /// stream is eight candidates, which is more than the bound of five, so the
 /// answer is still a bounded answer rather than everything there was.
 const SHORT_ROWS: u64 = 4;
-
-/// The two strata, in the order the two producers are registered.
-fn strata() -> [Iri; 2] {
-    [iri(&ex("stratum/left")), iri(&ex("stratum/right"))]
-}
 
 /// The candidate domains each producer declares, under `blocks`.
 ///
@@ -2682,16 +2653,6 @@ fn fuse_at_depths(instance: &Instance, depths: &[usize]) -> FusionResult<Term> {
     .expect("the generated streams obey the protocol")
 }
 
-/// The answer a fusion returned, as the thing a shallowest prefix has to reproduce:
-/// the rows, their scores, and their order.
-fn answer_of(result: &FusionResult<Term>) -> Vec<(String, Fixed)> {
-    result
-        .rows
-        .iter()
-        .map(|row| (row.entity.as_str().to_owned(), row.score))
-        .collect()
-}
-
 /// Every depth vector over the instance's streams, from all-zero upward.
 fn depth_vectors(lengths: &[usize]) -> Vec<Vec<usize>> {
     let mut vectors = vec![Vec::new()];
@@ -2724,10 +2685,10 @@ fn shallowest_prefixes(instance: &Instance) -> Vec<usize> {
         .map(|entry| entry.items.len())
         .collect();
     let full = fuse_at_depths(instance, &lengths);
-    let target = answer_of(&full);
+    let target = scored(&full.rows);
     let mut best: Option<Vec<usize>> = None;
     for candidate in depth_vectors(&lengths) {
-        if answer_of(&fuse_at_depths(instance, &candidate)) != target {
+        if scored(&fuse_at_depths(instance, &candidate).rows) != target {
             continue;
         }
         let key = |vector: &[usize]| {
@@ -2928,8 +2889,8 @@ fn the_engine_reads_within_a_pinned_factor_of_the_shallowest_prefixes() {
         // And the shallowest prefix really is one: reading it reproduces the
         // answer, and every strictly shallower prefix does not.
         assert_eq!(
-            answer_of(&fuse_at_depths(&instance, &prefix_depths)),
-            answer_of(&run),
+            scored(&fuse_at_depths(&instance, &prefix_depths).rows),
+            scored(&run.rows),
             "{}: the shallowest prefix must reproduce the answer it was chosen for",
             instance.name
         );
@@ -2940,8 +2901,8 @@ fn the_engine_reads_within_a_pinned_factor_of_the_shallowest_prefixes() {
             let mut shallower = prefix_depths.clone();
             shallower[index] -= 1;
             assert_ne!(
-                answer_of(&fuse_at_depths(&instance, &shallower)),
-                answer_of(&run),
+                scored(&fuse_at_depths(&instance, &shallower).rows),
+                scored(&run.rows),
                 "{}: {shallower:?} already entails the answer, so {prefix_depths:?} is \
                  not the shallowest prefix",
                 instance.name

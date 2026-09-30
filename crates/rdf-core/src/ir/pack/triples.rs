@@ -96,14 +96,15 @@
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::fmt;
+
+use purrdf_hash::frame::frame_le;
 
 use crate::dataset_view::{DatasetView, GraphMatch};
 use crate::ir::composite::owned_value;
 
 use super::bits::{
     BitVec, DeltaListRef, IntVector, IntVectorRef, PackBitsError, RankSelectRef, bits_for,
-    write_delta_list,
+    read_header_u64, write_delta_list,
 };
 use super::dict::{PackDict, PackTermId};
 use crate::hash::FastMap;
@@ -112,72 +113,16 @@ use crate::hash::FastMap;
 // Errors
 // ---------------------------------------------------------------------------
 
-/// Why decoding a [`Triples`] byte buffer failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum PackTriplesError {
-    /// The buffer ended before all the bytes a header promised were present.
-    Truncated {
-        /// The total leading byte count the format required.
-        needed: usize,
-        /// The byte count actually available.
-        found: usize,
-    },
-    /// The buffer's header was internally inconsistent, an id/offset reference
-    /// fell outside its documented domain, or a boundary bitmap's popcount
-    /// disagreed with the structure it is supposed to index.
-    Malformed(&'static str),
-}
-
-impl fmt::Display for PackTriplesError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Truncated { needed, found } => write!(
-                f,
-                "pack-triples: truncated input: needed at least {needed} bytes, found {found}"
-            ),
-            Self::Malformed(reason) => write!(f, "pack-triples: malformed input: {reason}"),
-        }
-    }
-}
-
-impl std::error::Error for PackTriplesError {}
-
-impl From<PackBitsError> for PackTriplesError {
-    fn from(e: PackBitsError) -> Self {
-        match e {
-            PackBitsError::Truncated { needed, found } => Self::Truncated { needed, found },
-            PackBitsError::Malformed(reason) => Self::Malformed(reason),
-        }
-    }
-}
-
-/// Read an 8-byte little-endian header field at `*pos`, advancing `*pos` past it.
-/// A small local mirror of `bits::read_header_u64` (private to that module).
-fn read_u64_header(bytes: &[u8], pos: &mut usize) -> Result<u64, PackTriplesError> {
-    let end = *pos + 8;
-    let slice = bytes.get(*pos..end).ok_or(PackTriplesError::Truncated {
-        needed: end,
-        found: bytes.len(),
-    })?;
-    let value = u64::from_le_bytes(slice.try_into().expect("slice is exactly 8 bytes"));
-    *pos = end;
-    Ok(value)
-}
+/// Why decoding a [`Triples`] byte buffer failed: the pack codecs' one decode
+/// error. Every section decoder reads the same bit-packed primitives and fails in
+/// the same two ways (a header promising bytes the buffer lacks, or an
+/// inconsistent header), so it reports [`PackBitsError`] itself; which section
+/// refused is the container's variant, not a second error type.
+pub type PackTriplesError = PackBitsError;
 
 // ---------------------------------------------------------------------------
 // Small owned-vector helpers shared by every FoQ/local-map builder.
 // ---------------------------------------------------------------------------
-
-/// Build a bit-packed [`IntVector`] wide enough for `values`' maximum element.
-fn build_int_vector(values: &[u64]) -> IntVector {
-    let max = values.iter().copied().max().unwrap_or(0);
-    let mut v = IntVector::with_width(bits_for(max));
-    for &x in values {
-        v.push(x);
-    }
-    v
-}
 
 // ---------------------------------------------------------------------------
 // Encoding: dataset+dict -> per-partition triple lists -> byte blocks.
@@ -302,9 +247,9 @@ fn encode_partition(graph_id: Option<PackTermId>, triples: &[(u64, u64, u64)]) -
         i = j;
     }
 
-    let local_s = build_int_vector(&s_set);
-    let local_p = build_int_vector(&p_set);
-    let local_o = build_int_vector(&o_set);
+    let local_s = IntVector::from_values(&s_set);
+    let local_p = IntVector::from_values(&p_set);
+    let local_o = IntVector::from_values(&o_set);
 
     let mut pred_index_data = Vec::new();
     let mut pred_offsets = Vec::with_capacity(n_p);
@@ -334,15 +279,13 @@ fn encode_partition(graph_id: Option<PackTermId>, triples: &[(u64, u64, u64)]) -
     out.extend_from_slice(&bp.freeze().to_bytes());
     out.extend_from_slice(&so.to_bytes());
     out.extend_from_slice(&bo.freeze().to_bytes());
-    out.extend_from_slice(&build_int_vector(&pred_offsets).to_bytes());
-    out.extend_from_slice(&build_int_vector(&pred_counts).to_bytes());
-    out.extend_from_slice(&build_int_vector(&pred_totals).to_bytes());
-    out.extend_from_slice(&(pred_index_data.len() as u64).to_le_bytes());
-    out.extend_from_slice(&pred_index_data);
-    out.extend_from_slice(&build_int_vector(&obj_offsets).to_bytes());
-    out.extend_from_slice(&build_int_vector(&obj_counts).to_bytes());
-    out.extend_from_slice(&(obj_index_data.len() as u64).to_le_bytes());
-    out.extend_from_slice(&obj_index_data);
+    out.extend_from_slice(&IntVector::from_values(&pred_offsets).to_bytes());
+    out.extend_from_slice(&IntVector::from_values(&pred_counts).to_bytes());
+    out.extend_from_slice(&IntVector::from_values(&pred_totals).to_bytes());
+    frame_le(&mut out, &pred_index_data);
+    out.extend_from_slice(&IntVector::from_values(&obj_offsets).to_bytes());
+    out.extend_from_slice(&IntVector::from_values(&obj_counts).to_bytes());
+    frame_le(&mut out, &obj_index_data);
     out
 }
 
@@ -403,13 +346,11 @@ impl Triples {
         out.extend_from_slice(&(1 + named.len() as u64).to_le_bytes());
 
         let default_bytes = encode_partition(None, &default_triples);
-        out.extend_from_slice(&(default_bytes.len() as u64).to_le_bytes());
-        out.extend_from_slice(&default_bytes);
+        frame_le(&mut out, &default_bytes);
 
         for (&g_uni, triples) in &named {
             let bytes = encode_partition(Some(g_uni), triples);
-            out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-            out.extend_from_slice(&bytes);
+            frame_le(&mut out, &bytes);
         }
 
         Self { bytes: out }
@@ -595,13 +536,13 @@ impl<'a> PartitionRef<'a> {
     /// the [module docs](self) for what is validated).
     fn from_bytes(bytes: &'a [u8]) -> Result<(Self, usize), PackTriplesError> {
         let mut pos = 0usize;
-        let graph_id_raw = read_u64_header(bytes, &mut pos)?;
+        let graph_id_raw = read_header_u64(bytes, &mut pos)?;
         let graph_id = if graph_id_raw == 0 {
             None
         } else {
             Some(graph_id_raw)
         };
-        let n_triples = read_u64_header(bytes, &mut pos)?;
+        let n_triples = read_header_u64(bytes, &mut pos)?;
 
         let local_s = IntVectorRef::from_bytes(&bytes[pos..])?;
         pos += local_s.serialized_len();
@@ -623,7 +564,7 @@ impl<'a> PartitionRef<'a> {
         pos += pred_counts.serialized_len();
         let pred_totals = IntVectorRef::from_bytes(&bytes[pos..])?;
         pos += pred_totals.serialized_len();
-        let pred_data_len = read_u64_header(bytes, &mut pos)? as usize;
+        let pred_data_len = read_header_u64(bytes, &mut pos)? as usize;
         let pred_index_data =
             bytes
                 .get(pos..pos + pred_data_len)
@@ -636,7 +577,7 @@ impl<'a> PartitionRef<'a> {
         pos += obj_offsets.serialized_len();
         let obj_counts = IntVectorRef::from_bytes(&bytes[pos..])?;
         pos += obj_counts.serialized_len();
-        let obj_data_len = read_u64_header(bytes, &mut pos)? as usize;
+        let obj_data_len = read_header_u64(bytes, &mut pos)? as usize;
         let obj_index_data =
             bytes
                 .get(pos..pos + obj_data_len)
@@ -786,41 +727,17 @@ fn binary_search_range(
 /// Subject `local_s`'s slice `[start, end)` into `sp` (mark-last convention over
 /// `bp` — see the [module docs](self)).
 fn subject_slice(part: &PartitionRef<'_>, local_s: u64) -> (usize, usize) {
-    let ls = local_s as usize;
-    let start = if ls == 0 {
-        0
-    } else {
-        part.bp
-            .select1(ls - 1)
-            .expect("dense local subject numbering guarantees a bp boundary bit per subject")
-            + 1
-    };
-    let end = part
-        .bp
-        .select1(ls)
+    part.bp
+        .mark_last_range(local_s as usize)
         .expect("dense local subject numbering guarantees a bp boundary bit per subject")
-        + 1;
-    (start, end)
 }
 
 /// `Sp` position `sp_pos`'s object slice `[start, end)` into `so` (identical
 /// mark-last convention over `bo`, substituting `Sp`-position for subject).
 fn sp_pair_slice(part: &PartitionRef<'_>, sp_pos: u64) -> (usize, usize) {
-    let i = sp_pos as usize;
-    let start = if i == 0 {
-        0
-    } else {
-        part.bo
-            .select1(i - 1)
-            .expect("every sp position has a bo boundary bit")
-            + 1
-    };
-    let end = part
-        .bo
-        .select1(i)
+    part.bo
+        .mark_last_range(sp_pos as usize)
         .expect("every sp position has a bo boundary bit")
-        + 1;
-    (start, end)
 }
 
 /// The local subject id owning `Sp` position `sp_pos` (the count of
@@ -1091,7 +1008,7 @@ impl<'a> TriplesRef<'a> {
             ));
         }
         let mut pos = 1usize;
-        let partition_count = read_u64_header(bytes, &mut pos)? as usize;
+        let partition_count = read_header_u64(bytes, &mut pos)? as usize;
         if partition_count == 0 {
             return Err(PackTriplesError::Malformed(
                 "triples: missing the mandatory default-graph partition",
@@ -1099,7 +1016,7 @@ impl<'a> TriplesRef<'a> {
         }
         let mut partitions = Vec::with_capacity(partition_count);
         for idx in 0..partition_count {
-            let plen = read_u64_header(bytes, &mut pos)? as usize;
+            let plen = read_header_u64(bytes, &mut pos)? as usize;
             let pbytes = bytes
                 .get(pos..pos + plen)
                 .ok_or(PackTriplesError::Truncated {

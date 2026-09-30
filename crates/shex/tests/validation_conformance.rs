@@ -21,10 +21,14 @@
 //! * **XFAIL**: genuine engine gaps, listed exactly (name + reason). A
 //!   passing xfail fails the harness (a stale ledger is a test error).
 
-use std::collections::{BTreeMap, HashMap};
+#[path = "support/corpus.rs"]
+mod corpus;
+
+use purrdf_core::FastMap;
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use purrdf_rdf::{DatasetView, GraphMatch, RdfDataset, TermId, TermValue, parse_dataset};
@@ -53,17 +57,13 @@ const XFAIL: &[(&str, &str)] = &[];
 
 const MF: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#";
 const SHT: &str = "http://www.w3.org/ns/shacl/test-suite#";
-const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-
-fn corpus_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors/shexTest")
-}
+use purrdf_iri::vocab::rdf::NS as RDF;
 
 fn url_to_path(url: &str) -> PathBuf {
     let rest = url
         .strip_prefix(CORPUS_URL)
         .unwrap_or_else(|| panic!("URL outside the vendored corpus: {url}"));
-    corpus_dir().join(rest)
+    corpus::shex_test().join(rest)
 }
 
 // ── manifest access ─────────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ struct Manifest {
 
 impl Manifest {
     fn load() -> Self {
-        let path = corpus_dir().join("validation/manifest.ttl");
+        let path = corpus::shex_test().join("validation/manifest.ttl");
         let text = fs::read_to_string(&path).expect("read validation manifest");
         let ds = parse_dataset(
             text.as_bytes(),
@@ -104,14 +104,14 @@ impl Manifest {
     }
 
     fn iri(&self, id: TermId) -> Option<String> {
-        match self.ds.term_value(id) {
+        match self.ds.term_value(id).unwrap() {
             TermValue::Iri(iri) => Some(iri),
             _ => None,
         }
     }
 
     fn lexical(&self, id: TermId) -> Option<String> {
-        match self.ds.term_value(id) {
+        match self.ds.term_value(id).unwrap() {
             TermValue::Literal { lexical_form, .. } => Some(lexical_form),
             _ => None,
         }
@@ -204,16 +204,16 @@ fn read_entry(m: &Manifest, id: TermId) -> Entry {
         .object(action, &format!("{SHT}data"))
         .and_then(|o| m.iri(o))
         .expect("sht:data");
-    let shape = m
-        .object(action, &format!("{SHT}shape"))
-        .map(|o| match m.ds.term_value(o) {
-            TermValue::Iri(iri) => iri,
-            TermValue::Blank { label, .. } => format!("_:{label}"),
-            other => panic!("{name}: unsupported sht:shape term {other:?}"),
-        });
+    let shape =
+        m.object(action, &format!("{SHT}shape"))
+            .map(|o| match m.ds.term_value(o).unwrap() {
+                TermValue::Iri(iri) => iri,
+                TermValue::Blank { label, .. } => format!("_:{label}"),
+                other => panic!("{name}: unsupported sht:shape term {other:?}"),
+            });
     let focus = m
         .object(action, &format!("{SHT}focus"))
-        .map(|o| m.ds.term_value(o));
+        .map(|o| m.ds.term_value(o).unwrap());
     let map_url = m
         .object(action, &format!("{SHT}map"))
         .and_then(|o| m.iri(o));
@@ -243,8 +243,8 @@ fn read_entry(m: &Manifest, id: TermId) -> Entry {
 
 #[derive(Default)]
 struct Caches {
-    schemas: HashMap<String, Result<Arc<Schema>, String>>,
-    data: HashMap<String, Result<Arc<RdfDataset>, String>>,
+    schemas: FastMap<String, Result<Arc<Schema>, String>>,
+    data: FastMap<String, Result<Arc<RdfDataset>, String>>,
 }
 
 /// Read one schema document, choosing ShExC/ShExJ by the on-disk extension
@@ -366,8 +366,7 @@ fn run_shape_map_entry(entry: &Entry, caches: &mut Caches) -> Result<(), String>
     let map_url = entry.map_url.as_deref().expect("map url");
     let map_text =
         fs::read_to_string(url_to_path(map_url)).map_err(|e| format!("read map: {e}"))?;
-    let map_json: serde_json::Value =
-        serde_json::from_str(&map_text).map_err(|e| format!("map JSON: {e}"))?;
+    let map_json = purrdf_lex::json::read(&map_text).map_err(|e| format!("map JSON: {e}"))?;
     let mut associations = Vec::new();
     for pair in map_json.as_array().ok_or("map JSON is not an array")? {
         let node = pair["node"].as_str().ok_or("map node")?;
@@ -385,8 +384,8 @@ fn run_shape_map_entry(entry: &Entry, caches: &mut Caches) -> Result<(), String>
         .ok_or("shape-map entry without mf:result")?;
     let result_text =
         fs::read_to_string(url_to_path(result_url)).map_err(|e| format!("read result: {e}"))?;
-    let result_json: serde_json::Value =
-        serde_json::from_str(&result_text).map_err(|e| format!("result JSON: {e}"))?;
+    let result_json =
+        purrdf_lex::json::read(&result_text).map_err(|e| format!("result JSON: {e}"))?;
     for (index, (node, selector)) in associations.iter().enumerate() {
         let node_key = match node {
             TermValue::Iri(iri) => iri.clone(),
@@ -396,7 +395,7 @@ fn run_shape_map_entry(entry: &Entry, caches: &mut Caches) -> Result<(), String>
         let ShapeSelector::Label(shape_key) = selector else {
             return Err("START in a map entry".to_owned());
         };
-        let expected = result_json[&node_key]
+        let expected = result_json[node_key.as_str()]
             .as_array()
             .and_then(|rows| {
                 rows.iter()

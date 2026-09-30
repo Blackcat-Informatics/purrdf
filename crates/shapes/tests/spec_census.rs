@@ -8,25 +8,26 @@
 //! * The vocabulary half: every term the vendored `shacl.ttl` and `shnex.ttl`
 //!   define ([`purrdf_shapes::spec::declared_terms`] reads the RDF).
 //! * The engine half: every `sh::` / `shnex::` string constant
-//!   `crates/shapes/src/model.rs` declares — every term PurRDF reads anywhere,
-//!   SHACL Advanced Features and SHACL-SPARQL 1.0 spellings included — scraped
-//!   with `syn`, so a constant added to `model.rs` without a census row fails
-//!   here, naming it.
+//!   `crates/iri/src/vocab.rs` declares (the modules `purrdf_shapes::model`
+//!   re-exports) — every term PurRDF reads anywhere, SHACL Advanced Features
+//!   and SHACL-SPARQL 1.0 spellings included — scraped with `syn`, so a
+//!   constant added to the vocabulary without a census row fails here, naming
+//!   it.
 //!
 //! And the mirror: a census row outside both universes must be one of the SHACL
-//! JavaScript Extensions terms, which neither declares and the census names only
-//! to refuse.
+//! JavaScript Extensions terms, which the census names only to refuse.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_shapes::spec::census::{Role, Site, TermClass, census, classify};
 use purrdf_shapes::spec::declared_terms;
 
-/// Every string constant declared in `mod {module}` of `model.rs`, as
-/// `(name, value)`, excluding the namespace constant `NS` itself.
+/// Every string constant declared in `mod {module}` of the shared W3C
+/// vocabulary (`crates/iri/src/vocab.rs`), as `(name, value)`, excluding the
+/// namespace constant `NS` itself.
 fn model_constants(module: &str) -> BTreeMap<String, String> {
-    let source = include_str!("../src/model.rs");
-    let file = syn::parse_file(source).expect("model.rs parses as Rust");
+    let source = include_str!("../../iri/src/vocab.rs");
+    let file = syn::parse_file(source).expect("vocab.rs parses as Rust");
     let mut out = BTreeMap::new();
     for item in &file.items {
         let syn::Item::Mod(module_item) = item else {
@@ -36,7 +37,7 @@ fn model_constants(module: &str) -> BTreeMap<String, String> {
             continue;
         }
         let Some((_, items)) = &module_item.content else {
-            panic!("mod {module} in model.rs has no inline body");
+            panic!("mod {module} in vocab.rs has no inline body");
         };
         for inner in items {
             let syn::Item::Const(konst) = inner else {
@@ -56,14 +57,15 @@ fn model_constants(module: &str) -> BTreeMap<String, String> {
     }
     assert!(
         !out.is_empty(),
-        "the scrape found no constants in mod {module} of model.rs, so this census test reads \
+        "the scrape found no constants in mod {module} of vocab.rs, so this census test reads \
          nothing"
     );
     out
 }
 
-/// The SHACL JavaScript Extensions terms: in neither universe, classified only so
-/// the loader can refuse them by name.
+/// The SHACL JavaScript Extensions terms, classified only so the loader can refuse
+/// them by name. The shared vocabulary names some of them (so the refusals can
+/// cite them); the rest are in neither universe.
 const SHACL_JS: [&str; 13] = [
     "http://www.w3.org/ns/shacl#js",
     "http://www.w3.org/ns/shacl#jsFunctionName",
@@ -108,12 +110,13 @@ fn every_model_constant_is_classified() {
     }
     assert!(
         missing.is_empty(),
-        "model.rs constants with no census class: {missing:?}"
+        "vocabulary constants with no census class: {missing:?}"
     );
 }
 
 /// The mirror of the two totality tests: the census classifies nothing outside
-/// the two universes except the SHACL-JS terms it names to refuse.
+/// the two universes except the SHACL-JS terms it names to refuse, and every
+/// SHACL-JS term is refused whichever universe names it.
 #[test]
 fn the_census_classifies_nothing_outside_the_two_universes_but_shacl_js() {
     let mut universe: BTreeSet<String> = declared_terms().expect("the vocabularies read");
@@ -125,7 +128,10 @@ fn the_census_classifies_nothing_outside_the_two_universes_but_shacl_js() {
         .map(|row| row.iri)
         .filter(|iri| !universe.contains(*iri))
         .collect();
-    let expected: BTreeSet<&str> = SHACL_JS.into_iter().collect();
+    let expected: BTreeSet<&str> = SHACL_JS
+        .into_iter()
+        .filter(|iri| !universe.contains(*iri))
+        .collect();
     assert_eq!(outside, expected);
     for iri in SHACL_JS {
         assert!(

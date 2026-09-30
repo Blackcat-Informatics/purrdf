@@ -59,32 +59,18 @@
 
 use core::ops::ControlFlow;
 
-use ciborium::value::Value;
 use purrdf_events::{
     EventError, EventQuad, EventTerm, EventTermId, EventTriple, RdfEventSink, ScopeId,
     TextDirection,
 };
+use purrdf_lex::cbor::Value;
 
+use crate::FastMap;
 use crate::model::{ByteRange, Diagnostic, OpaqueNode, Signature, StreamableInfo, Suppression};
 use crate::reader::{FrameContext, ReadOptions, StreamingReadResult, read_to_sink_with_options};
 use crate::segment_decode::{ResolvedSink, SegmentResolver};
 
-/// A [`std::collections::HashMap`] keyed by the workspace's fixed-key
-/// `purrdf_hash::fixed::FixedHasher` (`purrdf-core`'s `FastHasher` policy) — no runtime RNG
-/// seeding, so it stays wasm-clean. Iteration order is unspecified; this map is
-/// only ever point-looked-up, never iterated for egress.
-type FastMap<K, V> = std::collections::HashMap<K, V, purrdf_hash::fixed::FixedState>;
-
-/// Well-known `xsd:string` datatype IRI implied by a plain literal (RDF §7.1).
-///
-/// This is RDF's own datatype IRI, mirrored from
-/// `crates/rdf/src/native_codecs/hextuples.rs`; it is NOT fabricated PurRDF
-/// vocabulary.
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-/// Well-known `rdf:langString` datatype IRI implied by a language tag (RDF §7.1).
-///
-/// RDF's own datatype IRI (see [`XSD_STRING`]), not fabricated vocabulary.
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// A GTS-aware event sink: an [`RdfEventSink`] that also receives per-frame GTS
 /// provenance and the GTS-specific frames that have no neutral RDF event.
@@ -99,7 +85,7 @@ const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langSt
 pub trait GtsEventSink: RdfEventSink {
     /// Per-frame byte/identity provenance, announced once per frame.
     fn frame(&mut self, _ctx: FrameContext<'_>) -> Result<ControlFlow<()>, EventError> {
-        Ok(ControlFlow::Continue(()))
+        purrdf_events::CONTINUE
     }
 
     /// An inline blob's content digest and declared public metadata.
@@ -109,7 +95,7 @@ pub trait GtsEventSink: RdfEventSink {
         _digest: &str,
         _meta: Option<&Value>,
     ) -> Result<ControlFlow<()>, EventError> {
-        Ok(ControlFlow::Continue(()))
+        purrdf_events::CONTINUE
     }
 
     /// An opaque frame (unknown codec, missing key, or damaged payload).
@@ -118,7 +104,7 @@ pub trait GtsEventSink: RdfEventSink {
         _ctx: Option<FrameContext<'_>>,
         _node: &OpaqueNode,
     ) -> Result<ControlFlow<()>, EventError> {
-        Ok(ControlFlow::Continue(()))
+        purrdf_events::CONTINUE
     }
 
     /// A signature observation on a frame.
@@ -127,7 +113,7 @@ pub trait GtsEventSink: RdfEventSink {
         _ctx: Option<FrameContext<'_>>,
         _sig: &Signature,
     ) -> Result<ControlFlow<()>, EventError> {
-        Ok(ControlFlow::Continue(()))
+        purrdf_events::CONTINUE
     }
 
     /// A suppression directive.
@@ -136,7 +122,7 @@ pub trait GtsEventSink: RdfEventSink {
         _ctx: Option<FrameContext<'_>>,
         _suppression: &Suppression,
     ) -> Result<ControlFlow<()>, EventError> {
-        Ok(ControlFlow::Continue(()))
+        purrdf_events::CONTINUE
     }
 
     /// A reader diagnostic. Frame-scoped diagnostics carry the cached
@@ -146,7 +132,7 @@ pub trait GtsEventSink: RdfEventSink {
         _ctx: Option<FrameContext<'_>>,
         _diagnostic: &Diagnostic,
     ) -> Result<ControlFlow<()>, EventError> {
-        Ok(ControlFlow::Continue(()))
+        purrdf_events::CONTINUE
     }
 }
 
@@ -322,10 +308,9 @@ impl<'s> EventEmitter<'s> {
                     EventError::message("GTS literal datatype must resolve to an IRI")
                 })
             }
-            None if lang.is_some() && direction.is_some() => {
-                Ok(crate::model::RDF_DIR_LANG_STRING.to_owned())
+            None if lang.is_some() => {
+                Ok(purrdf_iri::vocab::language_datatype_iri(direction.is_some()).to_owned())
             }
-            None if lang.is_some() => Ok(RDF_LANG_STRING.to_owned()),
             None => Ok(XSD_STRING.to_owned()),
         }
     }
@@ -342,13 +327,9 @@ fn parse_direction(
 ) -> Result<Option<TextDirection>, EventError> {
     let parsed = match direction {
         None => return Ok(None),
-        Some("ltr") => TextDirection::Ltr,
-        Some("rtl") => TextDirection::Rtl,
-        Some(other) => {
-            return Err(EventError::message(format!(
-                "unrecognized GTS literal base direction {other:?}"
-            )));
-        }
+        Some(token) => TextDirection::from_str_token(token).ok_or_else(|| {
+            EventError::message(format!("unrecognized GTS literal base direction {token:?}"))
+        })?,
     };
     if lang.is_none_or(str::is_empty) {
         return Err(EventError::message(

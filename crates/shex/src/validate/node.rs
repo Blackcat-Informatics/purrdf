@@ -13,10 +13,10 @@ use crate::ast::{
     ObjectLiteral, StemValue, ValueSetValue,
 };
 
-/// The `xsd:string` datatype IRI (a plain literal's expanded datatype).
-pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 /// The `rdf:langString` datatype IRI (a language-tagged literal's datatype).
-pub(crate) const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+pub(crate) use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+/// The `xsd:string` datatype IRI (a plain literal's expanded datatype).
+pub(crate) use purrdf_xsd::datatype::XSD_STRING;
 
 /// What sort of RDF term a focus/value node is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -232,27 +232,7 @@ fn numeric_value(facts: &NodeFacts<'_>) -> Result<XsdValue, String> {
             "numeric facet requires a numeric datatype, got <{datatype}>"
         ));
     };
-    use XsdDatatype as D;
-    let numeric = matches!(
-        xsd,
-        D::Integer
-            | D::Long
-            | D::Int
-            | D::Short
-            | D::Byte
-            | D::UnsignedLong
-            | D::UnsignedInt
-            | D::UnsignedShort
-            | D::UnsignedByte
-            | D::NonNegativeInteger
-            | D::PositiveInteger
-            | D::NonPositiveInteger
-            | D::NegativeInteger
-            | D::Decimal
-            | D::Float
-            | D::Double
-    );
-    if !numeric {
+    if !xsd.is_numeric() {
         return Err(format!(
             "numeric facet requires a numeric datatype, got <{datatype}>"
         ));

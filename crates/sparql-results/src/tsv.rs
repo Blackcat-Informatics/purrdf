@@ -176,9 +176,9 @@ mod tests {
     use purrdf_core::TermBox;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm, TermValue};
 
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+    use purrdf_core::datatype::XSD_INTEGER;
+    use purrdf_core::datatype::XSD_STRING;
+    use purrdf_core::vocab::rdf::LANG_STRING as RDF_LANGSTRING;
 
     fn tsv_outcome(result: &SparqlResult, prov: &ResultProvenance) -> SerializeOutcome {
         to_tsv(result, prov).expect("serialization succeeds")

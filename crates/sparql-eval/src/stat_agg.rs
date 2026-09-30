@@ -72,14 +72,14 @@
 //! * `MODE`/`FIRST`/`LAST`/`TOPK` needed NO code change at all: they already
 //!   fold over a [`TermValue`] of ANY kind (see each member's own doc
 //!   section above), gated by nothing numeric-specific — none of their
-//!   `step` implementations ever call `is_numeric_xsd`. `MODE`'s tie-break
+//!   `step` implementations ever call `XsdValue::is_numeric`. `MODE`'s tie-break
 //!   and `TOPK`'s total order are both `crate::modifier`'s
 //!   `project`/`total_order` pair, which already orders duration literals
 //!   correctly (through its `parse_by_iri` + `value_cmp` path) — see the
 //!   ordering-policy paragraph below for the one difference between that
 //!   order and the one `MEDIAN`/`PERCENTILE` use.
 //! * `MEDIAN`/`PERCENTILE` (order statistics needing interpolation) widen
-//!   their gate from `is_numeric_xsd` alone to "numeric OR duration, never
+//!   their gate from `XsdValue::is_numeric` alone to "numeric OR duration, never
 //!   both in the same group" (see `is_numeric_or_duration_xsd`/
 //!   `same_value_family`) — a mixed numeric+duration group POISONS, the
 //!   same discipline `crate::modifier`'s duration `SUM`/`AVG` extension
@@ -133,7 +133,7 @@
 //! fall back to without inventing a value space this crate does not own, so
 //! this family is deliberately NOT extended — a duration input to
 //! `STDDEV`/`VARIANCE` poisons the fold exactly as any other non-numeric
-//! value does (the unchanged `is_numeric_xsd` gate in
+//! value does (the unchanged `XsdValue::is_numeric` gate in
 //! `MomentsAccumulator::step`).
 //!
 //! # `PERCENTILE`'s named scalarval
@@ -308,7 +308,7 @@ use crate::agg_fn::{
 };
 use crate::error::EvalError;
 use crate::expr::xsd_of;
-use crate::modifier::{ValueClass, is_numeric_xsd, lexical_of, project, total_order};
+use crate::modifier::{ValueClass, lexical_of, project, total_order};
 use crate::user_fn::{Arity, Volatility};
 
 // ---------------------------------------------------------------------------
@@ -326,11 +326,16 @@ const FIRST: &str = "FIRST";
 const LAST: &str = "LAST";
 const TOPK: &str = "TOPK";
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+use purrdf_xsd::datatype::XSD_DOUBLE;
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// `PERCENTILE`'s named scalarval: `AGG(<{NS}PERCENTILE>, ?v; P=0.95)`.
 const PERCENTILE_P: &str = "P";
+
+/// The arity of every aggregate in this module: one expression folded per row.
+/// A parameter (`PERCENTILE`'s `P`, `TOPK`'s `K`) is a scalarval, never an
+/// argument, so it does not widen this.
+const ONE_EXPRESSION: Arity = Arity::Exact(1);
 /// `TOPK`'s named scalarval: `AGG(<{NS}TOPK>, ?v; K=3)`.
 const TOPK_K: &str = "K";
 
@@ -348,7 +353,7 @@ fn numeric_scalarval(scalarvals: &[(String, TermValue)], name: &str) -> Option<X
         .iter()
         .find(|(k, _)| k == name)
         .and_then(|(_, v)| xsd_of(v))
-        .filter(is_numeric_xsd)
+        .filter(XsdValue::is_numeric)
 }
 
 /// `MEDIAN`/`PERCENTILE`'s widened gate — see the module docs' "The
@@ -357,7 +362,7 @@ fn numeric_scalarval(scalarvals: &[(String, TermValue)], name: &str) -> Option<X
 /// already in the group (that check is [`same_value_family`]'s job, applied
 /// separately in `step`/`combine`).
 fn is_numeric_or_duration_xsd(v: &XsdValue) -> bool {
-    is_numeric_xsd(v) || matches!(v, XsdValue::Duration(_))
+    v.is_numeric() || matches!(v, XsdValue::Duration(_))
 }
 
 /// Whether two values already passed through [`is_numeric_or_duration_xsd`]
@@ -367,7 +372,7 @@ fn is_numeric_or_duration_xsd(v: &XsdValue) -> bool {
 /// SUBTYPE duration values (`yearMonthDuration` beside `dayTimeDuration`)
 /// are the SAME family and never poison here.
 fn same_value_family(a: &XsdValue, b: &XsdValue) -> bool {
-    is_numeric_xsd(a) == is_numeric_xsd(b)
+    a.is_numeric() == b.is_numeric()
 }
 
 /// The running-moments (`(n, Σx, Σx²)`, deliberately NOT Welford — see the
@@ -529,83 +534,51 @@ enum ValueSeries {
     Poisoned,
 }
 
-struct MedianAccumulator {
-    state: ValueSeries,
-}
-
-impl AggregateAccumulator for MedianAccumulator {
-    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        if matches!(self.state, ValueSeries::Poisoned) {
-            return Ok(());
+impl ValueSeries {
+    /// Fold one row's argument in: a value outside the numeric tower and the
+    /// duration group, or of the other family than the values already held,
+    /// poisons the series, and a poisoned series stays poisoned.
+    fn step(&mut self, args: &[TermValue]) {
+        if matches!(self, Self::Poisoned) {
+            return;
         }
         let Some(x) = args
             .first()
             .and_then(xsd_of)
             .filter(is_numeric_or_duration_xsd)
         else {
-            self.state = ValueSeries::Poisoned;
-            return Ok(());
+            *self = Self::Poisoned;
+            return;
         };
-        self.state = match mem::replace(&mut self.state, ValueSeries::Empty) {
-            ValueSeries::Empty => ValueSeries::Ok(vec![x]),
-            ValueSeries::Ok(mut values) if same_value_family(&values[0], &x) => {
+        *self = match mem::replace(self, Self::Empty) {
+            Self::Empty => Self::Ok(vec![x]),
+            Self::Ok(mut values) if same_value_family(&values[0], &x) => {
                 values.push(x);
-                ValueSeries::Ok(values)
+                Self::Ok(values)
             }
-            ValueSeries::Ok(_) => ValueSeries::Poisoned,
-            ValueSeries::Poisoned => ValueSeries::Poisoned,
+            Self::Ok(_) | Self::Poisoned => Self::Poisoned,
         };
-        Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
-        // Concatenate the two (still-unsorted) value lists: merge order never
-        // matters, because `finish` sorts the whole multiset before computing
-        // a rank — see the module docs' "Real merges" section. A family
-        // mismatch between the two partials (numeric vs duration) poisons,
-        // the same as a within-accumulator mismatch in `step` above.
-        let other = downcast_combine_partial::<Self>(other)?;
-        self.state = match (
-            mem::replace(&mut self.state, ValueSeries::Empty),
-            other.state,
-        ) {
-            (ValueSeries::Poisoned, _) | (_, ValueSeries::Poisoned) => ValueSeries::Poisoned,
-            (ValueSeries::Empty, s) | (s, ValueSeries::Empty) => s,
-            (ValueSeries::Ok(mut values), ValueSeries::Ok(other_values)) => {
+    /// Merge a partial series in by concatenating the two (still-unsorted)
+    /// value lists. Merge order never matters, because `finish` sorts the
+    /// whole multiset before computing a rank — see the module docs' "Real
+    /// merges" section. A family mismatch between the two partials (numeric
+    /// vs duration) poisons, the same as a within-series mismatch in
+    /// [`Self::step`].
+    fn combine(&mut self, other: Self) {
+        *self = match (mem::replace(self, Self::Empty), other) {
+            (Self::Poisoned, _) | (_, Self::Poisoned) => Self::Poisoned,
+            (Self::Empty, s) | (s, Self::Empty) => s,
+            (Self::Ok(mut values), Self::Ok(other_values)) => {
                 if same_value_family(&values[0], &other_values[0]) {
                     values.extend(other_values);
-                    ValueSeries::Ok(values)
+                    Self::Ok(values)
                 } else {
-                    ValueSeries::Poisoned
+                    Self::Poisoned
                 }
             }
         };
-        Ok(())
-    }
-
-    /// See [`AggregateAccumulator::into_any`]'s trait docs — every implementor's
-    /// body is this same one line.
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
-        self
-    }
-
-    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        let Self { state } = *self;
-        match state {
-            ValueSeries::Empty | ValueSeries::Poisoned => Ok(None),
-            ValueSeries::Ok(values) => {
-                // The sort must also order durations, and it must be a TOTAL
-                // order or `sort_by` may panic. An incomparable pair (e.g. `P1M`
-                // vs `P30D`) still sorts as EQUAL — the SAME policy this
-                // comparator always used — but only against another member of
-                // its own comparability class; see `sort_series` and the module
-                // docs' "Ordering policy for incomparable duration pairs".
-                let values = sort_series(values);
-                Ok(percentile_of(&values, &half())
-                    .as_ref()
-                    .map(xsd_value_to_term))
-            }
-        }
     }
 }
 
@@ -613,7 +586,7 @@ struct MedianAggregate;
 
 impl CustomAggregate for MedianAggregate {
     fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ONE_EXPRESSION
     }
     fn volatility(&self) -> Volatility {
         Volatility::Stable
@@ -625,7 +598,10 @@ impl CustomAggregate for MedianAggregate {
         VALUE_PROPORTIONAL_STATE_BOUND
     }
     fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
-        Box::new(MedianAccumulator {
+        // MEDIAN is PERCENTILE at one half: one accumulator, so the two
+        // cannot drift in how they fold, merge, sort or rank.
+        Box::new(PercentileAccumulator {
+            p: Some(half()),
             state: ValueSeries::Empty,
         })
     }
@@ -652,26 +628,7 @@ impl AggregateAccumulator for PercentileAccumulator {
             self.state = ValueSeries::Poisoned;
             return Ok(());
         }
-        if matches!(self.state, ValueSeries::Poisoned) {
-            return Ok(());
-        }
-        let Some(x) = args
-            .first()
-            .and_then(xsd_of)
-            .filter(is_numeric_or_duration_xsd)
-        else {
-            self.state = ValueSeries::Poisoned;
-            return Ok(());
-        };
-        self.state = match mem::replace(&mut self.state, ValueSeries::Empty) {
-            ValueSeries::Empty => ValueSeries::Ok(vec![x]),
-            ValueSeries::Ok(mut values) if same_value_family(&values[0], &x) => {
-                values.push(x);
-                ValueSeries::Ok(values)
-            }
-            ValueSeries::Ok(_) => ValueSeries::Poisoned,
-            ValueSeries::Poisoned => ValueSeries::Poisoned,
-        };
+        self.state.step(args);
         Ok(())
     }
 
@@ -682,27 +639,10 @@ impl AggregateAccumulator for PercentileAccumulator {
         // scalarvals (see the module docs' "Real merges" section and
         // `crate::agg_fn`'s "Merging structural state" section) — so, unlike
         // the old per-row positional-argument design, there is no cross-chunk
-        // `p`-mismatch to detect here: concatenating the (still-unsorted)
-        // value lists is always correct, since `finish` sorts the whole
-        // multiset before computing a rank either way. A family mismatch
-        // between the two partials (numeric vs duration) poisons, the same
-        // as a within-accumulator mismatch in `step` above.
+        // `p`-mismatch to detect here: merging the two series is always
+        // correct (see `ValueSeries::combine`).
         let other = downcast_combine_partial::<Self>(other)?;
-        self.state = match (
-            mem::replace(&mut self.state, ValueSeries::Empty),
-            other.state,
-        ) {
-            (ValueSeries::Poisoned, _) | (_, ValueSeries::Poisoned) => ValueSeries::Poisoned,
-            (ValueSeries::Empty, s) | (s, ValueSeries::Empty) => s,
-            (ValueSeries::Ok(mut values), ValueSeries::Ok(other_values)) => {
-                if same_value_family(&values[0], &other_values[0]) {
-                    values.extend(other_values);
-                    ValueSeries::Ok(values)
-                } else {
-                    ValueSeries::Poisoned
-                }
-            }
-        };
+        self.state.combine(other.state);
         Ok(())
     }
 
@@ -717,8 +657,11 @@ impl AggregateAccumulator for PercentileAccumulator {
         let (Some(p), ValueSeries::Ok(values)) = (p, state) else {
             return Ok(None);
         };
-        // The same total-order sort `MedianAccumulator::finish` uses — one
-        // function, so the two cannot drift.
+        // The sort must also order durations, and it must be a TOTAL order or
+        // `sort_by` may panic. An incomparable pair (e.g. `P1M` vs `P30D`)
+        // still sorts as EQUAL, but only against another member of its own
+        // comparability class; see `sort_series` and the module docs'
+        // "Ordering policy for incomparable duration pairs".
         let values = sort_series(values);
         Ok(percentile_of(&values, &p).as_ref().map(xsd_value_to_term))
     }
@@ -728,7 +671,7 @@ struct PercentileAggregate;
 
 impl CustomAggregate for PercentileAggregate {
     fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ONE_EXPRESSION
     }
     fn volatility(&self) -> Volatility {
         Volatility::Stable
@@ -828,7 +771,7 @@ impl AggregateAccumulator for MomentsAccumulator {
         if matches!(self.state, MomentsState::Poisoned) {
             return Ok(());
         }
-        let Some(x) = args.first().and_then(xsd_of).filter(is_numeric_xsd) else {
+        let Some(x) = args.first().and_then(xsd_of).filter(XsdValue::is_numeric) else {
             self.state = MomentsState::Poisoned;
             return Ok(());
         };
@@ -946,7 +889,7 @@ struct MomentsAggregate {
 
 impl CustomAggregate for MomentsAggregate {
     fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ONE_EXPRESSION
     }
     fn volatility(&self) -> Volatility {
         Volatility::Stable
@@ -1044,7 +987,7 @@ struct ModeAggregate;
 
 impl CustomAggregate for ModeAggregate {
     fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ONE_EXPRESSION
     }
     fn volatility(&self) -> Volatility {
         Volatility::Stable
@@ -1120,7 +1063,7 @@ struct FirstAggregate;
 
 impl CustomAggregate for FirstAggregate {
     fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ONE_EXPRESSION
     }
     fn volatility(&self) -> Volatility {
         Volatility::Stable
@@ -1181,7 +1124,7 @@ struct LastAggregate;
 
 impl CustomAggregate for LastAggregate {
     fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ONE_EXPRESSION
     }
     fn volatility(&self) -> Volatility {
         Volatility::Stable
@@ -1323,7 +1266,7 @@ struct TopKAggregate;
 
 impl CustomAggregate for TopKAggregate {
     fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ONE_EXPRESSION
     }
     fn volatility(&self) -> Volatility {
         Volatility::Stable
@@ -1375,7 +1318,7 @@ impl AggregateRegistry {
     /// as a host that never configures
     /// [`purrdf_sparql_algebra::ParserOptions::extension_fn_namespaces`] gets
     /// none of [`purrdf_sparql_algebra::PurrdfFn`]'s scalar functions. Typically
-    /// called once, right after [`AggregateRegistry::new`], before registering
+    /// called once, right after [`AggregateRegistry::default`], before registering
     /// any host-specific aggregate of the caller's own.
     ///
     /// # Panics
@@ -1431,7 +1374,7 @@ mod tests {
     }
 
     fn registry() -> AggregateRegistry {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register_statistical_aggregates(NS);
         registry
     }
@@ -1514,7 +1457,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "already registered as a custom aggregate")]
     fn registering_twice_under_the_same_namespace_panics() {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register_statistical_aggregates(NS);
         registry.register_statistical_aggregates(NS);
     }
@@ -1862,7 +1805,7 @@ mod tests {
 
     /// `MODE` needed no code change to accept durations (see the module docs'
     /// "The `xsd:duration` extension" section: it folds over any [`TermValue`]
-    /// by RDF term identity, never gated on `is_numeric_xsd`).
+    /// by RDF term identity, never gated on `XsdValue::is_numeric`).
     #[test]
     fn mode_over_durations_picks_the_most_frequent_value() {
         let rows = [dt_dur("P1D"), dt_dur("P2D"), dt_dur("P2D")]

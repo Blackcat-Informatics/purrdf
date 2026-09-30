@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Multi-operation UPDATE reparse benchmark.
@@ -19,8 +19,8 @@
 //! would have made the unbounded clone (`self.tokens[self.pos..]` through EOF
 //! for every operation) quadratic.
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_sparql_algebra::SparqlParser;
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 
 const DELETE_WHERE_OPS: usize = 200;
 const CONSTRUCT_ROWS: usize = 2_000;
@@ -51,7 +51,7 @@ fn construct_where_fixture(rows: usize) -> String {
     out
 }
 
-fn bench_delete_where(c: &mut Criterion) {
+fn bench_delete_where(c: &mut Bench) {
     let parser = SparqlParser::new();
     let delete_where_text = delete_where_fixture(DELETE_WHERE_OPS);
     let mut group = c.benchmark_group("update_reparse");
@@ -67,7 +67,7 @@ fn bench_delete_where(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_construct_where(c: &mut Criterion) {
+fn bench_construct_where(c: &mut Bench) {
     let parser = SparqlParser::new();
     let construct_where_text = construct_where_fixture(CONSTRUCT_ROWS);
     let mut group = c.benchmark_group("construct_where_reparse");
@@ -83,5 +83,5 @@ fn bench_construct_where(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_delete_where, bench_construct_where);
-criterion_main!(benches);
+bench_group!(benches, bench_delete_where, bench_construct_where);
+bench_main!(benches);

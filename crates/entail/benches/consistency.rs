@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! OWL-Direct CONSISTENCY benchmark over the shape whose search cost was the defect.
@@ -76,7 +76,7 @@
 
 use std::sync::Arc;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
 use purrdf_entail::reasoner::Reasoner;
@@ -85,19 +85,19 @@ use purrdf_entail::reasoner::Reasoner;
 /// its own, and a reserved-for-documentation authority is the only one it may put in a term.
 const EX: &str = "http://example.org/";
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-const RDFS_SUBCLASSOF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
-const RDFS_RANGE: &str = "http://www.w3.org/2000/01/rdf-schema#range";
-const OWL_EQUIVALENTCLASS: &str = "http://www.w3.org/2002/07/owl#equivalentClass";
-const OWL_INVERSEOF: &str = "http://www.w3.org/2002/07/owl#inverseOf";
-const OWL_INTERSECTIONOF: &str = "http://www.w3.org/2002/07/owl#intersectionOf";
-const OWL_ONPROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
-const OWL_ALLVALUESFROM: &str = "http://www.w3.org/2002/07/owl#allValuesFrom";
-const OWL_CARDINALITY: &str = "http://www.w3.org/2002/07/owl#cardinality";
-const XSD_NON_NEGATIVE_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#nonNegativeInteger";
+use purrdf_iri::vocab::owl::ALL_VALUES_FROM as OWL_ALLVALUESFROM;
+use purrdf_iri::vocab::owl::CARDINALITY as OWL_CARDINALITY;
+use purrdf_iri::vocab::owl::EQUIVALENT_CLASS as OWL_EQUIVALENTCLASS;
+use purrdf_iri::vocab::owl::INTERSECTION_OF as OWL_INTERSECTIONOF;
+use purrdf_iri::vocab::owl::INVERSE_OF as OWL_INVERSEOF;
+use purrdf_iri::vocab::owl::ON_PROPERTY as OWL_ONPROPERTY;
+use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+use purrdf_iri::vocab::rdf::REST as RDF_REST;
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_iri::vocab::rdfs::RANGE as RDFS_RANGE;
+use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASSOF;
+use purrdf_xsd::datatype::XSD_NON_NEGATIVE_INTEGER;
 
 /// Which way each block states its restrictions, and whose individual it is asserted of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,7 +293,7 @@ fn nn_ontology(bound: usize) -> Arc<RdfDataset> {
 }
 
 /// Report-only bench of the nominal-introduction path over spy-point ontologies of growing bound.
-fn bench_nominal_introduction(c: &mut Criterion) {
+fn bench_nominal_introduction(c: &mut Bench) {
     let mut group = c.benchmark_group("owl_direct_consistency_nominal_introduction");
     for &bound in &[1usize, 2, 4] {
         let dataset = nn_ontology(bound);
@@ -309,7 +309,7 @@ fn bench_nominal_introduction(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_consistency(c: &mut Criterion) {
+fn bench_consistency(c: &mut Bench) {
     for shape in [Shape::Equivalence, Shape::SubClass, Shape::Stacked] {
         let mut group = c.benchmark_group(shape.label());
         // The co-typed group stops at eight: past four blocks it reaches the work cap rather
@@ -346,7 +346,7 @@ fn bench_consistency(c: &mut Criterion) {
 /// Nothing is asserted. A saving is a number this prints, not a claim a test makes; the
 /// obligation the tests DO carry is that the two arms decide identically, which
 /// `a_proofs_off_service_answer_is_identical_to_a_proofs_on_one` pins.
-fn bench_proof_recording(c: &mut Criterion) {
+fn bench_proof_recording(c: &mut Bench) {
     let mut group = c.benchmark_group("owl_direct_consistency_proof_recording");
     for &blocks in &[1usize, 4, 16] {
         let dataset = ontology(blocks, Shape::SubClass);
@@ -376,10 +376,10 @@ fn bench_proof_recording(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
+bench_group!(
     benches,
     bench_consistency,
     bench_nominal_introduction,
     bench_proof_recording
 );
-criterion_main!(benches);
+bench_main!(benches);

@@ -66,7 +66,7 @@ use super::scan::Scanner;
 /// pattern.
 pub(super) fn strip_x_flag_whitespace(pattern: &str) -> String {
     let mut out = String::with_capacity(pattern.len());
-    let mut scanner = Scanner::new(pattern);
+    let mut scanner = Scanner::with_x_state(pattern);
     loop {
         // The `Result` is deliberately ignored: every rejected construct is
         // still consumed and its spelling is still available through

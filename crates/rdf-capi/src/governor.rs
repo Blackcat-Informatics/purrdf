@@ -3,15 +3,19 @@
 
 //! C-ABI carriers for SPARQL execution governors, receipts, and cancellation.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use purrdf_sparql_eval::{
-    CancellationFlag, GovernorEvidence, QueryGovernors, ResourceDimension, StopCause, StopSignal,
-    TrippedGovernor, WallDeadline,
+    CancellationFlag, GovernorEvidence, HostStopWatch, QueryGovernors, ResourceDimension,
+    StopCause, StopSignal, TrippedGovernor, WallDeadline,
+};
+use purrdf_validate::governors::{
+    GovernorParts, GovernorPartsError, from_parts, from_update_parts,
 };
 
 use crate::error::PurrdfError;
+use crate::handles::{free_handle, into_handle};
 use crate::status::PurrdfStatus;
 
 /// Bit values for [`PurrdfQueryGovernors::enabled`].
@@ -124,7 +128,7 @@ pub unsafe extern "C" fn purrdf_cancellation_new(out: *mut *mut PurrdfCancellati
             if out.is_null() {
                 return PurrdfStatus::NullPointer as i32;
             }
-            *out = Box::into_raw(Box::new(PurrdfCancellation(CancellationFlag::new())));
+            *out = into_handle(PurrdfCancellation(CancellationFlag::new()));
             PurrdfStatus::Ok as i32
         })
     }
@@ -176,13 +180,7 @@ pub unsafe extern "C" fn purrdf_cancellation_is_cancelled(
 /// an active governed call must remain live until that call returns.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_cancellation_free(cancellation: *mut PurrdfCancellation) {
-    unsafe {
-        ffi_guard!((), {
-            if !cancellation.is_null() {
-                drop(Box::from_raw(cancellation));
-            }
-        });
-    }
+    unsafe { free_handle::<PurrdfCancellation>(cancellation) }
 }
 
 /// Stable C discriminants for governed resource dimensions.
@@ -319,13 +317,13 @@ impl PurrdfGovernorEvidence {
     };
 }
 
-/// Build native governors from a validated C carrier.
+/// The ceilings and stop signal a validated C carrier names, before they are engaged.
 ///
 /// # Safety
 /// `config` and any enabled cancellation handle must remain live for this call.
-pub(crate) unsafe fn decode_governors(
+unsafe fn decode_parts(
     config: *const PurrdfQueryGovernors,
-) -> Result<QueryGovernors, PurrdfError> {
+) -> Result<(GovernorParts, Option<Arc<dyn StopSignal>>), PurrdfError> {
     unsafe {
         if config.is_null() {
             return Err(PurrdfError::new(
@@ -350,22 +348,22 @@ pub(crate) unsafe fn decode_governors(
             ));
         }
 
-        let mut governors = QueryGovernors::METERED;
-        if config.flag(PurrdfGovernorFlag::Fuel) {
-            governors = governors.with_fuel(config.fuel);
-        }
-        if config.flag(PurrdfGovernorFlag::MaxAnswers) {
-            governors = governors.with_max_answers(config.max_answers);
-        }
-        if config.flag(PurrdfGovernorFlag::MaxIntermediateCells) {
-            governors = governors.with_max_intermediate_cells(config.max_intermediate_cells);
-        }
-        if config.flag(PurrdfGovernorFlag::MaxScratchBytes) {
-            governors = governors.with_max_scratch_bytes(config.max_scratch_bytes);
-        }
-        if config.flag(PurrdfGovernorFlag::MaxRemoteRequests) {
-            governors = governors.with_max_remote_requests(config.max_remote_requests);
-        }
+        let parts = GovernorParts {
+            fuel: config.flag(PurrdfGovernorFlag::Fuel).then_some(config.fuel),
+            max_answers: config
+                .flag(PurrdfGovernorFlag::MaxAnswers)
+                .then_some(config.max_answers),
+            max_intermediate_cells: config
+                .flag(PurrdfGovernorFlag::MaxIntermediateCells)
+                .then_some(config.max_intermediate_cells),
+            max_scratch_bytes: config
+                .flag(PurrdfGovernorFlag::MaxScratchBytes)
+                .then_some(config.max_scratch_bytes),
+            max_remote_requests: config
+                .flag(PurrdfGovernorFlag::MaxRemoteRequests)
+                .then_some(config.max_remote_requests),
+            no_ceiling: false,
+        };
 
         let cancellation = if config.flag(PurrdfGovernorFlag::Cancellation) {
             if config.cancellation.is_null() {
@@ -381,34 +379,48 @@ pub(crate) unsafe fn decode_governors(
         let deadline = config
             .flag(PurrdfGovernorFlag::DeadlineMillis)
             .then(|| WallDeadline::after(Duration::from_millis(config.deadline_millis)));
-        let watch = CStopWatch::new(cancellation, deadline);
-        if watch.is_armed() {
-            let signal: Arc<dyn StopSignal> = Arc::new(watch);
-            governors = governors.with_stop_signal(signal);
-        }
-        Ok(governors)
+        Ok((
+            parts,
+            HostStopWatch::new(cancellation, deadline).into_signal(),
+        ))
     }
 }
 
-/// Reject an answer cap on UPDATE, whose answer sequence is empty by definition.
-pub(crate) unsafe fn validate_update_governors(
-    config: *const PurrdfQueryGovernors,
-) -> Result<(), PurrdfError> {
-    unsafe {
-        if config.is_null() {
-            return Err(PurrdfError::new(
-                PurrdfStatus::NullPointer,
-                "governors is null",
-            ));
-        }
-        if (*config).flag(PurrdfGovernorFlag::MaxAnswers) {
-            return Err(PurrdfError::new(
-                PurrdfStatus::InvalidArgument,
-                "max_answers is not accepted by governed UPDATE: UPDATE has no answer sequence",
-            ));
-        }
-        Ok(())
+/// The ABI's wording of a [`GovernorPartsError`].
+fn parts_error(error: GovernorPartsError) -> PurrdfError {
+    match error {
+        GovernorPartsError::AnswerCapOnUpdate => PurrdfError::new(
+            PurrdfStatus::InvalidArgument,
+            "max_answers is not accepted by governed UPDATE: UPDATE has no answer sequence",
+        ),
+        other => PurrdfError::new(PurrdfStatus::InvalidArgument, other.to_string()),
     }
+}
+
+/// Build native governors for a query from a validated C carrier, through
+/// [`purrdf_validate::governors::from_parts`]: the metered base with each enabled
+/// ceiling engaged.
+///
+/// # Safety
+/// `config` and any enabled cancellation handle must remain live for this call.
+pub(crate) unsafe fn decode_governors(
+    config: *const PurrdfQueryGovernors,
+) -> Result<QueryGovernors, PurrdfError> {
+    let (parts, stop) = unsafe { decode_parts(config) }?;
+    from_parts(&parts, stop).map_err(parts_error)
+}
+
+/// Build native governors for an UPDATE, through
+/// [`purrdf_validate::governors::from_update_parts`], which refuses an answer cap: an
+/// UPDATE's answer sequence is empty by definition.
+///
+/// # Safety
+/// `config` and any enabled cancellation handle must remain live for this call.
+pub(crate) unsafe fn decode_update_governors(
+    config: *const PurrdfQueryGovernors,
+) -> Result<QueryGovernors, PurrdfError> {
+    let (parts, stop) = unsafe { decode_parts(config) }?;
+    from_update_parts(&parts, stop).map_err(parts_error)
 }
 
 /// Convert kernel evidence into its ABI-stable C carrier.
@@ -480,49 +492,6 @@ pub(crate) fn encode_trip(tripped: Option<TrippedGovernor>) -> PurrdfGovernorTri
         Some(_) => out.kind = PurrdfGovernorTripKind::Unknown as i32,
     }
     out
-}
-
-/// One latched stop signal composed from the C cancellation and deadline sources.
-#[derive(Debug)]
-struct CStopWatch {
-    latched: OnceLock<StopCause>,
-    cancellation: Option<CancellationFlag>,
-    deadline: Option<WallDeadline>,
-}
-
-impl CStopWatch {
-    fn new(cancellation: Option<CancellationFlag>, deadline: Option<WallDeadline>) -> Self {
-        Self {
-            latched: OnceLock::new(),
-            cancellation,
-            deadline,
-        }
-    }
-
-    const fn is_armed(&self) -> bool {
-        self.cancellation.is_some() || self.deadline.is_some()
-    }
-
-    fn observe(&self) -> Option<StopCause> {
-        if self
-            .cancellation
-            .as_ref()
-            .is_some_and(CancellationFlag::is_cancelled)
-        {
-            return Some(StopCause::Cancelled);
-        }
-        self.deadline.as_ref().and_then(StopSignal::poll)
-    }
-}
-
-impl StopSignal for CStopWatch {
-    fn poll(&self) -> Option<StopCause> {
-        if let Some(&cause) = self.latched.get() {
-            return Some(cause);
-        }
-        let cause = self.observe()?;
-        Some(*self.latched.get_or_init(|| cause))
-    }
 }
 
 #[cfg(test)]

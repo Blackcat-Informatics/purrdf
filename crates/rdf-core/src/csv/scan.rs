@@ -156,28 +156,35 @@ pub(crate) fn find_portable(set: &StopSet, haystack: &[u8]) -> Option<usize> {
         .map(|offset| chunks.len() * CHUNK + offset)
 }
 
-/// A kernel's signature, for the differential tests: this crate's own unit
-/// tests below, and [`super::backend`], which adapts it to a `StopSet`-free
-/// signature an integration test outside this crate can call.
+/// A kernel's signature: what [`super::arch::kernel`] resolves a
+/// [`super::backend::Backend`] to, for the differential tests (this crate's own
+/// unit tests below, and [`super::backend`], which adapts it to a
+/// `StopSet`-free signature an integration test outside this crate can call).
 pub(crate) type Kernel = fn(&StopSet, &[u8]) -> Option<usize>;
 
 #[cfg(test)]
 mod tests {
-    use super::{Kernel, LANES, StopSet, find_portable};
+    use purrdf_hash::Backend as _;
+    use purrdf_hash::dispatch::{assert_required_available, host_advertises};
     use purrdf_testkit::rng::SplitMix64;
+
+    use super::super::backend::Backend;
+    use super::{Kernel, LANES, StopSet};
 
     /// The per-byte answer every kernel must equal.
     fn reference(set: &StopSet, haystack: &[u8]) -> Option<usize> {
         haystack.iter().position(|&b| set.contains(b))
     }
 
-    /// Every kernel compiled for this target, by name.
+    /// The live dispatch and every kernel this build and processor run, by
+    /// name.
     fn kernels() -> Vec<(&'static str, Kernel)> {
-        let mut kernels: Vec<(&'static str, Kernel)> = vec![
-            ("portable", find_portable),
-            ("dispatch", |set, haystack| set.find(haystack)),
-        ];
-        kernels.extend(super::arch::every_kernel());
+        let mut kernels: Vec<(&'static str, Kernel)> =
+            vec![("dispatch", |set, haystack| set.find(haystack))];
+        kernels.extend(Backend::all_available().map(|backend| {
+            let kernel = super::super::arch::kernel(backend).expect("an available path");
+            (backend.name(), kernel)
+        }));
         kernels
     }
 
@@ -263,11 +270,6 @@ mod tests {
         }
     }
 
-    /// A uniform-enough draw below `n` (`n > 0`) for input generation.
-    fn below(rng: &mut SplitMix64, n: usize) -> usize {
-        (rng.next_u64() % n as u64) as usize
-    }
-
     /// Seeded random haystacks over a small alphabet, so members are dense in
     /// some and absent from others.
     #[test]
@@ -275,23 +277,66 @@ mod tests {
         let kernels = kernels();
         let mut rng = SplitMix64::new(0x00C5_F1E1_D5CA_2026);
         for _ in 0..4_000 {
-            let members: Vec<u8> = (0..below(&mut rng, 10))
+            let members: Vec<u8> = (0..rng.below_usize(10))
                 .map(|_| rng.next_u64().to_le_bytes()[0])
                 .collect();
             let set = StopSet::new(&members);
-            let alphabet: Vec<u8> = (0..=below(&mut rng, 12))
+            let alphabet: Vec<u8> = (0..=rng.below_usize(12))
                 .map(|_| rng.next_u64().to_le_bytes()[0])
                 .collect();
-            let len = below(&mut rng, 700);
+            let len = rng.below_usize(700);
             let haystack: Vec<u8> = (0..len)
-                .map(|_| alphabet[below(&mut rng, alphabet.len())])
+                .map(|_| alphabet[rng.below_usize(alphabet.len())])
                 .collect();
-            let start = below(&mut rng, len.max(1)).min(len);
+            let start = rng.below_usize(len.max(1)).min(len);
             let haystack = &haystack[start..];
             let expected = reference(&set, haystack);
             for (name, kernel) in &kernels {
                 assert_eq!(kernel(&set, haystack), expected, "{name} {set:?}");
             }
         }
+    }
+
+    /// Every available path is one of the family's, the selected one among
+    /// them, and the architecture's baseline vector kernel is available where
+    /// the target has one.
+    #[test]
+    fn the_selected_kernel_is_among_the_available_ones() {
+        let available: Vec<Backend> = Backend::all_available().collect();
+        assert!(available.contains(&Backend::selected()), "{available:?}");
+        assert!(available.contains(&Backend::Portable), "{available:?}");
+        #[cfg(target_arch = "x86_64")]
+        assert!(available.contains(&Backend::Sse2), "{available:?}");
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!(Backend::selected(), Backend::Neon);
+    }
+
+    /// Whether this host is expected to run a field-scanner path: its
+    /// architecture and build, and the processor features it advertises
+    /// independently of the detection under test.
+    fn expected_here(backend: Backend) -> bool {
+        match backend {
+            Backend::Portable => true,
+            Backend::Sse2 => cfg!(target_arch = "x86_64"),
+            Backend::Avx2 => cfg!(target_arch = "x86_64") && host_advertises(&["avx2"]),
+            Backend::Neon => cfg!(target_arch = "aarch64"),
+            Backend::Simd128 => cfg!(all(target_arch = "wasm32", target_feature = "simd128")),
+        }
+    }
+
+    /// Every `csv` path `PURRDF_REQUIRE_SIMD_PATHS` requires is available, so
+    /// the differentials above ran it; under `1` that is the architecture's
+    /// baseline kernel (`sse2`, `neon`) and AVX2 where the host advertises it.
+    #[test]
+    fn required_csv_paths_are_available() {
+        let required = assert_required_available("csv", expected_here);
+        println!(
+            "csv paths required: {}",
+            required
+                .iter()
+                .map(|backend| backend.name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
 }

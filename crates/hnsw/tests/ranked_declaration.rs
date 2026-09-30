@@ -12,6 +12,7 @@
 //! the profile's own bytes, and that reaching for the unranked registration by
 //! mistake fails loudly rather than quietly.
 
+use purrdf_hnsw::fixture::params;
 use std::sync::Arc;
 
 #[path = "support/corpus.rs"]
@@ -29,13 +30,9 @@ use purrdf_sparql_eval::{
     PropertyFunctionRegistry, RankArithmetic, TermKind,
 };
 
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_xsd::datatype::XSD_INTEGER;
 const PREDICATE: &str = "https://example.org/pf#nearest";
 const STRATUM: &str = "https://example.org/stratum/vector";
-
-fn params() -> Params {
-    Params::new(4, 8, 16, 8).expect("valid parameters")
-}
 
 /// A small deterministic space. The values are a splitmix walk mapped into
 /// `(-1, 1)`; nothing here reads a clock or an RNG.
@@ -427,7 +424,7 @@ fn a_search_within_the_beam_is_still_served() {
 /// A reassociated space over the same vectors [`space`] builds its exact index over.
 fn reassociated_space(rows: usize) -> Arc<HnswSpace<Reassociated>> {
     let exact = space(rows);
-    let index = HnswIndex::build_reassociated(
+    let index = purrdf_hnsw::build::<Reassociated>(
         exact.index().matrix().clone(),
         &DistanceMetric::SquaredEuclidean,
         params(),
@@ -441,7 +438,7 @@ fn reassociated_space(rows: usize) -> Arc<HnswSpace<Reassociated>> {
 fn reassociated_hnsw_declares_its_evidence_perturbed_order_and_law() {
     let fast = reassociated_space(16);
     let path = fast.index().arithmetic().path();
-    let evidence = profile::loss_evidence_reassociated(path);
+    let evidence = profile::loss_evidence_for::<Reassociated>(path);
     assert_eq!(
         fast.evidence(),
         evidence,

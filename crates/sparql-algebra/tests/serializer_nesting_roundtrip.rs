@@ -12,10 +12,14 @@
 //! forwarded and re-parsed on the test thread's own stack — nothing but memory bounds
 //! how deep either the parse or the rendering goes.
 
+#[path = "support/patterns.rs"]
+mod patterns;
+
+use patterns::var;
 use purrdf_sparql_algebra::{
     ArithmeticOperator, Child, Expression, Function, GraphPattern, Literal, NamedNode,
-    NamedNodePattern, NegatedPathElement, PropertyPathExpression, Query, SparqlParser, TermPattern,
-    TriplePattern, Variable, pattern_to_select_query,
+    NegatedPathElement, PropertyPathExpression, Query, SparqlParser, TermPattern,
+    pattern_to_select_query,
 };
 use purrdf_testkit::prop::prelude::*;
 
@@ -552,10 +556,6 @@ fn property_path_families_forward_twenty_thousand_levels_deep() {
 
 // ── generated trees ─────────────────────────────────────────────────────────
 
-fn var(name: &str) -> Variable {
-    Variable::new(name)
-}
-
 fn iri(local: &str) -> NamedNode {
     NamedNode::new_unchecked(format!("{EX}{local}"))
 }
@@ -571,16 +571,6 @@ fn leaf_expression() -> impl Strategy<Value = Expression> {
         ))),
         prop::sample::select(vec!["a", "b"]).prop_map(|v| Expression::Bound(var(v))),
     ]
-}
-
-fn exists_body() -> GraphPattern {
-    GraphPattern::Bgp {
-        patterns: vec![TriplePattern {
-            subject: TermPattern::Variable(var("a")),
-            predicate: NamedNodePattern::NamedNode(iri("q")),
-            object: TermPattern::Variable(var("b")),
-        }],
-    }
 }
 
 /// A constructor of a two-operand expression node, built the way the parser builds
@@ -621,10 +611,10 @@ fn expression_tree() -> impl Strategy<Value = Expression> {
             1 => (inner.clone(), inner.clone(), inner.clone())
                 .prop_map(|(c, t, e)| Expression::If(Child::new(c), Child::new(t), Child::new(e))),
             1 => prop::collection::vec(inner.clone(), 1..3).prop_map(|list| Expression::Coalesce(list.into())),
-            1 => Just(Expression::Exists(Child::new(exists_body()))),
+            1 => Just(Expression::Exists(Child::new(patterns::triple_bgp("a", iri("q"), "b")))),
             1 => inner.prop_map(|a| Expression::and(
                 a,
-                Expression::Exists(Child::new(exists_body()))
+                Expression::Exists(Child::new(patterns::triple_bgp("a", iri("q"), "b")))
             )),
         ]
     })
@@ -693,7 +683,7 @@ prop_test! {
     fn a_generated_expression_round_trips(expr in expression_tree()) {
         let body = GraphPattern::Filter {
             expr,
-            inner: Child::new(exists_body()),
+            inner: Child::new(patterns::triple_bgp("a", iri("q"), "b")),
         };
         assert_forwarded_roundtrip(&body);
     }

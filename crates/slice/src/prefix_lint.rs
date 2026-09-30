@@ -162,14 +162,7 @@ pub fn lint_prefix_consistency(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn repo_root() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .canonicalize()
-            .unwrap()
-    }
+    use purrdf_testkit::paths::workspace_root;
 
     fn committed_vocab() -> SliceVocab {
         SliceVocab::for_namespace("https://blackcatinformatics.ca/gmeow/")
@@ -178,7 +171,7 @@ mod tests {
     #[test]
     fn authored_corpus_has_no_registry_prefix_shadows() {
         let diagnostics =
-            lint_prefix_consistency(&repo_root(), &committed_vocab()).expect("scan corpus");
+            lint_prefix_consistency(&workspace_root(), &committed_vocab()).expect("scan corpus");
         assert!(
             diagnostics.is_empty(),
             "registry-prefix shadows found:\n{}",
@@ -207,7 +200,7 @@ mod tests {
         // agree with the Rust authority exactly — same prefix→namespace pairs, same
         // insertion order. Parsing failure or any divergence is a hard test failure
         // (the registry comment pins them as mirrors; this is the missing guard).
-        let config = repo_root()
+        let config = workspace_root()
             .join("src")
             .join("purrdf_tools")
             .join("config.py");

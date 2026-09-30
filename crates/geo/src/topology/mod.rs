@@ -63,4 +63,5 @@ mod segment;
 
 pub use locate::{curve_boundary_points, has_area, locate, topological_dimension};
 pub use relate::{relate, relate_pattern};
+pub(crate) use segment::plane;
 pub use segment::{SegmentIntersection, intersect, midpoint, on_segment, orientation};

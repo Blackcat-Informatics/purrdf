@@ -136,6 +136,17 @@ pub struct VectorFile<'a> {
 }
 
 impl<'a> VectorFile<'a> {
+    /// [`Self::parse`] a vector file a test embeds, panicking with the reason when
+    /// it does not verify: a tampered or stale fixture is a broken test.
+    ///
+    /// # Panics
+    ///
+    /// When [`Self::parse`] refuses `text`.
+    #[must_use]
+    pub fn load(text: &'a str) -> Self {
+        Self::parse(text).unwrap_or_else(|error| panic!("{error}"))
+    }
+
     /// Parse `text` and verify its `vector-count` and `body-sha256` against
     /// its body.
     pub fn parse(text: &'a str) -> Result<Self, VectorError> {
@@ -318,9 +329,15 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    /// An empty recorder.
-    pub fn new() -> Self {
-        Self::default()
+    /// An empty recorder, usable in `const` context.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            comments: Vec::new(),
+            headers: Vec::new(),
+            body: String::new(),
+            count: 0,
+        }
     }
 
     /// Append a free-form header comment line (without its leading `# `).
@@ -414,7 +431,8 @@ pub fn encode_str(text: &str) -> String {
         match character {
             '\\' => encoded.push_str("\\\\"),
             ascii if ascii.is_ascii() && escaped_in_text(ascii as u8) => {
-                let _ = write!(encoded, "\\x{:02x}", ascii as u8);
+                encoded.push_str("\\x");
+                purrdf_hash::hex::encode_into(&[ascii as u8], &mut encoded);
             }
             other => encoded.push(other),
         }
@@ -433,7 +451,8 @@ pub fn encode_bytes(bytes: &[u8]) -> String {
         match byte {
             b'\\' => encoded.push_str("\\\\"),
             byte if escaped_in_text(byte) || byte >= 0x80 => {
-                let _ = write!(encoded, "\\x{byte:02x}");
+                encoded.push_str("\\x");
+                purrdf_hash::hex::encode_into(&[byte], &mut encoded);
             }
             byte => encoded.push(char::from(byte)),
         }
@@ -506,9 +525,9 @@ fn decode(field: &str, encoding: Encoding) -> Result<Vec<u8>, VectorError> {
                 let digits = bytes
                     .get(index + 2..index + 4)
                     .ok_or_else(|| malformed("`\\x` needs two hex digits"))?;
-                let high = hex_value(digits[0])
+                let high = purrdf_hash::hex::nibble_canonical(digits[0])
                     .ok_or_else(|| malformed("`\\x` needs lowercase hex digits"))?;
-                let low = hex_value(digits[1])
+                let low = purrdf_hash::hex::nibble_canonical(digits[1])
                     .ok_or_else(|| malformed("`\\x` needs lowercase hex digits"))?;
                 let value = (high << 4) | low;
                 if value >= 0x80 && encoding == Encoding::Text {
@@ -531,20 +550,35 @@ fn decode(field: &str, encoding: Encoding) -> Result<Vec<u8>, VectorError> {
     Ok(decoded)
 }
 
-const fn hex_value(digit: u8) -> Option<u8> {
-    match digit {
-        b'0'..=b'9' => Some(digit - b'0'),
-        b'a'..=b'f' => Some(digit - b'a' + 10),
-        _ => None,
-    }
-}
-
 /// The lowercase hex SHA-256 of `data`.
 pub fn sha256_hex(data: &[u8]) -> String {
-    Sha256::digest(data)
-        .iter()
-        .fold(String::with_capacity(64), |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        })
+    purrdf_hash::hex::encode(&Sha256::digest(data))
+}
+
+/// The lowercase hex SHA-256 of `answers`, each followed by `\n`: one record's
+/// summary of an input set too large to list line by line, such as every
+/// Unicode scalar value.
+///
+/// A replay regenerates the same inputs in the same order, computes its own
+/// answers and compares this one field, so a disagreement anywhere in the set
+/// fails the record. Each answer should already be in the record's field
+/// encoding (see [`encode_str`]), so an answer holding `\n` cannot run into the
+/// next one.
+///
+/// ```
+/// use purrdf_testkit::vectors::{answer_digest, sha256_hex};
+///
+/// assert_eq!(answer_digest(["a", "b"]), sha256_hex(b"a\nb\n"));
+/// ```
+pub fn answer_digest<I, S>(answers: I) -> String
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut hasher = Sha256::new();
+    for answer in answers {
+        hasher.update(answer.as_ref().as_bytes());
+        hasher.update(b"\n");
+    }
+    purrdf_hash::hex::encode(&hasher.finalize())
 }

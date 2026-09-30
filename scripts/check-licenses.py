@@ -209,6 +209,7 @@ DELIBERATE_OTHER_LICENSE: dict[str, str] = {
     # apply to the tables beside the project's own offer (see LICENSING.md,
     # "Unicode data compiled into published crates"). Each is a generator's
     # output, and its generator writes this header.
+    "crates/lex/src/unicode_tables.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
     "crates/iri/src/idna_tables.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
     "crates/rdf-core/src/xsd_regex/blocks.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
     "crates/text/src/unicode_tables.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",

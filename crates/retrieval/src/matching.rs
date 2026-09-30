@@ -1280,13 +1280,11 @@ mod tests {
     // and renderable now rather than dead.
     // -----------------------------------------------------------------------
 
-    /// `xsd:dateTime`, named by the *fixture producer*, never by this layer:
-    /// PurRDF mints no calendar datatype, and a producer that declares none has
-    /// its endpoint placement refused rather than rendered as a plain string.
-    const XSD_DATE_TIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
-
-    /// `xsd:decimal`, likewise the fixture producer's declaration.
-    const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+    // `xsd:dateTime` and `xsd:decimal` are named by the *fixture producer*,
+    // never by this layer: PurRDF mints no calendar datatype, and a producer that
+    // declares none has its endpoint placement refused rather than rendered as a
+    // plain string.
+    use purrdf_core::datatype::{XSD_DATE_TIME, XSD_DECIMAL};
 
     fn bounds_at(lower: usize, upper: usize, datatype: &str) -> Vec<TermPlacement> {
         vec![

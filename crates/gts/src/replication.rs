@@ -7,14 +7,16 @@
 //! sequence and hash primitives as the reader, without adding runtime JSON
 //! dependencies.
 
-use ciborium::value::Value;
+use purrdf_hash::Domain;
+use purrdf_hash::hex::Lower;
 use purrdf_iri::json_escape::{JsonEscapes, push_string};
+use purrdf_lex::cbor::Value;
 
 pub use crate::model::ByteRange;
 use crate::model::{Diagnostic, StreamableInfo};
-use crate::reader::read_file_segments;
+use crate::reader::{is_header_item, read_file_segments};
 use crate::wire::{
-    blake3_256, canonical, content_id, header_id, hex, iter_items, map_get, unwrap_header,
+    blake3_256, canonical, content_id, header_id, iter_items, map_get, unwrap_header,
 };
 
 /// Byte range, identity, and chain-validation state for one frame.
@@ -136,27 +138,6 @@ impl Inventory {
     }
 }
 
-fn as_text(v: &Value) -> Option<&str> {
-    if let Value::Text(text) = v {
-        Some(text)
-    } else {
-        None
-    }
-}
-
-/// §3.1 boundary rule: a map carrying `"gts"` and lacking `"t"`.
-fn is_header_item(item: &Value) -> bool {
-    let inner = match item {
-        Value::Tag(_, inner) => inner.as_ref(),
-        other => other,
-    };
-    if let Value::Map(entries) = inner {
-        map_get(entries, "gts").is_some() && map_get(entries, "t").is_none()
-    } else {
-        false
-    }
-}
-
 fn item_end(items: &[(usize, Value)], torn: Option<usize>, data_len: usize, index: usize) -> usize {
     items
         .get(index + 1)
@@ -166,7 +147,7 @@ fn item_end(items: &[(usize, Value)], torn: Option<usize>, data_len: usize, inde
 fn header_profile(item: &Value) -> String {
     unwrap_header(item)
         .ok()
-        .and_then(|header| map_get(header, "prof").and_then(as_text))
+        .and_then(|header| map_get(header, "prof").and_then(Value::as_text))
         .unwrap_or("generic")
         .to_string()
 }
@@ -238,7 +219,7 @@ fn collect_frames(
             end: item_end,
             id,
             frame_type: map_get(frame, "t")
-                .and_then(as_text)
+                .and_then(Value::as_text)
                 .unwrap_or("<unknown>")
                 .to_string(),
             valid: id_ok && prev_ok,
@@ -330,6 +311,10 @@ pub fn inventory(data: &[u8]) -> Inventory {
     }
 }
 
+/// The hash domain of the aggregate over every segment head: the first element
+/// of its CBOR array.
+const SEGMENT_HEADS_DOMAIN: Domain = Domain::new(b"gts-segment-heads-v1");
+
 fn aggregate_digest(inventory: &Inventory) -> Vec<u8> {
     let heads: Vec<Value> = inventory
         .segments
@@ -338,7 +323,7 @@ fn aggregate_digest(inventory: &Inventory) -> Vec<u8> {
         .map(|head| Value::Bytes(head.clone()))
         .collect();
     blake3_256(&canonical(&Value::Array(vec![
-        "gts-segment-heads-v1".into(),
+        SEGMENT_HEADS_DOMAIN.as_str().into(),
         Value::Array(heads),
     ])))
     .to_vec()
@@ -354,7 +339,7 @@ fn json_string(text: &str) -> String {
 }
 
 fn json_hex(bytes: &[u8]) -> String {
-    json_string(&hex(bytes))
+    format!("\"{}\"", Lower(bytes))
 }
 
 fn json_optional_hex(value: Option<&[u8]>) -> String {
@@ -612,7 +597,7 @@ pub fn resume_after<'a>(data: &'a [u8], frame_id: &[u8]) -> Result<&'a [u8], Str
             }
         }
     }
-    Err(format!("frame {} not found", hex(frame_id)))
+    Err(format!("frame {} not found", Lower(frame_id)))
 }
 
 /// Outcome category for a two-file replication [`diff`].

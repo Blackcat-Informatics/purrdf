@@ -3,14 +3,14 @@
 
 //! `purrdf-iri` — the native **IRI/URI value space** for the RDF 1.2 query stack.
 //!
-//! A pure-Rust, **zero-runtime-dependency**, wasm-clean leaf crate: the drop-in
-//! replacement for the oxigraph-family `oxiri`, and the second foundation slice of
-//! the native SPARQL engine. It is deliberately decoupled
+//! A pure-Rust, wasm-clean crate whose one dependency is the zero-dependency
+//! lexical layer [`purrdf_lex`], and the second
+//! foundation slice of the native SPARQL engine. It is deliberately decoupled
 //! from `purrdf-core` (no dependency in either direction yet); the IR keeps
 //! IRIs **lexical-verbatim** (Constitution C0.1) and this crate is the
 //! validation/resolution layer beside it.
 //!
-//! # Coverage (a superset of `oxiri`)
+//! # Coverage
 //!
 //! * **Parse + validate** — RFC-3987 IRIs ([`parse`]) and the strict-ASCII RFC-3986
 //!   URI subset ([`parse_uri`]). Component spans (scheme/authority/path/query/
@@ -28,8 +28,8 @@
 //! * **Syntax normalization** — RFC-3986 §6.2.2 ([`Iri::normalize`]): case, percent-
 //!   encoding, and dot-segment normalization. Idempotent.
 //! * **CURIE/prefix** — [`expand_curie`]/[`resolve`]/[`contract`] over a
-//!   [`PrefixMap`], subsuming the SSSOM serializer's hand-rolled prefix logic.
-//!   `oxiri` has none of this — it is the EXTEND deliverable for this slice.
+//!   [`PrefixMap`], and the namespace/local-name split
+//!   [`split_local_name`]/[`local_name`].
 //! * **BCP 47 language tags** — [`langtag`], RFC 5646 `Language-Tag`
 //!   well-formedness against the §2.1 ABNF and the closed §2.2.8 grandfathered
 //!   list, shared by embedding metadata and CSVW validation. An accepted tag
@@ -38,21 +38,20 @@
 //!   subtags — in borrowing or owning form, and
 //!   [`langtag::canonical_case`] rewrites it in the §2.1.1 case convention
 //!   (language lower, region upper, script title, registered spelling for the
-//!   grandfathered tags). The boundary is well-formedness: subtags are never
+//!   grandfathered tags). [`langtag::identity_fold`] is the RDF 1.2 value-space
+//!   fold (lowercase) every store and comparison keys a tag by. The boundary is well-formedness: subtags are never
 //!   checked against the IANA Language Subtag Registry, and RFC 4647
 //!   language-range matching is outside this crate's scope entirely.
+//! * **W3C vocabularies** — [`vocab`], one module per W3C namespace (`rdf`,
+//!   `rdfs`, `owl`, `sh`, `skos`, `prov`, …) holding its `NS` and one constant
+//!   per term the workspace names, and [`vocab::language_datatype_iri`]. PurRDF
+//!   mints no vocabulary: every constant is a term of a W3C Recommendation, and
+//!   the XSD datatypes live with their value space in `purrdf-xsd`.
 //! * **Grammar terminals** — [`terminals`], the exact Turtle/SPARQL character
-//!   classes (`WS`, `PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`, `VARNAME`) that
-//!   every scanner above this leaf shares. They live here because a scanner's
-//!   character class decides token BOUNDARIES under maximal munch, so an
-//!   approximation misparses documents rather than merely widening the accepted
-//!   language, and one transcription is the only way to keep the scanners
-//!   agreeing with each other. The same module carries the byte-class
-//!   scanners built from those tables ([`terminals::find_first_trivia`],
-//!   [`terminals::find_first_iri_body_special`],
-//!   [`terminals::find_first_json_string_special`],
-//!   [`terminals::find_first_xml_special`]): portable chunked scans that find
-//!   the first byte of a class sixteen bytes at a time.
+//!   classes (`WS`, `PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`, `VARNAME`) and
+//!   the byte-class scanners built from them, re-exported from their home in
+//!   [`purrdf_lex`], the lexical layer every grammar in the workspace shares.
+//!   This crate's parser validates every component with them.
 //! * **Host syntax** — [`host`], the RFC 3986 §3.2.2 `IPv4address`,
 //!   `IPv6address` and `reg-name` productions as predicates. Every authority
 //!   [`parse`] accepts has its host decided by them, and they are public so a
@@ -61,16 +60,15 @@
 //! * **IDNA2008** — [`idna`], host names under RFC 5891 over the RFC 5892
 //!   derived property, the RFC 5892 Appendix A contextual rules and the
 //!   RFC 5893 Bidi rule, with RFC 3492 Punycode between A-labels and U-labels
-//!   and a local mapping step (NFKC_Casefold, then NFC). Every Unicode table is
+//!   and a local mapping step (NFKC_Casefold, then NFC). Its tables are
 //!   generated from the Unicode 17.0.0 database vendored under
-//!   `crates/iri/unicode/`. [`Iri::to_uri`] applies it as RFC 3987 §3.1
+//!   `crates/iri/unicode/`, and it normalizes through `purrdf_lex::unicode`,
+//!   the workspace's one normalization pipeline. [`Iri::to_uri`] applies it as RFC 3987 §3.1
 //!   describes; [`parse`] never does, because RFC 3987 compares IRIs code point
 //!   by code point.
 //! * **JSON string escape law** — [`json_escape`], the one RFC 8259 §7 string
-//!   body escaper every PurRDF JSON writer shares, over the JSON string-body
-//!   scanner above. It lives in this leaf because it is the one crate every
-//!   JSON-emitting crate reaches; [`json_escape::JsonEscapes`] names the three
-//!   spellings those writers pin.
+//!   body escaper every PurRDF JSON writer shares, re-exported from
+//!   [`purrdf_lex`].
 //!
 //! # Hard-fail
 //!
@@ -156,17 +154,24 @@ mod error;
 pub mod host;
 pub mod idna;
 mod idna_tables;
-pub mod json_escape;
 pub mod langtag;
 mod normalize;
 mod parse;
 pub mod pos;
 mod resolve;
-mod scan;
-pub mod terminals;
+pub mod vocab;
+
+/// The lexical foundations this crate scans with, re-exported so the paths
+/// `purrdf_iri::terminals`, `purrdf_iri::scan`, `purrdf_iri::json_escape`,
+/// `purrdf_iri::json_pointer` and `purrdf_iri::percent`
+/// name the same items as their home in [`purrdf_lex`].
+pub use purrdf_lex::{json_escape, json_pointer, percent, scan, terminals};
 
 pub use base::{BaseInScope, BaseIri, BaseOrigin, BaseScope, ScopedBase};
-pub use curie::{PrefixMap, contract, curie_prefix, expand_curie, resolve};
+pub use curie::{
+    PrefixMap, contract, contract_where, curie_prefix, expand_curie, local_name, resolve,
+    split_local_name,
+};
 pub use error::{IriError, Result};
 pub use parse::{Iri, is_absolute, parse, parse_uri};
 pub use pos::{LineIndex, Position};

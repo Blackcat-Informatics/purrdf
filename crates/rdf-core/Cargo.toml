@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-core"
-description = "PurRDF RDF 1.2 oxigraph-free kernel: model, diagnostics, IR, store traits, and event ingestion"
+description = "PurRDF RDF 1.2 kernel: model, diagnostics, IR, store traits, and event ingestion"
 version.workspace = true
 edition.workspace = true
 license = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
@@ -21,14 +21,18 @@ all-features = true
 workspace = true
 
 [lib]
-# rlib-only oxigraph-free / PyO3-free kernel. Python bindings live under
+# rlib-only PyO3-free kernel. Python bindings live under
 # `bindings/python`; this crate is the ring-fenced core that MUST NOT pull
-# oxigraph or PyO3 into its dependency tree.
+# PyO3 into its dependency tree.
 crate-type = ["rlib"]
 path = "src/lib.rs"
 name = "purrdf_core"
 
 [dependencies]
+# The lexical layer: the one `TextOut` append target, the `IRIREF` and literal
+# escapers, the RDF 1.2 term syntax and the XML reader. A leaf over
+# `purrdf-hash` only, with no edge back to the core, and wasm-clean.
+purrdf-lex = { workspace = true }
 # Zero-dependency RFC 3987 validation for canonical RDF-term targets. The IRI
 # leaf has no edge back to the core, remains wasm-clean, and prevents malformed
 # or relative identifiers from entering persistent PURREMB target identity.
@@ -57,6 +61,12 @@ purrdf-events = { workspace = true }
 # SipHash on hot value-index paths without introducing runtime randomness. A
 # zero-dependency leaf, so the kernel's graph gains no third-party package.
 purrdf-hash = { workspace = true }
+# The workspace's one first-mismatch index (`purrdf_deflate::common_prefix_len`),
+# the word-parallel compare behind the pack dictionary's front coding. It is
+# `#[inline]` with no dispatch, so each short record compare compiles into the
+# encoder's loop. A leaf over `purrdf-hash` only, with no edge back to the
+# core, and wasm-clean.
+purrdf-deflate = { workspace = true }
 # Raw `HashTable` for the store-once builder interner/dedup: each term/
 # row is owned ONCE by its `Vec`, the table holds only indices. (`HashTable` was
 # introduced in hashbrown 0.14.2; the workspace tracks 0.17.)
@@ -75,14 +85,13 @@ regex = { workspace = true }
 regex-syntax = { workspace = true }
 
 [dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
 # The workspace's shared counting allocator, for `tests/ir_zero_alloc.rs`. Path-
 # only and unpublished, so it is stripped from the packaged manifest; std-only
 # and dependency-free, so it needs no target gate.
 purrdf-alloc-probe = { workspace = true }
-# Acceleration-program baselines; light feature set matching
-# the sibling crates (logic/shacl/validate): criterion's plotters/rayon defaults are
-# off so `make bench` builds fast and the cargo-bench stdout summary is all we need.
-criterion = { workspace = true }
 # Writes the built pack bytes to a real temporary file for `pack_mmap.rs` to
 # read back, scratch directories for the other integration tests, and the property
 # harness. Path-only and unpublished, so it is stripped from the packaged
@@ -174,14 +183,14 @@ harness = false
 [[bench]]
 # One-shot allocation/count/high-water probes over the same deterministic
 # `.purremb` fixtures. Kept in a separate process so allocator atomics cannot
-# distort the Criterion timings above.
+# distort the timings above.
 name = "purremb_alloc"
 harness = false
 
 [[bench]]
 # One-shot allocation/count/high-water probes over the pack RESTORE path
 # (`PackView::from_bytes`, `dataset_from_view`, and `restore_pack` over both), on an
-# RDF 1.1 and an RDF 1.2 fixture. Separate from the `pack_query` Criterion target so
+# RDF 1.1 and an RDF 1.2 fixture. Separate from the `pack_query` timed target so
 # the allocator atomics cannot distort its timings, and separate from that target's
 # concerns because a decoder that quietly returns to one allocation per term reads as
 # noise in a latency measurement and as a scaling count here. Report-only — no
@@ -210,6 +219,15 @@ harness = false
 # and 1536 dimensions. Report-only -- no timing/speedup assertions; the two arithmetics
 # are reported side by side. `make bench` lane only -- excluded from `make check`.
 name = "distance"
+harness = false
+
+[[bench]]
+# The two core paths that reach a shared home: the Turtle literal escape scan
+# (`turtle::emit_term` over 1 MiB of clean, dense-escape and sparse-escape text)
+# and the pack dictionary's front-coding prefix (`EncodedDict::encode`/`decode`
+# over 100,000 sorted IRIs, and the `common_prefix_len` kernel). Report-only --
+# no timing/speedup assertions. `make bench` lane only -- excluded from `make check`.
+name = "shared_homes"
 harness = false
 
 [[bench]]

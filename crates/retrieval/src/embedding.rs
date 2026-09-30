@@ -63,8 +63,6 @@
 //! and the producer that reads it, and accepting a spelling the writer never
 //! emits would admit text that came from somewhere else.
 
-use core::fmt::Write as _;
-
 /// The number of hexadecimal digits one component is written as: a binary32 bit
 /// pattern is 32 bits, which is exactly eight.
 const COMPONENT_DIGITS: usize = 8;
@@ -128,10 +126,9 @@ pub fn encode_embedding(embedding: &[f32]) -> String {
         if index > 0 {
             out.push(SEPARATOR);
         }
-        // Reading the bit pattern is not arithmetic on the float, and formatting
-        // an integer as hex is not arithmetic at all.
-        write!(out, "{:0COMPONENT_DIGITS$X}", component.to_bits())
-            .expect("writing to a String cannot fail");
+        // Reading the bit pattern is not arithmetic on the float, and writing
+        // its big-endian bytes as hex is not arithmetic at all.
+        purrdf_hash::hex::encode_upper_into(&component.to_bits().to_be_bytes(), &mut out);
     }
     out
 }
@@ -158,21 +155,30 @@ pub fn decode_embedding(lexical: &str) -> Result<Vec<f32>, EmbeddingError> {
             index,
             token: token.to_owned(),
         };
-        if token.len() != COMPONENT_DIGITS || !token.bytes().all(is_canonical_hex_digit) {
+        if token.len() != COMPONENT_DIGITS {
             return Err(malformed());
         }
-        let bits = u32::from_str_radix(token, 16).map_err(|_| malformed())?;
+        let bits = token
+            .bytes()
+            .try_fold(0_u32, |bits, byte| {
+                canonical_digit(byte).map(|digit| (bits << 4) | u32::from(digit))
+            })
+            .ok_or_else(malformed)?;
         embedding.push(f32::from_bits(bits));
     }
     Ok(embedding)
 }
 
-/// Whether `byte` is one of the sixteen digits this form writes.
+/// The value of `byte` as one of the sixteen digits this form writes.
 ///
-/// Upper case only: `from_str_radix` would accept `a` as well, and accepting it
-/// here would make two lexicals name one embedding.
-const fn is_canonical_hex_digit(byte: u8) -> bool {
-    byte.is_ascii_digit() || matches!(byte, b'A'..=b'F')
+/// Upper case only: a lowercase letter is a hex digit elsewhere, and accepting
+/// it here would make two lexicals name one embedding.
+fn canonical_digit(byte: u8) -> Option<u8> {
+    if byte.is_ascii_lowercase() {
+        None
+    } else {
+        purrdf_hash::hex::nibble(byte)
+    }
 }
 
 #[cfg(test)]

@@ -161,7 +161,7 @@ pub trait StopSignal: Send + Sync + std::fmt::Debug {
 ///
 /// Latching is by construction — the bit only ever moves from clear to set, and nothing
 /// clears it. Build a new flag for a new query rather than resetting one.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CancellationFlag {
     /// The shared monotone bit. `Relaxed` on both sides is sufficient: it carries no
     /// accompanying data that a reader must see, so there is nothing for an
@@ -169,11 +169,15 @@ pub struct CancellationFlag {
     cancelled: Arc<AtomicBool>,
 }
 
+purrdf_hash::default_from_new!(CancellationFlag);
+
 impl CancellationFlag {
-    /// A fresh, uncancelled flag.
+    /// A fresh, uncancelled flag; [`Default`] delegates here.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     /// Cancel every clone of this flag. Idempotent, and never reversible.
@@ -338,6 +342,76 @@ impl StopSignal for WallDeadline {
     }
 }
 
+/// A host's cancellation bit and wall deadline, composed into the one [`StopSignal`] a
+/// governed call takes.
+///
+/// `QueryGovernors::with_stop_signal` takes one signal, and every host surface (the C
+/// ABI, the WebAssembly binding) offers its caller both sources, so the composition is
+/// written here once rather than per host. A simultaneous fire resolves the way the
+/// kernel ranks the causes: a cancellation (an explicit decision) ahead of a deadline (an
+/// elapsed measurement).
+///
+/// # Latching
+///
+/// The first resolved cause is written once into a `OnceLock`, and every later poll
+/// returns it without consulting a source again, which is the [`StopSignal`] contract.
+#[derive(Debug)]
+pub struct HostStopWatch {
+    /// The resolved cause, written once.
+    latched: OnceLock<StopCause>,
+    /// The caller's cancellation bit, when one was supplied.
+    cancellation: Option<CancellationFlag>,
+    /// The caller's wall deadline, when one was supplied.
+    deadline: Option<WallDeadline>,
+}
+
+impl HostStopWatch {
+    /// A watch over the caller's `cancellation` bit and `deadline`, either of which may be
+    /// absent.
+    #[must_use]
+    pub const fn new(
+        cancellation: Option<CancellationFlag>,
+        deadline: Option<WallDeadline>,
+    ) -> Self {
+        Self {
+            latched: OnceLock::new(),
+            cancellation,
+            deadline,
+        }
+    }
+
+    /// The watch as a shareable signal, or `None` when the caller supplied neither
+    /// source: an unarmed watch can never fire, so a governed call is handed no signal
+    /// to poll.
+    #[must_use]
+    pub fn into_signal(self) -> Option<Arc<dyn StopSignal>> {
+        (self.cancellation.is_some() || self.deadline.is_some())
+            .then(|| Arc::new(self) as Arc<dyn StopSignal>)
+    }
+
+    /// Poll every source once, the cancellation ahead of the deadline.
+    fn observe(&self) -> Option<StopCause> {
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(CancellationFlag::is_cancelled)
+        {
+            return Some(StopCause::Cancelled);
+        }
+        self.deadline.as_ref().and_then(StopSignal::poll)
+    }
+}
+
+impl StopSignal for HostStopWatch {
+    fn poll(&self) -> Option<StopCause> {
+        if let Some(&cause) = self.latched.get() {
+            return Some(cause);
+        }
+        let cause = self.observe()?;
+        Some(*self.latched.get_or_init(|| cause))
+    }
+}
+
 /// A millisecond source a test can step forwards and backwards at will.
 #[cfg(test)]
 #[derive(Debug)]
@@ -406,6 +480,35 @@ const fn metering_limits() -> ResourceVector {
         index += 1;
     }
     limits
+}
+
+/// The ceiling a caller actually configured for `dimension` in `limits`: `None` for an
+/// unbounded dimension and for one bounded only by [`METERING_CEILING`], which is not a
+/// bound anyone asked for. The one reading behind [`QueryGovernors::caller_ceiling`]
+/// and [`GovernorState::caller_ceiling`], so a configuration and the execution built
+/// from it cannot disagree about what the caller set.
+const fn caller_ceiling_in(limits: &ResourceVector, dimension: ResourceDimension) -> Option<u64> {
+    if !limits.is_bounded(dimension) {
+        return None;
+    }
+    let ceiling = limits.get(dimension);
+    if ceiling == METERING_CEILING {
+        None
+    } else {
+        Some(ceiling)
+    }
+}
+
+/// Whether any caller-settable governor is engaged: a stop signal is attached, or a
+/// caller-settable dimension carries a ceiling. Fixed-ceiling dimensions are excluded:
+/// they hold on every query, so counting them would make every execution look governed.
+/// The one reading behind [`QueryGovernors::is_engaged`] and
+/// [`GovernorState::is_engaged`].
+fn caller_engaged(limits: &ResourceVector, has_stop: bool) -> bool {
+    has_stop
+        || CALLER_SETTABLE_DIMENSIONS
+            .iter()
+            .any(|&dimension| limits.is_bounded(dimension))
 }
 
 /// Whether `dimension` is compared against the **maximum** of any single observation
@@ -611,10 +714,7 @@ impl QueryGovernors {
     /// governed and defeat the short-circuit.
     #[must_use]
     pub fn is_engaged(&self) -> bool {
-        self.stop.is_some()
-            || CALLER_SETTABLE_DIMENSIONS
-                .iter()
-                .any(|&dimension| self.limits.is_bounded(dimension))
+        caller_engaged(&self.limits, self.stop.is_some())
     }
 
     /// Whether `dimension` carries a ceiling that must actually be enforced.
@@ -644,15 +744,7 @@ impl QueryGovernors {
     /// narrowed below that.
     #[must_use]
     pub const fn caller_ceiling(&self, dimension: ResourceDimension) -> Option<u64> {
-        if !self.limits.is_bounded(dimension) {
-            return None;
-        }
-        let ceiling = self.limits.get(dimension);
-        if ceiling == METERING_CEILING {
-            None
-        } else {
-            Some(ceiling)
-        }
+        caller_ceiling_in(&self.limits, dimension)
     }
 }
 
@@ -1068,15 +1160,7 @@ impl GovernorState {
     /// access to. See that method for why `Some` is withheld from the metering sentinel.
     #[must_use]
     pub const fn caller_ceiling(&self, dimension: ResourceDimension) -> Option<u64> {
-        if !self.limits.is_bounded(dimension) {
-            return None;
-        }
-        let ceiling = self.limits.get(dimension);
-        if ceiling == METERING_CEILING {
-            None
-        } else {
-            Some(ceiling)
-        }
+        caller_ceiling_in(&self.limits, dimension)
     }
 
     /// Whether **any** caller-settable governor is engaged in this execution.
@@ -1091,10 +1175,7 @@ impl GovernorState {
     /// across workers at all — see `EvalCtx::may_fork_row_loop`.
     #[must_use]
     pub fn is_engaged(&self) -> bool {
-        self.stop.is_some()
-            || CALLER_SETTABLE_DIMENSIONS
-                .iter()
-                .any(|&dimension| self.limits.is_bounded(dimension))
+        caller_engaged(&self.limits, self.stop.is_some())
     }
 
     /// Charge `amount` against `dimension`, **only if** that dimension carries a ceiling.
@@ -1839,7 +1920,7 @@ fn schedule_preimage(id: &str, version: u32, schedule: &[(&str, u64)]) -> String
 /// The lowercase-hex SHA-256 of [`schedule_preimage`].
 fn schedule_digest(id: &str, version: u32, schedule: &[(&str, u64)]) -> String {
     let digest = sha2::Sha256::digest(schedule_preimage(id, version, schedule).as_bytes());
-    purrdf_core::hex::lower(&digest)
+    purrdf_hash::hex::encode(&digest)
 }
 
 /// The content-addressed identity of [`CHARGE_SCHEDULE`]: the lowercase-hex SHA-256 of its
@@ -1917,6 +1998,46 @@ pub const GOVERNOR_CORPUS_DIGEST: &str =
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn a_host_stop_watch_with_no_source_is_no_signal() {
+        assert!(HostStopWatch::new(None, None).into_signal().is_none());
+        let armed = HostStopWatch::new(Some(CancellationFlag::new()), None).into_signal();
+        let armed = armed.expect("a watch with a cancellation bit is a signal");
+        assert_eq!(armed.poll(), None, "an uncancelled bit has not fired");
+    }
+
+    #[test]
+    fn a_host_stop_watch_ranks_cancellation_ahead_of_deadline_and_latches() {
+        let flag = CancellationFlag::new();
+        let watch = HostStopWatch::new(
+            Some(flag.clone()),
+            Some(WallDeadline::after(Duration::ZERO)),
+        );
+        flag.cancel();
+        assert_eq!(watch.poll(), Some(StopCause::Cancelled));
+        assert_eq!(
+            watch.poll(),
+            Some(StopCause::Cancelled),
+            "a fired watch stays fired"
+        );
+    }
+
+    #[test]
+    fn a_host_stop_watch_reports_an_expired_deadline_while_uncancelled() {
+        let flag = CancellationFlag::new();
+        let watch = HostStopWatch::new(
+            Some(flag.clone()),
+            Some(WallDeadline::after(Duration::ZERO)),
+        );
+        assert_eq!(watch.poll(), Some(StopCause::Deadline));
+        flag.cancel();
+        assert_eq!(
+            watch.poll(),
+            Some(StopCause::Deadline),
+            "the latched cause is not re-ranked by a later cancellation"
+        );
+    }
 
     /// Compile-time proof that the state can be shared across evaluation workers, which
     /// the evaluation context's own `Send + Sync` proof requires of everything it holds.
@@ -2644,10 +2765,10 @@ mod tests {
                 .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
         );
 
-        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../scripts/conformance-frozen/vectors-sparql-governors.sha256");
+        let manifest = purrdf_testkit::paths::workspace_root()
+            .join("scripts/conformance-frozen/vectors-sparql-governors.sha256");
         let bytes = std::fs::read(&manifest).expect("the corpus freeze manifest must exist");
-        let hex = purrdf_core::hex::lower(&sha2::Sha256::digest(&bytes));
+        let hex = purrdf_hash::hex::encode(&sha2::Sha256::digest(&bytes));
         assert_eq!(
             GOVERNOR_CORPUS_DIGEST, hex,
             "the frozen corpus at vectors/sparql-governors/ changed without \

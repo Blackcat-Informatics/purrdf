@@ -28,13 +28,14 @@
 //! the wrong graph cannot pass by accident, and every treatment is set beside a
 //! control whose reported set differs from it.
 
+#[path = "support/turtle.rs"]
+mod turtle;
+
 use std::sync::Arc;
 
-use purrdf::RdfDataset;
 use purrdf_shapes::engine::{parse_shapes, validate_dataset_with_shapes_graph};
 use purrdf_shapes::report::ValidationReport;
 use purrdf_shapes::shapes::{ClosedMode, Constraint};
-use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 
 const PREFIXES: &str = "
 @prefix ex:    <http://example.org/ns#> .
@@ -43,15 +44,12 @@ const PREFIXES: &str = "
 @prefix sh:    <http://www.w3.org/ns/shacl#> .
 ";
 
-fn data(data_ttl: &str) -> Arc<RdfDataset> {
-    parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parses")
-}
-
 #[track_caller]
 fn validate(shapes_ttl: &str, data_ttl: &str) -> ValidationReport {
     let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None)
         .unwrap_or_else(|error| panic!("the shapes graph must load: {error}"));
-    validate_dataset_with_shapes_graph(&data(data_ttl), &shapes, None).expect("validation runs")
+    validate_dataset_with_shapes_graph(&turtle::data(PREFIXES, data_ttl), &shapes, None)
+        .expect("validation runs")
 }
 
 /// The local name of the `sh:resultPath` of every `sh:ClosedConstraintComponent`

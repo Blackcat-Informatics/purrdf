@@ -24,7 +24,7 @@ use purrdf::{
     serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_writer_with,
     serialize_dataset_with, try_canonicalize_flat_view,
 };
-use serde::Deserialize;
+use purrdf_lex::json::{self, Value};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -74,15 +74,16 @@ impl std::io::Write for SinkWriter<'_> {
 }
 
 use purrdf::viz::{
-    VizGraphPolicy, VizLabelPolicy, VizLayoutOptions, VizMode, VizRenderOptions, VizRole,
-    VizRoleRule, VizSpec, VizSvgOptions, VizTableField, VizVocabularyMapping, export_json,
-    project_dataset, project_dataset_export, render_dataset_svg,
+    VizGraphPolicy, VizLayoutOptions, VizRenderOptions, VizRole, VizRoleRule, VizSpec,
+    VizSvgOptions, VizTableField, VizVocabularyMapping, export_json, project_dataset,
+    project_dataset_export, render_dataset_svg,
 };
 
 use crate::codec::{resolve_format, resolve_media_type};
-use crate::convert::{quad_to_quad_values, quad_values_to_quad, rdf_term_to_term_value};
+use crate::convert::{quad_to_quad_values, quad_values_to_quad};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::term::{Quad, Term, TermInner};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
 
 /// Lower an optional pattern [`Term`] to an optional [`TermValue`] (None = wildcard).
 ///
@@ -95,37 +96,65 @@ fn pattern_value(term: Option<&Term>) -> Result<Option<TermValue>, JsError> {
         Some(t) if matches!(t.inner, TermInner::Variable(_)) => Ok(None),
         Some(t) => {
             let rdf = t.to_rdf_term().map_err(|e| JsError::new(&e))?;
-            Ok(Some(rdf_term_to_term_value(&rdf)))
+            Ok(Some(TermValue::from_rdf_term(&rdf)))
         }
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+/// The visualization options a JS caller passes as JSON text: a closed record of
+/// camelCase members, every one optional, read as strict records
+/// ([`purrdf_lex::json::record`]).
+#[derive(Debug, Default)]
 struct VisualOptions {
-    mode: Option<VizMode>,
+    mode: Option<String>,
     focus: Option<String>,
     role_rules: Vec<VisualRoleRule>,
-    vocabulary: Vec<VizVocabularyMapping>,
+    vocabulary: Vec<VisualVocabularyMapping>,
     graph: Option<String>,
     graphs: Vec<String>,
-    label_policy: Option<VizLabelPolicy>,
+    label_policy: Option<String>,
     max_statements: Option<usize>,
     max_terms: Option<usize>,
-    table_fields: Option<Vec<VizTableField>>,
+    table_fields: Option<Vec<String>>,
     layout: VisualLayoutOptions,
     svg: VisualSvgOptions,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One `vocabulary` entry; members other than `prefix` and `namespace` are ignored.
+#[derive(Debug)]
+struct VisualVocabularyMapping {
+    prefix: String,
+    namespace: String,
+}
+
+impl FromJson for VisualVocabularyMapping {
+    /// An open record: members other than `prefix` and `namespace` are not read.
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut record = Record::new(value, "a vocabulary mapping object")?;
+        Ok(Self {
+            prefix: record.required("prefix")?,
+            namespace: record.required("namespace")?,
+        })
+    }
+}
+
+/// The visualization value a JSON-options string names, in the engine's JSON form.
+fn viz_name<T: FromJson>(name: &str) -> Result<T, JsError> {
+    T::from_json(&name.into()).map_err(|error| JsError::new(&error.to_string()))
+}
+
+#[derive(Debug)]
 struct VisualRoleRule {
     predicate_iri: String,
     role: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+purrdf_lex::json_record!(impl FromJson for VisualRoleRule as "a role rule object" {
+    "predicateIri" => predicate_iri: required,
+    "role" => role: required,
+});
+
+#[derive(Debug, Default)]
 struct VisualLayoutOptions {
     margin: Option<i32>,
     rank_spacing: Option<i32>,
@@ -136,20 +165,60 @@ struct VisualLayoutOptions {
     max_node_width: Option<i32>,
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+purrdf_lex::json_record!(impl FromJson for VisualLayoutOptions as "a layout options object" {
+    "margin" => margin: optional,
+    "rankSpacing" => rank_spacing: optional,
+    "nodeSpacing" => node_spacing: optional,
+    "componentSpacing" => component_spacing: optional,
+    "componentWrapWidth" => component_wrap_width: optional,
+    "crossingSweeps" => crossing_sweeps: optional,
+    "maxNodeWidth" => max_node_width: optional,
+});
+
+#[derive(Debug, Default)]
 struct VisualSvgOptions {
     embed_metadata: Option<bool>,
     include_styles: Option<bool>,
     title: Option<String>,
 }
 
+purrdf_lex::json_record!(impl FromJson for VisualSvgOptions as "an SVG options object" {
+    "embedMetadata" => embed_metadata: optional,
+    "includeStyles" => include_styles: optional,
+    "title" => title: optional,
+});
+
+purrdf_lex::json_record!(impl FromJson for VisualOptions as "an object" {
+    "mode" => mode: optional,
+    "focus" => focus: optional,
+    "roleRules" => role_rules: defaulted,
+    "vocabulary" => vocabulary: defaulted,
+    "graph" => graph: optional,
+    "graphs" => graphs: defaulted,
+    "labelPolicy" => label_policy: optional,
+    "maxStatements" => max_statements: optional,
+    "maxTerms" => max_terms: optional,
+    "tableFields" => table_fields: optional,
+    "layout" => layout: defaulted,
+    "svg" => svg: defaulted,
+});
+
 impl VisualOptions {
     fn parse(json: Option<String>) -> Result<Self, JsError> {
         json.filter(|value| !value.trim().is_empty()).map_or_else(
             || Ok(Self::default()),
-            |value| serde_json::from_str(&value).map_err(|error| JsError::new(&error.to_string())),
+            |value| {
+                let document = json::read(&value)
+                    .map_err(|error| JsError::new(&format!("visualization options: {error}")))?;
+                Self::from_json(&document).map_err(|error| JsError::new(&error))
+            },
         )
+    }
+
+    /// The options record, a refusal named `visualization options: …`.
+    fn from_json(value: &Value) -> Result<Self, String> {
+        <Self as FromJson>::from_json(value)
+            .map_err(|error| format!("visualization options: {error}"))
     }
 
     fn into_engine_options(self) -> Result<(VizSpec, VizRenderOptions), JsError> {
@@ -160,7 +229,7 @@ impl VisualOptions {
         }
         let mut spec = VizSpec::default();
         if let Some(mode) = self.mode {
-            spec.mode = mode;
+            spec.mode = viz_name(&mode)?;
         }
         spec.focus = self.focus;
         spec.role_rules = self
@@ -171,7 +240,14 @@ impl VisualOptions {
                 role: VizRole::Custom(rule.role),
             })
             .collect();
-        spec.vocabulary = self.vocabulary;
+        spec.vocabulary = self
+            .vocabulary
+            .into_iter()
+            .map(|mapping| VizVocabularyMapping {
+                prefix: mapping.prefix,
+                namespace: mapping.namespace,
+            })
+            .collect();
         let graph_selectors = self
             .graph
             .into_iter()
@@ -181,7 +257,7 @@ impl VisualOptions {
             spec.graph_policy = VizGraphPolicy::Include(graph_selectors);
         }
         if let Some(label_policy) = self.label_policy {
-            spec.label_policy = label_policy;
+            spec.label_policy = viz_name(&label_policy)?;
         }
         if let Some(max_statements) = self.max_statements {
             spec.max_statements = max_statements;
@@ -190,7 +266,10 @@ impl VisualOptions {
             spec.max_terms = max_terms;
         }
         if let Some(table_fields) = self.table_fields {
-            spec.table_fields = table_fields;
+            spec.table_fields = table_fields
+                .iter()
+                .map(|field| viz_name::<VizTableField>(field))
+                .collect::<Result<_, _>>()?;
         }
 
         let mut layout = VizLayoutOptions::default();
@@ -698,7 +777,7 @@ impl Dataset {
         let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
         let model =
             project_dataset(&frozen, &spec).map_err(|error| JsError::new(&error.to_string()))?;
-        serde_json::to_string(&model).map_err(|error| JsError::new(&error.to_string()))
+        Ok(model.to_json().to_string())
     }
 
     /// `visualExportJson(optionsJson?)` -> model, scene, geometry, and index as JSON.
@@ -720,7 +799,7 @@ impl Dataset {
         let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
         let document = render_dataset_svg(&frozen, &spec, &options)
             .map_err(|error| JsError::new(&error.to_string()))?;
-        serde_json::to_string(&document).map_err(|error| JsError::new(&error.to_string()))
+        Ok(document.to_json().to_string())
     }
 
     /// `match(subject?, predicate?, object?, graph?)` → a new dataset of the matching
@@ -743,7 +822,7 @@ impl Dataset {
         // (`Any`), like an omitted argument — never resolved as a named graph.
         let named_graph = match &graph {
             Some(t) if !matches!(t.inner, TermInner::DefaultGraph | TermInner::Variable(_)) => {
-                Some(rdf_term_to_term_value(
+                Some(TermValue::from_rdf_term(
                     &t.to_rdf_term().map_err(|e| JsError::new(&e))?,
                 ))
             }
@@ -1149,15 +1228,13 @@ mod tests {
             r#"{"mode":"compact","vocabulary":[{"prefix":"ex","namespace":"https://e/"}],"svg":{"title":"Example graph"}}"#
                 .to_owned(),
         );
-        let model: serde_json::Value =
-            serde_json::from_str(&ds.visual_model_json(options.clone()).expect("model JSON"))
-                .expect("model value");
-        let export: serde_json::Value =
-            serde_json::from_str(&ds.visual_export_json(options.clone()).expect("export JSON"))
+        let model: Value = json::read(&ds.visual_model_json(options.clone()).expect("model JSON"))
+            .expect("model value");
+        let export: Value =
+            json::read(&ds.visual_export_json(options.clone()).expect("export JSON"))
                 .expect("export value");
-        let document: serde_json::Value =
-            serde_json::from_str(&ds.visual_svg_json(options).expect("SVG JSON"))
-                .expect("document value");
+        let document: Value =
+            json::read(&ds.visual_svg_json(options).expect("SVG JSON")).expect("document value");
         assert_eq!(model["statements"].as_array().map(Vec::len), Some(1));
         assert_eq!(export["schema_version"], "purrdf-viz-export-1");
         assert_eq!(export["model"], model);
@@ -1167,6 +1244,52 @@ mod tests {
                 .as_str()
                 .is_some_and(|svg| svg.contains("<metadata id=\"purrdf-viz-export\""))
         );
+    }
+
+    /// The options record is closed at every level: an undeclared member, a repeated
+    /// member, a `null` list and a value of the wrong kind are refused and named, and
+    /// the declared neighbours of each are accepted.
+    #[test]
+    fn visualization_options_refuse_what_they_do_not_declare() {
+        let refused = |text: &str, needle: &str| {
+            let Err(error) = VisualOptions::from_json(&json::read(text).expect("JSON")) else {
+                panic!("{text} was accepted");
+            };
+            assert!(error.contains(needle), "{text}: {error}");
+        };
+        let accepted = |text: &str| {
+            VisualOptions::from_json(&json::read(text).expect("JSON"))
+                .unwrap_or_else(|error| panic!("{text}: {error}"))
+        };
+        refused(r#"{"modes":"compact"}"#, "unknown field `modes`");
+        accepted(r#"{"mode":"compact"}"#);
+        refused(
+            r#"{"mode":"compact","mode":"full"}"#,
+            "duplicate field `mode`",
+        );
+        refused(r#"{"layout":{"margins":4}}"#, "unknown field `margins`");
+        let options = accepted(r#"{"layout":{"margin":4,"crossingSweeps":2}}"#);
+        assert_eq!(options.layout.margin, Some(4));
+        assert_eq!(options.layout.crossing_sweeps, Some(2));
+        refused(r#"{"layout":{"crossingSweeps":-1}}"#, "crossingSweeps");
+        refused(r#"{"layout":{"margin":2147483648}}"#, "margin");
+        accepted(r#"{"layout":{"margin":2147483647}}"#);
+        refused(r#"{"maxTerms":1.5}"#, "maxTerms");
+        assert_eq!(accepted(r#"{"maxTerms":15}"#).max_terms, Some(15));
+        refused(r#"{"graphs":null}"#, "graphs");
+        assert!(accepted(r#"{"graph":null}"#).graph.is_none());
+        refused(r#"{"svg":{"title":7}}"#, "title");
+        refused(
+            r#"{"roleRules":[{"predicateIri":"https://e/p"}]}"#,
+            "missing field `role`",
+        );
+        let rules = accepted(r#"{"roleRules":[{"predicateIri":"https://e/p","role":"r"}]}"#);
+        assert_eq!(rules.role_rules[0].predicate_iri, "https://e/p");
+        // A vocabulary mapping reads its two members and ignores any other.
+        let mapped =
+            accepted(r#"{"vocabulary":[{"prefix":"ex","namespace":"https://e/","note":1}]}"#);
+        assert_eq!(mapped.vocabulary[0].prefix, "ex");
+        refused("[]", "expected an object");
     }
 
     #[test]
@@ -1185,8 +1308,8 @@ mod tests {
         for quad in parsed.quads().expect("quads") {
             added.add(&quad).expect("add");
         }
-        let model: serde_json::Value =
-            serde_json::from_str(&added.visual_model_json(None).expect("model")).expect("JSON");
+        let model: Value =
+            json::read(&added.visual_model_json(None).expect("model")).expect("JSON");
         assert_eq!(model["statements"].as_array().map(Vec::len), Some(1));
         assert_eq!(model["assertions"].as_array().map(Vec::len), Some(1));
         assert_eq!(model["relations"].as_array().map(Vec::len), Some(2));
@@ -1394,7 +1517,7 @@ mod tests {
     /// CROSS-PATH regression (the adversarial case): a directional literal PARSED
     /// from text (the engine interns its `rdf:dirLangString` datatype and direction)
     /// must be found by a `has` whose query literal is built via the SAME path a
-    /// `DataFactory` literal would take — `rdf_term_to_term_value` →
+    /// `DataFactory` literal would take — `TermValue::from_rdf_term` →
     /// `canonicalize_literal`. The whole point of `canonicalize_literal` is byte
     /// identity with how the engine stores/interns the literal after a parse: if the
     /// canonical datatype diverges from what the engine interned, this `has` MISSES.

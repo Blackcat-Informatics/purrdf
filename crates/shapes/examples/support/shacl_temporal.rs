@@ -11,13 +11,7 @@
 //! bound and the reverse (comparable only beyond ±14:00), `24:00:00`, a leap
 //! day, and values of another datatype.
 
-use std::error::Error;
-use std::fmt::Write as _;
-
-use purrdf_shapes::engine::{parse_shapes, validate_dataset_with_shapes_graph};
-use purrdf_shapes::json_schema::{CompiledSchema, Namespaces, compile};
-use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
-use serde_json::Value;
+use crate::holder::Fixture;
 
 const PREFIXES: &str = r"
     @prefix sh:  <http://www.w3.org/ns/shacl#> .
@@ -89,58 +83,10 @@ pub(crate) const VARIANTS: [(&str, &str, &str); 12] = [
     ("clock-a-string", "ex:clock", r#""noon""#),
 ];
 
-/// The namespace table every oracle compiles and projects with.
-pub(crate) fn namespaces() -> Result<Namespaces, Box<dyn Error>> {
-    Ok(Namespaces::new(
-        "ex",
-        &[("ex".to_owned(), "https://example.org/".to_owned())],
-    )?)
-}
-
-/// The shapes graph compiled to JSON Schema.
-pub(crate) fn compiled() -> Result<CompiledSchema, Box<dyn Error>> {
-    let shapes = parse_shapes(&format!("{PREFIXES}{SHAPES}"), None)?;
-    Ok(compile(&shapes, &namespaces()?)?)
-}
-
-/// One data variant: its label, projected `Holder` node, and SHACL verdict.
-pub(crate) struct Case {
-    pub(crate) label: &'static str,
-    pub(crate) value: Value,
-    pub(crate) conforms: bool,
-}
-
-/// Every variant, projected and validated.
-pub(crate) fn cases() -> Result<Vec<Case>, Box<dyn Error>> {
-    let shapes = parse_shapes(&format!("{PREFIXES}{SHAPES}"), None)?;
-    let namespaces = namespaces()?;
-    VARIANTS
-        .iter()
-        .map(|&(label, property, replacement)| {
-            let mut data = format!("{PREFIXES}\nex:h a ex:Holder");
-            for (key, value) in BASE {
-                let value = if key == property { replacement } else { value };
-                write!(data, " ; {key} {value}")?;
-            }
-            data.push_str(" .\n");
-            let dataset =
-                parse_turtle_to_dataset(&data, None).map_err(|errors| format!("{errors:?}"))?;
-            let report = validate_dataset_with_shapes_graph(&dataset, &shapes, None)?;
-            let projected = purrdf_shapes::instance::project_graph(&dataset, &namespaces);
-            let value = projected["@graph"]
-                .as_array()
-                .and_then(|nodes| {
-                    nodes
-                        .iter()
-                        .find(|node| node["@id"] == "https://example.org/h")
-                })
-                .cloned()
-                .ok_or("the Holder node is projected")?;
-            Ok(Case {
-                label,
-                value,
-                conforms: report.conforms,
-            })
-        })
-        .collect()
-}
+/// The fixture: its shapes graph, base values and variants.
+pub(crate) const FIXTURE: Fixture = Fixture {
+    prefixes: PREFIXES,
+    shapes: SHAPES,
+    base: &BASE,
+    variants: &VARIANTS,
+};

@@ -9,25 +9,17 @@
 //! splitmix64 stream, so the suite carries no committed binaries and produces the same
 //! graphs on every target.
 
+#[path = "support/fixture.rs"]
+mod fixture;
+use fixture::seeded_matrix;
 use purrdf_core::DistanceMetric;
+use purrdf_core::distance::Exact;
 #[path = "support/corpus.rs"]
 mod corpus;
 
 use corpus::CorpusShape;
 use purrdf_hnsw::level::{level_cap, level_from_index};
 use purrdf_hnsw::{HnswIndex, Params, Ranked, VectorMatrix, build};
-
-/// A deterministic matrix of `rows x dims` values in `[-1, 1)`, never exactly zero.
-fn fixture(rows: usize, dims: usize, seed: u64) -> VectorMatrix {
-    let mut state = seed;
-    let mut data = Vec::with_capacity(rows * dims);
-    for _ in 0..rows * dims {
-        state = purrdf_hnsw::level::splitmix64(state);
-        let value = ((state >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0);
-        data.push(if value == 0.0 { 0.125 } else { value });
-    }
-    VectorMatrix::new(rows, dims, data).expect("fixture is valid")
-}
 
 /// The parameter sets every invariant is checked under.
 fn parameter_sets() -> Vec<Params> {
@@ -59,7 +51,8 @@ fn for_each_layer(index: &HnswIndex, mut check: impl FnMut(usize, u32, &[Ranked]
 fn no_node_links_to_itself_at_any_layer() {
     for params in parameter_sets() {
         for metric in kernels() {
-            let index = build(fixture(96, 8, 0xA11CE), &metric, params).expect("builds");
+            let index =
+                build(seeded_matrix(96, 8, 0xA11CE, Some(0.125)), &metric, params).expect("builds");
             for_each_layer(&index, |row, layer, neighbors| {
                 for neighbor in neighbors {
                     assert_ne!(
@@ -76,7 +69,7 @@ fn no_node_links_to_itself_at_any_layer() {
 fn every_neighbor_is_a_valid_row_at_a_layer_that_row_occupies() {
     for params in parameter_sets() {
         let index = build(
-            fixture(96, 8, 0xB0B),
+            seeded_matrix(96, 8, 0xB0B, Some(0.125)),
             &DistanceMetric::SquaredEuclidean,
             params,
         )
@@ -104,7 +97,12 @@ fn every_neighbor_is_a_valid_row_at_a_layer_that_row_occupies() {
 fn adjacency_is_strictly_sorted_by_distance_then_row() {
     for params in parameter_sets() {
         for metric in kernels() {
-            let index = build(fixture(96, 8, 0x00C0_FFEE), &metric, params).expect("builds");
+            let index = build(
+                seeded_matrix(96, 8, 0x00C0_FFEE, Some(0.125)),
+                &metric,
+                params,
+            )
+            .expect("builds");
             for_each_layer(&index, |row, layer, neighbors| {
                 for pair in neighbors.windows(2) {
                     assert!(
@@ -124,7 +122,7 @@ fn adjacency_is_strictly_sorted_by_distance_then_row() {
 fn degree_bounds_hold_at_every_layer() {
     for params in parameter_sets() {
         let index = build(
-            fixture(128, 6, 0xD00D),
+            seeded_matrix(128, 6, 0xD00D, Some(0.125)),
             &DistanceMetric::SquaredEuclidean,
             params,
         )
@@ -143,8 +141,8 @@ fn degree_bounds_hold_at_every_layer() {
 #[test]
 fn the_entry_point_is_the_minimum_row_at_the_maximum_level() {
     for params in parameter_sets() {
-        let index = build(
-            fixture(128, 6, 0xE11E),
+        let index = build::<Exact>(
+            seeded_matrix(128, 6, 0xE11E, Some(0.125)),
             &DistanceMetric::SquaredEuclidean,
             params,
         )
@@ -168,8 +166,8 @@ fn the_entry_point_is_the_minimum_row_at_the_maximum_level() {
 #[test]
 fn levels_are_exactly_the_fixed_formula() {
     for params in parameter_sets() {
-        let index = build(
-            fixture(256, 4, 0xF00D),
+        let index = build::<Exact>(
+            seeded_matrix(256, 4, 0xF00D, Some(0.125)),
             &DistanceMetric::SquaredEuclidean,
             params,
         )
@@ -189,10 +187,10 @@ fn levels_are_exactly_the_fixed_formula() {
 fn the_canonical_image_round_trips_through_decode_byte_for_byte() {
     for params in parameter_sets() {
         for metric in kernels() {
-            let matrix = fixture(64, 8, 0x5EED);
-            let index = build(matrix.clone(), &metric, params).expect("builds");
+            let matrix = seeded_matrix(64, 8, 0x5EED, Some(0.125));
+            let index = build::<Exact>(matrix.clone(), &metric, params).expect("builds");
             let image = index.canonical_image();
-            let decoded = HnswIndex::decode(matrix, &image).expect("decodes");
+            let decoded = HnswIndex::<Exact>::decode(matrix, &image).expect("decodes");
             assert_eq!(
                 decoded.canonical_image(),
                 image,
@@ -208,8 +206,11 @@ fn an_index_is_a_pure_function_of_its_inputs() {
     // is reproduced by a second call, including the entry point and every layer.
     for params in parameter_sets() {
         for metric in kernels() {
-            let first = build(fixture(200, 8, 0x1DEA), &metric, params).expect("builds");
-            let second = build(fixture(200, 8, 0x1DEA), &metric, params).expect("builds");
+            let first = build::<Exact>(seeded_matrix(200, 8, 0x1DEA, Some(0.125)), &metric, params)
+                .expect("builds");
+            let second =
+                build::<Exact>(seeded_matrix(200, 8, 0x1DEA, Some(0.125)), &metric, params)
+                    .expect("builds");
             assert_eq!(first.canonical_image(), second.canonical_image());
             assert!(first.verify_rebuild().expect("rebuilds"));
         }
@@ -277,7 +278,7 @@ fn every_row_is_reachable_from_the_entry_point_at_layer_zero() {
         for metric in kernels() {
             for rows in [2_usize, 3, 17, 96, 250] {
                 assert_reachable(
-                    &fixture(rows, 8, 0x00C0_FFEE),
+                    &seeded_matrix(rows, 8, 0x00C0_FFEE, Some(0.125)),
                     &metric,
                     params,
                     &format!("uniform-{rows}x8"),
@@ -318,7 +319,7 @@ fn reachability_holds_at_the_scale_the_crate_claims() {
     let params = Params::new(16, 32, 64, 16).expect("wide");
     for rows in [1_000_usize, 5_000] {
         assert_reachable(
-            &fixture(rows, 8, 0x00C0_FFEE),
+            &seeded_matrix(rows, 8, 0x00C0_FFEE, Some(0.125)),
             &DistanceMetric::SquaredEuclidean,
             params,
             &format!("uniform-{rows}x8"),
@@ -358,7 +359,8 @@ fn asymmetric_adjacency_is_explained_by_the_degree_bound() {
     // the whole point of a protected edge, and connectivity beats purity.
     for params in parameter_sets() {
         for metric in kernels() {
-            let index = build(fixture(96, 8, 0xBEEF), &metric, params).expect("builds");
+            let index =
+                build(seeded_matrix(96, 8, 0xBEEF, Some(0.125)), &metric, params).expect("builds");
             for_each_layer(&index, |row, layer, neighbors| {
                 for neighbor in neighbors {
                     let back = index.neighbors(neighbor.row, layer);
@@ -392,23 +394,19 @@ fn a_narrow_matrix_builds_the_identical_graph_to_its_widened_copy() {
     let (rows, dims) = (192_usize, 12_usize);
     let mut state = 0x1F32_D00D_u64;
     let narrow: Vec<f32> = (0..rows * dims)
-        .map(|_| {
-            state = purrdf_hnsw::level::splitmix64(state);
-            let value = ((state >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0);
-            (if value == 0.0 { 0.125 } else { value }) as f32
-        })
+        .map(|_| purrdf_testkit::rng::signed_unit_step_nonzero(&mut state, 0.125) as f32)
         .collect();
     let widened: Vec<f64> = narrow.iter().copied().map(f64::from).collect();
 
     for params in parameter_sets() {
         for metric in kernels() {
-            let from_f32 = build(
+            let from_f32 = build::<Exact>(
                 VectorMatrix::from_f32(rows, dims, narrow.clone()).expect("valid"),
                 &metric,
                 params,
             )
             .expect("builds");
-            let from_f64 = build(
+            let from_f64 = build::<Exact>(
                 VectorMatrix::new(rows, dims, widened.clone()).expect("valid"),
                 &metric,
                 params,

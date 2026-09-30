@@ -1,17 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use crate::direction_json::direction_to_json;
+use crate::projections::util::reject_duplicate_keys;
 use std::collections::BTreeSet;
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use purrdf_lex::json::{Object, Value};
 
 use super::super::{ProjectionDirection, ProjectionError, validate_absolute_iri};
 use super::ResearchObjectPolicy;
+use purrdf_lex::json::record::{ToJson, sorted_last_wins};
 
 /// RDF literal identity retained by the common research-object model.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ResearchText {
     /// Literal lexical form.
     pub value: String,
@@ -70,8 +71,7 @@ impl ResearchText {
 }
 
 /// Scalar or reference value shared across research-object formats.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ResearchValue {
     /// Absolute IRI reference.
     Iri {
@@ -94,6 +94,15 @@ impl ResearchValue {
         Ok(Self::Iri { value })
     }
 
+    /// The value's lexical form: the IRI of a reference, the lexical form of
+    /// a literal.
+    pub fn lexical(&self) -> &str {
+        match self {
+            Self::Iri { value } => value,
+            Self::Text(value) => &value.value,
+        }
+    }
+
     /// Borrow the IRI value, when this is an IRI reference.
     pub fn as_iri(&self) -> Option<&str> {
         let Self::Iri { value } = self else {
@@ -112,8 +121,7 @@ impl ResearchValue {
 }
 
 /// Algorithm/value checksum pair.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ResearchChecksum {
     /// Algorithm name or IRI exactly as supplied by the source profile.
     pub algorithm: ResearchValue,
@@ -122,8 +130,7 @@ pub struct ResearchChecksum {
 }
 
 /// Person, organization, or software agent used by a research object.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResearchAgent {
     /// Absolute entity IRI.
     pub id: String,
@@ -132,8 +139,7 @@ pub struct ResearchAgent {
 }
 
 /// File, distribution, or other data resource.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResearchResource {
     /// Absolute entity IRI.
     pub id: String,
@@ -156,8 +162,7 @@ pub struct ResearchResource {
 }
 
 /// Provenance activity connected to the research object.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResearchActivity {
     /// Absolute entity IRI.
     pub id: String,
@@ -178,8 +183,7 @@ pub struct ResearchActivity {
 }
 
 /// Field definition in a Croissant-compatible record set.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResearchField {
     /// Absolute field IRI.
     pub id: String,
@@ -190,8 +194,7 @@ pub struct ResearchField {
 }
 
 /// Structured record set with deterministic inline JSON rows.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResearchRecordSet {
     /// Absolute record-set IRI.
     pub id: String,
@@ -201,13 +204,13 @@ pub struct ResearchRecordSet {
     pub descriptions: Vec<ResearchText>,
     /// Field definitions.
     pub fields: Vec<ResearchField>,
-    /// Inline rows represented as JSON values.
+    /// Inline rows represented as JSON values; normalization orders each row's
+    /// members by name and keeps the last of a repeated name.
     pub rows: Vec<Value>,
 }
 
 /// Dataset-level research-object metadata and entity references.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResearchDataset {
     /// Absolute dataset IRI.
     pub id: String,
@@ -242,8 +245,7 @@ pub struct ResearchDataset {
 }
 
 /// Canonical typed semantic pivot shared by every research-object codec.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResearchObjectModel {
     /// Root dataset metadata.
     pub dataset: ResearchDataset,
@@ -343,8 +345,16 @@ impl ResearchObjectModel {
                     validate_value(value)?;
                 }
             }
+            // A row is free-form JSON: carried with its members in name order and a
+            // repeated name keeping its last value, so its bytes (and its sort key)
+            // are a function of its content.
+            record_set.rows.iter_mut().for_each(sorted_last_wins);
             record_set.rows.sort_by_key(canonical_json_key);
-            record_set.rows.dedup();
+            // Rows are byte-identical, not merely equal by value: `1` and `1.0`
+            // are two spellings a row keeps.
+            record_set
+                .rows
+                .dedup_by(|later, earlier| later.same_text(earlier));
             for row in &record_set.rows {
                 validate_json_depth(row, policy.max_json_depth(), 0)?;
             }
@@ -399,6 +409,41 @@ impl ResearchObjectModel {
         Ok(self)
     }
 }
+
+impl ToJson for ResearchText {
+    fn to_json(&self) -> Value {
+        Value::Object(self.members(Object::new()))
+    }
+}
+
+impl ResearchText {
+    /// The literal's members, after any members `object` already holds.
+    fn members(&self, object: Object) -> Object {
+        object
+            .with("value", self.value.as_str())
+            .with("datatype", self.datatype.as_str())
+            .with("language", self.language.to_json())
+            .with("direction", direction_to_json(self.direction))
+    }
+}
+
+impl ToJson for ResearchValue {
+    /// `{"kind": "iri", "value": …}`, or `{"kind": "text"}` followed by the
+    /// literal's members.
+    fn to_json(&self) -> Value {
+        Value::Object(match self {
+            Self::Iri { value } => Object::new()
+                .with("kind", "iri")
+                .with("value", value.as_str()),
+            Self::Text(text) => text.members(Object::new().with("kind", "text")),
+        })
+    }
+}
+
+purrdf_lex::json_record!(impl ToJson for ResearchChecksum {
+    "algorithm" => algorithm,
+    "value" => value,
+});
 
 fn normalize_dataset(dataset: &mut ResearchDataset) -> Result<(), ProjectionError> {
     sort_dedup(&mut dataset.titles);
@@ -466,12 +511,9 @@ fn reject_duplicate_ids<T>(
     id: impl Fn(&T) -> &String,
     description: &str,
 ) -> Result<(), ProjectionError> {
-    if values.windows(2).any(|pair| id(&pair[0]) == id(&pair[1])) {
-        return Err(ProjectionError::integrity(format!(
-            "research-object model contains duplicate {description} identity"
-        )));
-    }
-    Ok(())
+    reject_duplicate_keys(values, id, || {
+        format!("research-object model contains duplicate {description} identity")
+    })
 }
 
 fn ids<T>(values: &[T], id: impl Fn(&T) -> &String) -> BTreeSet<String> {
@@ -514,7 +556,7 @@ fn validate_json_depth(value: &Value, maximum: usize, depth: usize) -> Result<()
 }
 
 fn canonical_json_key(value: &Value) -> Vec<u8> {
-    serde_json::to_vec(value).expect("serde_json::Value always serializes")
+    purrdf_lex::json::write_compact(value).into_bytes()
 }
 
 fn count_values(model: &ResearchObjectModel) -> Result<usize, ProjectionError> {
@@ -644,6 +686,40 @@ mod tests {
         assert_eq!(
             model.clone().normalize(policy(10, 10)).expect("again"),
             model
+        );
+    }
+
+    #[test]
+    fn identical_rows_deduplicate_and_spelled_differently_rows_survive() {
+        let row = |text: &str| purrdf_lex::json::read(text).expect("row");
+        let mut model = minimal();
+        model.record_sets.push(ResearchRecordSet {
+            id: "https://example.org/records".to_owned(),
+            names: vec![],
+            descriptions: vec![],
+            fields: vec![],
+            rows: vec![
+                row(r#"{"b":2,"a":1}"#),
+                row(r#"{"a":1.0}"#),
+                row(r#"{"a":1}"#),
+                row(r#"{"a":1,"b":2}"#),
+                row(r#"{"a":1}"#),
+            ],
+        });
+        model
+            .dataset
+            .record_sets
+            .push("https://example.org/records".to_owned());
+        let model = model.normalize(policy(10, 100)).expect("normalize");
+        let texts: Vec<String> = model.record_sets[0]
+            .rows
+            .iter()
+            .map(purrdf_lex::json::write_compact)
+            .collect();
+        // Byte-identical rows collapse; `1` and `1.0` are two spellings, both kept.
+        assert_eq!(
+            texts,
+            [r#"{"a":1,"b":2}"#, r#"{"a":1.0}"#, r#"{"a":1}"#].map(str::to_owned)
         );
     }
 

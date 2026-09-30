@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Parsing and evaluating a flat operator chain: `?v = 0 || ?v = 1 || …`,
@@ -22,10 +22,10 @@
 use std::fmt::Write as _;
 use std::hint::black_box;
 
-use criterion::{Criterion, criterion_group, criterion_main};
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest};
 use purrdf_sparql_algebra::SparqlParser;
 use purrdf_sparql_eval::NativeSparqlEngine;
+use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
 const EX: &str = "http://example.org/";
 
@@ -103,7 +103,7 @@ fn queries(terms: usize) -> [(&'static str, String); 5] {
     ]
 }
 
-fn bench_flat_chains(c: &mut Criterion) {
+fn bench_flat_chains(c: &mut Bench) {
     let data = dataset();
     let path_data = path_dataset();
     let mut group = c.benchmark_group("flat_operator_chains");
@@ -145,5 +145,5 @@ fn bench_flat_chains(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_flat_chains);
-criterion_main!(benches);
+bench_group!(benches, bench_flat_chains);
+bench_main!(benches);

@@ -2732,9 +2732,7 @@ const SHA3_ABC_VECTORS: [(&str, &str, &str); 4] = [
 ///
 /// `spelling` rewrites each function name, so the SAME assertion serves the
 /// hyphenated keyword and SEP-0008's own underscored spelling.
-unsafe fn sha3_row_over_the_c_abi(
-    spelling: impl Fn(&str) -> String,
-) -> serde_json::Map<String, serde_json::Value> {
+unsafe fn sha3_row_over_the_c_abi(spelling: impl Fn(&str) -> String) -> purrdf_lex::json::Object {
     unsafe {
         let dataset = parse("application/n-triples", SHA3_MESSAGE_NT);
         let mut query = String::from("PREFIX ex: <http://example.org/> SELECT");
@@ -2761,7 +2759,8 @@ unsafe fn sha3_row_over_the_c_abi(
         purrdf_buffer_free(buffer);
         purrdf_dataset_free(dataset);
 
-        let doc: serde_json::Value = serde_json::from_str(&json).expect("SPARQL-results JSON");
+        let doc: purrdf_lex::json::Value =
+            purrdf_lex::json::read(&json).expect("SPARQL-results JSON");
         let bindings = doc["results"]["bindings"]
             .as_array()
             .unwrap_or_else(|| panic!("no results.bindings in: {json}"));

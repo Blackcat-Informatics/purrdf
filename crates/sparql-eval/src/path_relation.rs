@@ -345,8 +345,9 @@
 //! See each relation's own emission-order contract for the resulting row order.
 
 use purrdf_core::TermBox;
+use purrdf_hash::Domain;
 use std::collections::VecDeque;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{DatasetView, GraphMatch, TermValue};
@@ -361,7 +362,7 @@ use crate::user_fn::Volatility;
 /// it reifies. A well-known RDF vocabulary IRI (PurRDF mints none of its own); it is named
 /// here only to decide whether a step alternative can draw edges from the reifier
 /// side-table at all, since every row of that table carries exactly this predicate.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// The domain-separation prefix a snapshot's edge-set digest is taken under.
 ///
@@ -371,7 +372,7 @@ const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 /// offered as an answer to the other. The `-v1` suffix is what makes the layout revisable:
 /// a future change takes a new domain, so old and new values are unequal by construction
 /// rather than silently interchangeable.
-const PATH_SNAPSHOT_DOMAIN_V1: &[u8] = b"path-snapshot-edge-set-v1";
+const PATH_SNAPSHOT_DOMAIN_V1: Domain = Domain::new(b"path-snapshot-edge-set-v1");
 
 // ---------------------------------------------------------------------------
 // The step definition
@@ -970,9 +971,9 @@ impl PathGraph {
              relation no dataset at evaluation time, so an unnoticed mismatch is answered \
              silently about the snapshot's edges; rebuild the snapshot from the dataset \
              being queried",
-            render_hex(&self.fingerprint.content_digest),
+            purrdf_hash::hex::encode(&self.fingerprint.content_digest),
             self.fingerprint.edge_count,
-            render_hex(&observed_digest),
+            purrdf_hash::hex::encode(&observed_digest),
             observed_edges.len(),
         )))
     }
@@ -1156,7 +1157,7 @@ fn canonical_edges<D: DatasetView>(
 /// slowdown, it is a mispaired snapshot certified as correct.
 fn edge_set_digest(edges: &[(TermValue, TermValue, TermValue)]) -> [u8; 32] {
     let mut state = Sha256::new();
-    state.update(PATH_SNAPSHOT_DOMAIN_V1);
+    state.update(PATH_SNAPSHOT_DOMAIN_V1.as_bytes());
     state.update((edges.len() as u64).to_le_bytes());
     let mut bytes = Vec::new();
     for (from, to, statement) in edges {
@@ -1167,11 +1168,6 @@ fn edge_set_digest(edges: &[(TermValue, TermValue, TermValue)]) -> [u8; 32] {
         state.update(&bytes);
     }
     state.finalize().into()
-}
-
-/// Render bytes as lowercase hex, the one spelling this module renders a digest in.
-fn render_hex(bytes: &[u8]) -> String {
-    purrdf_core::hex::lower(bytes)
 }
 
 /// The dense index of `value` within an already-sorted, deduplicated table it is known to
@@ -1194,12 +1190,12 @@ fn dense_index(table: &[TermValue], value: &TermValue) -> u32 {
 /// to one minted by a different scheme over the same bytes. The `-v1` suffix is what
 /// makes the encoding revisable: a future layout change takes a new domain, so old and
 /// new identifiers are unequal by construction rather than silently interchangeable.
-const PATH_ID_DOMAIN_V1: &[u8] = b"path-witness-identifier-v1";
+const PATH_ID_DOMAIN_V1: Domain = Domain::new(b"path-witness-identifier-v1");
 
 /// The digest state of a zero-hop prefix rooted at `node`.
 fn seed_digest(graph: &PathGraph, node: u32) -> Sha256 {
     let mut state = Sha256::new();
-    state.update(PATH_ID_DOMAIN_V1);
+    state.update(PATH_ID_DOMAIN_V1.as_bytes());
     let mut bytes = Vec::new();
     graph.nodes[node as usize].canonical_bytes(&mut bytes);
     state.update(&bytes);
@@ -1221,7 +1217,7 @@ fn seed_digest(graph: &PathGraph, node: u32) -> Sha256 {
 /// answer. All 32 bytes are rendered, as 64 lowercase hex characters.
 fn finish_digest(mut state: Sha256, hop_count: u64) -> String {
     state.update(hop_count.to_le_bytes());
-    render_hex(&state.finalize())
+    purrdf_hash::hex::encode(&state.finalize())
 }
 
 // ---------------------------------------------------------------------------
@@ -1251,15 +1247,11 @@ fn path_arity() -> PfArity {
     PfArity::new(1, ROW_WIDTH - 1)
 }
 
-/// `n` as an `xsd:integer`-typed literal.
-///
-/// Typed, never simple: `?step` and `?len` exist to be compared and ordered
-/// numerically, and `ORDER BY` over simple literals is codepoint order, which puts
-/// `"10"` before `"2"` and scrambles every reconstruction of a walk longer than nine
-/// hops.
-fn integer_literal(n: u64) -> TermValue {
-    TermValue::typed_literal(n.to_string(), purrdf_xsd::datatype::XSD_INTEGER)
-}
+/// The one mode both witness relations declare: all-free, the ⊥ of the lattice,
+/// because either can serve every access pattern of the call shape. Materialized
+/// once so [`PropertyFunction::modes`] can hand out a slice.
+static WITNESS_MODES: LazyLock<[BindingPattern; 1]> =
+    LazyLock::new(|| [path_arity().all_free_mode()]);
 
 /// Read a bound argument as a hop count for pushdown purposes.
 ///
@@ -1505,7 +1497,7 @@ impl Prepared {
             return;
         }
         let length = hops.len() as u64;
-        let len_term = integer_literal(length);
+        let len_term = TermValue::integer(length);
         if !self.agrees(POS_LEN, &len_term) {
             return;
         }
@@ -1515,7 +1507,7 @@ impl Prepared {
         }
 
         for (index, &hop) in hops.iter().enumerate() {
-            let step_term = integer_literal(index as u64 + 1);
+            let step_term = TermValue::integer(index as u64 + 1);
             if !self.agrees(POS_STEP, &step_term) {
                 continue;
             }
@@ -1739,9 +1731,6 @@ fn row_bound(
 pub struct PathWitnessRelation {
     graph: Arc<PathGraph>,
     limits: PathLimits,
-    /// The single declared mode (all-free), materialized once so
-    /// [`PropertyFunction::modes`] can hand out a slice.
-    modes: [BindingPattern; 1],
 }
 
 impl PathWitnessRelation {
@@ -1751,12 +1740,8 @@ impl PathWitnessRelation {
     /// [`ShortestPathWitnessRelation`] registered alongside it: the two questions differ,
     /// the edges do not.
     #[must_use]
-    pub fn new(graph: Arc<PathGraph>, limits: PathLimits) -> Self {
-        Self {
-            graph,
-            limits,
-            modes: [path_arity().all_free_mode()],
-        }
+    pub const fn new(graph: Arc<PathGraph>, limits: PathLimits) -> Self {
+        Self { graph, limits }
     }
 }
 
@@ -1773,7 +1758,7 @@ impl PropertyFunction for PathWitnessRelation {
     }
 
     fn modes(&self) -> &[BindingPattern] {
-        &self.modes
+        &*WITNESS_MODES
     }
 
     fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
@@ -1801,7 +1786,7 @@ impl PropertyFunction for PathWitnessRelation {
         else {
             return Ok(Box::new(EmptyCursor));
         };
-        Ok(Box::new(PathWitnessCursor {
+        Ok(Box::new(Witnesses(PathWitnessCursor {
             on_path: vec![false; self.graph.node_count()],
             graph: Arc::clone(&self.graph),
             prepared,
@@ -1810,7 +1795,7 @@ impl PropertyFunction for PathWitnessRelation {
             stack: Vec::new(),
             hops: Vec::new(),
             digests: Vec::new(),
-        }))
+        })))
     }
 }
 
@@ -1961,16 +1946,50 @@ impl PathWitnessCursor {
     }
 }
 
-impl PfCursor for PathWitnessCursor {
+impl WitnessTraversal for PathWitnessCursor {
+    fn prepared(&mut self) -> &mut Prepared {
+        &mut self.prepared
+    }
+
+    fn step(&mut self) -> Result<bool, EvalError> {
+        Self::step(self)
+    }
+}
+
+/// A traversal a witness relation drives: one unit of work at a time, queuing the rows
+/// a walk produces on its [`Prepared`] invocation.
+trait WitnessTraversal {
+    /// The invocation whose licence and pending rows the traversal fills.
+    fn prepared(&mut self) -> &mut Prepared;
+
+    /// Perform one unit of traversal work; `false` only when every seed is exhausted.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::Function`] when a resource guard is breached.
+    fn step(&mut self) -> Result<bool, EvalError>;
+}
+
+/// The cursor both witness relations return: drain the queued rows, stop the moment the
+/// licence is spent, and otherwise take one more unit of traversal work.
+///
+/// Checking the licence before every row and every unit is what keeps a ceiling from
+/// being spent on work whose rows nobody asked for, and a single unit per turn keeps one
+/// `next` call bounded (see [`PfCursor`]'s deaf-relation doctrine).
+#[derive(Debug)]
+struct Witnesses<T>(T);
+
+impl<T: WitnessTraversal> PfCursor for Witnesses<T> {
     fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
         loop {
-            if self.prepared.licence_spent() {
+            let prepared = self.0.prepared();
+            if prepared.licence_spent() {
                 return Ok(None);
             }
-            if let Some(row) = self.prepared.take_pending() {
+            if let Some(row) = prepared.take_pending() {
                 return Ok(Some(row));
             }
-            if !self.step()? {
+            if !self.0.step()? {
                 return Ok(None);
             }
         }
@@ -2038,8 +2057,6 @@ impl PfCursor for PathWitnessCursor {
 pub struct ShortestPathWitnessRelation {
     graph: Arc<PathGraph>,
     limits: PathLimits,
-    /// The single declared mode (all-free).
-    modes: [BindingPattern; 1],
 }
 
 impl ShortestPathWitnessRelation {
@@ -2048,12 +2065,8 @@ impl ShortestPathWitnessRelation {
     /// Takes the same [`Arc<PathGraph>`] a [`PathWitnessRelation`] takes, so a host that
     /// registers both under two IRIs pays for one snapshot.
     #[must_use]
-    pub fn new(graph: Arc<PathGraph>, limits: PathLimits) -> Self {
-        Self {
-            graph,
-            limits,
-            modes: [path_arity().all_free_mode()],
-        }
+    pub const fn new(graph: Arc<PathGraph>, limits: PathLimits) -> Self {
+        Self { graph, limits }
     }
 }
 
@@ -2067,7 +2080,7 @@ impl PropertyFunction for ShortestPathWitnessRelation {
     }
 
     fn modes(&self) -> &[BindingPattern] {
-        &self.modes
+        &*WITNESS_MODES
     }
 
     fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
@@ -2105,7 +2118,7 @@ impl PropertyFunction for ShortestPathWitnessRelation {
         ) else {
             return Ok(Box::new(EmptyCursor));
         };
-        Ok(Box::new(ShortestPathWitnessCursor {
+        Ok(Box::new(Witnesses(ShortestPathWitnessCursor {
             discovered: vec![false; self.graph.node_count()],
             graph: Arc::clone(&self.graph),
             prepared,
@@ -2113,7 +2126,7 @@ impl PropertyFunction for ShortestPathWitnessRelation {
             seed: 0,
             visits: Vec::new(),
             emit_cursor: 0,
-        }))
+        })))
     }
 }
 
@@ -2266,19 +2279,13 @@ impl ShortestPathWitnessCursor {
     }
 }
 
-impl PfCursor for ShortestPathWitnessCursor {
-    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
-        loop {
-            if self.prepared.licence_spent() {
-                return Ok(None);
-            }
-            if let Some(row) = self.prepared.take_pending() {
-                return Ok(Some(row));
-            }
-            if !self.step()? {
-                return Ok(None);
-            }
-        }
+impl WitnessTraversal for ShortestPathWitnessCursor {
+    fn prepared(&mut self) -> &mut Prepared {
+        &mut self.prepared
+    }
+
+    fn step(&mut self) -> Result<bool, EvalError> {
+        Self::step(self)
     }
 }
 
@@ -2307,7 +2314,7 @@ mod tests {
     }
 
     fn int(n: u64) -> TermValue {
-        integer_literal(n)
+        TermValue::integer(n)
     }
 
     /// An all-free argument vector, to be filled position by position.
@@ -2385,7 +2392,7 @@ mod tests {
             assert!(
                 lexical_form
                     .bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+                    .all(|b| purrdf_hash::hex::nibble_canonical(b).is_some()),
                 "lowercase hex only: {lexical_form}"
             );
             assert_eq!(datatype, "http://www.w3.org/2001/XMLSchema#string");
@@ -2639,6 +2646,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_snapshot_edge_set_digest_is_golden() {
+        // Pinned so any change to the domain separator, the term encoding or the edge
+        // order silently re-certifying a different snapshot is a loud failure.
+        let edges = [
+            (iri("a"), iri("b"), iri("s1")),
+            (iri("b"), iri("c"), iri("s2")),
+        ];
+        assert_eq!(
+            purrdf_hash::hex::encode(&edge_set_digest(&edges)),
+            "3e8b56a6503ea1a5b185fc0011f104a49b809fba3e51f71e8f6cd466169781f1"
+        );
+    }
+
     /// The identifier of the walk `ex:a --ex:p--> ex:b --ex:p--> ex:c`.
     const GOLDEN_ABC_PATH_ID: &str =
         "3e4c617c5f08362717dfdbdaf9ced0e4db15c8253c13284e4ad7d6b7a8269c08";
@@ -2875,12 +2896,14 @@ mod tests {
         let text = error.to_string();
         // Both sides, because "these do not match" is not actionable.
         assert!(
-            text.contains(&render_hex(&graph.snapshot_fingerprint().content_digest)),
+            text.contains(&purrdf_hash::hex::encode(
+                &graph.snapshot_fingerprint().content_digest
+            )),
             "the snapshot's own digest must be named: {text}"
         );
         let other_graph = snapshot(&other, &[("p", PathDirection::Forward)]);
         assert!(
-            text.contains(&render_hex(
+            text.contains(&purrdf_hash::hex::encode(
                 &other_graph.snapshot_fingerprint().content_digest
             )),
             "the presented dataset's digest must be named: {text}"
@@ -2964,7 +2987,8 @@ mod tests {
         // nodes, same encoding primitive.
         let data = dataset(&[("a", "p", "b")]);
         let graph = snapshot(&data, &[("p", PathDirection::Forward)]);
-        let snapshot_digest = render_hex(&graph.snapshot_fingerprint().content_digest);
+        let snapshot_digest =
+            purrdf_hash::hex::encode(&graph.snapshot_fingerprint().content_digest);
 
         let relation = PathWitnessRelation::new(Arc::clone(&graph), limits(1, 1));
         let rows = drained(&relation, &free());

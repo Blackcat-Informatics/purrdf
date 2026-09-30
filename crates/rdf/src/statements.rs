@@ -17,7 +17,7 @@
 //! must round-trip losslessly, verified by construction — never a silent drop.
 //!
 //! The RDF 1.2 triple-term form `<<( s p o )>>` is emitted (matching the SPARQL
-//! codecs and what oxigraph/Jena both parse), not the RDF-star `<< s p o >>`
+//! codecs and what RDF 1.2 parsers accept), not the RDF-star `<< s p o >>`
 //! shorthand the reasoning-closure emitter uses.
 
 use std::collections::BTreeMap;
@@ -28,13 +28,14 @@ use crate::{
     NativeRdfFormat, RdfDiagnostic, RdfLiteral, RdfQuad, RdfTerm, RdfTriple, parse_dataset,
 };
 
-const OWL_AXIOM: &str = "http://www.w3.org/2002/07/owl#Axiom";
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const OWL_ANNOTATED_SOURCE: &str = "http://www.w3.org/2002/07/owl#annotatedSource";
-const OWL_ANNOTATED_PROPERTY: &str = "http://www.w3.org/2002/07/owl#annotatedProperty";
-const OWL_ANNOTATED_TARGET: &str = "http://www.w3.org/2002/07/owl#annotatedTarget";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::owl::ANNOTATED_PROPERTY as OWL_ANNOTATED_PROPERTY;
+use purrdf_iri::vocab::owl::ANNOTATED_SOURCE as OWL_ANNOTATED_SOURCE;
+use purrdf_iri::vocab::owl::ANNOTATED_TARGET as OWL_ANNOTATED_TARGET;
+use purrdf_iri::vocab::owl::AXIOM as OWL_AXIOM;
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_lex::term_syntax;
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// Parse a Turtle document (incl. RDF 1.2 triple terms) into model quads.
 ///
@@ -53,10 +54,9 @@ fn parse_quads(ttl: &str) -> Result<Vec<RdfQuad>, RdfDiagnostic> {
 
 /// Drop a redundant `^^xsd:string` datatype so a simple literal serializes bare.
 ///
-/// oxigraph (RDF 1.1) types a bare `"x"` as `xsd:string`; the authored OWL graph
+/// RDF 1.1 types a bare `"x"` as `xsd:string`; the authored OWL graph
 /// (rdflib) keeps it as a plain literal, and rdflib's isomorphism treats the two
-/// as distinct. Jena and oxigraph both emit `xsd:string` literals bare — match
-/// that so the round-trip proof against the authored OWL holds. Triple-term
+/// as distinct. Emitting `xsd:string` literals bare keeps them equal, so the round-trip proof against the authored OWL holds. Triple-term
 /// components are normalized too.
 ///
 /// A triple term is rebuilt bottom-up over a work list: its subject, then its
@@ -119,9 +119,19 @@ fn display(term: &RdfTerm) -> String {
     crate::display_term(&simplify_term(term))
 }
 
-/// Emit an RDF 1.2 triple term `<<( <s> <p> <o> )>>`.
+/// Emit an RDF 1.2 triple term `<<( s p o )>>` in the [`term_syntax`] spelling, the
+/// predicate an escaped `IRIREF`.
 fn emit_triple_term(subject: &RdfTerm, predicate: &str, object: &RdfTerm) -> String {
-    format!("<<( {} <{}> {} )>>", emit(subject), predicate, emit(object))
+    let mut out = String::from(term_syntax::TRIPLE_TERM_OPEN);
+    out.push(' ');
+    out.push_str(&emit(subject));
+    out.push(' ');
+    term_syntax::write_iri(predicate, &mut out);
+    out.push(' ');
+    out.push_str(&emit(object));
+    out.push(' ');
+    out.push_str(term_syntax::TRIPLE_TERM_CLOSE);
+    out
 }
 
 /// Require an IRI term (predicates must be IRIs).
@@ -376,6 +386,23 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
+    /// The triple term's predicate is an escaped `IRIREF`: a scalar `IRIREF` forbids
+    /// rides as `UCHAR`, and an ordinary predicate is written byte for byte.
+    #[test]
+    fn a_triple_term_predicate_is_an_escaped_iriref() {
+        let s = RdfTerm::iri("https://example.org/s");
+        let o = RdfTerm::iri("https://example.org/o");
+        assert_eq!(
+            emit_triple_term(&s, "https://example.org/p q>", &o),
+            "<<( <https://example.org/s> <https://example.org/p\\u0020q\\u003E> \
+             <https://example.org/o> )>>"
+        );
+        assert_eq!(
+            emit_triple_term(&s, "https://example.org/p", &o),
+            "<<( <https://example.org/s> <https://example.org/p> <https://example.org/o> )>>"
+        );
+    }
+
     const OWL: &str = r#"
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix ex: <https://example.org/vocab/> .
@@ -574,10 +601,11 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = purrdf_core::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::IriPredicates,
+                purrdf_core::term_fixture::TermShape::IriPredicates,
             );
             nested += usize::from(budget < 7);
             let term = owned(&value);
@@ -591,38 +619,34 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_simplified_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut term = RdfTerm::literal(RdfLiteral {
-                    lexical_form: "x".to_owned(),
-                    datatype: Some(XSD_STRING.to_owned()),
-                    language: None,
-                    direction: None,
-                });
-                for _ in 0..LEVELS {
-                    term = RdfTerm::triple(RdfTriple::new(
-                        term,
-                        "http://example.org/p",
-                        RdfTerm::iri("http://example.org/o"),
-                    ));
-                }
-                let mut simplified = simplify_term(&term);
-                // The owned model's derived drop descends once per level, so both chains
-                // are taken apart one level at a time, the innermost subject checked.
-                let mut levels = 0;
-                while let RdfTerm::Triple(triple) = simplified {
-                    simplified = triple.subject;
-                    levels += 1;
-                }
-                assert_eq!(levels, LEVELS);
-                assert_eq!(simplified, RdfTerm::literal(RdfLiteral::simple("x")));
-                while let RdfTerm::Triple(triple) = term {
-                    term = triple.subject;
-                }
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the normalization did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut term = RdfTerm::literal(RdfLiteral {
+                lexical_form: "x".to_owned(),
+                datatype: Some(XSD_STRING.to_owned()),
+                language: None,
+                direction: None,
+            });
+            for _ in 0..LEVELS {
+                term = RdfTerm::triple(RdfTriple::new(
+                    term,
+                    "http://example.org/p",
+                    RdfTerm::iri("http://example.org/o"),
+                ));
+            }
+            let mut simplified = simplify_term(&term);
+            // The owned model's derived drop descends once per level, so both chains
+            // are taken apart one level at a time, the innermost subject checked.
+            let mut levels = 0;
+            while let RdfTerm::Triple(triple) = simplified {
+                simplified = triple.subject;
+                levels += 1;
+            }
+            assert_eq!(levels, LEVELS);
+            assert_eq!(simplified, RdfTerm::literal(RdfLiteral::simple("x")));
+            while let RdfTerm::Triple(triple) = term {
+                term = triple.subject;
+            }
+        })
+        .expect("the thread starts");
     }
 }

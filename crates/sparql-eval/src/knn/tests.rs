@@ -10,19 +10,20 @@
 //! metric it declares, which rows its target set numbers, which matrix its guards bind —
 //! and a hand-built table would test none of it.
 
+use purrdf_core::purremb_fixture::Identities;
 use std::sync::Arc;
 
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, DerivedIndex, DimensionalityPolicy, DistanceMetric,
-    EmbeddingBuilder, EmbeddingFamilyContract, IndexBuildDeterminism, IndexCoordinates,
-    IndexGuardContract, IndexLossContract, IndexPayloadStorage, IndexUseRole, MatrixInput,
-    MatrixRow, PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, RdfTermTarget,
-    StageImplementation, TargetSet, VectorDtype,
+    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DerivedIndex,
+    DimensionalityPolicy, DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract,
+    IndexBuildDeterminism, IndexCoordinates, IndexGuardContract, IndexLossContract,
+    IndexPayloadStorage, IndexUseRole, MatrixInput, MatrixRow, PrefixPostprocessing,
+    ProjectionSpec, RdfDatasetBuilder, RdfTermTarget, TargetSet, VectorDtype,
 };
 
 use super::*;
-use crate::property_fn::{Completeness, OrderFidelity};
+use crate::property_fn::{Completeness, OrderFidelity, PfRow};
+use purrdf_xsd::datatype::XSD_DOUBLE;
 
 /// The fixture namespace. PurRDF mints no IRIs; these are the example vocabulary the
 /// repository's fixtures use.
@@ -40,30 +41,7 @@ struct Fixture {
     bindings: Vec<(TargetId, TermValue)>,
 }
 
-/// A fixture artifact identity, distinct per `name`.
-fn identity(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        format!("https://example.org/{name}"),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("artifact identity")
-}
-
-/// A fixture applied stage, distinct per `name`.
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            format!("https://example.org/{name}"),
-            ContentDigest::of(name.as_bytes()),
-            "application/octet-stream",
-            vec![1],
-        )
-        .expect("stage"),
-    )
-}
+const FX: Identities = Identities::at("https://example.org/");
 
 /// An IRI term in the fixture namespace.
 fn iri(local: &str) -> TermValue {
@@ -115,14 +93,14 @@ fn fixture_with_indexes(
     declared.sort_unstable_by_key(|target| target.id);
 
     let contract = EmbeddingFamilyContract {
-        model: identity("model"),
-        engine: identity("engine"),
-        tokenizer: identity("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F64,
@@ -1437,7 +1415,7 @@ fn a_derived_index_guard_naming_this_space_is_checked_and_a_matching_one_is_admi
         prefix_dimension: space_view.dimension(),
     };
     let guard_contract = IndexGuardContract {
-        implementation: identity("ann-implementation"),
+        implementation: FX.artifact("ann-implementation"),
         parameter_encoding: "application/cbor".to_owned(),
         parameters: vec![0xA0],
         loss: IndexLossContract {
@@ -1546,14 +1524,14 @@ fn prefixed_fixture(
     };
 
     let contract = EmbeddingFamilyContract {
-        model: identity("model"),
-        engine: identity("engine"),
-        tokenizer: identity("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype,
@@ -2273,61 +2251,9 @@ fn reassociated_scan_matches_reassociated_kernel_bits() {
     assert_required_paths_ran(path);
 }
 
-/// The variable a CI job sets to name the dispatch paths its host must execute, as a
-/// comma-separated list of path names. Read by the test harness only.
-const REQUIRE_PATHS_VAR: &str = "PURRDF_REQUIRE_DISPATCH_PATHS";
-
-/// Every dispatch path, by which a required name is resolved.
-const ALL_PATHS: [purrdf_core::distance::Path; 8] = {
-    use purrdf_core::distance::Path;
-    [
-        Path::Portable,
-        Path::Avx2,
-        Path::Sse2,
-        Path::Avx2Fma,
-        Path::Avx512f,
-        Path::Neon,
-        Path::WasmSimd128,
-        Path::WasmScalar,
-    ]
-};
-
-/// The paths [`REQUIRE_PATHS_VAR`] names, or none when it is unset. A name that is no
-/// path, or a variable that names none, panics: a misspelt requirement must fail rather
-/// than require nothing.
-fn required_paths() -> Vec<purrdf_core::distance::Path> {
-    let Some(value) = std::env::var_os(REQUIRE_PATHS_VAR) else {
-        return Vec::new();
-    };
-    let value = value
-        .into_string()
-        .unwrap_or_else(|raw| panic!("{REQUIRE_PATHS_VAR} is not UTF-8: {raw:?}"));
-    let known = ALL_PATHS.map(purrdf_core::distance::Path::name).join(", ");
-    let mut paths = Vec::new();
-    for name in value
-        .split(',')
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-    {
-        let path = ALL_PATHS
-            .into_iter()
-            .find(|path| path.name() == name)
-            .unwrap_or_else(|| {
-                panic!(
-                    "{REQUIRE_PATHS_VAR} names `{name}`, which is not a dispatch path; the \
-                     paths are: {known}"
-                )
-            });
-        if !paths.contains(&path) {
-            paths.push(path);
-        }
-    }
-    assert!(
-        !paths.is_empty(),
-        "{REQUIRE_PATHS_VAR} is set but names no path ({value:?}); the paths are: {known}"
-    );
-    paths
-}
+/// The variable naming the dispatch paths a host must execute; its `distance`
+/// entries are read by [`purrdf_core::distance::required_paths`].
+const REQUIRE_PATHS_VAR: &str = purrdf_hash::dispatch::REQUIRE_SIMD_PATHS;
 
 /// The reassociated relation runs the widest path the processor reports, `ran`. Every
 /// required reassociated path this build compiles must be one the host runs and none
@@ -2345,7 +2271,7 @@ fn assert_required_paths_ran(ran: purrdf_core::distance::Path) {
         path == Path::Portable
             || (cfg!(target_arch = "x86_64") && matches!(path, Path::Avx2 | Path::Avx512f))
     };
-    for path in required_paths() {
+    for path in purrdf_core::distance::required_paths() {
         let refusal = match Reassociated::image_code(path) {
             Some(code) => match Reassociated::resolve_recorded(code) {
                 Ok(_) => {
@@ -3133,4 +3059,33 @@ fn a_space_from_vectors_refuses_what_could_fail_a_query_and_admits_its_neighbour
         "caller-defined distance metric",
     );
     assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+}
+
+/// Both generation constructions are frozen over fixed inputs: a moved generation is a
+/// changed identity every piece of retrieval evidence already recorded carries.
+#[test]
+fn both_space_generations_are_frozen() {
+    let terms = [
+        TermValue::iri(format!("{EX}a")),
+        TermValue::iri(format!("{EX}b")),
+    ];
+    let artifact = space_generation(
+        ProjectionContentDigest::from_raw([0x11; 32]),
+        FamilyContractDigest::from_raw([0x22; 32]),
+        &terms,
+    );
+    assert_eq!(
+        &*artifact,
+        "f5023470280500dc109e1a2c1030bdd4847e77fdb00259a00e2f847e0def0159"
+    );
+    let vectors = vectors_generation(
+        &DistanceMetric::SquaredEuclidean,
+        2,
+        &[0.5, -1.0, 2.0, 0.25],
+        &terms,
+    );
+    assert_eq!(
+        &*vectors,
+        "f30b674454f5457a2b749cae0e92a9aa5b62d12f3e0b100cd9a8b45c17f8dd66"
+    );
 }

@@ -4,8 +4,7 @@
 //! `purrdf-xsd` — the native XSD **value space** for the RDF 1.2 query stack.
 //!
 //! This is a pure-Rust, **zero-runtime-dependency**, wasm-clean leaf crate. It is
-//! the drop-in replacement for the oxigraph-family `oxsdatatypes`, and the
-//! foundation layer of the native SPARQL engine: the SPARQL evaluator evaluates
+//! the foundation layer of the native SPARQL engine: the SPARQL evaluator evaluates
 //! `FILTER`/`ORDER BY` over *typed values*, which this crate supplies. It is
 //! deliberately decoupled from `purrdf-core` (no dependency in
 //! either direction yet); the IR keeps literals **lexical-verbatim** (Constitution
@@ -68,7 +67,7 @@
 //!
 //! # Datatype coverage
 //!
-//! purrdf-xsd models — and value-compares — a **superset** of `oxsdatatypes`:
+//! purrdf-xsd models — and value-compares — these datatypes:
 //!
 //! * numeric: `integer` (i128), the twelve derived-integer facets (`long`/`int`/
 //!   `short`/`byte`, the `unsigned*` family, and `nonNegative`/`positive`/
@@ -80,8 +79,7 @@
 //!   `gYearMonth`/`gMonthDay` (tz-indeterminate partial order);
 //! * binary: `hexBinary`/`base64Binary` (hand-rolled codecs — still zero-dep).
 //!
-//! The derived-integer facets and the binary types are **not** modelled by
-//! `oxsdatatypes`; the gregorian family matches it. Integer and decimal are
+//! Integer and decimal are
 //! `i128`-bounded (decimal scale ≤ 18); lexicals beyond that domain hard-fail on
 //! range rather than promoting to arbitrary precision. [`bigint::BigInt`] is the
 //! one deliberate exception: not a literal value space at all, it exists purely
@@ -127,7 +125,7 @@
 //!
 //! Malformed lexical input is a hard error ([`XsdError`]), never a silent default.
 //! Out-of-range integer/decimal lexicals fail rather than saturate (this crate is
-//! `i128`-bounded — already exceeding `oxsdatatypes`' `i64`).
+//! `i128`-bounded).
 //!
 //! # Examples
 //!
@@ -175,13 +173,16 @@ pub mod binary;
 pub mod datatype;
 mod decimal_float;
 pub mod ieee;
+pub mod json_number;
 pub mod numeric;
 pub mod ops;
 pub mod range;
 pub mod rational;
+pub mod rfc3339;
 pub mod simple;
 pub mod temporal;
 pub mod value;
+pub mod wide;
 
 pub use bigint::BigInt;
 pub use binary::{canonical_base64, canonical_hex, parse_base64, parse_binary, parse_hex};
@@ -202,6 +203,7 @@ pub use range::{
 };
 pub use simple::{normalize_whitespace_collapse, normalize_whitespace_replace};
 pub use temporal::{
-    datetime_epoch, datetime_from_unix_seconds, days_from_civil, days_in_month, duration_equal,
+    civil_from_days, datetime_epoch, datetime_from_unix_seconds, days_from_civil, days_in_month,
+    duration_equal, is_leap,
 };
 pub use value::{XsdError, XsdValue, parse, parse_by_iri, parse_xsd10};

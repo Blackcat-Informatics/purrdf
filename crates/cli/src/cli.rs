@@ -51,11 +51,14 @@
 //! `--max-scratch-bytes`, `--max-remote-requests` — carry the engine's execution governors
 //! to the command line, and they are `query`'s alone for the reason `--report` is not
 //! global: they bound a SPARQL evaluation, and a subcommand that runs none would have
-//! nothing to enforce them over. Each is `Option`, and `None` is the only thing that
-//! becomes an unbounded dimension; [`GovernorFlags`](crate::governors::GovernorFlags) is
-//! where they are decoded and where [`QueryGovernors`](purrdf_sparql_eval::QueryGovernors)'
-//! deliberately-unnameable-by-default "no ceiling" state is named exactly once. A trip
-//! exits **3** rather than failing — see [`CliOutcome`](crate::error::CliOutcome).
+//! nothing to enforce them over. Each is `Option`, and `None` names no ceiling on that
+//! dimension: a governed run starts from
+//! [`QueryGovernors::METERED`](purrdf_sparql_eval::QueryGovernors::METERED), which charges
+//! every dimension against a ceiling nothing can reach. `--no-ceiling` asks for
+//! [`QueryGovernors::UNBOUNDED`](purrdf_sparql_eval::QueryGovernors::UNBOUNDED) instead and
+//! is refused beside a numeric ceiling; [`GovernorFlags`](crate::governors::GovernorFlags)
+//! is where they are decoded. A trip exits **3** rather than failing — see
+//! [`CliOutcome`](crate::error::CliOutcome).
 //!
 //! `--explain` sits beside them and takes none of them: it measures a run rather than
 //! bounding one, so accepting a ceiling it cannot enforce would be a governor that governs
@@ -87,10 +90,12 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 use purrdf_entail::Regime;
 use purrdf_rdf::{
-    LiftProfile, NativeRdfFormat, ProjectionProfile, SourceFormat, TransportEncoding,
+    JsonLdSerializeOptions, LiftProfile, NativeRdfFormat, ProjectionProfile, SourceFormat,
+    TransportEncoding,
 };
 use purrdf_sparql_results::SparqlResultsFormat;
 
+use crate::error::CliError;
 use crate::source::TransportPolicy;
 
 /// Validate a `--base` value at the ARGUMENT boundary.
@@ -229,6 +234,29 @@ impl LedgerTarget {
     pub(crate) const fn is_requested(&self) -> bool {
         !matches!(self, Self::Silent)
     }
+}
+
+/// Refuse the two GLOBAL document flags on a command that runs no RDF serializer.
+///
+/// `--loss-ledger` records what a serialization dropped and `--jsonld-options` configures
+/// a JSON-LD/YAML-LD serializer. clap accepts both on every subcommand, so on a command
+/// that serializes no RDF an unrefused one would be accepted and silently do nothing,
+/// the no-op this toolkit refuses everywhere else. Each command supplies the prose that
+/// says why the flag has nothing to act on there (`ledger_refusal`, `jsonld_refusal`);
+/// the refusal itself, a usage error (exit 2) checked ledger first, is this one body.
+pub(crate) fn refuse_document_flags(
+    ledger_target: &LedgerTarget,
+    jsonld_options: Option<&JsonLdSerializeOptions>,
+    ledger_refusal: &str,
+    jsonld_refusal: &str,
+) -> Result<(), CliError> {
+    if ledger_target.is_requested() {
+        return Err(CliError::Usage(ledger_refusal.to_owned()));
+    }
+    if jsonld_options.is_some() {
+        return Err(CliError::Usage(jsonld_refusal.to_owned()));
+    }
+    Ok(())
 }
 
 /// Where (if anywhere) the reasoning report should be surfaced — the decoded form of the
@@ -424,15 +452,15 @@ pub(crate) enum Command {
         /// `d` regimes; one more fails the run (exit 1). Omitted, the limit is 1048576 steps.
         #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
         max_join_steps: Option<u64>,
-        /// Result serialization: a SPARQL-results format (json/xml/csv/tsv) for
-        /// SELECT/ASK, or an RDF syntax (turtle/trig/…) for CONSTRUCT/DESCRIBE.
-        /// Defaults to `json` when omitted. `None` here (the flag genuinely
+        /// Result serialization: a SPARQL-results format (json/xml/csv/tsv, its media
+        /// type, or `srj`, in any case) for SELECT/ASK, or an RDF syntax
+        /// (turtle/trig/…) for CONSTRUCT/DESCRIBE. Defaults to `json` when omitted. `None` here (the flag genuinely
         /// absent, not merely defaulted) is load-bearing: it is what lets
         /// `--explain` tell "the operator asked for a serialization" apart from
         /// "nothing was named" and refuse the former (see
         /// `crate::query::refuse_unenforceable_combinations`) rather than
         /// silently ignore it.
-        #[arg(long, value_enum)]
+        #[arg(long, value_parser = QueryFormatParser)]
         results_format: Option<QueryFormat>,
         /// Bound the query's abstract execution steps. The unit is the engine's own
         /// charge schedule, which `--explain` prints, so a fuel budget is comparable
@@ -471,6 +499,13 @@ pub(crate) enum Command {
         /// `SILENT`, is the join identity — before it can be charged.
         #[arg(long, value_name = "REQUESTS")]
         max_remote_requests: Option<u64>,
+        /// Decline every ceiling AND all accounting: the query runs as if no governor
+        /// existed, rather than metered against ceilings nothing can reach (the base every
+        /// governed run otherwise starts from). Combines with `--deadline`, which is a stop
+        /// signal rather than a ceiling; refused beside any numeric ceiling, and beside
+        /// `--explain`, which meters by definition.
+        #[arg(long, conflicts_with = "explain")]
+        no_ceiling: bool,
         /// Print what the engine does with the query and what it costs — the charge
         /// schedule it was priced under, the per-node ledger with the planner's estimate
         /// beside the cardinality that materialized, the cost-based join orders, and the
@@ -578,6 +613,11 @@ pub(crate) enum Command {
         /// Bound remote/federated requests issued while computing the mutation.
         #[arg(long, value_name = "REQUESTS")]
         max_remote_requests: Option<u64>,
+        /// Decline every ceiling AND all accounting, rather than metering the mutation
+        /// against ceilings nothing can reach. Combines with `--deadline`; refused beside
+        /// any numeric ceiling.
+        #[arg(long)]
+        no_ceiling: bool,
         /// Register purrdf's first-party statistical aggregate set under this IRI
         /// namespace — identical to `query --aggregate-namespace`, reachable from a
         /// `DELETE`/`INSERT … WHERE` clause through a nested `SELECT … GROUP BY`, which
@@ -1153,6 +1193,11 @@ pub(crate) enum Command {
         /// Bound the requests a `SERVICE` clause in a SHACL-SPARQL constraint issues.
         #[arg(long, value_name = "REQUESTS")]
         max_remote_requests: Option<u64>,
+        /// Decline every ceiling AND all accounting, rather than metering the validation
+        /// against ceilings nothing can reach. Combines with `--deadline`; refused beside
+        /// any numeric ceiling.
+        #[arg(long)]
+        no_ceiling: bool,
         /// Data-graph path `IN`, or `-` for stdin (which requires `--from`).
         #[arg(value_name = "IN", default_value = "-")]
         input: String,
@@ -2206,22 +2251,23 @@ impl CliTransport {
 /// A shape/format-kind mismatch (e.g. a graph with `csv`, or solutions with
 /// `turtle`) is a hard error at emit time. [`Self::to_results_format`] and
 /// [`Self::to_rdf_format`] project a choice into whichever half it names.
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// A results format is read by [`SparqlResultsFormat::from_name`], the one reading every
+/// host shares, so `--results-format` accepts exactly the names the C ABI, the wasm
+/// package and the Python binding accept (a media type, `srj`, any ASCII case); every
+/// other name is read as an RDF syntax. See [`QueryFormatParser`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum QueryFormat {
-    // --- SPARQL-results serializations (SELECT solutions / ASK boolean) ---
-    /// SPARQL Results JSON.
-    #[value(name = "json")]
-    Json,
-    /// SPARQL Results XML.
-    #[value(name = "xml")]
-    Xml,
-    /// SPARQL Results CSV.
-    #[value(name = "csv")]
-    Csv,
-    /// SPARQL Results TSV.
-    #[value(name = "tsv")]
-    Tsv,
-    // --- Native RDF syntaxes (CONSTRUCT / DESCRIBE graph) ---
+    /// A SPARQL-results serialization (SELECT solutions / ASK boolean).
+    Results(SparqlResultsFormat),
+    /// A native RDF syntax (CONSTRUCT / DESCRIBE graph).
+    Rdf(QueryRdfFormat),
+}
+
+/// The RDF-syntax half of [`QueryFormat`]: the nine native syntaxes a CONSTRUCT or
+/// DESCRIBE graph serializes to.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum QueryRdfFormat {
     /// Turtle.
     #[value(name = "turtle", alias = "ttl")]
     Turtle,
@@ -2252,53 +2298,119 @@ pub(crate) enum QueryFormat {
 }
 
 impl QueryFormat {
+    /// `json`, the choice an omitted `--results-format` stands for.
+    pub(crate) const DEFAULT: Self = Self::Results(SparqlResultsFormat::Json);
+
     /// The [`SparqlResultsFormat`] this choice names, or `None` when it names an
     /// RDF syntax (a graph target).
-    pub(crate) fn to_results_format(self) -> Option<SparqlResultsFormat> {
+    pub(crate) const fn to_results_format(self) -> Option<SparqlResultsFormat> {
         match self {
-            Self::Json => Some(SparqlResultsFormat::Json),
-            Self::Xml => Some(SparqlResultsFormat::Xml),
-            Self::Csv => Some(SparqlResultsFormat::Csv),
-            Self::Tsv => Some(SparqlResultsFormat::Tsv),
-            _ => None,
+            Self::Results(format) => Some(format),
+            Self::Rdf(_) => None,
         }
     }
 
     /// The [`NativeRdfFormat`] this choice names, or `None` when it names a
     /// SPARQL-results format (a solutions/boolean target).
-    pub(crate) fn to_rdf_format(self) -> Option<NativeRdfFormat> {
+    pub(crate) const fn to_rdf_format(self) -> Option<NativeRdfFormat> {
         use NativeRdfFormat as N;
-        match self {
-            Self::Turtle => Some(N::Turtle),
-            Self::Trig => Some(N::TriG),
-            Self::Ntriples => Some(N::NTriples),
-            Self::Nquads => Some(N::NQuads),
-            Self::Rdfxml => Some(N::RdfXml),
-            Self::Trix => Some(N::TriX),
-            Self::Hextuples => Some(N::HexTuples),
-            Self::Jsonld => Some(N::JsonLd),
-            Self::Yamlld => Some(N::YamlLd),
-            _ => None,
-        }
+        let Self::Rdf(format) = self else {
+            return None;
+        };
+        Some(match format {
+            QueryRdfFormat::Turtle => N::Turtle,
+            QueryRdfFormat::Trig => N::TriG,
+            QueryRdfFormat::Ntriples => N::NTriples,
+            QueryRdfFormat::Nquads => N::NQuads,
+            QueryRdfFormat::Rdfxml => N::RdfXml,
+            QueryRdfFormat::Trix => N::TriX,
+            QueryRdfFormat::Hextuples => N::HexTuples,
+            QueryRdfFormat::Jsonld => N::JsonLd,
+            QueryRdfFormat::Yamlld => N::YamlLd,
+        })
     }
 
     /// The canonical CLI token that names this choice (for diagnostics).
-    pub(crate) fn token(self) -> &'static str {
+    pub(crate) const fn token(self) -> &'static str {
         match self {
-            Self::Json => "json",
-            Self::Xml => "xml",
-            Self::Csv => "csv",
-            Self::Tsv => "tsv",
-            Self::Turtle => "turtle",
-            Self::Trig => "trig",
-            Self::Ntriples => "ntriples",
-            Self::Nquads => "nquads",
-            Self::Rdfxml => "rdfxml",
-            Self::Trix => "trix",
-            Self::Hextuples => "hextuples",
-            Self::Jsonld => "jsonld",
-            Self::Yamlld => "yamlld",
+            Self::Results(format) => format.token(),
+            Self::Rdf(QueryRdfFormat::Turtle) => "turtle",
+            Self::Rdf(QueryRdfFormat::Trig) => "trig",
+            Self::Rdf(QueryRdfFormat::Ntriples) => "ntriples",
+            Self::Rdf(QueryRdfFormat::Nquads) => "nquads",
+            Self::Rdf(QueryRdfFormat::Rdfxml) => "rdfxml",
+            Self::Rdf(QueryRdfFormat::Trix) => "trix",
+            Self::Rdf(QueryRdfFormat::Hextuples) => "hextuples",
+            Self::Rdf(QueryRdfFormat::Jsonld) => "jsonld",
+            Self::Rdf(QueryRdfFormat::Yamlld) => "yamlld",
         }
+    }
+}
+
+/// `--results-format`'s value parser: a SPARQL-results name through
+/// [`SparqlResultsFormat::from_name`], otherwise an RDF syntax through
+/// [`QueryRdfFormat`]'s clap names and aliases.
+///
+/// The possible values `--help` lists and a refusal names are the four results
+/// tokens followed by the nine RDF syntaxes.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct QueryFormatParser;
+
+impl clap::builder::TypedValueParser for QueryFormatParser {
+    type Value = QueryFormat;
+
+    fn parse_ref(
+        &self,
+        cmd: &clap::Command,
+        arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        let text = value
+            .to_str()
+            .ok_or_else(|| clap::Error::new(clap::error::ErrorKind::InvalidUtf8).with_cmd(cmd))?;
+        if let Some(format) = SparqlResultsFormat::from_name(text) {
+            return Ok(QueryFormat::Results(format));
+        }
+        clap::builder::EnumValueParser::<QueryRdfFormat>::new()
+            .parse_ref(cmd, arg, value)
+            .map(QueryFormat::Rdf)
+            .map_err(|_| {
+                let mut error =
+                    clap::Error::new(clap::error::ErrorKind::InvalidValue).with_cmd(cmd);
+                if let Some(arg) = arg {
+                    error.insert(
+                        clap::error::ContextKind::InvalidArg,
+                        clap::error::ContextValue::String(arg.to_string()),
+                    );
+                }
+                error.insert(
+                    clap::error::ContextKind::InvalidValue,
+                    clap::error::ContextValue::String(text.to_owned()),
+                );
+                error.insert(
+                    clap::error::ContextKind::ValidValue,
+                    clap::error::ContextValue::Strings(
+                        self.possible_values()
+                            .into_iter()
+                            .flatten()
+                            .map(|value| value.get_name().to_owned())
+                            .collect(),
+                    ),
+                );
+                error
+            })
+    }
+
+    fn possible_values(
+        &self,
+    ) -> Option<Box<dyn Iterator<Item = clap::builder::PossibleValue> + '_>> {
+        let results = SparqlResultsFormat::ALL
+            .into_iter()
+            .map(|format| clap::builder::PossibleValue::new(format.token()));
+        let rdf = QueryRdfFormat::value_variants()
+            .iter()
+            .filter_map(ValueEnum::to_possible_value);
+        Some(Box::new(results.chain(rdf)))
     }
 }
 
@@ -2341,5 +2453,28 @@ impl CliRegime {
             Self::Rif => Regime::Rif,
             Self::D => Regime::D,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_requested_document_flag_is_refused_and_absent_ones_pass() {
+        let refuse = |ledger: &LedgerTarget, jsonld: Option<&JsonLdSerializeOptions>| {
+            refuse_document_flags(ledger, jsonld, "no ledger here", "no JSON-LD here")
+                .map_err(|error| error.to_string())
+        };
+        assert_eq!(refuse(&LedgerTarget::Silent, None), Ok(()));
+        assert_eq!(
+            refuse(&LedgerTarget::Stderr, None),
+            Err("no ledger here".to_owned())
+        );
+        let options = JsonLdSerializeOptions::expanded();
+        assert_eq!(
+            refuse(&LedgerTarget::Silent, Some(&options)),
+            Err("no JSON-LD here".to_owned())
+        );
     }
 }

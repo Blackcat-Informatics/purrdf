@@ -3,6 +3,9 @@
 
 //! Operation-boundary tests for fallible paged reads.
 
+#[path = "support/paged.rs"]
+mod paged;
+use paged::{page, ready_evidence};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -12,28 +15,6 @@ use purrdf_core::{
     PagedQueryError, PagedQueryEvidence, PagedQueryLimits, RdfDataset, RdfDatasetBuilder,
     StopCause, TermValue, ViewCanonError, ViewOperationStatus, try_canonicalize_flat_view,
 };
-
-fn page(subject: &str, object: &str) -> Arc<RdfDataset> {
-    let mut builder = RdfDatasetBuilder::new();
-    let subject_iri = format!("http://example.org/{subject}");
-    let object_iri = format!("http://example.org/{object}");
-    let subject = builder.intern_iri(&subject_iri);
-    let predicate = builder.intern_iri("http://example.org/p");
-    let object = builder.intern_iri(&object_iri);
-    builder.push_quad(subject, predicate, object, None);
-    builder.freeze().expect("valid page")
-}
-
-fn ready_evidence(
-    status: ViewOperationStatus<PagedQueryError, PagedQueryEvidence>,
-) -> PagedQueryEvidence {
-    match status {
-        ViewOperationStatus::Ready { evidence } => evidence,
-        ViewOperationStatus::Failed { error, .. } => {
-            panic!("expected a ready operation, got: {error}")
-        }
-    }
-}
 
 fn failed_status(
     status: ViewOperationStatus<PagedQueryError, PagedQueryEvidence>,

@@ -9,12 +9,12 @@
 //! engine intern terms from the source dataset and re-materialize them into a fresh
 //! builder soundly.
 
-use std::convert::Infallible;
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::BuildHasher;
 
 use hashbrown::HashTable;
 
-use purrdf_core::{Nested, RdfDatasetBuilder, RdfLiteral, TermId, TermValue, try_fold_nested};
+use purrdf_core::{RdfDatasetBuilder, TermFactory, TermId, TermValue};
 
 /// Local `TermValue`→`u32` interner over dataset-independent terms.
 #[derive(Default)]
@@ -23,21 +23,18 @@ pub(crate) struct Interner {
     values: Vec<TermValue>,
 }
 
-fn hash_value(value: &TermValue) -> u64 {
-    purrdf_core::FastHasher::default().hash_one(value)
-}
-
 impl Interner {
     /// Intern `v`, returning its stable dense id (assigned in first-seen order).
     pub(crate) fn intern(&mut self, v: TermValue) -> u32 {
-        let hash = hash_value(&v);
+        let hash = purrdf_core::FastHasher::default().hash_one(&v);
         if let Some(&id) = self.index.find(hash, |&id| self.values[id as usize] == v) {
             return id;
         }
         let id = u32::try_from(self.values.len()).expect("term count fits u32");
         self.values.push(v);
-        self.index
-            .insert_unique(hash, id, |&id| hash_value(&self.values[id as usize]));
+        self.index.insert_unique(hash, id, |&id| {
+            purrdf_core::FastHasher::default().hash_one(&self.values[id as usize])
+        });
         id
     }
 
@@ -55,7 +52,7 @@ impl Interner {
     #[cfg(test)]
     pub(crate) fn id_of_iri(&self, iri: &str) -> Option<u32> {
         let value = TermValue::Iri(iri.to_owned());
-        let hash = hash_value(&value);
+        let hash = purrdf_core::FastHasher::default().hash_one(&value);
         self.index
             .find(hash, |&id| self.values[id as usize] == value)
             .copied()
@@ -130,35 +127,10 @@ impl Interner {
 /// the closure is incomplete rather than left to assume it is exact. Re-materializing the
 /// term faithfully is what keeps the conclusions the rules DO draw around it correct.
 ///
-/// A triple term is interned over [`try_fold_nested`]'s work list: its subject, predicate
-/// and object, each fully before the next, then the triple itself.
+/// The builder's own value interning ([`TermFactory::intern_value`]), which takes a
+/// triple term apart over a work list rather than the machine stack.
 pub(crate) fn intern_into(b: &mut RdfDatasetBuilder, v: &TermValue) -> TermId {
-    let interned = try_fold_nested(
-        v,
-        b,
-        |b, v| {
-            Ok::<_, Infallible>(Nested::Leaf(match v {
-                TermValue::Iri(iri) => b.intern_iri(iri),
-                TermValue::Blank { label, scope } => b.intern_blank(label, *scope),
-                TermValue::Literal {
-                    lexical_form,
-                    datatype,
-                    language,
-                    direction,
-                } => b.intern_literal(RdfLiteral {
-                    lexical_form: lexical_form.clone(),
-                    datatype: Some(datatype.clone()),
-                    language: language.clone(),
-                    direction: *direction,
-                }),
-                TermValue::Triple { s, p, o } => return Ok(Nested::Triple(&**s, &**p, &**o)),
-            }))
-        },
-        |b, _, s, p, o| Ok(b.intern_triple(s, p, o)),
-    );
-    match interned {
-        Ok(id) => id,
-    }
+    b.intern_value(v)
 }
 
 #[cfg(test)]
@@ -166,8 +138,29 @@ mod tests {
     use purrdf_core::TermBox;
     use purrdf_core::{BlankScope, RdfTextDirection};
 
-    use super::{Interner, intern_into};
+    use super::{Interner, blank_closure, blank_subjects, intern_into};
     use purrdf_core::{RdfDatasetBuilder, TermValue};
+
+    /// The closure follows blank objects through a cycle once each, stops at a named
+    /// object, and a named starting term contributes nothing.
+    #[test]
+    fn blank_closure_follows_blank_objects_once_and_ignores_named_terms() {
+        let mut interner = Interner::default();
+        let s = interner.intern(TermValue::iri(EX_S));
+        let p = interner.intern(TermValue::iri(EX_P));
+        let o = interner.intern(TermValue::iri(EX_O));
+        let a = interner.intern(TermValue::blank("a"));
+        let b = interner.intern(TermValue::blank("b"));
+        let triples = [(s, p, a), (a, p, b), (b, p, a), (b, p, o), (o, p, s)];
+        let blanks = blank_subjects(&interner, &triples);
+        assert_eq!(blanks.len(), 2);
+        let mut out = std::collections::BTreeSet::new();
+        blank_closure(&interner, &triples, &blanks, a, &mut out);
+        assert_eq!(out.into_iter().collect::<Vec<_>>(), [1, 2, 3]);
+        let mut named = std::collections::BTreeSet::new();
+        blank_closure(&interner, &triples, &blanks, s, &mut named);
+        assert!(named.is_empty());
+    }
 
     /// A fixture IRI. PurRDF mints no vocabulary, so every fixture term is `example.org`.
     const EX_S: &str = "http://example.org/s";
@@ -178,7 +171,7 @@ mod tests {
     /// The predicate the round-trip fixtures hang their object term under.
     const EX_HOLDS: &str = "http://example.org/holds";
     /// RDF 1.2 datatype for language-tagged literals with a base direction.
-    const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+    use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
 
     /// A triple term over three IRIs, by value.
     fn quoted(s: &str, p: &str, o: &str) -> TermValue {
@@ -359,10 +352,11 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = purrdf_core::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::Any,
+                purrdf_core::term_fixture::TermShape::Any,
             );
             let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
             assert_eq!(
@@ -384,15 +378,54 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_interns_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = crate::test_terms::triple_chain(LEVELS);
-                let mut builder = RdfDatasetBuilder::new();
-                assert_eq!(intern_into(&mut builder, &value).index(), LEVELS + 2);
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("interning did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            let mut builder = RdfDatasetBuilder::new();
+            assert_eq!(intern_into(&mut builder, &value).index(), LEVELS + 2);
+        })
+        .expect("the thread starts");
+    }
+}
+
+/// Blank-node subject → the indices of the `triples` it is the subject of, ascending.
+///
+/// The index every blank-node closure walk over an interned triple list reads; see
+/// [`blank_closure`].
+pub(crate) fn blank_subjects(
+    interner: &Interner,
+    triples: &[(u32, u32, u32)],
+) -> BTreeMap<u32, Vec<usize>> {
+    let mut blanks: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+    for (index, &(s, _, _)) in triples.iter().enumerate() {
+        if matches!(interner.value(s), TermValue::Blank { .. }) {
+            blanks.entry(s).or_default().push(index);
+        }
+    }
+    blanks
+}
+
+/// Add to `out` the indices of every triple in the blank-node closure reachable from
+/// `term`: the triples a blank subject carries, followed through their blank objects.
+///
+/// A non-blank `term` contributes nothing; each blank node is expanded once, so a cyclic
+/// blank structure terminates. The one walk behind axiom explanation and module extraction,
+/// which both carry an axiom's anonymous scaffolding along with it.
+pub(crate) fn blank_closure(
+    interner: &Interner,
+    triples: &[(u32, u32, u32)],
+    blanks: &BTreeMap<u32, Vec<usize>>,
+    term: u32,
+    out: &mut BTreeSet<usize>,
+) {
+    let mut stack = vec![term];
+    let mut seen: BTreeSet<u32> = BTreeSet::new();
+    while let Some(node) = stack.pop() {
+        if !matches!(interner.value(node), TermValue::Blank { .. }) || !seen.insert(node) {
+            continue;
+        }
+        for &index in blanks.get(&node).map_or(&[][..], Vec::as_slice) {
+            out.insert(index);
+            stack.push(triples[index].2);
+        }
     }
 }

@@ -306,7 +306,7 @@
 //!
 //! A plan's identity is a domain-separated BLAKE3 digest over a versioned,
 //! canonical, length-framed encoding ([`Plan::canonical_bytes`]) — never over a
-//! serde document or a `Hash`. The encoding sorts map entries, so it is a pure
+//! JSON document or a `Hash`. The encoding sorts map entries, so it is a pure
 //! function of the plan's fields and is byte-identical on every target.
 //!
 //! A fused answer carries **three** such identities, and they answer three
@@ -395,9 +395,11 @@
 mod admission;
 mod canonical;
 mod compile;
+mod document;
 mod embedding;
 mod error;
 mod execute;
+mod executor;
 mod fixed;
 mod fuse;
 mod fusion_profile;
@@ -429,6 +431,9 @@ mod statistics;
 #[doc = include_str!("../PRODUCER-CONTRACT.md")]
 pub mod producer_contract {}
 
+#[doc(hidden)]
+pub mod fixture;
+
 pub use admission::{AdmissionEnvironment, AdmissionError, BoundMode};
 pub use compile::{
     CompiledRetrieval, PlannedResolution, ReadSchedule, StratumUnit, UnitError, compile,
@@ -439,6 +444,7 @@ pub use execute::{
     ExecutionError, ExecutionResult, RankedStreamImpl, StratumStream, StreamEnding, execute,
     execute_within,
 };
+pub use executor::block_on;
 pub use fuse::{FusionResult, TopK, fuse};
 pub use fusion_profile::{DecayRule, FusionProfile, TieBreak};
 pub use fusion_stream::{
@@ -509,7 +515,3 @@ pub use purrdf_sparql_eval::{Completeness, OrderFidelity, RankFidelity};
 // declaration back off a registry must be able to name the type without
 // depending on the evaluator crate.
 pub use purrdf_sparql_eval::ExclusionBasis;
-
-#[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;

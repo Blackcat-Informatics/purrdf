@@ -8,8 +8,56 @@ use std::collections::BTreeSet;
 use crate::walk::NodeRef;
 use crate::{
     AggregateExpression, Expression, Function, GraphPattern, GroundTerm, Literal, NamedNodePattern,
-    ParseError, PropertyPathExpression, Query, Result, TermPattern, Variable,
+    ParseError, PropertyPathExpression, Query, Result, TermPattern, TriplePattern, Variable,
 };
+
+/// A term position that may hold a triple term: the one shape the nesting count
+/// walks, shared by pattern terms and `VALUES` cells.
+trait TripleTermSlot: Sized {
+    /// The subject and object of the triple term this is, or `None` for a
+    /// non-triple term.
+    fn subject_and_object(&self) -> Option<(&Self, &Self)>;
+}
+
+/// The slot implementation for each term kind whose `Triple` variant holds a
+/// triple with `subject` and `object` of that same kind.
+macro_rules! triple_term_slot {
+    ($($term:ty),+) => {$(
+        impl TripleTermSlot for $term {
+            fn subject_and_object(&self) -> Option<(&Self, &Self)> {
+                match self {
+                    Self::Triple(triple) => Some((&triple.subject, &triple.object)),
+                    _ => None,
+                }
+            }
+        }
+    )+};
+}
+
+triple_term_slot!(TermPattern, GroundTerm);
+
+/// How many triple terms `root`'s longest chain holds, the outermost included.
+///
+/// The single nesting count for every term kind. Counted iteratively, following
+/// the object position in a loop and parking a subject only when it is itself a
+/// triple term, so it needs no more stack however deep the term nests and does
+/// not allocate unless a subject nests.
+fn triple_term_nesting<T: TripleTermSlot>(root: &T) -> usize {
+    let mut deepest = 0;
+    let mut pending: Vec<(&T, usize)> = Vec::new();
+    let mut next = Some((root, 0));
+    while let Some((term, above)) = next.take().or_else(|| pending.pop()) {
+        if let Some((subject, object)) = term.subject_and_object() {
+            let depth = above + 1;
+            deepest = deepest.max(depth);
+            if subject.subject_and_object().is_some() {
+                pending.push((subject, depth));
+            }
+            next = Some((object, depth));
+        }
+    }
+    deepest
+}
 
 impl TermPattern {
     /// How many triple terms this term's longest chain holds, the outermost included:
@@ -20,20 +68,62 @@ impl TermPattern {
     /// without allocating unless a triple term's subject is itself one.
     #[must_use]
     pub fn triple_term_nesting(&self) -> usize {
-        let mut deepest = 0;
-        let mut pending: Vec<(&Self, usize)> = Vec::new();
-        let mut next = Some((self, 0));
-        while let Some((term, above)) = next.take().or_else(|| pending.pop()) {
-            if let Self::Triple(triple) = term {
-                let depth = above + 1;
-                deepest = deepest.max(depth);
-                if matches!(triple.subject, Self::Triple(_)) {
-                    pending.push((&triple.subject, depth));
+        triple_term_nesting(self)
+    }
+
+    /// Call `visit` on every variable this term mentions, a quoted triple term's own
+    /// positions included — subject, predicate and object, at every depth. A
+    /// variable mentioned twice is visited twice.
+    ///
+    /// The one variable walk over a term pattern every analysis shares. It keeps its
+    /// own work list, so a term nested to any depth needs no more machine stack, and
+    /// a term that is not a triple term is answered without allocating.
+    pub fn for_each_variable<'a>(&'a self, mut visit: impl FnMut(&'a Variable)) {
+        let mut pending = match self {
+            Self::Variable(variable) => return visit(variable),
+            Self::Triple(_) => vec![self],
+            Self::NamedNode(_) | Self::BlankNode(_) | Self::Literal(_) => return,
+        };
+        while let Some(term) = pending.pop() {
+            match term {
+                Self::Variable(variable) => visit(variable),
+                Self::Triple(triple) => {
+                    if let NamedNodePattern::Variable(variable) = &triple.predicate {
+                        visit(variable);
+                    }
+                    pending.push(&triple.object);
+                    pending.push(&triple.subject);
                 }
-                next = Some((&triple.object, depth));
+                Self::NamedNode(_) | Self::BlankNode(_) | Self::Literal(_) => {}
             }
         }
-        deepest
+    }
+
+    /// Add every variable this term mentions to `out`, a quoted triple term's own
+    /// positions included (see [`Self::for_each_variable`]).
+    pub fn collect_variables(&self, out: &mut impl Extend<Variable>) {
+        self.for_each_variable(|variable| out.extend([variable.clone()]));
+    }
+
+    /// Add the name of every variable this term mentions to `out`, a quoted triple
+    /// term's own positions included (see [`Self::for_each_variable`]).
+    pub fn collect_variable_names(&self, out: &mut BTreeSet<String>) {
+        self.for_each_variable(|variable| {
+            out.insert(variable.as_str().to_owned());
+        });
+    }
+}
+
+impl TriplePattern {
+    /// Add the name of every variable this triple pattern mentions to `out`: its
+    /// subject's and object's (quoted triple terms included) and a variable
+    /// predicate.
+    pub fn collect_variable_names(&self, out: &mut BTreeSet<String>) {
+        self.subject.collect_variable_names(out);
+        if let NamedNodePattern::Variable(variable) = &self.predicate {
+            out.insert(variable.as_str().to_owned());
+        }
+        self.object.collect_variable_names(out);
     }
 }
 
@@ -42,20 +132,7 @@ impl GroundTerm {
     /// included; see [`TermPattern::triple_term_nesting`].
     #[must_use]
     pub fn triple_term_nesting(&self) -> usize {
-        let mut deepest = 0;
-        let mut pending: Vec<(&Self, usize)> = Vec::new();
-        let mut next = Some((self, 0));
-        while let Some((term, above)) = next.take().or_else(|| pending.pop()) {
-            if let Self::Triple(triple) = term {
-                let depth = above + 1;
-                deepest = deepest.max(depth);
-                if matches!(triple.subject, Self::Triple(_)) {
-                    pending.push((&triple.subject, depth));
-                }
-                next = Some((&triple.object, depth));
-            }
-        }
-        deepest
+        triple_term_nesting(self)
     }
 }
 
@@ -209,11 +286,7 @@ fn literal(value: &Literal) -> Result<()> {
     iri(value.datatype().as_str())?;
     match value.language() {
         Some(_) => {
-            let expected = if value.direction().is_some() {
-                crate::ast::RDF_DIR_LANG_STRING
-            } else {
-                crate::ast::RDF_LANG_STRING
-            };
+            let expected = purrdf_iri::vocab::language_datatype_iri(value.direction().is_some());
             if value.datatype().as_str() != expected {
                 return Err(invalid(
                     "literal datatype disagrees with its language and direction",
@@ -427,6 +500,56 @@ fn check_path(path: &PropertyPathExpression) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use crate::SparqlParser;
+    use crate::tree::Child;
+    use crate::{
+        GroundTerm, GroundTriple, NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
+    };
+
+    fn pattern_triple(subject: TermPattern, object: TermPattern) -> TermPattern {
+        TermPattern::Triple(Child::new(TriplePattern {
+            subject,
+            predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                "http://example.org/p",
+            )),
+            object,
+        }))
+    }
+
+    fn ground_triple(subject: GroundTerm, object: GroundTerm) -> GroundTerm {
+        GroundTerm::Triple(Child::new(GroundTriple {
+            subject,
+            predicate: NamedNode::new_unchecked("http://example.org/p"),
+            object,
+        }))
+    }
+
+    #[test]
+    fn pattern_nesting_counts_the_longest_chain_through_subject_or_object() {
+        let var = || TermPattern::Variable(Variable::new("x"));
+        assert_eq!(var().triple_term_nesting(), 0);
+        assert_eq!(pattern_triple(var(), var()).triple_term_nesting(), 1);
+        let object_deep = pattern_triple(var(), pattern_triple(var(), var()));
+        assert_eq!(object_deep.triple_term_nesting(), 2);
+        let subject_deep = pattern_triple(
+            pattern_triple(pattern_triple(var(), var()), var()),
+            pattern_triple(var(), var()),
+        );
+        assert_eq!(subject_deep.triple_term_nesting(), 3);
+    }
+
+    #[test]
+    fn ground_nesting_counts_the_longest_chain_through_subject_or_object() {
+        let iri = || GroundTerm::NamedNode(NamedNode::new_unchecked("http://example.org/a"));
+        assert_eq!(iri().triple_term_nesting(), 0);
+        assert_eq!(ground_triple(iri(), iri()).triple_term_nesting(), 1);
+        let subject_deep = ground_triple(ground_triple(ground_triple(iri(), iri()), iri()), iri());
+        assert_eq!(subject_deep.triple_term_nesting(), 3);
+        let mut chain = iri();
+        for _ in 0..10_000 {
+            chain = ground_triple(iri(), chain);
+        }
+        assert_eq!(chain.triple_term_nesting(), 10_000);
+    }
 
     /// Every extension-function call is listed, wherever the expression sits — a
     /// `FILTER`, a `BIND`, a projection, an aggregate's argument, and a `FILTER` inside

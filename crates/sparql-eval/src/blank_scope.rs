@@ -445,7 +445,7 @@ fn needs(root: Node<'_>) -> bool {
                         expression
                             .iter()
                             .rev()
-                            .map(|key| Node::Expression(crate::modifier::order_sort_key(key))),
+                            .map(|key| Node::Expression(key.expression())),
                     );
                     pending.push(Node::Pattern(inner));
                 }
@@ -458,7 +458,7 @@ fn needs(root: Node<'_>) -> bool {
                                 .order_by()
                                 .iter()
                                 .rev()
-                                .map(|key| Node::Expression(crate::modifier::order_sort_key(key))),
+                                .map(|key| Node::Expression(key.expression())),
                         );
                         pending.extend(aggregate.args().iter().rev().map(Node::Expression));
                     }
@@ -518,7 +518,7 @@ fn needs(root: Node<'_>) -> bool {
 // ---------------------------------------------------------------------------
 
 /// A child position of a node, mutably: where a rewritten child is put back.
-enum ChildMut<'a> {
+pub(crate) enum ChildMut<'a> {
     Pattern(&'a mut GraphPattern),
     Expression(&'a mut Expression),
 }
@@ -530,7 +530,10 @@ enum ChildMut<'a> {
 /// then its condition, an `ORDER BY`'s pattern before its keys, a `GROUP BY`'s
 /// pattern only (its aggregates' expressions are reached through
 /// [`take_aggregates`], after it). A `SERVICE` body is left as written.
-fn for_each_child_mut(node: &mut GraphPattern, visit: &mut impl FnMut(ChildMut<'_>)) {
+pub(crate) fn for_each_child_mut<'a>(
+    node: &'a mut GraphPattern,
+    visit: &mut impl FnMut(ChildMut<'a>),
+) {
     match node {
         GraphPattern::Bgp { .. }
         | GraphPattern::Path { .. }
@@ -639,14 +642,6 @@ fn for_each_operand_mut(expr: &mut Expression, visit: &mut impl FnMut(ChildMut<'
         | Expression::Literal(_)
         | Expression::Variable(_)
         | Expression::Bound(_) => {}
-    }
-}
-
-/// What stands in a child position while its subtree is away being rewritten: the
-/// empty basic graph pattern, or an empty `COALESCE`. Neither allocates.
-fn pattern_hole() -> GraphPattern {
-    GraphPattern::Bgp {
-        patterns: Vec::new(),
     }
 }
 
@@ -824,9 +819,10 @@ fn rewrite_pattern(pattern: GraphPattern, next_spine: &mut usize) -> GraphPatter
                 }
                 for_each_child_mut(&mut node, &mut |child| {
                     children.push(match child {
-                        ChildMut::Pattern(inner) => {
-                            Step::Pattern(std::mem::replace(inner, pattern_hole()), spine)
-                        }
+                        ChildMut::Pattern(inner) => Step::Pattern(
+                            std::mem::replace(inner, GraphPattern::empty_bgp()),
+                            spine,
+                        ),
                         ChildMut::Expression(expr) => {
                             Step::Expression(std::mem::replace(expr, expression_hole()))
                         }
@@ -845,9 +841,10 @@ fn rewrite_pattern(pattern: GraphPattern, next_spine: &mut usize) -> GraphPatter
             Step::Expression(mut node) => {
                 for_each_operand_mut(&mut node, &mut |child| {
                     children.push(match child {
-                        ChildMut::Pattern(inner) => {
-                            Step::Pattern(std::mem::replace(inner, pattern_hole()), false)
-                        }
+                        ChildMut::Pattern(inner) => Step::Pattern(
+                            std::mem::replace(inner, GraphPattern::empty_bgp()),
+                            false,
+                        ),
                         ChildMut::Expression(expr) => {
                             Step::Expression(std::mem::replace(expr, expression_hole()))
                         }
@@ -1097,7 +1094,7 @@ mod walk_tests {
                 reference_pattern_needs(inner)
                     || expression
                         .iter()
-                        .any(|key| reference_expression_needs(crate::modifier::order_sort_key(key)))
+                        .any(|key| reference_expression_needs(key.expression()))
             }
             GraphPattern::Group {
                 inner, aggregates, ..
@@ -1115,7 +1112,7 @@ mod walk_tests {
             || aggregate
                 .order_by()
                 .iter()
-                .any(|key| reference_expression_needs(crate::modifier::order_sort_key(key)))
+                .any(|key| reference_expression_needs(key.expression()))
     }
 
     fn reference_expression_needs(expr: &Expression) -> bool {
@@ -1340,7 +1337,7 @@ mod walk_tests {
     /// A choice sequence: every decision is drawn from one SplitMix64 stream, so a seed
     /// names one shape.
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         /// How many more nodes the shape may hold.
         budget: usize,
     }
@@ -1348,14 +1345,13 @@ mod walk_tests {
     impl Choices {
         fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 48,
             }
         }
 
         fn choose(&mut self, options: usize) -> usize {
-            let draw = purrdf_testkit::rng::splitmix64_next(&mut self.state);
-            usize::try_from(draw % options as u64).expect("a choice fits usize")
+            self.state.below_usize(options)
         }
 
         fn spend(&mut self) -> bool {
@@ -1664,37 +1660,33 @@ mod walk_tests {
     /// to spine 0's variable and nothing is left to detect.
     #[test]
     fn a_hundred_thousand_level_pattern_is_joined_on_a_128_kib_thread() {
-        let (spine_leaves_renamed, wrapped_ok) = std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let spine = deep_spine(100_000);
-                assert!(pattern_needs(&spine));
-                let joined = join_shared_blanks(&spine).expect("the label is shared");
-                let mut leaves = Vec::new();
-                spine_leaves(&joined, &mut leaves);
-                let renamed = leaves
-                    .iter()
-                    .filter(|leaf| match leaf {
-                        GraphPattern::Bgp { patterns } => matches!(
-                            &patterns[0].subject,
-                            TermPattern::Variable(v) if v.as_str() == "\u{0}bgp0:x"
-                        ),
-                        _ => false,
-                    })
-                    .count();
-                assert!(!pattern_needs(&joined));
-                assert!(join_shared_blanks(&joined).is_none());
+        let (spine_leaves_renamed, wrapped_ok) = purrdf_stack::on_stack(128 * 1024, || {
+            let spine = deep_spine(100_000);
+            assert!(pattern_needs(&spine));
+            let joined = join_shared_blanks(&spine).expect("the label is shared");
+            let mut leaves = Vec::new();
+            spine_leaves(&joined, &mut leaves);
+            let renamed = leaves
+                .iter()
+                .filter(|leaf| match leaf {
+                    GraphPattern::Bgp { patterns } => matches!(
+                        &patterns[0].subject,
+                        TermPattern::Variable(v) if v.as_str() == "\u{0}bgp0:x"
+                    ),
+                    _ => false,
+                })
+                .count();
+            assert!(!pattern_needs(&joined));
+            assert!(join_shared_blanks(&joined).is_none());
 
-                let wrapped = deep_wrappers(100_000);
-                assert!(pattern_needs(&wrapped));
-                let joined = join_shared_blanks(&wrapped).expect("the label is shared");
-                let wrapped_ok =
-                    !pattern_needs(&joined) && is_joined_blank(&Variable::new("\u{0}bgp0:x"));
-                (renamed, wrapped_ok)
-            })
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned");
+            let wrapped = deep_wrappers(100_000);
+            assert!(pattern_needs(&wrapped));
+            let joined = join_shared_blanks(&wrapped).expect("the label is shared");
+            let wrapped_ok =
+                !pattern_needs(&joined) && is_joined_blank(&Variable::new("\u{0}bgp0:x"));
+            (renamed, wrapped_ok)
+        })
+        .expect("spawn");
         assert_eq!(spine_leaves_renamed, 100_000);
         assert!(wrapped_ok);
     }

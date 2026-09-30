@@ -126,11 +126,6 @@ pub(crate) struct DistanceCache {
 }
 
 impl DistanceCache {
-    /// An empty cache.
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
     /// A stored distance to `row`.
     fn get(&self, row: usize) -> Option<f64> {
         self.state.borrow().entries.get(&row).copied()
@@ -536,7 +531,7 @@ mod tests {
     #[test]
     fn a_greedy_descent_walks_toward_the_query() {
         let (matrix, graph) = line_graph(&[2, 2, 2, 2]);
-        let cache = DistanceCache::new();
+        let cache = DistanceCache::default();
         let query = Query::new(&matrix, Kernel::SquaredEuclidean, exact(), &[], &cache, 3);
         let (node, distance) = greedy_descend(&graph, &query, 0, 0, 0).expect("descends");
         assert_eq!(node, 3, "it should reach the query's own row");
@@ -546,7 +541,7 @@ mod tests {
     #[test]
     fn the_beam_returns_the_nearest_first() {
         let (matrix, graph) = line_graph(&[3, 3, 3, 3, 3, 3]);
-        let cache = DistanceCache::new();
+        let cache = DistanceCache::default();
         let query = Query::new(&matrix, Kernel::SquaredEuclidean, exact(), &[], &cache, 0);
         let mut visited = Visited::new(6);
         let result = search_layer(&graph, &query, &mut visited, &[0], 0, 3).expect("searches");
@@ -557,7 +552,7 @@ mod tests {
     #[test]
     fn the_distance_cache_is_value_neutral() {
         let (matrix, _graph) = line_graph(&[2, 2, 2]);
-        let cache = DistanceCache::new();
+        let cache = DistanceCache::default();
         let query = Query::new(&matrix, Kernel::SquaredEuclidean, exact(), &[], &cache, 0);
         let first = query.of(2).expect("finite");
         assert_eq!(query.cached(2), Some(first));

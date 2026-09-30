@@ -63,7 +63,9 @@ pub(crate) fn half() -> Rat {
 /// dropped.
 ///
 /// This is the Clause 10.2 projection, applied once at the boundary of the
-/// topology engine so that nothing downstream has to remember to ignore `z`.
+/// topology engine and of every measurement decomposition, so that nothing
+/// downstream has to remember to ignore `z`. It is the crate's one planar
+/// projection; the measurement module reads it through `crate::topology`.
 pub(crate) fn plane(coord: &Coord) -> Coord {
     Coord::xy(coord.x().clone(), coord.y().clone())
 }

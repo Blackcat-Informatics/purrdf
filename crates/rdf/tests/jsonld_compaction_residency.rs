@@ -150,11 +150,9 @@ fn compaction_output_is_unchanged_by_taking_the_carrier_by_value() {
 
 /// YAML-LD costs about what JSON-LD costs, rather than that plus two more copies.
 ///
-/// YAML-LD used to serialize the whole JSON-LD document to a `String`, reparse it into
-/// a `serde_json::Value`, and convert that — holding the `SerGraph`, the carrier, the
-/// JSON text and the value tree at once. It was the one format whose comment said its
-/// intermediate document could not be removed, and it was strictly more resident than
-/// the eager path it replaced.
+/// A YAML-LD writer that serialized the whole JSON-LD document to a `String`, reparsed
+/// it into a value tree, and converted that would hold the `SerGraph`, the carrier, the
+/// JSON text and the value tree at once, strictly more than the JSON-LD path holds.
 ///
 /// JSON-LD over the same dataset is the control: it builds the same carrier and emits
 /// straight from it. The two now differ by their emitters, so their peaks should be

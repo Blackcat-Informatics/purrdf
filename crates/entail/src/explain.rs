@@ -85,9 +85,8 @@ use purrdf_datalog::seminaive::{compile, evaluate};
 use purrdf_datalog::store::{Fact, RelationStore};
 
 use crate::calculus::{ChaseRule, program_with_attribution};
-use crate::digest_hex::hex;
 use crate::engine::{seed, surface_of};
-use crate::interner::{Interner, intern_into};
+use crate::interner::{Interner, blank_closure, blank_subjects, intern_into};
 use crate::reasoner::{DlAxiom, Reasoner, Verdict};
 use crate::rules::RuleId;
 use crate::{EntailError, Regime};
@@ -363,7 +362,7 @@ impl ChaseProof {
     /// [`Self::digest`] as lowercase hex.
     #[must_use]
     pub fn digest_hex(&self) -> String {
-        hex(self.digest())
+        purrdf_hash::hex::encode(&self.digest())
     }
 
     /// RE-DERIVE the conclusion from the proof and the clause program.
@@ -621,7 +620,7 @@ pub fn explain_conclusion(
                     conclusion: format!("{} {} {}", goal.subject, goal.predicate, goal.object),
                 });
             }
-            let mut arena = ProofArena::new();
+            let mut arena = ProofArena::default();
             let root = arena.axiom(goal.clone());
             (arena, root)
         }
@@ -732,7 +731,7 @@ impl Justification {
     /// [`Self::digest`] as lowercase hex.
     #[must_use]
     pub fn digest_hex(&self) -> String {
-        hex(self.digest())
+        purrdf_hash::hex::encode(&self.digest())
     }
 
     /// SUFFICIENCY, re-decided: does the justification alone still entail the axiom?
@@ -989,12 +988,7 @@ impl Axioms {
             let o = interner.intern(ds.term_value(quad.o));
             triples.push((s, p, o));
         }
-        let mut blanks: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
-        for (index, &(s, _, _)) in triples.iter().enumerate() {
-            if matches!(interner.value(s), TermValue::Blank { .. }) {
-                blanks.entry(s).or_default().push(index);
-            }
-        }
+        let blanks = blank_subjects(&interner, &triples);
         // A blank node that appears as an OBJECT is scaffolding reached from somewhere; one
         // that never does is the subject of an axiom nothing points at, and dropping it
         // would silently lose a general class inclusion.
@@ -1017,17 +1011,7 @@ impl Axioms {
 
     /// Add the blank-node closure reachable from `term` to `out`.
     fn closure(&self, term: u32, out: &mut BTreeSet<usize>) {
-        let mut stack = vec![term];
-        let mut seen: BTreeSet<u32> = BTreeSet::new();
-        while let Some(node) = stack.pop() {
-            if !matches!(self.interner.value(node), TermValue::Blank { .. }) || !seen.insert(node) {
-                continue;
-            }
-            for &index in self.blanks.get(&node).map_or(&[][..], Vec::as_slice) {
-                out.insert(index);
-                stack.push(self.triples[index].2);
-            }
-        }
+        blank_closure(&self.interner, &self.triples, &self.blanks, term, out);
     }
 
     /// Freeze the subset holding the axioms at the root POSITIONS in `kept`, plus their
@@ -1059,10 +1043,10 @@ mod tests {
     use super::*;
     use purrdf_core::RdfDatasetBuilder;
 
-    /// `rdfs:subClassOf`.
-    const SUB: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
     /// `rdf:type`.
-    const TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+    use purrdf_iri::vocab::rdf::TYPE;
+    /// `rdfs:subClassOf`.
+    use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as SUB;
     /// A fixture class.
     const CAT: &str = "http://example.org/Cat";
     /// A fixture class.
@@ -1227,7 +1211,10 @@ mod tests {
         let second = justify(&chain(), &cat_is_an_animal()).expect("entailed");
         assert_eq!(first.digest(), second.digest());
         assert_eq!(first.digest_hex().len(), 64);
-        assert_eq!(hex(first.digest()), first.digest_hex());
+        assert_eq!(
+            purrdf_hash::hex::encode(&first.digest()),
+            first.digest_hex()
+        );
 
         // The SAME two axioms reached from a different ontology digest identically: the
         // digest is over the justification, not over what it was carved out of.
@@ -1485,7 +1472,7 @@ mod tests {
         .expect("derived");
         assert!(honest.check().is_ok(), "the honest proof must check");
 
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let premises: Vec<ProofId> = honest
             .arena
             .premises(honest.root)
@@ -1511,7 +1498,7 @@ mod tests {
         );
 
         // The circular forgery: claim the DERIVED conclusion as a given.
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let root = arena.axiom(honest.arena.goal(honest.root).clone());
         let circular = ChaseProof {
             arena,

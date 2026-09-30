@@ -80,6 +80,8 @@ use core::fmt;
 use core::hint::black_box;
 
 use super::binary64::{Binary64, Precision};
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+use super::control;
 
 /// What a refusal of the floating-point environment observed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -519,43 +521,10 @@ const FPCR_FIZ: u64 = 1 << 0;
 #[cfg(target_arch = "aarch64")]
 const FPCR_RMODE: u64 = 0b11 << 22;
 
-/// The current thread's MXCSR.
-#[cfg(target_arch = "x86_64")]
-pub(crate) fn mxcsr() -> u32 {
-    let mut value: u32 = 0;
-    // SAFETY: `stmxcsr` stores the 32-bit MXCSR, and nothing else, to the address it is
-    // given, which is a live, aligned, writable `u32` on this stack frame. It touches
-    // no flag and no stack memory beyond that store.
-    unsafe {
-        core::arch::asm!(
-            "stmxcsr [{ptr}]",
-            ptr = in(reg) &raw mut value,
-            options(nostack, preserves_flags),
-        );
-    }
-    value
-}
-
-/// The current thread's FPCR.
-#[cfg(target_arch = "aarch64")]
-pub(crate) fn fpcr() -> u64 {
-    let value: u64;
-    // SAFETY: `mrs` of FPCR is readable at EL0 and only copies the register into a
-    // general-purpose register; it reads no memory and changes no state.
-    unsafe {
-        core::arch::asm!(
-            "mrs {value}, fpcr",
-            value = out(reg) value,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
-    value
-}
-
 /// Refuse an MXCSR whose flush or rounding fields are set, naming the register.
 #[cfg(target_arch = "x86_64")]
 fn register() -> Result<(), FloatEnvironmentError> {
-    let bits = mxcsr();
+    let bits = control::mxcsr();
     let evidence = FloatEnvironmentEvidence::Register {
         name: "MXCSR",
         bits: u64::from(bits),
@@ -572,7 +541,7 @@ fn register() -> Result<(), FloatEnvironmentError> {
 /// Refuse an FPCR whose flush or rounding fields are set, naming the register.
 #[cfg(target_arch = "aarch64")]
 fn register() -> Result<(), FloatEnvironmentError> {
-    let bits = fpcr();
+    let bits = control::fpcr();
     let evidence = FloatEnvironmentEvidence::Register { name: "FPCR", bits };
     if bits & (FPCR_FZ | FPCR_FIZ) != 0 {
         return Err(FloatEnvironmentError::FlushToZero { evidence });

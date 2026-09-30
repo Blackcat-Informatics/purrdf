@@ -35,8 +35,8 @@ use purrdf_core::{
 use crate::engine::NativeSparqlEngine;
 use crate::parallel::{PARALLEL_MIN_ROWS, force_parallel_for_test};
 
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_xsd::datatype::XSD_INTEGER;
 const EX: &str = "https://example.org/";
 
 /// Entity count for this gate's dataset. Small enough to build/evaluate the
@@ -813,7 +813,7 @@ impl crate::agg_fn::CustomAggregate for ListCollectorAggregate {
 fn custom_aggregate_single_huge_group_parallel_and_sequential_agree() {
     let ds = people_dataset();
     let engine = NativeSparqlEngine::new();
-    let mut registry = crate::agg_fn::AggregateRegistry::new();
+    let mut registry = crate::agg_fn::AggregateRegistry::default();
     registry.register(
         "https://example.org/agg/listCollector",
         Arc::new(ListCollectorAggregate),

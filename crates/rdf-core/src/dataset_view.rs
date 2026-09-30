@@ -18,8 +18,10 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::RdfStoreCapabilities;
+use crate::collections::{
+    ListError, ListErrorKind, RdfListError, SoleObject, container_member_index, walk_rdf_list,
+};
 use crate::collections::{RDF_ALT, RDF_BAG, RDF_FIRST, RDF_NIL, RDF_REST, RDF_SEQ, RDF_TYPE};
-use crate::collections::{RdfListError, container_member_index};
 use crate::ir::{QuadIds, QuadProbePlan, QuadRef, RdfDataset, TermId, TermRef, TermValue};
 
 mod sealed {
@@ -27,6 +29,28 @@ mod sealed {
 
     impl Sealed for crate::ir::MutableDataset {}
 }
+
+/// Why [`DatasetView::term_value`] could not resolve an id to a value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TermLookupError {
+    /// The id does not name a well-formed term of the view it was handed to: a literal
+    /// it resolves to has a datatype that is not an IRI, which no view mints for its
+    /// own ids (C0.1), so the id belongs to another view (C0.8).
+    ForeignId,
+}
+
+impl core::fmt::Display for TermLookupError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ForeignId => f.write_str(
+                "the term id does not name a term of this view: a literal's datatype does not \
+                 resolve to an IRI",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TermLookupError {}
 
 /// The associated id type of a [`DatasetView`]. An id is meaningful only within the
 /// view that minted it (C0.8); these bounds are exactly what the evaluator's
@@ -142,6 +166,45 @@ pub enum GraphMatchValue<'a> {
     Named(&'a TermValue),
 }
 
+/// Which graph a dataset-independent configuration reads: the owned, **value**
+/// space selector an index configuration writes down once and applies to any
+/// dataset.
+///
+/// [`GraphMatch::Named`] holds a dataset-local id, which means something only
+/// inside the one dataset that minted it; a configuration may be applied to
+/// several datasets, so it names a graph by its IRI and is resolved against the
+/// dataset in hand by [`GraphSelector::resolve`]. This is the one selector and
+/// the one resolution every derived index (text, geometry) uses.
+///
+/// Deliberately exhaustive, like [`GraphMatch`]: a quad's graph is the default
+/// graph or exactly one named graph, so the three cases are closed.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum GraphSelector {
+    /// Read from every graph, default and named alike.
+    Any,
+    /// Read from the default graph only.
+    Default,
+    /// Read from the one named graph this IRI identifies.
+    Named(TermValue),
+}
+
+impl GraphSelector {
+    /// Resolve this selector against `dataset`, without minting.
+    ///
+    /// [`None`] where the selector names a graph the dataset has not interned:
+    /// nothing is in a graph that is not there, so no quad can match and the
+    /// caller reads nothing. This cannot fail: an absent graph is a state of the
+    /// corpus, not a fault in the wiring.
+    #[must_use]
+    pub fn resolve<D: DatasetView + ?Sized>(&self, dataset: &D) -> Option<GraphMatch<D::Id>> {
+        Some(match self {
+            Self::Any => GraphMatch::Any,
+            Self::Default => GraphMatch::Default,
+            Self::Named(name) => GraphMatch::Named(dataset.term_id_by_value(name)?),
+        })
+    }
+}
+
 /// A static, allocation-free read view over an RDF dataset (purrdf backend
 /// contract, C2/C3/C6). All methods are infallible for a frozen, validated dataset.
 ///
@@ -222,10 +285,82 @@ pub trait DatasetView {
     fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_;
 
     /// Iterate every quad as a borrowed, resolved [`QuadRef`] (no allocation).
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_, Self::Id>> + '_;
+    ///
+    /// Provided as [`Self::quads`] with each position through [`Self::resolve`]:
+    /// a resolved quad is by definition its id row resolved, so every view shares
+    /// this one body. A view overrides it only when it holds its quads already
+    /// resolved and can hand them out without the per-term lookup.
+    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_, Self::Id>> + '_ {
+        self.quads().map(|q| QuadRef {
+            s: self.resolve(q.s),
+            p: self.resolve(q.p),
+            o: self.resolve(q.o),
+            g: q.g.map(|id| self.resolve(id)),
+        })
+    }
 
     /// Resolve a dataset-local id to its borrowed [`TermRef`].
     fn resolve(&self, id: Self::Id) -> TermRef<'_, Self::Id>;
+
+    /// Resolve a dataset-local id to its dataset-independent [`TermValue`], through a
+    /// literal's datatype and a triple term's `(s, p, o)` components: the literal
+    /// datatype is expanded to its IRI string, the blank node keeps its
+    /// `(label, scope)` pair, and a triple term is carried by value (C0.1/C0.2/C0.3).
+    ///
+    /// This is the one resolution from an id to a value; every view, and every
+    /// consumer that reasons over values rather than ids, reads through it. A triple
+    /// term is assembled bottom-up over [`fold_term`](crate::fold_term)'s work list: its
+    /// subject, predicate and object are resolved in that order, each fully before the
+    /// next, so a term of any depth costs no more machine stack.
+    ///
+    /// # Errors
+    ///
+    /// [`TermLookupError::ForeignId`] when the id does not name a well-formed term of
+    /// this view: a literal whose datatype resolves to anything but an IRI. A view
+    /// never mints such a literal (the IR expands every datatype to an interned IRI at
+    /// intern time), so the id was minted by another view. No part of the value is
+    /// invented in its place.
+    fn term_value(&self, id: Self::Id) -> Result<TermValue, TermLookupError> {
+        crate::fold_term(
+            self,
+            id,
+            |_, term| {
+                Ok(match term {
+                    TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
+                    TermRef::Blank { label, scope } => TermValue::Blank {
+                        label: label.to_owned(),
+                        scope,
+                    },
+                    TermRef::Literal {
+                        lexical,
+                        datatype,
+                        language,
+                        direction,
+                    } => {
+                        let TermRef::Iri(datatype) = self.resolve(datatype) else {
+                            return Err(TermLookupError::ForeignId);
+                        };
+                        TermValue::Literal {
+                            lexical_form: lexical.to_owned(),
+                            datatype: datatype.to_owned(),
+                            language: language.map(str::to_owned),
+                            direction,
+                        }
+                    }
+                    TermRef::Triple { .. } => {
+                        unreachable!("a triple term is assembled from its components")
+                    }
+                })
+            },
+            |_, s, p, o| {
+                Ok(TermValue::Triple {
+                    s: crate::TermBox::new(s),
+                    p: crate::TermBox::new(p),
+                    o: crate::TermBox::new(o),
+                })
+            },
+        )
+    }
 
     /// Quads matching an optional `(s, p, o)` id pattern and a [`GraphMatch`].
     ///
@@ -430,16 +565,116 @@ pub trait DatasetView {
         set.into_iter()
     }
 
+    /// The distinct objects of `(subject, predicate, ?)` in `graph`, ascending
+    /// by id.
+    ///
+    /// Distinct because an RDF graph is a set: a statement asserted in several
+    /// named graphs is one value when `graph` spans them.
+    fn objects(
+        &self,
+        subject: Self::Id,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+    ) -> Vec<Self::Id> {
+        let mut objects: Vec<Self::Id> = self
+            .quads_for_pattern(Some(subject), Some(predicate), None, graph)
+            .map(|q| q.o)
+            .collect();
+        objects.sort_unstable();
+        objects.dedup();
+        objects
+    }
+
+    /// The distinct objects of `(?, predicate, ?)` in `graph`, ascending by
+    /// id: every value a predicate takes, whatever its subject.
+    ///
+    /// The subject-free twin of [`objects`](Self::objects), with the same set
+    /// reading — a value stated by several subjects, or in several named
+    /// graphs, is one value. It answers SHACL's `sh:targetObjectsOf` and any
+    /// other "range of a predicate" question.
+    fn objects_of_predicate(
+        &self,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+    ) -> Vec<Self::Id> {
+        let mut objects: Vec<Self::Id> = self
+            .quads_for_pattern(None, Some(predicate), None, graph)
+            .map(|q| q.o)
+            .collect();
+        objects.sort_unstable();
+        objects.dedup();
+        objects
+    }
+
+    /// How many distinct objects `(subject, predicate, ?)` has in `graph`,
+    /// counted up to two, without allocating: the one question the strict list
+    /// walker ([`RdfListWalk`](crate::collections::RdfListWalk)) asks of each
+    /// cell. `predicate` is `None` when this view does not intern it, so no
+    /// statement can use it. A statement asserted in several named graphs is
+    /// one object.
+    fn sole_object(
+        &self,
+        subject: Self::Id,
+        predicate: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+    ) -> SoleObject<Self::Id> {
+        predicate.map_or(SoleObject::None, |predicate| {
+            SoleObject::of(
+                self.quads_for_pattern(Some(subject), Some(predicate), None, graph)
+                    .map(|quad| quad.o),
+            )
+        })
+    }
+
+    /// The members of the RDF Collection headed by `head` in `graph`, in list
+    /// order — the one strict walker.
+    ///
+    /// `head` is `rdf:nil` (the empty list) or a cell; every cell must have
+    /// exactly one distinct `rdf:first` and exactly one distinct `rdf:rest`,
+    /// the `rdf:rest` chain must reach `rdf:nil` without revisiting a cell, and
+    /// `rdf:nil` must carry neither edge (RDF 1.2 Semantics §D.3, SHACL 1.2
+    /// Core §1.4). Anything else is a [`ListError`] naming the broken
+    /// invariant, the node where the walk stopped and every member read before
+    /// it. Nothing else about a cell is constrained: a cell may be an IRI or a
+    /// blank node, may carry `rdf:type rdf:List` or any other statement, and a
+    /// member may be any term — a literal or a triple term included.
+    ///
+    /// The cycle check allocates nothing: Brent's algorithm keeps one saved
+    /// cell and compares each step against it, so a cycle is found within
+    /// twice the walked length and a well-formed list costs no lookup beyond
+    /// its own edges.
+    ///
+    /// # Errors
+    ///
+    /// [`ListError`] when the collection is malformed; see
+    /// [`ListErrorKind`].
+    fn rdf_list_strict(
+        &self,
+        head: Self::Id,
+        graph: GraphMatch<Self::Id>,
+    ) -> Result<Vec<Self::Id>, ListError<Self::Id>> {
+        let first = self.term_id_by_value(&TermValue::iri(RDF_FIRST));
+        let rest = self.term_id_by_value(&TermValue::iri(RDF_REST));
+        let nil = self.term_id_by_value(&TermValue::iri(RDF_NIL));
+        walk_rdf_list(
+            head,
+            nil,
+            |cell| self.sole_object(cell, first, graph),
+            |cell| self.sole_object(cell, rest, graph),
+        )
+    }
+
     /// Materialize an `rdf:first`/`rdf:rest`/`rdf:nil` Collection whose head is
     /// `head`, scoped to `graph`. Returns members in list order.
     ///
-    /// Cycle-guarded: a revisited cell terminates the walk gracefully (`Ok`,
-    /// truncated at the cycle), matching the reference GTS walker. A MALFORMED cell
-    /// — a cons cell with no `rdf:first`, more than one `rdf:first`, or an
-    /// `rdf:rest` to a term that is neither `rdf:nil` nor a cons cell — is a hard
-    /// error ([`RdfListError`]): this walker is also a validator. A head that is
-    /// `rdf:nil` or is not a list (carries neither `rdf:first` nor `rdf:rest`)
-    /// yields an empty `Vec`.
+    /// The lenient reading over [`rdf_list_strict`](Self::rdf_list_strict):
+    /// a head that is `rdf:nil` or no list at all (it carries neither
+    /// `rdf:first` nor `rdf:rest`) yields an empty `Vec`, and a walk that
+    /// meets a cycle, a cell with no `rdf:rest`, or an `rdf:nil` carrying
+    /// edges ends there with the members read so far — the reading of the
+    /// GTS reference walker. Every other malformation is an [`RdfListError`]:
+    /// a cell with no or several `rdf:first`, several `rdf:rest`, or an
+    /// `rdf:rest` to a term that is neither `rdf:nil` nor a cell.
     ///
     /// If the `rdf:first` IRI is not interned in this view at all, no Collection can
     /// exist, so the result is an empty `Vec` (`Ok`), not an error.
@@ -448,72 +683,32 @@ pub trait DatasetView {
         head: Self::Id,
         graph: GraphMatch<Self::Id>,
     ) -> Result<Vec<Self::Id>, RdfListError> {
-        // No `rdf:first` in the term table ⇒ no cons cell can exist here.
-        let Some(first_p) = self.term_id_by_value(&TermValue::iri(RDF_FIRST)) else {
-            return Ok(Vec::new());
+        let error = match self.rdf_list_strict(head, graph) {
+            Ok(members) => return Ok(members),
+            Err(error) => error,
         };
-        // `rdf:rest`/`rdf:nil` may be absent; the walk handles that inline (a
-        // missing `rdf:rest` edge simply ends the list, absent `rdf:nil` matches no
-        // terminator).
-        let rest_p = self.term_id_by_value(&TermValue::iri(RDF_REST));
-        let nil = self.term_id_by_value(&TermValue::iri(RDF_NIL));
-
-        let mut out = Vec::new();
-        // Cycle guard: revisited cell terminates the walk (mirrors the reference
-        // GTS `rdf_list` seen-set).
-        let mut seen: BTreeSet<Self::Id> = BTreeSet::new();
-        let mut current = head;
-        loop {
-            if Some(current) == nil {
-                break;
+        match error.kind {
+            ListErrorKind::Cycle | ListErrorKind::MissingRest | ListErrorKind::NonEmptyNil => {
+                Ok(error.members)
             }
-            if !seen.insert(current) {
-                break;
-            }
-
-            // Gather this cell's `rdf:first` objects: zero or many is malformed
-            // (the defensive multi-edge detection of the reference list walker).
-            let mut first_obj = None;
-            let mut first_count = 0usize;
-            for q in self.quads_for_pattern(Some(current), Some(first_p), None, graph) {
-                first_obj = Some(q.o);
-                first_count += 1;
-            }
-            // The single `rdf:rest` object, if any.
-            let mut rest_obj = None;
-            if let Some(rest_p) = rest_p {
-                for q in self.quads_for_pattern(Some(current), Some(rest_p), None, graph) {
-                    rest_obj = Some(q.o);
+            ListErrorKind::MultipleFirst => Err(RdfListError::MultipleFirst),
+            ListErrorKind::MultipleRest => Err(RdfListError::MultipleRest),
+            // A node with neither edge: the head is no list, an interior node
+            // is a dangling tail.
+            ListErrorKind::MissingFirst => {
+                let rest = self.term_id_by_value(&TermValue::iri(RDF_REST));
+                let has_rest = rest.is_some_and(|rest| {
+                    self.quads_for_pattern(Some(error.node), Some(rest), None, graph)
+                        .next()
+                        .is_some()
+                });
+                match (has_rest, error.node == head) {
+                    (true, _) => Err(RdfListError::MissingFirst),
+                    (false, true) => Ok(Vec::new()),
+                    (false, false) => Err(RdfListError::DanglingRest),
                 }
             }
-
-            // Neither edge ⇒ not a cons cell. Only `head` can reach this branch
-            // (interior cells are only entered through a rest edge validated to
-            // point at `rdf:nil` or a cons cell); it means `head` is simply not a
-            // list ⇒ an empty Vec.
-            if first_count == 0 && rest_obj.is_none() {
-                break;
-            }
-            if first_count == 0 {
-                return Err(RdfListError::MissingFirst);
-            }
-            if first_count > 1 {
-                return Err(RdfListError::MultipleFirst);
-            }
-            out.push(first_obj.expect("first_count == 1 implies a first object"));
-
-            // A cons cell with no `rdf:rest` edge ends the list (a truncated, but
-            // not malformed, tail). Otherwise validate the rest target before
-            // following it.
-            let Some(next) = rest_obj else {
-                break;
-            };
-            if Some(next) != nil && !self.is_cons_cell(next, first_p, rest_p, graph) {
-                return Err(RdfListError::DanglingRest);
-            }
-            current = next;
         }
-        Ok(out)
     }
 
     /// RDF Container members `rdf:_1`..`rdf:_n` of `head` in numeric order, scoped
@@ -838,6 +1033,17 @@ pub trait DatasetMut: sealed::Sealed {
     ) -> Vec<Self::Quad>;
 }
 
+/// The widest triple-term nesting bound among `bounds`, or `None` when any of them
+/// vouches for none. A view composed of others is bounded by its widest part; an
+/// empty composition holds no triple term, so its bound is 0.
+pub(crate) fn widest_nesting_bound(
+    bounds: impl IntoIterator<Item = Option<usize>>,
+) -> Option<usize> {
+    bounds
+        .into_iter()
+        .try_fold(0, |widest, bound| bound.map(|bound| widest.max(bound)))
+}
+
 /// The production read view: the immutable value-interned [`RdfDataset`] (C1).
 impl DatasetView for RdfDataset {
     type Id = TermId;
@@ -847,7 +1053,7 @@ impl DatasetView for RdfDataset {
     /// which refuses a triple term nested past 16.
     #[inline]
     fn triple_term_nesting_bound(&self) -> Option<usize> {
-        Some(crate::ir::validate::MAX_TERM_NESTING_DEPTH)
+        Some(purrdf_events::MAX_TERM_NESTING_DEPTH)
     }
 
     #[inline]
@@ -1160,6 +1366,59 @@ mod tests {
     }
 
     #[test]
+    fn graph_selector_resolves_against_the_dataset_without_minting() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o, g) = (
+            iri(&mut b, "s"),
+            iri(&mut b, "p"),
+            iri(&mut b, "o"),
+            iri(&mut b, "g"),
+        );
+        b.push_quad(s, p, o, Some(g));
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(GraphSelector::Any.resolve(&ds), Some(GraphMatch::Any));
+        assert_eq!(
+            GraphSelector::Default.resolve(&ds),
+            Some(GraphMatch::Default)
+        );
+        let named = GraphSelector::Named(TermValue::iri("http://example.org/g"));
+        assert_eq!(named.resolve(&ds), Some(GraphMatch::Named(g)));
+        let absent = GraphSelector::Named(TermValue::iri("http://example.org/absent"));
+        assert_eq!(absent.resolve(&ds), None);
+    }
+
+    /// Every value a predicate takes, once, ascending by id: a value stated by
+    /// two subjects and in two graphs is one value, and another predicate's
+    /// values and a graph outside the scope are not reached.
+    #[test]
+    fn objects_of_predicate_is_the_distinct_range_in_scope() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s1, s2, p, q) = (
+            iri(&mut b, "s1"),
+            iri(&mut b, "s2"),
+            iri(&mut b, "p"),
+            iri(&mut b, "q"),
+        );
+        let (o1, o2, o3, g) = (
+            iri(&mut b, "o1"),
+            iri(&mut b, "o2"),
+            iri(&mut b, "o3"),
+            iri(&mut b, "g"),
+        );
+        b.push_quad(s1, p, o2, None);
+        b.push_quad(s2, p, o2, Some(g));
+        b.push_quad(s2, p, o1, None);
+        b.push_quad(s1, q, o3, None);
+        let ds = b.freeze().expect("freeze");
+        let mut expected = vec![o1, o2];
+        expected.sort_unstable();
+        assert_eq!(ds.objects_of_predicate(p, GraphMatch::Any), expected);
+        assert_eq!(ds.objects_of_predicate(p, GraphMatch::Named(g)), vec![o2]);
+        assert_eq!(ds.objects_of_predicate(q, GraphMatch::Default), vec![o3]);
+        assert_eq!(ds.objects_of_predicate(o1, GraphMatch::Any), Vec::new());
+    }
+
+    #[test]
     fn quads_for_pattern_filters_by_id_and_graph() {
         let mut b = RdfDatasetBuilder::new();
         let s = iri(&mut b, "s");
@@ -1376,6 +1635,113 @@ mod tests {
         assert_eq!(
             failure.error,
             ProbeFault("the probe view was told to fault")
+        );
+    }
+}
+
+#[cfg(test)]
+mod term_value_tests {
+    //! [`DatasetView::term_value`]: the one resolution from an id to a value.
+
+    use std::sync::Arc;
+
+    use super::{DatasetView, TermLookupError};
+    use crate::TermBox;
+    use crate::backend::TermFactory as _;
+    use crate::ir::{RdfDataset, RdfDatasetBuilder, TermId, TermValue};
+    use crate::term_fixture::ForeignDatatypeView;
+
+    const EX: &str = "http://example.org/";
+
+    /// A dataset holding an empty plain literal, a quoted triple term carrying it, and a
+    /// blank node, with their ids.
+    fn fixture() -> (Arc<RdfDataset>, TermId, TermId, TermId) {
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri(&format!("{EX}s"));
+        let p = builder.intern_iri(&format!("{EX}p"));
+        let empty = builder.intern_value(&TermValue::simple_literal(""));
+        let quoted = builder.intern_value(&TermValue::Triple {
+            s: TermBox::new(TermValue::iri(format!("{EX}s"))),
+            p: TermBox::new(TermValue::iri(format!("{EX}p"))),
+            o: TermBox::new(TermValue::simple_literal("")),
+        });
+        let blank = builder.intern_value(&TermValue::blank("b"));
+        builder.push_quad(s, p, empty, None);
+        builder.push_quad(s, p, quoted, None);
+        builder.push_quad(blank, p, s, None);
+        let dataset = builder.freeze().expect("the fixture freezes");
+        (dataset, empty, quoted, blank)
+    }
+
+    #[test]
+    fn an_id_whose_literal_datatype_is_not_an_iri_is_foreign() {
+        let (inner, empty, quoted, blank) = fixture();
+        let view = ForeignDatatypeView {
+            inner,
+            datatype: blank,
+            foreign: true,
+        };
+        assert_eq!(view.term_value(empty), Err(TermLookupError::ForeignId));
+        assert_eq!(view.term_value(quoted), Err(TermLookupError::ForeignId));
+        // A term with no literal in it still resolves through the same view.
+        assert_eq!(view.term_value(blank), Ok(TermValue::blank("b")));
+    }
+
+    #[test]
+    fn a_present_empty_literal_resolves_to_the_empty_string() {
+        let (inner, empty, quoted, blank) = fixture();
+        let view = ForeignDatatypeView {
+            inner: Arc::clone(&inner),
+            datatype: blank,
+            foreign: false,
+        };
+        assert_eq!(view.term_value(empty), Ok(TermValue::simple_literal("")));
+        assert_eq!(
+            view.term_value(quoted),
+            Ok(TermValue::Triple {
+                s: TermBox::new(TermValue::iri(format!("{EX}s"))),
+                p: TermBox::new(TermValue::iri(format!("{EX}p"))),
+                o: TermBox::new(TermValue::simple_literal("")),
+            })
+        );
+        assert_eq!(
+            DatasetView::term_value(&inner, empty),
+            view.term_value(empty)
+        );
+    }
+
+    /// Every generated term resolves to exactly the value it was interned from.
+    #[test]
+    fn every_interned_value_resolves_to_itself() {
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri(&format!("{EX}s"));
+        let p = builder.intern_iri(&format!("{EX}p"));
+        let mut values = Vec::new();
+        for seed in 0..200_u64 {
+            let mut state = seed;
+            let mut budget = 6;
+            let value = crate::term_fixture::term_value(
+                &mut state,
+                purrdf_testkit::rng::splitmix64_next,
+                &mut budget,
+                crate::term_fixture::TermShape::WellFormed,
+            );
+            let id = builder.intern_value(&value);
+            builder.push_quad(s, p, id, None);
+            values.push((value, id));
+        }
+        let dataset = builder.freeze().expect("the generated values freeze");
+        for (value, id) in values {
+            assert_eq!(DatasetView::term_value(&dataset, id), Ok(value));
+        }
+    }
+
+    #[test]
+    fn the_lookup_error_names_the_foreign_id() {
+        assert!(
+            TermLookupError::ForeignId
+                .to_string()
+                .contains("does not name a term of this view")
         );
     }
 }

@@ -79,10 +79,11 @@
 //!
 //! # A malformed or cyclic list is a hard ERROR
 //!
-//! The walk is bounded by the number of distinct cells it has already visited, so a cycle
-//! terminates on the step that revisits one rather than running forever. A cell with no
-//! `rdf:first`, with two, with no `rdf:rest`, with two, or a walk that never reaches
-//! `rdf:nil` is equally a refusal: OWL 2 requires these objects to BE well-formed
+//! The walk is the workspace's strict collection walker
+//! ([`purrdf_core::collections::walk_rdf_list`]), so a cycle terminates rather than
+//! running forever. A cell with no `rdf:first`, with two, with no `rdf:rest`, with two, a
+//! walk that never reaches `rdf:nil`, or an `rdf:nil` carrying an edge is equally a
+//! refusal: OWL 2 requires these objects to BE well-formed
 //! collections, and a chase that silently used the well-formed prefix of a broken one
 //! would answer a question nobody asked.
 //!
@@ -92,6 +93,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+
+use purrdf_core::ListErrorKind;
+use purrdf_core::collections::{SoleObject, walk_rdf_list};
 
 use crate::vocab::{
     OWL_DISTINCTMEMBERS, OWL_HASKEY, OWL_INTERSECTIONOF, OWL_MEMBERS, OWL_ONEOF,
@@ -275,7 +279,7 @@ fn index_surface(index: usize) -> String {
 
 /// Why a collection could not be walked.
 ///
-/// Every variant names the CELL it stopped at, because "the list under `?x` is broken" is
+/// Every refusal names the CELL it stopped at, because "the list under `?x` is broken" is
 /// not actionable and "the cell `<…>` has no `rdf:rest`" is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MalformedList {
@@ -283,46 +287,16 @@ pub(crate) struct MalformedList {
     head: String,
     /// The cell the walk stopped at, as its lexical surface.
     cell: String,
-    /// What was wrong with that cell.
-    fault: Fault,
-}
-
-/// The five ways a collection can fail to be one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Fault {
-    /// The cell carries no `rdf:first`.
-    NoFirst,
-    /// The cell carries more than one `rdf:first`.
-    ManyFirst,
-    /// The cell carries no `rdf:rest`.
-    NoRest,
-    /// The cell carries more than one `rdf:rest`.
-    ManyRest,
-    /// The walk reached a cell it had already visited: the list is cyclic.
-    Cycle,
-}
-
-impl Fault {
-    /// The fault, as the sentence a diagnostic reads.
-    const fn describe(self) -> &'static str {
-        match self {
-            Self::NoFirst => "carries no rdf:first",
-            Self::ManyFirst => "carries more than one rdf:first",
-            Self::NoRest => "carries no rdf:rest",
-            Self::ManyRest => "carries more than one rdf:rest",
-            Self::Cycle => "was already visited, so the collection is cyclic",
-        }
-    }
+    /// Which invariant of a collection that cell broke.
+    kind: ListErrorKind,
 }
 
 impl fmt::Display for MalformedList {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "the RDF collection under {} is malformed: the cell {} {}",
-            self.head,
-            self.cell,
-            self.fault.describe()
+            "the RDF collection under {} is malformed at the cell {}: {}",
+            self.head, self.cell, self.kind
         )
     }
 }
@@ -397,35 +371,25 @@ impl ListIndex {
             if head == &nil {
                 continue;
             }
-            let mut cell = head.clone();
-            let mut visited: BTreeSet<String> = BTreeSet::new();
-            let mut index = 0_usize;
-            loop {
-                if !visited.insert(cell.clone()) {
-                    return Err(self.fault(head, &cell, Fault::Cycle));
-                }
-                let member = match self.first.get(&cell).map(Vec::as_slice) {
-                    Some([only]) => only.clone(),
-                    Some(_) => return Err(self.fault(head, &cell, Fault::ManyFirst)),
-                    None => return Err(self.fault(head, &cell, Fault::NoFirst)),
-                };
-                let next = match self.rest.get(&cell).map(Vec::as_slice) {
-                    Some([only]) => only.clone(),
-                    Some(_) => return Err(self.fault(head, &cell, Fault::ManyRest)),
-                    None => return Err(self.fault(head, &cell, Fault::NoRest)),
-                };
+            let members = walk_rdf_list(
+                head.as_str(),
+                Some(nil.as_str()),
+                |cell| objects(&self.first, cell),
+                |cell| objects(&self.rest, cell),
+            )
+            .map_err(|error| MalformedList {
+                head: head.clone(),
+                cell: error.node.to_owned(),
+                kind: error.kind,
+            })?;
+            for (index, member) in members.into_iter().enumerate() {
                 facts.push(InternalFact {
                     subject: head.clone(),
                     predicate: LIST_RELATION,
-                    object: member,
+                    object: member.to_owned(),
                     graph: index_surface(index),
                 });
                 indices.insert(index);
-                index += 1;
-                if next == nil {
-                    break;
-                }
-                cell = next;
             }
         }
         // The `i ≠ j` side condition, materialized: one row per ORDERED pair of DIFFERENT
@@ -446,15 +410,11 @@ impl ListIndex {
         }
         Ok(facts)
     }
+}
 
-    /// A refusal naming the head, the cell and the fault.
-    fn fault(&self, head: &str, cell: &str, fault: Fault) -> MalformedList {
-        MalformedList {
-            head: head.to_owned(),
-            cell: cell.to_owned(),
-            fault,
-        }
-    }
+/// How many distinct objects `cell` has in one of the [`ListIndex`] edge maps.
+fn objects<'a>(edges: &'a BTreeMap<String, Vec<String>>, cell: &str) -> SoleObject<&'a str> {
+    SoleObject::of(edges.get(cell).into_iter().flatten().map(String::as_str))
 }
 
 /// The store surface of a constant IRI: `<iri>`.
@@ -565,7 +525,7 @@ mod tests {
         index.observe(EX_L1, &s(RDF_REST), EX_L0);
         let error = index.materialize().expect_err("a cycle is refused");
         let rendered = error.to_string();
-        assert!(rendered.contains("cyclic"), "{rendered}");
+        assert!(rendered.contains("rdf:rest chain returns"), "{rendered}");
         assert!(rendered.contains("http://example.org/l0"), "{rendered}");
     }
 
@@ -575,22 +535,27 @@ mod tests {
         /// One malformation: the diagnostic it must produce, and the triples that cause
         /// it.
         type Case = (&'static str, fn(&mut ListIndex));
-        let cases: [Case; 4] = [
-            ("carries no rdf:first", |index| {
+        let cases: [Case; 5] = [
+            ("has no rdf:first", |index| {
                 index.observe(EX_L0, &s(RDF_REST), &s(RDF_NIL));
             }),
-            ("carries more than one rdf:first", |index| {
+            ("has more than one rdf:first", |index| {
                 index.observe(EX_L0, &s(RDF_FIRST), EX_A);
                 index.observe(EX_L0, &s(RDF_FIRST), EX_B);
                 index.observe(EX_L0, &s(RDF_REST), &s(RDF_NIL));
             }),
-            ("carries no rdf:rest", |index| {
+            ("has no rdf:rest", |index| {
                 index.observe(EX_L0, &s(RDF_FIRST), EX_A);
             }),
-            ("carries more than one rdf:rest", |index| {
+            ("has more than one rdf:rest", |index| {
                 index.observe(EX_L0, &s(RDF_FIRST), EX_A);
                 index.observe(EX_L0, &s(RDF_REST), &s(RDF_NIL));
                 index.observe(EX_L0, &s(RDF_REST), EX_L1);
+            }),
+            ("rdf:nil carries an rdf:first or rdf:rest", |index| {
+                index.observe(EX_L0, &s(RDF_FIRST), EX_A);
+                index.observe(EX_L0, &s(RDF_REST), &s(RDF_NIL));
+                index.observe(&s(RDF_NIL), &s(RDF_FIRST), EX_B);
             }),
         ];
         for (expected, build) in cases {

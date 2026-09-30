@@ -9,6 +9,7 @@
 #![doc(
     html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
+#![forbid(unsafe_code)]
 
 pub mod analysis;
 pub mod artifact;
@@ -19,6 +20,7 @@ pub mod diagnostics;
 pub mod dsl_stats_emit;
 pub mod error;
 pub mod fix_deps;
+mod json_form;
 pub mod list_functions;
 pub mod mapping_support;
 pub mod ownership;
@@ -59,7 +61,3 @@ pub use rdf_query::NamedNode;
 pub use retrieval::{file_iri_for_absolute_path, retrieval_base_iri};
 pub use standpoint_emit::emit_standpoint_sets;
 pub use vocab::SliceVocab;
-
-#[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;

@@ -561,8 +561,12 @@ pub(crate) struct PlanCache {
 }
 
 impl Clone for PlanCache {
+    /// An empty cache: the clone's nodes live at other addresses, so nothing kept
+    /// for the original's tree is valid for the clone's.
     fn clone(&self) -> Self {
-        Self::default()
+        Self {
+            kept: OnceLock::new(),
+        }
     }
 }
 
@@ -800,7 +804,9 @@ mod tests {
 
     #[test]
     fn the_shape_numbers_generated_algebra_in_walk_spine_order() {
-        let mut choices = crate::service_endpoints::walk_tests::Choices { state: 0x5EED_0B1D };
+        let mut choices = crate::service_endpoints::walk_tests::Choices {
+            state: purrdf_testkit::rng::SplitMix64::new(0x5EED_0B1D),
+        };
         for shape in 0..300 {
             let mut budget = 32;
             let root = crate::service_endpoints::walk_tests::pattern(&mut choices, &mut budget);
@@ -810,7 +816,7 @@ mod tests {
 
     #[test]
     fn the_shape_numbers_every_suite_query_in_walk_spine_order() {
-        let suites = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../sparql-conformance");
+        let suites = purrdf_testkit::paths::workspace_root().join("crates/sparql-conformance");
         let mut files = Vec::new();
         let mut dirs = vec![suites.join("suite"), suites.join("corpus")];
         while let Some(dir) = dirs.pop() {

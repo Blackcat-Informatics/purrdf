@@ -41,7 +41,7 @@ use pyo3::types::PyDict;
 
 use super::PyStore;
 use super::env::extension_env;
-use super::query::{RelationSpec, build_aggregates, build_relations, materialize_results};
+use super::query::{RelationSpec, build_relations, materialize_results};
 use super::term::{extract_term, rdf_term_to_value};
 use crate::RdfDataset;
 use crate::attestation::Attestation;
@@ -173,7 +173,8 @@ impl GraphDerivedRelations {
         dataset: &RdfDataset,
     ) -> PyResult<(PreparedExecution, ExtensionEnv)> {
         let registry = build_relations(self.specs.clone(), dataset)?;
-        let aggregates = build_aggregates(self.aggregate_namespace.clone());
+        let aggregates =
+            purrdf_validate::query::statistical_aggregates(self.aggregate_namespace.as_deref());
         let env = extension_env(
             self.parser_options.clone(),
             registry.as_ref(),
@@ -308,7 +309,7 @@ impl PyPreparedQuery {
         // held (a cheap borrow), then the heavy freeze work itself runs detached
         // inside `freeze_snapshot`.
         let dataset = {
-            let store = self.store.bind(py).borrow();
+            let store = self.store.bind(py).as_super().borrow();
             store.freeze_snapshot(py)?
         };
 

@@ -4,7 +4,16 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, OnceLock};
 
-use serde_json::{Value, json};
+use purrdf_lex::json::{self as lex_json, Object, Value};
+
+/// The JSON value literal JSON text spells, members in name order.
+macro_rules! json {
+    ($($json:tt)+) => {{
+        let mut value = lex_json::read(stringify!($($json)+)).expect("literal JSON");
+        value.sort_keys();
+        value
+    }};
+}
 
 use super::*;
 
@@ -88,10 +97,7 @@ fn full_context_compiles_type_language_container_reverse_nest_and_scope() {
     assert_eq!(compiled.base_iri(), Some("https://example.org/doc/"));
     assert_eq!(compiled.vocab_mapping(), Some("https://example.org/vocab/"));
     assert_eq!(compiled.default_language(), Some("en"));
-    assert_eq!(
-        compiled.default_direction(),
-        Some(JsonLdDirection::LeftToRight)
-    );
+    assert_eq!(compiled.default_direction(), Some(JsonLdDirection::Ltr));
     assert!(compiled.term("schema").expect("schema").is_prefix());
     assert_eq!(compiled.term("id").expect("id").iri_mapping(), Some("@id"));
     assert_eq!(
@@ -110,7 +116,7 @@ fn full_context_compiles_type_language_container_reverse_nest_and_scope() {
     assert_eq!(name.language_mapping(), Some(JsonLdNullable::Null));
     assert_eq!(
         name.direction_mapping(),
-        Some(JsonLdNullable::Value(JsonLdDirection::RightToLeft))
+        Some(JsonLdNullable::Value(JsonLdDirection::Rtl))
     );
     assert!(name.is_protected());
     assert_eq!(
@@ -238,8 +244,15 @@ fn registry_missing_documents_cycles_and_duplicate_members_fail_stably() {
     assert!(
         duplicate
             .message
-            .contains("duplicate JSON object member `x`")
+            .contains("an object repeats a member name"),
+        "{}",
+        duplicate.message
     );
+    CompiledJsonLdContext::compile_json(
+        br#"{"x":"https://example.org/one","y":"https://example.org/two"}"#,
+        None,
+    )
+    .expect("distinct members compile");
 }
 
 #[test]
@@ -329,7 +342,7 @@ fn base_and_vocab_resolution_round_trip_exactly() {
 /// Compact `iri` for a document-position `@id` under a context whose only setting is
 /// `@base`, so nothing but base removal can be responsible for the answer.
 fn compact_under_base(base: &str, iri: &str) -> String {
-    CompiledJsonLdContext::compile(&json!({ "@base": base }), None)
+    CompiledJsonLdContext::compile(&Object::new().with("@base", base).into(), None)
         .expect("a base-only context")
         .compact_iri(iri, false)
         .expect("document-position compaction")
@@ -471,7 +484,7 @@ fn null_base_is_not_resurrected_from_the_document_url() {
         (json!({"@vocab": "later/"}), "later/"),
     ] {
         let error = CompiledJsonLdContext::compile(
-            &json!([{"@base": null}, relative_setting]),
+            &Value::array([json!({"@base": null}), relative_setting]),
             Some("https://example.org/document"),
         )
         .expect_err("relative setting after null @base");
@@ -642,7 +655,7 @@ fn metaschemas() -> &'static purrdf_jsonschema::Metaschemas {
             purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
                 .iter()
                 .map(|&(uri, text)| {
-                    let document: Value = serde_json::from_str(text).expect("meta-schema JSON");
+                    let document = purrdf_lex::json::read(text).expect("meta-schema JSON");
                     (uri, document)
                 }),
         )
@@ -669,7 +682,7 @@ fn options_schema_compiles_with_its_metaschema_and_names_it_when_absent() {
             .is_valid(&json!({"mode": "expanded", "version": 1}))
             .expect("evaluation")
     );
-    let none = purrdf_jsonschema::Metaschemas::new(Vec::<(&str, Value)>::new())
+    let none = purrdf_jsonschema::Metaschemas::new(Vec::<(&str, purrdf_lex::json::Value)>::new())
         .expect("an empty set is a set");
     match options_schema(&none) {
         Err(purrdf_jsonschema::SchemaError::MissingMetaschema { metaschema, .. }) => {
@@ -757,7 +770,7 @@ fn options_schema_and_decoder_have_identical_mode_field_constraints() {
         ),
     ];
     for (instance, expected) in cases {
-        let bytes = serde_json::to_vec(&instance).expect("encode options case");
+        let bytes = lex_json::write_compact(&instance).into_bytes();
         assert_eq!(
             JsonLdSerializeOptions::from_json(&bytes).is_ok(),
             expected,
@@ -778,12 +791,14 @@ fn options_input_can_carry_more_than_one_context_ceiling_of_registry_data() {
         "context": {},
         "mode": "context",
         "registry": {
-            "https://example.org/first": {"@context": null, "padding": padding},
-            "https://example.org/second": {"@context": null, "padding": padding}
+            "https://example.org/first": {"@context": null, "padding": "PADDING"},
+            "https://example.org/second": {"@context": null, "padding": "PADDING"}
         },
         "version": 1
     });
-    let bytes = serde_json::to_vec(&options).expect("encode registry-bearing options");
+    let bytes = lex_json::write_compact(&options)
+        .replace("PADDING", &padding)
+        .into_bytes();
     let limits = JsonLdContextLimits::default();
     assert!(bytes.len() > limits.max_context_bytes());
     assert!(bytes.len() < limits.max_options_bytes());
@@ -1052,11 +1067,11 @@ fn inverse_context_uses_exact_language_direction_and_any_keys() {
     let iri = "https://example.org/p";
     let compiled = CompiledJsonLdContext::compile(
         &json!({
-            "bothNull": {"@direction": null, "@id": iri, "@language": null},
-            "direction": {"@direction": "rtl", "@id": iri},
-            "directionNull": {"@direction": null, "@id": iri},
-            "language": {"@id": iri, "@language": "EN"},
-            "untyped": {"@id": iri, "@type": "@none"}
+            "bothNull": {"@direction": null, "@id": "https://example.org/p", "@language": null},
+            "direction": {"@direction": "rtl", "@id": "https://example.org/p"},
+            "directionNull": {"@direction": null, "@id": "https://example.org/p"},
+            "language": {"@id": "https://example.org/p", "@language": "EN"},
+            "untyped": {"@id": "https://example.org/p", "@type": "@none"}
         }),
         None,
     )
@@ -1087,8 +1102,8 @@ fn any_inverse_selection_ignores_coercion_preferences() {
     let iri = "https://example.org/p";
     let compiled = CompiledJsonLdContext::compile(
         &json!({
-            "plain": iri,
-            "typed": {"@id": iri, "@type": "@id"}
+            "plain": "https://example.org/p",
+            "typed": {"@id": "https://example.org/p", "@type": "@id"}
         }),
         None,
     )
@@ -1202,7 +1217,8 @@ fn propagation_import_merge_cache_and_keyword_form_behavior_are_bounded() {
 #[test]
 fn canonical_context_byte_limit_accepts_exactly_and_rejects_one_over() {
     let context = json!({"x": "https://example.org/x"});
-    let canonical_bytes = serde_json::to_vec(&canonicalize(&context)).expect("canonical bytes");
+    let canonical_bytes =
+        lex_json::write_compact(&canonicalize(&context).expect("canonical context")).into_bytes();
     let exact = JsonLdContextLimits {
         context_bytes: canonical_bytes.len(),
         ..limits()

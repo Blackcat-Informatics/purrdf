@@ -34,18 +34,6 @@ use purrdf_gts::model::{Graph, Term, TermKind};
 use purrdf_gts::reader::read;
 use purrdf_gts::writer::Writer;
 
-fn iri(value: &str) -> Term {
-    Term {
-        kind: TermKind::Iri,
-        value: Some(value.to_string()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
 /// The legacy indirect spelling: components come from the `reifies` row bound
 /// to `reifier`.
 fn indirect_triple_term(reifier: usize) -> Term {
@@ -76,7 +64,10 @@ fn implicit_self_bound_triple_term() -> Term {
 
 /// A plain second segment, so the reader takes the multi-segment union path.
 fn plain_segment() -> Vec<u8> {
-    let terms = vec![iri("http://example.org/b"), iri("http://example.org/q")];
+    let terms = vec![
+        Term::iri("http://example.org/b"),
+        Term::iri("http://example.org/q"),
+    ];
     let mut writer = Writer::new("purrdf-test");
     writer.add_terms(&terms);
     writer.add_quads(&[(0, 1, 0, None)]);
@@ -129,8 +120,8 @@ fn assert_no_term_reaches_itself(graph: &Graph) {
 #[test]
 fn a_row_keyed_by_an_implicit_self_bound_terms_own_id_is_refused() {
     let terms = vec![
-        iri("http://example.org/a"),
-        iri("http://example.org/p"),
+        Term::iri("http://example.org/a"),
+        Term::iri("http://example.org/p"),
         implicit_self_bound_triple_term(),
     ];
     let mut writer = Writer::new("purrdf-test");
@@ -170,8 +161,8 @@ fn a_row_keyed_by_an_implicit_self_bound_terms_own_id_is_refused() {
 #[test]
 fn an_implicit_self_bound_term_binding_other_terms_still_folds() {
     let terms = vec![
-        iri("http://example.org/a"),
-        iri("http://example.org/p"),
+        Term::iri("http://example.org/a"),
+        Term::iri("http://example.org/p"),
         implicit_self_bound_triple_term(),
     ];
     let mut writer = Writer::new("purrdf-test");
@@ -196,8 +187,8 @@ fn an_implicit_self_bound_term_binding_other_terms_still_folds() {
 #[test]
 fn a_loop_routed_through_an_implicit_self_bound_term_is_refused() {
     let terms = vec![
-        iri("http://example.org/a"),
-        iri("http://example.org/p"),
+        Term::iri("http://example.org/a"),
+        Term::iri("http://example.org/p"),
         implicit_self_bound_triple_term(), // 2, bound by the row keyed on 2
         indirect_triple_term(0),           // 3, bound by the row keyed on 0
     ];
@@ -232,8 +223,8 @@ fn a_loop_routed_through_an_implicit_self_bound_term_is_refused() {
 #[test]
 fn a_binding_that_makes_an_rf_triple_term_contain_itself_is_refused() {
     let terms = vec![
-        iri("http://example.org/a"),
-        iri("http://example.org/p"),
+        Term::iri("http://example.org/a"),
+        Term::iri("http://example.org/p"),
         indirect_triple_term(0),
     ];
     let mut writer = Writer::new("purrdf-test");
@@ -259,8 +250,8 @@ fn a_binding_that_makes_an_rf_triple_term_contain_itself_is_refused() {
 #[test]
 fn a_two_hop_binding_loop_is_refused() {
     let terms = vec![
-        iri("http://example.org/a"),
-        iri("http://example.org/p"),
+        Term::iri("http://example.org/a"),
+        Term::iri("http://example.org/p"),
         indirect_triple_term(0),
         indirect_triple_term(1),
     ];
@@ -291,7 +282,10 @@ fn a_two_hop_binding_loop_is_refused() {
 #[test]
 fn a_binding_loop_is_refused_across_frame_boundaries() {
     let mut writer = Writer::new("purrdf-test");
-    writer.add_terms(&[iri("http://example.org/a"), iri("http://example.org/p")]);
+    writer.add_terms(&[
+        Term::iri("http://example.org/a"),
+        Term::iri("http://example.org/p"),
+    ]);
     writer.add_terms(&[indirect_triple_term(0)]); // 2
     writer.add_reifies(&[(0, (1, 1, 1), None)]); // innocent: term 2 = <<( p p p )>>
     writer.add_terms(&[indirect_triple_term(0)]); // 3, sharing reifier 0
@@ -317,8 +311,8 @@ fn a_binding_loop_is_refused_across_frame_boundaries() {
 #[test]
 fn an_explicitly_self_bound_term_naming_itself_is_refused() {
     let terms = vec![
-        iri("http://example.org/a"),
-        iri("http://example.org/p"),
+        Term::iri("http://example.org/a"),
+        Term::iri("http://example.org/p"),
         indirect_triple_term(2), // rf == this term's own id, which §7.1 allows
     ];
     let mut writer = Writer::new("purrdf-test");
@@ -344,8 +338,8 @@ fn an_explicitly_self_bound_term_naming_itself_is_refused() {
 #[test]
 fn a_tt_naming_its_own_term_is_dropped_as_a_forward_reference() {
     let terms = vec![
-        iri("http://example.org/a"),
-        iri("http://example.org/p"),
+        Term::iri("http://example.org/a"),
+        Term::iri("http://example.org/p"),
         Term {
             kind: TermKind::Triple,
             value: None,
@@ -371,8 +365,8 @@ fn a_tt_naming_its_own_term_is_dropped_as_a_forward_reference() {
 #[test]
 fn an_rf_naming_a_later_term_is_dropped_as_a_forward_reference() {
     let terms = vec![
-        iri("http://example.org/a"),
-        iri("http://example.org/p"),
+        Term::iri("http://example.org/a"),
+        Term::iri("http://example.org/p"),
         indirect_triple_term(3), // 3 does not exist yet
         indirect_triple_term(2),
     ];
@@ -396,8 +390,8 @@ fn an_rf_naming_a_later_term_is_dropped_as_a_forward_reference() {
 #[test]
 fn a_binding_loop_inside_a_snapshot_is_refused() {
     let mut graph = Graph::default();
-    graph.terms.push(iri("http://example.org/a")); // 0
-    graph.terms.push(iri("http://example.org/p")); // 1
+    graph.terms.push(Term::iri("http://example.org/a")); // 0
+    graph.terms.push(Term::iri("http://example.org/p")); // 1
     graph.terms.push(implicit_self_bound_triple_term()); // 2
     graph.reifiers.push((2, (2, 1, 1), None));
 
@@ -420,8 +414,8 @@ fn a_binding_loop_inside_a_snapshot_is_refused() {
 #[test]
 fn the_multi_segment_fold_of_an_attempted_loop_terminates() {
     let terms = vec![
-        iri("http://example.org/a"),
-        iri("http://example.org/p"),
+        Term::iri("http://example.org/a"),
+        Term::iri("http://example.org/p"),
         implicit_self_bound_triple_term(),
     ];
     let mut writer = Writer::new("purrdf-test");
@@ -449,8 +443,8 @@ fn the_multi_segment_fold_of_an_attempted_loop_terminates() {
 #[test]
 fn a_refused_loop_does_not_come_back_through_a_round_trip() {
     let terms = vec![
-        iri("http://example.org/a"),
-        iri("http://example.org/p"),
+        Term::iri("http://example.org/a"),
+        Term::iri("http://example.org/p"),
         implicit_self_bound_triple_term(),
     ];
     let mut writer = Writer::new("purrdf-test");

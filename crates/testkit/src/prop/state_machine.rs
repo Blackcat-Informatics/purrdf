@@ -160,13 +160,7 @@ impl<M> Clone for Sequences<M> {
     }
 }
 
-impl<M> fmt::Debug for Sequences<M> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Sequences")
-            .field("steps", &self.steps)
-            .finish_non_exhaustive()
-    }
-}
+purrdf_hash::debug_non_exhaustive!([M] Sequences<M> { steps });
 
 /// One generated run: an initial model state and the transitions after it.
 pub struct Sequence<M: ReferenceStateMachine> {
@@ -177,14 +171,7 @@ pub struct Sequence<M: ReferenceStateMachine> {
     pub transitions: Vec<M::Transition>,
 }
 
-impl<M: ReferenceStateMachine> fmt::Debug for Sequence<M> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Sequence")
-            .field("initial", &self.initial)
-            .field("transitions", &self.transitions)
-            .finish_non_exhaustive()
-    }
-}
+purrdf_hash::debug_non_exhaustive!([M: ReferenceStateMachine] Sequence<M> { initial, transitions });
 
 impl<M: ReferenceStateMachine> Sequence<M> {
     /// Replay the run against `S`, checking its invariants after

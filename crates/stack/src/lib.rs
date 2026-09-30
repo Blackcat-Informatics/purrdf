@@ -16,7 +16,9 @@
 //! too ([`walk`], [`walk_is_low`]), the stack a computation keeps out of reach of its
 //! own checks for walks it knows it will make ([`reserve`], [`widen`]), and the functions
 //! hosts call to install the floor of a stack they switch onto ([`replace_floor`]) or to
-//! switch whole contexts ([`replace_context`]).
+//! switch whole contexts ([`replace_context`]). It also runs a computation on a stack of
+//! a stated size ([`on_stack`]), which is how a guard that refuses on a small stack is
+//! exercised on one.
 //!
 //! # The floor
 //!
@@ -624,20 +626,167 @@ fn refresh(sp: usize) -> usize {
     0
 }
 
+/// Why [`on_stack`] did not run its computation.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum StackError {
+    /// The computation asked for more stack than is left above the running stack's floor.
+    ///
+    /// `wasm32` has one shadow stack per instance and no second thread to give a
+    /// computation a stack of its own, so [`on_stack`] runs it inline on what is left of
+    /// the running stack: a request larger than that cannot be honoured, and is refused
+    /// here rather than trapping below the floor part-way through the computation.
+    ExceedsFloor {
+        /// The bytes asked for.
+        requested: usize,
+        /// The bytes left above the floor when the request was made.
+        available: usize,
+    },
+    /// The operating system would not start a thread with the requested stack.
+    Spawn(std::io::Error),
+}
+
+impl core::fmt::Display for StackError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ExceedsFloor {
+                requested,
+                available,
+            } => write!(
+                f,
+                "a {requested}-byte stack was requested, but only {available} bytes are left \
+                 above the running stack's floor"
+            ),
+            Self::Spawn(error) => write!(f, "could not start a thread for the stack: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for StackError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ExceedsFloor { .. } => None,
+            Self::Spawn(error) => Some(error),
+        }
+    }
+}
+
+/// Run `f` on a stack of `bytes` and return what it returns.
+///
+/// A guard that refuses before the stack runs out is only shown to work by running it on
+/// a stack small enough to run out, so every such test needs "this computation, on a
+/// stack this big". This is the one implementation of that, because what a stack of a
+/// given size *is* differs by target and only this crate knows both:
+///
+/// * **native**: a fresh thread whose stack is `bytes` (the operating system may round
+///   it up to its minimum or its page size, never down). A fresh thread starts with a
+///   fresh [`Context`] — its own floor, no walk scope, no reserve — so `f` is measured
+///   against exactly the stack it was given. A panic in `f` resumes on the calling thread
+///   with its original payload, so an assertion inside `f` fails the caller with its own
+///   message.
+/// * **`wasm32`**: there is no second thread, so `f` runs inline, under a fresh
+///   [`Context`] whose floor is `bytes` below the calling frame: every check `f` makes
+///   sees a stack of `bytes`, as it would on a native thread of that size, and the
+///   caller's context is put back when `f` returns. The request is checked against the
+///   stack actually left above the running floor first, and one larger than that is
+///   refused with [`StackError::ExceedsFloor`] instead of running `f` into a trap.
+///
+/// # Errors
+///
+/// [`StackError::ExceedsFloor`] on `wasm32` when `bytes` exceeds what is left above the
+/// floor; [`StackError::Spawn`] natively when the thread cannot be started.
+pub fn on_stack<R: Send + 'static>(
+    bytes: usize,
+    f: impl FnOnce() -> R + Send + 'static,
+) -> Result<R, StackError> {
+    on_stack_scoped(bytes, f)
+}
+
+/// [`on_stack`] for a computation that borrows from the caller: `f` need not be
+/// `'static`, because the stack it runs on is gone before this returns.
+///
+/// Natively `f` runs on a scoped thread of `bytes` that is joined before the
+/// scope closes, so its borrows of the caller's locals are sound; on `wasm32` it
+/// runs inline under the same fresh [`Context`] as [`on_stack`], and a request
+/// over the floor is refused in the same way. Every other property — the fresh
+/// context, a panic resuming on the caller with its payload — is [`on_stack`]'s,
+/// which is this function with a `'static` computation.
+///
+/// # Errors
+///
+/// [`StackError::ExceedsFloor`] on `wasm32` when `bytes` exceeds what is left above the
+/// floor; [`StackError::Spawn`] natively when the thread cannot be started.
+pub fn on_stack_scoped<'env, R: Send + 'env>(
+    bytes: usize,
+    f: impl FnOnce() -> R + Send + 'env,
+) -> Result<R, StackError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        on_thread(bytes, f)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        on_current_stack(bytes, f)
+    }
+}
+
+/// [`on_stack_scoped`] natively: `f` on a scoped thread of `bytes`, joined before
+/// the scope closes.
+#[cfg(not(target_arch = "wasm32"))]
+fn on_thread<'env, R: Send + 'env>(
+    bytes: usize,
+    f: impl FnOnce() -> R + Send + 'env,
+) -> Result<R, StackError> {
+    std::thread::scope(|scope| {
+        let handle = std::thread::Builder::new()
+            .stack_size(bytes)
+            .spawn_scoped(scope, f)
+            .map_err(StackError::Spawn)?;
+        match handle.join() {
+            Ok(value) => Ok(value),
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    })
+}
+
+/// [`on_stack`] on `wasm32`: `f` inline, under a fresh [`Context`] whose floor is `bytes`
+/// below the calling frame, after checking that much stack is left above the running
+/// floor. Compiled natively too, so its refusal and its accepted neighbour are tested on
+/// every target.
+#[cfg_attr(
+    not(any(target_arch = "wasm32", test)),
+    expect(
+        dead_code,
+        reason = "the inline path is `on_stack_scoped` on wasm32 only"
+    )
+)]
+fn on_current_stack<R>(bytes: usize, f: impl FnOnce() -> R) -> Result<R, StackError> {
+    /// Puts the caller's context back when `f` returns or unwinds.
+    struct Restore(Context);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            replace_context(self.0);
+        }
+    }
+    let available = remaining();
+    if bytes > available {
+        return Err(StackError::ExceedsFloor {
+            requested: bytes,
+            available,
+        });
+    }
+    // `remaining` measured from a frame at or below this one, so the frame here has at
+    // least `bytes` above the running floor and the new floor does not pass under it.
+    let floor = stack_pointer().saturating_sub(bytes);
+    let restore = Restore(replace_context(Context::on_floor(floor)));
+    let value = f();
+    drop(restore);
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Run `body` on a fresh thread with `bytes` of stack, so the thread-local floor is
-    /// read for that thread alone.
-    fn on_thread<T: Send + 'static>(bytes: usize, body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(bytes)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("join")
-    }
 
     /// `levels` frames of 4 KiB below the caller, then `at_bottom`.
     fn deeper<T>(levels: usize, at_bottom: &dyn Fn() -> T) -> T {
@@ -656,7 +805,8 @@ mod tests {
     #[test]
     fn remaining_measures_the_thread_s_own_stack() {
         const BYTES: usize = 4 * 1024 * 1024;
-        let (top, below) = on_thread(BYTES, || (remaining(), deeper(16, &remaining)));
+        let (top, below) =
+            on_stack(BYTES, || (remaining(), deeper(16, &remaining))).expect("spawn");
         // At least what was asked for, less the frames already live. (The C library may
         // hand a thread more than it asked for, never less.)
         assert!(
@@ -675,7 +825,7 @@ mod tests {
     /// unwind.
     #[test]
     fn a_small_thread_runs_low_as_its_stack_is_consumed() {
-        let (top, low_at_top, reports) = on_thread(512 * 1024, || {
+        let (top, low_at_top, reports) = on_stack(512 * 1024, || {
             let top = remaining();
             let low_at_top = is_low();
             let mut reports = Vec::new();
@@ -689,7 +839,8 @@ mod tests {
                 levels += 4;
             }
             (top, low_at_top, reports)
-        });
+        })
+        .expect("spawn");
         assert!(
             !low_at_top,
             "{top} bytes left at the top of a 512 KiB thread"
@@ -717,7 +868,7 @@ mod tests {
             "the thread had room for several steps before the margin: {reports:?}"
         );
         assert!(
-            on_thread(512 * 1024, || !is_low()),
+            on_stack(512 * 1024, || !is_low()).expect("spawn"),
             "a fresh thread is not low"
         );
     }
@@ -726,13 +877,14 @@ mod tests {
     /// putting the previous floor back) is read again rather than reporting nothing left.
     #[test]
     fn a_floor_above_the_frame_is_read_again() {
-        let (low, left) = on_thread(1024 * 1024, || {
+        let (low, left) = on_stack(1024 * 1024, || {
             let previous = replace_floor(stack_pointer() + 4096);
             let low = is_low();
             let left = remaining();
             replace_floor(previous);
             (low, left)
-        });
+        })
+        .expect("spawn");
         assert!(!low);
         assert!(left > MARGIN_BYTES, "{left} bytes left");
     }
@@ -741,7 +893,7 @@ mod tests {
     /// installed floor is the one measured against.
     #[test]
     fn replace_floor_sets_and_returns_the_floor() {
-        on_thread(256 * 1024, || {
+        on_stack(256 * 1024, || {
             let original = replace_floor(1);
             assert_eq!(replace_floor(2), 1);
             let sp = stack_pointer();
@@ -754,14 +906,15 @@ mod tests {
             assert!(is_low(), "8 KiB is inside the margin");
             assert_eq!(replace_floor(original), sp - 8192);
             assert!(!is_low(), "the thread's own floor is back");
-        });
+        })
+        .expect("spawn");
     }
 
     /// While [`EXHAUSTED`] is installed nothing is left, whatever the stack pointer, and
     /// putting the previous floor back restores the measurement.
     #[test]
     fn the_exhausted_floor_leaves_nothing() {
-        on_thread(1024 * 1024, || {
+        on_stack(1024 * 1024, || {
             assert!(!is_low());
             let previous = replace_floor(EXHAUSTED);
             assert_eq!(remaining(), 0);
@@ -769,7 +922,8 @@ mod tests {
             assert_eq!(replace_floor(previous), EXHAUSTED);
             assert!(!is_low());
             assert!(remaining() > MARGIN_BYTES);
-        });
+        })
+        .expect("spawn");
     }
 
     /// A floor 1 KiB below the calling frame: inside the margin, so [`is_low`] is `true`.
@@ -782,7 +936,7 @@ mod tests {
     /// Outside any scope the same low stack is not a refusal, and nothing is latched.
     #[test]
     fn a_scope_latches_a_low_walk_and_an_unscoped_walk_carries_on() {
-        on_thread(1024 * 1024, || {
+        on_stack(1024 * 1024, || {
             assert!(!is_low(), "the thread's own floor, read");
             let real = FLOOR.with(Cell::get);
             let low = low_floor();
@@ -805,7 +959,8 @@ mod tests {
             replace_floor(real);
             assert!(!is_low(), "the thread's own floor is back");
             assert_eq!(walk(|| walk_is_low("roomy walk")), Ok(false));
-        });
+        })
+        .expect("spawn");
     }
 
     /// A computation suspended inside a scope takes the scope with it: the context that
@@ -817,7 +972,7 @@ mod tests {
     /// and the suspended computation is refused for a walk it never ran.
     #[test]
     fn a_suspended_scope_stays_with_its_context() {
-        on_thread(1024 * 1024, || {
+        on_stack(1024 * 1024, || {
             assert!(!is_low(), "the thread's own floor, read");
             let real = FLOOR.with(Cell::get);
             let mut observed = None;
@@ -878,7 +1033,8 @@ mod tests {
                 "and refuses the job for the waiting context's walk"
             );
             replace_floor(real);
-        });
+        })
+        .expect("spawn");
     }
 
     /// A reserve takes its bytes off what every check sees, and gives them back when it
@@ -886,7 +1042,7 @@ mod tests {
     /// than the margin is not low, one that eats into the margin is.
     #[test]
     fn a_reserve_is_kept_out_of_reach_until_dropped() {
-        on_thread(4 * 1024 * 1024, || {
+        on_stack(4 * 1024 * 1024, || {
             let before = remaining();
             let outer = reserve(512 * 1024);
             assert_eq!(outer.bytes(), 512 * 1024);
@@ -909,14 +1065,15 @@ mod tests {
                 (before - 1024..before + 1024).contains(&after),
                 "{before} bytes before, {after} after the reserve is dropped"
             );
-        });
+        })
+        .expect("spawn");
     }
 
     /// A floor read again inside a reserve — a native thread whose frame is found below
     /// the cached floor — is raised by what is reserved, so the reserve survives it.
     #[test]
     fn a_floor_read_again_keeps_the_reserve() {
-        on_thread(4 * 1024 * 1024, || {
+        on_stack(4 * 1024 * 1024, || {
             let before = remaining();
             let kept = reserve(1024 * 1024);
             let raised = FLOOR.with(Cell::get);
@@ -934,14 +1091,15 @@ mod tests {
             );
             drop(kept);
             assert!(remaining() + 1024 > before);
-        });
+        })
+        .expect("spawn");
     }
 
     /// A reserve travels with its context: the computation that runs while it waits sees
     /// its own stack whole, and the reserve is still in force when it resumes.
     #[test]
     fn a_reserve_stays_with_its_context() {
-        on_thread(4 * 1024 * 1024, || {
+        on_stack(4 * 1024 * 1024, || {
             let before = remaining();
             let kept = reserve(1024 * 1024);
             let real = FLOOR.with(Cell::get) - 1024 * 1024;
@@ -963,7 +1121,8 @@ mod tests {
             );
             drop(kept);
             assert!(remaining() + 1024 > before);
-        });
+        })
+        .expect("spawn");
     }
 
     /// Widening needs an open scope, keeps its bytes until the OUTERMOST scope closes
@@ -972,7 +1131,7 @@ mod tests {
     /// neighbouring widening that leaves more is kept.
     #[test]
     fn a_widening_lasts_until_the_outermost_scope_closes() {
-        on_thread(4 * 1024 * 1024, || {
+        on_stack(4 * 1024 * 1024, || {
             let before = remaining();
             assert!(!scoped());
             assert!(!widen(4096), "no scope: nothing would give the bytes back");
@@ -1013,13 +1172,14 @@ mod tests {
                 (before - 1024..before + 1024).contains(&after),
                 "{before} bytes before, {after} after"
             );
-        });
+        })
+        .expect("spawn");
     }
 
     /// A widening travels with its context, like the scope it belongs to.
     #[test]
     fn a_widening_stays_with_its_context() {
-        on_thread(4 * 1024 * 1024, || {
+        on_stack(4 * 1024 * 1024, || {
             let before = remaining();
             let scope = reserve(0);
             assert!(widen(1024 * 1024));
@@ -1035,14 +1195,15 @@ mod tests {
             drop(scope);
             assert!(remaining() + 1024 > before);
             assert_eq!(reserved(), 0);
-        });
+        })
+        .expect("spawn");
     }
 
     /// A walk scope that refuses inside a reserve and closes after the reserve is dropped
     /// puts back the real floor, not the raised one.
     #[test]
     fn a_refusal_latched_inside_a_reserve_restores_the_real_floor() {
-        on_thread(4 * 1024 * 1024, || {
+        on_stack(4 * 1024 * 1024, || {
             let _ = remaining();
             let real = FLOOR.with(Cell::get);
             let refused = walk(|| {
@@ -1062,6 +1223,130 @@ mod tests {
             assert_eq!(refused, Err("reserved walk"));
             assert_eq!(FLOOR.with(Cell::get), real, "the real floor is back");
             assert!(!is_low());
-        });
+        })
+        .expect("spawn");
+    }
+
+    /// `on_stack` runs its computation on a stack of its own, at least the size asked
+    /// for: what the computation measures is that stack, not the caller's, and its value
+    /// comes back.
+    #[test]
+    fn on_stack_runs_the_computation_on_a_stack_of_the_requested_size() {
+        const BYTES: usize = 512 * 1024;
+        let caller_sp = stack_pointer();
+        let caller_floor = caller_sp - remaining();
+        let (sp, left) =
+            on_stack(BYTES, || (stack_pointer(), remaining())).expect("a 512 KiB thread starts");
+        // The operating system may round a thread's stack up to a page or its minimum, and
+        // the C library may hand a thread a cached stack several times the request, never
+        // less; 64 KiB covers the frames already live.
+        assert!(
+            left >= BYTES - 64 * 1024,
+            "{left} bytes left on a {BYTES}-byte stack"
+        );
+        assert!(
+            !(caller_floor..=caller_sp).contains(&sp),
+            "the computation ran on the caller's stack ({sp:#x} in {caller_floor:#x}..={caller_sp:#x})"
+        );
+        assert_eq!(on_stack(BYTES, || 7_u8).expect("runs"), 7);
+    }
+
+    /// A panic inside `on_stack`'s computation resumes on the caller with the original
+    /// payload, so an assertion inside it fails the caller with its own message.
+    #[test]
+    fn on_stack_resumes_a_panic_with_its_own_payload() {
+        let caught = std::panic::catch_unwind(|| {
+            on_stack(256 * 1024, || -> () {
+                panic!("the inner assertion's message")
+            })
+        })
+        .expect_err("the panic reaches the caller");
+        let message = caught
+            .downcast_ref::<&str>()
+            .copied()
+            .expect("a string payload");
+        assert_eq!(message, "the inner assertion's message");
+    }
+
+    /// The inline path refuses a request larger than the stack left above the running
+    /// floor, typed, and runs its neighbour just inside it — the boundary drawn from a
+    /// floor installed a known distance below the frame.
+    #[test]
+    fn an_over_floor_request_is_refused_and_an_in_floor_request_runs() {
+        on_stack(2 * 1024 * 1024, || {
+            let previous = replace_floor(stack_pointer() - 512 * 1024);
+            let available = remaining();
+
+            let over = on_current_stack(available + 4096, || unreachable!("not run"));
+            match over {
+                Err(StackError::ExceedsFloor {
+                    requested,
+                    available: reported,
+                }) => {
+                    assert_eq!(requested, available + 4096);
+                    assert!(reported <= available, "{reported} of {available}");
+                }
+                other => panic!("an over-floor request is refused, got {other:?}"),
+            }
+            assert!(
+                matches!(
+                    on_current_stack(usize::MAX, || ()),
+                    Err(StackError::ExceedsFloor { .. })
+                ),
+                "the largest request is refused"
+            );
+
+            let inside = on_current_stack(available - 4096, remaining)
+                .expect("a request inside the floor runs");
+            assert!(inside <= available - 4096, "{inside} of {available}");
+
+            replace_floor(previous);
+        })
+        .expect("spawn");
+    }
+
+    /// The inline path gives its computation a fresh context of the requested size — a
+    /// small request is inside the margin, a large one is not, no reserve scope of the
+    /// caller's is visible — and puts the caller's context back afterwards.
+    #[test]
+    fn the_inline_path_runs_under_a_fresh_context_and_restores_the_caller_s() {
+        on_stack(4 * 1024 * 1024, || {
+            let _ = remaining();
+            let kept = reserve(0);
+            let floor = FLOOR.with(Cell::get);
+            assert!(scoped());
+
+            let (low, inner_scoped) =
+                on_current_stack(MARGIN_BYTES / 2, || (is_low(), scoped())).expect("runs");
+            assert!(low, "half the margin is inside it");
+            assert!(
+                !inner_scoped,
+                "the caller's reserve scope stays with the caller"
+            );
+            assert!(
+                !on_current_stack(4 * MARGIN_BYTES, is_low).expect("runs"),
+                "four margins are not low"
+            );
+
+            assert!(scoped(), "the caller's scope is back");
+            assert_eq!(FLOOR.with(Cell::get), floor, "the caller's floor is back");
+            drop(kept);
+        })
+        .expect("spawn");
+    }
+
+    /// The typed refusal says what was asked for and what was left.
+    #[test]
+    fn the_refusal_names_the_request_and_what_was_left() {
+        let error = StackError::ExceedsFloor {
+            requested: 2048,
+            available: 1024,
+        };
+        assert_eq!(
+            error.to_string(),
+            "a 2048-byte stack was requested, but only 1024 bytes are left above the \
+             running stack's floor"
+        );
+        assert!(std::error::Error::source(&error).is_none());
     }
 }

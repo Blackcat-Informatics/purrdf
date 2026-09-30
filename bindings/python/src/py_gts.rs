@@ -120,7 +120,10 @@ fn assemble_slice_bundle(
         // role + logical path so a repo-free consumer recovers each artifact.
         blob_rows.push(BlobRow {
             data: row.content.clone(),
-            media_type: media_type_for(&row.logical_path),
+            media_type: purrdf_gts::files::media_type_for_path(std::path::Path::new(
+                &row.logical_path,
+            ))
+            .to_string(),
             rep: format!(
                 "{SLICE_ARTIFACT_REP_PREFIX}{}:{}",
                 row.role, row.logical_path
@@ -131,23 +134,6 @@ fn assemble_slice_bundle(
     // HARD-fail on any structural violation BEFORE serialization (no-optionality).
     bundle.validate().map_err(|e| e.to_string())?;
     Ok(blob_rows)
-}
-
-/// Infer a stable MIME type for a slice artifact path (mirrors the slice catalog's
-/// `infer_media_type`, kept local to avoid a kernel→slice dependency edge).
-fn media_type_for(path: &str) -> String {
-    let ext = path.rsplit('.').next().unwrap_or("");
-    match ext {
-        "ttl" => "text/turtle",
-        "nt" => "application/n-triples",
-        "nq" => "application/n-quads",
-        "sparql" | "rq" => "application/sparql-query",
-        "md" => "text/markdown",
-        "yaml" | "yml" | "cff" => "application/yaml",
-        "json" => "application/json",
-        _ => "application/octet-stream",
-    }
-    .to_string()
 }
 
 // ── Python helpers ────────────────────────────────────────────────────────────
@@ -230,7 +216,7 @@ fn parse_rdf(data: &[u8], format: PyRdfFormat, base: Option<&str>) -> PyResult<V
 /// Parse RDF bytes into a frozen native [`RdfDataset`] for `SnapshotBuilder`
 /// ingestion (the native carrier path). The native parse folds the RDF 1.2
 /// statement layer into the dataset's reifier/annotation side-tables and preserves
-/// named graphs, so `add_dataset_scoped` reproduces the legacy oxigraph ingestion
+/// named graphs, so `add_dataset_scoped` ingests it
 /// byte-for-byte. The blank-node `scope` is applied at INGESTION (by
 /// `add_dataset_scoped`), not here — `parse_dataset`'s third argument is the base
 /// IRI, never a blank scope. Private-use language tags (`@x-purrdf-*`) survive.
@@ -249,8 +235,8 @@ fn parse_rdf_dataset(
 
 // ── Module-level functions ────────────────────────────────────────────────────
 
-/// The pure-Rust parse → snapshot-build → emit core `gts_from_quads` /
-/// `gts_from_rdf12_bytes` share; runs inside [`Python::detach`] (GIL released).
+/// The pure-Rust parse → snapshot-build → emit core of `gts_from_quads` (also
+/// exported as `gts_from_rdf12_bytes`); runs inside [`Python::detach`] (GIL released).
 fn snapshot_gts_bytes(
     data: &[u8],
     format: PyRdfFormat,
@@ -279,30 +265,18 @@ fn snapshot_gts_bytes(
     .map_err(PyValueError::new_err)
 }
 
-/// Produce a GTS snapshot from a serialized RDF 1.1 base graph (Turtle/N-Quads
-/// bytes, parsed leniently). Mirrors `gts_producer.gts_from_graph`. `transform`
-/// defaults to `["zstd"]` when `None`.
+/// Produce a GTS snapshot from serialized RDF bytes (Turtle/N-Quads, parsed
+/// natively into the RDF 1.2 IR, statement layer included). `transform` defaults
+/// to `["zstd"]` when `None`.
+///
+/// Exported under two names: `gts_from_quads` (the base-graph producer,
+/// `gts_producer.gts_from_graph`) and `gts_from_rdf12_bytes` (the statement-layer
+/// artifact producer, `gts_producer.gts_from_rdf12`). They are one function, because
+/// the native parse already carries the RDF 1.2 statement layer, so a base graph and
+/// a statement-layer artifact take the same path to the same snapshot.
 #[pyfunction]
 #[pyo3(signature = (data, *, format, profile="dist", transform=None, base=None))]
 fn gts_from_quads(
-    py: Python<'_>,
-    data: &Bound<'_, PyBytes>,
-    format: PyRdfFormat,
-    profile: &str,
-    transform: Option<Vec<String>>,
-    base: Option<String>,
-) -> PyResult<Py<PyBytes>> {
-    let raw = data.as_bytes();
-    let bytes =
-        py.detach(move || snapshot_gts_bytes(raw, format, profile, transform, base.as_deref()))?;
-    Ok(PyBytes::new(py, &bytes).unbind())
-}
-
-/// Produce a GTS snapshot from an RDF 1.2 statement-layer artifact's bytes
-/// (parsed natively as Turtle/N-Quads). Mirrors `gts_producer.gts_from_rdf12`.
-#[pyfunction]
-#[pyo3(signature = (data, *, format, profile="dist", transform=None, base=None))]
-fn gts_from_rdf12_bytes(
     py: Python<'_>,
     data: &Bound<'_, PyBytes>,
     format: PyRdfFormat,
@@ -770,7 +744,7 @@ fn compile_gts_core(
         // are NOT passed here and STAY by-reference (blob-by-reference doctrine).
         let mut all_doc_blobs = doc_blob_rows;
         if !slice_rows.is_empty() {
-            // The bundle assembler still consumes a flat oxigraph quad list for its hot
+            // The bundle assembler still consumes a flat quad list for its hot
             // dataset; re-parse the base here (only when slice artifacts are present).
             let flat_base = parse_rdf(base_bytes, base_format, sources.document_base)?;
             let bundle_blobs =
@@ -1019,14 +993,15 @@ fn feedback_bundle_native(
     Ok(PyBytes::new(py, &bytes).unbind())
 }
 
-fn rdf_format(format: PyRdfFormat) -> NativeRdfFormat {
+pub(crate) fn rdf_format(format: PyRdfFormat) -> NativeRdfFormat {
     format.to_native()
 }
 
 /// Register the native GTS producer surface on the `purrdf` module.
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(gts_from_quads, m)?)?;
-    m.add_function(wrap_pyfunction!(gts_from_rdf12_bytes, m)?)?;
+    let gts_from_quads = wrap_pyfunction!(gts_from_quads, m)?;
+    m.add("gts_from_rdf12_bytes", &gts_from_quads)?;
+    m.add_function(gts_from_quads)?;
     m.add_function(wrap_pyfunction!(compile_gts_native, m)?)?;
     m.add_function(wrap_pyfunction!(compile_gts_with_report, m)?)?;
     m.add_function(wrap_pyfunction!(gts_ingest_report, m)?)?;

@@ -22,15 +22,16 @@
 
 use std::collections::BTreeMap;
 
-use ed25519_dalek::SigningKey;
+use purrdf_ed25519::{SigningKey, VerifyingKey};
 use purrdf_gts::compact::{DEFAULT_DICT_NAME, DictPlan, DictStrategy};
 use purrdf_gts::dict::raw_content_dict;
 use purrdf_gts::model::Graph;
 use purrdf_gts::reader::read;
-use purrdf_gts::wire::{hex, map_get};
+use purrdf_gts::wire::map_get;
 use purrdf_gts::writer::{FrameOptions, Writer, WriterOptions};
-use serde_json::{Value as Json, json};
+use purrdf_lex::json::{self, Format, Object, Value as Json};
 
+use crate::FastMap;
 use crate::gts::dataset_from_gts_graph;
 use crate::{SerializeGraph, serialize_dataset};
 
@@ -56,6 +57,28 @@ pub fn packaging_key() -> SigningKey {
     SigningKey::from_bytes(&[7u8; 32])
 }
 
+/// The verifying keyring a dict-vector pack is checked against: `authorA` for
+/// [`authorship_key`] and `pack` for [`packaging_key`].
+#[must_use]
+pub fn keyring() -> FastMap<String, VerifyingKey> {
+    FastMap::from_iter([
+        ("authorA".to_string(), authorship_key().verifying_key()),
+        ("pack".to_string(), packaging_key().verifying_key()),
+    ])
+}
+
+/// The fixed packaging signing key (`kid` "pack") `25b-streamable-compacted.gts`
+/// is packaged with — the MANDATORY streamable-compaction ordering/packaging
+/// signature (GTS-SPEC §10.1), never frame authorship. Deliberately a DIFFERENT
+/// key from [`packaging_key`]: distinct frozen corpora should not share signing
+/// key material even when both are fixed maintainer constants. The generator
+/// (`src/bin/gen_streamable_vectors.rs`) and the drift guard
+/// (`tests/streamable_vectors.rs`) both take it from here.
+#[must_use]
+pub fn streamable_packaging_key() -> SigningKey {
+    SigningKey::from_bytes(&[11u8; 32])
+}
+
 /// A fixed, signed GTS source: 40 content-blob frames of repeated structure
 /// (a `<s{i%7}> <p> "dict vector claim {i} about cats"` N-Triples line per
 /// blob), signed under the fixed authorship key, closed with an `index`
@@ -63,19 +86,7 @@ pub fn packaging_key() -> SigningKey {
 /// train on.
 #[must_use]
 pub fn fixed_source() -> Vec<u8> {
-    let mut w = Writer::new("purrdf.gts");
-    w.sign_with(authorship_key(), "authorA");
-    for i in 0..40u32 {
-        let blob = format!(
-            "<https://example.org/s{}> <https://example.org/p> \"dict vector claim {} about cats\" .\n",
-            i % 7,
-            i
-        )
-        .into_bytes();
-        w.add_blob_owned(blob, Some("text/plain"), None);
-    }
-    w.add_index();
-    w.into_bytes()
+    claim_corpus(40, "cats")
 }
 
 /// A larger, more redundant source than [`fixed_source`]: 300 content blobs
@@ -88,15 +99,24 @@ pub fn fixed_source() -> Vec<u8> {
 /// dictionary's one-time cost to be genuinely amortized.
 #[must_use]
 pub fn size_comparison_source() -> Vec<u8> {
+    claim_corpus(
+        300,
+        "cats and the shared structure repeated across every blob in this redundant corpus, \
+         which a pack dictionary should compress extremely well",
+    )
+}
+
+/// `count` content blobs, blob `i` the N-Triples line
+/// `<s{i%7}> <p> "dict vector claim {i} about {about}"`, signed under the fixed
+/// authorship key and closed with an `index` footer: the one corpus shape the
+/// dictionary vectors are frozen over.
+fn claim_corpus(count: u32, about: &str) -> Vec<u8> {
     let mut w = Writer::new("purrdf.gts");
     w.sign_with(authorship_key(), "authorA");
-    for i in 0..300u32 {
+    for i in 0..count {
         let blob = format!(
-            "<https://example.org/s{}> <https://example.org/p> \"dict vector claim {} about \
-             cats and the shared structure repeated across every blob in this redundant \
-             corpus, which a pack dictionary should compress extremely well\" .\n",
-            i % 7,
-            i
+            "<https://example.org/s{}> <https://example.org/p> \"dict vector claim {i} about {about}\" .\n",
+            i % 7
         )
         .into_bytes();
         w.add_blob_owned(blob, Some("text/plain"), None);
@@ -207,7 +227,7 @@ pub fn multi_dict_pack() -> Vec<u8> {
     w.add_frame_with_options(
         "meta",
         FrameOptions {
-            payload: Some(ciborium::value::Value::Map(vec![(
+            payload: Some(purrdf_lex::cbor::Value::Map(vec![(
                 "vector".into(),
                 "33-multi-dict".into(),
             )])),
@@ -284,53 +304,66 @@ fn fold_json(graph: &Graph, mode: &str) -> Json {
         .segment_streamable
         .iter()
         .map(|state| {
-            json!({
-                "claimed": state.claimed,
-                "covered": state.covered,
-                "tail": state.tail,
-            })
+            Json::from(
+                Object::new()
+                    .with("claimed", state.claimed)
+                    .with("covered", state.covered)
+                    .with("tail", state.tail),
+            )
         })
         .collect();
-    let segment_heads: Vec<String> = graph.segment_heads.iter().map(|head| hex(head)).collect();
+    let segment_heads: Vec<String> = graph
+        .segment_heads
+        .iter()
+        .map(|head| purrdf_hash::hex::encode(head))
+        .collect();
 
-    json!({
-        "blobs": blobs_json(graph),
-        "diagnostics": graph
-            .diagnostics
-            .iter()
-            .map(|diagnostic| diagnostic.code.clone())
-            .collect::<Vec<_>>(),
-        "mode": mode,
-        "nquads": nquads,
-        "opaque_reasons": graph
-            .opaque
-            .iter()
-            .map(|opaque| opaque.reason.clone())
-            .collect::<Vec<_>>(),
-        "profiles": profiles,
-        "quads": quad_count,
-        "segment_heads": segment_heads,
-        "segments": graph.segment_heads.len(),
-        "streamable": streamable,
-        "suppressions": graph.suppressions.len(),
-        "terms": graph.terms.len(),
-    })
+    let mut fold = Json::from(
+        Object::new()
+            .with("blobs", blobs_json(graph))
+            .with(
+                "diagnostics",
+                graph
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.code.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .with("mode", mode)
+            .with("nquads", nquads)
+            .with(
+                "opaque_reasons",
+                graph
+                    .opaque
+                    .iter()
+                    .map(|opaque| opaque.reason.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .with("profiles", profiles)
+            .with("quads", quad_count)
+            .with("segment_heads", segment_heads)
+            .with("segments", graph.segment_heads.len())
+            .with("streamable", streamable)
+            .with("suppressions", graph.suppressions.len())
+            .with("terms", graph.terms.len()),
+    );
+    fold.sort_keys();
+    fold
 }
 
 /// Render an expected-fold value with sorted keys, one-space indentation, and
 /// one trailing newline, matching the shared GTS vector corpus byte format.
-///
-/// # Panics
-///
-/// Panics only if `serde_json` cannot serialize its own in-memory value or
-/// emits non-UTF-8 bytes, both of which are invariant violations.
 #[must_use]
 pub fn render_expected_json(value: &Json) -> String {
-    let mut bytes = Vec::new();
-    let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
-    let mut serializer = serde_json::Serializer::with_formatter(&mut bytes, formatter);
-    serde::Serialize::serialize(value, &mut serializer).expect("serialize expected-fold JSON");
-    let mut text = String::from_utf8(bytes).expect("serde_json emits UTF-8");
+    let mut sorted = value.clone();
+    sorted.sort_keys();
+    let mut text = json::write(
+        &sorted,
+        Format {
+            indent: Some(" "),
+            ..Format::PRETTY
+        },
+    );
     text.push('\n');
     text
 }
@@ -344,8 +377,8 @@ fn blobs_json(graph: &Graph) -> Json {
             .iter()
             .find(|(candidate, _)| candidate == digest)
             .and_then(|(_, metadata)| match metadata {
-                ciborium::value::Value::Map(entries) => match map_get(entries, "mt") {
-                    Some(ciborium::value::Value::Text(value)) => Some(value.clone()),
+                purrdf_lex::cbor::Value::Map(entries) => match map_get(entries, "mt") {
+                    Some(purrdf_lex::cbor::Value::Text(value)) => Some(value.clone()),
                     _ => None,
                 },
                 _ => None,
@@ -354,7 +387,10 @@ fn blobs_json(graph: &Graph) -> Json {
         let size = entry
             .decoded_len()
             .unwrap_or_else(|error| panic!("blob {digest} decodes: {error}"));
-        blobs.insert(digest.clone(), json!({"mt": media_type, "size": size}));
+        blobs.insert(
+            digest.clone(),
+            Object::new().with("mt", media_type).with("size", size),
+        );
     }
     Json::Object(blobs.into_iter().collect())
 }

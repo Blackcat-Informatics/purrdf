@@ -50,10 +50,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::{RdfDataset, TermValue};
 
-use super::term_key;
 use crate::interner::Interner;
 use crate::owl_dl::constructs::{Support, is_reserved, support_of};
-use crate::owl_dl::parser::{TripleIndex, Vocab};
+use crate::owl_dl::parser::{TripleIndex, Vocab, index_list};
 use crate::owl_dl::query::build_data_index;
 use crate::report::Construct;
 use crate::vocab::{OWL_DATATYPEPROPERTY, OWL_OBJECTPROPERTY, OWL_PROPERTYCHAINAXIOM};
@@ -243,12 +242,7 @@ pub fn profile(ds: &RdfDataset) -> ProfileCertificate {
     scan.axioms(&interner, &v, extra.chain, &index, &mut violations);
     scan.description_logic(&interner, &v, &extra, &index, &mut violations);
     violations.sort_by(|a, b| {
-        (a.profile, term_key(&a.term), term_key(&a.subject), a.reason).cmp(&(
-            b.profile,
-            term_key(&b.term),
-            term_key(&b.subject),
-            b.reason,
-        ))
+        (a.profile, &a.term, &a.subject, a.reason).cmp(&(b.profile, &b.term, &b.subject, b.reason))
     });
     violations.dedup();
     ProfileCertificate { violations }
@@ -598,27 +592,9 @@ fn max_cardinality_bound<'a>(
     }
 }
 
-/// Whether the collection rooted at `head` terminates at `rdf:nil` with exactly one
-/// `rdf:first` and one `rdf:rest` per cell.
+/// Whether the collection rooted at `head` is well formed ([`index_list`]).
 fn well_formed_collection(index: &TripleIndex, v: &Vocab, head: u32) -> bool {
-    let mut seen: BTreeSet<u32> = BTreeSet::new();
-    let mut cell = head;
-    while cell != v.nil {
-        if !seen.insert(cell) {
-            return false;
-        }
-        let Some(preds) = index.get(&cell) else {
-            return false;
-        };
-        if preds.get(&v.first).map_or(0, Vec::len) != 1 {
-            return false;
-        }
-        match preds.get(&v.rest) {
-            Some(rest) if rest.len() == 1 => cell = rest[0],
-            _ => return false,
-        }
-    }
-    true
+    index_list(index, v, head).is_ok()
 }
 
 /// The roles a transitivity axiom or a property chain makes NON-SIMPLE.
@@ -928,7 +904,8 @@ fn propagate(index: &TripleIndex, v: &Vocab, positions: &mut BTreeMap<u32, u8>) 
 ///
 /// Total by construction: a malformed collection yields the prefix it could walk rather
 /// than an error, because a malformed collection is separately reported as an OWL 2 DL
-/// violation and a certifier that refused to answer at all would be less useful than one
+/// violation (OWL 2 Mapping to RDF Graphs §3.2.1 requires every sequence to be a
+/// well-formed list) and a certifier that refused to answer at all would be less useful than one
 /// that answers conservatively.
 fn members(index: &TripleIndex, v: &Vocab, head: u32, key: u32) -> Vec<u32> {
     // `key` selects between walking an RDF collection from `head` (`rdf:first`) and reading
@@ -944,22 +921,8 @@ fn members(index: &TripleIndex, v: &Vocab, head: u32, key: u32) -> Vec<u32> {
             None => return Vec::new(),
         }
     };
-    let mut out = Vec::new();
-    let mut seen: BTreeSet<u32> = BTreeSet::new();
-    let mut cell = head;
-    while cell != v.nil && seen.insert(cell) {
-        let Some(preds) = index.get(&cell) else {
-            return out;
-        };
-        if let Some(first) = preds.get(&v.first).and_then(|f| f.first()) {
-            out.push(*first);
-        }
-        match preds.get(&v.rest).and_then(|r| r.first()) {
-            Some(&next) => cell = next,
-            None => return out,
-        }
-    }
-    out
+    // The recovered reading: the members the strict walker read before it stopped.
+    index_list(index, v, head).unwrap_or_else(|error| error.members)
 }
 
 /// The class-expression constructor a node carries, if it is a class expression.

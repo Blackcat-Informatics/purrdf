@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-hash"
-description = "Native, zero-dependency hashing for PurRDF: BLAKE3, MD5, SHA-1, SHA-3/Keccak and CRC-32 digests, streaming and one-shot, lowercase hex rendering, and the fixed-key table hasher"
+description = "Native, zero-dependency hashing for PurRDF: BLAKE3, MD5, SHA-1, SHA-3/Keccak and CRC-32 digests, streaming and one-shot, the base16 codec and 32-byte digest value, the fixed-key table hasher, FNV-1a and SplitMix64"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -12,7 +12,7 @@ homepage.workspace = true
 documentation = "https://docs.rs/purrdf-hash"
 rust-version.workspace = true
 keywords = ["blake3", "sha3", "crc32", "hash", "digest"]
-categories = ["algorithms", "cryptography", "no-std::no-alloc"]
+categories = ["algorithms", "cryptography", "encoding"]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -21,61 +21,21 @@ all-features = true
 workspace = true
 
 [lib]
-# rlib-only, ZERO runtime dependencies: a leaf foundation like purrdf-iri,
-# purrdf-xsd and purrdf-events, held to that by `make rdf-core-hygiene`. Pure
-# integer arithmetic over caller-supplied bytes: no allocation, no threads, no
-# filesystem, no clock, no entropy, so it is wasm32-clean on every target.
+# rlib-only, ZERO runtime dependencies: the root of layers.toml, which every
+# crate may depend on, held to that by `make rdf-core-hygiene`. Pure integer
+# arithmetic over caller-supplied bytes (the base16 functions that return an
+# owned String or Vec allocate only that value): no threads, no filesystem,
+# no clock, no entropy, so it is wasm32-clean on every target.
 crate-type = ["rlib"]
 path = "src/lib.rs"
 name = "purrdf_hash"
 
 [dev-dependencies]
 purrdf-alloc-probe = { workspace = true }
-# The frozen differential vectors, the deterministic input stream they are
-# drawn from, and the `harness = false` runner `tests/fixed_hasher.rs` runs on,
-# natively and on wasm32-unknown-unknown alike. Path-only and unpublished, so
-# it is stripped from the packaged manifest; the zero-dep leaf gate checks
-# normal edges only.
-purrdf-testkit = { workspace = true }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-# Digest and hasher throughput baselines. DEV-DEPENDENCY ONLY, and native-only:
-# `make wasm-test` builds this crate's wasm32 test target, cargo builds every
-# declared dev-dependency for it, and criterion is not wasm32-clean.
-criterion = { workspace = true }
-
-[[bench]]
-name = "digests"
-harness = false
-
-[[bench]]
-name = "hasher"
-harness = false
-
-# The frozen-vector replay runs on purrdf_testkit's `harness = false` runner so
-# the same named cases run natively under `cargo test` and on
-# wasm32-unknown-unknown in Node under scripts/wasm-test-runner.sh
-# (`make wasm-test`).
-[[test]]
-name = "digest_differential"
-harness = false
-
-# Base16 rendering: RFC 4648 vectors and every encoding path against the
-# portable one. On the same runner, so `make wasm-test` executes the wasm32
-# `simd128` kernel as well as the portable path.
-[[test]]
-name = "hex"
-harness = false
-
-# The one test in this crate that must EXECUTE on wasm32-unknown-unknown: the
-# portable hasher's frozen answers, which wasm32 computes from 32-bit halves.
-# `harness = false` on the shared runner, so `make wasm-test` runs the same
-# named cases in Node through scripts/wasm-test-runner.sh.
-[[test]]
-name = "fixed_hasher"
-harness = false
-
-# Streaming tree boundaries replay the same frozen answers on native and wasm.
-[[test]]
-name = "blake3"
-harness = false
+# The frozen-vector suites (digest differentials, BLAKE3 streaming boundaries,
+# base16 rendering, the table hasher's self-vectors and quality), the digest and
+# base16 throughput bench and the table hasher's latency bench live in the
+# unpublished `purrdf-hash-conformance`:
+# they run on purrdf-testkit, which depends on this crate, so a dev-dependency
+# on it here would close a cycle.

@@ -1,12 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use super::super::selection::{GraphSelection, SubjectSelector};
+use crate::projections::util::validated;
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Deserializer, Serialize};
+use purrdf_lex::json::{Object, Value};
 
 use super::super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
 use crate::native_codecs::okf::{MAX_OKF_BUNDLE_BYTES, MAX_OKF_DOCUMENT_BYTES, MAX_OKF_DOCUMENTS};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
+use purrdf_lex::json_string_enum;
 
 /// Stable unified-projection profile name for caller-curated OKF bundles.
 pub const OKF_TERMS_PROFILE: &str = "okf-terms";
@@ -21,181 +25,13 @@ const STANDARD_KEYS: [&str; 6] = [
 ];
 
 /// Explicit RDF graph scope used for concept discovery and mapped values.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", tag = "kind", deny_unknown_fields)]
-pub enum OkfGraphSelection {
-    /// Read the default graph and every declared named graph as one semantic view.
-    All,
-    /// Read exactly the caller-selected default/named graph identities.
-    Include {
-        /// Whether default-graph statements are in scope.
-        default_graph: bool,
-        /// Exact named-graph IRIs in scope.
-        named_graphs: BTreeSet<String>,
-    },
-}
-
-impl OkfGraphSelection {
-    /// Construct and validate an exact graph selection.
-    ///
-    /// # Errors
-    ///
-    /// Returns a configuration error for an empty scope or relative named-graph IRI.
-    pub fn include(
-        default_graph: bool,
-        named_graphs: BTreeSet<String>,
-    ) -> Result<Self, ProjectionError> {
-        let selection = Self::Include {
-            default_graph,
-            named_graphs,
-        };
-        selection.validate()?;
-        Ok(selection)
-    }
-
-    pub(crate) fn validate(&self) -> Result<(), ProjectionError> {
-        if let Self::Include {
-            default_graph,
-            named_graphs,
-        } = self
-        {
-            if !default_graph && named_graphs.is_empty() {
-                return Err(ProjectionError::configuration(
-                    "OKF graph selection must include at least one graph",
-                ));
-            }
-            for graph in named_graphs {
-                validate_absolute_iri(graph, "OKF selected named graph")?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Whether the default graph is selected.
-    pub fn includes_default_graph(&self) -> bool {
-        matches!(
-            self,
-            Self::All
-                | Self::Include {
-                    default_graph: true,
-                    ..
-                }
-        )
-    }
-
-    /// Whether a resolved named-graph IRI is selected.
-    pub fn includes_named_graph(&self, graph: &str) -> bool {
-        match self {
-            Self::All => true,
-            Self::Include { named_graphs, .. } => named_graphs.contains(graph),
-        }
-    }
-}
+pub type OkfGraphSelection = GraphSelection;
 
 /// Caller-supplied type-set and IRI-prefix classifier for one OKF category.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OkfConceptSelector {
-    type_predicate: Option<String>,
-    any_types: BTreeSet<String>,
-    all_types: BTreeSet<String>,
-    none_types: BTreeSet<String>,
-    iri_prefixes: BTreeSet<String>,
-}
-
-impl OkfConceptSelector {
-    /// Construct a validated declarative concept classifier.
-    ///
-    /// Empty type sets leave type unconstrained. Empty IRI prefixes accept every
-    /// RDF subject kind; a non-empty prefix set accepts only matching IRI subjects.
-    /// A type predicate is required exactly when a type constraint is present.
-    ///
-    /// # Errors
-    ///
-    /// Returns a configuration error for incomplete, contradictory, or relative
-    /// IRI policy.
-    pub fn new(
-        type_predicate: Option<String>,
-        any_types: BTreeSet<String>,
-        all_types: BTreeSet<String>,
-        none_types: BTreeSet<String>,
-        iri_prefixes: BTreeSet<String>,
-    ) -> Result<Self, ProjectionError> {
-        let selector = Self {
-            type_predicate,
-            any_types,
-            all_types,
-            none_types,
-            iri_prefixes,
-        };
-        selector.validate()?;
-        Ok(selector)
-    }
-
-    /// Predicate whose IRI objects define classifier type membership.
-    pub fn type_predicate(&self) -> Option<&str> {
-        self.type_predicate.as_deref()
-    }
-
-    /// Types of which at least one must be present, when non-empty.
-    pub const fn any_types(&self) -> &BTreeSet<String> {
-        &self.any_types
-    }
-
-    /// Types all of which must be present.
-    pub const fn all_types(&self) -> &BTreeSet<String> {
-        &self.all_types
-    }
-
-    /// Types none of which may be present.
-    pub const fn none_types(&self) -> &BTreeSet<String> {
-        &self.none_types
-    }
-
-    /// Allowed subject-IRI prefixes; empty accepts every RDF subject kind.
-    pub const fn iri_prefixes(&self) -> &BTreeSet<String> {
-        &self.iri_prefixes
-    }
-
-    pub(crate) fn validate(&self) -> Result<(), ProjectionError> {
-        let constrained =
-            !(self.any_types.is_empty() && self.all_types.is_empty() && self.none_types.is_empty());
-        if constrained != self.type_predicate.is_some() {
-            return Err(ProjectionError::configuration(
-                "OKF concept selector requires type_predicate exactly when type constraints are present",
-            ));
-        }
-        if let Some(predicate) = &self.type_predicate {
-            validate_absolute_iri(predicate, "OKF concept type predicate")?;
-        }
-        for (role, values) in [
-            ("required-any type", &self.any_types),
-            ("required-all type", &self.all_types),
-            ("excluded type", &self.none_types),
-        ] {
-            for value in values {
-                validate_absolute_iri(value, &format!("OKF selector {role}"))?;
-            }
-        }
-        if self
-            .none_types
-            .iter()
-            .any(|value| self.any_types.contains(value) || self.all_types.contains(value))
-        {
-            return Err(ProjectionError::configuration(
-                "OKF concept selector cannot both require and exclude the same type",
-            ));
-        }
-        for prefix in &self.iri_prefixes {
-            validate_absolute_iri(prefix, "OKF concept subject IRI prefix")?;
-        }
-        Ok(())
-    }
-}
+pub type OkfConceptSelector = SubjectSelector;
 
 /// Caller-authored category metadata and classifier.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OkfCategory {
     directory: String,
     document_type: String,
@@ -264,8 +100,7 @@ impl OkfCategory {
 }
 
 /// Deterministic bundle path identity strategy.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", tag = "kind", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OkfPathStrategy {
     /// Use the fragment or final path segment of an IRI subject as a strict stem.
     SubjectLocalName,
@@ -334,8 +169,7 @@ impl OkfPathStrategy {
 }
 
 /// Total textual rendering for arbitrary RDF 1.2 term values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OkfTermRendering {
     /// Human-oriented lexical text: full IRI, blank label, literal lexical form,
     /// or recursively rendered quoted-triple syntax.
@@ -345,8 +179,7 @@ pub enum OkfTermRendering {
 }
 
 /// Typed scalar policy for one mapped RDF object.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", tag = "kind", deny_unknown_fields)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OkfValueMode {
     /// Always emit a YAML string using a total RDF-term renderer.
     Text {
@@ -366,8 +199,7 @@ pub enum OkfValueMode {
 }
 
 /// Output cardinality and missing-value policy for one mapped field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OkfCardinality {
     /// Omit the field when absent and reject more than one distinct value.
     ZeroOrOne,
@@ -378,8 +210,7 @@ pub enum OkfCardinality {
 }
 
 /// Predicate set, cardinality, and value policy for one output field.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OkfFieldMapping {
     predicates: BTreeSet<String>,
     cardinality: OkfCardinality,
@@ -457,8 +288,7 @@ impl OkfFieldMapping {
 }
 
 /// Caller-owned policy for the standard `resource` frontmatter field.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", tag = "kind", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OkfResourceMapping {
     /// Omit `resource` for every concept.
     Omit,
@@ -496,8 +326,7 @@ impl OkfResourceMapping {
 }
 
 /// Complete mapping for standard and producer-defined OKF frontmatter.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OkfFrontmatterMappings {
     title: Option<OkfFieldMapping>,
     description: Option<OkfFieldMapping>,
@@ -527,16 +356,17 @@ impl OkfFrontmatterMappings {
         timestamp: Option<OkfFieldMapping>,
         extensions: BTreeMap<String, OkfFieldMapping>,
     ) -> Result<Self, ProjectionError> {
-        let mappings = Self {
-            title,
-            description,
-            resource,
-            tags,
-            timestamp,
-            extensions,
-        };
-        mappings.validate()?;
-        Ok(mappings)
+        validated(
+            Self {
+                title,
+                description,
+                resource,
+                tags,
+                timestamp,
+                extensions,
+            },
+            Self::validate,
+        )
     }
 
     /// Optional title mapping.
@@ -609,8 +439,7 @@ impl OkfFrontmatterMappings {
 }
 
 /// How mapped body values are represented before Markdown layout.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", tag = "kind", deny_unknown_fields)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OkfBodyValueMode {
     /// Render every RDF term to escaped Markdown text.
     Text {
@@ -622,8 +451,7 @@ pub enum OkfBodyValueMode {
 }
 
 /// Structural layout for values in a body or link section.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OkfBodyStyle {
     /// One value per paragraph.
     Paragraphs,
@@ -632,8 +460,7 @@ pub enum OkfBodyStyle {
 }
 
 /// Caller-authored Markdown body section backed by one or more predicates.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OkfBodySection {
     heading: Option<String>,
     predicates: BTreeSet<String>,
@@ -654,14 +481,15 @@ impl OkfBodySection {
         style: OkfBodyStyle,
         value_mode: OkfBodyValueMode,
     ) -> Result<Self, ProjectionError> {
-        let section = Self {
-            heading,
-            predicates,
-            style,
-            value_mode,
-        };
-        section.validate()?;
-        Ok(section)
+        validated(
+            Self {
+                heading,
+                predicates,
+                style,
+                value_mode,
+            },
+            Self::validate,
+        )
     }
 
     /// Optional level-two Markdown heading.
@@ -694,8 +522,7 @@ impl OkfBodySection {
 }
 
 /// Which link targets a section renders.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OkfLinkTargetMode {
     /// Render only targets that are selected concept documents.
     InternalOnly,
@@ -704,8 +531,7 @@ pub enum OkfLinkTargetMode {
 }
 
 /// Link-destination policy for selected concept documents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OkfLinkPathStyle {
     /// Standard relative paths from the source document.
     Relative,
@@ -714,8 +540,7 @@ pub enum OkfLinkPathStyle {
 }
 
 /// Structural layout for one set of Markdown links.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OkfLinkStyle {
     /// One link per bullet.
     Bullets,
@@ -724,8 +549,7 @@ pub enum OkfLinkStyle {
 }
 
 /// Caller-authored Markdown link section backed by RDF predicates.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OkfLinkSection {
     heading: Option<String>,
     predicates: BTreeSet<String>,
@@ -754,16 +578,17 @@ impl OkfLinkSection {
         path_style: OkfLinkPathStyle,
         targets: OkfLinkTargetMode,
     ) -> Result<Self, ProjectionError> {
-        let section = Self {
-            heading,
-            predicates,
-            relation_label,
-            style,
-            path_style,
-            targets,
-        };
-        section.validate()?;
-        Ok(section)
+        validated(
+            Self {
+                heading,
+                predicates,
+                relation_label,
+                style,
+                path_style,
+                targets,
+            },
+            Self::validate,
+        )
     }
 
     /// Optional level-two Markdown heading.
@@ -809,8 +634,7 @@ impl OkfLinkSection {
 }
 
 /// Caller-authored root-index and in-band projection-fidelity prose.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OkfIndexConfig {
     root_heading: String,
     categories_heading: String,
@@ -880,7 +704,7 @@ impl OkfIndexConfig {
 }
 
 /// Complete mandatory configuration for the write-only `okf-terms` projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OkfGenerationConfig {
     graph_selection: OkfGraphSelection,
     categories: BTreeMap<String, OkfCategory>,
@@ -1070,44 +894,218 @@ impl OkfGenerationConfig {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawOkfGenerationConfig {
-    graph_selection: OkfGraphSelection,
-    categories: BTreeMap<String, OkfCategory>,
-    path_strategy: OkfPathStrategy,
-    frontmatter: OkfFrontmatterMappings,
-    body_sections: Vec<OkfBodySection>,
-    link_sections: Vec<OkfLinkSection>,
-    index: OkfIndexConfig,
-    limits: ProjectionLimits,
-    max_records: usize,
-    max_concepts: usize,
-    max_values_per_field: usize,
+json_string_enum!(OkfTermRendering {
+    Lexical => "lexical",
+    Canonical => "canonical",
+});
+
+json_string_enum!(OkfCardinality {
+    ZeroOrOne => "zero-or-one",
+    One => "one",
+    Many => "many",
+});
+
+json_string_enum!(OkfBodyStyle {
+    Paragraphs => "paragraphs",
+    Bullets => "bullets",
+});
+
+json_string_enum!(OkfLinkTargetMode {
+    InternalOnly => "internal-only",
+    IncludeExternalIris => "include-external-iris",
+});
+
+json_string_enum!(OkfLinkPathStyle {
+    Relative => "relative",
+    BundleAbsolute => "bundle-absolute",
+});
+
+json_string_enum!(OkfLinkStyle {
+    Bullets => "bullets",
+    Paragraphs => "paragraphs",
+});
+
+/// `{"kind": …}` plus the variant's members, and no other member.
+fn tagged(kind: &str) -> Object {
+    Object::new().with("kind", kind)
 }
 
-impl<'de> Deserialize<'de> for OkfGenerationConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawOkfGenerationConfig::deserialize(deserializer)?;
-        Self::new(
-            raw.graph_selection,
-            raw.categories,
-            raw.path_strategy,
-            raw.frontmatter,
-            raw.body_sections,
-            raw.link_sections,
-            raw.index,
-            raw.limits,
-            raw.max_records,
-            raw.max_concepts,
-            raw.max_values_per_field,
-        )
-        .map_err(serde::de::Error::custom)
+purrdf_lex::json_record!(OkfCategory as "struct OkfCategory" {
+    "directory" => directory: required,
+    "document_type" => document_type: required,
+    "index_heading" => index_heading: required,
+    "index_description" => index_description: required,
+    "selector" => selector: required,
+});
+
+impl FromJson for OkfPathStrategy {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum OkfPathStrategy")?;
+        let strategy =
+            match fields.tag("kind", &["subject-local-name", "predicate", "stable-hash"])? {
+                "subject-local-name" => Self::SubjectLocalName,
+                "predicate" => Self::Predicate {
+                    predicate: fields.required("predicate")?,
+                    rendering: fields.required("rendering")?,
+                },
+                _ => Self::StableHash {
+                    prefix: fields.required("prefix")?,
+                },
+            };
+        fields.deny_unknown()?;
+        Ok(strategy)
     }
 }
+
+impl ToJson for OkfPathStrategy {
+    fn to_json(&self) -> Value {
+        Value::Object(match self {
+            Self::SubjectLocalName => tagged("subject-local-name"),
+            Self::Predicate {
+                predicate,
+                rendering,
+            } => tagged("predicate")
+                .with("predicate", predicate.as_str())
+                .with("rendering", rendering.to_json()),
+            Self::StableHash { prefix } => tagged("stable-hash").with("prefix", prefix.as_str()),
+        })
+    }
+}
+
+impl FromJson for OkfValueMode {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum OkfValueMode")?;
+        let mode = match fields.tag(
+            "kind",
+            &["text", "iri", "boolean", "integer", "decimal", "date-time"],
+        )? {
+            "text" => Self::Text {
+                rendering: fields.required("rendering")?,
+            },
+            "iri" => Self::Iri,
+            "boolean" => Self::Boolean,
+            "integer" => Self::Integer,
+            "decimal" => Self::Decimal,
+            _ => Self::DateTime,
+        };
+        fields.deny_unknown()?;
+        Ok(mode)
+    }
+}
+
+impl ToJson for OkfValueMode {
+    fn to_json(&self) -> Value {
+        Value::Object(match self {
+            Self::Text { rendering } => tagged("text").with("rendering", rendering.to_json()),
+            Self::Iri => tagged("iri"),
+            Self::Boolean => tagged("boolean"),
+            Self::Integer => tagged("integer"),
+            Self::Decimal => tagged("decimal"),
+            Self::DateTime => tagged("date-time"),
+        })
+    }
+}
+
+purrdf_lex::json_record!(OkfFieldMapping as "struct OkfFieldMapping" {
+    "predicates" => predicates: required,
+    "cardinality" => cardinality: required,
+    "value_mode" => value_mode: required,
+});
+
+impl FromJson for OkfResourceMapping {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum OkfResourceMapping")?;
+        let resource = match fields.tag("kind", &["omit", "subject", "predicate"])? {
+            "omit" => Self::Omit,
+            "subject" => Self::Subject,
+            _ => Self::Predicate {
+                mapping: fields.required("mapping")?,
+            },
+        };
+        fields.deny_unknown()?;
+        Ok(resource)
+    }
+}
+
+impl ToJson for OkfResourceMapping {
+    fn to_json(&self) -> Value {
+        Value::Object(match self {
+            Self::Omit => tagged("omit"),
+            Self::Subject => tagged("subject"),
+            Self::Predicate { mapping } => tagged("predicate").with("mapping", mapping.to_json()),
+        })
+    }
+}
+
+purrdf_lex::json_record!(OkfFrontmatterMappings as "struct OkfFrontmatterMappings" {
+    "title" => title: optional,
+    "description" => description: optional,
+    "resource" => resource: required,
+    "tags" => tags: optional,
+    "timestamp" => timestamp: optional,
+    "extensions" => extensions: required,
+});
+
+impl FromJson for OkfBodyValueMode {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum OkfBodyValueMode")?;
+        let mode = match fields.tag("kind", &["text", "markdown-literal"])? {
+            "text" => Self::Text {
+                rendering: fields.required("rendering")?,
+            },
+            _ => Self::MarkdownLiteral,
+        };
+        fields.deny_unknown()?;
+        Ok(mode)
+    }
+}
+
+impl ToJson for OkfBodyValueMode {
+    fn to_json(&self) -> Value {
+        Value::Object(match self {
+            Self::Text { rendering } => tagged("text").with("rendering", rendering.to_json()),
+            Self::MarkdownLiteral => tagged("markdown-literal"),
+        })
+    }
+}
+
+purrdf_lex::json_record!(OkfBodySection as "struct OkfBodySection" {
+    "heading" => heading: optional,
+    "predicates" => predicates: required,
+    "style" => style: required,
+    "value_mode" => value_mode: required,
+});
+
+purrdf_lex::json_record!(OkfLinkSection as "struct OkfLinkSection" {
+    "heading" => heading: optional,
+    "predicates" => predicates: required,
+    "relation_label" => relation_label: optional,
+    "style" => style: required,
+    "path_style" => path_style: required,
+    "targets" => targets: required,
+});
+
+purrdf_lex::json_record!(OkfIndexConfig as "struct OkfIndexConfig" {
+    "root_heading" => root_heading: required,
+    "categories_heading" => categories_heading: required,
+    "fidelity_heading" => fidelity_heading: required,
+    "loss_declaration" => loss_declaration: required,
+});
+
+// Every member, then [`OkfGenerationConfig::new`]'s whole-profile checks.
+purrdf_lex::json_record!(OkfGenerationConfig as "struct OkfGenerationConfig" {
+    "graph_selection" => graph_selection: required,
+    "categories" => categories: required,
+    "path_strategy" => path_strategy: required,
+    "frontmatter" => frontmatter: required,
+    "body_sections" => body_sections: required,
+    "link_sections" => link_sections: required,
+    "index" => index: required,
+    "limits" => limits: required,
+    "max_records" => max_records: required,
+    "max_concepts" => max_concepts: required,
+    "max_values_per_field" => max_values_per_field: required,
+} => OkfGenerationConfig::new);
 
 pub(crate) fn validate_frontmatter_key(key: &str) -> Result<(), ProjectionError> {
     let mut chars = key.chars();
@@ -1186,6 +1184,7 @@ fn validate_single_line(value: &str, role: &str) -> Result<(), ProjectionError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_lex::json::record::{from_slice, to_vec};
 
     const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
     const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
@@ -1263,16 +1262,46 @@ mod tests {
     #[test]
     fn complete_configuration_round_trips_and_revalidates_json() {
         let config = config();
-        let bytes = serde_json::to_vec(&config).expect("serialize");
+        let bytes = to_vec(&config);
         assert_eq!(
-            serde_json::from_slice::<OkfGenerationConfig>(&bytes).expect("deserialize"),
+            from_slice::<OkfGenerationConfig>(&bytes).expect("deserialize"),
             config
         );
 
-        let mut value: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON");
-        value["categories"]["class"]["directory"] = serde_json::json!("../escape");
-        let invalid = serde_json::to_vec(&value).expect("invalid JSON bytes");
-        assert!(serde_json::from_slice::<OkfGenerationConfig>(&invalid).is_err());
+        let mut value = config.to_json();
+        value["categories"]["class"]["directory"] = Value::from("../escape");
+        assert!(OkfGenerationConfig::from_json(&value).is_err());
+    }
+
+    /// A field-less tagged variant is exactly its tag: a member beside the tag is
+    /// an unknown field, while the bare tag beside it is read.
+    #[test]
+    fn a_unit_tagged_variant_refuses_an_extra_member() {
+        let read = |text: &str| {
+            OkfResourceMapping::from_json(&purrdf_lex::json::read(text).expect("JSON"))
+        };
+        assert_eq!(
+            read(r#"{"kind":"subject","mapping":null}"#)
+                .expect_err("extra member")
+                .to_string(),
+            "unknown field `mapping`, expected `kind`"
+        );
+        assert_eq!(
+            read(r#"{"kind":"subject"}"#),
+            Ok(OkfResourceMapping::Subject)
+        );
+        assert!(
+            OkfGraphSelection::from_json(
+                &purrdf_lex::json::read(r#"{"kind":"all","default_graph":true}"#).expect("JSON")
+            )
+            .is_err()
+        );
+        assert_eq!(
+            OkfGraphSelection::from_json(
+                &purrdf_lex::json::read(r#"{"kind":"all"}"#).expect("JSON")
+            ),
+            Ok(OkfGraphSelection::All)
+        );
     }
 
     #[test]

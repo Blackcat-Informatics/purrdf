@@ -22,8 +22,6 @@
 //!   `http://shex.io/extensions/Test/` extension used by the shexTest suite:
 //!   `fail(...)` code fails, everything else (`print(...)`, no code) succeeds.
 
-use std::collections::HashMap;
-
 use purrdf_core::TermValue;
 
 use crate::ast::SemAct;
@@ -65,21 +63,15 @@ pub type SemActExtension<'a> = dyn Fn(&SemAct, &SemActContext) -> bool + 'a;
 /// Unregistered IRIs dispatch to a success no-op (see the module doc).
 #[derive(Default)]
 pub struct SemActRegistry<'a> {
-    extensions: HashMap<String, Box<SemActExtension<'a>>>,
+    extensions: purrdf_core::FastMap<String, Box<SemActExtension<'a>>>,
 }
 
 impl<'a> SemActRegistry<'a> {
-    /// An empty registry (every action is inert / succeeds).
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// A registry carrying the built-in `http://shex.io/extensions/Test/`
     /// extension.
     #[must_use]
     pub fn with_test() -> Self {
-        let mut registry = Self::new();
+        let mut registry = Self::default();
         registry.register(TEST_EXTENSION, Box::new(test_extension));
         registry
     }

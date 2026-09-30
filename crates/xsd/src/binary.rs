@@ -3,7 +3,7 @@
 
 //! Hand-rolled, zero-dependency codecs for `xsd:hexBinary` and `xsd:base64Binary`.
 //!
-//! Both are genuine **EXTEND** — not present in `oxsdatatypes`. The value space for
+//! The value space for
 //! both is a byte sequence; value-equality is byte equality. The two datatypes have
 //! DIFFERENT value spaces, so a hexBinary byte sequence and a base64Binary byte
 //! sequence with identical bytes are nonetheless INCOMPARABLE (different value spaces).
@@ -34,56 +34,26 @@ use crate::value::XsdError;
 /// - The string length must be even (two hex digits per byte).
 /// - The empty string is valid and decodes to an empty `Vec<u8>`.
 /// - Whitespace and any other non-hex character is a hard failure.
+///
+/// The lexical space is base16's either-case one, read by
+/// [`purrdf_hash::hex::decode`]; this function names the refusal in XSD terms.
 pub fn parse_hex(lexical: &str) -> Result<Vec<u8>, XsdError> {
-    let err = |reason| XsdError::InvalidLexical {
+    purrdf_hash::hex::decode(lexical).map_err(|error| XsdError::InvalidLexical {
         datatype: XsdDatatype::HexBinary,
         lexical: lexical.to_string(),
-        reason,
-    };
-
-    if !lexical.len().is_multiple_of(2) {
-        return Err(err("hexBinary lexical must have an even number of digits"));
-    }
-
-    let bytes_len = lexical.len() / 2;
-    let mut out = Vec::with_capacity(bytes_len);
-    let chars: &[u8] = lexical.as_bytes();
-
-    let mut i = 0;
-    while i < chars.len() {
-        let hi = hex_digit(chars[i])
-            .ok_or_else(|| err("non-hexadecimal character in hexBinary lexical"))?;
-        let lo = hex_digit(chars[i + 1])
-            .ok_or_else(|| err("non-hexadecimal character in hexBinary lexical"))?;
-        out.push((hi << 4) | lo);
-        i += 2;
-    }
-
-    Ok(out)
+        reason: match error {
+            purrdf_hash::hex::HexError::OddLength { .. } => {
+                "hexBinary lexical must have an even number of digits"
+            }
+            _ => "non-hexadecimal character in hexBinary lexical",
+        },
+    })
 }
 
-/// Decode a single ASCII hex character `[0-9A-Fa-f]` to its 4-bit nibble value,
-/// or `None` if the character is not a valid hex digit.
-#[inline]
-fn hex_digit(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        _ => None,
-    }
-}
-
-/// Encode a byte slice to XSD canonical hexBinary form (UPPERCASE hex, two chars per byte).
+/// Encode a byte slice to XSD canonical hexBinary form (UPPERCASE hex, two chars per byte):
+/// [`purrdf_hash::hex::encode_upper`].
 pub fn canonical_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        // Both indices are masked to 0..15 so the table lookup is always in-range.
-        out.push(char::from(HEX[(b >> 4) as usize]));
-        out.push(char::from(HEX[(b & 0x0F) as usize]));
-    }
-    out
+    purrdf_hash::hex::encode_upper(bytes)
 }
 
 // ── base64 codec ──────────────────────────────────────────────────────────────────
@@ -105,11 +75,7 @@ const BASE64_ALPHABET: &[u8; 64] =
 /// - Any character outside the alphabet is a hard failure.
 /// - The empty string (after stripping whitespace) is valid and decodes to empty `Vec<u8>`.
 pub fn parse_base64(lexical: &str) -> Result<Vec<u8>, XsdError> {
-    let err = |reason| XsdError::InvalidLexical {
-        datatype: XsdDatatype::Base64Binary,
-        lexical: lexical.to_string(),
-        reason,
-    };
+    let err = |reason| XsdError::invalid(XsdDatatype::Base64Binary, lexical, reason);
 
     // Strip ASCII whitespace first (XSD base64Binary lexical space permits it).
     let stripped: Vec<u8> = lexical
@@ -286,11 +252,11 @@ pub fn parse_binary(datatype: XsdDatatype, lexical: &str) -> Result<Vec<u8>, Xsd
     match datatype {
         XsdDatatype::HexBinary => parse_hex(lexical),
         XsdDatatype::Base64Binary => parse_base64(lexical),
-        _ => Err(XsdError::InvalidLexical {
+        _ => Err(XsdError::invalid(
             datatype,
-            lexical: lexical.to_string(),
-            reason: "parse_binary called with non-binary datatype",
-        }),
+            lexical,
+            "parse_binary called with non-binary datatype",
+        )),
     }
 }
 
@@ -299,6 +265,29 @@ pub fn parse_binary(datatype: XsdDatatype, lexical: &str) -> Result<Vec<u8>, Xsd
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_base64_matches_the_rfc_4648_test_vectors() {
+        // RFC 4648 §10, verbatim: the padding boundaries are where an encoder goes wrong,
+        // and every one of them is exercised here.
+        for (input, expected) in [
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            ("foob", "Zm9vYg=="),
+            ("fooba", "Zm9vYmE="),
+            ("foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(
+                canonical_base64(input.as_bytes()),
+                expected,
+                "input {input:?}"
+            );
+        }
+        // A byte outside ASCII exercises the high bits of the 24-bit group.
+        assert_eq!(canonical_base64(&[0xff, 0xef, 0xbf]), "/++/");
+    }
 
     // ── hexBinary positive ────────────────────────────────────────────────────────
 

@@ -216,23 +216,7 @@ impl BindingPattern {
 mod tests {
     use super::*;
 
-    // One step of the SplitMix64 mixing function — a pure, seed-driven integer
-    // hash with no ambient state.
-    use purrdf_testkit::rng::splitmix64_next as mix;
-
-    /// A deterministic permutation of `items` selected by `seed`.
-    ///
-    /// A Fisher-Yates shuffle driven by [`mix`]; the same `seed` always yields the
-    /// same order, on every target.
-    fn permute<T: Clone>(items: &[T], seed: u64) -> Vec<T> {
-        let mut out = items.to_vec();
-        let mut state = seed;
-        for i in (1..out.len()).rev() {
-            let j = (mix(&mut state) % (i as u64 + 1)) as usize;
-            out.swap(i, j);
-        }
-        out
-    }
+    use purrdf_testkit::rng::permute;
 
     /// The 8 arity-3 patterns (every subset of `{0,1,2}`), for exhaustive
     /// lattice-law coverage.

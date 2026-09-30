@@ -52,7 +52,10 @@
 //! ([`crate::unify`]'s `occurs_through`) a binary-searchable fast path instead of a
 //! structural walk on every call.
 
+use core::hash::BuildHasher;
+
 use hashbrown::HashTable;
+use purrdf_hash::fixed::FixedState;
 
 use crate::id::{MetaId, NodeId, SymId};
 
@@ -99,26 +102,6 @@ pub enum NodeData {
     },
 }
 
-/// The interning hash of one node's shape.
-///
-/// The fixed-key `FixedHasher`, exactly as [`crate::proof::ProofArena`]'s `term_hash` uses:
-/// seeded from constants rather than ambient entropy, which does not exist on
-/// `wasm32-unknown-unknown`. The table this feeds is never iterated.
-fn node_hash(data: &NodeData) -> u64 {
-    use core::hash::{Hash, Hasher};
-    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    data.hash(&mut hasher);
-    hasher.finish()
-}
-
-/// The interning hash of one symbol string.
-fn symbol_hash(symbol: &str) -> u64 {
-    use core::hash::{Hash, Hasher};
-    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    symbol.hash(&mut hasher);
-    hasher.finish()
-}
-
 /// Merge two already-sorted, already-deduplicated `MetaId` slices into one sorted,
 /// deduplicated `Vec`.
 fn merge_free_meta(left: &[MetaId], right: &[MetaId]) -> Vec<MetaId> {
@@ -157,11 +140,6 @@ pub struct TermDag {
 }
 
 impl TermDag {
-    /// A fresh, empty arena.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// The number of interned nodes.
     pub fn len(&self) -> usize {
         self.nodes.len()
@@ -180,13 +158,7 @@ impl TermDag {
     /// exactly as `crate::proof::ProofArena::term`'s are, so a foreign id is a
     /// programming error rather than a data state.
     pub fn data(&self, node: NodeId) -> &NodeData {
-        self.nodes.get(node.index()).unwrap_or_else(|| {
-            panic!(
-                "NodeId {node:?} was not minted by this arena (len {}): term ids are \
-                 per-arena handles and must never cross arena boundaries",
-                self.nodes.len()
-            )
-        })
+        node.slot_in(&self.nodes, "NodeId", "term")
     }
 
     /// `node`'s sorted, deduplicated set of free metavariables — O(1), since it is
@@ -196,13 +168,7 @@ impl TermDag {
     ///
     /// Panics if `node` was not minted by this arena.
     pub fn free_meta(&self, node: NodeId) -> &[MetaId] {
-        self.free_meta.get(node.index()).unwrap_or_else(|| {
-            panic!(
-                "NodeId {node:?} was not minted by this arena (len {}): term ids are \
-                 per-arena handles and must never cross arena boundaries",
-                self.nodes.len()
-            )
-        })
+        node.slot_in(&self.free_meta, "NodeId", "term")
     }
 
     /// Mint a fresh metavariable, and intern the [`NodeData::Meta`] node that
@@ -220,7 +186,7 @@ impl TermDag {
 
     /// Intern a symbol string, returning its dense [`SymId`].
     pub fn intern_symbol(&mut self, symbol: &str) -> SymId {
-        let hash = symbol_hash(symbol);
+        let hash = FixedState::new().hash_one(symbol);
         let symbols = &self.symbols;
         if let Some(&id) = self
             .symbols_by_content
@@ -231,8 +197,9 @@ impl TermDag {
         let id = SymId::from_index(self.symbols.len());
         self.symbols.push(symbol.to_owned());
         let symbols = &self.symbols;
-        self.symbols_by_content
-            .insert_unique(hash, id, |&id| symbol_hash(&symbols[id.index()]));
+        self.symbols_by_content.insert_unique(hash, id, |&id| {
+            FixedState::new().hash_one(&symbols[id.index()])
+        });
         id
     }
 
@@ -242,13 +209,7 @@ impl TermDag {
     ///
     /// Panics if `id` was not minted by this arena's symbol interner.
     pub fn symbol(&self, id: SymId) -> &str {
-        self.symbols.get(id.index()).unwrap_or_else(|| {
-            panic!(
-                "SymId {id:?} was not minted by this arena (len {}): symbol ids are \
-                 per-arena handles and must never cross arena boundaries",
-                self.symbols.len()
-            )
-        })
+        id.slot_in(&self.symbols, "SymId", "symbol")
     }
 
     /// Intern a [`NodeData::Leaf`] naming `symbol`.
@@ -311,7 +272,7 @@ impl TermDag {
     /// Intern `data`, returning the existing id if an identical node is already
     /// held, and caching its free-metavariable set on first insertion.
     fn intern(&mut self, data: NodeData) -> NodeId {
-        let hash = node_hash(&data);
+        let hash = FixedState::new().hash_one(&data);
         let nodes = &self.nodes;
         if let Some(&id) = self.by_content.find(hash, |&id| nodes[id.index()] == data) {
             return id;
@@ -321,8 +282,9 @@ impl TermDag {
         self.nodes.push(data);
         self.free_meta.push(cache);
         let nodes = &self.nodes;
-        self.by_content
-            .insert_unique(hash, id, |&id| node_hash(&nodes[id.index()]));
+        self.by_content.insert_unique(hash, id, |&id| {
+            FixedState::new().hash_one(&nodes[id.index()])
+        });
         id
     }
 }
@@ -334,7 +296,7 @@ mod tests {
     /// Interning the same leaf symbol twice yields the same `NodeId`.
     #[test]
     fn hash_consing_collapses_identical_leaves() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let a = dag.intern_leaf("https://example.org/a");
         let b = dag.intern_leaf("https://example.org/a");
         assert_eq!(a, b);
@@ -345,7 +307,7 @@ mod tests {
     /// differently-shaped application is a distinct node.
     #[test]
     fn hash_consing_collapses_identical_applications() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let f = dag.intern_leaf("f");
         let a = dag.intern_leaf("a");
         let b = dag.intern_leaf("b");
@@ -359,7 +321,7 @@ mod tests {
     /// Interning the same binder twice yields the same `NodeId`.
     #[test]
     fn hash_consing_collapses_identical_binders() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let forall = dag.intern_leaf("forall");
         let sort = dag.intern_leaf("thing");
         let body = dag.intern_bound(0, 0);
@@ -372,7 +334,7 @@ mod tests {
     /// calls to `fresh_meta` ever mint the same `MetaId`.
     #[test]
     fn fresh_meta_is_unique_and_self_free() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let (m1, n1) = dag.fresh_meta();
         let (m2, n2) = dag.fresh_meta();
         assert_ne!(m1, m2);
@@ -385,7 +347,7 @@ mod tests {
     /// children's — including the operator position.
     #[test]
     fn app_free_meta_is_the_union_of_children() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let f = dag.intern_leaf("f");
         let (m1, meta1) = dag.fresh_meta();
         let (m2, meta2) = dag.fresh_meta();
@@ -400,7 +362,7 @@ mod tests {
     /// the same rule an `App` follows.
     #[test]
     fn binder_free_meta_excludes_nothing() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let op = dag.intern_leaf("forall");
         let sort = dag.intern_leaf("thing");
         let (m, meta) = dag.fresh_meta();
@@ -412,7 +374,7 @@ mod tests {
     /// sets — none of them mentions a metavariable.
     #[test]
     fn leaves_free_variables_and_bound_occurrences_have_no_free_meta() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let leaf = dag.intern_leaf("a");
         let free = dag.intern_free("x");
         let bound = dag.intern_bound(0, 0);
@@ -425,7 +387,7 @@ mod tests {
     /// yields the same `SymId`.
     #[test]
     fn symbol_interning_round_trips() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let id = dag.intern_symbol("https://example.org/p");
         let again = dag.intern_symbol("https://example.org/p");
         assert_eq!(id, again);
@@ -436,7 +398,7 @@ mod tests {
     /// nodes: they occupy the same symbol interner but different `NodeData` shapes.
     #[test]
     fn free_and_leaf_over_the_same_symbol_are_distinct_nodes() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let leaf = dag.intern_leaf("x");
         let free = dag.intern_free("x");
         assert_ne!(leaf, free);
@@ -445,7 +407,7 @@ mod tests {
     /// `len`/`is_empty` track the number of DISTINCT interned nodes.
     #[test]
     fn len_and_is_empty_track_distinct_nodes() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         assert!(dag.is_empty());
         let a = dag.intern_leaf("a");
         assert_eq!(dag.len(), 1);
@@ -463,7 +425,7 @@ mod tests {
     /// internally consistent.
     #[test]
     fn fresh_meta_node_resolves_back_to_a_meta_shape() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let (meta, node) = dag.fresh_meta();
         assert_eq!(dag.data(node), &NodeData::Meta(meta));
     }

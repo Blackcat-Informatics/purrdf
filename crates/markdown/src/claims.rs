@@ -35,7 +35,7 @@ use std::collections::BTreeMap;
 use purrdf_core::embedding::ChunkingContractId;
 use purrdf_core::{ContentDigest, RdfLiteral, RdfTerm, RdfTriple, emit_term};
 
-use crate::identity::{citation_iri, node_iri_of_digest, structure_iri};
+use crate::identity::{SECTION_KIND, UNIT_KIND, citation_iri, node_iri_of_digest, structure_iri};
 use crate::model::{Document, Section, Span, Unit};
 use crate::profile::{Profile, Vocabulary};
 use crate::{Claim, ClaimKind};
@@ -79,12 +79,12 @@ pub fn render(document: &Document<'_>) -> Vec<Claim> {
             let span = s.heading_span();
             node_iri_of_digest(
                 &profile.vocabulary,
-                "section",
+                SECTION_KIND,
                 document.id(),
                 &contract,
                 span.start,
                 span.end,
-                &ContentDigest::of(&source.as_bytes()[span.start as usize..span.end as usize]),
+                &ContentDigest::of(&source.as_bytes()[span.range()]),
             )
         })
         .collect();
@@ -94,7 +94,7 @@ pub fn render(document: &Document<'_>) -> Vec<Claim> {
         .map(|u| {
             node_iri_of_digest(
                 &profile.vocabulary,
-                "unit",
+                UNIT_KIND,
                 document.id(),
                 &contract,
                 u.span().start,
@@ -239,7 +239,7 @@ fn citation_edges<'d>(
     let mut out: BTreeMap<usize, Vec<CitationEdge<'d>>> = BTreeMap::new();
     for row in document.citations() {
         let span = row.span();
-        let line = &source[span.start as usize..span.end as usize];
+        let line = &source[span.range()];
         // Minted before the node is addressed, because the node is
         // addressed *by* them: what a reifier reifies is part of what it
         // is, so one row read under two canon bases — or under two
@@ -332,7 +332,7 @@ fn section_claim(
     };
     let span = s.span();
     let heading_span = s.heading_span();
-    let heading_line = &source[heading_span.start as usize..heading_span.end as usize];
+    let heading_line = &source[heading_span.range()];
     let mut lines = vec![
         triple(me, crate::RDF_TYPE, &iri(class)),
         triple(me, &v.in_document, &iri(document_id)),

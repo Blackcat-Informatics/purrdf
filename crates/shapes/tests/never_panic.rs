@@ -9,6 +9,7 @@
 //! parse cannot become a spurious timeout. See `crates/rdf/tests/never_panic.rs`
 //! for the contract rationale.
 
+use purrdf_lex::json::{Number, Object, Value};
 use purrdf_shapes::engine::parse_shapes;
 use purrdf_shapes::json_schema::Namespaces;
 use purrdf_shapes::{
@@ -16,11 +17,6 @@ use purrdf_shapes::{
     parse_linkml,
 };
 use purrdf_testkit::prop::prelude::*;
-use serde_json::{Map, Number, Value};
-
-fn arbitrary_bytes() -> impl Strategy<Value = Vec<u8>> {
-    prop::collection::vec(any::<u8>(), 0..4096)
-}
 
 const NODE_EXPR_PREFIXES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
      @prefix ex: <http://example.org/ns#> .\n";
@@ -93,23 +89,25 @@ fn shared_named_sub_expression_is_not_a_cycle() {
 /// Structure-aware SHACL Turtle: real `sh:` shape fragments interleaved with
 /// noise, to reach the shape-graph interpreter, not just the Turtle lexer.
 fn structured_shapes() -> impl Strategy<Value = String> {
-    let fragments: Vec<&'static str> = vec![
-        "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
-        "@prefix ex: <https://example.org/> .\n",
-        "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
-        "ex:S a sh:NodeShape ; sh:targetClass ex:C .\n",
-        "ex:S sh:property [ sh:path ex:p ; sh:minCount 1 ] .\n",
-        "ex:S sh:property [ sh:path ex:p ; sh:datatype xsd:string ] .\n",
-        "ex:S sh:property [ sh:path ex:p ; sh:pattern \"^a+$\" ] .\n",
-        "ex:S sh:property [ sh:path ex:p ; sh:minCount \"notanint\" ] .\n",
-        "ex:S sh:node ex:S .\n",
-        "ex:S sh:property [ sh:path [ sh:inversePath ex:p ] ] .\n",
-        "\u{0}\u{1}",
-        "ex:S a sh:NodeShape ; sh:property",
-        "@prefix sh:",
-    ];
-    prop::collection::vec(prop::sample::select(fragments), 0..24).prop_map(|parts| parts.concat())
+    prop::sample::interleaved(SHAPES_FRAGMENTS.to_vec(), 24)
 }
+
+/// The fragments [`structured_shapes`] interleaves.
+const SHAPES_FRAGMENTS: [&str; 13] = [
+    "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
+    "@prefix ex: <https://example.org/> .\n",
+    "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    "ex:S a sh:NodeShape ; sh:targetClass ex:C .\n",
+    "ex:S sh:property [ sh:path ex:p ; sh:minCount 1 ] .\n",
+    "ex:S sh:property [ sh:path ex:p ; sh:datatype xsd:string ] .\n",
+    "ex:S sh:property [ sh:path ex:p ; sh:pattern \"^a+$\" ] .\n",
+    "ex:S sh:property [ sh:path ex:p ; sh:minCount \"notanint\" ] .\n",
+    "ex:S sh:node ex:S .\n",
+    "ex:S sh:property [ sh:path [ sh:inversePath ex:p ] ] .\n",
+    "\u{0}\u{1}",
+    "ex:S a sh:NodeShape ; sh:property",
+    "@prefix sh:",
+];
 
 fn arbitrary_json() -> impl Strategy<Value = Value> {
     let leaf = prop_oneof![
@@ -121,15 +119,14 @@ fn arbitrary_json() -> impl Strategy<Value = Value> {
     leaf.prop_recursive(5, 128, 8, |inner| {
         prop_oneof![
             prop::collection::vec(inner.clone(), 0..8).prop_map(Value::Array),
-            prop::collection::btree_map(prop::string::regex(".{0,24}"), inner, 0..8).prop_map(
-                |entries| { Value::Object(entries.into_iter().collect::<Map<String, Value>>()) }
-            ),
+            prop::collection::btree_map(prop::string::regex(".{0,24}"), inner, 0..8)
+                .prop_map(|entries| { Value::Object(entries.into_iter().collect::<Object>()) }),
         ]
     })
 }
 
 fn schema_import_config() -> SchemaImportConfig {
-    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+    use purrdf_xsd::datatype::XSD_NS as XSD;
     let namespaces = Namespaces::new(
         "ex",
         &[("ex".to_owned(), "https://example.org/".to_owned())],
@@ -153,7 +150,7 @@ prop_test! {
     #![prop_config(Config { cases: 256, ..Config::default() })]
 
     #[test]
-    fn parse_shapes_never_panics_raw(data in arbitrary_bytes()) {
+    fn parse_shapes_never_panics_raw(data in prop::collection::bytes(4096)) {
         if let Ok(text) = std::str::from_utf8(&data) {
             let _ = parse_shapes(text, None);
         }
@@ -166,12 +163,12 @@ prop_test! {
 
     #[test]
     fn import_json_schema_never_panics(value in arbitrary_json()) {
-        let input = serde_json::to_string(&value).expect("JSON value serializes");
+        let input = purrdf_lex::json::write_compact(&value);
         let _ = import_json_schema(&input, &schema_import_config());
     }
 
     #[test]
-    fn parse_linkml_never_panics(data in arbitrary_bytes()) {
+    fn parse_linkml_never_panics(data in prop::collection::bytes(4096)) {
         if let Ok(text) = std::str::from_utf8(&data) {
             let _ = parse_linkml(text);
         }
@@ -179,7 +176,7 @@ prop_test! {
 
     #[test]
     fn import_linkml_never_panics(section in 0_usize..4, value in arbitrary_json()) {
-        let mut document = serde_json::json!({
+        let mut document = purrdf_lex::json::read(r#"{
             "id": "https://example.org/schema/linkml",
             "name": "Generated-Schema",
             "metamodel_version": "1.11.0",
@@ -192,7 +189,8 @@ prop_test! {
             "enums": {},
             "slots": {},
             "types": {}
-        });
+        }"#)
+        .expect("literal");
         let section_name = ["classes", "enums", "slots", "types"][section];
         document[section_name]["Generated"] = value;
         if let Ok(document) = LinkmlDocument::from_value(document) {

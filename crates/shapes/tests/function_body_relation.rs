@@ -40,6 +40,10 @@
 //! triple" — so it is tested in all three of its states: declared-and-unregistered
 //! (refused, by name), undeclared (ordinary data), declared-and-registered (resolves).
 
+#[path = "support/relation.rs"]
+mod relation;
+
+use purrdf_sparql_eval::fixture::OneRowRelation;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -49,10 +53,7 @@ use purrdf_shapes::engine::validate_dataset;
 use purrdf_shapes::report::ValidationReport;
 use purrdf_shapes::sparql::{enter_parser_options_scope, enter_property_function_scope};
 use purrdf_sparql_algebra::ParserOptions;
-use purrdf_sparql_eval::{
-    BindingPattern, EvalError, IndexGeneration, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-    PropertyFunctionRegistry, ServiceLevel, Volatility,
-};
+use purrdf_sparql_eval::{PropertyFunctionRegistry, ServiceLevel};
 
 const EX: &str = "http://example.org/ns#";
 
@@ -68,75 +69,24 @@ const REL_SIBLING: &str = "http://example.org/rel/flaggedElsewhere";
 /// The generation the relation declares, so the receipt has something to carry.
 const GENERATION: &str = "flag-index@7";
 
-/// A relation over one fixed row, counting the invocations the engine makes.
-#[derive(Debug)]
-struct FlagRelation {
-    modes: [BindingPattern; 1],
-    opens: Arc<AtomicU64>,
-}
-
-#[derive(Debug)]
-struct FlagCursor {
-    rows: std::vec::IntoIter<PfRow>,
-}
-
-impl PfCursor for FlagCursor {
-    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
-        Ok(self.rows.next())
-    }
-
-    fn generation(&self) -> IndexGeneration {
-        IndexGeneration::declared(GENERATION)
-    }
-}
-
-impl PropertyFunction for FlagRelation {
-    fn volatility(&self) -> Volatility {
-        Volatility::Stable
-    }
-
-    fn arity(&self) -> PfArity {
-        PfArity::new(1, 1)
-    }
-
-    fn modes(&self) -> &[BindingPattern] {
-        &self.modes
-    }
-
-    fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
-        1
-    }
-
-    fn open(
-        &self,
-        _args: &PfArgs<'_>,
-        _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
-        self.opens.fetch_add(1, Ordering::Relaxed);
-        // The ONE fact that distinguishes the two focus nodes, and it exists nowhere
-        // in the data graph. Both positions are free (`$this`/`?node` pre-binding is a
-        // substitution, which the evaluation-order analysis does not see as a
-        // binding), so the row is emitted whole and the engine unifies it.
-        let rows = vec![vec![
-            TermValue::Iri(format!("{EX}a")),
-            TermValue::Iri(format!("{EX}yes")),
-        ]];
-        Ok(Box::new(FlagCursor {
-            rows: rows.into_iter(),
-        }))
-    }
-}
-
 /// A registry holding `REL`, plus the shared invocation counter.
 fn registry() -> (Arc<PropertyFunctionRegistry>, Arc<AtomicU64>) {
     let opens = Arc::new(AtomicU64::new(0));
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         REL.to_owned(),
-        Arc::new(FlagRelation {
-            modes: [BindingPattern::from_code("ff")],
-            opens: Arc::clone(&opens),
-        }),
+        // The ONE fact that distinguishes the two focus nodes, and it exists nowhere in
+        // the data graph. Both positions are free (`$this`/`?node` pre-binding is a
+        // substitution, which the evaluation-order analysis does not see as a binding),
+        // so the row is emitted whole and the engine unifies it.
+        Arc::new(OneRowRelation::new(
+            vec![
+                TermValue::Iri(format!("{EX}a")),
+                TermValue::Iri(format!("{EX}yes")),
+            ],
+            GENERATION,
+            Arc::clone(&opens),
+        )),
     );
     (Arc::new(registry), opens)
 }
@@ -171,8 +121,7 @@ fn data() -> Arc<RdfDataset> {
         "<{EX}a> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{EX}Thing> .\n\
          <{EX}b> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{EX}Thing> .\n"
     );
-    purrdf_shapes::text_ingest::parse_ntriples_to_dataset(&triples)
-        .unwrap_or_else(|errors| panic!("fixture data: {}", errors.join("\n")))
+    relation::ntriples(&triples)
 }
 
 /// Validate `shapes(predicate)` with `relations` installed.
@@ -778,67 +727,6 @@ fn a_registered_iri_reaches_its_relation_from_a_sparql_constraint_body() {
 // The attestation reaches the CALLER's receipt, observed on the SHACL surface
 // ---------------------------------------------------------------------------
 
-/// A relation that answers rows AND declares its index was not whole.
-#[derive(Debug)]
-struct PartialRelation {
-    modes: [BindingPattern; 1],
-    opens: Arc<AtomicU64>,
-}
-
-#[derive(Debug)]
-struct PartialCursor {
-    rows: std::vec::IntoIter<PfRow>,
-}
-
-impl PfCursor for PartialCursor {
-    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
-        Ok(self.rows.next())
-    }
-
-    fn generation(&self) -> IndexGeneration {
-        IndexGeneration::declared(GENERATION)
-    }
-
-    fn service_level(&self) -> ServiceLevel {
-        ServiceLevel::Incomplete {
-            reason: "shard-3 offline".to_owned(),
-        }
-    }
-}
-
-impl PropertyFunction for PartialRelation {
-    fn volatility(&self) -> Volatility {
-        Volatility::Stable
-    }
-
-    fn arity(&self) -> PfArity {
-        PfArity::new(1, 1)
-    }
-
-    fn modes(&self) -> &[BindingPattern] {
-        &self.modes
-    }
-
-    fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
-        1
-    }
-
-    fn open(
-        &self,
-        _args: &PfArgs<'_>,
-        _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
-        self.opens.fetch_add(1, Ordering::Relaxed);
-        let rows = vec![vec![
-            TermValue::Iri(format!("{EX}a")),
-            TermValue::Iri(format!("{EX}yes")),
-        ]];
-        Ok(Box::new(PartialCursor {
-            rows: rows.into_iter(),
-        }))
-    }
-}
-
 /// The witness crosses the function-body boundary onto the CALLER's governed receipt,
 /// observed through the SHACL surface rather than through the evaluator.
 ///
@@ -860,10 +748,19 @@ fn an_incomplete_index_declared_from_a_function_body_refuses_the_verdict() {
     let mut registry = PropertyFunctionRegistry::default();
     registry.register(
         REL,
-        Arc::new(PartialRelation {
-            modes: [BindingPattern::from_code("ff")],
-            opens: Arc::clone(&opens),
-        }),
+        Arc::new(
+            OneRowRelation::new(
+                vec![
+                    TermValue::Iri(format!("{EX}a")),
+                    TermValue::Iri(format!("{EX}yes")),
+                ],
+                GENERATION,
+                Arc::clone(&opens),
+            )
+            .with_service_level(ServiceLevel::Incomplete {
+                reason: "shard-3 offline".to_owned(),
+            }),
+        ),
     );
 
     let _relations = enter_property_function_scope(Arc::new(registry));

@@ -61,7 +61,7 @@ cargo lane:
 - every workspace crate version must match the tag version.
 
 After its initial record bootstrap, every version of every crate in the
-29-crate release set is published by that lane. Each existing crate record is locked on crates.io with *Require trusted
+31-crate release set is published by that lane. Each existing crate record is locked on crates.io with *Require trusted
 publishing* (`trustpub_only`), so an API token cannot publish a new version of
 any of them: crates.io answers with `403 Forbidden: New versions of this crate
 can only be published using Trusted Publishing`. A token has exactly one role
@@ -72,17 +72,19 @@ bootstrap works: the lane publishes up to the first crate that depends on a
 new one and stops cleanly, the token creates the new crate's record, Trusted
 Publishing is enabled on it, and the same run is resumed.
 
-Nine workspace members are deliberately never published to crates.io:
+Eleven workspace members are deliberately never published to crates.io:
 `purrdf-capi` (built via cargo-c, distributed as `libpurrdf`),
-`purrdf-sparql-conformance` (the test harness), `purrdf-cli` (the `purrdf`
+`purrdf-sparql-conformance` (the test harness), `purrdf-hash-conformance` (the
+frozen-vector suites of `purrdf-hash`), `purrdf-cli` (the `purrdf`
 binary), `purrdf-envelope-probe` (the micro-hardware envelope capture tool),
 `purrdf-bench` (benchmark tooling), `purrdf-alloc-probe` (the shared counting
 allocator the allocation tests and benches measure with), `purrdf-testkit` (the
 shared test support: goldens, temporary paths, frozen vectors and the
-`harness = false` runner), `wasm-link` (the wasm package's post-link step), and `purrdf-python` (the extension crate, which ships
-to PyPI via maturin instead).
+`harness = false` runner), `wasm-link` (the wasm package's post-link step),
+`helper-census` (the structural census behind the shared-helpers gate), and
+`purrdf-python` (the extension crate, which ships to PyPI via maturin instead).
 
-`purrdf-alloc-probe` and `purrdf-testkit` are the only two of the nine that
+`purrdf-alloc-probe` and `purrdf-testkit` are the only two of the eleven that
 published crates depend on, and they reach them solely through
 `[dev-dependencies]`. Their root `[workspace.dependencies]` entries are
 therefore path-only, with no `version` key, which is what makes cargo drop them

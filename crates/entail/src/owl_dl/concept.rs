@@ -302,10 +302,6 @@ pub(crate) struct ConceptTable {
     neg: Vec<Option<u32>>,
 }
 
-fn hash_concept(concept: &Concept) -> u64 {
-    purrdf_core::FastHasher::default().hash_one(concept)
-}
-
 impl ConceptTable {
     /// Intern `c` (normalized to NNF), returning its stable concept id.
     ///
@@ -318,7 +314,7 @@ impl ConceptTable {
 
     /// Intern an already-NNF concept (children recursed first).
     fn intern_nnf(&mut self, c: &Concept) -> u32 {
-        let hash = hash_concept(c);
+        let hash = purrdf_core::FastHasher::default().hash_one(c);
         if let Some(&id) = self
             .index
             .find(hash, |&id| self.concepts[id as usize] == *c)
@@ -351,8 +347,9 @@ impl ConceptTable {
         self.concepts.push(c.clone());
         self.decomp.push(decomp);
         self.neg.push(None);
-        self.index
-            .insert_unique(hash, id, |&id| hash_concept(&self.concepts[id as usize]));
+        self.index.insert_unique(hash, id, |&id| {
+            purrdf_core::FastHasher::default().hash_one(&self.concepts[id as usize])
+        });
         id
     }
 
@@ -372,7 +369,7 @@ impl ConceptTable {
     #[cfg(test)]
     pub(crate) fn find_id(&self, c: &Concept) -> Option<u32> {
         let c = c.clone().nnf();
-        let hash = hash_concept(&c);
+        let hash = purrdf_core::FastHasher::default().hash_one(&c);
         self.index
             .find(hash, |&id| self.concepts[id as usize] == c)
             .copied()
@@ -600,17 +597,9 @@ mod tests {
     /// A deterministic pseudo-random concept generator: a fixed-seed SplitMix64 walk over the
     /// variants, so the corpus below is byte-identical on every run and on every platform.
     /// No clock, no thread-local entropy, no floating point.
-    struct Gen(u64);
+    struct Gen(purrdf_testkit::rng::SplitMix64);
 
     impl Gen {
-        fn next(&mut self) -> u64 {
-            purrdf_testkit::rng::splitmix64_next(&mut self.0)
-        }
-
-        fn below(&mut self, bound: u64) -> u64 {
-            self.next() % bound
-        }
-
         /// A concept of at most `depth` nested constructors over a two-name, two-role,
         /// two-individual signature — small enough that duplicate and complementary members
         /// arise often, which is precisely what the canonicalization must survive. [`Gen::leaf`]
@@ -626,25 +615,25 @@ mod tests {
             if depth == 0 {
                 return self.leaf();
             }
-            match self.below(leaves + 8) {
+            match self.0.below(leaves + 8) {
                 0..=5 => self.leaf(),
                 6 => Concept::Not(Box::new(self.concept(depth - 1))),
                 7 => {
-                    let n = 1 + self.below(3);
+                    let n = 1 + self.0.below(3);
                     Concept::And((0..n).map(|_| self.concept(depth - 1)).collect())
                 }
                 8 => {
-                    let n = 1 + self.below(3);
+                    let n = 1 + self.0.below(3);
                     Concept::Or((0..n).map(|_| self.concept(depth - 1)).collect())
                 }
                 9 => Concept::Some(self.role(), Box::new(self.concept(depth - 1))),
                 10 => Concept::All(self.role(), Box::new(self.concept(depth - 1))),
                 11 => {
-                    let n = u32::try_from(self.below(3)).expect("a count below three fits u32");
+                    let n = u32::try_from(self.0.below(3)).expect("a count below three fits u32");
                     Concept::Min(n, self.role(), Box::new(self.concept(depth - 1)))
                 }
                 12 => {
-                    let n = u32::try_from(self.below(3)).expect("a count below three fits u32");
+                    let n = u32::try_from(self.0.below(3)).expect("a count below three fits u32");
                     Concept::Max(n, self.role(), Box::new(self.concept(depth - 1)))
                 }
                 _ => Concept::SelfRestriction(self.role()),
@@ -652,13 +641,15 @@ mod tests {
         }
 
         fn leaf(&mut self) -> Concept {
-            match self.below(6) {
+            match self.0.below(6) {
                 0 => Concept::Top,
                 1 => Concept::Bottom,
                 2 => Concept::Nominal(vec![
-                    u32::try_from(self.below(2)).expect("an index below two fits u32"),
+                    u32::try_from(self.0.below(2)).expect("an index below two fits u32"),
                 ]),
-                3 => Concept::Data(u32::try_from(self.below(2)).expect("an index below two fits")),
+                3 => {
+                    Concept::Data(u32::try_from(self.0.below(2)).expect("an index below two fits"))
+                }
                 other => {
                     Concept::Named(u32::try_from(other).expect("a small index fits u32") - 4 + 10)
                 }
@@ -666,7 +657,7 @@ mod tests {
         }
 
         fn role(&mut self) -> Role {
-            if self.below(2) == 0 {
+            if self.0.below(2) == 0 {
                 Role::Named(20)
             } else {
                 Role::Inv(21)
@@ -678,7 +669,7 @@ mod tests {
     fn corpus() -> Vec<Concept> {
         let mut out = Vec::new();
         for seed in [1u64, 0x5EED, 0xC0FF_EE00, 0xDEAD_BEEF] {
-            let mut g = Gen(seed);
+            let mut g = Gen(purrdf_testkit::rng::SplitMix64::new(seed));
             for _ in 0..250 {
                 out.push(g.concept(4));
             }

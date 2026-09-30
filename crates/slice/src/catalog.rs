@@ -11,9 +11,11 @@ use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 
 use purrdf::RdfDataset;
+use purrdf_lex::json::{Object as JsonObject, Value as JsonValue};
 
 use crate::artifact::{ArtifactRecord, ArtifactRole};
 use crate::error::SliceError;
+use crate::json_form;
 use crate::rdf_query::{Dataset, Object};
 use crate::vocab::SliceVocab;
 
@@ -22,13 +24,13 @@ use crate::vocab::SliceVocab;
 // Only W3C/DCMI terms are hardcoded; every slice-framework term (`Slice`,
 // `sliceTier`, `sliceDependsOn`, …) comes from the caller's [`SliceVocab`].
 
-const RDFS_LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
+use purrdf_iri::vocab::rdfs::LABEL as RDFS_LABEL;
 const DCTERMS_TITLE: &str = "http://purl.org/dc/terms/title";
 const DCTERMS_CREATOR: &str = "http://purl.org/dc/terms/creator";
 const DCTERMS_IDENTIFIER: &str = "http://purl.org/dc/terms/identifier";
 
 /// The tier of a slice in the slice taxonomy.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SliceTier {
     /// A core slice (`<vocab>tierCore`).
     Core,
@@ -53,7 +55,7 @@ impl SliceTier {
 }
 
 /// A parsed view of the mandatory `manifest.ttl` fields.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestView {
     /// The IRI of the slice resource (`a <vocab>Slice`).
     pub slice_iri: String,
@@ -78,6 +80,77 @@ pub struct ManifestView {
     /// A named profile's membership is the closure of its declared members over
     /// this relation; docs reuse it for the same closure.
     pub depends_on: Vec<String>,
+}
+
+impl SliceTier {
+    /// The tier as JSON: a named tier is its variant name (`"Core"`), and
+    /// [`SliceTier::Unknown`] is `{"Unknown": <iri>}`.
+    pub fn to_json(&self) -> JsonValue {
+        match self {
+            Self::Core => JsonValue::from("Core"),
+            Self::Extension => JsonValue::from("Extension"),
+            Self::Domain => JsonValue::from("Domain"),
+            Self::Unknown(iri) => JsonValue::from(JsonObject::new().with("Unknown", iri)),
+        }
+    }
+
+    /// The tier [`SliceTier::to_json`] wrote.
+    ///
+    /// # Errors
+    ///
+    /// [`SliceError::Json`] for any other value.
+    pub fn from_json(value: &JsonValue) -> Result<Self, SliceError> {
+        match value.as_str() {
+            Some("Core") => Ok(Self::Core),
+            Some("Extension") => Ok(Self::Extension),
+            Some("Domain") => Ok(Self::Domain),
+            Some(other) => Err(SliceError::Json(format!("unknown slice tier `{other}`"))),
+            None => json_form::newtype_variant(value, "Unknown").map(Self::Unknown),
+        }
+    }
+}
+
+impl ManifestView {
+    /// The view as a JSON object whose members are its fields, in declaration
+    /// order; an absent optional field is `null`.
+    pub fn to_json(&self) -> JsonValue {
+        JsonValue::from(
+            JsonObject::new()
+                .with("slice_iri", &self.slice_iri)
+                .with("label", self.label.as_deref())
+                .with("title", self.title.as_deref())
+                .with("creators", self.creators.as_slice())
+                .with("identifier", self.identifier.as_deref())
+                .with("tier", self.tier.as_ref().map(SliceTier::to_json))
+                .with("consumers", self.consumers.as_slice())
+                .with("profiles", self.profiles.as_slice())
+                .with("depends_on", self.depends_on.as_slice()),
+        )
+    }
+
+    /// The view [`ManifestView::to_json`] wrote.
+    ///
+    /// # Errors
+    ///
+    /// [`SliceError::Json`] when a field is missing or has the wrong type.
+    pub fn from_json(value: &JsonValue) -> Result<Self, SliceError> {
+        let object = json_form::object(value, "a manifest view")?;
+        let tier = match object.get("tier") {
+            None | Some(JsonValue::Null) => None,
+            Some(tier) => Some(SliceTier::from_json(tier)?),
+        };
+        Ok(Self {
+            slice_iri: json_form::string(object, "slice_iri")?,
+            label: json_form::optional_string(object, "label")?,
+            title: json_form::optional_string(object, "title")?,
+            creators: json_form::strings(object, "creators")?,
+            identifier: json_form::optional_string(object, "identifier")?,
+            tier,
+            consumers: json_form::strings(object, "consumers")?,
+            profiles: json_form::strings(object, "profiles")?,
+            depends_on: json_form::strings(object, "depends_on")?,
+        })
+    }
 }
 
 /// A fully-loaded slice record: manifest view, manifest IR dataset, and artifact
@@ -150,7 +223,10 @@ impl SliceCatalog {
         // Parse Turtle once into the native IR (lenient: accepts @x-purrdf-* lang tags).
         // The frozen dataset serves BOTH the manifest-view extraction and the
         // lossless `manifest_graph` — no store→IR round-trip.
-        let dataset = parse_manifest(&manifest_bytes, &manifest_path)?;
+        // Parsed under its own RFC-8089 retrieval IRI, so a manifest that spells a slice
+        // or a dependency as a relative reference resolves rather than hard-failing with
+        // the base sitting unused in the path.
+        let dataset = Dataset::parse_file(&manifest_bytes, &manifest_path)?;
 
         // Extract manifest view from the dataset.
         let manifest = extract_manifest_view(&dataset, vocab)?;
@@ -178,15 +254,6 @@ impl SliceCatalog {
     pub fn get(&self, iri: &str) -> Option<&SliceRecord> {
         self.records.iter().find(|r| r.manifest.slice_iri == iri)
     }
-}
-
-// ── Turtle parsing ────────────────────────────────────────────────────────────
-
-/// Parse a `manifest.ttl` under its own RFC-8089 retrieval IRI, so a manifest that
-/// spells a slice or a dependency as a relative reference resolves rather than
-/// hard-failing with the base sitting unused in `path`.
-fn parse_manifest(bytes: &[u8], path: &Path) -> Result<Dataset, SliceError> {
-    Dataset::parse_file(bytes, path)
 }
 
 // ── Manifest extraction ───────────────────────────────────────────────────────
@@ -290,7 +357,7 @@ fn find_slice_iri(ds: &Dataset, vocab: &SliceVocab) -> Result<String, SliceError
 }
 
 /// The string projection of an object term (a literal's lexical value; an IRI/blank
-/// rendered the way rdflib/oxigraph surfaced them through `.value()`).
+/// rendered as its IRI string or `_:label`).
 fn literal_value(term: &Object) -> String {
     match term {
         Object::Literal { value, .. } => value.clone(),
@@ -353,7 +420,8 @@ fn collect_artifacts(
         let raw_digest = hex_sha256(&content);
 
         let role = classify_role(&logical_path);
-        let media_type = infer_media_type(&logical_path);
+        let media_type =
+            purrdf_gts::files::media_type_for_path(Path::new(&logical_path)).to_string();
 
         // For RDF files, compute the semantic digest via canonical N-Triples.
         //
@@ -387,11 +455,7 @@ fn collect_artifacts(
 
 fn hex_sha256(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
-    format!("{}", purrdf_hash::hex::Lower(&digest))
-}
-
-fn parse_rdf_to_dataset(bytes: &[u8], path: &Path) -> Result<Dataset, SliceError> {
-    Dataset::parse_file(bytes, path)
+    purrdf_hash::hex::encode(&digest)
 }
 
 /// The semantic (canonical N-Triples) digest of one RDF artifact.
@@ -402,7 +466,7 @@ fn parse_rdf_to_dataset(bytes: &[u8], path: &Path) -> Result<Dataset, SliceError
 /// be RDF that does not parse, has no derivable retrieval IRI, or does not canonicalize
 /// is a defect in the slice, not an artifact without a semantic identity.
 fn compute_semantic_digest(bytes: &[u8], path: &Path) -> Result<String, SliceError> {
-    let dataset = parse_rdf_to_dataset(bytes, path)?;
+    let dataset = Dataset::parse_file(bytes, path)?;
 
     // Canonicalize blank-node labels BEFORE digesting. Parsing assigns blank-node IDs
     // non-deterministically, so a plain sorted-N-Triples digest would differ
@@ -413,7 +477,7 @@ fn compute_semantic_digest(bytes: &[u8], path: &Path) -> Result<String, SliceErr
     //
     // Native full RDFC-1.0: the `canonical_nquads_flat` projection flattens the
     // RDF 1.2 statement overlay back to plain `rdf:reifies`/annotation triples and
-    // canonicalizes that flat set, byte-identical to the prior oxigraph-quad path.
+    // canonicalizes that flat set.
     let canonical = dataset.canonical_nquads_flat().map_err(|error| {
         SliceError::Parse(format!(
             "canonicalize {} for its semantic digest: {error}",
@@ -465,22 +529,6 @@ fn classify_role(path: &str) -> ArtifactRole {
     ArtifactRole::Other(path.to_string())
 }
 
-fn infer_media_type(path: &str) -> String {
-    let ext = path.rsplit('.').next().unwrap_or("");
-    match ext {
-        "ttl" => "text/turtle",
-        "nt" => "application/n-triples",
-        "nq" => "application/n-quads",
-        "sparql" | "rq" => "application/sparql-query",
-        "md" => "text/markdown",
-        "yaml" | "yml" => "application/yaml",
-        "json" => "application/json",
-        "cff" => "application/yaml",
-        _ => "application/octet-stream",
-    }
-    .to_string()
-}
-
 // ── Recursive slice-dir discovery ─────────────────────────────────────────────
 
 fn find_slice_dirs(root: &Path) -> Result<Vec<PathBuf>, SliceError> {
@@ -512,6 +560,45 @@ fn find_slice_dirs_inner(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), Slice
 mod tests {
     use super::*;
 
+    #[test]
+    fn manifest_view_json_round_trips_every_tier() {
+        for tier in [
+            None,
+            Some(SliceTier::Core),
+            Some(SliceTier::Extension),
+            Some(SliceTier::Domain),
+            Some(SliceTier::Unknown("https://example.org/tierX".to_owned())),
+        ] {
+            let view = ManifestView {
+                slice_iri: "https://example.org/slice/a".to_owned(),
+                label: Some("A".to_owned()),
+                title: None,
+                creators: vec!["https://example.org/c".to_owned()],
+                identifier: None,
+                tier,
+                consumers: Vec::new(),
+                profiles: vec!["claims".to_owned()],
+                depends_on: vec!["https://example.org/slice/b".to_owned()],
+            };
+            assert_eq!(ManifestView::from_json(&view.to_json()).unwrap(), view);
+        }
+    }
+
+    #[test]
+    fn slice_tier_from_json_refuses_an_unknown_name_and_accepts_a_known_one() {
+        assert!(SliceTier::from_json(&JsonValue::from("Kernel")).is_err());
+        assert_eq!(
+            SliceTier::from_json(&JsonValue::from("Domain")).unwrap(),
+            SliceTier::Domain
+        );
+        let unknown = JsonValue::from(JsonObject::new().with("Unknown", "https://example.org/t"));
+        assert_eq!(
+            purrdf_lex::json::write_compact(&unknown),
+            r#"{"Unknown":"https://example.org/t"}"#
+        );
+        assert!(SliceTier::from_json(&unknown).is_ok());
+    }
+
     /// Fix 1: a manifest declaring two `a <vocab>Slice` subjects must hard-fail
     /// with `SliceError::InvalidManifest` naming both subjects. The vocabulary
     /// is caller-supplied; the fixture uses example.org.
@@ -527,7 +614,7 @@ mod tests {
         let dir = purrdf_testkit::TempDir::for_unit_test().expect("tempdir");
         let path = dir.path().join("manifest.ttl");
         std::fs::write(&path, ttl).expect("write the manifest");
-        let ds = parse_manifest(ttl.as_bytes(), &path).expect("should parse without error");
+        let ds = Dataset::parse_file(ttl.as_bytes(), &path).expect("should parse without error");
         let vocab = SliceVocab::for_namespace("https://example.org/vocab/");
         let result = find_slice_iri(&ds, &vocab);
         match result {

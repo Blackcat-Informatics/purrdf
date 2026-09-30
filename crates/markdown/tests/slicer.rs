@@ -5,7 +5,10 @@
 //! law, the concordance, identity, and the goldens a declared profile
 //! reproduces byte for byte.
 
+mod support;
+
 use std::collections::{BTreeMap, BTreeSet};
+use support::{SLICE_BASE, v};
 
 use purrdf_core::embedding::{
     AppliedStage, ChunkingContractId, CorpusTarget, DocumentTarget, EmbeddingError, TargetId,
@@ -30,14 +33,9 @@ const GUIDE_ID: &str = "https://example.org/doc/field-guide";
 const GUIDE_GOLDEN: &str = include_str!("fixtures/field-guide.nt");
 /// The same, with a canon base declared.
 const GUIDE_GOLDEN_CANON: &str = include_str!("fixtures/field-guide.canon.nt");
-const SLICE_BASE: &str = "https://example.org/slice/";
 const PROFILE_NAME: &str = "example-slice-md-v1";
 const CANON_BASE: &str = "https://example.org/canon#";
 const TITLE: &str = "A Field Guide to the Marrow Archipelago";
-
-fn v() -> Vocabulary {
-    Vocabulary::under(SLICE_BASE).expect("a vocabulary")
-}
 
 /// The declared profile: the goldens are minted under it.
 fn v1() -> Profile {
@@ -208,6 +206,8 @@ fn unescape(literal: &str) -> String {
             Some('n') => out.push('\n'),
             Some('r') => out.push('\r'),
             Some('t') => out.push('\t'),
+            Some('b') => out.push('\u{8}'),
+            Some('f') => out.push('\u{c}'),
             Some('"') => out.push('"'),
             Some('\\') => out.push('\\'),
             Some('u') => {
@@ -320,14 +320,6 @@ fn split_chains_before_a_heading(claims: &[Claim]) -> Vec<(Vec<&Claim>, &Claim)>
         }
     }
     out
-}
-
-/// The last scalar boundary at or before an offset.
-fn floor_boundary(text: &str, mut i: usize) -> usize {
-    while !text.is_char_boundary(i) {
-        i -= 1;
-    }
-    i
 }
 
 /// The model of a document under a profile.
@@ -3581,7 +3573,7 @@ fn at_the_narrowest_bounds_every_piece_stays_inside_the_bound_and_the_pieces_cov
                                     snapped_to_a_scalar_boundary += 1;
                                     assert_eq!(
                                         start,
-                                        floor_boundary(text, candidate),
+                                        text.floor_char_boundary(candidate),
                                         "with no line start to reach, the scalar boundary at or \
                                          before the candidate"
                                     );
@@ -3617,7 +3609,7 @@ fn at_the_narrowest_bounds_every_piece_stays_inside_the_bound_and_the_pieces_cov
                                 scalar_cuts += 1;
                                 assert_eq!(
                                     end,
-                                    floor_boundary(text, bound),
+                                    text.floor_char_boundary(bound),
                                     "with no newline the cut is the last scalar boundary at or \
                                      before the bound"
                                 );
@@ -5781,10 +5773,11 @@ fn the_reader_and_the_law_agree_on_the_heading_stack_over_generated_level_sequen
     for _ in 0..64 {
         let mut levels: Vec<u32> = Vec::with_capacity(8);
         for _ in 0..8 {
-            state = state
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            levels.push(u32::try_from((state >> 33) % 7).expect("a level under seven"));
+            let drawn = purrdf_testkit::rng::lcg64_next(
+                &mut state,
+                purrdf_testkit::rng::LCG64_MMIX_INCREMENT,
+            );
+            levels.push(u32::try_from((drawn >> 33) % 7).expect("a level under seven"));
         }
         the_reader_and_the_law_agree_on(&levels);
     }

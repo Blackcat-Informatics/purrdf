@@ -3,3 +3,20 @@
 
 # Keep clippy suggestions compatible with the declared MSRV.
 msrv = "1.98"
+
+# Byte determinism: std's `RandomState` seeds every map with per-process random
+# keys, so any iteration over such a map comes out in a different order on each
+# run, and `DefaultHasher`'s SipHash variant is explicitly unspecified across
+# Rust releases. Tables use the fixed-key `purrdf_hash::fixed::FixedState`
+# (`purrdf_core::FastMap`/`FastSet` where the crate depends on the kernel).
+disallowed-types = [
+    { path = "std::collections::hash_map::DefaultHasher", reason = "its SipHash variant is unspecified across Rust releases, so a value derived from it is not reproducible; hash with `purrdf_hash::fixed::FixedHasher` for tables, or a specified hash for anything that reaches output" },
+    { path = "std::collections::hash_map::RandomState", reason = "per-process random keys randomise iteration order and break byte determinism; use `purrdf_hash::fixed::FixedState` or `purrdf_core::FastMap`/`FastSet`" },
+    { path = "std::hash::RandomState", reason = "per-process random keys randomise iteration order and break byte determinism; use `purrdf_hash::fixed::FixedState` or `purrdf_core::FastMap`/`FastSet`" },
+]
+disallowed-methods = [
+    { path = "std::collections::HashMap::new", reason = "builds a `RandomState` map whose per-process seed randomises iteration order and breaks byte determinism; use `purrdf_core::FastMap::default()` or `HashMap::with_hasher(purrdf_hash::fixed::FixedState::new())`" },
+    { path = "std::collections::HashMap::with_capacity", reason = "builds a `RandomState` map whose per-process seed randomises iteration order and breaks byte determinism; use `HashMap::with_capacity_and_hasher(n, purrdf_hash::fixed::FixedState::new())`" },
+    { path = "std::collections::HashSet::new", reason = "builds a `RandomState` set whose per-process seed randomises iteration order and breaks byte determinism; use `purrdf_core::FastSet::default()` or `HashSet::with_hasher(purrdf_hash::fixed::FixedState::new())`" },
+    { path = "std::collections::HashSet::with_capacity", reason = "builds a `RandomState` set whose per-process seed randomises iteration order and breaks byte determinism; use `HashSet::with_capacity_and_hasher(n, purrdf_hash::fixed::FixedState::new())`" },
+]

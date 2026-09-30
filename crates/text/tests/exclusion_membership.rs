@@ -44,6 +44,11 @@ use purrdf_text::{
     TextIndexConfig, TextSearchRelation, explain, select,
 };
 
+#[path = "support/index.rs"]
+mod index_fixture;
+
+use index_fixture::subjects;
+
 /// The one predicate whose literals the fixture indexes.
 const NOTE: &str = "http://example.org/note";
 
@@ -115,22 +120,11 @@ fn index() -> Arc<TextIndex> {
     )
 }
 
-/// The analyzed tokens of `text` — the query side of the one pipeline the index
-/// side used, spelled the way the relation spells it.
-fn analyze(text: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    Analyzer::new().analyze(text, &mut tokens);
-    tokens
-        .into_iter()
-        .map(|token| token.text.into_owned())
-        .collect()
-}
-
 /// How many **distinct** terms a needle analyzes to, which is the number of
 /// membership lookups one candidate-bound invocation performs per document the
 /// bound subject occupies.
 fn distinct_terms(needle: &str) -> u64 {
-    let mut terms = analyze(needle);
+    let mut terms = Analyzer::new().terms(needle);
     terms.sort_unstable();
     terms.dedup();
     terms.len() as u64
@@ -169,20 +163,12 @@ fn invoke(
 fn streamed(index: &TextIndex, needle: &str) -> Vec<Scored> {
     select(
         index,
-        &analyze(needle),
+        &Analyzer::new().terms(needle),
         &PartitionFilter::unconstrained(),
         None,
         None,
     )
     .expect("the fixture needles rank")
-}
-
-/// The subject of every document of the index, in document-id order.
-fn subjects(index: &TextIndex) -> Vec<TermValue> {
-    index
-        .documents()
-        .map(|document| document.subject().clone())
-        .collect()
 }
 
 // ── 1. The point lookup, measured ────────────────────────────────────────────
@@ -396,7 +382,7 @@ fn the_point_score_is_the_streamed_score_exactly() {
     let mut nonzero = 0_usize;
 
     for needle in NEEDLES {
-        let terms = analyze(needle);
+        let terms = Analyzer::new().terms(needle);
         let stream = streamed(&index, needle);
         for document in 0..u32::try_from(subjects.len()).expect("the fixture is small") {
             let mut point = Fixed::ZERO;
@@ -656,7 +642,7 @@ fn a_possible_lookup_scores_one_document_whatever_the_corpus_holds() {
         let index = grown_index(filler);
         let candidates = select(
             &index,
-            &analyze(needle),
+            &Analyzer::new().terms(needle),
             &PartitionFilter::unconstrained(),
             None,
             None,

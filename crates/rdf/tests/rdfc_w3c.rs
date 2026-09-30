@@ -5,8 +5,8 @@
 //!
 //! The vendored W3C `rdf-canon` test suite (`tests/fixtures/rdfc/`, see
 //! `SOURCE.md`) is the acceptance gate for the native canonicalizer. Each
-//! `testNNN-in.nq` input is parsed with the native [`purrdf_rdf::parse_dataset`] codec
-//! (oxigraph-free), canonicalized graph-preservingly by
+//! `testNNN-in.nq` input is parsed with the native [`purrdf_rdf::parse_dataset`] codec,
+//! canonicalized graph-preservingly by
 //! [`purrdf_rdf::canonicalize_with`], and its canonical N-Quads compared to
 //! the expected `testNNN-rdfc10.nq`. Inputs WITHOUT an expected output are
 //! **negative** (poison / complexity-limit) tests that must abort rather than
@@ -33,6 +33,7 @@
 //! - A cheap [`w3c_inventory`] test guards against fixture loss (incl. the carved
 //!   heavy stems) without running any canonicalization.
 
+use purrdf_core::FastSet;
 use std::path::{Path, PathBuf};
 
 use purrdf_rdf::{CanonHash, NativeRdfFormat, canonicalize_with, parse_dataset};
@@ -68,15 +69,10 @@ fn hash_for(stem: &str) -> CanonHash {
     }
 }
 
-/// Stable FNV-1a hash of a test stem → shard id. Identical algorithm to
-/// `sparql_eval_parity.rs` so the sharding pattern is uniform across the codebase.
+/// A test stem's shard id: its stable FNV-1a digest ([`purrdf_hash::fnv`]) modulo
+/// the shard count.
 fn shard_of(stem: &str) -> usize {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in stem.as_bytes() {
-        h ^= u64::from(*b);
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    (h % NUM_SHARDS as u64) as usize
+    (purrdf_hash::fnv::fnv1a64(stem.as_bytes()) % NUM_SHARDS as u64) as usize
 }
 
 fn fixtures_dir() -> PathBuf {
@@ -315,7 +311,7 @@ fn w3c_inventory() {
 
     // The carved off-gate stems must still exist — otherwise heavy-vector coverage
     // would silently vanish (the off-gate test would run zero fixtures unnoticed).
-    let present: std::collections::HashSet<String> = inputs.iter().map(|p| stem_of(p)).collect();
+    let present: FastSet<String> = inputs.iter().map(|p| stem_of(p)).collect();
     for stem in HEAVY_OFFGATE_STEMS {
         assert!(
             present.contains(*stem),

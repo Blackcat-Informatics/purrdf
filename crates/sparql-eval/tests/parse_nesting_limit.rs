@@ -15,35 +15,20 @@
 //! what is asserted is that the deepest level that answers and the first that is
 //! refused are neighbours, not where they fall.
 
-use std::sync::Arc;
+mod support;
 
-use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, SparqlRequest, SparqlResult,
-    TermValue,
-};
+use purrdf_testkit::text::nested;
+use support::two_integer_objects;
+
+use purrdf_core::{RdfDiagnostic, SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::{EvalError, NativeSparqlEngine, QueryOptions};
 
 const EX: &str = "http://example.org/";
 
-/// `<s1> <p> 1` and `<s2> <p> 2`.
-fn dataset() -> Arc<RdfDataset> {
-    let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
-    for n in 1..=2 {
-        let s = builder.intern_iri(&format!("{EX}s{n}"));
-        let o = builder.intern_literal(RdfLiteral::typed(
-            n.to_string(),
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        builder.push_quad(s, p, o, None);
-    }
-    builder.freeze().expect("the fixture dataset")
-}
-
 /// The local names of the subjects `query` answers with, sorted, or the engine's
 /// diagnostic.
 fn subjects(query: &str) -> Result<Vec<String>, RdfDiagnostic> {
-    let dataset = dataset();
+    let dataset = two_integer_objects();
     let result = NativeSparqlEngine::new().query_with_options_view(
         &*dataset,
         SparqlRequest {
@@ -71,11 +56,6 @@ fn subjects(query: &str) -> Result<Vec<String>, RdfDiagnostic> {
 /// ([`EvalError::STACK_EXHAUSTED_CODE`]).
 fn is_stack_refusal(diagnostic: &RdfDiagnostic) -> bool {
     diagnostic.code == EvalError::STACK_EXHAUSTED_CODE
-}
-
-/// `open` written `n` times around `core`, closed by `close` written `n` times.
-fn nested(open: &str, core: &str, close: &str, n: usize) -> String {
-    format!("{}{core}{}", open.repeat(n), close.repeat(n))
 }
 
 /// A nesting shape, written `n` levels deep, and the subjects it must answer with: each
@@ -147,16 +127,6 @@ fn shapes() -> [Shape; 5] {
     ]
 }
 
-/// Run `body` on a thread with a `bytes`-sized stack.
-fn on_thread<T: Send + 'static>(bytes: usize, body: impl FnOnce() -> T + Send + 'static) -> T {
-    std::thread::Builder::new()
-        .stack_size(bytes)
-        .spawn(body)
-        .expect("spawn")
-        .join()
-        .expect("the thread returned rather than aborting")
-}
-
 /// The stack of a Linux process's main thread.
 const MAIN_THREAD: usize = 8 * 1024 * 1024;
 /// The stack Rust gives a spawned thread, and `cargo test` each test.
@@ -170,7 +140,7 @@ const SPAWNED_THREAD: usize = 2 * 1024 * 1024;
 #[test]
 fn every_shape_answers_at_128_500_and_1000_where_the_stack_holds_it() {
     for (lane, bytes) in [("8 MiB", MAIN_THREAD), ("2 MiB", SPAWNED_THREAD)] {
-        let outcomes = on_thread(bytes, || {
+        let outcomes = purrdf_stack::on_stack(bytes, || {
             let mut outcomes = Vec::new();
             for shape in shapes() {
                 for levels in [128, 500, 1_000] {
@@ -179,7 +149,8 @@ fn every_shape_answers_at_128_500_and_1000_where_the_stack_holds_it() {
                 }
             }
             outcomes
-        });
+        })
+        .expect("spawn");
         for (name, levels, outcome, answer) in outcomes {
             match outcome {
                 Ok(subjects) => assert_eq!(
@@ -208,7 +179,7 @@ fn every_shape_answers_at_128_500_and_1000_where_the_stack_holds_it() {
 #[test]
 fn the_deepest_answer_and_the_first_refusal_are_neighbours() {
     for (lane, bytes) in [("8 MiB", MAIN_THREAD), ("2 MiB", SPAWNED_THREAD)] {
-        on_thread(bytes, move || {
+        purrdf_stack::on_stack(bytes, move || {
             for shape in shapes() {
                 let answers = |levels: usize| subjects(&(shape.text)(levels));
                 let (mut deepest, mut refused) = (1_usize, 20_000_usize);
@@ -263,7 +234,8 @@ fn the_deepest_answer_and_the_first_refusal_are_neighbours() {
                     shape.name
                 );
             }
-        });
+        })
+        .expect("spawn");
     }
 }
 

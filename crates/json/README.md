@@ -24,8 +24,9 @@ assert_eq!(restored.as_bytes(), source.bytes);
 # Ok::<(), purrdf_json::JsonError>(())
 ```
 
-The same surface is always available as `purrdf::json`. The only runtime
-dependency is `purrdf-core`; the codec uses no files, clocks, randomness or
+The same surface is always available as `purrdf::json`. The runtime
+dependencies are `purrdf-core`, `purrdf-lex` (the JSON reader, string decoder
+and pointer tokens) and `purrdf-hash`; the codec uses no files, clocks, randomness or
 platform services and builds for `wasm32-unknown-unknown`.
 
 `analyze` borrows the original source and builds a validated occurrence model.

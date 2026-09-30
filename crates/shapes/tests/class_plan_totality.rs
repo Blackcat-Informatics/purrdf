@@ -22,25 +22,23 @@
 //!
 //! Test IRIs live under `example.org`.
 
+#[path = "support/terms.rs"]
+mod terms;
+
 use std::sync::Arc;
+use terms::ex_ns as ex;
 
 use purrdf_shapes::constraints::conforms;
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine::{parse_shapes, validate_dataset};
 use purrdf_shapes::shapes::Shape;
-use purrdf_shapes::term::{NamedNode, Term};
+use purrdf_shapes::term::NamedNode;
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 
 const PREFIXES: &str = r"
 @prefix ex: <http://example.org/ns#> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 ";
-
-fn ex(local: &str) -> Term {
-    Term::NamedNode(NamedNode::new_unchecked(format!(
-        "http://example.org/ns#{local}"
-    )))
-}
 
 // ── The believed-INVALID direction: a class the walk never planned ────────────
 

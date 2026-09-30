@@ -21,7 +21,8 @@
 //! emitter renders the nearest faithful ShExC (documented at each site) rather
 //! than failing.
 
-use core::fmt::Write as _;
+use purrdf_lex::literal_escape::{self, Carrier};
+use purrdf_lex::term_syntax;
 
 use crate::ast::{
     Annotation, IriExclusion, LanguageExclusion, LiteralExclusion, NodeConstraint, NodeKind,
@@ -505,35 +506,16 @@ fn iri_string(i: &str) -> String {
     s
 }
 
-/// `<…>` with every character an IRIREF forbids UCHAR-escaped.
+/// `<…>`, the body through [`purrdf_lex::term_syntax::write_iri`]: every scalar an
+/// `IRIREF` writer must escape rides as its `UCHAR`.
 fn iri(out: &mut String, i: &str) {
-    out.push('<');
-    for c in i.chars() {
-        match c {
-            '\u{0}'..='\u{20}' | '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' => {
-                let _ = write!(out, "\\u{:04X}", c as u32);
-            }
-            _ => out.push(c),
-        }
-    }
-    out.push('>');
+    term_syntax::write_iri(i, out);
 }
 
-/// A `"…"` string literal with the four control escapes and `"`/`\` escaped.
+/// A `"…"` string literal, the body escaped by the RDF 1.2 canonical literal
+/// escaper ([`Carrier::Canonical`]).
 fn string(out: &mut String, s: &str) {
     out.push('"');
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04X}", c as u32);
-            }
-            _ => out.push(c),
-        }
-    }
+    literal_escape::write(s, Carrier::Canonical, out);
     out.push('"');
 }

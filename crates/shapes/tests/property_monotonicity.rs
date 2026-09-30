@@ -50,7 +50,7 @@ ex:ThingShape a sh:NodeShape ;
     ] .
 "#;
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 const EX: &str = "https://example.org/";
 
 /// A single generated data assertion, rendered as one N-Triples line.
@@ -95,11 +95,6 @@ fn arb_fact() -> impl Strategy<Value = Fact> {
     ]
 }
 
-/// 64 cases, or `PURRDF_PROP_CASES` when set.
-fn config() -> Config {
-    Config::with_cases(prop::cases_from_env(64))
-}
-
 /// Non-vacuity guard: the shapes must actually fire, otherwise the monotonicity
 /// property would pass trivially on always-empty reports.
 #[test]
@@ -113,7 +108,7 @@ fn shapes_detect_violations() {
 }
 
 prop_test! {
-    #![prop_config(config())]
+    #![prop_config(Config::with_env_cases(64))]
 
     /// Adding data never removes a violation in the monotone fragment.
     #[test]

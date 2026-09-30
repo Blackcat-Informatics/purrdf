@@ -34,13 +34,14 @@
 //! seen — is an `Err`, never a silent skip. Only the merely out-of-order case
 //! resolves.
 
+use crate::gts_core::metadata_value_from_cbor;
 use crate::gts_import_blobs::BlobCollector;
-use ciborium::value::Value;
 use purrdf_core::cdt_blank::BlankBinding;
-use purrdf_core::hex;
 use purrdf_gts::model::{Diagnostic, OpaqueNode, Signature, StreamableInfo, Suppression};
 use purrdf_gts::reader::{BlobPayload, BlobRefusal, FrameContext};
 use purrdf_gts::segment_decode::{ResolvedSink, SegmentResolver};
+use purrdf_hash::hex;
+use purrdf_lex::cbor::Value;
 
 use crate::{
     BlankScope, GtsBundle, RdfDatasetBuilder, RdfDiagnostic, RdfEnvelope, RdfLiteral, RdfLocation,
@@ -223,26 +224,24 @@ impl ResolvedSink for SinkImporter<'_> {
     }
 
     fn err_nesting_limit(&self, segment_index: usize, gts_id: usize) -> RdfDiagnostic {
-        RdfDiagnostic::error(
-            "rdf-ir-term-nesting-limit",
-            "GTS triple-term nesting depth limit exceeded",
-        )
-        .with_location(
-            RdfLocation::logical("gts:sink")
-                .with_gts_segment(segment_index)
-                .with_gts_term(gts_id),
+        sink_term_error(
+            RdfDiagnostic::error(
+                "rdf-ir-term-nesting-limit",
+                "GTS triple-term nesting depth limit exceeded",
+            ),
+            segment_index,
+            gts_id,
         )
     }
 
     fn err_unbound_triple(&self, segment_index: usize, gts_id: usize) -> RdfDiagnostic {
-        RdfDiagnostic::error(
-            "rdf-ir-unbound-triple-term",
-            "GTS triple term names neither its own components nor a reifier",
-        )
-        .with_location(
-            RdfLocation::logical("gts:sink")
-                .with_gts_segment(segment_index)
-                .with_gts_term(gts_id),
+        sink_term_error(
+            RdfDiagnostic::error(
+                "rdf-ir-unbound-triple-term",
+                "GTS triple term names neither its own components nor a reifier",
+            ),
+            segment_index,
+            gts_id,
         )
     }
 
@@ -356,7 +355,7 @@ impl ResolvedSink for SinkImporter<'_> {
 
     fn opaque(&mut self, _segment_index: usize, opaque: &OpaqueNode) -> Result<(), RdfDiagnostic> {
         self.lookaside.opaque_nodes.push(RdfOpaqueNodeRecord {
-            id: hex::lower(&opaque.id),
+            id: hex::encode(&opaque.id),
             frame_type: opaque.frame_type.clone(),
             reason: opaque.reason.clone(),
             signature_status: opaque.sigstat.clone(),
@@ -371,7 +370,7 @@ impl ResolvedSink for SinkImporter<'_> {
         signature: &Signature,
     ) -> Result<(), RdfDiagnostic> {
         self.lookaside.signatures.push(RdfSignatureRecord {
-            frame_id: hex::lower(&signature.frame_id),
+            frame_id: hex::encode(&signature.frame_id),
             key_id: signature.kid.clone(),
             status: signature.status.clone(),
             has_cose: signature.cose.is_some(),
@@ -384,7 +383,7 @@ impl ResolvedSink for SinkImporter<'_> {
             blobs.segment_head(segment_index, head);
         }
         // Grow/patch the per-segment record with its head id.
-        self.ensure_segment_record(segment_index).head = Some(hex::lower(head));
+        self.ensure_segment_record(segment_index).head = Some(hex::encode(head));
         Ok(())
     }
 
@@ -434,38 +433,6 @@ impl ResolvedSink for SinkImporter<'_> {
                 None => location,
             }
         }))
-    }
-}
-
-/// Convert a CBOR [`Value`] into the crate's [`RdfMetadataValue`].
-fn metadata_value_from_cbor(value: &Value) -> RdfMetadataValue {
-    match value {
-        Value::Integer(integer) => RdfMetadataValue::Integer(i128::from(*integer)),
-        Value::Bytes(bytes) => RdfMetadataValue::Bytes(bytes.clone()),
-        Value::Float(value) => RdfMetadataValue::Float(*value),
-        Value::Text(value) => RdfMetadataValue::Text(value.clone()),
-        Value::Bool(value) => RdfMetadataValue::Bool(*value),
-        Value::Null => RdfMetadataValue::Null,
-        Value::Tag(tag, value) => RdfMetadataValue::Tagged {
-            tag: *tag,
-            value: Box::new(metadata_value_from_cbor(value)),
-        },
-        Value::Array(values) => {
-            RdfMetadataValue::Array(values.iter().map(metadata_value_from_cbor).collect())
-        }
-        Value::Map(entries) => RdfMetadataValue::Map(
-            entries
-                .iter()
-                .map(|(key, value)| {
-                    let key = match key {
-                        Value::Text(text) => text.clone(),
-                        other => format!("{other:?}"),
-                    };
-                    (key, metadata_value_from_cbor(value))
-                })
-                .collect(),
-        ),
-        other => RdfMetadataValue::Opaque(format!("{other:?}")),
     }
 }
 
@@ -549,6 +516,19 @@ pub(crate) fn import_with_collector<'a>(
     ))
 }
 
+/// `diagnostic`, located at segment `segment_index`'s term `gts_id` on the
+/// sink path.
+fn sink_term_error(
+    diagnostic: RdfDiagnostic,
+    segment_index: usize,
+    gts_id: usize,
+) -> RdfDiagnostic {
+    diagnostic.with_location(
+        RdfLocation::logical("gts:sink")
+            .with_gts_segment(segment_index)
+            .with_gts_term(gts_id),
+    )
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -618,14 +598,14 @@ mod tests {
     /// in the test harness, is fine — it is not the hot streaming path.
     struct RecordingSink {
         inner: SinkImporter<'static>,
-        ids: std::collections::HashMap<(usize, usize), TermId>,
+        ids: crate::FastMap<(usize, usize), TermId>,
     }
 
     impl RecordingSink {
         fn new() -> Self {
             Self {
                 inner: SinkImporter::new(),
-                ids: std::collections::HashMap::new(),
+                ids: crate::FastMap::default(),
             }
         }
 

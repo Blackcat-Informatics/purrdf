@@ -37,7 +37,3 @@ pub use parquet::Compression;
 pub use reader::{ColumnarRead, read};
 pub use schema::{ColumnSchema, PhysicalType, Repetition, Table, TableSchema};
 pub use writer::{ColumnarWrite, write};
-
-#[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;

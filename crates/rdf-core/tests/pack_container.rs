@@ -9,14 +9,14 @@
 //! rejecting a corrupted one (a flipped section byte, a flipped magic byte)
 //! fail-closed.
 
-use std::cell::Cell;
+use purrdf_core::term_fixture::{ProbeFault, RowBudget};
 use std::sync::Arc;
 
 use purrdf_core::ir::pack::container::{PackBuilder, PackCheckpoint, PackError, PackView};
 use purrdf_core::ir::pack::dict::PackDictError;
 use purrdf_core::{
     BlankScope, CompositeDatasetView, CompositeSource, DatasetMut, DatasetView,
-    FallibleDatasetView, GraphMatch, MutableDataset, QuadIds, QuadRef, QuadValues, RdfDataset,
+    FallibleDatasetView, GraphMatch, MutableDataset, QuadIds, QuadValues, RdfDataset,
     RdfDatasetBuilder, RdfLiteral, RdfStoreCapabilities, RdfTextDirection, TermId, TermRef,
     TermValue, ViewLimits, ViewOperationStatus, verify_pack,
 };
@@ -565,47 +565,20 @@ fn build_view_bytes_over_a_graph_selection_equals_the_equivalent_flat_dataset() 
     );
 }
 
-/// The typed root cause a [`BudgetedView`] reports once its row budget is gone.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ProbeFault(&'static str);
-
-impl std::fmt::Display for ProbeFault {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0)
-    }
-}
-
-impl std::error::Error for ProbeFault {}
-
 /// A view that yields `budget` rows and then faults the way an operational
 /// backend does: it STOPS YIELDING rather than erroring, so nothing about the
 /// row stream distinguishes the truncation from an honest end of stream and only
 /// the operational checkpoint can tell them apart.
 struct BudgetedView {
     inner: Arc<RdfDataset>,
-    budget: Cell<usize>,
-    faulted: Cell<bool>,
+    budget: RowBudget,
 }
 
 impl BudgetedView {
     fn new(inner: Arc<RdfDataset>, budget: usize) -> Self {
         Self {
             inner,
-            budget: Cell::new(budget),
-            faulted: Cell::new(false),
-        }
-    }
-
-    fn spend(&self) -> bool {
-        match self.budget.get().checked_sub(1) {
-            Some(left) => {
-                self.budget.set(left);
-                true
-            }
-            None => {
-                self.faulted.set(true);
-                false
-            }
+            budget: RowBudget::new(budget),
         }
     }
 }
@@ -615,16 +588,7 @@ impl DatasetView for BudgetedView {
     type ProbePlan = ();
 
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
-        self.inner.quads().take_while(|_| self.spend())
-    }
-
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
-        self.quads().map(|q| QuadRef {
-            s: self.resolve(q.s),
-            p: self.resolve(q.p),
-            o: self.resolve(q.o),
-            g: q.g.map(|g| self.resolve(g)),
-        })
+        self.budget.take(self.inner.quads())
     }
 
     fn resolve(&self, id: TermId) -> TermRef<'_> {
@@ -674,15 +638,7 @@ impl FallibleDatasetView for BudgetedView {
     type Evidence = usize;
 
     fn operation_status(&self) -> ViewOperationStatus<ProbeFault, usize> {
-        let evidence = self.budget.get();
-        if self.faulted.get() {
-            ViewOperationStatus::Failed {
-                error: ProbeFault("the probe view exhausted its row budget"),
-                evidence,
-            }
-        } else {
-            ViewOperationStatus::Ready { evidence }
-        }
+        self.budget.status()
     }
 }
 

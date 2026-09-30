@@ -14,15 +14,40 @@ use std::fmt;
 
 use crate::ecma::PatternError;
 
-/// Evaluation stopped because an expression exhausted its resource budget.
+/// Why an evaluation stopped without reaching a verdict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EvaluationCause {
+    /// A regular expression exhausted its matcher budget, or a string checked
+    /// by the asserting `regex` format exceeds the ECMA-262 parser's limits.
+    Pattern(PatternError),
+    /// More than [`crate::MAX_REF_CHAIN`] references were followed in a row
+    /// at one instance location.
+    ReferenceChain,
+}
+
+impl fmt::Display for EvaluationCause {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pattern(error) => error.fmt(f),
+            Self::ReferenceChain => write!(
+                f,
+                "more than {} references are followed in a row at one instance location",
+                crate::MAX_REF_CHAIN
+            ),
+        }
+    }
+}
+
+/// Evaluation stopped because it exhausted a resource bound before reaching a
+/// verdict; an instance is never reported valid or invalid on a guess.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvaluationError {
-    /// Absolute keyword location responsible for the expression.
+    /// Absolute location of the keyword that hit the bound.
     pub keyword_location: String,
     /// Location of the instance being checked.
     pub instance_location: String,
-    /// The matcher error.
-    pub cause: PatternError,
+    /// The bound that was hit.
+    pub cause: EvaluationCause,
 }
 
 impl fmt::Display for EvaluationError {
@@ -34,7 +59,14 @@ impl fmt::Display for EvaluationError {
         )
     }
 }
-impl Error for EvaluationError {}
+impl Error for EvaluationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match &self.cause {
+            EvaluationCause::Pattern(error) => Some(error),
+            EvaluationCause::ReferenceChain => None,
+        }
+    }
+}
 
 /// Why a schema, or a set of schemas, could not be registered or compiled.
 #[derive(Debug, Clone, PartialEq, Eq)]

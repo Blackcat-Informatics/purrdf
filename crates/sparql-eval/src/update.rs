@@ -129,11 +129,9 @@ pub(crate) enum UpdateAbort {
     Tripped(TrippedGovernor),
 }
 
-impl From<RdfDiagnostic> for UpdateAbort {
-    fn from(diagnostic: RdfDiagnostic) -> Self {
-        Self::Failed(diagnostic)
-    }
-}
+purrdf_lex::variant_from!(UpdateAbort {
+    Failed(RdfDiagnostic),
+});
 
 /// Refuse a mutation whose quad carries a non-absolute IRI, reporting the workspace's
 /// shared [`purrdf_core::IriError::diagnostic_code`] spelling.
@@ -2209,7 +2207,7 @@ mod tests {
     fn custom_aggregate_arity_mismatch_in_update_where_carries_the_aggregate_code() {
         let mut m = mut_with(&[]);
         let cache = BoundedOrderCache::default();
-        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
         registry.register_statistical_aggregates("http://example.org/agg#");
         let options = QueryOptions {
             env: &crate::extension_env::ExtensionEnv::over_aggregates(registry.clone())

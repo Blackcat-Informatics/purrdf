@@ -4,15 +4,16 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use serde::{Deserialize, Deserializer, Serialize};
+use purrdf_lex::json::{Object, Value};
 
 use crate::native_codecs::jsonld::CompiledJsonLdContext;
 
 use super::super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
+use purrdf_lex::json::record::ToJson;
+use purrdf_lex::json_string_enum;
 
 /// RDF conversion mode defined by the CSVW Recommendation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CsvwMode {
     /// Emit the CSVW table-group, table, row, and source-location structure.
     Standard,
@@ -20,21 +21,22 @@ pub enum CsvwMode {
     Minimal,
 }
 
+json_string_enum!(CsvwMode {
+    Standard => "standard",
+    Minimal => "minimal",
+});
+
 /// Caller-supplied RDF namespaces used by the CSVW conversion algorithm.
 ///
 /// The W3C Recommendations define the semantic roles, but PurRDF deliberately
 /// does not choose concrete vocabulary IRIs on behalf of a caller. A standards
 /// profile supplies the W3C namespace IRIs explicitly; another closed deployment
 /// can supply equivalent role vocabularies without changing engine behavior.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwVocabulary {
-    #[serde(rename = "csvw_namespace")]
     csvw: String,
-    #[serde(rename = "rdf_namespace")]
     rdf: String,
-    #[serde(rename = "rdfs_namespace")]
     rdfs: String,
-    #[serde(rename = "xsd_namespace")]
     xsd: String,
 }
 
@@ -100,39 +102,29 @@ impl CsvwVocabulary {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawCsvwVocabulary {
-    #[serde(rename = "csvw_namespace")]
-    csvw: String,
-    #[serde(rename = "rdf_namespace")]
-    rdf: String,
-    #[serde(rename = "rdfs_namespace")]
-    rdfs: String,
-    #[serde(rename = "xsd_namespace")]
-    xsd: String,
-}
+purrdf_lex::json_record!(impl FromJson for CsvwVocabulary as "struct CsvwVocabulary" {
+    "csvw_namespace" => csvw: required::<String>,
+    "rdf_namespace" => rdf: required::<String>,
+    "rdfs_namespace" => rdfs: required::<String>,
+    "xsd_namespace" => xsd: required::<String>,
+} => CsvwVocabulary::new);
 
-impl<'de> Deserialize<'de> for CsvwVocabulary {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawCsvwVocabulary::deserialize(deserializer)?;
-        Self::new(raw.csvw, raw.rdf, raw.rdfs, raw.xsd).map_err(serde::de::Error::custom)
-    }
-}
+purrdf_lex::json_record!(impl ToJson for CsvwVocabulary {
+    "csvw_namespace" => csvw,
+    "rdf_namespace" => rdf,
+    "rdfs_namespace" => rdfs,
+    "xsd_namespace" => xsd,
+});
 
 /// Caller-owned JSON-LD context identity and compact-IRI prefix map.
 ///
 /// PurRDF does not fetch a remote context and does not embed a prefix registry.
 /// The host resolves that policy once and passes the exact expansion map used for
 /// metadata annotations, URL templates, and datatype identifiers.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwContext {
     iri: String,
     prefixes: BTreeMap<String, String>,
-    #[serde(skip)]
     compiled: Arc<CompiledJsonLdContext>,
 }
 
@@ -215,20 +207,19 @@ impl CsvwContext {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawCsvwContext {
-    iri: String,
-    prefixes: BTreeMap<String, String>,
-}
+purrdf_lex::json_record!(impl FromJson for CsvwContext as "struct CsvwContext" {
+    "iri" => iri: required::<String>,
+    "prefixes" => prefixes: required,
+} => CsvwContext::new);
 
-impl<'de> Deserialize<'de> for CsvwContext {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawCsvwContext::deserialize(deserializer)?;
-        Self::new(raw.iri, raw.prefixes).map_err(serde::de::Error::custom)
+impl ToJson for CsvwContext {
+    /// The identity and the prefix map; the compiled context is derived state.
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("iri", self.iri.as_str())
+                .with("prefixes", self.prefixes.to_json()),
+        )
     }
 }
 
@@ -237,7 +228,7 @@ impl<'de> Deserialize<'de> for CsvwContext {
 /// There is deliberately no `Default`. The caller supplies the metadata base, the
 /// CSVW context identity, and the table-group identity. PurRDF never invents an
 /// application namespace or a package identity.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwConfig {
     metadata_base_iri: String,
     context: CsvwContext,
@@ -330,36 +321,25 @@ impl CsvwConfig {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawCsvwConfig {
-    metadata_base_iri: String,
-    context: CsvwContext,
-    table_group_iri: String,
-    vocabulary: CsvwVocabulary,
-    mode: CsvwMode,
-    limits: ProjectionLimits,
-    max_records: usize,
-}
+purrdf_lex::json_record!(impl FromJson for CsvwConfig as "struct CsvwConfig" {
+    "metadata_base_iri" => metadata_base_iri: required::<String>,
+    "context" => context: required,
+    "table_group_iri" => table_group_iri: required::<String>,
+    "vocabulary" => vocabulary: required,
+    "mode" => mode: required,
+    "limits" => limits: required,
+    "max_records" => max_records: required,
+} => CsvwConfig::new);
 
-impl<'de> Deserialize<'de> for CsvwConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawCsvwConfig::deserialize(deserializer)?;
-        Self::new(
-            raw.metadata_base_iri,
-            raw.context,
-            raw.table_group_iri,
-            raw.vocabulary,
-            raw.mode,
-            raw.limits,
-            raw.max_records,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+purrdf_lex::json_record!(impl ToJson for CsvwConfig {
+    "metadata_base_iri" => metadata_base_iri,
+    "context" => context,
+    "table_group_iri" => table_group_iri,
+    "vocabulary" => vocabulary,
+    "mode" => mode,
+    "limits" => limits,
+    "max_records" => max_records,
+});
 
 fn validate_namespace(value: String, role: &str) -> Result<String, ProjectionError> {
     validate_absolute_iri(&value, &format!("{role} namespace"))?;
@@ -460,9 +440,9 @@ mod tests {
             100,
         )
         .expect("config");
-        let json = serde_json::to_vec(&config).expect("JSON");
+        let json = purrdf_lex::json::record::to_vec(&config);
         assert_eq!(
-            serde_json::from_slice::<CsvwConfig>(&json).expect("reparse"),
+            purrdf_lex::json::record::from_slice::<CsvwConfig>(&json).expect("reparse"),
             config
         );
         assert!(

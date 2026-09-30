@@ -61,12 +61,12 @@ use crate::{RdfDiagnostic, RdfLiteral, RdfLocation, RdfQuad, RdfSeverity, RdfTer
 // Vocabulary
 // --------------------------------------------------------------------------- //
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const OWL_AXIOM: &str = "http://www.w3.org/2002/07/owl#Axiom";
-const OWL_ANNOTATED_SOURCE: &str = "http://www.w3.org/2002/07/owl#annotatedSource";
-const OWL_ANNOTATED_PROPERTY: &str = "http://www.w3.org/2002/07/owl#annotatedProperty";
-const OWL_ANNOTATED_TARGET: &str = "http://www.w3.org/2002/07/owl#annotatedTarget";
-const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+use purrdf_iri::vocab::owl::ANNOTATED_PROPERTY as OWL_ANNOTATED_PROPERTY;
+use purrdf_iri::vocab::owl::ANNOTATED_SOURCE as OWL_ANNOTATED_SOURCE;
+use purrdf_iri::vocab::owl::ANNOTATED_TARGET as OWL_ANNOTATED_TARGET;
+use purrdf_iri::vocab::owl::AXIOM as OWL_AXIOM;
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_xsd::datatype::XSD_DOUBLE;
 
 /// The `https://w3id.org/sssom/` metadata namespace.
 const SSSOM_NS: &str = "https://w3id.org/sssom/";
@@ -1031,7 +1031,7 @@ fn validate_prefixes(mapping: &SssomMapping, meta: &SssomMeta, out: &mut Vec<Sss
         mapping.mapping_justification.as_str(),
     ];
     for entity in entities {
-        let Some(prefix) = curie_prefix(entity) else {
+        let Some(prefix) = purrdf_iri::curie_prefix(entity) else {
             continue;
         };
         if !meta.curie_map.contains_key(prefix) {
@@ -1064,25 +1064,6 @@ fn validate_confidence(mapping: &SssomMapping, out: &mut Vec<SssomDiagnostic>) {
             ));
         }
     }
-}
-
-/// The CURIE prefix of an entity reference, or `None` if it is not a CURIE.
-///
-/// A CURIE is `prefix:reference` with a non-empty prefix that is *not* a scheme of
-/// an absolute IRI (`http://`, `https://`, …). PurRDF writes bare absolute URIs for
-/// unregistered namespaces, which must not be mistaken for a `http`/`https` CURIE
-/// prefix.
-fn curie_prefix(entity: &str) -> Option<&str> {
-    let idx = entity.find(':')?;
-    let prefix = &entity[..idx];
-    if prefix.is_empty() {
-        return None;
-    }
-    // An absolute IRI: `prefix` is a scheme and the reference starts with `//`.
-    if entity[idx + 1..].starts_with("//") {
-        return None;
-    }
-    Some(prefix)
 }
 
 /// The instance handle a diagnostic points at: the offending row's `subject_id`
@@ -1380,7 +1361,7 @@ pub fn to_rdf(set: &SssomMappingSet) -> Vec<RdfQuad> {
 /// serializer's — `to_rdf` emits the best-effort IRI regardless so a partially
 /// valid set still produces inspectable RDF.
 fn resolve_iri(entity: &str, meta: &SssomMeta) -> RdfTerm {
-    if let Some(prefix) = curie_prefix(entity)
+    if let Some(prefix) = purrdf_iri::curie_prefix(entity)
         && let Some(namespace) = meta.curie_map.get(prefix)
     {
         let reference = &entity[prefix.len() + 1..];

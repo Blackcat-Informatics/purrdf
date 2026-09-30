@@ -68,6 +68,8 @@ use std::fmt::Write as _;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+use purrdf_hash::hex::nibble_canonical;
+
 use crate::RdfLiteral;
 
 use super::builder::RdfDatasetBuilder;
@@ -226,6 +228,25 @@ fn genid_prefix(authority: &str) -> Result<String, SkolemError> {
     Ok(format!("{authority}{GENID_WELL_KNOWN_PATH}"))
 }
 
+/// Append `bytes` to `out` in the blank-label escape alphabet: every ASCII-alphanumeric
+/// byte passes through, every other byte becomes `-` plus two lowercase hex digits.
+///
+/// This is the workspace's one implementation of the `-xx` escape (the genid path
+/// segment here and the rule engine's minted-blank tags in `purrdf-shapes` both use it).
+/// The encoding is injective because `-` itself is escaped (`-2d`), so each `-` in the
+/// output opens a fixed-width escape; the output matches `[A-Za-z0-9-]*` and is undone by
+/// the strict lowercase decoder behind [`deskolemize`].
+pub fn escape_label_bytes_into(bytes: &[u8], out: &mut String) {
+    for &byte in bytes {
+        if byte.is_ascii_alphanumeric() {
+            out.push(char::from(byte));
+        } else {
+            out.push('-');
+            purrdf_hash::hex::encode_into(&[byte], out);
+        }
+    }
+}
+
 /// Encode a blank node's `(label, scope)` as the canonical genid path segment
 /// (see the module documentation for the grammar and the injectivity argument).
 fn encode_blank(label: &str, scope: BlankScope) -> String {
@@ -233,13 +254,7 @@ fn encode_blank(label: &str, scope: BlankScope) -> String {
     out.push('s');
     let _ = write!(out, "{}", scope.ordinal());
     out.push('-');
-    for &byte in label.as_bytes() {
-        if byte.is_ascii_alphanumeric() {
-            out.push(char::from(byte));
-        } else {
-            let _ = write!(out, "-{byte:02x}");
-        }
-    }
+    escape_label_bytes_into(label.as_bytes(), &mut out);
     out
 }
 
@@ -275,7 +290,7 @@ fn decode_blank(encoded: &str) -> Result<(String, BlankScope), &'static str> {
                 let (Some(&hi), Some(&lo)) = (bytes.get(i + 1), bytes.get(i + 2)) else {
                     return Err("a '-' escape is not followed by two hex digits");
                 };
-                let (Some(hi), Some(lo)) = (lower_hex_value(hi), lower_hex_value(lo)) else {
+                let (Some(hi), Some(lo)) = (nibble_canonical(hi), nibble_canonical(lo)) else {
                     return Err("a '-' escape carries a non-lowercase-hex digit");
                 };
                 let byte = hi * 16 + lo;
@@ -295,16 +310,6 @@ fn decode_blank(encoded: &str) -> Result<(String, BlankScope), &'static str> {
     let label = String::from_utf8(label_bytes)
         .map_err(|_| "the escaped label bytes are not valid UTF-8")?;
     Ok((label, BlankScope(scope)))
-}
-
-/// The value of a lowercase hex digit (`[0-9a-f]`), or `None` — uppercase is
-/// rejected so every byte has exactly one escape spelling (canonicality).
-const fn lower_hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        _ => None,
-    }
 }
 
 /// How a whole-dataset rewrite maps the two leaf term kinds a rewrite may
@@ -501,47 +506,25 @@ fn remap_composite_lexical<M: TermMapper>(
     Ok(out)
 }
 
-/// The composite-lexical element text a mapped term is written back as.
+/// The composite-lexical element text a mapped term is written back as: the
+/// RDF 1.2 term syntax ([`purrdf_lex::term_syntax`]), which is also how the
+/// composite canonical form spells an IRI.
 fn element_text(builder: &RdfDatasetBuilder, id: TermId) -> String {
     use crate::blank_label::{LabelAlphabet, encode_blank_label};
+    use purrdf_lex::term_syntax::{write_blank, write_iri};
 
+    let mut out = String::new();
     match builder.resolve(id) {
-        TermRef::Iri(iri) => {
-            let mut out = String::with_capacity(iri.len() + 2);
-            out.push('<');
-            write_iriref_escaped(iri, &mut out);
-            out.push('>');
-            out
-        }
-        TermRef::Blank { label, scope } => {
-            format!(
-                "_:{}",
-                encode_blank_label(label, scope, LabelAlphabet::BlankNodeLabel)
-            )
-        }
+        TermRef::Iri(iri) => write_iri(iri, &mut out),
+        TermRef::Blank { label, scope } => write_blank(
+            &encode_blank_label(label, scope, LabelAlphabet::BlankNodeLabel),
+            &mut out,
+        ),
         other => {
             unreachable!("a term rewrite may only produce an IRI or a blank node, got {other:?}")
         }
     }
-}
-
-/// Write an IRI as a composite `IRIREF` body, `\u`-escaping every character the
-/// production excludes so the result is always a legal token.
-fn write_iriref_escaped(iri: &str, out: &mut String) {
-    for ch in iri.chars() {
-        match ch {
-            // `'` is legal in an `IRIREF`, but a composite literal may be
-            // embedded inside a single-quoted string, where a raw `'` would
-            // close it. Escaping it costs nothing and is always legal.
-            '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' | '\'' => {
-                let _ = write!(out, "\\u{:04X}", ch as u32);
-            }
-            c if (c as u32) <= 0x20 => {
-                let _ = write!(out, "\\u{:04X}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
+    out
 }
 
 /// Rebuild `ds` as a NEW frozen dataset with every term routed through
@@ -1099,6 +1082,19 @@ mod tests {
     }
 
     #[test]
+    fn escape_label_bytes_golden_and_round_trip() {
+        let mut out = String::new();
+        escape_label_bytes_into("f_<http://ex.org/a b>\u{e9}-Z9".as_bytes(), &mut out);
+        assert_eq!(out, "f-5f-3chttp-3a-2f-2fex-2eorg-2fa-20b-3e-c3-a9-2dZ9");
+        let (decoded, scope) = decode_blank(&format!("s0-{out}")).expect("decodes");
+        assert_eq!(decoded, "f_<http://ex.org/a b>\u{e9}-Z9");
+        assert_eq!(scope, BlankScope::DEFAULT);
+        let mut appended = String::from("keep");
+        escape_label_bytes_into(b"", &mut appended);
+        assert_eq!(appended, "keep");
+    }
+
+    #[test]
     fn decoding_rejects_everything_outside_the_canonical_image() {
         for bad in [
             "",
@@ -1335,7 +1331,7 @@ mod term_walk_tests {
         existing_blanks, reintern, remap_composite_lexical,
     };
     use crate::backend::TermFactory as _;
-    use crate::test_terms::TermShape;
+    use crate::term_fixture::TermShape;
 
     /// A mapper that interns every term unchanged and logs every call it receives.
     #[derive(Default)]
@@ -1432,8 +1428,12 @@ mod term_walk_tests {
         for seed in 0..300_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value =
-                crate::test_terms::term_value(&mut state, &mut budget, TermShape::WellFormed);
+            let value = crate::term_fixture::term_value(
+                &mut state,
+                purrdf_testkit::rng::splitmix64_next,
+                &mut budget,
+                TermShape::WellFormed,
+            );
             let mut builder = RdfDatasetBuilder::new();
             let object = builder.intern_value(&value);
             let holder = builder.intern_iri("http://example.org/holder");

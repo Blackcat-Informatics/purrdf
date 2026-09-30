@@ -20,6 +20,7 @@
 //! halves, because a gate that refused `x-purrdf-afrikaans` or `en-fr-jura`
 //! would be a worse bug than the one it closes.
 
+use purrdf_core::term_fixture::one_quad;
 use purrdf_sparql_algebra::Child;
 use std::sync::Arc;
 
@@ -64,12 +65,7 @@ const REFUSED: &[&str] = &[
 /// A single-quad dataset, so the query below evaluates over exactly one row and
 /// an unbound answer is distinguishable from no answer at all.
 fn dataset() -> Arc<RdfDataset> {
-    let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&format!("{EX}s"));
-    let p = b.intern_iri(&format!("{EX}p"));
-    let o = b.intern_iri(&format!("{EX}o"));
-    b.push_quad(s, p, o, None);
-    b.freeze().expect("freeze the fixture")
+    one_quad(&format!("{EX}s"), &format!("{EX}p"), &format!("{EX}o"))
 }
 
 /// Register `ex:tagged()` as a native function that returns
@@ -83,7 +79,7 @@ fn tagged_by_a_native_function(tag: &str) -> Option<TermValue> {
         language: Some(tag.to_owned()),
         direction: None,
     };
-    let mut functions = UserFunctionRegistry::new();
+    let mut functions = UserFunctionRegistry::default();
     functions.register_native(
         format!("{EX}tagged"),
         Arity::Exact(0),
@@ -158,7 +154,7 @@ fn a_refused_tag_costs_the_binding_and_nothing_else() {
         language: Some("en us".to_owned()),
         direction: None,
     };
-    let mut functions = UserFunctionRegistry::new();
+    let mut functions = UserFunctionRegistry::default();
     functions.register_native(
         format!("{EX}tagged"),
         Arity::Exact(0),

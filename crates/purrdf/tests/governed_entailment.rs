@@ -36,8 +36,8 @@ use purrdf::sparql::{
 use purrdf::{BlankScope, RdfDataset, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf::{ClosureRelations, GovernedEntailment, QueryEntailment, query_with_entailment};
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDFS_SUBCLASS: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASS;
 const NS: &str = "http://example.org/";
 
 /// A three-instance class hierarchy: enough rows for an answer cap to cut, and enough
@@ -180,9 +180,26 @@ fn the_remote_request_ceiling_is_in_force_over_the_closure() {
         QueryEntailment::Rdfs,
         &QueryGovernors::UNBOUNDED.with_max_remote_requests(7),
     );
-    let GovernedEntailment::Answered { outcome, .. } = &answered else {
+    let GovernedEntailment::Answered { outcome, report } = &answered else {
         panic!("an unreachable ceiling must not stop the closure");
     };
+    let (read_outcome, read_report) = answered
+        .answered()
+        .expect("the answered arm reads as answered");
+    assert!(
+        std::ptr::eq(read_outcome, outcome) && std::ptr::eq(read_report, report),
+        "the accessor hands back the arm's own outcome and certificate"
+    );
+    assert!(
+        answered
+            .outcome()
+            .is_some_and(|read| std::ptr::eq(read, outcome))
+    );
+    assert!(
+        answered
+            .report()
+            .is_some_and(|read| std::ptr::eq(read, report))
+    );
     let limits = outcome.evidence().limits();
     assert!(limits.is_bounded(ResourceDimension::RemoteRequests));
     assert_eq!(limits.get(ResourceDimension::RemoteRequests), 7);
@@ -235,7 +252,7 @@ fn an_unreached_ceiling_answers_exactly_as_the_ungoverned_lane_does() {
 #[test]
 fn the_ungoverned_lane_is_byte_for_byte_unchanged() {
     let dataset = hierarchy();
-    let rules = purrdf::entail::RuleSet::new();
+    let rules = purrdf::entail::RuleSet::default();
     for (mode, regime) in [
         (QueryEntailment::Simple, Regime::Simple),
         (QueryEntailment::Rdf, Regime::Rdf),
@@ -307,7 +324,7 @@ fn a_custom_aggregate_registry_reaches_the_governed_entailed_closure() {
     }
     let dataset = b.freeze().expect("the fixture freezes");
 
-    let mut registry = AggregateRegistry::new();
+    let mut registry = AggregateRegistry::default();
     registry.register_statistical_aggregates("https://example.org/agg#");
 
     let query = "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
@@ -406,7 +423,9 @@ fn an_expired_deadline_stops_the_closure_with_nothing_claimed() {
         }
     ));
     assert!(
-        answered.outcome().is_none() && answered.report().is_none(),
+        answered.answered().is_none()
+            && answered.outcome().is_none()
+            && answered.report().is_none(),
         "a stopped closure has no answer and no certificate, and the type says so"
     );
     assert!(!answered.is_complete());
@@ -450,7 +469,7 @@ fn a_cancellation_stops_the_closure_and_names_itself() {
 #[test]
 fn every_regime_honours_a_signal_that_is_already_firing() {
     let dataset = hierarchy();
-    let rules = purrdf::entail::RuleSet::new();
+    let rules = purrdf::entail::RuleSet::default();
     for (mode, regime) in [
         (QueryEntailment::Simple, Regime::Simple),
         (QueryEntailment::Rdf, Regime::Rdf),
@@ -504,7 +523,7 @@ fn every_regime_honours_a_signal_that_is_already_firing() {
 #[test]
 fn a_signal_that_never_fires_changes_no_closure() {
     let dataset = hierarchy();
-    let rules = purrdf::entail::RuleSet::new();
+    let rules = purrdf::entail::RuleSet::default();
     for mode in [
         QueryEntailment::Simple,
         QueryEntailment::Rdf,
@@ -567,10 +586,10 @@ fn a_signal_that_never_fires_changes_no_closure() {
 
 // ── The combined approach's witnesses cannot escape through a PARTIAL answer ───────────
 
-const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
-const OWL_RESTRICTION: &str = "http://www.w3.org/2002/07/owl#Restriction";
-const OWL_ON_PROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
-const OWL_SOME_VALUES_FROM: &str = "http://www.w3.org/2002/07/owl#someValuesFrom";
+use purrdf_iri::vocab::owl::CLASS as OWL_CLASS;
+use purrdf_iri::vocab::owl::ON_PROPERTY as OWL_ON_PROPERTY;
+use purrdf_iri::vocab::owl::RESTRICTION as OWL_RESTRICTION;
+use purrdf_iri::vocab::owl::SOME_VALUES_FROM as OWL_SOME_VALUES_FROM;
 
 /// `A ⊑ ∃r.B` with three `A` instances — the shape the combined approach answers by minting
 /// an existential witness. When `with_named_answers` is true, each instance also has an asserted
@@ -783,8 +802,8 @@ fn witness_triples_are_in_the_closure_the_scrub_runs_over() {
 
 // ── The closure is taken over the premise's `owl:imports` closure ──────────────────
 
-const OWL_IMPORTS: &str = "http://www.w3.org/2002/07/owl#imports";
-const OWL_ONTOLOGY: &str = "http://www.w3.org/2002/07/owl#Ontology";
+use purrdf_iri::vocab::owl::IMPORTS as OWL_IMPORTS;
+use purrdf_iri::vocab::owl::ONTOLOGY as OWL_ONTOLOGY;
 
 /// `ex:o a owl:Ontology ; owl:imports ex:schema . ex:tom a ex:Cat .` — the schema that makes
 /// `tom` an `Animal` lives only in the imported document.
@@ -859,8 +878,10 @@ fn an_entailment_query_closes_over_the_import_table() {
         "{refused:?}"
     );
 
-    let mut imports = purrdf::entail::ImportMap::new();
-    imports.insert(format!("{NS}schema"), imported_schema());
+    let mut imports = purrdf::entail::ImportMap::default();
+    imports
+        .try_insert(format!("{NS}schema"), imported_schema())
+        .expect("a fresh absolute key");
     let GovernedEntailment::Answered {
         outcome: GovernedOutcome::Complete { result, .. },
         report,
@@ -891,7 +912,7 @@ fn an_entailment_query_closes_over_the_import_table() {
     let GovernedEntailment::Answered {
         outcome: GovernedOutcome::Complete { result, .. },
         ..
-    } = over_imports(&hierarchy(), &purrdf::entail::ImportMap::new()).expect("imports nothing")
+    } = over_imports(&hierarchy(), &purrdf::entail::ImportMap::default()).expect("imports nothing")
     else {
         panic!("an unbounded run completes");
     };

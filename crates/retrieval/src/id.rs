@@ -12,6 +12,8 @@
 //! kind, which is what the per-domain prefix buys.
 
 use core::fmt;
+use purrdf_hash::Domain;
+use purrdf_hash::hex::Digest32;
 
 /// The canonical plan layout this build writes and understands.
 ///
@@ -90,7 +92,7 @@ pub const PLAN_VERSION: u16 = 4;
 /// only if their bytes did, but prefixing the domain is what makes a plan digest
 /// *not* a digest of the same bytes under any other purpose — the discipline the
 /// crate's other content identities follow.
-pub const PLAN_ID_DOMAIN: &str = "purrdf:plan:v1";
+pub const PLAN_ID_DOMAIN: Domain = Domain::new(b"purrdf:plan:v1");
 
 /// The length of a [`PlanId`] digest in bytes.
 pub const PLAN_ID_BYTES: usize = 32;
@@ -99,11 +101,11 @@ pub const PLAN_ID_BYTES: usize = 32;
 /// canonical bytes.
 ///
 /// The identity is derived from canonical bytes, never from `Hash` or from a
-/// serde document: two plans are the same plan iff their canonical encodings are
+/// JSON document: two plans are the same plan iff their canonical encodings are
 /// byte-identical, which is exactly when their ids are equal. A changed field is
 /// a changed plan and therefore a changed id.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PlanId([u8; PLAN_ID_BYTES]);
+pub struct PlanId(Digest32);
 
 impl PlanId {
     /// Digest canonical plan `bytes` under the plan domain.
@@ -113,36 +115,31 @@ impl PlanId {
         hasher.update(PLAN_ID_DOMAIN.as_bytes());
         hasher.update(&[0u8]);
         hasher.update(bytes);
-        Self(*hasher.finalize().as_bytes())
+        Self(Digest32::new(*hasher.finalize().as_bytes()))
     }
 
     /// The raw 32 digest bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; PLAN_ID_BYTES] {
-        &self.0
+        self.0.as_bytes()
     }
 
     /// The lowercase-hex rendering of the digest (64 characters).
     #[must_use]
     pub fn to_hex(&self) -> String {
-        let mut out = String::with_capacity(PLAN_ID_BYTES * 2);
-        for byte in &self.0 {
-            use fmt::Write as _;
-            write!(out, "{byte:02x}").expect("writing to a String cannot fail");
-        }
-        out
+        self.0.to_hex()
     }
 }
 
 impl fmt::Debug for PlanId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "PlanId({})", self.to_hex())
+        write!(f, "PlanId({})", self.0)
     }
 }
 
 impl fmt::Display for PlanId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.to_hex())
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -157,7 +154,7 @@ pub const FUSION_PROFILE_VERSION: u16 = 1;
 ///
 /// Namespaced apart from [`PLAN_ID_DOMAIN`] so the same canonical bytes hashed
 /// for a plan and for a fusion profile never produce the same identity.
-pub const FUSION_PROFILE_ID_DOMAIN: &str = "purrdf:fusion-profile:v1";
+pub const FUSION_PROFILE_ID_DOMAIN: Domain = Domain::new(b"purrdf:fusion-profile:v1");
 
 /// The length of a [`FusionProfileId`] digest in bytes.
 pub const FUSION_PROFILE_ID_BYTES: usize = 32;
@@ -170,7 +167,7 @@ pub const FUSION_PROFILE_ID_BYTES: usize = 32;
 /// or a different tie-break are answers to different questions, and the digest
 /// is how a report names which law was in force.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct FusionProfileId([u8; FUSION_PROFILE_ID_BYTES]);
+pub struct FusionProfileId(Digest32);
 
 impl FusionProfileId {
     /// Digest canonical fusion-profile `bytes` under the fusion-profile domain.
@@ -180,36 +177,31 @@ impl FusionProfileId {
         hasher.update(FUSION_PROFILE_ID_DOMAIN.as_bytes());
         hasher.update(&[0u8]);
         hasher.update(bytes);
-        Self(*hasher.finalize().as_bytes())
+        Self(Digest32::new(*hasher.finalize().as_bytes()))
     }
 
     /// The raw 32 digest bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; FUSION_PROFILE_ID_BYTES] {
-        &self.0
+        self.0.as_bytes()
     }
 
     /// The lowercase-hex rendering of the digest (64 characters).
     #[must_use]
     pub fn to_hex(&self) -> String {
-        let mut out = String::with_capacity(FUSION_PROFILE_ID_BYTES * 2);
-        for byte in &self.0 {
-            use fmt::Write as _;
-            write!(out, "{byte:02x}").expect("writing to a String cannot fail");
-        }
-        out
+        self.0.to_hex()
     }
 }
 
 impl fmt::Debug for FusionProfileId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "FusionProfileId({})", self.to_hex())
+        write!(f, "FusionProfileId({})", self.0)
     }
 }
 
 impl fmt::Display for FusionProfileId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.to_hex())
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -232,7 +224,7 @@ pub const EVIDENCE_VERSION: u16 = 1;
 /// that the same canonical bytes read as evidence, as a plan and as a profile
 /// never produce the same identity — the three answer different questions and
 /// must never compare equal by accident.
-pub const EVIDENCE_ID_DOMAIN: &str = "purrdf:evidence:v1";
+pub const EVIDENCE_ID_DOMAIN: Domain = Domain::new(b"purrdf:evidence:v1");
 
 /// The length of an [`EvidenceId`] digest in bytes.
 pub const EVIDENCE_ID_BYTES: usize = 32;
@@ -279,14 +271,14 @@ pub const EVIDENCE_ID_BYTES: usize = 32;
 ///
 /// Same discipline as [`PlanId`]: the digest is taken over a sorted,
 /// length-framed encoding built by this crate's canonical writer, never over a
-/// `Hash` or a serde document. Length framing is what makes the encoding
+/// `Hash` or a JSON document. Length framing is what makes the encoding
 /// injective, so a stratum named `ex:a` attesting generation `bc` cannot encode
 /// to the same bytes as one named `ex:ab` attesting `c`; sorting by stratum
 /// makes it independent of any iteration order; little-endian integers make it
 /// identical on every target, wasm32 included. Two evidence maps are the same
 /// evidence iff their bytes are, which is exactly when their ids are equal.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct EvidenceId([u8; EVIDENCE_ID_BYTES]);
+pub struct EvidenceId(Digest32);
 
 impl EvidenceId {
     /// Digest canonical evidence `bytes` under the evidence domain.
@@ -296,35 +288,30 @@ impl EvidenceId {
         hasher.update(EVIDENCE_ID_DOMAIN.as_bytes());
         hasher.update(&[0u8]);
         hasher.update(bytes);
-        Self(*hasher.finalize().as_bytes())
+        Self(Digest32::new(*hasher.finalize().as_bytes()))
     }
 
     /// The raw 32 digest bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; EVIDENCE_ID_BYTES] {
-        &self.0
+        self.0.as_bytes()
     }
 
     /// The lowercase-hex rendering of the digest (64 characters).
     #[must_use]
     pub fn to_hex(&self) -> String {
-        let mut out = String::with_capacity(EVIDENCE_ID_BYTES * 2);
-        for byte in &self.0 {
-            use fmt::Write as _;
-            write!(out, "{byte:02x}").expect("writing to a String cannot fail");
-        }
-        out
+        self.0.to_hex()
     }
 }
 
 impl fmt::Debug for EvidenceId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "EvidenceId({})", self.to_hex())
+        write!(f, "EvidenceId({})", self.0)
     }
 }
 
 impl fmt::Display for EvidenceId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.to_hex())
+        fmt::Display::fmt(&self.0, f)
     }
 }

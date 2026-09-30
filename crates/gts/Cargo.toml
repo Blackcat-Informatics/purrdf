@@ -30,13 +30,20 @@ purrdf-events = { workspace = true }
 # untrusted bytes that the fold view renders straight into an N-Quads token, so
 # the reader has to ask the same grammar, on the same profile, that every RDF
 # codec and the IR kernel already ask. The edge is safe where a `purrdf-core`
-# edge would not be: `purrdf-iri` is a true leaf with ZERO runtime dependencies
-# (its `[lib]` note states the contract) and is already wasm32-clean, so it drags
-# nothing in and `make wasm` stays green.
+# edge would not be: `purrdf-iri` takes no third-party runtime dependency (its
+# one dependency is the zero-dependency `purrdf-lex`; its `[lib]` note states the
+# contract) and is already wasm32-clean, so it drags nothing in and `make wasm`
+# stays green.
 purrdf-iri = { workspace = true }
-# Proleptic-Gregorian calendar arithmetic for the files/tar profiles' RFC 3339
-# `modified` timestamps (the grammar itself is `src/rfc3339.rs`). Another
-# zero-runtime-dependency, wasm32-clean leaf, so the edge adds nothing below it.
+# The one Crockford Base32 renderer and reader (`purrdf_lex::crockford`) behind
+# the ULID text form, the one CBOR codec (`purrdf_lex::cbor`) every GTS item is
+# encoded and decoded with, and the one JSON reader (`purrdf_lex::json`) behind
+# detached MMR proofs and the frozen corpus's `<id>.expected.json` oracles. A
+# leaf over `purrdf-hash` only, and wasm32-clean.
+purrdf-lex = { workspace = true }
+# The RFC 3339 grammar and writer (`purrdf_xsd::rfc3339`) behind the files/tar
+# profiles' `modified` timestamps; `src/rfc3339.rs` names the profiles' reading
+# of it. A wasm32-clean leaf, so the edge adds nothing below it.
 purrdf-xsd = { workspace = true }
 # emojihash + randomart visual fingerprints, published from
 # Blackcat-Informatics/visual-hashing.
@@ -46,9 +53,6 @@ visual-hashing = { workspace = true }
 # On targets without threads (wasm32) rayon degrades to inline-sequential
 # execution, so results are identical everywhere.
 rayon = { workspace = true }
-ciborium = { workspace = true }
-# Borrowed deterministic-CBOR views serialize recursively without cloning Value trees.
-serde = { workspace = true }
 # gzip (RFC 1952) for the `gzip` transform, the transport decoder and gzip tar
 # streams: the workspace's native DEFLATE leaf, deterministic and wasm-clean.
 purrdf-deflate = { workspace = true }
@@ -60,8 +64,9 @@ purrdf-deflate = { workspace = true }
 structured-zstd = { workspace = true, features = ["dict_builder"] }
 # Seeds structured-zstd's ambient FastCOVER reservoir RNG for reproducible dicts.
 fastrand = { workspace = true }
-# pure-Rust Ed25519 (COSE_Sign1, §9.2) — deterministic per RFC 8032, wasm-friendly
-ed25519-dalek = { workspace = true }
+# Ed25519 (COSE_Sign1, §9.2; OpenPGP key import; packaging signatures):
+# deterministic RFC 8032 signing and strict verification, wasm-clean.
+purrdf-ed25519 = { workspace = true }
 # SHA-1 — only for OpenPGP v4 key fingerprints (RFC 4880 §12.2), not used as a
 # general-purpose hash — and the fixed-key `FixedHasher` (no runtime seeding,
 # wasm-clean) for the segment-decode / event-bridge dedup maps and the digest
@@ -72,6 +77,9 @@ purrdf-hash = { workspace = true }
 aes-gcm = { workspace = true }
 
 [dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
 # The workspace's shared counting allocator, for the `authoring` bench probes.
 # Path-only and unpublished, so it is stripped from the packaged manifest;
 # std-only and dependency-free, so it is wasm32-clean and needs no target gate.
@@ -79,13 +87,6 @@ purrdf-alloc-probe = { workspace = true }
 # Isolated temporary directories under the target directory for the unpack
 # tests. Path-only and unpublished, so it is stripped from the packaged manifest.
 purrdf-testkit = { workspace = true }
-# Authoring hot-path regression watch. Defaults off like sibling crates so the
-# bench lane stays lightweight and report-only.
-criterion = { workspace = true }
-# Reads the frozen corpus's `<id>.expected.json` fold oracles so a test can
-# compare what this reader produces against what the shared cross-engine
-# expectation states. Test-only: the library itself never parses JSON.
-serde_json = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 # Fresh keys/nonces for native encryption tests; absent from every library target.

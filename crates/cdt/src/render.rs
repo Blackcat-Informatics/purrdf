@@ -19,15 +19,16 @@
 //!   `key` `:` `value` with no whitespace. Entries are written in the crate's
 //!   syntactic key order ([`crate::total_key_cmp`]), which is what makes the output
 //!   independent of authoring order. An empty map is `{}`.
-//! * An IRI is `<`, the IRI text with the `IRIREF`-forbidden code points escaped as
-//!   `\u00XX`, `>`.
+//! * An IRI is [`purrdf_lex::term_syntax::write_iri`]'s `IRIREF`: `<`, the IRI
+//!   text through [`purrdf_lex::iri_escape`], `>`.
 //! * A blank node is `_:` followed by its label.
 //! * A literal is **always explicit**: `"lexical"^^<datatype>`, with no shorthand —
 //!   never a bare `1`, `1.5`, `1e0`, `true` or `"abc"`. A language-tagged literal is
 //!   `"lexical"@tag`, and a directional one `"lexical"@tag--ltr` / `--rtl`. The
-//!   lexical form is written verbatim under the SPARQL string escape set.
-//! * A triple term is `<<(`, the three components separated by a single space,
-//!   `)>>`.
+//!   lexical form is escaped by the [`Canonical`](Carrier::Canonical) carrier of
+//!   [`purrdf_lex::literal_escape`], the RDF 1.2 canonical string body.
+//! * A triple term is the RDF 1.2 term syntax's `<<( s p o )>>`: the three
+//!   components separated by a single space, with one space inside each delimiter.
 //! * The null element is `null`.
 //!
 //! # Total by construction, and iterative
@@ -52,12 +53,14 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::fmt;
+
+use purrdf_lex::literal_escape::{self, Carrier};
+use purrdf_lex::term_syntax::{TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri};
+use purrdf_lex::text_out::TextOut;
 
 use crate::term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm, CdtTripleTerm};
 use crate::value::{CdtContents, CdtValue};
-
-/// Uppercase hex digits, for the `\u00XX` escape forms.
-const HEX_UPPER: [u8; 16] = *b"0123456789ABCDEF";
 
 /// One step of the iterative renderer.
 enum Job<'a> {
@@ -75,24 +78,15 @@ enum Job<'a> {
 /// and [`Measure`], which keeps only its byte length — and **one** walker drives
 /// both. Measuring is therefore guaranteed to agree with rendering, byte for byte,
 /// with no second description of the form to fall out of step.
-trait Sink {
-    /// Append a string slice.
-    fn put_str(&mut self, text: &str);
-    /// Append one character.
-    fn put_char(&mut self, ch: char);
+///
+/// A sink is a [`TextOut`], so the lexical layer's term writers append into it
+/// directly and the measure counts exactly the bytes they would write.
+trait Sink: TextOut {
     /// A nested composite: schedule its rendering, or account for its length.
     fn composite<'a>(&mut self, jobs: &mut Vec<Job<'a>>, value: &'a CdtValue);
 }
 
 impl Sink for String {
-    fn put_str(&mut self, text: &str) {
-        self.push_str(text);
-    }
-
-    fn put_char(&mut self, ch: char) {
-        self.push(ch);
-    }
-
     fn composite<'a>(&mut self, jobs: &mut Vec<Job<'a>>, value: &'a CdtValue) {
         push_value(jobs, value);
     }
@@ -108,15 +102,24 @@ impl Sink for String {
 /// from its construction, measured by this very sink, and that is what is added.
 struct Measure(usize);
 
-impl Sink for Measure {
-    fn put_str(&mut self, text: &str) {
+impl fmt::Write for Measure {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        TextOut::push_str(self, text);
+        Ok(())
+    }
+}
+
+impl TextOut for Measure {
+    fn push_str(&mut self, text: &str) {
         self.0 = self.0.saturating_add(text.len());
     }
 
-    fn put_char(&mut self, ch: char) {
+    fn push(&mut self, ch: char) {
         self.0 = self.0.saturating_add(ch.len_utf8());
     }
+}
 
+impl Sink for Measure {
     fn composite<'a>(&mut self, _jobs: &mut Vec<Job<'a>>, value: &'a CdtValue) {
         self.0 = self.0.saturating_add(value.extent().bytes);
     }
@@ -207,18 +210,15 @@ pub(crate) fn key_lexical_len(key: &CdtKey) -> usize {
 fn run<S: Sink>(out: &mut S, mut jobs: Vec<Job<'_>>) {
     while let Some(job) = jobs.pop() {
         match job {
-            Job::Punct(text) => out.put_str(text),
+            Job::Punct(text) => out.push_str(text),
             Job::Key(key) => write_key(out, key),
             Job::Term(term) => match term {
                 CdtTerm::Composite(inner) => out.composite(&mut jobs, inner.as_ref()),
                 CdtTerm::TripleTerm(triple) => push_triple(&mut jobs, triple.as_ref()),
-                CdtTerm::Iri(iri) => write_iri(out, iri),
-                CdtTerm::Blank(label) => {
-                    out.put_str("_:");
-                    out.put_str(label);
-                }
+                CdtTerm::Iri(iri) => write_iri(iri, out),
+                CdtTerm::Blank(label) => write_blank(label, out),
                 CdtTerm::Literal(literal) => write_literal(out, literal),
-                CdtTerm::Null => out.put_str("null"),
+                CdtTerm::Null => out.push_str("null"),
             },
         }
     }
@@ -254,94 +254,42 @@ fn push_value<'a>(jobs: &mut Vec<Job<'a>>, value: &'a CdtValue) {
 
 /// Push the jobs for a triple term, in reverse emission order.
 fn push_triple<'a>(jobs: &mut Vec<Job<'a>>, triple: &'a CdtTripleTerm) {
-    jobs.push(Job::Punct(")>>"));
+    jobs.push(Job::Punct(TRIPLE_TERM_CLOSE));
+    jobs.push(Job::Punct(" "));
     jobs.push(Job::Term(&triple.object));
     jobs.push(Job::Punct(" "));
     jobs.push(Job::Term(&triple.predicate));
     jobs.push(Job::Punct(" "));
     jobs.push(Job::Term(&triple.subject));
-    jobs.push(Job::Punct("<<("));
+    jobs.push(Job::Punct(" "));
+    jobs.push(Job::Punct(TRIPLE_TERM_OPEN));
 }
 
 fn write_key<S: Sink>(out: &mut S, key: &CdtKey) {
     match key {
-        CdtKey::Iri(iri) => write_iri(out, iri),
+        CdtKey::Iri(iri) => write_iri(iri, out),
         CdtKey::Literal(literal) => write_literal(out, literal),
     }
 }
 
-fn write_iri<S: Sink>(out: &mut S, iri: &str) {
-    out.put_char('<');
-    for ch in iri.chars() {
-        if is_iri_forbidden(ch) {
-            push_uchar(out, ch);
-        } else {
-            out.put_char(ch);
-        }
-    }
-    out.put_char('>');
-}
-
+/// A literal with its datatype always written: the canonical string body, then
+/// `@tag`, `@tag--dir`, or `^^` and the datatype's `IRIREF`.
 fn write_literal<S: Sink>(out: &mut S, literal: &CdtLiteral) {
-    out.put_char('"');
-    for ch in literal.lexical.chars() {
-        match ch {
-            '\\' => out.put_str("\\\\"),
-            '"' => out.put_str("\\\""),
-            '\n' => out.put_str("\\n"),
-            '\r' => out.put_str("\\r"),
-            '\t' => out.put_str("\\t"),
-            '\u{8}' => out.put_str("\\b"),
-            '\u{c}' => out.put_str("\\f"),
-            c if c.is_control() => push_uchar(out, c),
-            c => out.put_char(c),
-        }
-    }
-    out.put_char('"');
+    out.push('"');
+    literal_escape::write(&literal.lexical, Carrier::Canonical, out);
+    out.push('"');
     match &literal.language {
         Some(language) => {
-            out.put_char('@');
-            out.put_str(language);
+            out.push('@');
+            out.push_str(language);
             if let Some(direction) = literal.direction {
-                out.put_str("--");
-                out.put_str(direction.as_str());
+                out.push_str("--");
+                out.push_str(direction.as_str());
             }
         }
         None => {
-            out.put_str("^^");
-            write_iri(out, &literal.datatype);
+            out.push_str("^^");
+            write_iri(&literal.datatype, out);
         }
-    }
-}
-
-/// The code points an `IRIREF` may not carry raw: the grammar's own delimiters, the
-/// space, and every control code point (C0, DEL and the C1 block).
-fn is_iri_forbidden(ch: char) -> bool {
-    matches!(
-        ch,
-        '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' | ' '
-    ) || ch.is_control()
-}
-
-/// Push a `UCHAR` escape, in the narrow `\uXXXX` form for a code point in the Basic
-/// Multilingual Plane and the wide `\UXXXXXXXX` form above it. Both escape sets this
-/// module applies — the control code points and the `IRIREF` delimiters — lie in the
-/// BMP, so the narrow form is the one an emitted canonical form actually carries; the
-/// wide branch is what keeps the function total over `char`.
-fn push_uchar<S: Sink>(out: &mut S, ch: char) {
-    let value = ch as u32;
-    if value <= 0xFFFF {
-        out.put_str("\\u");
-        push_hex(out, value, 4);
-    } else {
-        out.put_str("\\U");
-        push_hex(out, value, 8);
-    }
-}
-
-fn push_hex<S: Sink>(out: &mut S, value: u32, digits: u32) {
-    for shift in (0..digits).rev() {
-        let nibble = (value >> (shift * 4)) & 0xF;
-        out.put_char(HEX_UPPER[nibble as usize] as char);
     }
 }

@@ -38,15 +38,18 @@
 //! whose decimal expansion is infinite, an irrational length, a boundary case for
 //! the topological predicates, and a rounding tie.
 //!
-//! # The hash is hand-rolled, deliberately
+//! # The hash is FNV-1a, a specified function
 //!
-//! FNV-1a, written out below in six lines. Not the table hasher `FixedHasher`
-//! (a different function on a build with AES than on one without, so its output
-//! cannot address content), not
-//! [`std::hash::DefaultHasher`] (SipHash with an unspecified, version-dependent
+//! [`purrdf_hash::fnv`]: FNV-1a 64-bit, whose offset basis, prime and byte loop
+//! are fixed by its specification and pinned by that module's reference test
+//! values. Not the table hasher `FixedHasher` (a different function on a build
+//! with AES than on one without, so its output cannot address content), not
+//! std's default SipHash hasher (with an unspecified, version-dependent
 //! implementation). A digest that is compared across two builds must be a
-//! function of the bytes and of nothing else, and the only way to be sure of that
-//! is to be able to read the whole hash.
+//! function of the bytes and of nothing else, so it is computed by a function
+//! whose every output is specified independently of any build.
+
+use purrdf_hash::fnv::{BASIS, fold};
 
 use crate::geom::{Crs, GeometryLiteral};
 use crate::measure;
@@ -118,26 +121,6 @@ const CORPUS: &[&str] = &[
     // A multi-geometry, for the same reason.
     "MULTIPOLYGON(((0 0,1 0,1 1,0 0)),((5 5,6 5,6 6,5 5)))",
 ];
-
-/// FNV-1a over a byte slice, folded into `state`.
-///
-/// Written out rather than imported so that the digest is a function of these six
-/// lines and of nothing that could change under it. `wrapping_mul` because
-/// FNV's multiply is defined modulo 2^64 — an overflow here is the algorithm, not
-/// a bug, and it must not panic under the debug overflow checks the test profile
-/// turns on.
-const fn fold(mut state: u64, bytes: &[u8]) -> u64 {
-    let mut index = 0;
-    while index < bytes.len() {
-        state ^= bytes[index] as u64;
-        state = state.wrapping_mul(0x0000_0100_0000_01B3);
-        index += 1;
-    }
-    state
-}
-
-/// The FNV-1a offset basis.
-const BASIS: u64 = 0xCBF2_9CE4_8422_2325;
 
 /// Run the corpus through every consumer-visible output path and fold the
 /// resulting bytes into one number.
@@ -285,7 +268,9 @@ pub fn corpus_len() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{CORPUS, CORPUS_CRS, corpus_len, digest, fold};
+    use purrdf_hash::fnv::{BASIS, fold};
+
+    use super::{CORPUS, CORPUS_CRS, corpus_len, digest};
     use crate::geom::Crs;
     use crate::wkt;
 
@@ -305,12 +290,12 @@ mod tests {
         assert!(corpus_len() >= 20, "the corpus must be worth hashing");
         assert_ne!(
             digest(),
-            super::BASIS,
+            BASIS,
             "the digest must differ from the unfolded basis, or nothing was folded"
         );
         // And the fold itself must be sensitive to a single byte.
-        assert_ne!(fold(super::BASIS, b"a"), fold(super::BASIS, b"b"));
-        assert_ne!(fold(super::BASIS, b"ab"), fold(super::BASIS, b"ba"));
+        assert_ne!(fold(BASIS, b"a"), fold(BASIS, b"b"));
+        assert_ne!(fold(BASIS, b"ab"), fold(BASIS, b"ba"));
     }
 
     /// Every corpus member must parse, or the digest is computed over a silently

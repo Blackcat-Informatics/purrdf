@@ -155,44 +155,78 @@ impl fmt::Display for CliError {
 
 impl std::error::Error for CliError {}
 
-impl From<RdfDiagnostic> for CliError {
-    fn from(diagnostic: RdfDiagnostic) -> Self {
-        Self::Runtime(diagnostic.to_string())
+/// The refusal for a command-line IRI value that denotes nothing.
+///
+/// `value` names the flag and the value as written (`--iri `x``). The refusal carries
+/// the shared [`purrdf_iri::IriError::diagnostic_code`], so it groups with every other
+/// IRI failure in this toolkit. When the error is the flag's relative-reference code
+/// (`relative_code`), the message is the flag's own `relative_remedy`, and never the
+/// library's remedy: that one names document directives (`@base`, `xml:base`, `BASE`),
+/// and argv text is in no document, so naming a fix the operator cannot apply is worse
+/// than naming none. Any other failure reads `{value}: {code}: {detail}{error}`.
+///
+/// Every argv IRI flag refuses through this one shape, so the wording of an IRI refusal
+/// cannot drift from flag to flag. It is a usage error (exit 2): nothing was read to
+/// discover it.
+pub(crate) fn argv_iri_refusal(
+    value: &str,
+    error: &purrdf_iri::IriError,
+    relative_code: &str,
+    relative_remedy: &str,
+    detail: &str,
+) -> CliError {
+    let code = error.diagnostic_code();
+    if code == relative_code {
+        return CliError::Usage(format!("{value}: {code}: {relative_remedy}"));
     }
+    CliError::Usage(format!("{value}: {code}: {detail}{error}"))
 }
 
-impl From<PackError> for CliError {
-    fn from(error: PackError) -> Self {
-        Self::Runtime(error.to_string())
-    }
-}
+// Every library failure the pipeline propagates with `?` is a runtime failure (exit 1)
+// carrying the library error's rendered message.
+purrdf_lex::variant_from!(CliError {
+    Runtime(
+        RdfDiagnostic,
+        PackError,
+        purrdf_rdf::ProjectionError,
+        purrdf_rdf::TransportError,
+        std::io::Error,
+        purrdf_sparql_results::Error,
+        EntailError,
+    ) as ToString::to_string
+});
 
-impl From<purrdf_rdf::ProjectionError> for CliError {
-    fn from(error: purrdf_rdf::ProjectionError) -> Self {
-        Self::Runtime(error.to_string())
-    }
-}
+#[cfg(test)]
+mod tests {
+    use purrdf_iri::IriError;
 
-impl From<purrdf_rdf::TransportError> for CliError {
-    fn from(error: purrdf_rdf::TransportError) -> Self {
-        Self::Runtime(error.to_string())
-    }
-}
+    use super::*;
 
-impl From<std::io::Error> for CliError {
-    fn from(error: std::io::Error) -> Self {
-        Self::Runtime(error.to_string())
-    }
-}
-
-impl From<purrdf_sparql_results::Error> for CliError {
-    fn from(error: purrdf_sparql_results::Error) -> Self {
-        Self::Runtime(error.to_string())
-    }
-}
-
-impl From<EntailError> for CliError {
-    fn from(error: EntailError) -> Self {
-        Self::Runtime(error.to_string())
+    #[test]
+    fn an_argv_iri_refusal_names_the_flag_remedy_only_for_its_relative_code() {
+        let relative = IriError::NonAbsoluteBase("rel".to_owned());
+        let refusal = argv_iri_refusal(
+            "--flag `rel`",
+            &relative,
+            "iri-non-absolute-base",
+            "write it absolute",
+            "detail: ",
+        );
+        assert!(matches!(refusal, CliError::Usage(_)), "exit 2");
+        assert_eq!(
+            refusal.to_string(),
+            "--flag `rel`: iri-non-absolute-base: write it absolute"
+        );
+        let other = argv_iri_refusal(
+            "--flag ``",
+            &IriError::Empty,
+            "iri-non-absolute-base",
+            "write it absolute",
+            "detail: ",
+        );
+        assert_eq!(
+            other.to_string(),
+            format!("--flag ``: iri-empty: detail: {}", IriError::Empty)
+        );
     }
 }

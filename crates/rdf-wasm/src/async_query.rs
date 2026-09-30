@@ -231,6 +231,8 @@ use std::time::Duration;
 
 use purrdf::{JsonLdSerializeOptions, RdfDataset, parse_dataset};
 use purrdf_core::SparqlResult;
+use purrdf_lex::json::record::{DecodeError, FromJson, Record};
+use purrdf_lex::json::{self, Value};
 use purrdf_sparql_eval::protocol::FailureCode;
 use purrdf_sparql_eval::remote_http::DEFAULT_TIMEOUT;
 use purrdf_sparql_eval::{
@@ -241,12 +243,13 @@ use purrdf_sparql_eval::{
     ServiceResolver, StopCause, StopSignal, TrippedGovernor, WallDeadline,
 };
 use purrdf_sparql_results::ProvenanceNamespace;
-use serde::Deserialize;
 use wasm_bindgen::convert::TryFromJsValue;
 use wasm_bindgen::prelude::*;
 
 use crate::codec::resolve_media_type;
+use crate::convert::BlankScopeMode;
 use crate::dataset::{Dataset, UpdateClaim};
+use crate::host::reflect_get;
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::operation::{
     ClosureInputs, JobError, JobOutcome, JobRun, OPTIONS_CODE, OperationInput, SHACL_REFUSAL_CODE,
@@ -254,9 +257,9 @@ use crate::operation::{
 };
 use crate::query::{
     EntailmentQueryOutcome, GovernorArgs, NegotiatedOutcome, QueryEngine, QueryOutcome,
-    QueryResult, UPDATE_REFUSES_MAX_ANSWERS, UpdateOutcome, entailment_query_outcome_from_native,
-    kind_mismatch, negotiated_outcome_from_value, query_outcome_from_governed,
-    query_result_from_sparql, update_outcome_from_governed,
+    QueryResult, UpdateOutcome, entailment_query_outcome_from_native, kind_mismatch,
+    negotiated_outcome_from_value, query_outcome_from_governed, query_result_from_sparql,
+    update_outcome_from_governed,
 };
 use crate::shacl::{
     ShaclChangeValidation, ShaclEntailment, ShaclImportError, ShaclJobRequest,
@@ -406,7 +409,7 @@ fn run_job(id: u32) -> RunStatus {
 /// remaining budget are read from.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn now_ms() -> f64 {
-    date_now_import()
+    purrdf_sparql_eval::wasm_host::date_now()
 }
 
 /// Milliseconds since the Unix epoch — the host clock the evidence and the deadline's
@@ -662,14 +665,6 @@ impl AsyncEffect {
     }
 }
 
-/// Flatten `(name, value)` pairs into `[name, value, name, value, …]`.
-fn flatten_headers(headers: &[(String, String)]) -> Vec<String> {
-    headers
-        .iter()
-        .flat_map(|(name, value)| [name.clone(), value.clone()])
-        .collect()
-}
-
 #[wasm_bindgen]
 impl AsyncEffect {
     /// The sequence number every delivery for this effect must name.
@@ -771,8 +766,10 @@ impl AsyncEffect {
     /// not be merged. Empty when no catalog is configured.
     pub fn headers(&self) -> Vec<String> {
         match &self.payload {
-            EffectPayload::Service { effect, .. } => flatten_headers(&effect.headers),
-            EffectPayload::Load(effect) => flatten_headers(&effect.headers),
+            EffectPayload::Service { effect, .. } => {
+                crate::protocol::flatten_pairs(&effect.headers)
+            }
+            EffectPayload::Load(effect) => crate::protocol::flatten_pairs(&effect.headers),
             EffectPayload::Yield | EffectPayload::AwaitExchange { .. } => Vec::new(),
         }
     }
@@ -2368,6 +2365,9 @@ struct JobInner {
     /// The identity of the host's `resolveService` handler, when it supplied one.
     service_handler: Option<u32>,
     load_handler: bool,
+    /// How the typed results this job hands out convert a blank node's scope: the mode
+    /// of the engine that began it, at the moment it began.
+    blank_scope: BlankScopeMode,
     catalog: Option<NativeServiceCatalog>,
     local_services: Vec<(String, Arc<RdfDataset>)>,
     dataset_id: u64,
@@ -3013,7 +3013,7 @@ impl AsyncJob {
                 return Err(kind_mismatch(expected, &result).into());
             }
         }
-        Ok(query_result_from_sparql(result)?)
+        Ok(query_result_from_sparql(result, self.inner.blank_scope)?)
     }
 
     /// A raw job's serialized bytes, an explain job's rendered ledger, or a SHACL job's
@@ -3038,7 +3038,10 @@ impl AsyncJob {
     #[wasm_bindgen(js_name = takeQueryOutcome)]
     pub fn take_query_outcome(&self) -> Result<QueryOutcome, JsValue> {
         match self.take("takeQueryOutcome", &[AsyncOperationKind::Governed])? {
-            JobOutcome::Governed(outcome) => Ok(query_outcome_from_governed(*outcome)?),
+            JobOutcome::Governed(outcome) => Ok(query_outcome_from_governed(
+                *outcome,
+                self.inner.blank_scope,
+            )?),
             _ => Err(usage_error(
                 "takeQueryOutcome: the job holds no governed outcome",
             )),
@@ -3049,7 +3052,10 @@ impl AsyncJob {
     #[wasm_bindgen(js_name = takeNegotiatedOutcome)]
     pub fn take_negotiated_outcome(&self) -> Result<NegotiatedOutcome, JsValue> {
         match self.take("takeNegotiatedOutcome", &[AsyncOperationKind::Negotiated])? {
-            JobOutcome::Negotiated(value) => Ok(negotiated_outcome_from_value(*value)?),
+            JobOutcome::Negotiated(value) => Ok(negotiated_outcome_from_value(
+                *value,
+                self.inner.blank_scope,
+            )?),
             _ => Err(usage_error(
                 "takeNegotiatedOutcome: the job holds no negotiated outcome",
             )),
@@ -3063,7 +3069,10 @@ impl AsyncJob {
             "takeEntailmentOutcome",
             &[AsyncOperationKind::EntailmentGoverned],
         )? {
-            JobOutcome::Entailment(outcome) => Ok(entailment_query_outcome_from_native(*outcome)?),
+            JobOutcome::Entailment(outcome) => Ok(entailment_query_outcome_from_native(
+                *outcome,
+                self.inner.blank_scope,
+            )?),
             _ => Err(usage_error(
                 "takeEntailmentOutcome: the job holds no entailment outcome",
             )),
@@ -3548,9 +3557,6 @@ extern "C" {
     #[wasm_bindgen(js_namespace = Array, js_name = isArray)]
     fn is_array(value: &JsValue) -> bool;
 
-    #[wasm_bindgen(js_namespace = Reflect, js_name = get, catch)]
-    fn reflect_get(target: &JsValue, key: &str) -> Result<JsValue, JsValue>;
-
     /// `ServiceCatalog#copy`, called on whatever was passed as the catalog.
     #[wasm_bindgen(method, catch, js_name = copy)]
     fn copy(this: &OptionSource) -> Result<JsValue, JsValue>;
@@ -3919,9 +3925,6 @@ impl AsyncJobOptions {
                 }
             }
         }
-        if kind == AsyncOperationKind::UpdateGoverned && ceilings.contains_key("maxAnswers") {
-            return Err(OptionsError::refused(UPDATE_REFUSES_MAX_ANSWERS));
-        }
         options.ceilings = GovernorArgs::decode(
             ceilings.get("fuel").copied(),
             ceilings.get("deadlineMs").copied(),
@@ -3931,6 +3934,12 @@ impl AsyncJobOptions {
             ceilings.get("maxRemoteRequests").copied(),
         )
         .map_err(OptionsError::refused)?;
+        if kind == AsyncOperationKind::UpdateGoverned {
+            options
+                .ceilings
+                .update_ceilings()
+                .map_err(OptionsError::refused)?;
+        }
         options.quantum = count_option(
             "yieldEveryPolls",
             counts.get("yieldEveryPolls").copied(),
@@ -4028,26 +4037,45 @@ pub struct ServiceCatalog {
     inner: NativeServiceCatalog,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+/// One service profile document: a closed record of camelCase members
+/// ([`purrdf_lex::json::record`]); `capabilities` is required.
+#[derive(Debug)]
 struct ProfileJson {
     capabilities: Vec<String>,
-    #[serde(default)]
-    headers: Option<serde_json::Value>,
-    #[serde(default)]
+    headers: Option<Value>,
     credential: Option<CredentialJson>,
-    #[serde(default)]
     user_agent: Option<String>,
-    #[serde(default)]
     timeout_ms: Option<u64>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+impl FromJson for ProfileJson {
+    /// `headers` is carried as written, member order and repeats included, for the
+    /// header check to read.
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut record = Record::new(value, "an object")?;
+        let profile = Self {
+            capabilities: record.required("capabilities")?,
+            headers: record
+                .optional_with("headers", |headers| Ok::<_, DecodeError>(headers.clone()))?,
+            credential: record.optional("credential")?,
+            user_agent: record.optional("userAgent")?,
+            timeout_ms: record.optional("timeoutMs")?,
+        };
+        record.deny_unknown()?;
+        Ok(profile)
+    }
+}
+
+/// A profile's `credential`: exactly a `header` name and its `value`.
 struct CredentialJson {
     header: String,
     value: String,
 }
+
+purrdf_lex::json_record!(impl FromJson for CredentialJson as "a credential object" {
+    "header" => header: required,
+    "value" => value: required,
+});
 
 // Hand-written so the secret never reaches a log.
 impl fmt::Debug for CredentialJson {
@@ -4081,8 +4109,9 @@ fn check_header(name: &str, value: &str) -> Result<(), String> {
 
 /// Parse one service profile document.
 fn parse_profile(json: &str) -> Result<ServiceProfile, String> {
-    let profile: ProfileJson =
-        serde_json::from_str(json).map_err(|error| format!("service profile: {error}"))?;
+    let document = json::read(json).map_err(|error| format!("service profile: {error}"))?;
+    let profile =
+        ProfileJson::from_json(&document).map_err(|error| format!("service profile: {error}"))?;
     let mut capabilities = ServiceCapabilities::NONE;
     for name in &profile.capabilities {
         let capability = match name.as_str() {
@@ -4099,17 +4128,14 @@ fn parse_profile(json: &str) -> Result<ServiceProfile, String> {
         capabilities = capabilities.grant(capability);
     }
     let mut out = ServiceProfile::new(capabilities);
-    match profile.headers {
+    match &profile.headers {
         None => {}
-        Some(serde_json::Value::Array(pairs)) => {
+        Some(Value::Array(pairs)) => {
             for pair in pairs {
                 let (name, value) = match pair.as_array().map(Vec::as_slice) {
-                    Some(
-                        [
-                            serde_json::Value::String(name),
-                            serde_json::Value::String(value),
-                        ],
-                    ) => (name.clone(), value.clone()),
+                    Some([Value::String(name), Value::String(value)]) => {
+                        (name.clone(), value.clone())
+                    }
                     _ => {
                         return Err(format!(
                             "service profile: every header must be a [name, value] pair of \
@@ -4219,6 +4245,7 @@ fn begin_job(
     kind: AsyncOperationKind,
     sparql: String,
     options: &AsyncJobOptions,
+    blank_scope: BlankScopeMode,
     jsonld: Option<JsonLdSerializeOptions>,
 ) -> Result<AsyncJob, JobError> {
     options
@@ -4269,6 +4296,7 @@ fn begin_job(
         kind,
         sparql_operation(input),
         options,
+        blank_scope,
         freeze_ms,
         (dataset.identity(), dataset.current_generation()),
         update_claim,
@@ -4306,6 +4334,7 @@ fn register_operation(
     kind: AsyncOperationKind,
     operation: Operation,
     options: &AsyncJobOptions,
+    blank_scope: BlankScopeMode,
     freeze_ms: f64,
     dataset: (u64, u64),
     update_claim: Option<UpdateClaim>,
@@ -4326,6 +4355,7 @@ fn register_operation(
             operation: RefCell::new(Some(operation)),
             service_handler: options.service_handler,
             load_handler: options.load_handler,
+            blank_scope,
             catalog: options.catalog.clone(),
             local_services: options.local_services.clone(),
             dataset_id: dataset.0,
@@ -4352,6 +4382,7 @@ fn begin_shacl_job(request: ShaclRequest, options: &AsyncJobOptions) -> Result<A
         AsyncOperationKind::Shacl,
         Box::new(move |run| execute_shacl(request, run)),
         options,
+        BlankScopeMode::Keep,
         0.0,
         (0, 0),
         None,
@@ -4429,8 +4460,16 @@ impl QueryEngine {
             (AsyncOperationKind::Raw, Some(json)) => Some(decode_options(json)?),
             _ => None,
         };
-        begin_job(self.engine(), dataset, kind, sparql, options, jsonld)
-            .map_err(|error| begin_refused(&error))
+        begin_job(
+            self.engine(),
+            dataset,
+            kind,
+            sparql,
+            options,
+            self.blank_scope(),
+            jsonld,
+        )
+        .map_err(|error| begin_refused(&error))
     }
 
     /// Start a `rawWithContext` operation: a CONSTRUCT/DESCRIBE serialized under a
@@ -4465,8 +4504,16 @@ impl QueryEngine {
                 begin_refused(&JobError::message(OPTIONS_CODE, error.to_string()))
             })?;
         }
-        begin_job(self.engine(), dataset, kind, sparql, options, Some(jsonld))
-            .map_err(|error| begin_refused(&error))
+        begin_job(
+            self.engine(),
+            dataset,
+            kind,
+            sparql,
+            options,
+            self.blank_scope(),
+            Some(jsonld),
+        )
+        .map_err(|error| begin_refused(&error))
     }
 }
 
@@ -4476,7 +4523,7 @@ mod tests {
     use purrdf_sparql_eval::{GovernedOutcome, QueryOptions};
 
     use super::*;
-    use crate::query::sparql_request;
+    use crate::query::{UPDATE_REFUSES_MAX_ANSWERS, sparql_request};
     use crate::shacl::requests;
     use crate::shacl::tests::{TOOLS_DATA, TOOLS_SHAPES};
     use purrdf_validate::ShapesError;
@@ -4621,6 +4668,7 @@ mod tests {
             kind,
             sparql.to_owned(),
             &options,
+            engine.blank_scope(),
             None,
         )
         .expect("the job begins")
@@ -4983,6 +5031,33 @@ mod tests {
                 .expect_err("capabilities are required")
                 .contains("capabilities")
         );
+    }
+
+    /// A repeated profile member, a credential member outside `header`/`value` and a
+    /// `null` capability list are refused and named; each neighbour is accepted.
+    #[test]
+    fn a_profile_is_a_closed_record_at_every_level() {
+        let error = parse_profile(r#"{"capabilities":["query"],"userAgent":"a","userAgent":"b"}"#)
+            .expect_err("a repeated member");
+        assert!(error.contains("duplicate field `userAgent`"), "{error}");
+        assert!(parse_profile(r#"{"capabilities":["query"],"userAgent":"a"}"#).is_ok());
+        let error = parse_profile(
+            r#"{"capabilities":["credentials"],"credential":{"header":"X-K","value":"v","scheme":"s"}}"#,
+        )
+        .expect_err("an undeclared credential member");
+        assert!(error.contains("unknown field `scheme`"), "{error}");
+        assert!(
+            parse_profile(
+                r#"{"capabilities":["credentials"],"credential":{"header":"X-K","value":"v"}}"#
+            )
+            .is_ok()
+        );
+        let error = parse_profile(r#"{"capabilities":null}"#).expect_err("null capabilities");
+        assert!(error.contains("capabilities"), "{error}");
+        assert!(parse_profile(r#"{"capabilities":[]}"#).is_ok());
+        let error = parse_profile(r#"{"capabilities":["query"],"timeoutMs":1.5}"#)
+            .expect_err("a fractional timeout");
+        assert!(error.contains("timeoutMs"), "{error}");
     }
 
     /// A timeout the host's timer could not honour is refused; the longest one it can is
@@ -6977,6 +7052,7 @@ mod tests {
             AsyncOperationKind::UpdateGoverned,
             INSERT.to_owned(),
             &validated,
+            engine.blank_scope(),
             None,
         )
         .expect_err("an update is in flight");
@@ -7473,11 +7549,4 @@ mod tests {
         );
         assert!(options().validate(AsyncOperationKind::Shacl).is_ok());
     }
-}
-
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen::prelude::wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen::prelude::wasm_bindgen(js_namespace = Date, js_name = now)]
-    fn date_now_import() -> f64;
 }

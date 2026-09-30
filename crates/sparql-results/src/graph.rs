@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! CONSTRUCT-graph → N-Quads serialization over the `purrdf-core` primitives
-//! (wasm-clean; does **not** pull `crates/rdf`/oxigraph).
+//! (wasm-clean; does **not** pull `crates/rdf`).
 //!
 //! A `SparqlResult::Graph` carries an [`RdfDataset`]. The standard N-Triples
 //! lossy path would emit only the quads, in one graph; in keeping with the

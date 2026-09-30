@@ -17,9 +17,12 @@
 
 #![cfg(all(target_arch = "x86", not(target_feature = "sse2")))]
 
+#[path = "support/fixture.rs"]
+mod fixture;
+use fixture::{bits, params, seeded_matrix};
 use purrdf_core::DistanceMetric;
-use purrdf_core::distance::{FloatEnvironmentError, FloatEnvironmentEvidence};
-use purrdf_hnsw::{HnswError, HnswIndex, Params, Ranked, VectorMatrix, level::splitmix64};
+use purrdf_core::distance::{FloatEnvironmentError, FloatEnvironmentEvidence, Reassociated};
+use purrdf_hnsw::{HnswError, HnswIndex, Ranked};
 use purrdf_xsd::ieee::x87;
 
 /// Round toward zero.
@@ -36,22 +39,6 @@ fn round_this_thread_toward_zero() {
     unsafe { x87::load_control_word(word) };
 }
 
-fn params() -> Params {
-    Params::new(4, 8, 16, 8).expect("valid")
-}
-
-/// A deterministic fixture matrix. Nothing here reads a clock or an RNG.
-fn matrix(rows: usize, dims: usize) -> VectorMatrix {
-    let mut state = 0xF7A3_0000_5EED_0001_u64;
-    let mut data = Vec::with_capacity(rows * dims);
-    for _ in 0..rows * dims {
-        state = splitmix64(state);
-        let unit = (state >> 11) as f64 / (1_u64 << 53) as f64;
-        data.push(unit.mul_add(2.0, -1.0));
-    }
-    VectorMatrix::new(rows, dims, data).expect("the fixture matrix is valid")
-}
-
 /// Whether `error` is the rounding refusal naming a worker's x87 control word with the
 /// toward-zero field loaded.
 fn is_toward_zero_refusal(error: &HnswError) -> bool {
@@ -64,19 +51,6 @@ fn is_toward_zero_refusal(error: &HnswError) -> bool {
             },
         }) if *bits & u64::from(x87::ROUNDING_CONTROL) == u64::from(TOWARD_ZERO)
     )
-}
-
-/// A batch answer as its rows and distance bits, so equality is bit-identity.
-fn bits(batch: &[Vec<Ranked>]) -> Vec<Vec<(usize, u64)>> {
-    batch
-        .iter()
-        .map(|ranked| {
-            ranked
-                .iter()
-                .map(|scored| (scored.row, scored.distance.to_bits()))
-                .collect()
-        })
-        .collect()
 }
 
 #[test]
@@ -92,12 +66,12 @@ fn a_directed_rayon_worker_refuses_its_share_and_a_clean_one_answers_the_single_
         .expect("a clean pool");
 
     // Everything is built on the clean pool, whose workers run the build's proposals.
-    let data = matrix(48, 70);
+    let data = seeded_matrix(48, 70, 0xF7A3_0000_5EED_0001, None);
     let metric = DistanceMetric::SquaredEuclidean;
     let (exact, fast) = clean.install(|| {
         (
             HnswIndex::build(data.clone(), &metric, params()).expect("builds on clean workers"),
-            HnswIndex::build_reassociated(data.clone(), &metric, params())
+            purrdf_hnsw::build::<Reassociated>(data.clone(), &metric, params())
                 .expect("builds on clean workers"),
         )
     });

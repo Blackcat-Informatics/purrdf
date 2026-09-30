@@ -83,7 +83,7 @@ impl Parser<'_> {
                         "sh:SPARQLTargetType <{iri}> has a sh:parameter without an IRI sh:path/sh:predicate"
                     )
                 })?;
-            let var = crate::shapes::local_name(predicate.as_str()).to_owned();
+            let var = purrdf_iri::local_name(predicate.as_str()).to_owned();
             if var.is_empty() {
                 return Err(format!(
                     "sh:SPARQLTargetType <{iri}> has a sh:parameter whose predicate <{}> has an empty local name",

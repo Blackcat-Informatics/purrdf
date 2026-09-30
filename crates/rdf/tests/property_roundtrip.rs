@@ -18,12 +18,10 @@
 //! One generator family authors frozen [`RdfDataset`] fixtures; the native text codecs
 //! ([`purrdf_rdf::serialize_dataset`] / [`purrdf_rdf::parse_dataset`]) serialize and
 //! re-parse them for N-Quads and TriG, the GTS fold/unfold path covers the third
-//! codec, and an NCName-restricted generator drives the RDF/XML round-trip. With
-//! oxigraph removed, this gate exercises the native codecs against the native
-//! RDFC-1.0 comparator directly (it is no longer a cross-check against an
-//! independent oxigraph implementation — the native engine is the sole
-//! authority). The native text codec's own isomorphism round-trips additionally live
-//! in `crates/rdf/src/native_codecs/mod.rs`.
+//! codec, and an NCName-restricted generator drives the RDF/XML round-trip. This
+//! gate exercises the native codecs against the native RDFC-1.0 comparator
+//! directly — the native engine is the sole authority. The native text codec's own
+//! isomorphism round-trips additionally live in `crates/rdf/src/native_codecs/mod.rs`.
 //!
 //! # Generators dodge codec-lossy inputs deliberately
 //!
@@ -34,8 +32,7 @@
 //! # Coverage and deferrals
 //!
 //! * **JSON-LD** is no longer exercised here: the native text codecs cover Turtle /
-//!   TriG / N-Triples / N-Quads / RDF-XML (no JSON-LD), and the prior JSON-LD
-//!   property tested oxigraph's JSON-LD serializer — removed with oxigraph.
+//!   TriG / N-Triples / N-Quads / RDF-XML (no JSON-LD).
 //! * **CLIF / CGIF / XCL** round-trips: depend on the open Common Logic epic
 //!   and do not exist yet.
 
@@ -305,10 +302,8 @@ const SENTINEL_REIFIES: &str = "urn:purrdf:rdfc:reifies";
 /// blank node, which `arb_dataset`/`arb_dataset_star` above never generate
 /// (their graph slot is `prop::option::of(arb_iri())`, IRI-only).
 fn arb_graph_term() -> impl Strategy<Value = RdfTerm> {
-    prop_oneof![
-        arb_iri().prop_map(RdfTerm::iri),
-        arb_bnode_label().prop_map(RdfTerm::blank_node),
-    ]
+    // The same IRI-or-blank choice a subject position draws from.
+    arb_subject()
 }
 
 /// A quoted triple nested up to TWO levels deep: [`arb_quoted_triple`]'s
@@ -414,16 +409,12 @@ fn arb_diff_sources_no_sentinel() -> impl Strategy<Value = (Vec<RdfQuad>, Vec<Rd
 
 // ── Config ──────────────────────────────────────────────────────────────────────
 
-fn config() -> Config {
-    // Bounded case count keeps each property fast under `cargo test` (and the
-    // CI job timeout); raise locally with PURRDF_PROP_CASES to deepen the search.
-    Config::with_cases(prop::cases_from_env(64))
-}
-
 // ── Properties ──────────────────────────────────────────────────────────────────
 
 prop_test! {
-    #![prop_config(config())]
+    // Bounded case count keeps each property fast under `cargo test` (and the CI
+    // job timeout); raise locally with PURRDF_PROP_CASES to deepen the search.
+    #![prop_config(Config::with_env_cases(64))]
 
     /// N-Quads: serialize → parse round-trips to the same canonical quad set,
     /// including RDF-1.2 quoted triples.

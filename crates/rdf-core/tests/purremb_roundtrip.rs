@@ -4,14 +4,15 @@
 //! End-to-end PURREMB construction, verification, and Matryoshka access.
 
 use purrdf_core::distance::{Arithmetic as _, Exact};
+use purrdf_core::purremb_fixture::Identities;
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, CorpusTarget, DimensionalityPolicy, DistanceMetric,
-    DocumentTarget, EffectivePrefix, EmbeddingBuilder, EmbeddingFamilyContract, EmbeddingView,
-    MatrixInput, MatrixRow, PackView, PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder,
-    RdfTermTarget, RelationKind, SourceVerificationMode, StageImplementation, TargetRelation,
-    TargetSet, TermValue, TextChunkTarget, TokenSpan, VectorDtype, derive_vector_space_id,
-    require_compatible_vector_spaces, verify_embedding, verify_embedding_source,
+    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, ContentDigest, CorpusTarget,
+    DimensionalityPolicy, DistanceMetric, DocumentTarget, EffectivePrefix, EmbeddingBuilder,
+    EmbeddingFamilyContract, EmbeddingView, MatrixInput, MatrixRow, PackView, PrefixPostprocessing,
+    ProjectionSpec, RdfDatasetBuilder, RdfTermTarget, RelationKind, SourceVerificationMode,
+    TargetRelation, TargetSet, TermValue, TextChunkTarget, TokenSpan, VectorDtype,
+    derive_vector_space_id, require_compatible_vector_spaces, verify_embedding,
+    verify_embedding_source,
 };
 
 fn golden_path() -> std::path::PathBuf {
@@ -23,39 +24,25 @@ struct Fixture {
     artifact_bytes: Vec<u8>,
 }
 
-fn artifact(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        format!("https://example.org/artifact/{name}"),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        Some(b"fixture-v1".to_vec()),
-        ArtifactIdentityKind::Single,
-    )
-    .expect("valid artifact identity")
-}
-
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            format!("https://example.org/stage/{name}"),
-            ContentDigest::of(name.as_bytes()),
-            "application/cbor",
-            vec![0xa1, 0x61, b'v', 0x01],
-        )
-        .expect("valid stage contract"),
-    )
-}
+const FX: Identities = Identities {
+    artifact_base: "https://example.org/artifact/",
+    stage_base: "https://example.org/stage/",
+    artifact_salt: Some(b"fixture-v1"),
+    stage_media: "application/cbor",
+    stage_payload: &[0xa1, 0x61, b'v', 0x01],
+    ..Identities::at("")
+};
 
 fn family_contract() -> EmbeddingFamilyContract {
     EmbeddingFamilyContract {
-        model: artifact("model"),
-        engine: artifact("engine"),
-        tokenizer: artifact("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("subject-projection"),
-        preprocessing: stage("unicode-nfc"),
-        chunking: stage("overlapping-utf8-chunks"),
-        pooling: stage("mean-pooling"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("subject-projection"),
+        preprocessing: FX.stage("unicode-nfc"),
+        chunking: FX.stage("overlapping-utf8-chunks"),
+        pooling: FX.stage("mean-pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F32,
@@ -288,20 +275,15 @@ fn unordered_typed_inputs_produce_identical_bytes() {
     assert_eq!(forward.artifact_bytes, reverse.artifact_bytes);
 }
 
+/// The canonical artifact, byte for byte; `PURREMB_REGENERATE_GOLDEN=1` rewrites the
+/// golden from what the build produced instead.
 #[test]
 fn canonical_artifact_matches_checked_in_golden() {
-    let expected = std::fs::read(golden_path()).expect("checked-in PURREMB golden");
-    assert_eq!(build_fixture(false).artifact_bytes, expected);
-}
-
-#[test]
-#[ignore = "explicit golden regeneration only"]
-fn regenerate_canonical_artifact_golden() {
-    assert_eq!(
-        std::env::var_os("PURREMB_REGENERATE_GOLDEN").as_deref(),
-        Some(std::ffi::OsStr::new("1")),
-        "set PURREMB_REGENERATE_GOLDEN=1 to replace the golden"
-    );
-    std::fs::write(golden_path(), build_fixture(false).artifact_bytes)
-        .expect("write PURREMB golden");
+    if let Err(error) = purrdf_testkit::golden::check_bytes(
+        &golden_path(),
+        &build_fixture(false).artifact_bytes,
+        "PURREMB_REGENERATE_GOLDEN",
+    ) {
+        panic!("{error}");
+    }
 }

@@ -10,11 +10,15 @@
 //! read-only accessor and no setter. The tests that depended on the removed
 //! mutability say so in place, with what coverage (if any) survives it and where.
 
+mod support;
+
+use support::ask;
+
 use purrdf_core::{RdfDatasetBuilder, SparqlResult};
 use purrdf_sparql_algebra::Child;
 use purrdf_sparql_algebra::{
     Expression, GraphPattern, GroundTerm, GroundTriple, Literal, NamedNode, ParserOptions,
-    PropertyFunctionCall, PropertyPathExpression, Query, QueryDataset, TermPattern, Variable,
+    PropertyFunctionCall, PropertyPathExpression, TermPattern, Variable,
 };
 use purrdf_sparql_eval::governor::GovernorState;
 use purrdf_sparql_eval::{
@@ -22,15 +26,6 @@ use purrdf_sparql_eval::{
     PropertyFunctionRegistry, QueryGovernors, QueryOptions,
 };
 use std::sync::Arc;
-
-fn ask(pattern: GraphPattern) -> Query {
-    Query::Ask {
-        pattern,
-        dataset: QueryDataset::default(),
-        base_iri: None,
-        version: None,
-    }
-}
 
 fn named() -> GroundTerm {
     GroundTerm::NamedNode(NamedNode::new("http://example.org/value").unwrap())
@@ -160,25 +155,21 @@ fn malformed_ranges_targets_and_nested_expressions_are_refused() {
     // stack is refused, typed. On an 8 MiB thread — which the C library may hand up to
     // 32 MiB — eighty thousand levels need 41 MB of walks at the parser's 512-byte
     // charge, while dropping the refused chain there needs under 5 MB.
-    let refused = std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024)
-        .spawn(move || {
-            let mut expression = Expression::Literal(Literal::new_simple("leaf"));
-            for _ in 0..80_000 {
-                expression = Expression::Not(Child::new(expression));
-            }
-            NativeSparqlEngine::new().prepare_algebra(
-                ask(GraphPattern::Filter {
-                    expr: expression,
-                    inner: empty().into(),
-                }),
-                QueryOptions::EMPTY,
-            )
-        })
-        .expect("spawn")
-        .join()
-        .expect("the preparing thread returned rather than aborting")
-        .expect_err("a chain too tall for the stack is refused");
+    let refused = purrdf_stack::on_stack(8 * 1024 * 1024, move || {
+        let mut expression = Expression::Literal(Literal::new_simple("leaf"));
+        for _ in 0..80_000 {
+            expression = Expression::Not(Child::new(expression));
+        }
+        NativeSparqlEngine::new().prepare_algebra(
+            ask(GraphPattern::Filter {
+                expr: expression,
+                inner: empty().into(),
+            }),
+            QueryOptions::EMPTY,
+        )
+    })
+    .expect("spawn")
+    .expect_err("a chain too tall for the stack is refused");
     assert_eq!(
         refused.code,
         purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE,
@@ -392,16 +383,10 @@ fn parsed_and_compiler_preparation_preserve_flat_operator_boundary_acceptance() 
                 .is_err()
         );
     }
-    let answered = std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(512 * 1024 * 1024)
-            .spawn_scoped(scope, || {
-                NativeSparqlEngine::new().query_prepared(&data, &text, &[], QueryOptions::EMPTY)
-            })
-            .expect("spawn")
-            .join()
-            .expect("the large thread returned")
+    let answered = purrdf_stack::on_stack_scoped(512 * 1024 * 1024, || {
+        NativeSparqlEngine::new().query_prepared(&data, &text, &[], QueryOptions::EMPTY)
     })
+    .expect("the large stack runs the evaluation")
     .expect("the spine evaluates where the stack holds it");
     assert!(
         matches!(answered, SparqlResult::Boolean(true)),

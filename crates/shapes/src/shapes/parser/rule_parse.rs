@@ -64,10 +64,6 @@ const TEMPLATE_TERMS: [&str; 3] = [sh::PARAMETER_PROPERTY, sh::CONSTRUCT, sh::PR
 
 /// The pre-bound variable names a template parameter may not take: `$this` and the
 /// shape context a shape rule pre-binds.
-/// `sh:JSRule`, the SHACL JavaScript Extensions rule type. Not a SHACL 1.2 term, so it
-/// has no `model::sh` constant.
-const JS_RULE: &str = "http://www.w3.org/ns/shacl#JSRule";
-
 const RESERVED_VARIABLES: [&str; 3] = ["this", "shapesGraph", "currentShape"];
 
 /// The one rule type a rule node executes as.
@@ -361,9 +357,9 @@ impl Parser<'_> {
             // A `sh:JSRule` a shape names is a rule this engine cannot execute
             // because it has no JavaScript engine: the same failure SHACL requires, typed
             // and naming the extension. One nothing names is inert vocabulary.
-            0 if is(&mut instances, JS_RULE) => Err(self.refuse_shacl_js(
+            0 if is(&mut instances, sh::JS_RULE) => Err(self.refuse_shacl_js(
                 rule_node,
-                JS_RULE,
+                sh::JS_RULE,
                 format!(
                     "rule {rule_node} is a sh:JSRule: {}; SHACL 1.2 Inference Rules: \"If a \
                      rules engine is not able to execute a given rule because it does not \
@@ -706,7 +702,7 @@ impl Parser<'_> {
                     format!("sh:optional on parameter {declaration} must be an xsd:boolean")
                 })?,
             };
-            let variable = crate::components::sparql_local_name(path.as_str());
+            let variable = purrdf_iri::local_name(path.as_str()).to_owned();
             if RESERVED_VARIABLES.contains(&variable.as_str()) {
                 return Err(format!(
                     "parameter {declaration} of SPARQL rule template {template} names the \

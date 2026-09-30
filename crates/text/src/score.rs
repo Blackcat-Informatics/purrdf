@@ -212,7 +212,7 @@ impl<T> Default for Constraint<T> {
 /// Applying this ahead of ranking is sound because ranks are per-partition:
 /// dropping whole partitions cannot change a surviving row's rank, since no
 /// surviving row was ever compared against a dropped one.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PartitionFilter {
     /// The graph dimension.
     graph: Constraint<TermValue>,
@@ -231,11 +231,17 @@ pub struct PartitionFilter {
     keys: Option<Vec<PartitionKey>>,
 }
 
+purrdf_hash::default_from_new!(PartitionFilter => unconstrained);
+
 impl PartitionFilter {
-    /// A filter that admits every partition.
+    /// A filter that admits every partition; [`Default`] delegates here.
     #[must_use]
-    pub fn unconstrained() -> Self {
-        Self::default()
+    pub const fn unconstrained() -> Self {
+        Self {
+            graph: Constraint::Any,
+            language: Constraint::Any,
+            keys: None,
+        }
     }
 
     /// This filter with its graph dimension replaced.

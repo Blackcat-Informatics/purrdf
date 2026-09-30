@@ -20,7 +20,7 @@
 //!   not define and this engine does not evaluate.
 //!
 //! and every term in it has exactly one [`TermClass`]. The census tests assert
-//! both halves: every declared vocabulary term and every `model.rs` constant is
+//! both halves: every declared vocabulary term and every `sh::` / `shnex::` constant is
 //! classified, read out of the files themselves rather than out of a second list.
 //!
 //! # What a class means at load

@@ -10,70 +10,76 @@
 
 use core::fmt;
 
+use purrdf_hash::Domain;
+use purrdf_hash::hex::Digest32;
 use sha2::{Digest as _, Sha256};
 
 use crate::ContentDigest;
 
-const D_ARTIFACT: &[u8] = b"purrdf.purremb.v1.artifact\0";
-const D_FAMILY_CONTRACT: &[u8] = b"purrdf.purremb.v1.family-contract\0";
-const D_FAMILY: &[u8] = b"purrdf.purremb.v1.family\0";
-const D_CHUNKING: &[u8] = b"purrdf.purremb.v1.chunking\0";
-const D_SPACE: &[u8] = b"purrdf.purremb.v1.vector-space\0";
-const D_TARGET_IDENTITY: &[u8] = b"purrdf.purremb.v1.target-identity\0";
-const D_TARGET: &[u8] = b"purrdf.purremb.v1.target\0";
-const D_TARGET_SET: &[u8] = b"purrdf.purremb.v1.target-set\0";
-const D_RELATION_ROLE: &[u8] = b"purrdf.purremb.v1.relation-role\0";
-const D_MATRIX_CONTENT: &[u8] = b"purrdf.purremb.v1.matrix-content\0";
-const D_MATRIX: &[u8] = b"purrdf.purremb.v1.matrix\0";
-const D_PROJECTION_CONTENT: &[u8] = b"purrdf.purremb.v1.projection-content\0";
-const D_PROJECTION: &[u8] = b"purrdf.purremb.v1.projection\0";
-const D_EXTERNAL_CONTRACT: &[u8] = b"purrdf.purremb.v1.external-contract\0";
-const D_EXTERNAL: &[u8] = b"purrdf.purremb.v1.external-binding\0";
-const D_INDEX_GUARD: &[u8] = b"purrdf.purremb.v1.index-guard\0";
-const D_INDEX: &[u8] = b"purrdf.purremb.v1.index\0";
+// The hash domains of the PURREMB identities: `docs/PURREMB.md` names each one,
+// and each is the prefix `FramedHasher` opens its preimage with. The writer and
+// the verifier stream three of them through `FramedHasher` directly.
+const D_ARTIFACT: Domain = Domain::new(b"purrdf.purremb.v1.artifact\0");
+const D_FAMILY_CONTRACT: Domain = Domain::new(b"purrdf.purremb.v1.family-contract\0");
+const D_FAMILY: Domain = Domain::new(b"purrdf.purremb.v1.family\0");
+const D_CHUNKING: Domain = Domain::new(b"purrdf.purremb.v1.chunking\0");
+const D_SPACE: Domain = Domain::new(b"purrdf.purremb.v1.vector-space\0");
+const D_TARGET_IDENTITY: Domain = Domain::new(b"purrdf.purremb.v1.target-identity\0");
+const D_TARGET: Domain = Domain::new(b"purrdf.purremb.v1.target\0");
+pub(super) const D_TARGET_SET: Domain = Domain::new(b"purrdf.purremb.v1.target-set\0");
+const D_RELATION_ROLE: Domain = Domain::new(b"purrdf.purremb.v1.relation-role\0");
+pub(super) const D_MATRIX_CONTENT: Domain = Domain::new(b"purrdf.purremb.v1.matrix-content\0");
+const D_MATRIX: Domain = Domain::new(b"purrdf.purremb.v1.matrix\0");
+pub(super) const D_PROJECTION_CONTENT: Domain =
+    Domain::new(b"purrdf.purremb.v1.projection-content\0");
+const D_PROJECTION: Domain = Domain::new(b"purrdf.purremb.v1.projection\0");
+const D_EXTERNAL_CONTRACT: Domain = Domain::new(b"purrdf.purremb.v1.external-contract\0");
+const D_EXTERNAL: Domain = Domain::new(b"purrdf.purremb.v1.external-binding\0");
+const D_INDEX_GUARD: Domain = Domain::new(b"purrdf.purremb.v1.index-guard\0");
+const D_INDEX: Domain = Domain::new(b"purrdf.purremb.v1.index\0");
 
 macro_rules! identity_type {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
         #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         #[repr(transparent)]
-        pub struct $name([u8; 32]);
+        pub struct $name(Digest32);
 
         impl $name {
             /// Adopts already-decoded identity bytes without hashing them.
             #[must_use]
             pub const fn from_raw(bytes: [u8; 32]) -> Self {
-                Self(bytes)
+                Self(Digest32::new(bytes))
             }
 
             /// Returns the exact 32 persisted bytes.
             #[must_use]
             pub const fn as_bytes(&self) -> &[u8; 32] {
-                &self.0
+                self.0.as_bytes()
             }
 
             /// Consumes the identity and returns its exact persisted bytes.
             #[must_use]
             pub const fn into_bytes(self) -> [u8; 32] {
-                self.0
+                self.0.into_bytes()
             }
 
             /// Renders lowercase hexadecimal for diagnostics and tooling.
             #[must_use]
             pub fn to_hex(self) -> String {
-                crate::hex::lower(&self.0)
+                self.0.to_hex()
             }
         }
 
         impl fmt::Debug for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.debug_tuple(stringify!($name)).field(&crate::hex::lower(&self.0)).finish()
+                f.debug_tuple(stringify!($name)).field(&self.0.to_hex()).finish()
             }
         }
 
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str(&crate::hex::lower(&self.0))
+                fmt::Display::fmt(&self.0, f)
             }
         }
     };
@@ -262,7 +268,7 @@ pub fn derive_target_set_id(target_ids: &[TargetId]) -> TargetSetId {
 /// Derives a role digest for an extension relation.
 #[must_use]
 pub fn derive_relation_role_digest(role_bytes: &[u8]) -> [u8; 32] {
-    hash_fold(D_RELATION_ROLE, &[role_bytes])
+    hash_fold(D_RELATION_ROLE, &[role_bytes]).into_bytes()
 }
 
 /// Derives the typed content digest of exact stored matrix bytes.
@@ -394,15 +400,83 @@ pub fn derive_artifact_root(header_zero_root: &[u8], directory: &[u8]) -> Artifa
     ArtifactRoot(hash_fold(D_ARTIFACT, &[header_zero_root, directory]))
 }
 
-fn hash_fold(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(domain);
+fn hash_fold(domain: Domain, fields: &[&[u8]]) -> Digest32 {
+    let mut hasher = FramedHasher::new(domain);
     for field in fields {
-        let length = u64::try_from(field.len()).expect("an in-memory slice length fits u64");
-        hasher.update(length.to_le_bytes());
-        hasher.update(field);
+        hasher.field(field);
     }
-    hasher.finalize().into()
+    Digest32::new(hasher.finish())
+}
+
+/// SHA-256 as a [`purrdf_hash::Digest`], so the framing of
+/// [`purrdf_hash::frame`] streams into it.
+///
+/// `sha2` is the workspace's one SHA-256 implementation; this newtype is the
+/// adapter the orphan rule requires between its type and `purrdf-hash`'s
+/// trait, and adds nothing else.
+#[derive(Clone, Default)]
+pub(super) struct Sha256Digest(Sha256);
+
+impl purrdf_hash::Digest for Sha256Digest {
+    fn output_len(&self) -> usize {
+        32
+    }
+
+    fn update(&mut self, data: &[u8]) {
+        self.0.update(data);
+    }
+
+    fn finalize_reset(&mut self, out: &mut [u8]) -> usize {
+        out[..32].copy_from_slice(&self.0.finalize_reset());
+        32
+    }
+
+    fn reset(&mut self) {
+        self.0 = Sha256::new();
+    }
+}
+
+/// The normative PURREMB identity fold of `docs/PURREMB.md`, streamed: the
+/// domain's bytes, then every field framed by [`purrdf_hash::frame`] — its
+/// length in eight little-endian bytes, then its bytes — under SHA-256.
+///
+/// [`hash_fold`] folds fields it holds; the writer and the verifier stream
+/// the matrix and projection contents and a target set's rows through the same
+/// fold, opening a long field with [`begin_field`](Self::begin_field) and
+/// absorbing its bytes in pieces with [`update`](Self::update).
+#[derive(Clone)]
+pub(super) struct FramedHasher {
+    hasher: Sha256Digest,
+}
+
+impl FramedHasher {
+    /// A fold under `domain`, its bytes absorbed.
+    pub(super) fn new(domain: Domain) -> Self {
+        let mut hasher = Sha256Digest::default();
+        purrdf_hash::Digest::update(&mut hasher, domain.as_bytes());
+        Self { hasher }
+    }
+
+    /// Absorb one whole field, framed.
+    pub(super) fn field(&mut self, bytes: &[u8]) {
+        purrdf_hash::frame::frame_le_into(&mut self.hasher, bytes);
+    }
+
+    /// Open a field of `length` bytes whose bytes follow through
+    /// [`update`](Self::update): the frame's length prefix alone.
+    pub(super) fn begin_field(&mut self, length: u64) {
+        purrdf_hash::Digest::update(&mut self.hasher, &length.to_le_bytes());
+    }
+
+    /// Absorb bytes of the field [`begin_field`](Self::begin_field) opened.
+    pub(super) fn update(&mut self, bytes: &[u8]) {
+        purrdf_hash::Digest::update(&mut self.hasher, bytes);
+    }
+
+    /// The fold's digest.
+    pub(super) fn finish(self) -> [u8; 32] {
+        self.hasher.0.finalize().into()
+    }
 }
 
 #[cfg(test)]
@@ -414,6 +488,57 @@ mod tests {
         let left = hash_fold(D_TARGET, &[b"ab", b"c"]);
         let right = hash_fold(D_TARGET, &[b"a", b"bc"]);
         assert_ne!(left, right);
+    }
+
+    /// The identities the checked-in PURREMB golden does not exercise, frozen over fixed
+    /// inputs: a relation role, an external contract and binding, an index guard and an
+    /// index. Each is persisted in an artifact, so a moved value is a changed identity.
+    #[test]
+    fn the_identities_outside_the_artifact_golden_are_frozen() {
+        let hex = |bytes: &[u8]| purrdf_hash::hex::Lower(bytes).to_string();
+        assert_eq!(
+            hex(&derive_relation_role_digest(b"https://example.org/role")),
+            "6f0a7fcae396ad75e599ecea1c4807948e480aba63594c4a51c3bfc636bdfca6"
+        );
+        let contract = derive_external_contract_digest(b"external contract");
+        assert_eq!(
+            hex(contract.as_bytes()),
+            "998bc47560e841615d067c98576b34459cfe426d7a942a71bc082ab7339f99e5"
+        );
+        let binding = derive_external_binding_id(ExternalBindingIdentity {
+            scope_kind: 1,
+            scope_id: &[0x31; 32],
+            artifact_sha256: ContentDigest::of(b"external artifact"),
+            artifact_length: 17,
+            certified_rdf_digest: [0x32; 32],
+            contract_digest: contract,
+        });
+        assert_eq!(
+            hex(binding.as_bytes()),
+            "56a18d2f143ea8c61f410986fb2344c652b5687b04dfca9e301cc96afd618c73"
+        );
+        let guard = derive_index_guard_digest(b"index guard");
+        assert_eq!(
+            hex(guard.as_bytes()),
+            "3eb1ad8a271b1a739b32cb3d4a47fa60064788d285275408c48ecde9106cd2df"
+        );
+        let index = derive_index_id(IndexIdentity {
+            source_exact_digest: ContentDigest::of(b"source"),
+            family_id: FamilyId::from_raw([0x41; 32]),
+            vector_space_id: VectorSpaceId::from_raw([0x42; 32]),
+            matrix_id: MatrixId::from_raw([0x43; 32]),
+            projection_id: ProjectionId::from_raw([0x44; 32]),
+            target_set_id: TargetSetId::from_raw([0x45; 32]),
+            prefix_dimension: 8,
+            payload_sha256: ContentDigest::of(b"payload"),
+            payload_length: 7,
+            determinism: 1,
+            guard_digest: guard,
+        });
+        assert_eq!(
+            hex(index.as_bytes()),
+            "acf422a8377bbd072aa3ab4f033e961006a0d24c16961d9c487e6f5663f37673"
+        );
     }
 
     #[test]

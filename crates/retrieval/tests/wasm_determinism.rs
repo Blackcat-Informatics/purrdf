@@ -86,8 +86,6 @@
 //!   back a different terminal report for identical streams.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::future::Future;
-use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
     CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, EVIDENCE_VERSION, EvidenceId,
@@ -95,6 +93,11 @@ use purrdf_retrieval::{
     ProducerReceipt, ProducerStatus, ProtocolError, RankFidelity, RankedRow, RankedStream,
     RowBlock, ScoreExactness, ServiceLevel, StreamContract, Term, TopK, contribution, fuse,
 };
+
+#[path = "support/streams.rs"]
+mod streams;
+
+use streams::{ready, unique_items};
 
 /// The reciprocal-rank smoothing constant the fixture profile fixes.
 const K: u32 = 60;
@@ -127,17 +130,6 @@ const PROFILE_ID_HEX: &str = "9b34ccfc3361417c90cbc70a6fc2685ef8c73b5270255b706e
 // no threads, and the scripted streams below never return `Poll::Pending`.
 // ---------------------------------------------------------------------------
 
-fn block_on<F: Future>(future: F) -> F::Output {
-    // `Waker::noop()` needs no thread and no allocation, so this drives a
-    // future on any target, `wasm32-unknown-unknown` included.
-    let mut context = Context::from_waker(Waker::noop());
-    let mut future = Box::pin(future);
-    match future.as_mut().poll(&mut context) {
-        Poll::Ready(output) => output,
-        Poll::Pending => panic!("the scripted streams are synchronous and never pend"),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // The fixture
 // ---------------------------------------------------------------------------
@@ -147,6 +139,11 @@ fn iri(text: &str) -> Iri {
 }
 
 /// A producer whose rows are pre-scripted, in rank order.
+///
+/// Its own stream, not `boundary`'s: this one states its contract and its
+/// attestation per fixture and ends every run exhausted, where `boundary`'s
+/// states one contract and ends with whatever receipt its script names. Only the
+/// one-line pop in `next` is spelled alike.
 struct ScriptedStream {
     steps: VecDeque<RankedRow<Term>>,
     emitted: u64,
@@ -199,17 +196,6 @@ impl RankedStream for ScriptedStream {
     }
 }
 
-/// The contract a fixture stream of distinct, strictly rank-ordered rows honestly
-/// declares when it promises nothing about where its candidates lie.
-fn unrestricted() -> StreamContract {
-    StreamContract::new(
-        DuplicatePolicy::Unique,
-        RankFidelity::EXACT,
-        CandidateDomains::Unrestricted,
-        ExclusionBasis::Unavailable,
-    )
-}
-
 /// Script one stream's three rows, in the order `candidates` names them.
 fn scripted(candidates: [&str; 3]) -> ScriptedStream {
     let steps = candidates
@@ -231,7 +217,7 @@ fn scripted(candidates: [&str; 3]) -> ScriptedStream {
     ScriptedStream {
         steps,
         emitted: 0,
-        contract: unrestricted(),
+        contract: unique_items(),
         attestation: PfAttestation::UNDECLARED,
     }
 }
@@ -281,7 +267,7 @@ fn a_fused_answer_is_the_same_rows_in_the_same_order_on_both_targets() {
         (iri(STRATUM_ONE), scripted(["alpha", "beta", "gamma"])),
         (iri(STRATUM_TWO), scripted(["beta", "gamma", "alpha"])),
     ];
-    let result = block_on(fuse::<ScriptedStream, Term>(
+    let result = ready(fuse::<ScriptedStream, Term>(
         streams,
         &profile,
         TopK::new(8),
@@ -431,10 +417,10 @@ fn a_collided_pair_fuses_to_the_same_order_on_both_targets() {
             ),
         ]),
         emitted: 0,
-        contract: unrestricted(),
+        contract: unique_items(),
         attestation: PfAttestation::UNDECLARED,
     };
-    let fused = block_on(fuse::<ScriptedStream, Term>(
+    let fused = ready(fuse::<ScriptedStream, Term>(
         vec![(stratum.clone(), stream)],
         &profile,
         TopK::new(2),
@@ -566,7 +552,7 @@ fn an_evidence_identity_is_the_same_bytes_and_digest_on_both_targets() {
         },
     };
 
-    let result = block_on(fuse::<ScriptedStream, Term>(
+    let result = ready(fuse::<ScriptedStream, Term>(
         vec![(iri(STRATUM_ONE), one), (iri(STRATUM_TWO), two)],
         &profile(),
         TopK::new(8),
@@ -657,7 +643,7 @@ fn an_evidence_identity_is_the_same_bytes_and_digest_on_both_targets() {
 fn a_declared_candidate_domain_bounds_the_same_read_on_both_targets() {
     let docs = ["doc-1", "doc-2", "doc-3", "doc-4"];
     let people = ["person-1", "person-2", "person-3", "person-4"];
-    let result = block_on(fuse::<ScriptedStream, Term>(
+    let result = ready(fuse::<ScriptedStream, Term>(
         vec![
             (iri(STRATUM_ONE), scripted_in(&docs, DOMAIN_DOCS)),
             (iri(STRATUM_TWO), scripted_in(&people, DOMAIN_PEOPLE)),

@@ -257,7 +257,7 @@ fn stddev_is_the_correctly_rounded_square_root_of_the_variance() {
     // a double-rounding witness through the x87's 64-bit register (a short significand
     // cannot be one: its square root is never that close to a midpoint); the count below
     // asserts the fixture holds some, so the test observes the defect it guards.
-    let mut registry = AggregateRegistry::new();
+    let mut registry = AggregateRegistry::default();
     registry.register_statistical_aggregates(STAT_NS);
     let env = ExtensionEnv::over_aggregates(registry).expect("the statistical set reads cleanly");
     let options = QueryOptions::new().with_env(&env);

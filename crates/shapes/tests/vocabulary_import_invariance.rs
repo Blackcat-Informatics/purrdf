@@ -32,7 +32,7 @@
 //! the vocabulary being present — a SPARQL constraint that reads `$shapesGraph` —
 //! with its reason; it is pinned by count and runs both ways.
 
-mod shacl_corpora;
+use purrdf_shapes::shacl_corpora;
 
 use std::fs;
 use std::sync::Arc;

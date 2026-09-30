@@ -17,9 +17,11 @@
 //!   evaluation stands when it walks the term, because every walk over a term runs over
 //!   a work list.
 
+mod support;
 use purrdf_core::TermBox;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use support::solutions;
 
 use purrdf_core::{
     DatasetView, GraphMatch, QuadIds, QuadProbePlan, QuadRef, RdfDataset, RdfDatasetBuilder,
@@ -196,16 +198,6 @@ fn query_on<D: DatasetView + Sync>(
         },
         QueryOptions::EMPTY,
     )
-}
-
-/// The variables and rows of a `SELECT`.
-fn solutions(result: SparqlResult) -> (Vec<String>, Vec<Vec<Option<TermValue>>>) {
-    match result {
-        SparqlResult::Solutions {
-            variables, rows, ..
-        } => (variables, rows),
-        other => panic!("a SELECT answers with solutions, got {other:?}"),
-    }
 }
 
 fn iri(local: &str) -> Option<TermValue> {
@@ -517,56 +509,52 @@ fn exists_around_a_deep_term(nesting: usize, term: &str) -> String {
 #[test]
 fn a_deep_term_walked_at_the_deepest_evaluation_fits_the_stack_left() {
     const LEVELS: usize = 3_000;
-    let answers = std::thread::Builder::new()
-        .stack_size(256 << 20)
-        .spawn(|| {
-            let data = dataset();
-            let engine = NativeSparqlEngine::new();
-            let prepared = engine
-                .prepare_query(&exists_around_a_deep_term(200, &chain(LEVELS, "1")), None)
-                .expect("parses with room to spare");
-            let answer = |bytes: usize| {
-                with_stack_left(bytes, || {
-                    engine
-                        .query_prepared(&data, &prepared, &[], QueryOptions::EMPTY)
-                        .map(|result| {
-                            let (_, mut rows) = solutions(result);
-                            let value = rows.pop().and_then(|mut row| row.pop().flatten());
-                            let depth = value.as_ref().map_or(0, nesting);
-                            if let Some(value) = value {
-                                drop_flat(value);
-                            }
-                            (rows.len(), depth)
-                        })
-                })
-            };
-            let (mut refused, mut answered) = (purrdf_stack::MARGIN_BYTES, 64 << 20);
-            assert_eq!(answer(answered).expect("answers with room"), (0, LEVELS));
-            match answer(refused) {
+    let answers = purrdf_stack::on_stack(256 << 20, || {
+        let data = dataset();
+        let engine = NativeSparqlEngine::new();
+        let prepared = engine
+            .prepare_query(&exists_around_a_deep_term(200, &chain(LEVELS, "1")), None)
+            .expect("parses with room to spare");
+        let answer = |bytes: usize| {
+            with_stack_left(bytes, || {
+                engine
+                    .query_prepared(&data, &prepared, &[], QueryOptions::EMPTY)
+                    .map(|result| {
+                        let (_, mut rows) = solutions(result);
+                        let value = rows.pop().and_then(|mut row| row.pop().flatten());
+                        let depth = value.as_ref().map_or(0, nesting);
+                        if let Some(value) = value {
+                            drop_flat(value);
+                        }
+                        (rows.len(), depth)
+                    })
+            })
+        };
+        let (mut refused, mut answered) = (purrdf_stack::MARGIN_BYTES, 64 << 20);
+        assert_eq!(answer(answered).expect("answers with room"), (0, LEVELS));
+        match answer(refused) {
+            Ok(found) => {
+                assert_eq!(found, (0, LEVELS), "the margin alone: the term is whole");
+                return (refused, None);
+            }
+            Err(refusal) => assert!(is_stack_refusal(&refusal), "{refusal:?}"),
+        }
+        while answered - refused > 4096 {
+            let mid = refused.midpoint(answered);
+            match answer(mid) {
                 Ok(found) => {
-                    assert_eq!(found, (0, LEVELS), "the margin alone: the term is whole");
-                    return (refused, None);
+                    assert_eq!(found, (0, LEVELS), "{mid} bytes: the term is whole");
+                    answered = mid;
                 }
-                Err(refusal) => assert!(is_stack_refusal(&refusal), "{refusal:?}"),
-            }
-            while answered - refused > 4096 {
-                let mid = refused.midpoint(answered);
-                match answer(mid) {
-                    Ok(found) => {
-                        assert_eq!(found, (0, LEVELS), "{mid} bytes: the term is whole");
-                        answered = mid;
-                    }
-                    Err(refusal) => {
-                        assert!(is_stack_refusal(&refusal), "{mid} bytes: {refusal:?}");
-                        refused = mid;
-                    }
+                Err(refusal) => {
+                    assert!(is_stack_refusal(&refusal), "{mid} bytes: {refusal:?}");
+                    refused = mid;
                 }
             }
-            (answered, Some(refused))
-        })
-        .expect("spawn")
-        .join()
-        .expect("the thread returned rather than aborting");
+        }
+        (answered, Some(refused))
+    })
+    .expect("spawn");
     eprintln!(
         "a {LEVELS}-deep term under 200 nested EXISTS answers with {} bytes left, refused with {:?}",
         answers.0, answers.1
@@ -583,7 +571,7 @@ fn deep_fn() -> String {
 
 /// A bound registry holding [`deep_fn`].
 fn deep_functions() -> BoundFunctionRegistry {
-    let mut functions = UserFunctionRegistry::new();
+    let mut functions = UserFunctionRegistry::default();
     functions.register_native(
         deep_fn(),
         Arity::Exact(1),
@@ -658,70 +646,66 @@ fn a_term_built_at_run_time_answers_whole_or_is_refused_never_aborts() {
     if !in_child_process("a_term_built_at_run_time_answers_whole_or_is_refused_never_aborts") {
         return;
     }
-    let edge = std::thread::Builder::new()
-        .stack_size(256 << 20)
-        .spawn(|| {
-            let data = dataset();
-            let engine = NativeSparqlEngine::new();
-            let functions = deep_functions();
-            let prepared = engine
-                .prepare_query(&exists_around_a_built_term(200, LEVELS), None)
-                .expect("parses with room to spare");
-            let answer = |bytes: usize| {
-                with_stack_left(bytes, || {
-                    engine
-                        .query_prepared(
-                            &data,
-                            &prepared,
-                            &[],
-                            QueryOptions::new().with_functions(&functions),
-                        )
-                        .map(|result| {
-                            let (_, mut rows) = solutions(result);
-                            let value = rows.pop().and_then(|mut row| row.pop().flatten());
-                            let depth = value.as_ref().map_or(0, nesting);
-                            if let Some(value) = value {
-                                drop_flat(value);
-                            }
-                            (rows.len(), depth)
-                        })
-                })
-            };
-            let (mut refused, mut answered) = (purrdf_stack::MARGIN_BYTES, 64 << 20);
-            assert_eq!(
-                answer(answered).expect("answers with room"),
-                (0, LEVELS + 1),
-                "one row, the whole term"
-            );
-            match answer(refused) {
+    let edge = purrdf_stack::on_stack(256 << 20, || {
+        let data = dataset();
+        let engine = NativeSparqlEngine::new();
+        let functions = deep_functions();
+        let prepared = engine
+            .prepare_query(&exists_around_a_built_term(200, LEVELS), None)
+            .expect("parses with room to spare");
+        let answer = |bytes: usize| {
+            with_stack_left(bytes, || {
+                engine
+                    .query_prepared(
+                        &data,
+                        &prepared,
+                        &[],
+                        QueryOptions::new().with_functions(&functions),
+                    )
+                    .map(|result| {
+                        let (_, mut rows) = solutions(result);
+                        let value = rows.pop().and_then(|mut row| row.pop().flatten());
+                        let depth = value.as_ref().map_or(0, nesting);
+                        if let Some(value) = value {
+                            drop_flat(value);
+                        }
+                        (rows.len(), depth)
+                    })
+            })
+        };
+        let (mut refused, mut answered) = (purrdf_stack::MARGIN_BYTES, 64 << 20);
+        assert_eq!(
+            answer(answered).expect("answers with room"),
+            (0, LEVELS + 1),
+            "one row, the whole term"
+        );
+        match answer(refused) {
+            Ok(found) => {
+                assert_eq!(
+                    found,
+                    (0, LEVELS + 1),
+                    "the margin alone: the term is whole"
+                );
+                return (refused, None);
+            }
+            Err(refusal) => assert!(is_stack_refusal(&refusal), "{refusal:?}"),
+        }
+        while answered - refused > 4096 {
+            let mid = refused.midpoint(answered);
+            match answer(mid) {
                 Ok(found) => {
-                    assert_eq!(
-                        found,
-                        (0, LEVELS + 1),
-                        "the margin alone: the term is whole"
-                    );
-                    return (refused, None);
+                    assert_eq!(found, (0, LEVELS + 1), "{mid} bytes: the term is whole");
+                    answered = mid;
                 }
-                Err(refusal) => assert!(is_stack_refusal(&refusal), "{refusal:?}"),
-            }
-            while answered - refused > 4096 {
-                let mid = refused.midpoint(answered);
-                match answer(mid) {
-                    Ok(found) => {
-                        assert_eq!(found, (0, LEVELS + 1), "{mid} bytes: the term is whole");
-                        answered = mid;
-                    }
-                    Err(refusal) => {
-                        assert!(is_stack_refusal(&refusal), "{mid} bytes: {refusal:?}");
-                        refused = mid;
-                    }
+                Err(refusal) => {
+                    assert!(is_stack_refusal(&refusal), "{mid} bytes: {refusal:?}");
+                    refused = mid;
                 }
             }
-            (answered, Some(refused))
-        })
-        .expect("spawn")
-        .join()
-        .expect("the thread returned");
+        }
+        (answered, Some(refused))
+    })
+    .expect("spawn");
     eprintln!(
         "a {}-deep term built under 200 nested EXISTS answers with {} bytes left, refused with {:?}",
         LEVELS + 1,
@@ -740,9 +724,7 @@ fn a_term_built_a_hundred_thousand_deep_answers_whole_or_is_the_typed_refusal() 
     ) {
         return;
     }
-    std::thread::Builder::new()
-        .stack_size(2 << 20)
-        .spawn(|| {
+    purrdf_stack::on_stack(2 << 20, || {
             let data = dataset();
             let functions = deep_functions();
             let run = |levels: usize| {
@@ -784,10 +766,7 @@ fn a_term_built_a_hundred_thousand_deep_answers_whole_or_is_the_typed_refusal() 
                 chain_value(101, TermValue::iri(format!("{EX}o"))),
                 "the whole term"
             );
-        })
-        .expect("spawn")
-        .join()
-        .expect("the thread returned");
+        }).expect("spawn");
 }
 
 /// `TRIPLE` calls feeding each other through a chain of `LATERAL` levels build a term one
@@ -797,37 +776,33 @@ fn a_term_built_a_hundred_thousand_deep_answers_whole_or_is_the_typed_refusal() 
 /// over the growing term running over a work list.
 #[test]
 fn triple_calls_chained_at_run_time_answer_the_whole_term() {
-    std::thread::Builder::new()
-        .stack_size(64 << 20)
-        .spawn(|| {
-            let data = dataset();
-            for levels in [20, 300] {
-                let mut body = format!("BIND(?t{levels} AS ?t)");
-                for level in (1..=levels).rev() {
-                    body = format!(
-                        "LATERAL {{ BIND(TRIPLE(<{EX}s>, <{EX}p>, ?t{}) AS ?t{level}) {body} }}",
-                        level - 1
-                    );
-                }
-                let query = format!("SELECT ?t WHERE {{ BIND(<{EX}o> AS ?t0) {body} }}");
-                let (variables, mut rows) =
-                    solutions(query_on(&data, &query).expect("the chain answers"));
-                assert_eq!(variables, ["t"]);
-                let value = rows
-                    .pop()
-                    .and_then(|mut row| row.pop().flatten())
-                    .expect("one row binding ?t");
-                assert_eq!(rows.len(), 0, "one row only");
-                let expected = chain_value(levels, TermValue::iri(format!("{EX}o")));
-                assert_eq!(nesting(&value), levels);
-                assert_eq!(value, expected, "{levels} levels: the term built");
-                drop_flat(value);
-                drop_flat(expected);
+    purrdf_stack::on_stack(64 << 20, || {
+        let data = dataset();
+        for levels in [20, 300] {
+            let mut body = format!("BIND(?t{levels} AS ?t)");
+            for level in (1..=levels).rev() {
+                body = format!(
+                    "LATERAL {{ BIND(TRIPLE(<{EX}s>, <{EX}p>, ?t{}) AS ?t{level}) {body} }}",
+                    level - 1
+                );
             }
-        })
-        .expect("spawn")
-        .join()
-        .expect("the thread returned");
+            let query = format!("SELECT ?t WHERE {{ BIND(<{EX}o> AS ?t0) {body} }}");
+            let (variables, mut rows) =
+                solutions(query_on(&data, &query).expect("the chain answers"));
+            assert_eq!(variables, ["t"]);
+            let value = rows
+                .pop()
+                .and_then(|mut row| row.pop().flatten())
+                .expect("one row binding ?t");
+            assert_eq!(rows.len(), 0, "one row only");
+            let expected = chain_value(levels, TermValue::iri(format!("{EX}o")));
+            assert_eq!(nesting(&value), levels);
+            assert_eq!(value, expected, "{levels} levels: the term built");
+            drop_flat(value);
+            drop_flat(expected);
+        }
+    })
+    .expect("spawn");
 }
 
 /// A `FILTER` over more rows than the evaluator forks for, whose expression builds a term
@@ -838,9 +813,7 @@ fn triple_calls_chained_at_run_time_answer_the_whole_term() {
 /// row answers too.
 #[test]
 fn a_term_built_on_a_worker_answers_every_row() {
-    std::thread::Builder::new()
-        .stack_size(64 << 20)
-        .spawn(|| {
+    purrdf_stack::on_stack(64 << 20, || {
             let mut builder = RdfDatasetBuilder::new();
             let p = builder.intern_iri(&format!("{EX}p"));
             let o = builder.intern_iri(&format!("{EX}o"));
@@ -851,7 +824,7 @@ fn a_term_built_on_a_worker_answers_every_row() {
             let data = builder.freeze().expect("freezes");
             let evaluating = std::thread::current().id();
             let elsewhere = Arc::new(AtomicUsize::new(0));
-            let mut functions = UserFunctionRegistry::new();
+            let mut functions = UserFunctionRegistry::default();
             let counted = Arc::clone(&elsewhere);
             functions.register_native(
                 deep_fn(),
@@ -898,8 +871,5 @@ fn a_term_built_on_a_worker_answers_every_row() {
             );
             assert_eq!(count(500, 10_000), 4_000, "deeper: every row, never a refusal");
             assert_eq!(count(500, 3), 3, "a handful of rows");
-        })
-        .expect("spawn")
-        .join()
-        .expect("the thread returned");
+        }).expect("spawn");
 }

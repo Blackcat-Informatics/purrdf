@@ -102,7 +102,7 @@ use purrdf_datalog::chase::{ChaseError, certify, chase_until};
 use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause, HeadDisjunct};
 use purrdf_datalog::store::RelationStore;
 
-use crate::engine::{resolve_value, surface_of};
+use crate::engine::surface_of;
 use crate::interner::intern_into;
 use crate::owl_dl::constructs::is_reserved;
 use crate::report::ReasoningReport;
@@ -190,7 +190,10 @@ fn every_statement_is_recognized<D: DatasetView>(ds: &D) -> bool {
         if quad.g.is_some() {
             return false;
         }
-        let TermValue::Iri(predicate) = resolve_value(ds, quad.p) else {
+        let TermValue::Iri(predicate) = ds
+            .term_value(quad.p)
+            .expect("an id the view minted resolves to a value")
+        else {
             // A blank node or literal in predicate position is generalized RDF, which no
             // OWL 2 axiom is written in.
             return false;
@@ -202,7 +205,9 @@ fn every_statement_is_recognized<D: DatasetView>(ds: &D) -> bool {
             return false;
         }
         if predicate == RDF_TYPE {
-            let object = resolve_value(ds, quad.o);
+            let object = ds
+                .term_value(quad.o)
+                .expect("an id the view minted resolves to a value");
             let TermValue::Iri(class) = &object else {
                 return false;
             };
@@ -318,9 +323,9 @@ pub fn materialize_combined_until<D: DatasetView>(
             continue;
         }
         let (s, p, o) = (
-            resolve_value(ds, quad.s),
-            resolve_value(ds, quad.p),
-            resolve_value(ds, quad.o),
+            ds.term_value(quad.s)?,
+            ds.term_value(quad.p)?,
+            ds.term_value(quad.o)?,
         );
         let (ss, ps, os) = (surface_of(&s), surface_of(&p), surface_of(&o));
         by_surface.entry(ss.clone()).or_insert(s);
@@ -453,11 +458,18 @@ fn lower_horn_tbox<D: DatasetView>(ds: &D) -> Option<Vec<DlClause>> {
         if quad.g.is_some() {
             continue;
         }
-        let subject = resolve_value(ds, quad.s);
-        let TermValue::Iri(predicate) = resolve_value(ds, quad.p) else {
+        let subject = ds
+            .term_value(quad.s)
+            .expect("an id the view minted resolves to a value");
+        let TermValue::Iri(predicate) = ds
+            .term_value(quad.p)
+            .expect("an id the view minted resolves to a value")
+        else {
             continue;
         };
-        let object = resolve_value(ds, quad.o);
+        let object = ds
+            .term_value(quad.o)
+            .expect("an id the view minted resolves to a value");
         let entry = index
             .entry(surface_of(&subject))
             .or_insert_with(|| (subject, BTreeMap::new()));
@@ -589,12 +601,12 @@ mod tests {
     };
 
     const NS: &str = "http://example.org/combined#";
-    const RDF_TYPE_IRI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-    const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
-    const OWL_RESTRICTION_IRI: &str = "http://www.w3.org/2002/07/owl#Restriction";
-    const OWL_ON_PROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
-    const OWL_SOME_VALUES_FROM: &str = "http://www.w3.org/2002/07/owl#someValuesFrom";
-    const RDFS_SUBCLASSOF_IRI: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+    use purrdf_iri::vocab::owl::CLASS as OWL_CLASS;
+    use purrdf_iri::vocab::owl::ON_PROPERTY as OWL_ON_PROPERTY;
+    use purrdf_iri::vocab::owl::RESTRICTION as OWL_RESTRICTION_IRI;
+    use purrdf_iri::vocab::owl::SOME_VALUES_FROM as OWL_SOME_VALUES_FROM;
+    use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE_IRI;
+    use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASSOF_IRI;
 
     /// `A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty r ; owl:someValuesFrom B ]`,
     /// `a : A` — the load-bearing shape: `a` is a certain answer of
@@ -659,9 +671,9 @@ mod tests {
         let mut saw_type = false;
         for quad in combined.dataset.quads() {
             let (s, p, o) = (
-                combined.dataset.term_value(quad.s),
-                combined.dataset.term_value(quad.p),
-                combined.dataset.term_value(quad.o),
+                combined.dataset.term_value(quad.s).unwrap(),
+                combined.dataset.term_value(quad.p).unwrap(),
+                combined.dataset.term_value(quad.o).unwrap(),
             );
             if s == a_iri && p == r && o == witness {
                 saw_role = true;

@@ -677,7 +677,7 @@ impl ArgKey {
     pub fn variable_name(&self) -> String {
         match self {
             Self::Index(index) => format!("arg{index}"),
-            Self::Named(iri) => crate::shapes::local_name(iri).to_owned(),
+            Self::Named(iri) => purrdf_iri::local_name(iri).to_owned(),
         }
     }
 }
@@ -1076,10 +1076,7 @@ impl<'a> Scope<'a> {
     /// not in the argument scope (§6.3's second case).
     #[must_use]
     pub fn lookup_arg(&self, key: &ArgKey) -> Option<&'a NodeExpr> {
-        self.args
-            .iter()
-            .find(|(bound, _)| bound == key)
-            .map(|(_, expr)| expr)
+        purrdf_lex::assoc::get(self.args, key)
     }
 
     /// Every argument binding in force, in call order.
@@ -1189,12 +1186,6 @@ pub const MAX_RECURSION_DEPTH: u32 = 64;
 pub const MAX_NODE_EXPR_DEPTH: u32 = 256;
 
 impl RecursionGuard {
-    /// A fresh guard with no in-flight pairs, at depth zero.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// A fresh guard seeded at `depth` — used when the constraint engine
     /// re-enters expression evaluation across the `conforms` boundary so the
     /// filter/exists recursion depth is preserved across the fresh guard.
@@ -1339,8 +1330,7 @@ pub fn is_true(terms: &[Term]) -> bool {
 ///
 /// A static `match` over `&'static str` — wasm-clean, no runtime allocation.
 pub(crate) fn builtin_keyword(iri: &str) -> Option<&'static str> {
-    const FN: &str = "http://www.w3.org/2005/xpath-functions#";
-    let local = iri.strip_prefix(FN)?;
+    let local = iri.strip_prefix(purrdf_iri::vocab::xpath::NS)?;
     Some(match local {
         "string-length" => "STRLEN",
         "contains" => "CONTAINS",
@@ -1644,7 +1634,7 @@ pub(crate) fn eval_node_expr_in_run(
         store,
         focus,
         expr,
-        &mut RecursionGuard::new(),
+        &mut RecursionGuard::default(),
         Scope::EMPTY,
         disallows,
     )
@@ -2660,7 +2650,7 @@ mod tests {
     #[test]
     fn constant_returns_the_term() {
         let data = load_data("");
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let expr = NodeExpr::Constant(ex("z"));
         let result =
             eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("constant evals");
@@ -2670,7 +2660,7 @@ mod tests {
     #[test]
     fn this_returns_the_focus() {
         let data = load_data("");
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let result = eval_node_expr(&data.data(), &ex("a"), &NodeExpr::This, &mut guard)
             .expect("this evals");
         assert_eq!(result, vec![ex("a")]);
@@ -2679,7 +2669,7 @@ mod tests {
     #[test]
     fn path_returns_value_nodes() {
         let data = load_data(DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let expr = NodeExpr::Path(pred("p"));
         // The Path arm canonicalizes (sort+dedup) locally, so the result is
         // returned already sorted — no manual sort needed.
@@ -2698,7 +2688,7 @@ mod tests {
         use crate::report::Severity;
 
         let data = load_data(DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         // An empty (no-constraint) shape: every candidate conforms, so the Filter
         // output is exactly its candidate LIST — §4.2.5 "preserving the order in
         // the list", duplicates included.
@@ -2737,7 +2727,7 @@ mod tests {
     #[test]
     fn union_dedups_and_sorts() {
         let data = load_data(DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         // ex:a's ex:p reaches {b, c}; add ex:b explicitly → dedup keeps one b.
         let expr = NodeExpr::Union(vec![NodeExpr::Path(pred("p")), NodeExpr::Constant(ex("b"))]);
         let result =
@@ -2755,7 +2745,7 @@ mod tests {
     #[test]
     fn intersection_keeps_common_nodes() {
         let data = load_data(DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         // {b, c} ∩ {b, z} = {b}
         let expr = NodeExpr::Intersection(vec![
             NodeExpr::Path(pred("p")),
@@ -2772,7 +2762,7 @@ mod tests {
     #[test]
     fn intersection_empty_operands_is_empty() {
         let data = load_data(DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let expr = NodeExpr::Intersection(vec![]);
         let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard)
             .expect("empty intersection evals");
@@ -2782,7 +2772,7 @@ mod tests {
     #[test]
     fn if_true_selects_then() {
         let data = load_data("");
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let expr = NodeExpr::If {
             cond: Box::new(NodeExpr::Constant(bool_literal(true))),
             then: Box::new(NodeExpr::Constant(ex("yes"))),
@@ -2795,7 +2785,7 @@ mod tests {
     #[test]
     fn if_false_selects_els() {
         let data = load_data("");
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let expr = NodeExpr::If {
             cond: Box::new(NodeExpr::Constant(bool_literal(false))),
             then: Box::new(NodeExpr::Constant(ex("yes"))),
@@ -2808,7 +2798,7 @@ mod tests {
     #[test]
     fn if_empty_condition_selects_els() {
         let data = load_data(DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         // ex:a has no ex:missing edge → empty condition → els branch.
         let expr = NodeExpr::If {
             cond: Box::new(NodeExpr::Path(pred("missing"))),
@@ -2822,7 +2812,7 @@ mod tests {
     #[test]
     fn if_propagates_condition_error() {
         let data = load_data("");
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         // A hard-erroring condition (an unresolved user-defined function, with no
         // registry in scope) must surface its error rather than being swallowed.
         let expr = NodeExpr::If {
@@ -2840,7 +2830,7 @@ mod tests {
     #[test]
     fn exists_true_when_inner_yields_nodes() {
         let data = load_data(DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         // ex:a has ex:p values → exists true.
         let expr = NodeExpr::Exists(Box::new(NodeExpr::Path(pred("p"))));
         let result =
@@ -2851,7 +2841,7 @@ mod tests {
     #[test]
     fn exists_false_when_inner_empty() {
         let data = load_data(DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         // ex:a has no ex:missing edge → exists false.
         let expr = NodeExpr::Exists(Box::new(NodeExpr::Path(pred("missing"))));
         let result =
@@ -2905,7 +2895,7 @@ mod tests {
     #[test]
     fn builtin_call_evaluates_through_sparql_seam() {
         let data = load_data("");
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         // The `xsd:boolean` constructor is a call-position builtin the SPARQL
         // engine resolves (an XSD cast): xsd:boolean("true") → true.
         let expr = NodeExpr::Call(FnCall::Builtin {
@@ -2922,7 +2912,7 @@ mod tests {
     #[test]
     fn builtin_call_unsupported_fn_is_hard_error() {
         let data = load_data("");
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         // An IRI the SPARQL engine does not resolve as a builtin cast is a hard
         // seam error (an unsupported custom function), not a swallowed empty set.
         let expr = NodeExpr::Call(FnCall::Builtin {
@@ -2941,7 +2931,7 @@ mod tests {
     #[test]
     fn builtin_call_multi_valued_arg_is_cartesian_product() {
         let data = load_data(DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         // ex:a ex:p reaches {b, c} — two terms — so the single-arg cast is invoked
         // once per value and the results are unioned (sorted, deduped).
         let expr = NodeExpr::Call(FnCall::Builtin {
@@ -2976,7 +2966,7 @@ mod tests {
             ex:x ex:r "a", "b" .
         "#,
         );
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let expr = NodeExpr::Call(FnCall::Builtin {
             iri: NamedNode::new_unchecked("http://www.w3.org/2005/xpath-functions#concat"),
             args: vec![NodeExpr::Path(pred("l")), NodeExpr::Path(pred("r"))],
@@ -2992,7 +2982,7 @@ mod tests {
     #[test]
     fn builtin_call_empty_arg_yields_empty_product() {
         let data = load_data(DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         // ex:a has no ex:missing edge → empty value-set → empty product.
         let expr = NodeExpr::Call(FnCall::Builtin {
             iri: NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#string"),
@@ -3008,7 +2998,7 @@ mod tests {
     #[test]
     fn builtin_keyword_string_length_dispatches() {
         let data = load_data("");
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let expr = NodeExpr::Call(FnCall::Builtin {
             iri: NamedNode::new_unchecked("http://www.w3.org/2005/xpath-functions#string-length"),
             args: vec![NodeExpr::Constant(Term::Literal(
@@ -3024,7 +3014,7 @@ mod tests {
     #[test]
     fn builtin_keyword_contains_dispatches() {
         let data = load_data("");
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let call = |s: &str, sub: &str| {
             NodeExpr::Call(FnCall::Builtin {
                 iri: NamedNode::new_unchecked("http://www.w3.org/2005/xpath-functions#contains"),
@@ -3048,7 +3038,7 @@ mod tests {
     #[test]
     fn builtin_keyword_table_all_dispatch() {
         let data = load_data("");
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let s = |v: &str| NodeExpr::Constant(Term::Literal(Literal::new_simple_literal(v)));
         let i = |v: &str| NodeExpr::Constant(int_lit(v));
         let dt = |v: &str| {
@@ -3106,7 +3096,7 @@ mod tests {
         };
 
         // A `double(?x) = ?x * 2` SPARQL function declared in the (in-scope) registry.
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.insert(
             "http://example.org/ns#double",
             UserFunction {
@@ -3127,7 +3117,7 @@ mod tests {
         );
 
         let data = load_data("");
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let expr = NodeExpr::Call(FnCall::UserDefined {
             iri: NamedNode::new_unchecked("http://example.org/ns#double"),
             args: vec![NodeExpr::Constant(Term::Literal(
@@ -3153,7 +3143,7 @@ mod tests {
         // No function scope installed → an unknown call-position IRI is a hard error,
         // not a silent empty result.
         let data = load_data("");
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let expr = NodeExpr::Call(FnCall::UserDefined {
             iri: NamedNode::new_unchecked("http://example.org/ns#missing"),
             args: vec![],
@@ -3168,7 +3158,7 @@ mod tests {
     #[test]
     fn if_numeric_condition_is_not_the_list_true() {
         let data = load_data("");
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let expr = NodeExpr::If {
             cond: Box::new(NodeExpr::Constant(Term::Literal(
                 Literal::new_typed_literal("5", NamedNode::new_unchecked(xsd::INTEGER)),
@@ -3186,7 +3176,7 @@ mod tests {
     #[test]
     fn if_non_boolean_and_multi_node_conditions_select_else() {
         let data = load_data("");
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         for cond in [
             NodeExpr::Constant(ex("iri")),
             NodeExpr::Concat(vec![
@@ -3225,7 +3215,7 @@ mod tests {
     #[test]
     fn distinct_keeps_first_occurrences_in_input_order() {
         let data = load_data(AGG_DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let expr = NodeExpr::Distinct(Box::new(NodeExpr::Concat(vec![
             NodeExpr::Constant(ex("c")),
             NodeExpr::Path(pred("e")),
@@ -3241,7 +3231,7 @@ mod tests {
     #[test]
     fn count_distinguishes_distinct_from_plain_length() {
         let data = load_data(AGG_DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let repeated = || {
             Box::new(NodeExpr::Concat(vec![
                 NodeExpr::Path(pred("e")),
@@ -3269,7 +3259,7 @@ mod tests {
     #[test]
     fn count_returns_cardinality_integer() {
         let data = load_data(AGG_DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let expr = NodeExpr::Count {
             distinct: false,
             of: Box::new(NodeExpr::Path(pred("n"))),
@@ -3282,7 +3272,7 @@ mod tests {
     #[test]
     fn count_distinct_returns_cardinality_integer() {
         let data = load_data(AGG_DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let expr = NodeExpr::Count {
             distinct: true,
             of: Box::new(NodeExpr::Path(pred("e"))),
@@ -3295,7 +3285,7 @@ mod tests {
     #[test]
     fn count_of_empty_is_zero() {
         let data = load_data(AGG_DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let expr = NodeExpr::Count {
             distinct: false,
             of: Box::new(NodeExpr::Path(pred("missing"))),
@@ -3308,7 +3298,7 @@ mod tests {
     #[test]
     fn min_max_sum_over_integers() {
         let data = load_data(AGG_DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let path = || Box::new(NodeExpr::Path(pred("n")));
 
         let min = eval_node_expr(&data.data(), &ex("x"), &NodeExpr::Min(path()), &mut guard)
@@ -3325,7 +3315,7 @@ mod tests {
     #[test]
     fn sum_of_empty_is_zero_min_max_of_empty_is_unbound() {
         let data = load_data(AGG_DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let empty = || Box::new(NodeExpr::Path(pred("missing")));
 
         let sum = eval_node_expr(&data.data(), &ex("x"), &NodeExpr::Sum(empty()), &mut guard)
@@ -3348,7 +3338,7 @@ mod tests {
             ex:x ex:v 2.5 .
         ",
         );
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let expr = NodeExpr::Sum(Box::new(NodeExpr::Path(pred("v"))));
         let result = eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).expect("sum evals");
         // 1 (int) + 2.5 (decimal) promotes to xsd:decimal 3.5.
@@ -3364,7 +3354,7 @@ mod tests {
     #[test]
     fn orderby_ascending_and_descending() {
         let data = load_data(AGG_DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let asc = NodeExpr::OrderBy {
             of: Box::new(NodeExpr::Path(pred("e"))),
             key: Box::new(NodeExpr::This),
@@ -3398,7 +3388,7 @@ mod tests {
             ex:c ex:k 0 .
         ",
         );
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let order = |descending| NodeExpr::OrderBy {
             of: Box::new(NodeExpr::Concat(vec![
                 NodeExpr::Constant(ex("b")),
@@ -3437,7 +3427,7 @@ mod tests {
             ex:b ex:k 3, 1 .
         ",
         );
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let order = |descending| NodeExpr::OrderBy {
             of: Box::new(NodeExpr::Concat(vec![
                 NodeExpr::Constant(ex("a")),
@@ -3463,7 +3453,7 @@ mod tests {
     #[test]
     fn offset_skips_leading_values() {
         let data = load_data(AGG_DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         // OrderBy first so the sequence is deterministic before the offset.
         let expr = NodeExpr::Offset {
             of: Box::new(NodeExpr::OrderBy {
@@ -3481,7 +3471,7 @@ mod tests {
     #[test]
     fn limit_takes_leading_values() {
         let data = load_data(AGG_DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let expr = NodeExpr::Limit {
             of: Box::new(NodeExpr::OrderBy {
                 of: Box::new(NodeExpr::Path(pred("e"))),
@@ -3498,7 +3488,7 @@ mod tests {
     #[test]
     fn composed_limit_offset_orderby() {
         let data = load_data(AGG_DATA);
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         // Parser nests as Limit(Offset(OrderBy(core))) — eval composes as
         // orderby → offset → limit.
         let expr = NodeExpr::Limit {
@@ -3529,7 +3519,7 @@ mod tests {
     #[test]
     fn aggregate_over_a_blank_node_answers_the_blank_node() {
         let data = load_data("");
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let expr = NodeExpr::Min(Box::new(NodeExpr::Constant(Term::blank("b0"))));
         let result =
             eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).expect("min over a blank");
@@ -3541,7 +3531,7 @@ mod tests {
     #[test]
     fn aggregate_over_mixed_rdf12_kinds_answers_the_triple_term() {
         let data = load_data("");
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let triple = Term::Triple(Box::new(crate::term::Triple::new(
             ex("s"),
             NamedNode::new_unchecked("http://example.org/ns#p"),
@@ -3559,7 +3549,7 @@ mod tests {
 
     #[test]
     fn recursion_guard_detects_reentry() {
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         guard.enter("shapeA", "focusX").expect("first enter ok");
         let err = guard.enter("shapeA", "focusX").unwrap_err();
         assert!(err.contains("recursive"), "got: {err}");
@@ -3584,30 +3574,24 @@ mod tests {
         // match) is sizeable, so run on a generous stack: the point of the test
         // is that the DEPTH GUARD — not a stack overflow — is what terminates
         // the walk. Dropping the tree is also recursive, hence the same thread.
-        let handle = std::thread::Builder::new()
-            .stack_size(64 * 1024 * 1024)
-            .spawn(|| {
-                let data = load_data(DATA);
-                let mut expr = NodeExpr::This;
-                for i in 0..MAX_NODE_EXPR_DEPTH + 8 {
-                    expr = if i % 2 == 0 {
-                        NodeExpr::Union(vec![expr])
-                    } else {
-                        NodeExpr::Limit {
-                            of: Box::new(expr),
-                            n: 10,
-                        }
-                    };
-                }
-                let mut guard = RecursionGuard::new();
-                eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard)
-            })
-            .expect("spawn deep-stack thread");
-
-        let err = handle
-            .join()
-            .expect("deep-stack thread must not overflow — the depth guard terminates it")
-            .expect_err("an expression nested past the structural ceiling must be a hard error");
+        let err = purrdf_stack::on_stack(64 * 1024 * 1024, || {
+            let data = load_data(DATA);
+            let mut expr = NodeExpr::This;
+            for i in 0..MAX_NODE_EXPR_DEPTH + 8 {
+                expr = if i % 2 == 0 {
+                    NodeExpr::Union(vec![expr])
+                } else {
+                    NodeExpr::Limit {
+                        of: Box::new(expr),
+                        n: 10,
+                    }
+                };
+            }
+            let mut guard = RecursionGuard::default();
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard)
+        })
+        .expect("spawn deep-stack thread")
+        .expect_err("an expression nested past the structural ceiling must be a hard error");
         assert!(
             err.contains("node expression nesting depth exceeded"),
             "error should name the structural limit, got: {err}"
@@ -3650,7 +3634,7 @@ mod tests {
         assert!(AUTHORED_LEVELS * 3 + 1 > MAX_RECURSION_DEPTH as usize);
         assert!(AUTHORED_LEVELS * 3 + 1 < MAX_NODE_EXPR_DEPTH as usize);
 
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard)
             .expect("a deep but legal paged expression must evaluate");
         assert_eq!(result, vec![ex("a")]);
@@ -3676,51 +3660,45 @@ mod tests {
         // thread's default 2 MiB stack. Run on a generous stack so the DEPTH
         // GUARD — not a stack overflow — is what terminates the recursion; the
         // guard is what protects the (larger) production stack in the same way.
-        let handle = std::thread::Builder::new()
-            .stack_size(64 * 1024 * 1024)
-            .spawn(|| {
-                let data = load_data(DATA);
+        let err = purrdf_stack::on_stack(64 * 1024 * 1024, || {
+            let data = load_data(DATA);
 
-                let make_shape = |id: Term, constraints: Vec<Constraint>| Shape {
-                    id,
-                    targets: vec![],
-                    constraints,
-                    property_shapes: vec![],
-                    severity: Severity::Violation,
-                    messages: vec![],
-                    constraint_annotations: vec![],
-                    deactivated: false,
-                    box_roles: vec![],
-                    rules: vec![],
+            let make_shape = |id: Term, constraints: Vec<Constraint>| Shape {
+                id,
+                targets: vec![],
+                constraints,
+                property_shapes: vec![],
+                severity: Severity::Violation,
+                messages: vec![],
+                constraint_annotations: vec![],
+                deactivated: false,
+                box_roles: vec![],
+                rules: vec![],
+            };
+
+            // Innermost shape: no constraints ⇒ every node trivially conforms.
+            let mut shape = make_shape(ex("leaf"), vec![]);
+            // Wrap one filter-through-inner layer per level, past the ceiling.
+            let levels = MAX_RECURSION_DEPTH + 5;
+            for i in 0..levels {
+                let expr = NodeExpr::Filter {
+                    nodes: Box::new(NodeExpr::This),
+                    shape: Box::new(shape),
                 };
+                shape = make_shape(
+                    ex(&format!("s{i}")),
+                    vec![Constraint::Expression {
+                        expr,
+                        messages: vec![],
+                        severity: None,
+                    }],
+                );
+            }
 
-                // Innermost shape: no constraints ⇒ every node trivially conforms.
-                let mut shape = make_shape(ex("leaf"), vec![]);
-                // Wrap one filter-through-inner layer per level, past the ceiling.
-                let levels = MAX_RECURSION_DEPTH + 5;
-                for i in 0..levels {
-                    let expr = NodeExpr::Filter {
-                        nodes: Box::new(NodeExpr::This),
-                        shape: Box::new(shape),
-                    };
-                    shape = make_shape(
-                        ex(&format!("s{i}")),
-                        vec![Constraint::Expression {
-                            expr,
-                            messages: vec![],
-                            severity: None,
-                        }],
-                    );
-                }
-
-                crate::constraints::conforms(&data.data(), &ex("a"), &shape)
-            })
-            .expect("spawn deep-stack thread");
-
-        let err = handle
-            .join()
-            .expect("deep-stack thread must not overflow — the depth guard terminates it")
-            .expect_err("a filter chain past the depth ceiling must be a hard error");
+            crate::constraints::conforms(&data.data(), &ex("a"), &shape)
+        })
+        .expect("spawn deep-stack thread")
+        .expect_err("a filter chain past the depth ceiling must be a hard error");
         assert!(
             err.contains("recursion depth"),
             "error should name the recursion depth, got: {err}"

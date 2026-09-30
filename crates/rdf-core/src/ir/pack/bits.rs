@@ -56,52 +56,47 @@ impl fmt::Display for PackBitsError {
 impl std::error::Error for PackBitsError {}
 
 // ---------------------------------------------------------------------------
-// Small byte-header helpers shared by every codec in this file.
+// Small byte-header helpers shared by every pack codec.
 // ---------------------------------------------------------------------------
 
 /// Read an 8-byte little-endian header field at `*pos`, advancing `*pos` past it.
-fn read_header_u64(bytes: &[u8], pos: &mut usize) -> Result<u64, PackBitsError> {
-    let end = *pos + 8;
-    let slice = bytes.get(*pos..end).ok_or(PackBitsError::Truncated {
-        needed: end,
+///
+/// The one header reader of every pack codec: each section's error type
+/// converts a [`PackBitsError::Truncated`] into its own, field for field.
+pub(super) fn read_header_u64(bytes: &[u8], pos: &mut usize) -> Result<u64, PackBitsError> {
+    let value = crate::bytes::read_u64_le(bytes, *pos).ok_or_else(|| PackBitsError::Truncated {
+        needed: pos.saturating_add(8),
         found: bytes.len(),
     })?;
-    let value = u64::from_le_bytes(slice.try_into().expect("slice is exactly 8 bytes"));
-    *pos = end;
+    *pos += 8;
     Ok(value)
 }
 
 /// Read a 4-byte little-endian header field at `*pos`, advancing `*pos` past it.
 fn read_header_u32(bytes: &[u8], pos: &mut usize) -> Result<u32, PackBitsError> {
-    let end = *pos + 4;
-    let slice = bytes.get(*pos..end).ok_or(PackBitsError::Truncated {
-        needed: end,
+    let value = crate::bytes::read_u32_le(bytes, *pos).ok_or_else(|| PackBitsError::Truncated {
+        needed: pos.saturating_add(4),
         found: bytes.len(),
     })?;
-    let value = u32::from_le_bytes(slice.try_into().expect("slice is exactly 4 bytes"));
-    *pos = end;
+    *pos += 4;
     Ok(value)
 }
 
 /// Read the `idx`-th little-endian `u64` word from a byte slice known to hold at
 /// least `(idx + 1) * 8` bytes. Alignment-agnostic (see the [module docs](self)).
+#[inline]
 fn read_u64_le(bytes: &[u8], idx: usize) -> u64 {
-    let start = idx * 8;
-    u64::from_le_bytes(
-        bytes[start..start + 8]
-            .try_into()
-            .expect("slice is exactly 8 bytes"),
-    )
+    crate::bytes::read_u64_le(bytes, idx * 8).expect("a validated word index")
 }
 
 /// Read the `idx`-th little-endian `u16` from a byte slice, alignment-agnostic
 /// (see [`read_u64_le`]).
+#[inline]
 fn read_u16_le(bytes: &[u8], idx: usize) -> u16 {
-    let start = idx * 2;
     u16::from_le_bytes(
-        bytes[start..start + 2]
-            .try_into()
-            .expect("slice is exactly 2 bytes"),
+        *bytes[idx * 2..]
+            .first_chunk()
+            .expect("a validated block index"),
     )
 }
 
@@ -168,6 +163,25 @@ impl IntVector {
             len: 0,
             words: Vec::new(),
         }
+    }
+
+    /// The narrowest vector holding every one of `values`, in order: the width is
+    /// [`bits_for`] of their maximum (0 for an empty slice), chosen once, and the
+    /// backing words are sized once before the values are packed.
+    ///
+    /// This is the one constructor from a finished slice. The width is a property
+    /// of the whole slice, so a builder that has its values in hand never guesses
+    /// a width or widens one; every pack codec and page summary builds its vectors
+    /// here.
+    #[must_use]
+    pub fn from_values(values: &[u64]) -> Self {
+        let mut vector = Self::with_width(bits_for(values.iter().copied().max().unwrap_or(0)));
+        let bits = values.len() as u64 * u64::from(vector.width);
+        vector.words.reserve_exact(bits.div_ceil(64) as usize);
+        for &value in values {
+            vector.push(value);
+        }
+        vector
     }
 
     /// Append `value`.
@@ -391,17 +405,22 @@ const WORDS_PER_SUPERBLOCK: usize = SUPERBLOCK_BITS / 64;
 /// A growable bit sequence, backed by `Vec<u64>` words (bit `i` lives in word
 /// `i / 64` at position `i % 64`, LSB-first) — the builder for a frozen
 /// [`RankSelect`].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct BitVec {
     words: Vec<u64>,
     len: usize,
 }
 
+purrdf_hash::default_from_new!(BitVec);
+
 impl BitVec {
-    /// An empty bit sequence.
+    /// An empty bit sequence; [`Default`] delegates here.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub const fn new() -> Self {
+        Self {
+            words: Vec::new(),
+            len: 0,
+        }
     }
 
     /// Append one bit.
@@ -966,6 +985,22 @@ impl<'a> RankSelectRef<'a> {
     pub fn select0(&self, k: usize) -> Option<usize> {
         RankSelectDir::select0(self, k)
     }
+
+    /// Group `k`'s range `[start, end)` under the mark-last convention: the bitmap
+    /// sets the bit of each group's LAST position, so group `k` starts one past the
+    /// `(k - 1)`-th set bit (at 0 for the first group) and ends one past the `k`-th.
+    /// `None` when there is no `k`-th set bit, which is no group `k`.
+    ///
+    /// This is the one reading of a boundary bitmap; every pack structure that
+    /// groups a flat array by marking group ends reads its groups here.
+    #[must_use]
+    pub fn mark_last_range(&self, k: usize) -> Option<(usize, usize)> {
+        let start = match k.checked_sub(1) {
+            None => 0,
+            Some(previous) => self.select1(previous)? + 1,
+        };
+        Some((start, self.select1(k)? + 1))
+    }
 }
 
 impl RankSelectDir for RankSelectRef<'_> {
@@ -1151,6 +1186,33 @@ mod tests {
     use purrdf_testkit::prop::prelude::*;
 
     // -- IntVector ------------------------------------------------------------
+
+    #[test]
+    fn from_values_packs_at_the_width_of_the_maximum() {
+        let values = [0_u64, 5, 3, 1 << 40];
+        let vector = IntVector::from_values(&values);
+        assert_eq!(vector.width(), bits_for(1 << 40));
+        assert_eq!(vector.len(), values.len());
+        for (index, &value) in values.iter().enumerate() {
+            assert_eq!(vector.get(index), value);
+        }
+        let empty = IntVector::from_values(&[]);
+        assert_eq!((empty.width(), empty.len()), (0, 0));
+        let zeros = IntVector::from_values(&[0, 0, 0]);
+        assert_eq!((zeros.width(), zeros.len()), (0, 3));
+    }
+
+    #[test]
+    fn mark_last_range_reads_each_group_between_its_boundary_bits() {
+        // Groups of sizes 2, 1 and 3 over six positions: the last position of each
+        // group is set.
+        let bytes = build_rank_select(&[false, true, true, false, false, true]).to_bytes();
+        let index = RankSelectRef::from_bytes(&bytes).expect("a valid bitmap");
+        assert_eq!(index.mark_last_range(0), Some((0, 2)));
+        assert_eq!(index.mark_last_range(1), Some((2, 3)));
+        assert_eq!(index.mark_last_range(2), Some((3, 6)));
+        assert_eq!(index.mark_last_range(3), None);
+    }
 
     #[test]
     fn bits_for_boundaries() {

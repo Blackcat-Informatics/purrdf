@@ -14,24 +14,14 @@
 //! over [`Dataset::quads`](crate::Dataset) — wasm is synchronous, so async I/O is a
 //! JS-layer concern.
 
-use std::collections::HashMap;
-
 use purrdf::ir::{Nested, try_fold_nested};
-use purrdf::{DatasetSink, RdfTerm, RdfTextDirection};
-use purrdf_events::{
-    EventQuad, EventTerm, EventTermId, EventTriple, RdfEventSink, ScopeId, TextDirection,
-};
+use purrdf::{DatasetSink, RdfTerm};
+use purrdf_core::FastMap;
+use purrdf_events::{EventQuad, EventTerm, EventTermId, EventTriple, RdfEventSink, ScopeId};
 use wasm_bindgen::prelude::*;
 
 use crate::dataset::Dataset;
 use crate::term::{Quad, TermInner, XSD_STRING, canonicalize_literal};
-
-fn to_event_direction(direction: RdfTextDirection) -> TextDirection {
-    match direction {
-        RdfTextDirection::Ltr => TextDirection::Ltr,
-        RdfTextDirection::Rtl => TextDirection::Rtl,
-    }
-}
 
 /// An RDF/JS `Sink` — a streaming consumer that interns pushed quads through the
 /// `purrdf-events` protocol and freezes them at `finish()`.
@@ -41,7 +31,7 @@ pub struct Sink {
     /// `None` after `finish()` (the protocol sink is consumed to produce the dataset).
     inner: Option<DatasetSink>,
     /// Dedup: a distinct term value is declared once and its protocol id reused.
-    ids: HashMap<RdfTerm, EventTermId>,
+    ids: FastMap<RdfTerm, EventTermId>,
     /// The next protocol-local [`EventTermId`] to mint (drive-global, monotonic).
     next_id: u32,
 }
@@ -50,7 +40,7 @@ impl Default for Sink {
     fn default() -> Self {
         Self {
             inner: Some(DatasetSink::new()),
-            ids: HashMap::new(),
+            ids: FastMap::default(),
             next_id: 0,
         }
     }
@@ -144,7 +134,7 @@ impl Sink {
             RdfTerm::Literal(lit) => {
                 let canonical = canonicalize_literal(lit.clone());
                 let datatype = canonical.datatype.as_deref().unwrap_or(XSD_STRING);
-                let direction = canonical.direction.map(to_event_direction);
+                let direction = canonical.direction;
                 let id = self.mint();
                 let _ = self
                     .sink_mut()?
@@ -374,10 +364,11 @@ mod term_walk_tests {
             for offset in [0, 1, 0, 2] {
                 let mut state = seed * 7 + offset;
                 let mut budget = 6;
-                let term = owned(&crate::test_terms::term_value(
+                let term = owned(&purrdf_core::term_fixture::term_value(
                     &mut state,
+                    purrdf_testkit::rng::splitmix64_next,
                     &mut budget,
-                    crate::test_terms::TermShape::IriPredicates,
+                    purrdf_core::term_fixture::TermShape::IriPredicates,
                 ));
                 assert_eq!(
                     found.emit_term(&term),

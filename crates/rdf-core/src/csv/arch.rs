@@ -32,19 +32,14 @@
     reason = "the module table documents the crate-private kernels it dispatches between"
 )]
 
+use super::backend::Backend;
 #[cfg(any(
     target_arch = "x86_64",
     target_arch = "aarch64",
     all(target_arch = "wasm32", target_feature = "simd128")
 ))]
 use super::scan::LANES;
-use super::scan::StopSet;
-#[cfg(not(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    all(target_arch = "wasm32", target_feature = "simd128")
-)))]
-use super::scan::find_portable;
+use super::scan::{Kernel, StopSet, find_portable};
 
 /// The widest kernel this process can run, applied to `haystack`.
 #[inline]
@@ -81,42 +76,49 @@ pub(crate) fn find(set: &StopSet, haystack: &[u8]) -> Option<usize> {
     }
 }
 
-/// Every explicit kernel this process can run, by name, for the differential
-/// tests against the portable kernel: this crate's own unit tests, and
-/// [`super::backend::kernels`], which this function also backs so an
-/// integration test outside the crate — including on wasm32, where this
-/// crate's `#[cfg(test)]` unit tests do not exist — runs the same comparison.
-pub(crate) fn every_kernel() -> Vec<(&'static str, super::scan::Kernel)> {
-    #[cfg_attr(
-        not(any(
-            target_arch = "x86_64",
-            target_arch = "aarch64",
-            all(target_arch = "wasm32", target_feature = "simd128")
-        )),
-        allow(unused_mut, reason = "a target without an explicit kernel pushes none")
-    )]
-    let mut kernels: Vec<(&'static str, super::scan::Kernel)> = Vec::new();
-    #[cfg(target_arch = "x86_64")]
-    {
-        kernels.push(("sse2", |set, haystack| {
-            // SAFETY: SSE2 is part of the `x86_64` baseline.
-            unsafe { x86::find_sse2(set, haystack) }
-        }));
-        if std::is_x86_feature_detected!("avx2") {
-            kernels.push(("avx2", |set, haystack| {
-                // SAFETY: registered only after the processor reported AVX2.
-                unsafe { x86::find_avx2(set, haystack) }
-            }));
-        }
+/// The kernel of `backend`, when this build compiles it and this processor
+/// runs it: the one place a [`Backend`] is resolved to code, so
+/// [`Backend::is_available`](purrdf_hash::Backend::is_available), this crate's
+/// differential unit tests and [`super::backend::kernels`] (which runs the same
+/// comparison from outside the crate, on wasm32 too) agree on what runs.
+pub(crate) fn kernel(backend: Backend) -> Option<Kernel> {
+    match backend {
+        Backend::Portable => Some(find_portable),
+        #[cfg(target_arch = "x86_64")]
+        Backend::Sse2 => Some(sse2),
+        #[cfg(target_arch = "x86_64")]
+        Backend::Avx2 => std::is_x86_feature_detected!("avx2").then_some(avx2 as Kernel),
+        #[cfg(target_arch = "aarch64")]
+        Backend::Neon => Some(neon),
+        #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+        Backend::Simd128 => Some(simd128::find),
+        _ => None,
     }
-    #[cfg(target_arch = "aarch64")]
-    kernels.push(("neon", |set, haystack| {
-        // SAFETY: NEON is part of the `aarch64` baseline.
-        unsafe { neon::find(set, haystack) }
-    }));
-    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
-    kernels.push(("simd128", simd128::find));
-    kernels
+}
+
+/// [`x86::find_sse2`], safe: SSE2 is part of the `x86_64` baseline.
+#[cfg(target_arch = "x86_64")]
+fn sse2(set: &StopSet, haystack: &[u8]) -> Option<usize> {
+    // SAFETY: SSE2 is part of the `x86_64` baseline, so every `x86_64`
+    // processor executes `find_sse2`.
+    unsafe { x86::find_sse2(set, haystack) }
+}
+
+/// [`x86::find_avx2`], reached only through [`kernel`], which hands it out
+/// after the processor reported AVX2.
+#[cfg(target_arch = "x86_64")]
+fn avx2(set: &StopSet, haystack: &[u8]) -> Option<usize> {
+    // SAFETY: `kernel` returns this function only after the processor
+    // reported AVX2, and it is private to this module.
+    unsafe { x86::find_avx2(set, haystack) }
+}
+
+/// [`neon::find`], safe: NEON is part of the `aarch64` baseline.
+#[cfg(target_arch = "aarch64")]
+fn neon(set: &StopSet, haystack: &[u8]) -> Option<usize> {
+    // SAFETY: NEON is part of the `aarch64` baseline, so every `aarch64`
+    // processor executes `neon::find`.
+    unsafe { neon::find(set, haystack) }
 }
 
 /// SSE2 and AVX2.

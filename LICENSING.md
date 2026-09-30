@@ -86,6 +86,7 @@ MIT, Apache-2.0, or MulanPSL-2.0.
 | `vectors/shacl/af/` | pySHACL DASH tests | Apache-2.0 |
 | `vectors/shacl12/`, `crates/shapes/spec/` | W3C SHACL 1.2 vocabularies + `shacl12-test-suite` | W3C Software and Document License |
 | `vectors/shexTest/` | shexTest v2.1.0 | MIT (per upstream `package.json`) |
+| `vectors/yaml-test-suite/` | official YAML test suite (`yaml/yaml-test-suite`, release `data-2022-01-17`) | MIT (`vectors/yaml-test-suite/LICENSE`) |
 | `crates/jsonschema/tests/suite/` | official JSON-Schema-Test-Suite (`json-schema-org/JSON-Schema-Test-Suite`) | MIT (`tests/suite/LICENSES/MIT.txt`) |
 | `crates/jsonschema/tests/metaschemas/` | JSON Schema draft-07, 2019-09 and 2020-12 meta-schemas (`json-schema-org/json-schema-spec`) | BSD-3-Clause, one of the two licences upstream offers (`tests/metaschemas/REUSE.toml`) |
 
@@ -114,7 +115,7 @@ whole repository:
 
 ## Unicode data compiled into published crates
 
-Four published crates compile tables generated from the Unicode Character
+Five published crates compile tables generated from the Unicode Character
 Database, and so ship Unicode, Inc. data under the
 [Unicode License v3](./LICENSES/Unicode-3.0.txt) (`Unicode-3.0`) alongside
 Blackcat Informatics® code. Their package metadata declares the combined
@@ -129,11 +130,12 @@ terms apply in addition, to the data.
 
 | Crate | Generated file | Generator | Source data |
 |---|---|---|---|
-| `purrdf-iri` | `crates/iri/src/idna_tables.rs` | `cargo run -p purrdf-iri --example gen_idna_tables` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
-| `purrdf-core` | `crates/rdf-core/src/xsd_regex/blocks.rs` | `cargo run -p purrdf-core --example gen_unicode_blocks` | `crates/rdf-core/vendor/unicode/Blocks.txt` (Unicode 16.0.0) |
-| `purrdf-text` | `crates/text/src/unicode_tables.rs` | `cargo run -p purrdf-text --example gen_unicode_text_tables` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
-| `purrdf-jsonschema` | `crates/jsonschema/src/ecma/property_tables.rs` | `cargo run -p purrdf-jsonschema --example gen_ecma_property_tables` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
-| `purrdf-jsonschema` | `crates/jsonschema/src/ecma/unicode_ranges.rs` | `python3 crates/jsonschema/examples/gen_ecma_unicode_ranges.py` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
+| `purrdf-lex` | `crates/lex/src/unicode_tables.rs` | `cargo run -p purrdf-lex --example gen_unicode_tables -- normalization` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
+| `purrdf-iri` | `crates/iri/src/idna_tables.rs` | `cargo run -p purrdf-lex --example gen_unicode_tables -- idna` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
+| `purrdf-core` | `crates/rdf-core/src/xsd_regex/blocks.rs` | `cargo run -p purrdf-core --example gen_unicode_blocks` | `crates/rdf-core/vendor/unicode/Blocks.txt` (Unicode 16.0.0, pinned to the locked `regex-syntax`) |
+| `purrdf-text` | `crates/text/src/unicode_tables.rs` | `cargo run -p purrdf-lex --example gen_unicode_tables -- text` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
+| `purrdf-jsonschema` | `crates/jsonschema/src/ecma/property_tables.rs` | `cargo run -p purrdf-lex --example gen_unicode_tables -- ecma-properties` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
+| `purrdf-jsonschema` | `crates/jsonschema/src/ecma/unicode_ranges.rs` | `cargo run -p purrdf-lex --example gen_unicode_tables -- ecma-ranges` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
 
 Each generated file carries the SPDX header
 

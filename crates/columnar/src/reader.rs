@@ -5,13 +5,13 @@
 
 use purrdf_core::TermBox;
 use std::collections::BTreeMap;
-use std::convert::Infallible;
 use std::str;
 use std::sync::Arc;
 
+use purrdf_core::langtag::is_identity_folded;
 use purrdf_core::{
-    BlankScope, ContentDigest, ContentStore, LossLedger, Nested, RdfDataset, RdfDatasetBuilder,
-    RdfLiteral, RdfTextDirection, TermId, TermValue, try_fold_nested,
+    BlankScope, ContentDigest, ContentStore, LossLedger, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+    RdfTextDirection, TermFactory as _, TermValue,
 };
 
 use crate::column::Int64Column;
@@ -393,7 +393,7 @@ fn resolve_term_record(
                     ));
                 };
                 if let Some(language) = &language {
-                    if language.is_empty() || language != &language.to_lowercase() {
+                    if language.is_empty() || !is_identity_folded(language) {
                         return Err(ColumnarError::malformed(
                             "terms.lang",
                             format!("literal row {index} has a non-canonical language tag"),
@@ -539,7 +539,7 @@ fn reconstruct_dataset(
     let ids: Vec<_> = dictionary
         .values
         .iter()
-        .map(|value| intern_value(&mut builder, value))
+        .map(|value| builder.intern_value(value))
         .collect();
     for (index, &named) in dictionary.named_graphs.iter().enumerate() {
         if named {
@@ -574,37 +574,6 @@ fn reconstruct_dataset(
     builder
         .freeze()
         .map_err(|error| ColumnarError::malformed("RDF reconstruction", error.to_string()))
-}
-
-/// Intern `value` into `builder`, a triple term over [`try_fold_nested`]'s work list:
-/// its subject, predicate and object, each fully before the next, then the triple.
-fn intern_value(builder: &mut RdfDatasetBuilder, value: &TermValue) -> TermId {
-    let interned = try_fold_nested(
-        value,
-        builder,
-        |builder, value| {
-            Ok::<_, Infallible>(Nested::Leaf(match value {
-                TermValue::Iri(iri) => builder.intern_iri(iri),
-                TermValue::Blank { label, scope } => builder.intern_blank(label, *scope),
-                TermValue::Literal {
-                    lexical_form,
-                    datatype,
-                    language,
-                    direction,
-                } => builder.intern_literal(RdfLiteral {
-                    lexical_form: lexical_form.clone(),
-                    datatype: Some(datatype.clone()),
-                    language: language.clone(),
-                    direction: *direction,
-                }),
-                TermValue::Triple { s, p, o } => return Ok(Nested::Triple(&**s, &**p, &**o)),
-            }))
-        },
-        |builder, _, s, p, o| Ok(builder.intern_triple(s, p, o)),
-    );
-    match interned {
-        Ok(id) => id,
-    }
 }
 
 fn int_column(data: &TableData, index: usize) -> Result<&Int64Column, ColumnarError> {
@@ -857,16 +826,14 @@ mod tests {
 
 #[cfg(test)]
 mod term_walk_tests {
-    //! The term-record resolution and the re-interning against their recursive
-    //! references, and at a hundred thousand levels on a 128 KiB thread.
+    //! The term-record resolution against its recursive reference, and deep on a
+    //! 128 KiB thread. Re-interning a resolved value is the builder's own
+    //! `TermFactory::intern_value`, tested beside it in `purrdf-core`.
 
-    use purrdf_core::{
-        BlankScope, RdfDatasetBuilder, RdfLiteral, RdfTextDirection, TermBox, TermId, TermValue,
-    };
+    use purrdf_core::langtag::is_identity_folded;
+    use purrdf_core::{BlankScope, RdfLiteral, RdfTextDirection, TermBox, TermValue};
 
-    use super::{
-        ColumnarError, TermRecord, intern_value, resolve_term_record, resolve_term_records,
-    };
+    use super::{ColumnarError, TermRecord, resolve_term_record, resolve_term_records};
 
     fn reference_record(
         index: usize,
@@ -901,7 +868,7 @@ mod term_walk_tests {
                     ));
                 };
                 if let Some(language) = &language {
-                    if language.is_empty() || language != &language.to_lowercase() {
+                    if language.is_empty() || !is_identity_folded(language) {
                         return Err(ColumnarError::malformed(
                             "terms.lang",
                             format!("literal row {index} has a non-canonical language tag"),
@@ -939,33 +906,14 @@ mod term_walk_tests {
         Ok(value)
     }
 
-    fn reference_intern(builder: &mut RdfDatasetBuilder, value: &TermValue) -> TermId {
-        match value {
-            TermValue::Triple { s, p, o } => {
-                let s = reference_intern(builder, s);
-                let p = reference_intern(builder, p);
-                let o = reference_intern(builder, o);
-                builder.intern_triple(s, p, o)
-            }
-            leaf => intern_value(builder, leaf),
-        }
-    }
-
-    /// A SplitMix64 draw below `n` from the counter at `state`.
-    fn draw(state: &mut u64, n: usize) -> usize {
-        let n = u64::try_from(n).expect("a small bound fits");
-        usize::try_from(purrdf_testkit::rng::splitmix64_next(state) % n)
-            .expect("a draw below a small bound fits")
-    }
-
     /// A generated term-record table: records naming any record — cycles included — and
     /// literals whose datatype, tag and direction are sometimes inconsistent, so every
     /// refusal is met.
     fn generated(seed: u64) -> Vec<TermRecord> {
-        let mut state = seed;
-        let len = 1 + draw(&mut state, 9);
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(seed);
+        let len = 1 + rng.below_usize(9);
         (0..len)
-            .map(|index| match draw(&mut state, 6) {
+            .map(|index| match rng.below_usize(6) {
                 0 => TermRecord::Iri(
                     [
                         "http://example.org/i",
@@ -980,15 +928,14 @@ mod term_walk_tests {
                 },
                 2 | 3 => TermRecord::Literal {
                     lexical: "x".to_owned(),
-                    datatype: draw(&mut state, len),
-                    language: [None, Some("en"), Some("EN")][draw(&mut state, 3)]
-                        .map(str::to_owned),
-                    direction: [None, Some(RdfTextDirection::Ltr)][draw(&mut state, 2)],
+                    datatype: rng.below_usize(len),
+                    language: [None, Some("en"), Some("EN")][rng.below_usize(3)].map(str::to_owned),
+                    direction: [None, Some(RdfTextDirection::Ltr)][rng.below_usize(2)],
                 },
                 _ => TermRecord::Triple {
-                    s: draw(&mut state, len),
-                    p: draw(&mut state, len),
-                    o: draw(&mut state, len),
+                    s: rng.below_usize(len),
+                    p: rng.below_usize(len),
+                    o: rng.below_usize(len),
                 },
             })
             .collect()
@@ -996,6 +943,44 @@ mod term_walk_tests {
 
     /// Every generated record table resolves — every record, in order — to exactly the
     /// values, the memo and the refusal the recursive reference reaches.
+    /// A literal row naming `rdf:langString` with the given tag.
+    fn language_literal_table(tag: &str) -> Vec<TermRecord> {
+        vec![
+            TermRecord::Iri(purrdf_core::vocab::rdf::LANG_STRING.to_owned()),
+            TermRecord::Literal {
+                lexical: "chat".to_owned(),
+                datatype: 0,
+                language: Some(tag.to_owned()),
+                direction: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn a_language_tag_with_an_ascii_uppercase_letter_is_refused_as_non_canonical() {
+        let refused = resolve_term_records(&language_literal_table("en-GB"))
+            .expect_err("an unfolded tag is not the canonical identity");
+        assert!(
+            refused.to_string().contains("non-canonical language tag"),
+            "{refused}"
+        );
+    }
+
+    #[test]
+    fn an_identity_folded_language_tag_resolves() {
+        let values = resolve_term_records(&language_literal_table("en-gb"))
+            .expect("a folded tag is canonical");
+        assert_eq!(
+            values[1],
+            TermValue::Literal {
+                lexical_form: "chat".to_owned(),
+                datatype: purrdf_core::vocab::rdf::LANG_STRING.to_owned(),
+                language: Some("en-gb".to_owned()),
+                direction: None,
+            }
+        );
+    }
+
     #[test]
     fn resolution_agrees_with_its_recursive_reference_on_generated_tables() {
         let (mut resolved, mut refused) = (0, 0);
@@ -1039,33 +1024,6 @@ mod term_walk_tests {
         assert!(refused > 0, "some generated table is refused");
     }
 
-    /// Every generated term re-interns into a fresh builder as the recursive reference
-    /// interns it: the same id, and the same next id after it.
-    #[test]
-    fn interning_agrees_with_its_recursive_reference_on_generated_terms() {
-        for seed in 0..400_u64 {
-            let mut state = seed;
-            let mut budget = 8;
-            let value = crate::test_terms::term_value(
-                &mut state,
-                &mut budget,
-                crate::test_terms::TermShape::Any,
-            );
-            let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
-            assert_eq!(
-                intern_value(&mut found, &value),
-                reference_intern(&mut expected, &value),
-                "seed {seed}"
-            );
-            let sentinel = "http://example.org/sentinel";
-            assert_eq!(
-                found.intern_iri(sentinel),
-                expected.intern_iri(sentinel),
-                "seed {seed}"
-            );
-        }
-    }
-
     /// A record chain a thousand triple terms deep resolves on a thread whose whole
     /// stack is 128 KiB — more levels than a recursion could take there. Every record is
     /// memoised as its whole value, so a chain costs memory with the square of its depth
@@ -1073,47 +1031,25 @@ mod term_walk_tests {
     #[test]
     fn a_deep_record_chain_resolves_on_a_128_kib_thread() {
         const LEVELS: usize = 1_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut records = vec![
-                    TermRecord::Iri("http://example.org/s".to_owned()),
-                    TermRecord::Iri("http://example.org/p".to_owned()),
-                    TermRecord::Iri("http://example.org/o".to_owned()),
-                ];
-                for level in 0..LEVELS {
-                    records.push(TermRecord::Triple {
-                        s: 0,
-                        p: 1,
-                        o: level + 2,
-                    });
-                }
-                let root = records.len() - 1;
-                let (mut states, mut values) =
-                    (vec![0u8; records.len()], vec![None; records.len()]);
-                let value = resolve_term_record(root, &records, &mut states, &mut values)
-                    .expect("the chain resolves");
-                assert_eq!(value, crate::test_terms::triple_chain(LEVELS));
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the resolution did not overflow the thread's stack");
-    }
-
-    /// A triple term a hundred thousand levels deep re-interns on a thread whose whole
-    /// stack is 128 KiB.
-    #[test]
-    fn a_hundred_thousand_level_term_interns_on_a_128_kib_thread() {
-        const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = crate::test_terms::triple_chain(LEVELS);
-                let mut builder = RdfDatasetBuilder::new();
-                assert_eq!(intern_value(&mut builder, &value).index(), LEVELS + 2);
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("interning did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut records = vec![
+                TermRecord::Iri("http://example.org/s".to_owned()),
+                TermRecord::Iri("http://example.org/p".to_owned()),
+                TermRecord::Iri("http://example.org/o".to_owned()),
+            ];
+            for level in 0..LEVELS {
+                records.push(TermRecord::Triple {
+                    s: 0,
+                    p: 1,
+                    o: level + 2,
+                });
+            }
+            let root = records.len() - 1;
+            let (mut states, mut values) = (vec![0u8; records.len()], vec![None; records.len()]);
+            let value = resolve_term_record(root, &records, &mut states, &mut values)
+                .expect("the chain resolves");
+            assert_eq!(value, purrdf_core::term_fixture::triple_chain(LEVELS));
+        })
+        .expect("the thread starts");
     }
 }

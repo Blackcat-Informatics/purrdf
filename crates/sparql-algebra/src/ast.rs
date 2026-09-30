@@ -3,8 +3,7 @@
 
 //! RDF 1.2 term-level types for the SPARQL algebra.
 //!
-//! These mirror the *structure* of the W3C SPARQL term model (and the surface
-//! the consumers of the prior oxigraph-family parser walk) but are purrdf-owned: a [`NamedNode`]
+//! These mirror the *structure* of the W3C SPARQL term model but are purrdf-owned: a [`NamedNode`]
 //! wraps a lexical IRI validated by [`purrdf_iri`], and a [`Literal`] carries a
 //! lexical form + datatype (optionally validated by [`purrdf_xsd`]). They carry
 //! **no variables** at the term level except through the `*Pattern` types, which
@@ -18,12 +17,12 @@ use std::sync::Arc;
 use crate::error::{ParseError, Result};
 use crate::tree::Child;
 
-/// A datatype IRI literal used for plain (non-typed) literals: `xsd:string`.
-pub const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-/// The datatype IRI for language-tagged strings: `rdf:langString`.
-pub const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 /// The datatype IRI for base-direction strings (RDF 1.2): `rdf:dirLangString`.
-pub const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+pub use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
+/// The datatype IRI for language-tagged strings: `rdf:langString`.
+pub use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+/// A datatype IRI literal used for plain (non-typed) literals: `xsd:string`.
+pub use purrdf_xsd::datatype::XSD_STRING;
 
 /// An absolute IRI in term position (e.g. a predicate, a class, a datatype).
 ///
@@ -48,6 +47,14 @@ pub struct NamedNode {
     iri: Arc<str>,
 }
 
+purrdf_lex::constructors! {
+    impl NamedNode {
+        /// Wrap an IRI without validation. Use only when the source is already known
+        /// to be a valid IRI (e.g. round-tripping an already-parsed node).
+        pub fn new_unchecked(iri) -> Self { .. };
+    }
+}
+
 impl NamedNode {
     /// Validate and wrap an absolute IRI. Returns [`ParseError::Iri`] if the
     /// string is not a valid RFC-3987 IRI, or if it is a relative reference
@@ -66,14 +73,6 @@ impl NamedNode {
             });
         }
         Ok(Self { iri: iri.into() })
-    }
-
-    /// Wrap an IRI without validation. Use only when the source is already known
-    /// to be a valid IRI (e.g. round-tripping an already-parsed node).
-    pub fn new_unchecked(iri: impl Into<String>) -> Self {
-        Self {
-            iri: iri.into().into(),
-        }
     }
 
     /// The IRI lexical form.
@@ -99,14 +98,14 @@ pub struct BlankNode {
     id: Arc<str>,
 }
 
-impl BlankNode {
-    /// Wrap a blank-node label (the part after `_:`).
-    pub fn new(id: impl Into<String>) -> Self {
-        Self {
-            id: id.into().into(),
-        }
+purrdf_lex::constructors! {
+    impl BlankNode {
+        /// Wrap a blank-node label (the part after `_:`).
+        pub fn new(id) -> Self { .. };
     }
+}
 
+impl BlankNode {
     /// The blank-node label (without `_:`).
     pub fn as_str(&self) -> &str {
         &self.id
@@ -141,14 +140,14 @@ pub struct Variable {
     name: Arc<str>,
 }
 
-impl Variable {
-    /// Wrap a variable name (the part after `?` or `$`).
-    pub fn new(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into().into(),
-        }
+purrdf_lex::constructors! {
+    impl Variable {
+        /// Wrap a variable name (the part after `?` or `$`).
+        pub fn new(name) -> Self { .. };
     }
+}
 
+impl Variable {
     /// The variable name (without the sigil).
     pub fn as_str(&self) -> &str {
         &self.name
@@ -161,14 +160,9 @@ impl core::fmt::Debug for Variable {
     }
 }
 
-/// The base text direction of an RDF 1.2 directional language-tagged string.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum BaseDirection {
-    /// Left-to-right (`--ltr`).
-    Ltr,
-    /// Right-to-left (`--rtl`).
-    Rtl,
-}
+/// The base text direction of an RDF 1.2 directional language-tagged string:
+/// the stack's one direction type, defined in `purrdf-cdt`.
+pub use purrdf_cdt::TextDirection as BaseDirection;
 
 /// An RDF literal: a lexical form plus a datatype, language tag and RDF 1.2
 /// base direction where required by that datatype.
@@ -222,11 +216,9 @@ impl Literal {
         language: impl Into<String>,
         direction: Option<BaseDirection>,
     ) -> Self {
-        let datatype = NamedNode::new_unchecked(if direction.is_some() {
-            RDF_DIR_LANG_STRING
-        } else {
-            RDF_LANG_STRING
-        });
+        let datatype = NamedNode::new_unchecked(purrdf_iri::vocab::language_datatype_iri(
+            direction.is_some(),
+        ));
         Self {
             value: value.into().into(),
             datatype,

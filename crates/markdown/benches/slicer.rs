@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Profiling harness for the structural slicer.
@@ -71,10 +71,10 @@
 use std::fmt::Write as _;
 use std::hint::black_box;
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use purrdf_markdown::{
     Document, Profile, SourceDocument, Vocabulary, analyze, render, slice_markdown,
 };
+use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main};
 
 /// The generated document's IRI. `example.org` is the repository's fixture
 /// authority, and nothing here mints a vocabulary of its own.
@@ -348,7 +348,7 @@ fn check(units: usize, model: &Document<'_>) {
     );
 }
 
-fn benches(c: &mut Criterion) {
+fn benches(c: &mut Bench) {
     let profile = profile();
     let mut group = c.benchmark_group("markdown_slicer");
     for units in SIZES {
@@ -375,5 +375,5 @@ fn benches(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(slicer, benches);
-criterion_main!(slicer);
+bench_group!(slicer, benches);
+bench_main!(slicer);

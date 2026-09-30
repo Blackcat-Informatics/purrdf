@@ -33,8 +33,9 @@
 //! bytes REQUIRES a `CANON_PROFILE_VERSION` increment. The three-step friction is the
 //! point — it makes an accidental golden refresh impossible to mistake for a no-op.
 
+use purrdf_gts::files::media_type_for_path;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use purrdf_rdf::{
     CANON_CORPUS_DIGEST, CANON_PRESENTATION_FLAT_ASSERTION_ID,
@@ -43,6 +44,8 @@ use purrdf_rdf::{
     CanonHash, CanonPresentation, RESERVED_NAMESPACE, RdfDatasetBuilder, TermPosition,
     ViewCanonError, parse_dataset, try_canonicalize_flat_view, try_canonicalize_with,
 };
+use purrdf_testkit::golden::regenerating;
+use purrdf_testkit::paths::workspace_root;
 use sha2::{Digest, Sha256};
 
 /// `rdf:reifies` — the real predicate a reifier binding denotes once lowered to the
@@ -66,11 +69,7 @@ struct Case {
 }
 
 fn corpus_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors/rdf12-canon")
-}
-
-fn updating() -> bool {
-    std::env::var_os("PURRDF_UPDATE_CANON_CORPUS").is_some()
+    workspace_root().join("vectors/rdf12-canon")
 }
 
 /// Parse the manifest. Blank lines and `#` comments are skipped; every other line is
@@ -128,22 +127,11 @@ fn load_manifest() -> Vec<Case> {
     cases
 }
 
-/// The media type a case's extension selects. Driven off the extension rather than
-/// recorded in the manifest so a case cannot be listed under a syntax it is not
-/// written in.
-fn media_type_for(path: &Path) -> &'static str {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("trig") => "application/trig",
-        Some("ttl") => "text/turtle",
-        other => panic!("unhandled corpus input extension {other:?} for {path:?}"),
-    }
-}
-
 /// The canonical bytes for a case, or its refusal rendered in the manifest's
 /// discriminant spelling.
 fn run_case(case: &Case) -> Result<String, String> {
     let bytes = std::fs::read(&case.file).unwrap_or_else(|e| panic!("read {:?}: {e}", case.file));
-    let dataset = parse_dataset(&bytes, media_type_for(&case.file), None)
+    let dataset = parse_dataset(&bytes, media_type_for_path(&case.file), None)
         .unwrap_or_else(|e| panic!("{} must parse: {e}", case.rel));
     match try_canonicalize_with(&dataset, CanonHash::Sha256) {
         Ok(canonicalized) => Ok(canonicalized.nquads),
@@ -179,7 +167,7 @@ fn the_corpus_matches_its_pinned_expectations() {
                     "{}",
                     purrdf_hash::hex::Lower(&Sha256::digest(nquads.as_bytes()))
                 );
-                if updating() {
+                if regenerating("PURRDF_UPDATE_CANON_CORPUS") {
                     std::fs::write(&canonical, &nquads).expect("write golden");
                     std::fs::write(&digest, format!("{hex}\n")).expect("write digest");
                     continue;
@@ -513,8 +501,7 @@ fn a_spelled_annotation_co_canonicalizes_with_the_flat_row_it_spells() {
 /// single `sha256sum` and without running this suite.
 #[test]
 fn the_corpus_digest_matches_the_constant_a_consumer_pins() {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../scripts/conformance-frozen/vectors-rdf12-canon.sha256");
+    let manifest = workspace_root().join("scripts/conformance-frozen/vectors-rdf12-canon.sha256");
     let bytes = std::fs::read(&manifest).expect("the corpus freeze manifest must exist");
     let computed = format!("{}", purrdf_hash::hex::Lower(&Sha256::digest(&bytes)));
     assert_eq!(
@@ -719,7 +706,7 @@ fn no_corpus_golden_leaks_the_reserved_namespace_under_the_flat_presentation() {
         }
         let bytes =
             std::fs::read(&case.file).unwrap_or_else(|e| panic!("read {:?}: {e}", case.file));
-        let dataset = parse_dataset(&bytes, media_type_for(&case.file), None)
+        let dataset = parse_dataset(&bytes, media_type_for_path(&case.file), None)
             .unwrap_or_else(|e| panic!("{} must parse: {e}", case.rel));
         let flat = try_canonicalize_flat_view(&*dataset, CanonHash::Sha256).unwrap_or_else(|e| {
             panic!(

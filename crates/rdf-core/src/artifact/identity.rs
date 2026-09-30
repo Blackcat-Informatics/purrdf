@@ -197,19 +197,23 @@ impl fmt::Display for IdentityMismatch {
     }
 }
 
-/// Render a component value for a human: quoted when it is printable UTF-8,
+/// Render an identity component value for a human: quoted when it is UTF-8 with
+/// no control character (the empty value is the quoted `""`), `0x`-prefixed
 /// lowercase hex otherwise. Identity values are usually digests (hex) or IRIs
 /// and version strings (text), and showing a digest as mojibake helps nobody.
-fn render_value(value: &[u8]) -> String {
+///
+/// The one rendering of an identity component: every surface that explains an
+/// identity match or mismatch (this module's [`IdentityMismatch`] display, a
+/// shapes product's explanation) spells a value through it, so the same bytes
+/// read the same everywhere.
+#[must_use]
+pub fn render_value(value: &[u8]) -> String {
     match std::str::from_utf8(value) {
         Ok(text) if !text.chars().any(char::is_control) => format!("\"{text}\""),
         _ => {
-            use std::fmt::Write as _;
             let mut hex = String::with_capacity(value.len() * 2 + 2);
             hex.push_str("0x");
-            for byte in value {
-                let _ = write!(hex, "{byte:02x}");
-            }
+            purrdf_hash::hex::encode_into(value, &mut hex);
             hex
         }
     }
@@ -230,12 +234,10 @@ pub struct Identity {
     digest: [u8; 32],
 }
 
-impl Default for Identity {
+purrdf_hash::default_from_new!(
     /// The empty identity — see [`Identity::new`].
-    fn default() -> Self {
-        Self::new()
-    }
-}
+    Identity
+);
 
 impl Identity {
     /// The empty identity: no components, and the digest of the empty byte
@@ -408,6 +410,12 @@ impl Identity {
     }
 
     /// Recompute the cached digest from the current components.
+    ///
+    /// The SHA-256 opens with no hash domain: the preimage is the canonical
+    /// encoding alone. The digest is its own kind, an [`Identity`] digest,
+    /// compared only against another identity's digest; and it is a published
+    /// identity sealed into every artifact header, so a domain cannot be added
+    /// without breaking every artifact already written.
     fn refresh(&mut self) {
         self.digest = Sha256::digest(self.to_bytes()).into();
     }
@@ -641,5 +649,8 @@ mod tests {
         );
         assert_eq!(render_value(&[0x00, 0xff]), "0x00ff");
         assert_eq!(render_value(b""), "\"\"");
+        // A control character is not printable text, whatever its encoding.
+        assert_eq!(render_value(b"a\nb"), "0x610a62");
+        assert_eq!(render_value(&[0xc3]), "0xc3");
     }
 }

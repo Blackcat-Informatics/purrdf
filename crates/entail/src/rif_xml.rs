@@ -27,16 +27,16 @@ use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
-use roxmltree::{Document, Node};
+use purrdf_lex::xml::{Document, Dtd, Node, Options};
 
 use crate::{
     Atom, EntailError, Fact, Materialization, Regime, RifTerm, Rule, RuleSet, materialize,
 };
 
-const RIF_NS: &str = "http://www.w3.org/2007/rif#";
-const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
+use purrdf_iri::vocab::rif::NS as RIF_NS;
 /// The reserved XML namespace `xml:base` lives in (XML Base, §3).
-const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
+use purrdf_iri::vocab::xml::NS as XML_NS;
+use purrdf_xsd::datatype::XSD_NS;
 
 /// One RIF `Import` directive. Fetching its location is deliberately caller-owned.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,15 +121,31 @@ where
 }
 
 fn parse_document(text: &str, base: &BaseScope) -> Result<ParsedRifDocument, String> {
-    // RIF imports are resolved by the caller; XML DTD/entity expansion is never needed.
-    let document = Document::parse(text).map_err(|error| error.to_string())?;
+    // The W3C RIF documents declare their namespace IRIs as internal general entities
+    // (`<!DOCTYPE Document [ <!ENTITY rif "…"> … ]>`, used as `xmlns="&rif;"` and
+    // `type="&xs;string"`), which XML 1.0 §5.1 obliges even a non-validating processor to
+    // expand. The internal subset is read for exactly that. Nothing is fetched: a
+    // reference to an external entity is refused, and so is a document naming an external
+    // subset or external parameter entity, whose default attributes and entity
+    // declarations would otherwise be silently unapplied.
+    let options = Options {
+        dtd: Dtd::internal_subset(),
+        ..Options::default()
+    };
+    let document = Document::parse_with_options(text, options).map_err(|error| {
+        let (line, column) = error.line_column(text);
+        format!("{error} (line {line}, column {column})")
+    })?;
+    if document.declarations_unread() {
+        return Err("the document type declaration names an external DTD subset or references an external parameter entity, which is never fetched, so default attributes and entity declarations may be missing".to_owned());
+    }
     let root = document.root_element();
     require(&root, "Document")?;
     // `xml:base` on the document element scopes the whole document.
     let base = enter(&root, base)?;
-    let mut ruleset = RuleSet::new();
+    let mut ruleset = RuleSet::default();
     let mut imports = Vec::new();
-    for child in elements(&root) {
+    for child in root.element_children() {
         let base = enter(&child, &base)?;
         match local_name(&child)? {
             "directive" => collect_import(&child, &mut imports, &base)?,
@@ -150,7 +166,7 @@ fn collect_import(
     let base = enter(&import, base)?;
     let mut location = None;
     let mut profile = None;
-    for child in elements(&import) {
+    for child in import.element_children() {
         let base = enter(&child, &base)?;
         match local_name(&child)? {
             // Both are IRI-valued: a `<location>` names the graph to fetch and a
@@ -176,7 +192,7 @@ fn parse_payload(
 ) -> Result<(), String> {
     let group = only_element(payload, "Group")?;
     let base = enter(&group, base)?;
-    for child in elements(&group) {
+    for child in group.element_children() {
         let base = enter(&child, &base)?;
         match local_name(&child)? {
             "sentence" => parse_sentence(&child, ruleset, &base)?,
@@ -211,7 +227,7 @@ fn parse_sentence(
 
 fn parse_forall(forall: &Node<'_, '_>, base: &BaseScope) -> Result<Rule, String> {
     let mut formula = None;
-    for child in elements(forall) {
+    for child in forall.element_children() {
         match local_name(&child)? {
             "declare" | "meta" | "id" => {}
             "formula" => formula = Some(child),
@@ -225,7 +241,7 @@ fn parse_forall(forall: &Node<'_, '_>, base: &BaseScope) -> Result<Rule, String>
     let base = enter(&implies, &base)?;
     let mut body = None;
     let mut head = None;
-    for child in elements(&implies) {
+    for child in implies.element_children() {
         let base = enter(&child, &base)?;
         match local_name(&child)? {
             "if" => {
@@ -253,7 +269,7 @@ fn parse_conjunction(node: &Node<'_, '_>, base: &BaseScope) -> Result<Vec<Atom>,
         "Frame" => parse_frame(node, base),
         "And" => {
             let mut atoms = Vec::new();
-            for child in elements(node) {
+            for child in node.element_children() {
                 let base = enter(&child, base)?;
                 match local_name(&child)? {
                     "formula" => {
@@ -275,7 +291,7 @@ fn parse_frame(frame: &Node<'_, '_>, base: &BaseScope) -> Result<Vec<Atom>, Stri
     require(frame, "Frame")?;
     let mut object = None;
     let mut slots = Vec::new();
-    for child in elements(frame) {
+    for child in frame.element_children() {
         let base = enter(&child, base)?;
         match local_name(&child)? {
             "object" => {
@@ -303,7 +319,7 @@ fn parse_frame(frame: &Node<'_, '_>, base: &BaseScope) -> Result<Vec<Atom>, Stri
 }
 
 fn parse_slot(slot: &Node<'_, '_>, base: &BaseScope) -> Result<(RifTerm, RifTerm), String> {
-    let mut children = elements(slot);
+    let mut children = slot.element_children();
     let predicate_node = children.next().ok_or("slot without a predicate")?;
     let predicate_base = enter(&predicate_node, base)?;
     let predicate = parse_term(&predicate_node, &predicate_base)?;
@@ -418,12 +434,6 @@ fn fill_dataset_facts(dataset: &RdfDataset, facts: &mut Vec<Fact>) {
     }));
 }
 
-fn elements<'a, 'input>(
-    node: &Node<'a, 'input>,
-) -> impl Iterator<Item = Node<'a, 'input>> + use<'a, 'input> {
-    node.children().filter(Node::is_element)
-}
-
 fn local_name<'a>(node: &Node<'a, '_>) -> Result<&'a str, String> {
     let tag = node.tag_name();
     match tag.namespace() {
@@ -448,7 +458,7 @@ fn single_element<'a, 'input>(
     node: &Node<'a, 'input>,
     parent: &str,
 ) -> Result<Node<'a, 'input>, String> {
-    let mut children = elements(node);
+    let mut children = node.element_children();
     let first = children
         .next()
         .ok_or_else(|| format!("<{parent}> is empty"))?;
@@ -474,7 +484,8 @@ fn text_of(node: &Node<'_, '_>) -> String {
             text.push_str(value);
         }
     }
-    text.trim().to_owned()
+    // XML `S`, not Unicode `White_Space`: a NO-BREAK SPACE at either end is content.
+    purrdf_iri::terminals::trim_ws(&text).to_owned()
 }
 
 #[cfg(test)]
@@ -615,14 +626,52 @@ mod tests {
     }
 
     #[test]
-    fn rejects_dtds() {
-        let text = RIF.replacen(
+    fn expands_internal_entities_and_refuses_external_ones() {
+        // The W3C RIF documents spell their namespaces through internal entities.
+        let internal = RIF
+            .replacen(
+                "<Document xmlns=\"http://www.w3.org/2007/rif#\"",
+                "<!DOCTYPE Document [<!ENTITY rif \"http://www.w3.org/2007/rif#\">\
+                 <!ENTITY xs \"http://www.w3.org/2001/XMLSchema#\">]><Document xmlns=\"&rif;\"",
+                1,
+            )
+            .replace(
+                "type=\"http://www.w3.org/2001/XMLSchema#string\"",
+                "type=\"&xs;string\"",
+            );
+        assert_ne!(
+            internal, RIF,
+            "the fixture spells its namespaces through entities"
+        );
+        assert_eq!(
+            parse_rif_xml(&internal, None).unwrap(),
+            parse_rif_xml(RIF, None).unwrap(),
+            "an internal entity reads as its replacement text"
+        );
+        // An external entity would be a fetch: a reference to one is refused, and so is a
+        // document naming an external subset (its declarations would go unapplied). The
+        // neighbour that only declares an external entity, referencing nothing, is read.
+        let declared = "<!DOCTYPE Document [<!ENTITY x SYSTEM \"https://example.org/x\">]>";
+        let referenced = RIF
+            .replacen("<Document", &format!("{declared}<Document"), 1)
+            .replace(">value<", ">&x;<");
+        assert_ne!(referenced, RIF);
+        assert!(matches!(
+            parse_rif_xml(&referenced, None),
+            Err(EntailError::Parse(_))
+        ));
+        let text = RIF.replacen("<Document", &format!("{declared}<Document"), 1);
+        assert_eq!(
+            parse_rif_xml(&text, None).unwrap(),
+            parse_rif_xml(RIF, None).unwrap()
+        );
+        let subset = RIF.replacen(
             "<Document",
-            "<!DOCTYPE Document [<!ENTITY x \"expanded\">]><Document",
+            "<!DOCTYPE Document SYSTEM \"https://example.org/rif.dtd\"><Document",
             1,
         );
         assert!(matches!(
-            parse_rif_xml(&text, None),
+            parse_rif_xml(&subset, None),
             Err(EntailError::Parse(_))
         ));
     }

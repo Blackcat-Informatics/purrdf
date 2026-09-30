@@ -37,7 +37,7 @@
 //! * `node-expr` — evaluate one node expression of a shapes graph against a focus node;
 //! * `shapes` — shapes-graph authoring tools; its `lint` verb certifies a shapes graph
 //!   cold: the loader's verdict, the W3C `shacl-shacl.ttl` results and every function
-//!   call's binding — see [`shapes_tools`].
+//!   call's binding — see `shapes_tools`.
 //!
 //! `reason` and `entails` are the two halves of entailment and neither is the
 //! other: `reason` computes a CLOSURE, which is what a caller wants who will go on
@@ -85,6 +85,7 @@
 //! write their one-line verdict to **stderr**, unconditionally, so a shell can branch on
 //! it without parsing the RDF or JSON artifact stdout must stay.
 
+mod argv_documents;
 mod cli;
 mod consistency;
 mod convert;
@@ -244,6 +245,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
+            no_ceiling,
             explain,
             aggregate_namespace,
             provenance_namespace,
@@ -266,6 +268,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                     max_intermediate_cells: *max_intermediate_cells,
                     max_scratch_bytes: *max_scratch_bytes,
                     max_remote_requests: *max_remote_requests,
+                    no_ceiling: *no_ceiling,
                 },
                 explain: *explain,
                 jsonld_options: jsonld_options.as_ref(),
@@ -289,6 +292,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
+            no_ceiling,
             aggregate_namespace,
             path_relation,
             update,
@@ -307,6 +311,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                     max_intermediate_cells: *max_intermediate_cells,
                     max_scratch_bytes: *max_scratch_bytes,
                     max_remote_requests: *max_remote_requests,
+                    no_ceiling: *no_ceiling,
                 },
                 jsonld_options: jsonld_options.as_ref(),
                 aggregate_namespace: aggregate_namespace.as_deref(),
@@ -418,6 +423,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
+            no_ceiling,
             input,
             output,
         } => validate::run(
@@ -451,6 +457,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                     max_intermediate_cells: *max_intermediate_cells,
                     max_scratch_bytes: *max_scratch_bytes,
                     max_remote_requests: *max_remote_requests,
+                    no_ceiling: *no_ceiling,
                 },
                 jsonld_options: jsonld_options.as_ref(),
             },

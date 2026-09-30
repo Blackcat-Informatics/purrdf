@@ -49,10 +49,14 @@
 //! The run is deterministic: a fixed xoshiro256** seed, [`CASES`] cases, and no
 //! on-disk failure persistence.
 
+#[path = "support/terms.rs"]
+mod terms;
+
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
+use terms::ex_ns as iri;
 
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine::parse_shapes;
@@ -72,10 +76,10 @@ const CASES: u32 = 2048;
 const SEED: u64 = 0x7368_6163_6c31_3221;
 
 const EX: &str = "http://example.org/ns#";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDFS_SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUB_CLASS_OF;
+use purrdf_xsd::datatype::XSD_BOOLEAN;
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 const PREFIXES: &str = r"
 @prefix ex:     <http://example.org/ns#> .
@@ -340,10 +344,6 @@ struct World {
 }
 
 // ── Terms ──────────────────────────────────────────────────────────────────────
-
-fn iri(local: &str) -> Term {
-    Term::NamedNode(NamedNode::new_unchecked(format!("{EX}{local}")))
-}
 
 fn integer(value: i64) -> Term {
     Term::Literal(Literal::new_typed_literal(
@@ -989,8 +989,8 @@ fn production(world: &World) -> Result<Output, String> {
         .map_err(|e| format!("the generated shapes graph did not parse: {}", e.join("; ")))?;
     let store = ShaclData::new(Arc::clone(&data), shapes_ds, None);
     let focus = iri(&format!("n{}", world.focus));
-    let first = eval_node_expr(&store, &focus, &expr, &mut RecursionGuard::new());
-    let second = eval_node_expr(&store, &focus, &expr, &mut RecursionGuard::new());
+    let first = eval_node_expr(&store, &focus, &expr, &mut RecursionGuard::default());
+    let second = eval_node_expr(&store, &focus, &expr, &mut RecursionGuard::default());
     if first != second {
         return Err(format!(
             "two evaluations of one expression disagree: {first:?} then {second:?}"

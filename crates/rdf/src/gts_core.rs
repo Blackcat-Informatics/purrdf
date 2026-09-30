@@ -3,9 +3,9 @@
 
 use std::collections::BTreeMap;
 
-use ciborium::value::Value;
-use purrdf_core::hex;
 use purrdf_gts::model::Graph;
+use purrdf_hash::hex;
+use purrdf_lex::cbor::Value;
 
 use crate::{
     RdfBlobOrigin, RdfBlobRecord, RdfDiagnostic, RdfLocation, RdfLookaside, RdfLookasideKind,
@@ -62,7 +62,7 @@ pub fn lookaside_from_graph(graph: &Graph) -> RdfLookaside {
         .opaque
         .iter()
         .map(|opaque| RdfOpaqueNodeRecord {
-            id: hex::lower(&opaque.id),
+            id: hex::encode(&opaque.id),
             frame_type: opaque.frame_type.clone(),
             reason: opaque.reason.clone(),
             signature_status: opaque.sigstat.clone(),
@@ -73,7 +73,7 @@ pub fn lookaside_from_graph(graph: &Graph) -> RdfLookaside {
         .signatures
         .iter()
         .map(|signature| RdfSignatureRecord {
-            frame_id: hex::lower(&signature.frame_id),
+            frame_id: hex::encode(&signature.frame_id),
             key_id: signature.kid.clone(),
             status: signature.status.clone(),
             has_cose: signature.cose.is_some(),
@@ -102,7 +102,7 @@ fn segment_records(graph: &Graph) -> Vec<RdfSegmentRecord> {
             let streamable = graph.segment_streamable.get(index);
             RdfSegmentRecord {
                 index,
-                head: graph.segment_heads.get(index).map(|head| hex::lower(head)),
+                head: graph.segment_heads.get(index).map(|head| hex::encode(head)),
                 profile: graph.segment_profiles.get(index).cloned(),
                 claimed_streamable: streamable.is_some_and(|info| info.claimed),
                 covered: streamable.map_or(0, |info| info.covered),
@@ -150,7 +150,7 @@ fn blob_origin(graph: &Graph) -> Option<RdfBlobOrigin> {
         source_segments: graph
             .segment_heads
             .iter()
-            .map(|head| hex::lower(head))
+            .map(|head| hex::encode(head))
             .collect(),
     })
 }
@@ -237,7 +237,13 @@ fn metadata_text(metadata: &BTreeMap<String, RdfMetadataValue>, key: &str) -> Op
         .map(str::to_owned)
 }
 
-fn metadata_value_from_cbor(value: &Value) -> RdfMetadataValue {
+/// Convert a GTS CBOR metadata [`Value`] into the crate's [`RdfMetadataValue`].
+///
+/// The one conversion for every GTS reader path (the in-memory import and the
+/// streaming sink), so a metadata value surfaces identically through both.
+/// A non-text map key is kept as its `Debug` spelling (an integer key `1` as `"1"`), and a simple value other
+/// than `false`, `true` and `null` as [`RdfMetadataValue::Opaque`].
+pub(crate) fn metadata_value_from_cbor(value: &Value) -> RdfMetadataValue {
     match value {
         Value::Integer(integer) => RdfMetadataValue::Integer(i128::from(*integer)),
         Value::Bytes(bytes) => RdfMetadataValue::Bytes(bytes.clone()),
@@ -258,7 +264,7 @@ fn metadata_value_from_cbor(value: &Value) -> RdfMetadataValue {
                 .map(|(key, value)| (metadata_key_from_cbor(key), metadata_value_from_cbor(value)))
                 .collect(),
         ),
-        other => RdfMetadataValue::Opaque(format!("{other:?}")),
+        other @ Value::Simple(_) => RdfMetadataValue::Opaque(format!("{other:?}")),
     }
 }
 
@@ -320,6 +326,25 @@ mod tests {
     use crate::RdfTerm;
     use crate::gts_resolve::term_from_id;
     use purrdf_gts::model::{Term, TermKind};
+
+    #[test]
+    fn metadata_simple_values_surface_as_opaque_and_null_stays_null() {
+        assert_eq!(
+            metadata_value_from_cbor(&Value::Simple(23)),
+            RdfMetadataValue::Opaque("undefined".to_owned())
+        );
+        assert_eq!(
+            metadata_value_from_cbor(&Value::Null),
+            RdfMetadataValue::Null
+        );
+        assert_eq!(
+            metadata_value_from_cbor(&Value::Map(vec![(Value::from(1_u8), Value::from(true))])),
+            RdfMetadataValue::Map(BTreeMap::from([(
+                "1".to_owned(),
+                RdfMetadataValue::Bool(true)
+            )]))
+        );
+    }
 
     fn private_lang_named_graph() -> Graph {
         let mut graph = Graph::default();

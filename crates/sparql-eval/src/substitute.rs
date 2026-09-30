@@ -6,8 +6,7 @@
 //! Bridges the engine's egress term model ([`TermValue`]) to the algebra's
 //! [`Query::substitute_variable`] rewrite. Each `(name, value)` of a
 //! [`SparqlRequest::substitutions`](purrdf_core::SparqlRequest) pre-binds the
-//! query variable `name` to `value` before evaluation, exactly mirroring oxigraph's
-//! `PreparedSparqlQuery::substitute_variable` (the SHACL `$this` focus-node path).
+//! query variable `name` to `value` before evaluation (the SHACL `$this` focus-node path).
 //!
 //! The substitution is applied to a **clone** of the cached (un-substituted) parse,
 //! so the plan cache is never poisoned by a focus-node-specific binding.
@@ -29,9 +28,9 @@
 use purrdf_core::{DatasetView, RdfDiagnostic, RdfTextDirection, TermRef, TermValue};
 use purrdf_sparql_algebra::Child;
 use purrdf_sparql_algebra::{
-    AggregateExpression, AggregateParts, BaseDirection, BlankNode, Expression, GraphPattern,
-    GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern, OrderExpression,
-    PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
+    AggregateExpression, AggregateParts, BlankNode, Expression, GraphPattern, GroundTerm,
+    GroundTriple, Literal, NamedNode, NamedNodePattern, OrderExpression, PropertyFunctionCall,
+    Query, TermPattern, TriplePattern, Variable,
 };
 
 /// The pre-binding list, in whichever of the two shapes the caller has.
@@ -260,17 +259,9 @@ pub(crate) fn apply_substitutions(
     Ok(apply_probes(query, probes))
 }
 
-/// The pattern that stands in a slot while the subtree the slot held is out being
-/// rewritten: the empty group, which holds nothing and costs no allocation.
-fn hole() -> GraphPattern {
-    GraphPattern::Bgp {
-        patterns: Vec::new(),
-    }
-}
-
 /// Take the pattern in `slot` out, leaving [`hole`] in its place.
 fn take_child(slot: &mut GraphPattern) -> GraphPattern {
-    std::mem::replace(slot, hole())
+    std::mem::replace(slot, GraphPattern::empty_bgp())
 }
 
 /// How many distinct pre-binding names one worker keeps interned.
@@ -958,18 +949,12 @@ pub(crate) fn group_key_carries(keys: &[Variable], variable: &Variable) -> bool 
 /// (`crate::property_fn_plan`'s `Planner`); the planner's drift guard holds the
 /// two to the same reach, shape by shape.
 pub(crate) const fn lateral_call(right: &GraphPattern) -> Option<&PropertyFunctionCall> {
-    match right {
-        GraphPattern::PropertyFunction(call) => Some(call),
-        _ => None,
-    }
+    right.as_property_function()
 }
 
 /// [`lateral_call`], for the rewrite that writes into the call.
 const fn lateral_call_mut(right: &mut GraphPattern) -> Option<&mut PropertyFunctionCall> {
-    match right {
-        GraphPattern::PropertyFunction(call) => Some(call),
-        _ => None,
-    }
+    right.as_property_function_mut()
 }
 
 /// Which pre-bound values a rewrite cannot WRITE into a property-function argument
@@ -1853,14 +1838,15 @@ fn own_expressions<'n>(
             expression: Some(expression),
             ..
         } => vec![expression],
-        GraphPattern::OrderBy { expression, .. } => {
-            expression.iter_mut().map(order_sort_key_mut).collect()
-        }
+        GraphPattern::OrderBy { expression, .. } => expression
+            .iter_mut()
+            .map(OrderExpression::expression_mut)
+            .collect(),
         GraphPattern::Group { .. } => aggregates
             .iter_mut()
             .flat_map(|(_, (_, args, _, order_by, _))| {
                 args.iter_mut()
-                    .chain(order_by.iter_mut().map(order_sort_key_mut))
+                    .chain(order_by.iter_mut().map(OrderExpression::expression_mut))
             })
             .collect(),
         GraphPattern::Bgp { .. }
@@ -1880,13 +1866,6 @@ fn own_expressions<'n>(
         | GraphPattern::Reduced { .. }
         | GraphPattern::Slice { .. }
         | GraphPattern::PropertyFunction(_) => Vec::new(),
-    }
-}
-
-/// The sort key under an `ORDER BY` direction, for rewriting in place.
-fn order_sort_key_mut(order: &mut OrderExpression) -> &mut Expression {
-    match order {
-        OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => expr,
     }
 }
 
@@ -2619,7 +2598,7 @@ fn for_each_node_expression(node: &GraphPattern, f: &mut dyn FnMut(&Expression))
         } => f(expression),
         GraphPattern::OrderBy { expression, .. } => {
             for order in expression {
-                f(crate::modifier::order_sort_key(order));
+                f(order.expression());
             }
         }
         GraphPattern::Group { aggregates, .. } => {
@@ -2628,7 +2607,7 @@ fn for_each_node_expression(node: &GraphPattern, f: &mut dyn FnMut(&Expression))
                     f(arg);
                 }
                 for order in aggregate.order_by() {
-                    f(crate::modifier::order_sort_key(order));
+                    f(order.expression());
                 }
             }
         }
@@ -2890,7 +2869,7 @@ fn substitute_in_expression(expr: &mut Expression, expr_subs: &ExprSubs) {
 fn true_literal() -> Expression {
     Expression::Literal(Literal::new_typed(
         "true",
-        NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean"),
+        NamedNode::new_unchecked(purrdf_xsd::datatype::XSD_BOOLEAN),
     ))
 }
 
@@ -3104,14 +3083,7 @@ fn literal_from_value(
     direction: Option<RdfTextDirection>,
 ) -> Result<Literal, RdfDiagnostic> {
     match (language, direction) {
-        (Some(language), dir) => Ok(Literal::new_lang(
-            lexical_form,
-            lang(language)?,
-            dir.map(|d| match d {
-                RdfTextDirection::Ltr => BaseDirection::Ltr,
-                RdfTextDirection::Rtl => BaseDirection::Rtl,
-            }),
-        )),
+        (Some(language), dir) => Ok(Literal::new_lang(lexical_form, lang(language)?, dir)),
         (None, _) => Ok(Literal::new_typed(lexical_form, node(datatype)?)),
     }
 }
@@ -3159,7 +3131,7 @@ mod tests {
     use purrdf_sparql_algebra::Child;
 
     /// `http://www.w3.org/2001/XMLSchema#string`, for a plain literal fixture.
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+    use purrdf_xsd::datatype::XSD_STRING;
 
     /// The five ground values the classification distinguishes, as `(label, term)`.
     ///
@@ -3523,8 +3495,8 @@ mod walk_tests {
 
     use super::*;
 
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+    use purrdf_xsd::datatype::XSD_INTEGER;
+    use purrdf_xsd::datatype::XSD_STRING;
     const SMALL_STACK: usize = 128 * 1024;
     const DEEP: usize = 100_000;
 
@@ -4350,21 +4322,20 @@ mod walk_tests {
     // ── A deterministic shape generator ────────────────────────────────────────────
 
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         fn new(seed: u64, budget: usize) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget,
             }
         }
 
         fn choose(&mut self, options: usize) -> usize {
-            let draw = purrdf_testkit::rng::splitmix64_next(&mut self.state);
-            usize::try_from(draw % options as u64).expect("a choice fits usize")
+            self.state.below_usize(options)
         }
 
         fn coin(&mut self) -> bool {
@@ -4395,7 +4366,7 @@ mod walk_tests {
             0 => Literal::new_simple(format!("v{}", choices.choose(4))),
             1 => Literal::new_typed("42", NamedNode::new_unchecked(XSD_INTEGER)),
             2 => Literal::new_lang("hi", "en", None),
-            _ => Literal::new_lang("hi", "en", Some(BaseDirection::Rtl)),
+            _ => Literal::new_lang("hi", "en", Some(purrdf_sparql_algebra::BaseDirection::Rtl)),
         }
     }
 
@@ -4727,15 +4698,6 @@ mod walk_tests {
         }
     }
 
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
-    }
-
     fn stringify<T>(result: Result<T, RdfDiagnostic>) -> Result<T, String> {
         result.map_err(|diagnostic| diagnostic.to_string())
     }
@@ -4902,7 +4864,7 @@ mod walk_tests {
             let values = probes(&mut choices);
             let driven: Vec<usize> = (0..values.len()).filter(|_| choices.coin()).collect();
             let seed_pattern = if choices.choose(4) == 0 {
-                hole()
+                GraphPattern::empty_bgp()
             } else {
                 seed_row(&driven, &values)
             };
@@ -4959,7 +4921,7 @@ mod walk_tests {
 
     #[test]
     fn a_hundred_thousand_level_ground_term_is_spelled_on_a_128_kib_thread() {
-        let (spelled, refused) = on_small_stack(|| {
+        let (spelled, refused) = purrdf_stack::on_stack(SMALL_STACK, || {
             let spelled = term_pattern_from_ground(&deep_ground(GroundTerm::Literal(
                 Literal::new_simple("bottom"),
             )));
@@ -4967,7 +4929,8 @@ mod walk_tests {
                 BlankNode::new("bottom"),
             )));
             (spelled, refused)
-        });
+        })
+        .expect("spawn");
         let spelled = spelled.expect("every position is admitted");
         let (depth, bottom) = unwind_term_pattern(&spelled);
         assert_eq!(depth, DEEP);
@@ -4993,7 +4956,7 @@ mod walk_tests {
             }
             value
         }
-        let (converted, refused) = on_small_stack(|| {
+        let (converted, refused) = purrdf_stack::on_stack(SMALL_STACK, || {
             let converted = ground_term_from_value(&deep_value(
                 TermValue::Iri("http://example.org/bottom".to_owned()),
                 TermValue::Iri("http://example.org/p".to_owned()),
@@ -5008,7 +4971,8 @@ mod walk_tests {
                 },
             ));
             (stringify(converted), stringify(refused))
-        });
+        })
+        .expect("spawn");
         let converted = converted.expect("every component converts");
         let mut depth = 0;
         let mut term = &converted;
@@ -5033,7 +4997,7 @@ mod walk_tests {
         let this = Variable::new("this");
         let blank = GroundTerm::BlankNode(BlankNode::new("b"));
         let written = GroundTerm::NamedNode(iri(7));
-        let (substituted, probed, driven, kept) = on_small_stack(move || {
+        let (substituted, probed, driven, kept) = purrdf_stack::on_stack(SMALL_STACK, move || {
             let mut argument = deep_term_pattern(TermPattern::Variable(this.clone()));
             substitute_in_term_pattern(&mut argument, &[(this.clone(), written.clone())]);
             let substituted = unwind_term_pattern(&argument).1.clone();
@@ -5057,7 +5021,8 @@ mod walk_tests {
                 },
             );
             (substituted, probed, driven, kept)
-        });
+        })
+        .expect("spawn");
         assert_eq!(substituted, TermPattern::NamedNode(iri(7)));
         assert_eq!(probed, vec![0]);
         assert_eq!(driven, vec![0]);
@@ -5210,11 +5175,12 @@ mod walk_tests {
             variables: vec![this.clone()],
             bindings: vec![vec![Some(value.clone())]],
         };
-        let rewritten = on_small_stack(move || {
+        let rewritten = purrdf_stack::on_stack(SMALL_STACK, move || {
             let mut chain = deep_join_chain(&this);
             push_probes(&mut chain, &[(this, value)], true);
             chain
-        });
+        })
+        .expect("spawn");
         // Every join's left operand is the probed triple pattern, restored by its own
         // one-row `VALUES`; the call at the bottom is written into and restored too.
         let GraphPattern::Join { left, .. } = &rewritten else {
@@ -5246,7 +5212,7 @@ mod walk_tests {
     fn a_hundred_thousand_level_pattern_is_substituted_on_a_128_kib_thread() {
         let this = Variable::new("this");
         let blank = GroundTerm::BlankNode(BlankNode::new("b"));
-        let (rewritten, columns) = on_small_stack({
+        let (rewritten, columns) = purrdf_stack::on_stack(SMALL_STACK, {
             let this = this.clone();
             let blank = blank.clone();
             move || {
@@ -5255,7 +5221,8 @@ mod walk_tests {
                 let columns = substitute_in_graph_pattern(&mut chain, &subs, WalkScope::Group);
                 (chain, columns)
             }
-        });
+        })
+        .expect("spawn");
         assert_eq!(columns, SeedColumns(0));
         let (depth, bottom) = unwind_joins(&rewritten);
         assert_eq!(depth, DEEP);
@@ -5279,7 +5246,7 @@ mod walk_tests {
     #[test]
     fn a_hundred_thousand_level_expression_is_substituted_noted_and_renamed_on_a_128_kib_thread() {
         let this = Variable::new("this");
-        let (substituted, reads, renamed) = on_small_stack({
+        let (substituted, reads, renamed) = purrdf_stack::on_stack(SMALL_STACK, {
             let this = this.clone();
             move || {
                 let mut deep = Expression::Variable(this.clone());
@@ -5295,7 +5262,8 @@ mod walk_tests {
                 rename_reads(&mut renamed, &[(this.clone(), stand_in(&this))]);
                 (substituted, reads.plain, renamed)
             }
-        });
+        })
+        .expect("spawn");
         fn bottom(expr: &Expression) -> (usize, &Expression) {
             let mut depth = 0;
             let mut expr = expr;
@@ -5320,7 +5288,7 @@ mod walk_tests {
     #[test]
     fn two_thousand_nested_exists_bodies_are_substituted_on_a_128_kib_thread() {
         let this = Variable::new("this");
-        let rewritten = on_small_stack({
+        let rewritten = purrdf_stack::on_stack(SMALL_STACK, {
             let this = this.clone();
             move || {
                 let mut body = GraphPattern::Bgp {
@@ -5342,7 +5310,8 @@ mod walk_tests {
                 substitute_in_graph_pattern(&mut body, &subs, WalkScope::Group);
                 body
             }
-        });
+        })
+        .expect("spawn");
         // Beneath the seed, every `FILTER` reads `?this` through its `EXISTS` body, so
         // each is driven with the value under a projection onto the variables it names
         // other than the driven `?this`: `carried_columns` leaves a variable driven for an

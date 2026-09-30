@@ -151,16 +151,8 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use purrdf_sparql_algebra::SparqlParser;
+use purrdf_testkit::paths::workspace_root;
 use regex::Regex;
-
-/// The workspace root, resolved from this crate's own manifest directory so the
-/// test works regardless of the caller's current directory.
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("workspace root resolves")
-}
 
 /// One shipped example this gate found and must parse successfully.
 #[derive(Debug)]
@@ -455,7 +447,8 @@ fn scan_doc_lines(file: &Path, lines: &[(usize, String)], out: &mut Vec<Candidat
     // lines is recorded as CONSUMED so the individual-literal pass below does
     // not also emit one HALF of the same literal as its own (necessarily
     // incomplete, necessarily failing) candidate.
-    let mut consumed = std::collections::HashSet::new();
+    let mut consumed =
+        std::collections::HashSet::with_hasher(purrdf_hash::fixed::FixedState::new());
     let mut i = 0;
     while i < lines.len() {
         let (start_line, first) = &lines[i];
@@ -770,7 +763,7 @@ fn collect_candidates() -> Vec<Candidate> {
 
     // Every language binding's OWN rustdoc — `bindings/**/src/**/*.rs` — e.g.
     // the Python extension's `#[pyfunction]`/struct doc comments
-    // (`bindings/python/src/py_store/{store,query}.rs`), which live outside
+    // (`bindings/python/src/py_store/{quad_store,query}.rs`), which live outside
     // `crates/` and so sat entirely outside the sweep above.
     for binding_dir in walk(&root.join("bindings")) {
         if binding_dir.extension().and_then(|e| e.to_str()) == Some("rs")
@@ -967,8 +960,11 @@ fn every_shipped_sparql_example_parses() {
     const REQUIRED_SURFACES: &[&str] = &[
         "crates/rdf-capi/include/purrdf.h",
         "crates/rdf-wasm/js/index.mjs",
-        "bindings/python/src/py_store/store.rs",
-        "bindings/python/src/py_store/query.rs",
+        "bindings/python/src/py_store/quad_store.rs",
+        // The binding's registry builder moved to `purrdf_validate::query::
+        // statistical_aggregates`, shared by every host; the Python surface's
+        // `AGG(<iri>…)` text is its type stub's.
+        "bindings/python/python/src/purrdf/__init__.pyi",
         "docs/playground/examples/gallery.mjs",
     ];
     for surface in REQUIRED_SURFACES {

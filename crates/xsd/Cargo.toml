@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-xsd"
-description = "Native, zero-dependency XSD value space (parse, value-space equality/ordering, canonical lexical mapping, SPARQL numeric promotion) for the RDF 1.2 query stack — replaces oxsdatatypes"
+description = "Native XSD value space (parse, value-space equality/ordering, canonical lexical mapping, SPARQL numeric promotion) for the RDF 1.2 query stack"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -21,23 +21,28 @@ all-features = true
 workspace = true
 
 [lib]
-# rlib-only, ZERO runtime dependencies: this crate is a leaf foundation. It must
-# stay wasm-clean and must not pull any oxigraph-family crate (it replaces
-# `oxsdatatypes`). It does NOT depend on `purrdf-core` — the dependency points
-# the other way, later.
+# rlib-only, and a foundation: its runtime dependencies are the zero-dependency
+# root `purrdf-hash` and the lexical layer `purrdf-lex` directly above it. It must
+# stay wasm-clean. It does NOT depend on
+# `purrdf-core` — the dependency points the other way.
 crate-type = ["rlib"]
 path = "src/lib.rs"
 name = "purrdf_xsd"
+
+[dependencies]
+# The base16 codec behind `xsd:hexBinary` (the either-case reader and the
+# uppercase canonical writer), and the SplitMix64 stream `ieee::reference`
+# draws its deterministic samples from.
+purrdf-hash = { workspace = true }
+# The byte-run membership test (`scan::in_runs`) the whitespace facets' chunked
+# prechecks classify each byte with.
+purrdf-lex = { workspace = true }
 
 [dev-dependencies]
 # Round-trip / canonicalization property tests (lexical -> value -> canonical)
 # on the shared property harness. Path-only and unpublished, so it is stripped
 # from the packaged manifest.
 purrdf-testkit = { workspace = true }
-# Lexical hot-path baselines. DEV-DEPENDENCY ONLY: the zero-dep leaf gate checks
-# `cargo tree --edges normal`, which excludes dev-deps, so criterion here does not
-# breach the crate's zero-runtime-dependency contract (same footing as purrdf-iri).
-criterion = { workspace = true }
 
 [[bench]]
 name = "lexical"

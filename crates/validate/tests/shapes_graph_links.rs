@@ -28,9 +28,9 @@ use purrdf_validate::{
     validate_with_rebuilt_shapes_product, validate_with_shapes_product,
 };
 
-const SH: &str = "http://www.w3.org/ns/shacl#";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const OWL: &str = "http://www.w3.org/2002/07/owl#";
+use purrdf_iri::vocab::owl::NS as OWL;
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_iri::vocab::sh::NS as SH;
 
 /// The data graph's own IRI in every fixture.
 const DATA_GRAPH: &str = "http://example.org/myDataGraph";

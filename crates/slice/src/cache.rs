@@ -52,6 +52,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::graph::tarjan_scc;
+use purrdf_hash::Domain;
 use sha2::{Digest, Sha256};
 
 use crate::artifact::{ArtifactRecord, ArtifactRole};
@@ -78,16 +79,30 @@ pub enum Phase {
     Bundle,
 }
 
+/// The hash domain of a [`Phase::Parse`] leaf. See [`Phase::tag`].
+const PARSE_PHASE: Domain = Domain::new(b"phase:parse");
+/// The hash domain of a [`Phase::Syntax`] leaf.
+const SYNTAX_PHASE: Domain = Domain::new(b"phase:syntax");
+/// The hash domain of a [`Phase::Shacl`] leaf.
+const SHACL_PHASE: Domain = Domain::new(b"phase:shacl");
+/// The hash domain of a [`Phase::Reason`] leaf.
+const REASON_PHASE: Domain = Domain::new(b"phase:reason");
+/// The hash domain of a [`Phase::Bundle`] leaf.
+const BUNDLE_PHASE: Domain = Domain::new(b"phase:bundle");
+/// The hash domain of a Merkle root over phase leaves, separator included.
+const MERKLE_ROOT_DOMAIN: Domain = Domain::new(b"merkle-root\x1f");
+
 impl Phase {
-    /// A stable, path-free discriminator string folded into the key so the same
-    /// inputs under different phases never collide.
-    fn tag(self) -> &'static str {
+    /// A stable, path-free discriminator folded into the key so the same
+    /// inputs under different phases never collide: the hash domain of the
+    /// phase's leaf, and the phase field of its Merkle root.
+    const fn tag(self) -> Domain {
         match self {
-            Self::Parse => "phase:parse",
-            Self::Syntax => "phase:syntax",
-            Self::Shacl => "phase:shacl",
-            Self::Reason => "phase:reason",
-            Self::Bundle => "phase:bundle",
+            Self::Parse => PARSE_PHASE,
+            Self::Syntax => SYNTAX_PHASE,
+            Self::Shacl => SHACL_PHASE,
+            Self::Reason => REASON_PHASE,
+            Self::Bundle => BUNDLE_PHASE,
         }
     }
 
@@ -384,7 +399,7 @@ fn phase_artifact_digest(phase: Phase, artifact: &ArtifactRecord) -> Result<Stri
         Some(d) => Ok(d.clone()),
         None => Err(SliceError::InvalidManifest(format!(
             "phase {} requires a semantic digest for artifact {} (role {:?}) but none was computed",
-            phase.tag(),
+            phase.tag().as_str(),
             artifact.logical_path,
             artifact.role
         ))),
@@ -488,7 +503,7 @@ fn merkle_root(
     }
 
     let mut hasher = Sha256::new();
-    hasher.update(b"merkle-root\x1f");
+    hasher.update(MERKLE_ROOT_DOMAIN.as_bytes());
     hasher.update(phase.tag().as_bytes());
     hasher.update(b"\x1f");
     hasher.update(toolchain.compiler_version.as_bytes());

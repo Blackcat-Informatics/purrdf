@@ -14,6 +14,7 @@ use crate::buffer::PurrdfBuffer;
 use crate::cstr_to_str;
 use crate::error::PurrdfError;
 use crate::handles::PurrdfDataset;
+use crate::handles::into_handle;
 use crate::status::PurrdfStatus;
 
 fn projection_error(error: &ProjectionError) -> PurrdfError {
@@ -76,10 +77,10 @@ pub unsafe extern "C" fn purrdf_project(
             let outcome = project_archive(PurrdfDataset::dataset(dataset), profile, &config)
                 .map_err(|error| projection_error(&error))?;
 
-            let archive = Box::new(PurrdfBuffer(outcome.archive));
-            let ledger = Box::new(PurrdfBuffer(outcome.loss_ledger.render_json().into_bytes()));
-            *out_archive = Box::into_raw(archive);
-            *out_loss_ledger_json = Box::into_raw(ledger);
+            let archive = into_handle(PurrdfBuffer(outcome.archive));
+            let ledger = into_handle(PurrdfBuffer(outcome.loss_ledger.render_json().into_bytes()));
+            *out_archive = archive;
+            *out_loss_ledger_json = ledger;
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -149,10 +150,10 @@ pub unsafe extern "C" fn purrdf_project_with_assets(
             )
             .map_err(|error| projection_error(&error))?;
 
-            let archive = Box::new(PurrdfBuffer(outcome.archive));
-            let ledger = Box::new(PurrdfBuffer(outcome.loss_ledger.render_json().into_bytes()));
-            *out_archive = Box::into_raw(archive);
-            *out_loss_ledger_json = Box::into_raw(ledger);
+            let archive = into_handle(PurrdfBuffer(outcome.archive));
+            let ledger = into_handle(PurrdfBuffer(outcome.loss_ledger.render_json().into_bytes()));
+            *out_archive = archive;
+            *out_loss_ledger_json = ledger;
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -207,10 +208,10 @@ pub unsafe extern "C" fn purrdf_lift(
             let outcome = lift_archive(archive, profile, &config)
                 .map_err(|error| projection_error(&error))?;
 
-            let dataset = Box::new(PurrdfDataset(outcome.dataset));
-            let ledger = Box::new(PurrdfBuffer(outcome.loss_ledger.render_json().into_bytes()));
-            *out_dataset = Box::into_raw(dataset);
-            *out_loss_ledger_json = Box::into_raw(ledger);
+            let dataset = into_handle(PurrdfDataset(outcome.dataset));
+            let ledger = into_handle(PurrdfBuffer(outcome.loss_ledger.render_json().into_bytes()));
+            *out_dataset = dataset;
+            *out_loss_ledger_json = ledger;
             Ok(PurrdfStatus::Ok)
         })
     }

@@ -39,16 +39,13 @@
 //! graph whose cover leans on such a literal is refused downstream as
 //! the uncovered range it leaves.
 
+use purrdf_core::datatype::{XSD_INTEGER, XSD_STRING};
 use purrdf_core::ir::{RdfDataset, TermRef};
 
 pub use purrdf_core::cover::{ReconstructError, VerbatimSpan, reconstruct};
 
 use crate::model::Document;
 use crate::profile::Vocabulary;
-
-/// The one datatype the unit rule admits: a unit's text is a plain
-/// literal, and a plain literal's datatype is `xsd:string`.
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
 /// Why a graph could not be read back into a cover: the refusals of
 /// the **graph** half of the decode law. The span half's refusals
@@ -192,9 +189,7 @@ pub fn decode_document(
             }
             _ => None,
         };
-        let integer = || {
-            literal("http://www.w3.org/2001/XMLSchema#integer").and_then(|s| s.parse::<u64>().ok())
-        };
+        let integer = || literal(XSD_INTEGER).and_then(|s| s.parse::<u64>().ok());
         if subject == document_id {
             if predicate == vocabulary.byte_length {
                 byte_length = integer();
@@ -204,6 +199,8 @@ pub fn decode_document(
         }
         let node = nodes.entry(subject).or_default();
         if predicate == vocabulary.text {
+            // A unit's text is a plain literal, so `xsd:string` is the one
+            // datatype the unit rule admits.
             if let Some(text) = literal(XSD_STRING) {
                 node.text = Some(text);
             }

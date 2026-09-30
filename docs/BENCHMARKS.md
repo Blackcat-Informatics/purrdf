@@ -18,7 +18,7 @@ scripts/proc-macros at **opt-level 3** (with `debug-assertions` and
 from a test or an ad-hoc `cargo run` is measuring optimized code rather than the
 unoptimized default it used to. It is still not a bench: `make bench` runs under
 `bench`/`release`, which additionally carries fat LTO and `codegen-units = 1`.
-Quote a criterion number, not a test's wall clock.
+Quote a bench-harness number, not a test's wall clock.
 
 There are five benchmark layers. The third is not a timing layer at all: it
 produces the *input* the other measurements are taken over, and it is here
@@ -37,18 +37,18 @@ other compares two different questions.
 
 | Layer | What it measures | How to run |
 | --- | --- | --- |
-| **Rust criterion suites** | The native engine hot paths — IR layout, codecs, SPARQL evaluation, SHACL validation, GTS authoring, and wasm wrapper overhead. | `make bench` |
+| **Rust bench suites** | The native engine hot paths — IR layout, codecs, SPARQL evaluation, SHACL validation, GTS authoring, and wasm wrapper overhead. | `make bench` |
 | **Python compat harness** | `purrdf.compat.rdflib` (the native-backed drop-in) vs. the real `rdflib` 7.x, on the operations a drop-in user actually calls. | `make bench-python` |
 | **Scale corpus** | Nothing, by itself. It *generates* the deterministic mixed corpus (`purrdf-scale-mixed-v1`) that a capacity capture is measured against, and reports what it produced. | `make scale-corpus` |
 | **LUBM comparison workload** | The published LUBM generator, its 14 published queries, and the entailment regime each one needs — the workload the OWL knowledge-base literature compares engines on. | `make lubm` |
 | **WatDiv comparison workload** | A digest-pinned frozen WatDiv dataset and the 20 published query templates, instantiated deterministically — the workload the RDF-store literature compares planners on. Pure BGP, no entailment. | `make watdiv` |
 
-## Native-layer benchmarks (criterion)
+## Native-layer benchmarks (`purrdf_testkit::bench`)
 
 The Rust benches are the source of truth for engine-level layout and algorithm
-choices — the shipped design is whichever the criterion numbers pick, not
+choices — the shipped design is whichever the bench numbers pick, not
 whichever sounds fast (see README, "Fast by measurement, not by assertion").
-They live under `crates/*/benches/`. The workspace registers 84 `[[bench]]`
+They live under `crates/*/benches/`. The workspace registers 93 `[[bench]]`
 targets in total; this section and the inventory table below document 23 of
 them — the ones with a story worth telling about a hot path or a design
 trade-off. The rest run under `make bench` like any other target and are
@@ -125,6 +125,9 @@ simply not narrated here:
   `QueryEngine` reuse vs. fresh-engine construction.
 - `crates/iri/benches/parse.rs` — IRI parse/validate hot path over a mixed
   character-class corpus.
+- `crates/lex/benches/scan.rs` — the chunked byte-class scanners over a long
+  clean run and a token-sized one, and the JSON string escaper in each of its
+  four spellings over clean and stop-dense text.
 
 `NativeSparqlEngine::explain_query` exposes the chosen BGP order as an ordered
 list of triple-pattern strings, so callers can audit planner decisions without
@@ -134,9 +137,67 @@ Run the default set with `make bench` (report-only; never part of `make check`).
 Additional benches are run package-by-package, e.g.
 `cargo bench -p purrdf-iri --bench parse`.
 
-### Native criterion benchmark inventory
+### The harness
 
-This table documents 23 of the 87 `[[bench]]` targets registered across the
+Every timed bench runs on `purrdf_testkit::bench`, the workspace's own
+harness (its rustdoc is the full reference). For each selected benchmark it
+warms the routine up (3 s by default), times a fixed iteration count per sample
+so the samples together last the measurement time (5 s, 100 samples by default,
+never fewer than 10), and reports the **median** time per iteration with its
+**MAD** and a **95% bootstrap percentile interval** of the median over 10 000
+resamples. The bootstrap is seeded from the benchmark's id through
+`purrdf_hash::mix`, so the same samples always give the same interval. Outliers
+are counted by Tukey's fences on the interquartile range and kept; a declared
+throughput is printed as a rate with the same interval.
+
+The command line (after cargo's `--`):
+
+| Option | Effect |
+| --- | --- |
+| *filter* | Run only benchmarks whose id (`group/function/parameter`) contains it; `--exact` requires equality |
+| `--test` | Run each routine once and report `Success` or `FAILED`; nothing is measured or written (also what `cargo test --benches` gets) |
+| `--list` | Print the selected ids |
+| `--quick` | At most 10 samples, 0.5 s warm-up and 1 s measurement per benchmark, with the same statistics |
+| `--save-baseline NAME` | Also record the estimates as baseline `NAME` (compared first against its previous contents) |
+| `--baseline NAME` | Compare against baseline `NAME`; a benchmark without it fails the run |
+| `--baseline-lenient NAME` | Compare against baseline `NAME` where it exists |
+| `--noplot` | Accepted; no plot is ever drawn |
+
+Any other option is refused by name with exit status 101. A comparison
+bootstraps the relative change of the median and prints `Performance has
+regressed.` when its whole interval lies above +1%, `Performance has
+improved.` below −1%, `Change within noise threshold.` when it excludes zero
+but not the ±1% band, and `No change in performance detected.` otherwise.
+
+Each measured benchmark writes
+`<store>/<group>[/<function>][/<parameter>]/<record>/estimates.json`, where the
+store is `PURRDF_BENCH_HOME`, or else `purrdf-bench/` beside the
+`CARGO_TARGET_TMPDIR` the bench was compiled with (`target/purrdf-bench/` in
+cargo's default layout), `<record>` is `new`
+for the latest run or a saved baseline's name, and each id component is one
+path component (bytes outside `[A-Za-z0-9._-]`, and a leading `.`, are written
+`%XX`). The file is one JSON object with exactly these members, in this order:
+
+| Member | Meaning |
+| --- | --- |
+| `schema` | `1` |
+| `unit` | `"ns"`; every time is nanoseconds per iteration |
+| `median`, `mad` | The median of `samples` and its median absolute deviation (unscaled) |
+| `ci_low`, `ci_high` | The median's bootstrap interval at `confidence` |
+| `confidence`, `resamples` | `0.95` and `10000` |
+| `iterations_per_sample` | The iteration count every sample timed |
+| `samples` | Each sample's time per iteration, in collection order |
+| `outliers` | `low_severe`, `low_mild`, `high_mild`, `high_severe` counts |
+| `throughput` | `null`, or `{"kind": "bytes" \| "elements", "per_iteration": N}` |
+
+On `wasm32-unknown-unknown` a bench binary runs in Node under
+`scripts/wasm-test-runner.sh` (`make wasm-test` runs the hash benches that way
+under `--test`); there is no file system, so the store options are refused and
+estimates are printed, not written.
+
+### Native benchmark inventory
+
+This table documents 23 of the 93 `[[bench]]` targets registered across the
 workspace's `Cargo.toml` files — the subset narrated in the prose list above,
 in the same order. It is not a claim of completeness: `cargo bench -p <crate>
 --bench <name>` reaches every registered target whether or not it has a row
@@ -168,6 +229,7 @@ here.
 | `crates/gts/benches/authoring.rs` | GTS container authoring: append, hash, and CBOR-log construction throughput. |
 | `crates/rdf-wasm/benches/query_engine_reuse.rs` | Binding-level SELECT overhead for reused package-root `QueryEngine` instances vs. fresh construction. |
 | `crates/iri/benches/parse.rs` | `purrdf_iri::parse` component validation across scheme, authority, path, query, and fragment classes. |
+| `crates/lex/benches/scan.rs` | `purrdf_lex` byte-class scanners (`WS` trivia, `IRIREF` body, JSON string body, XML egress) over long and token-sized runs, and `purrdf_lex::json_escape` in its four spellings over clean and stop-dense text. |
 
 ### PURREMB companion format
 
@@ -199,12 +261,12 @@ cache, so this is a cold-validation-code-path proxy, not disk or object-store
 latency. “Resident prevalidated reopen” applies a certificate to the same
 immutable allocation and still performs structural validation. The streaming
 measurement preallocates its output buffer and clones typed input during
-Criterion's untimed batch setup; the timed operation includes canonical
+the harness's untimed batch setup; the timed operation includes canonical
 metadata encoding, layout, matrix streaming, all integrity/projection hashes,
 and backpatching. A setup assertion requires its bytes to equal the unordered
 builder output exactly.
 
-Timed Criterion samples run in `purremb` with the normal process allocator. The
+Timed samples run in `purremb` with the normal process allocator. The
 separate `purremb_alloc` executable installs a counting allocator and reports
 allocation calls, cumulative requested bytes, retained-byte deltas, and the
 maximum live-byte delta observed during selected operations. Keeping the
@@ -314,7 +376,7 @@ cargo bench -p purrdf-shapes --bench validate --locked -- 'shacl_focus_realtime/
 
 Appending `--test` performs a single-sample smoke run and prints the fixture,
 thread, elapsed-time, allocation-call, and requested-byte probe. It is useful for
-correctness and allocation inspection, not a substitute for Criterion's sampled
+correctness and allocation inspection, not a substitute for the harness's sampled
 estimates.
 
 `PreparedValidator` is the realtime surface. Preparation owns the immutable
@@ -361,7 +423,7 @@ The `shacl_schema_import` group constructs a compact, deterministic draft
 2020-12 document with 128 classes and 1,024 properties. Its mix covers scalar
 facets, finite values, homogeneous arrays, requiredness, closure, and cyclic
 local references. Fixture construction and caller-owned namespace/datatype
-configuration remain outside the timed loop; Criterion measures the complete
+configuration remain outside the timed loop; the harness measures the complete
 JSON parse, validation, ordered lowering, and loss-ledger path.
 
 The `shacl_linkml_import` group derives one canonical LinkML 1.11 document from
@@ -422,7 +484,7 @@ across 20 named graphs, a 600-quad OBO/OWL graph, an 800-quad SKOS source graph,
 the 29-quad research-object intersection, and a 10-quad, four-graph VoID source.
 The small canonical LPG projection contains 408 nodes plus edges. The large
 scope comparison either retains all 20 graphs or scans the same trust boundary
-while retaining one 600-quad graph. Criterion measures complete
+while retaining one 600-quad graph. The harness measures complete
 mapping/serialization/parser operations, all four large LPG
 materialized-package/direct-sink pairs, mapped and bounded-CONSTRUCT DCAT RDF
 archive generation over the research fixture, and VoID archive generation;
@@ -645,7 +707,7 @@ pack bytes and decoding behavior remain unchanged.
 purrdf/rdflib ratio. It is deliberately kept out of `make pytest` because it is
 slow and timing-sensitive, but it is run in the separate, report-only
 `benchmarks` workflow (`.github/workflows/benchmarks.yaml`). That workflow
-produces `bench_compat.json` and uploads it alongside the Criterion artifacts.
+produces `bench_compat.json` and uploads it alongside the bench-harness estimates.
 It uses `continue-on-error: true`, so it never fails anything.
 
 It runs on a **weekly schedule plus `workflow_dispatch`**, not on every push. A
@@ -747,7 +809,7 @@ claim was measured over.
 
 The generator is `crates/bench` (`bench-corpus`, unpublished tooling); the lane
 that drives it across shards is `scripts/scale-corpus.sh`, run as
-`make scale-corpus`. It is deliberately **not** part of `make bench`: criterion
+`make scale-corpus`. It is deliberately **not** part of `make bench`: the bench
 suites are a different layer, and this one produces bytes rather than timings.
 
 ```sh

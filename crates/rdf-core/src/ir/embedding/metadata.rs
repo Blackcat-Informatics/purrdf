@@ -9,7 +9,7 @@ use crate::{ContentDigest, PackBuilder, RdfDataset, verify_pack};
 
 use super::contract::{
     ArtifactIdentity, ArtifactIdentityKind, EmbeddingFamily, EmbeddingFamilyContract, TlvWireType,
-    canonical_tlv, push_tlv,
+    canonical_tlv, push_tlv, validate_identifier,
 };
 use super::error::{DigestKind, EmbeddingError};
 use super::identity::{
@@ -22,7 +22,7 @@ use super::target::{
     EmbeddingTarget, RdfDatasetTarget, RelationKind, TargetKind, TargetRelation, TargetSet,
     TokenSpan,
 };
-use super::wire::checked_align_up;
+use super::wire::{put_u32, put_u64};
 use super::writer::{
     CanonicalMetadataSections, ExtensionSection, MatrixCommitment, ProjectionCommitment,
 };
@@ -773,8 +773,8 @@ pub struct ExternalBindingContract {
 impl ExternalBindingContract {
     /// Encodes the canonical binding-contract TLV block.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, EmbeddingError> {
-        validate_nonempty_text(&self.role, "external binding role")?;
-        validate_nonempty_text(&self.media_type, "external binding media type")?;
+        validate_identifier(&self.role, "external binding role")?;
+        validate_identifier(&self.media_type, "external binding media type")?;
         let mut output = Vec::new();
         push_tlv(
             &mut output,
@@ -951,8 +951,7 @@ fn canonical_external_bindings(
 
 fn validate_external_binding(binding: &ExternalBinding) -> Result<(), EmbeddingError> {
     let contract_digest = derive_external_contract_digest(&binding.canonical_contract);
-    check_identity(
-        DigestKind::ExternalBinding,
+    DigestKind::ExternalBinding.verify(
         binding.contract_digest.as_bytes(),
         contract_digest.as_bytes(),
     )?;
@@ -968,11 +967,7 @@ fn validate_external_binding(binding: &ExternalBinding) -> Result<(), EmbeddingE
         certified_rdf_digest: certified,
         contract_digest,
     });
-    check_identity(
-        DigestKind::ExternalBinding,
-        binding.id.as_bytes(),
-        id.as_bytes(),
-    )
+    DigestKind::ExternalBinding.verify(binding.id.as_bytes(), id.as_bytes())
 }
 
 fn encode_external_bindings_canonical(
@@ -1143,7 +1138,7 @@ impl IndexLossContract {
         ) {
             (false, None, None) => {}
             (true, Some(encoding), Some(_)) => {
-                validate_nonempty_text(encoding, "index loss encoding")?;
+                validate_identifier(encoding, "index loss encoding")?;
             }
             (false, _, _) => {
                 return Err(EmbeddingError::Malformed(
@@ -1200,8 +1195,8 @@ pub struct IndexGuardContract {
 impl IndexGuardContract {
     /// Encodes the canonical index-guard TLV block.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, EmbeddingError> {
-        validate_nonempty_text(&self.parameter_encoding, "index parameter encoding")?;
-        validate_nonempty_text(&self.payload_media_type, "index payload media type")?;
+        validate_identifier(&self.parameter_encoding, "index parameter encoding")?;
+        validate_identifier(&self.payload_media_type, "index payload media type")?;
         let implementation = encode_artifact_identity(&self.implementation)?;
         let loss = self.loss.canonical_bytes()?;
         let mut output = Vec::new();
@@ -1469,20 +1464,12 @@ fn validate_derived_index(index: &DerivedIndex) -> Result<(), EmbeddingError> {
         ));
     }
     let (payload_digest, payload_length) = index.storage.digest_and_length()?;
-    check_identity(
-        DigestKind::Index,
-        index.payload_sha256.as_bytes(),
-        payload_digest.as_bytes(),
-    )?;
+    DigestKind::Index.verify(index.payload_sha256.as_bytes(), payload_digest.as_bytes())?;
     if payload_length != index.payload_length {
         return Err(EmbeddingError::ContentMismatch("index payload length"));
     }
     let guard_digest = derive_index_guard_digest(&index.canonical_guard);
-    check_identity(
-        DigestKind::Index,
-        index.guard_digest.as_bytes(),
-        guard_digest.as_bytes(),
-    )?;
+    DigestKind::Index.verify(index.guard_digest.as_bytes(), guard_digest.as_bytes())?;
     let actual_id = derive_index_id(IndexIdentity {
         source_exact_digest: index.coordinates.source_exact_digest,
         family_id: index.coordinates.family_id,
@@ -1496,7 +1483,7 @@ fn validate_derived_index(index: &DerivedIndex) -> Result<(), EmbeddingError> {
         determinism: index.determinism.code(),
         guard_digest,
     });
-    check_identity(DigestKind::Index, index.id.as_bytes(), actual_id.as_bytes())
+    DigestKind::Index.verify(index.id.as_bytes(), actual_id.as_bytes())
 }
 
 fn encode_index_guards_canonical(
@@ -1910,10 +1897,16 @@ fn require_composite_graph(
     Ok(())
 }
 
-fn require_edge(
-    edges: &[BuiltinEdge],
+/// Refuse unless the sorted built-in relation table `edges` holds
+/// `(subject, kind, object)`.
+///
+/// The relation tables are checked in two representations — the owned metadata's
+/// typed [`RelationKind`] and a borrowed view's raw wire code — so the three edge
+/// checks are generic over the kind and both validators run these bodies.
+pub(super) fn require_edge<K: Ord + Copy>(
+    edges: &[(TargetId, K, TargetId)],
     subject: TargetId,
-    kind: RelationKind,
+    kind: K,
     object: TargetId,
 ) -> Result<(), EmbeddingError> {
     if edges.binary_search(&(subject, kind, object)).is_err() {
@@ -1924,10 +1917,11 @@ fn require_edge(
     Ok(())
 }
 
-fn require_edge_count(
-    edges: &[BuiltinEdge],
+/// Refuse unless `target` has exactly `expected` relations of `kind` in `edges`.
+pub(super) fn require_edge_count<K: Ord + Copy>(
+    edges: &[(TargetId, K, TargetId)],
     target: TargetId,
-    kind: RelationKind,
+    kind: K,
     expected: usize,
 ) -> Result<(), EmbeddingError> {
     if edge_count(edges, target, kind) != expected {
@@ -1938,7 +1932,12 @@ fn require_edge_count(
     Ok(())
 }
 
-fn edge_count(edges: &[BuiltinEdge], target: TargetId, kind: RelationKind) -> usize {
+/// How many relations of `kind` leave `target` in the sorted table `edges`.
+pub(super) fn edge_count<K: Ord + Copy>(
+    edges: &[(TargetId, K, TargetId)],
+    target: TargetId,
+    kind: K,
+) -> usize {
     let start = edges.partition_point(|edge| (edge.0, edge.1) < (target, kind));
     let end = edges.partition_point(|edge| (edge.0, edge.1) <= (target, kind));
     end - start
@@ -2255,26 +2254,33 @@ fn scope_matches_index_metadata(
     }
 }
 
+/// The entry of `items` whose `key` is `id`, by binary search: every id-keyed
+/// table of the metadata is stored sorted by its id, so each lookup is this one
+/// search, and an absent id is the dangling reference `what` names.
+fn find_sorted<'a, T, K: Ord + Copy>(
+    items: &'a [T],
+    id: K,
+    key: impl FnMut(&T) -> K,
+    what: &'static str,
+) -> Result<&'a T, EmbeddingError> {
+    items
+        .binary_search_by_key(&id, key)
+        .map(|index| &items[index])
+        .map_err(|_| EmbeddingError::MissingReference(what))
+}
+
 fn find_target(
     targets: &[EmbeddingTarget],
     id: TargetId,
 ) -> Result<&EmbeddingTarget, EmbeddingError> {
-    targets
-        .binary_search_by_key(&id, |target| target.id)
-        .ok()
-        .map(|index| &targets[index])
-        .ok_or(EmbeddingError::MissingReference("target"))
+    find_sorted(targets, id, |target| target.id, "target")
 }
 
 fn find_family(
     families: &[EmbeddingFamily],
     id: FamilyId,
 ) -> Result<&EmbeddingFamily, EmbeddingError> {
-    families
-        .binary_search_by_key(&id, |family| family.id)
-        .ok()
-        .map(|index| &families[index])
-        .ok_or(EmbeddingError::MissingReference("embedding family"))
+    find_sorted(families, id, |family| family.id, "embedding family")
 }
 
 fn find_space(
@@ -2289,10 +2295,7 @@ fn find_space(
 }
 
 fn find_target_set(sets: &[TargetSet], id: TargetSetId) -> Result<&TargetSet, EmbeddingError> {
-    sets.binary_search_by_key(&id, |set| set.id)
-        .ok()
-        .map(|index| &sets[index])
-        .ok_or(EmbeddingError::MissingReference("target set"))
+    find_sorted(sets, id, |set| set.id, "target set")
 }
 
 fn find_matrix(
@@ -2320,24 +2323,16 @@ fn find_binding(
     bindings: &[ExternalBinding],
     id: ExternalBindingId,
 ) -> Result<&ExternalBinding, EmbeddingError> {
-    bindings
-        .binary_search_by_key(&id, |binding| binding.id)
-        .ok()
-        .map(|index| &bindings[index])
-        .ok_or(EmbeddingError::MissingReference("external binding"))
+    find_sorted(bindings, id, |binding| binding.id, "external binding")
 }
 
 fn find_index(indexes: &[DerivedIndex], id: IndexId) -> Result<&DerivedIndex, EmbeddingError> {
-    indexes
-        .binary_search_by_key(&id, |index| index.id)
-        .ok()
-        .map(|index| &indexes[index])
-        .ok_or(EmbeddingError::MissingReference("derived index"))
+    find_sorted(indexes, id, |index| index.id, "derived index")
 }
 
 fn encode_artifact_identity(identity: &ArtifactIdentity) -> Result<Vec<u8>, EmbeddingError> {
-    validate_nonempty_text(&identity.identifier, "artifact identifier")?;
-    validate_nonempty_text(&identity.media_type, "artifact media type")?;
+    validate_identifier(&identity.identifier, "artifact identifier")?;
+    validate_identifier(&identity.media_type, "artifact media type")?;
     if identity.revision.as_ref().is_some_and(Vec::is_empty) {
         return Err(EmbeddingError::Missing("artifact revision bytes"));
     }
@@ -2384,16 +2379,6 @@ fn push_optional_nonempty_bytes(
             return Err(EmbeddingError::Missing("optional external contract bytes"));
         }
         push_tlv(output, tag, TlvWireType::Bytes, true, value)?;
-    }
-    Ok(())
-}
-
-fn validate_nonempty_text(value: &str, context: &'static str) -> Result<(), EmbeddingError> {
-    if value.is_empty() {
-        return Err(EmbeddingError::Missing(context));
-    }
-    if value.as_bytes().contains(&0) {
-        return Err(EmbeddingError::InvalidUtf8(context));
     }
     Ok(())
 }
@@ -2453,7 +2438,9 @@ fn append_pool_block(
 }
 
 fn align8(value: u64) -> Result<u64, EmbeddingError> {
-    checked_align_up(value, 8)
+    value
+        .checked_next_multiple_of(8)
+        .ok_or(EmbeddingError::ArithmeticOverflow("alignment"))
 }
 
 fn checked_add(left: u64, right: u64, context: &'static str) -> Result<u64, EmbeddingError> {
@@ -2514,72 +2501,48 @@ fn copy_at(output: &mut [u8], offset: u64, bytes: &[u8]) -> Result<(), Embedding
     Ok(())
 }
 
-fn check_identity(
-    kind: DigestKind,
-    expected: &[u8; 32],
-    actual: &[u8; 32],
-) -> Result<(), EmbeddingError> {
-    if expected != actual {
-        return Err(EmbeddingError::DigestMismatch {
-            kind,
-            expected: *expected,
-            actual: *actual,
-        });
-    }
-    Ok(())
-}
-
-fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
-    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-}
-
-fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
-    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
-}
-
 #[cfg(test)]
 mod tests {
     use crate::RdfDatasetBuilder;
 
+    /// An id-keyed table is read by binary search; an absent id is the dangling
+    /// reference the table names.
+    #[test]
+    fn find_sorted_answers_the_entry_or_names_the_missing_reference() {
+        let table = [(1_u32, 'a'), (4, 'b'), (9, 'c')];
+        for (id, expected) in [(1, 'a'), (4, 'b'), (9, 'c')] {
+            assert_eq!(
+                find_sorted(&table, id, |entry| entry.0, "entry").map(|entry| entry.1),
+                Ok(expected)
+            );
+        }
+        for absent in [0, 5, 10] {
+            assert_eq!(
+                find_sorted(&table, absent, |entry| entry.0, "entry"),
+                Err(EmbeddingError::MissingReference("entry"))
+            );
+        }
+    }
+
     use super::*;
-    use crate::ir::embedding::{
-        AppliedStage, ArtifactIdentity, DimensionalityPolicy, DistanceMetric, RdfTermTarget,
-        StageImplementation,
+    use crate::ir::embedding::{AppliedStage, DimensionalityPolicy, DistanceMetric, RdfTermTarget};
+
+    const FX: crate::purremb_fixture::Identities = crate::purremb_fixture::Identities {
+        artifact_media: "application/example",
+        stage_payload: &[1, 2, 3],
+        ..crate::purremb_fixture::Identities::at("")
     };
-
-    fn artifact(name: &str) -> ArtifactIdentity {
-        ArtifactIdentity::new(
-            name,
-            "application/example",
-            ContentDigest::of(name.as_bytes()),
-            None,
-            ArtifactIdentityKind::Single,
-        )
-        .unwrap()
-    }
-
-    fn stage(name: &str) -> AppliedStage {
-        AppliedStage::Applied(
-            StageImplementation::new(
-                name,
-                ContentDigest::of(name.as_bytes()),
-                "application/octet-stream",
-                vec![1, 2, 3],
-            )
-            .unwrap(),
-        )
-    }
 
     fn family_contract() -> EmbeddingFamilyContract {
         EmbeddingFamilyContract {
-            model: artifact("model"),
-            engine: artifact("engine"),
-            tokenizer: artifact("tokenizer"),
-            execution: stage("execution"),
-            subject_projection: stage("projection"),
+            model: FX.artifact("model"),
+            engine: FX.artifact("engine"),
+            tokenizer: FX.artifact("tokenizer"),
+            execution: FX.stage("execution"),
+            subject_projection: FX.stage("projection"),
             preprocessing: AppliedStage::NotApplied,
             chunking: AppliedStage::NotApplied,
-            pooling: stage("pooling"),
+            pooling: FX.stage("pooling"),
             normalization: AppliedStage::NotApplied,
             truncation: AppliedStage::NotApplied,
             dtype: super::super::contract::VectorDtype::F32,
@@ -2706,7 +2669,7 @@ mod tests {
             prefix_dimension: 2,
         };
         let guard = IndexGuardContract {
-            implementation: artifact("index"),
+            implementation: FX.artifact("index"),
             parameter_encoding: "application/example".into(),
             parameters: vec![8, 9],
             loss: IndexLossContract {

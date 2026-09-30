@@ -92,8 +92,8 @@ fn derive_seed(concat: &[u8]) -> u64 {
     let bytes = hash.as_bytes();
     // BLAKE3 output is 32 bytes; the first eight are ample entropy for a seed.
     u64::from_le_bytes(
-        bytes[..8]
-            .try_into()
+        *bytes
+            .first_chunk()
             .expect("BLAKE3 digest is 32 bytes, so 8 are always available"),
     )
 }

@@ -45,10 +45,8 @@
 //! because `fuse` drives its streams on the polling thread and spawns nothing.
 
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::{Context, Poll, Waker};
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_retrieval::{
@@ -56,6 +54,11 @@ use purrdf_retrieval::{
     Fixed, FusionProfile, Iri, ProducerReceipt, ProducerStatus, ProtocolError, RankFidelity,
     RankedRow, RankedStream, RowBlock, StreamContract, Term, TopK, contribution, fuse,
 };
+
+#[path = "support/streams.rs"]
+mod streams;
+
+use streams::{permuted_index, ready, stratum};
 
 // ---------------------------------------------------------------------------
 // The tracking allocator
@@ -68,17 +71,6 @@ static GLOBAL: CountingAllocator = CountingAllocator;
 // A single-threaded executor (the fixture streams never actually pend)
 // ---------------------------------------------------------------------------
 
-fn block_on<F: Future>(future: F) -> F::Output {
-    // `Waker::noop()` needs no thread and no allocation, so this drives a
-    // future on any target, `wasm32-unknown-unknown` included.
-    let mut context = Context::from_waker(Waker::noop());
-    let mut future = Box::pin(future);
-    match future.as_mut().poll(&mut context) {
-        Poll::Ready(output) => output,
-        Poll::Pending => panic!("the fixture streams are synchronous and never pend"),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // The multi-stratum fixture
 // ---------------------------------------------------------------------------
@@ -86,41 +78,11 @@ fn block_on<F: Future>(future: F) -> F::Output {
 /// The reciprocal-rank smoothing constant the fixture profile fixes.
 const K: u32 = 60;
 
-/// How many candidates the strata may disagree about at once.
-///
-/// Each stratum emits the same universe permuted **within** blocks of this size,
-/// so a candidate's rank differs across strata by less than one block. The
-/// frontier therefore holds a couple of blocks' worth of candidates at any
-/// moment, whatever the streams' length — which is the quantity under test.
-const DISAGREEMENT_BLOCK: u64 = 4;
-
 /// The three strata the fixture fuses, in their permutation order.
 const STRATA: [&str; 3] = ["nra/a", "nra/b", "nra/c"];
 
 /// How many fused rows each measured run certifies.
 const CERTIFIED_ROWS: usize = 32;
-
-fn stratum(suffix: &str) -> Iri {
-    Iri::parse(&format!("http://example.org/stratum/{suffix}")).expect("fixture IRIs are valid")
-}
-
-/// The candidate index one stratum emits at 1-based `rank`.
-///
-/// Stratum 0 emits the universe in order, stratum 1 reverses each block and
-/// stratum 2 rotates each block by half its width. Each is a permutation, so
-/// every stream emits distinct items and every candidate is eventually confirmed
-/// by every stratum.
-fn permuted_index(stream: usize, rank: u64) -> u64 {
-    let index = rank - 1;
-    let block = index / DISAGREEMENT_BLOCK;
-    let offset = index % DISAGREEMENT_BLOCK;
-    let permuted = match stream {
-        0 => offset,
-        1 => DISAGREEMENT_BLOCK - 1 - offset,
-        _ => (offset + DISAGREEMENT_BLOCK / 2) % DISAGREEMENT_BLOCK,
-    };
-    block * DISAGREEMENT_BLOCK + permuted
-}
 
 /// A producer that mints its rows lazily, so nothing is materialized up front.
 #[derive(Debug)]
@@ -425,7 +387,7 @@ fn measure_built(
     // The window opens after the fixture is built, so what is measured is the
     // fusion's own working set and not the fixture's.
     let window = CurrentThreadWindow::open();
-    let result = block_on(fuse::<LazyStream, Term>(streams, profile, TopK::new(rows)))
+    let result = ready(fuse::<LazyStream, Term>(streams, profile, TopK::new(rows)))
         .expect("the fixture streams obey the protocol");
     let peak_bytes = window.close().peak_working_bytes;
     let pulls = pulls.load(Ordering::SeqCst);

@@ -297,12 +297,12 @@
 //! answer.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, SparqlResult, TermValue};
+use purrdf_core::{DatasetView, FastHasher, FastMap, SparqlResult, TermValue};
 use purrdf_sparql_eval::{
     CallCursor, CandidateDomains, DomainTag, ExtensionEnv, GovernedOutcome, InternedOutcome,
     NativeSparqlEngine, PfAttestation, PreparedExecution, PropertyFunctionRegistry, QueryGovernors,
@@ -395,7 +395,7 @@ pub struct ExecutionResult<'d> {
     /// One stream per stratum that ran, ordered as compiled.
     pub streams: Vec<StratumStream<'d>>,
     /// Every stratum's own terminal status.
-    pub statuses: HashMap<Iri, ProducerStatus>,
+    pub statuses: FastMap<Iri, ProducerStatus>,
 }
 
 /// A whole-execution failure, as distinct from a per-stratum one.
@@ -838,7 +838,7 @@ enum CandidateBinding<I> {
 
 /// Every candidate the ranking reads of one [`execute_within`] call named, keyed by
 /// the [`Term`] the fusion stage will ask about. Shared by that call's lookups.
-type CandidateIndex<I> = HashMap<Term, CandidateBinding<I>>;
+type CandidateIndex<I> = FastMap<Term, CandidateBinding<I>>;
 
 /// One stratum's prepared lookups, held until every ranking read of the call is
 /// open and they can be attached to its stream.
@@ -1009,7 +1009,7 @@ impl<D: DatasetView + Sync> DatasetExclusion<'_, D> {
             .engine
             .execute_witnessed(execution, self.dataset, options, |outcome| match outcome {
                 InternedOutcome::Solutions(solutions) => Some(if driven {
-                    let mut answered: HashMap<&[_], u64> = HashMap::new();
+                    let mut answered: FastMap<&[_], u64> = FastMap::default();
                     for row in solutions.rows() {
                         *answered.entry(row.as_slice()).or_default() += 1;
                     }
@@ -1587,9 +1587,10 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
     // each row is pulled, which is before any lookup can ask about that row's
     // candidate, because the fusion asks only about candidates it has pulled.
     let mut lookups: Vec<PendingLookup> = Vec::new();
-    let candidates: Rc<RefCell<CandidateIndex<D::Id>>> = Rc::new(RefCell::new(HashMap::new()));
+    let candidates: Rc<RefCell<CandidateIndex<D::Id>>> = Rc::new(RefCell::new(FastMap::default()));
     let index_candidates = compiled.units.iter().any(StratumUnit::declares_exclusion);
-    let mut statuses = HashMap::with_capacity(compiled.units.len());
+    let mut statuses =
+        FastMap::with_capacity_and_hasher(compiled.units.len(), FastHasher::default());
     // The registry is named identically at prepare and at evaluation: the
     // evaluator refuses a plan prepared against a different registry than the
     // one it is run under, because a plan prepared without one has already

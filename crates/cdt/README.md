@@ -7,7 +7,11 @@ Native SPARQL **composite datatypes** (SEP-0009: `cdt:List` and `cdt:Map`) for
 the PurRDF RDF 1.2 query stack.
 
 `purrdf-cdt` is a **closed leaf**: its only runtime dependencies are
-`purrdf-iri` (absolute-IRI validation) and `purrdf-xsd` (the XSD value space).
+`purrdf-events` (`TextDirection`, the one RDF 1.2 base-direction type, which
+`purrdf_cdt::TextDirection` re-exports),
+`purrdf-iri` (absolute-IRI validation), `purrdf-xsd` (the XSD value space),
+`purrdf-lex` (term syntax and the canonical literal and IRI escapers) and
+`purrdf-hash` (the uppercase hex digits of its `UCHAR` escapes).
 It has no dependency on `purrdf-core` in either direction, which is precisely
 what lets the kernel depend on it later without a cycle. It is `#![no_std]`
 plus `alloc`, so it builds for `wasm32-unknown-unknown` like every other

@@ -35,36 +35,12 @@
 //! reports a false all-clear, which is how a regression test written that way
 //! passes while the defect is still present.
 
-use std::collections::BTreeMap;
-use std::future::Future;
-use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
-
 use purrdf_retrieval::{
     CandidateDomains, DecayRule, DuplicatePolicy, ExclusionBasis, Fixed, FusionProfile, Iri,
     RankFidelity, RankedStreamAdapter, RankedStreamImpl, RowBlock, StreamContract, StreamEnding,
-    Term, TopK, fuse,
+    Term, TopK, block_on, fuse,
 };
-
-/// A minimal executor. The adapter's rows are already materialized, so nothing
-/// here ever actually pends; the crate is runtime-agnostic by design.
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct Park(std::thread::Thread);
-    impl Wake for Park {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-    let waker = Waker::from(Arc::new(Park(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
-}
+use std::collections::BTreeMap;
 
 /// Fuse `ranks` contiguous ranks under one stratum at weight `weight`.
 ///

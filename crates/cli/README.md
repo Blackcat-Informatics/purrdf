@@ -148,8 +148,8 @@ purrdf convert --base http://example.org/ data.ttl data.nt
 ```text
 purrdf query --data <file|pack> [--base <IRI>] [--entailment <R>] [--results-format <FMT>]
              [--fuel <N>] [--deadline <D>] [--max-answers <N>] [--max-intermediate-cells <N>]
-             [--max-scratch-bytes <N>] [--max-remote-requests <N>] [--explain]
-             [--path-relation <SPEC>]... '<SPARQL>'
+             [--max-scratch-bytes <N>] [--max-remote-requests <N>] [--no-ceiling]
+             [--explain] [--path-relation <SPEC>]... '<SPARQL>'
 ```
 
 Evaluate a SPARQL 1.2 query over a data source. The source is opened as a view (a
@@ -215,8 +215,13 @@ the same reason; a result with only default-graph statements — every SPARQL 1.
 ### Execution governors
 
 Six flags bound what one query is allowed to cost. Each is optional and each bounds
-exactly the dimension it names; a dimension no flag names stays unbounded, and a
-query with no governor flag runs the ungoverned path unchanged.
+exactly the dimension it names; a dimension no flag names carries no ceiling, and a
+query with no governor flag runs the ungoverned path unchanged. A governed run is
+*metered*: a dimension no flag names is still charged, against a ceiling no run can
+reach, so a `--deadline` is noticed inside a long-running operator as well as between
+operators, and the trip report prints it as `unbounded`. `--no-ceiling` declines the
+metering too — no ceiling and no accounting — and combines with `--deadline`; it is
+refused (exit 2) beside a numeric ceiling or `--explain`.
 
 | Flag | Bounds | Unit |
 |---|---|---|
@@ -641,7 +646,7 @@ purrdf validate (--shapes <FILE> [--shapes-from <F>] [--shapes-graph <IRI>]
                 [--changes <FILE>] [--changes-removed <FILE>] [--changes-from <F>]
                 [--from <F>] [--base <IRI>] [--format <F>]
                 [--fuel <N>] [--deadline <D>] [--max-intermediate-cells <N>]
-                [--max-scratch-bytes <N>] [--max-remote-requests <N>]
+                [--max-scratch-bytes <N>] [--max-remote-requests <N>] [--no-ceiling]
                 [IN] [OUT]
 ```
 

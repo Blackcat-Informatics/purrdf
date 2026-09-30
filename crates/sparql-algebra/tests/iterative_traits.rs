@@ -18,16 +18,19 @@
 //! committed AST snapshot pins — and generated trees that reach every node kind and
 //! variant, including shapes the parser never builds (hand-built algebra is public).
 
+#[path = "support/patterns.rs"]
+mod patterns;
+
+use patterns::example as nn;
+use purrdf_hash::fixed::hash_one as hash_of;
 use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use purrdf_sparql_algebra::{
     AggregateExpression, AggregateFunction, ArithmeticOperator, BlankNode, Chain, Child,
-    Expression, Function, GraphPattern, GroundTerm, GroundTriple, Literal, NamedNode,
-    NamedNodePattern, NegatedPathElement, NonEmpty, OrderExpression, ParserOptions,
-    PropertyFunctionCall, PropertyPathExpression, Query, SparqlParser, TermPattern, TriplePattern,
-    Variable,
+    Expression, Function, GraphPattern, GroundTerm, GroundTriple, Literal, NamedNodePattern,
+    NegatedPathElement, NonEmpty, OrderExpression, ParserOptions, PropertyFunctionCall,
+    PropertyPathExpression, Query, SparqlParser, TermPattern, TriplePattern, Variable,
 };
 use purrdf_testkit::prop::prelude::*;
 
@@ -455,12 +458,6 @@ fn m_ground(g: &GroundTerm) -> mirror::GroundTerm {
     }
 }
 
-fn hash_of<T: Hash>(value: &T) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    value.hash(&mut hasher);
-    hasher.finish()
-}
-
 /// Every single-tree check: both `Debug` forms byte-identical to the mirror's, and a
 /// copy whose mirror equals the original's, equal and hashing equally to it.
 fn assert_single(p: &GraphPattern) {
@@ -480,7 +477,8 @@ fn assert_pairs(trees: &[GraphPattern]) {
     let hashes: Vec<_> = trees.iter().map(hash_of).collect();
     // Trees sharing a hash, then every pair compared: unequal hashes must mean
     // unequal trees, which the mirrors confirm.
-    let mut by_hash: HashMap<u64, Vec<usize>> = HashMap::new();
+    let mut by_hash: HashMap<u64, Vec<usize>, purrdf_hash::fixed::FixedState> =
+        HashMap::with_hasher(purrdf_hash::fixed::FixedState::new());
     for (i, hash) in hashes.iter().enumerate() {
         by_hash.entry(*hash).or_default().push(i);
     }
@@ -530,7 +528,7 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// The root pattern of every corpus query that parses, in sorted path order.
 fn corpus_patterns() -> Vec<GraphPattern> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = purrdf_testkit::paths::workspace_root();
     let mut files = Vec::new();
     for corpus in CORPORA {
         collect(&root.join(corpus), &mut files);
@@ -561,12 +559,7 @@ fn corpus_patterns() -> Vec<GraphPattern> {
 
 /// Run `body` on a thread with room for the recursive reference.
 fn with_stack(body: impl FnOnce() + Send + 'static) {
-    std::thread::Builder::new()
-        .stack_size(256 * 1024 * 1024)
-        .spawn(body)
-        .expect("the thread starts")
-        .join()
-        .expect("the checks passed");
+    purrdf_stack::on_stack(256 * 1024 * 1024, body).expect("the thread starts");
 }
 
 #[test]
@@ -585,10 +578,6 @@ fn every_corpus_tree_matches_the_derived_reference() {
 }
 
 // ── generated trees ──────────────────────────────────────────────────────────────────
-
-fn nn(local: &str) -> NamedNode {
-    NamedNode::new_unchecked(format!("http://example.org/{local}"))
-}
 
 fn leaf_term() -> impl Strategy<Value = TermPattern> {
     prop_oneof![

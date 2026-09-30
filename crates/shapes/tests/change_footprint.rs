@@ -78,14 +78,14 @@ const PREFIXES: &str = r"
 ";
 
 const EX: &str = "http://example.org/ns#";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDFS_SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
-/// `sh:shape`, whose data-graph statements are explicit shape targets.
-const SH_SHAPE: &str = "http://www.w3.org/ns/shacl#shape";
 /// The RDF 1.2 reifier predicate. A row `(r, rdf:reifies, <<( s p o )>>)` is a
 /// REIFIER DECLARATION, not an ordinary quad: it lands in the statement side-table
 /// and reclassifies the rows about `r` in the graph that declared it.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUB_CLASS_OF;
+/// `sh:shape`, whose data-graph statements are explicit shape targets.
+use purrdf_iri::vocab::sh::SHAPE as SH_SHAPE;
 
 /// One object position of a fixture row.
 #[derive(Clone, Copy, Debug)]

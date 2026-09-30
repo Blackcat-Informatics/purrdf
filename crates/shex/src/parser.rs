@@ -25,8 +25,7 @@
 //! absolute terms of the data it is validating, so it can only ever produce a
 //! wrong verdict.
 
-use std::collections::HashMap;
-
+use purrdf_core::FastMap;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
 
 use crate::ast::{
@@ -38,7 +37,7 @@ use crate::ast::{IriExclusion, LanguageExclusion, LiteralExclusion, StemValue};
 use crate::error::{Result, ShexError};
 use crate::lexer::{CodeName, Spanned, Token, tokenize};
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
 /// Deepest allowed expression nesting; beyond this the parser hard-fails
 /// rather than risking stack exhaustion on hostile input. Each syntactic
@@ -89,7 +88,7 @@ pub fn parse_shexc(input: &str, base: Option<&str>) -> Result<Schema> {
         src: input,
         tokens,
         pos: 0,
-        prefixes: HashMap::new(),
+        prefixes: FastMap::default(),
         base: scope,
         depth: 0,
     };
@@ -104,7 +103,7 @@ struct Parser<'a> {
     pos: usize,
     /// Declared prefix → its namespace, ALREADY RESOLVED against the base that was
     /// in force when the `PREFIX` directive was read (ShEx 2.1 §6, Turtle §4.4).
-    prefixes: HashMap<String, String>,
+    prefixes: FastMap<String, String>,
     base: BaseScope,
     depth: usize,
 }
@@ -212,10 +211,7 @@ impl Parser<'_> {
     /// nothing the absolute terms of a data graph can match, so it silently turns
     /// every constraint written with it into a vacuous one.
     fn resolve(&self, reference: &str) -> Result<String> {
-        self.base
-            .resolve(reference)
-            .map(|iri| iri.as_str().to_owned())
-            .map_err(|e| ShexError::iri(reference, &e))
+        resolve_iri(&self.base, reference)
     }
 
     /// Expand a prefixed name against the declared prefixes.
@@ -707,7 +703,8 @@ impl Parser<'_> {
             return Ok(());
         }
         if let Some(dt) = &nc.datatype
-            && !is_numeric_datatype(dt)
+            && !purrdf_xsd::XsdDatatype::from_iri(dt)
+                .is_some_and(purrdf_xsd::XsdDatatype::is_numeric)
         {
             return Err(self.err(format!("numeric facet on non-numeric datatype <{dt}>")));
         }
@@ -902,7 +899,7 @@ impl Parser<'_> {
                             // Language-tagged literals carry lowercase tags
                             // in the RDF data model (and the ShExJ ground
                             // truth).
-                            language: Some(tag.to_ascii_lowercase()),
+                            language: Some(purrdf_iri::langtag::identity_fold(&tag)),
                             datatype: None,
                         })
                     }
@@ -1174,6 +1171,26 @@ impl Parser<'_> {
     }
 }
 
+/// Resolve an IRI reference against the base in force, as an absolute IRI string.
+///
+/// The one resolution every ShEx surface uses — the ShExC parser, the compact
+/// shape-map parser and the ShExJ reader all admit relative references and all
+/// resolve them through [`BaseScope::resolve`] (RFC 3986 §5.2). There is
+/// deliberately no "no base in scope, keep the reference verbatim" fallthrough:
+/// an unresolved relative reference denotes nothing an absolute data term can
+/// match, so it would turn every constraint or node selector written with it
+/// into a vacuous one.
+///
+/// # Errors
+///
+/// [`ShexError::Iri`] when the reference does not resolve (no base in scope for
+/// a relative reference, or a malformed reference).
+pub(crate) fn resolve_iri(base: &BaseScope, reference: &str) -> Result<String> {
+    base.resolve(reference)
+        .map(|iri| iri.as_str().to_owned())
+        .map_err(|e| ShexError::iri(reference, &e))
+}
+
 /// Attach a bracketed group's cardinality/annotations/semActs to `inner`,
 /// wrapping in a singleton `EachOf` when `inner` already carries its own
 /// modifiers (so `(x{2}){3}` keeps both cardinalities).
@@ -1277,34 +1294,33 @@ fn numeric_from_lexical(lexical: &str) -> Option<NumericLiteral> {
     Some(NumericLiteral::Fractional(f))
 }
 
-/// The XSD numeric datatypes (decimal/double/float and the integer-derived
-/// family) admissible under a numeric facet.
-fn is_numeric_datatype(dt: &str) -> bool {
-    use purrdf_xsd::datatype as x;
-    [
-        x::XSD_INTEGER,
-        x::XSD_DECIMAL,
-        x::XSD_FLOAT,
-        x::XSD_DOUBLE,
-        x::XSD_LONG,
-        x::XSD_INT,
-        x::XSD_SHORT,
-        x::XSD_BYTE,
-        x::XSD_UNSIGNED_LONG,
-        x::XSD_UNSIGNED_INT,
-        x::XSD_UNSIGNED_SHORT,
-        x::XSD_UNSIGNED_BYTE,
-        x::XSD_NON_NEGATIVE_INTEGER,
-        x::XSD_NON_POSITIVE_INTEGER,
-        x::XSD_POSITIVE_INTEGER,
-        x::XSD_NEGATIVE_INTEGER,
-    ]
-    .contains(&dt)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_iri_resolves_a_relative_reference_against_the_base_in_force() {
+        let base = BaseScope::rooted(
+            BaseIri::parse("http://example.org/schema/").expect("base parses"),
+            BaseOrigin::Caller,
+        );
+        assert_eq!(
+            resolve_iri(&base, "S").as_deref(),
+            Ok("http://example.org/schema/S")
+        );
+        assert_eq!(
+            resolve_iri(&BaseScope::empty(), "http://example.org/S").as_deref(),
+            Ok("http://example.org/S")
+        );
+    }
+
+    #[test]
+    fn resolve_iri_refuses_a_relative_reference_with_no_base_in_scope() {
+        assert!(matches!(
+            resolve_iri(&BaseScope::empty(), "S"),
+            Err(ShexError::Iri { .. })
+        ));
+    }
 
     #[test]
     fn hostile_inputs_error_instead_of_panicking() {

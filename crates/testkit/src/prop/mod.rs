@@ -69,7 +69,7 @@ pub use arbitrary::{AnyBool, AnyChar, AnyInt, Arbitrary, any};
 pub use choices::{Choices, HexError, Invalid};
 pub use runner::{
     CASES_VARIABLE, Config, FailedCase, Failure, RunSummary, Runner, SEED_VARIABLE, TestCaseError,
-    cases_from_env, parse_seed, replay, run_test, seed_for,
+    cases_from_env, parse_cases, parse_seed, replay, run_test, seed_for,
 };
 pub use strategy::{BoxedStrategy, Filter, FilterMap, FlatMap, Just, Map, Strategy, Union};
 

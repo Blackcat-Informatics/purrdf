@@ -31,12 +31,14 @@
 //! assertion, so a red run still reports what it measured.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
 
 use purrdf_rdf::gts_dict_vectors::{
     DEFAULT_MODE, expected_fold_json_in_mode, render_expected_json,
 };
-use serde_json::Value as Json;
+
+#[path = "support/vectors.rs"]
+mod vectors;
+use vectors::vectors_dir;
 
 /// Every vector in the frozen corpus, so an upstream add or remove is loud.
 const VECTOR_COUNT: usize = 39;
@@ -52,10 +54,6 @@ const VECTOR_COUNT: usize = 39;
 /// corpus. `purrdf-gts`'s `frozen_conflicting_reifier_divergence` test pins
 /// both sides in full and documents what must land upstream.
 const KNOWN_DIVERGENCES: [&str; 1] = ["12-conflicting-reifier"];
-
-fn vectors_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vectors")
-}
 
 #[test]
 fn every_frozen_vector_matches_its_committed_expected_fold() {
@@ -85,7 +83,7 @@ fn every_frozen_vector_matches_its_committed_expected_fold() {
             .unwrap_or_else(|error| panic!("read {stem}.gts: {error}"));
         let expected = std::fs::read_to_string(vectors.join(format!("{stem}.expected.json")))
             .unwrap_or_else(|error| panic!("read {stem}.expected.json: {error}"));
-        let declared: Json = serde_json::from_str(&expected)
+        let declared = purrdf_lex::json::read(&expected)
             .unwrap_or_else(|error| panic!("parse {stem}.expected.json: {error}"));
         let mode = declared["mode"].as_str().unwrap_or(DEFAULT_MODE);
 

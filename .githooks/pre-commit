@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+# The quick subset of `make check`, run on what the commit actually records.
+#
+# Every gate here reads a snapshot of the index, not the working tree: a commit
+# assembled by partial staging is checked as it will exist, so a hunk left
+# behind in the tree can neither hide a failure nor fake a pass. The gates are
+# the ones that finish in a second or two; the census, the hash-domain registry,
+# clippy, the build and the tests stay in `make check` and CI.
+#
+# Install once per clone with `make hooks`. Bypassing the hook does not bypass
+# the gates: `make check` and CI run every one of them again.
+
+set -euo pipefail
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+
+snapshot=$(mktemp -d)
+logs=$(mktemp -d)
+trap 'rm -rf "$snapshot" "$logs"' EXIT
+git checkout-index --all --force --prefix="$snapshot/"
+
+# Gates that ask git which paths are tracked must see the index the snapshot
+# was taken from, with the snapshot as the work tree.
+GIT_DIR=$(git rev-parse --absolute-git-dir)
+GIT_INDEX_FILE=${GIT_INDEX_FILE:-$GIT_DIR/index}
+case "$GIT_INDEX_FILE" in /*) ;; *) GIT_INDEX_FILE=$(git rev-parse --show-toplevel)/$GIT_INDEX_FILE ;; esac
+export GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE="$snapshot"
+
+failed=0
+
+# Formatting, for the staged Rust sources only.
+mapfile -t rust < <(grep -E '\.rs$' <<<"$staged" || true)
+if [ "${#rust[@]}" -gt 0 ]; then
+    if ! (cd "$snapshot" && rustfmt --edition 2024 --check "${rust[@]}") >"$logs/rustfmt" 2>&1; then
+        echo "pre-commit: rustfmt --check failed on staged sources:" >&2
+        sed 's/^/  /' "$logs/rustfmt" >&2
+        failed=1
+    fi
+fi
+
+# Whole-tree hygiene gates that finish quickly, in parallel over the snapshot.
+gates=(
+    check-toolchain-pin
+    check-gate-parity
+    check-stream-chunk
+    check-iri-resolver-singleton
+    check-serializer-rewinds
+    check-python-binding-tests
+    check-terminal-predicates
+    check-thread-locals
+    check-shapes-parser-drops
+    check-licenses
+    check-layers
+    check-corpus-frozen
+    check-brand-casing
+    check-i18n-glossary
+    check-publish-order
+    check-wasm-js-exports
+    check-entailment-surface
+    check-python-stub-parity
+    check-tracked-paths
+    check-test-shards
+)
+pids=()
+for gate in "${gates[@]}"; do
+    python3 "$snapshot/scripts/$gate.py" >"$logs/$gate" 2>&1 &
+    pids+=("$!")
+done
+for i in "${!gates[@]}"; do
+    if ! wait "${pids[$i]}"; then
+        echo "pre-commit: ${gates[$i]} failed:" >&2
+        sed 's/^/  /' "$logs/${gates[$i]}" >&2
+        failed=1
+    fi
+done
+
+if [ "$failed" -ne 0 ]; then
+    echo "pre-commit: the staged snapshot fails the gates above; fix and re-stage." >&2
+    exit 1
+fi

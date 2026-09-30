@@ -24,14 +24,10 @@ use purrdf_shex::{
     NodeSelector, ShapeSelector, ValidationOptions, parse_shape_map, parse_shexc,
     validate_shape_map,
 };
+use purrdf_testkit::scalars::all_scalars;
 
 /// The four scalars `@pass` and `PASSED TOKENS` name: `#x20 #x9 #xD #xA`.
 const WS: [char; 4] = [' ', '\t', '\r', '\n'];
-
-/// Every Unicode scalar value, in order.
-fn all_scalars() -> impl Iterator<Item = char> {
-    (0..=0x0010_FFFF_u32).filter_map(char::from_u32)
-}
 
 /// Every scalar with the Unicode `White_Space` property that `WS` does NOT name.
 ///

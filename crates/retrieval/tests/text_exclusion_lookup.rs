@@ -38,18 +38,16 @@
 //! configuration, never a minted vocabulary.
 
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, EVIDENCE_VERSION, EvidenceId,
-    ExclusionVerdict, Fixed, FusedRow, FusionError, FusionProfile, Iri, ProtocolError, RECIP_K,
-    RankFidelity, RequestTerm, RetrievalRequest, SearchError, SearchResult, Statistics,
-    StratumStream, Term, TopK, compile, execute, plan, search,
+    AdmissionEnvironment, CandidateDomains, DecayRule, EVIDENCE_VERSION, EvidenceId,
+    ExclusionVerdict, Fixed, FusionError, FusionProfile, Iri, ProtocolError, RECIP_K, RankFidelity,
+    RequestTerm, RetrievalRequest, SearchError, SearchResult, Statistics, StratumStream, Term,
+    TopK, compile, execute, plan, search,
 };
 use purrdf_sparql_eval::{
     EvalError, ExclusionBasis, IndexGeneration, PfArgs, PfArity, PfAttestation, PfCursor, PfRow,
@@ -58,6 +56,13 @@ use purrdf_sparql_eval::{
 use purrdf_text::{
     GraphSelector, SearchObservations, TextIndex, TextIndexConfig, TextSearchRelation,
 };
+
+#[path = "support/registry.rs"]
+mod registry;
+
+use purrdf_retrieval::block_on;
+use purrdf_retrieval::fixture::{iri, reduce, shared_block};
+use registry::kernel_iri;
 
 /// The needle both producers are asked for.
 const NEEDLE: &str = "alpha beta";
@@ -80,34 +85,6 @@ const K: u32 = RECIP_K as u32;
 
 fn ex(suffix: &str) -> String {
     format!("http://example.org/{suffix}")
-}
-
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
-
-fn kernel_iri(text: &str) -> purrdf_core::Iri {
-    purrdf_core::parse_iri(text).expect("fixture IRIs are valid")
-}
-
-/// A minimal single-threaded executor. Nothing in this pipeline actually pends.
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -436,12 +413,6 @@ impl PfCursor for Served {
 // The wiring
 // ---------------------------------------------------------------------------
 
-/// The one block both producers declare. Sharing it is what removes the
-/// planner's merge argument and makes finality the thing that decides the read.
-fn shared_block() -> DomainTag {
-    DomainTag::parse(&ex("domain/shared")).expect("the fixture domain tag is a valid IRI")
-}
-
 /// One request term per producer, each naming that producer's own predicate, so
 /// each producer is bound to exactly one term and both search the same needle.
 fn request_terms() -> Vec<RequestTerm> {
@@ -685,23 +656,6 @@ fn measure(dataset: &RdfDataset, basis: ExclusionBasis) -> Measured {
     }
 }
 
-/// One fused row reduced to what two runs must agree on.
-///
-/// The threshold witness is deliberately left out: it records the global
-/// threshold in force when the row was certified, and certifying a row earlier —
-/// which is the whole point of an exclusion lookup — legitimately moves it. The
-/// candidate, the score and the provenance are the answer.
-fn reduce(row: &FusedRow) -> (Term, Fixed, Vec<(Iri, u64, Fixed)>) {
-    (
-        row.entity.clone(),
-        row.score,
-        row.contributions
-            .iter()
-            .map(|(stratum, rank, contribution)| (stratum.clone(), *rank, *contribution))
-            .collect(),
-    )
-}
-
 // ---------------------------------------------------------------------------
 // The measurement
 // ---------------------------------------------------------------------------
@@ -873,9 +827,9 @@ fn a_lookup_answered_by_a_rebuilt_index_is_refused_and_one_at_the_pinned_generat
     };
     assert_eq!(stratum, &Side::Right.stratum(), "{refused}");
     assert!(
-        reason.contains(&purrdf_core::hex::lower(
+        reason.contains(&purrdf_hash::hex::encode(
             &rebuilt_index(&dataset, Side::Right).fingerprint()
-        )) && reason.contains(&purrdf_core::hex::lower(
+        )) && reason.contains(&purrdf_hash::hex::encode(
             &index(&dataset, Side::Right).fingerprint()
         )),
         "the refusal names both generations: {reason}"
@@ -946,7 +900,7 @@ fn the_evidence_binds_the_lookups_and_a_run_without_lookups_is_unchanged() {
         assert_eq!(
             control.attestations.get(&iri(&side.stratum())),
             Some(&PfAttestation {
-                generation: IndexGeneration::Declared(Arc::from(purrdf_core::hex::lower(
+                generation: IndexGeneration::Declared(Arc::from(purrdf_hash::hex::encode(
                     &index(&dataset, side).fingerprint()
                 ))),
                 service: ServiceLevel::Undeclared,

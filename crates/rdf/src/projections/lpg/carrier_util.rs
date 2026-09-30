@@ -1,22 +1,26 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
-
+use super::super::json_codec::{FromJson, ToJson};
 use super::super::util::canonical_json_bounded;
 use super::super::{ProjectionError, ProjectionLimits, ProjectionPackage};
 use super::{LpgConfig, LpgGraph};
 
 const PROFILE_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CarrierManifest {
-    profile: String,
-    profile_version: u32,
-    lpg_schema_version: u32,
+/// The versioned manifest every LPG carrier package writes beside its artifacts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CarrierManifest {
+    pub(super) profile: String,
+    pub(super) profile_version: u32,
+    pub(super) lpg_schema_version: u32,
 }
+
+purrdf_lex::json_record!(CarrierManifest as "struct CarrierManifest" {
+    "profile" => profile: required,
+    "profile_version" => profile_version: required,
+    "lpg_schema_version" => lpg_schema_version: required,
+});
 
 pub(super) fn write_manifest(
     profile: &str,
@@ -51,7 +55,7 @@ pub(super) fn read_manifest(
     Ok(manifest.lpg_schema_version)
 }
 
-pub(super) fn json_string<T: Serialize>(
+pub(super) fn json_string<T: ToJson + ?Sized>(
     value: &T,
     config: &LpgConfig,
     description: &str,
@@ -61,7 +65,7 @@ pub(super) fn json_string<T: Serialize>(
     )
 }
 
-pub(super) fn parse_json<T: DeserializeOwned + Serialize>(
+pub(super) fn parse_json<T: FromJson + ToJson>(
     bytes: &[u8],
     config: &LpgConfig,
     description: &str,
@@ -73,7 +77,7 @@ pub(super) fn parse_json<T: DeserializeOwned + Serialize>(
         ))
         .at_path(path));
     }
-    let value: T = serde_json::from_slice(bytes).map_err(|error| {
+    let value: T = super::super::json_codec::from_slice(bytes).map_err(|error| {
         ProjectionError::syntax(format!("parse {description}: {error}")).at_path(path)
     })?;
     if canonical_json_bounded(&value, config.limits(), description)? != bytes {
@@ -83,15 +87,6 @@ pub(super) fn parse_json<T: DeserializeOwned + Serialize>(
         .at_path(path));
     }
     Ok(value)
-}
-
-pub(super) fn required_artifact<'a>(
-    package: &'a ProjectionPackage,
-    path: &str,
-) -> Result<&'a [u8], ProjectionError> {
-    package
-        .get(path)
-        .ok_or_else(|| ProjectionError::package("required artifact is missing").at_path(path))
 }
 
 pub(super) fn validate_package_bounds(
@@ -143,18 +138,8 @@ const HEX_BLOCK_BYTES: usize = 8_192;
 
 /// Render `value` as lowercase hexadecimal — two characters per byte, zero
 /// padded, leading zero bytes preserved — handing the rendered characters to
-/// `emit` one fixed stack block at a time.
-///
-/// This is the single transcription of the nibble-table encoder for the LPG
-/// carriers, and it sits beside [`hex_decode`], the inverse it must agree with.
-/// It is deliberately NOT `purrdf_core::hex::lower`: that renders into an
-/// owned [`String`], and both call sites here are byte sinks on a per-item
-/// projection path (a streaming artifact writer and a bounded `Vec<u8>`), so
-/// routing them through it would add one heap allocation *and* one copy per
-/// rendered value for output they never keep as a `String`. `purrdf-core`'s hex
-/// module names exactly this case — an allocation-free renderer writing into a
-/// fixed inline buffer — as the call-site class that correctly does something
-/// else.
+/// `emit` one fixed stack block at a time, so a byte sink receives the text
+/// without an owned `String` in between.
 ///
 /// Blocking rather than emitting per byte keeps the sink call count proportional
 /// to the payload size divided by [`HEX_BLOCK_BYTES`], not to the byte count.
@@ -162,16 +147,13 @@ pub(super) fn render_hex_blocks(
     value: &[u8],
     mut emit: impl FnMut(&[u8]) -> Result<(), ProjectionError>,
 ) -> Result<(), ProjectionError> {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut block = [0u8; HEX_BLOCK_BYTES];
     // Two output characters per source byte, so a block holds half its size in
-    // source bytes and `source.len() * 2` can never exceed `block.len()`.
+    // source bytes and the rendering always fits.
     for source in value.chunks(HEX_BLOCK_BYTES / 2) {
-        for (index, byte) in source.iter().copied().enumerate() {
-            block[index * 2] = DIGITS[usize::from(byte >> 4)];
-            block[index * 2 + 1] = DIGITS[usize::from(byte & 0x0f)];
-        }
-        emit(&block[..source.len() * 2])?;
+        let rendered = purrdf_hash::hex::encode_to_slice(source, &mut block)
+            .map_err(|error| ProjectionError::limit(error.to_string()))?;
+        emit(rendered.as_bytes())?;
     }
     Ok(())
 }
@@ -264,31 +246,13 @@ pub(super) fn hex_decode(
     description: &str,
     path: &str,
 ) -> Result<Vec<u8>, ProjectionError> {
-    if !value.len().is_multiple_of(2) {
-        return Err(ProjectionError::syntax(format!(
-            "{description} lowercase-hex payload has odd length"
-        ))
-        .at_path(path));
-    }
-    let mut bytes = Vec::with_capacity(value.len() / 2);
-    for pair in value.as_bytes().as_chunks::<2>().0 {
-        let high = hex_nibble(pair[0]).ok_or_else(|| {
-            ProjectionError::syntax(format!("{description} contains a non-lowercase-hex digit"))
-                .at_path(path)
-        })?;
-        let low = hex_nibble(pair[1]).ok_or_else(|| {
-            ProjectionError::syntax(format!("{description} contains a non-lowercase-hex digit"))
-                .at_path(path)
-        })?;
-        bytes.push((high << 4) | low);
-    }
-    Ok(bytes)
-}
-
-const fn hex_nibble(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        _ => None,
-    }
+    purrdf_hash::hex::decode_canonical(value).map_err(|error| {
+        let reason = match error {
+            purrdf_hash::hex::HexError::OddLength { .. } => {
+                format!("{description} lowercase-hex payload has odd length")
+            }
+            _ => format!("{description} contains a non-lowercase-hex digit"),
+        };
+        ProjectionError::syntax(reason).at_path(path)
+    })
 }

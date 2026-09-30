@@ -6,6 +6,13 @@
 //! [`NativeSparqlEngine`] entry points under a [`QueryOptions`] carrying an
 //! [`AggregateRegistry`] — never reaching into the crate.
 
+#[path = "support/aggregates.rs"]
+mod aggregates;
+mod support;
+
+use aggregates::{Fold, FoldAggregate};
+use support::with_env;
+
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -26,162 +33,38 @@ const UNREGISTERED_IRI: &str = "http://example.org/agg#nope";
 
 // ── the example custom aggregates ───────────────────────────────────────────
 
-/// A running integer sum over its single argument's lexical form. Non-numeric
-/// arguments are simply ignored (never observed here, since every fixture
-/// value is an `xsd:integer` literal).
-struct SumAccumulator {
-    total: i64,
-}
-
-impl AggregateAccumulator for SumAccumulator {
-    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        if let Some(TermValue::Literal { lexical_form, .. }) = args.first()
-            && let Ok(n) = lexical_form.parse::<i64>()
-        {
-            self.total += n;
-        }
-        Ok(())
-    }
-
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
-        if let Some(TermValue::Literal { lexical_form, .. }) = other.finish()?
-            && let Ok(n) = lexical_form.parse::<i64>()
-        {
-            self.total += n;
-        }
-        Ok(())
-    }
-
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
-        self
-    }
-
-    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        Ok(Some(TermValue::typed_literal(
-            self.total.to_string(),
-            XSD_INTEGER,
-        )))
-    }
-}
-
-/// `SUM`-alike, one argument, a declared determinism class the constructor picks —
-/// used both as the ordinary `Stable` fixture and (registered under a second IRI)
-/// as the `Volatile` fixture for the fork-gate determinism test.
-struct SumAggregate {
-    volatility: Volatility,
-}
-
-impl CustomAggregate for SumAggregate {
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
-    fn volatility(&self) -> Volatility {
-        self.volatility
-    }
-    fn algebraic_class(&self) -> AlgebraicClass {
-        AlgebraicClass::Commutative
-    }
-    fn state_bound(&self) -> u64 {
-        0
-    }
-    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
-        Box::new(SumAccumulator { total: 0 })
-    }
-}
-
-/// A running sum of `value * weight` over a two-argument tuple — the fixture that
-/// exercises DISTINCT deduping the FULL argument tuple rather than a single
-/// column: two rows sharing `value` but differing in `weight` must both be
-/// folded in.
-struct WeightedSumAccumulator {
-    total: i64,
-}
-
-impl AggregateAccumulator for WeightedSumAccumulator {
-    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        let (
-            Some(TermValue::Literal {
-                lexical_form: v, ..
-            }),
-            Some(TermValue::Literal {
-                lexical_form: w, ..
-            }),
-        ) = (args.first(), args.get(1))
-        else {
-            return Ok(());
-        };
-        if let (Ok(v), Ok(w)) = (v.parse::<i64>(), w.parse::<i64>()) {
-            self.total += v * w;
-        }
-        Ok(())
-    }
-
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
-        if let Some(TermValue::Literal { lexical_form, .. }) = other.finish()?
-            && let Ok(n) = lexical_form.parse::<i64>()
-        {
-            self.total += n;
-        }
-        Ok(())
-    }
-
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
-        self
-    }
-
-    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        Ok(Some(TermValue::typed_literal(
-            self.total.to_string(),
-            XSD_INTEGER,
-        )))
-    }
-}
-
-struct WeightedSumAggregate;
-
-impl CustomAggregate for WeightedSumAggregate {
-    fn arity(&self) -> Arity {
-        Arity::Exact(2)
-    }
-    fn volatility(&self) -> Volatility {
-        Volatility::Stable
-    }
-    fn algebraic_class(&self) -> AlgebraicClass {
-        AlgebraicClass::Commutative
-    }
-    fn state_bound(&self) -> u64 {
-        0
-    }
-    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
-        Box::new(WeightedSumAccumulator { total: 0 })
-    }
-}
+// The `SUM`, weighted-sum and `PRODUCT` fixtures are `support/aggregates.rs`'s
+// [`FoldAggregate`]: the `SUM` is registered both as the ordinary `Stable` fixture and
+// (under a second IRI) as the `Volatile` fixture for the fork-gate determinism test; the
+// weighted sum exercises DISTINCT deduping the FULL argument tuple rather than a single
+// column: two rows sharing `value` but differing in `weight` must both be folded in.
 
 fn registry() -> ExtensionEnv {
-    let mut registry = AggregateRegistry::new();
+    let mut registry = AggregateRegistry::default();
     registry.register(
         SUM_IRI,
-        Arc::new(SumAggregate {
+        Arc::new(FoldAggregate {
+            fold: Fold::Sum,
             volatility: Volatility::Stable,
         }),
     );
     registry.register(
         VOLATILE_SUM_IRI,
-        Arc::new(SumAggregate {
+        Arc::new(FoldAggregate {
+            fold: Fold::Sum,
             volatility: Volatility::Volatile,
         }),
     );
-    registry.register(WEIGHTED_SUM_IRI, Arc::new(WeightedSumAggregate));
+    registry.register(
+        WEIGHTED_SUM_IRI,
+        Arc::new(FoldAggregate::stable(Fold::WeightedSum)),
+    );
     ExtensionEnv::over_aggregates(registry).expect("the fixture declarations read cleanly")
 }
 
 /// The environment a fixture registry is interpreted in.
 fn env_of(aggregates: AggregateRegistry) -> ExtensionEnv {
     ExtensionEnv::over_aggregates(aggregates).expect("the fixture declarations read cleanly")
-}
-
-fn with_aggregates(env: &ExtensionEnv) -> QueryOptions<'_> {
-    QueryOptions::new().with_env(env)
 }
 
 fn request(query: &str) -> SparqlRequest<'_> {
@@ -272,7 +155,7 @@ fn group_by_case_sums_per_group() {
         "SELECT ?cat (AGG(<{SUM_IRI}>, ?v) AS ?total) WHERE {{ \
          ?s <{EX}cat> ?cat . ?s <{EX}val> ?v }} GROUP BY ?cat ORDER BY ?cat"
     );
-    let result = run(&ds, &query, with_aggregates(&reg));
+    let result = run(&ds, &query, with_env(&reg));
     let rows = rows(&result);
     // cat1: s1(1) + s2(2) + s2b(2) = 5; cat2: s3(10).
     assert_eq!(rows.len(), 2);
@@ -287,7 +170,7 @@ fn implicit_single_group_case_sums_everything() {
     let reg = registry();
     let ds = dataset();
     let query = format!("SELECT (AGG(<{SUM_IRI}>, ?v) AS ?total) WHERE {{ ?s <{EX}val> ?v }}");
-    let result = run(&ds, &query, with_aggregates(&reg));
+    let result = run(&ds, &query, with_env(&reg));
     let rows = rows(&result);
     assert_eq!(rows.len(), 1, "no GROUP BY: exactly one implicit group");
     // 1 + 2 + 2 + 10 = 15.
@@ -302,7 +185,7 @@ fn distinct_dedups_the_single_argument() {
     let ds = dataset();
     let query =
         format!("SELECT (AGG(<{SUM_IRI}>, DISTINCT ?v) AS ?total) WHERE {{ ?s <{EX}val> ?v }}");
-    let result = run(&ds, &query, with_aggregates(&reg));
+    let result = run(&ds, &query, with_env(&reg));
     let rows = rows(&result);
     // Distinct values across all rows: {1, 2, 10} (the second `2`, from s2b, is
     // dropped) = 13.
@@ -319,7 +202,7 @@ fn distinct_dedups_the_full_argument_tuple_not_a_single_column() {
         "SELECT (AGG(<{WEIGHTED_SUM_IRI}>, DISTINCT ?v, ?w) AS ?total) WHERE {{ \
          ?s <{EX}val> ?v . ?s <{EX}weight> ?w }}"
     );
-    let result = run(&ds, &query, with_aggregates(&reg));
+    let result = run(&ds, &query, with_env(&reg));
     let result_rows = rows(&result);
     // Tuples: (1,5) from s1, (2,5) from s2, (2,7) from s2b [same `v` as s2, DIFFERENT
     // `w`, so NOT deduped against it], (10,2) from s3. Every tuple is distinct, so
@@ -333,7 +216,7 @@ fn distinct_dedups_the_full_argument_tuple_not_a_single_column() {
         "SELECT (AGG(<{WEIGHTED_SUM_IRI}>, ?v, ?w) AS ?total) WHERE {{ \
          ?s <{EX}val> ?v . ?s <{EX}weight> ?w }}"
     );
-    let result_no_distinct = run(&ds, &query_no_distinct, with_aggregates(&reg));
+    let result_no_distinct = run(&ds, &query_no_distinct, with_env(&reg));
     assert_eq!(int_cell(&rows(&result_no_distinct)[0], 0), 49);
 }
 
@@ -348,7 +231,7 @@ fn empty_group_answers_finish_of_init_explicitly() {
     // rather than the row producing no solution at all.
     let query =
         format!("SELECT (AGG(<{SUM_IRI}>, ?v) AS ?total) WHERE {{ ?s <{EX}nonexistent> ?v }}");
-    let result = run(&ds, &query, with_aggregates(&reg));
+    let result = run(&ds, &query, with_env(&reg));
     let rows = rows(&result);
     assert_eq!(
         rows.len(),
@@ -370,7 +253,7 @@ fn unregistered_custom_aggregate_iri_is_refused_at_prepare_time_naming_the_iri()
     let engine = NativeSparqlEngine::new();
     let query =
         format!("SELECT (AGG(<{UNREGISTERED_IRI}>, ?v) AS ?total) WHERE {{ ?s <{EX}val> ?v }}");
-    let options = with_aggregates(&reg);
+    let options = with_env(&reg);
     // `prepare_query_with_options` is the PREPARE-time entry — no dataset is even
     // supplied to it, so a success here proves the refusal (if any) did not wait
     // for evaluation.
@@ -404,7 +287,7 @@ fn custom_aggregate_arity_mismatch_is_refused_at_prepare_time_under_the_aggregat
     let engine = NativeSparqlEngine::new();
     // SUM_IRI is declared `Arity::Exact(1)`; two positional arguments is a mismatch.
     let query = format!("SELECT (AGG(<{SUM_IRI}>, ?v, ?v) AS ?total) WHERE {{ ?s <{EX}val> ?v }}");
-    let options = with_aggregates(&reg);
+    let options = with_env(&reg);
     let error = engine
         .prepare_query_with_options(&query, None, options)
         .expect_err("an arity mismatch must be refused at prepare time");
@@ -454,14 +337,14 @@ fn unregistered_property_function_still_reports_the_property_function_code() {
 /// `Option<&AggregateRegistry>` — there is no separate "no registry
 /// configured" spelling for a query to distinguish from "an empty registry was
 /// configured". A `None`-shaped call and a
-/// `Some(&AggregateRegistry::new())`-shaped call answering differently is
+/// `Some(&AggregateRegistry::default())`-shaped call answering differently is
 /// therefore structurally impossible to even state: `None` does not
 /// type-check as a `QueryOptions::aggregates` value at all. What remains
 /// meaningful, and is what this test pins, is the weaker but still real
 /// property that motivated `AggregateRegistry::EMPTY` being one canonical
 /// shared constant rather than every call site minting its own empty registry:
 /// [`QueryOptions::EMPTY`] (which carries `&AggregateRegistry::EMPTY`) and an
-/// explicitly supplied, freshly built, still-empty [`AggregateRegistry::new`]
+/// explicitly supplied, freshly built, still-empty [`AggregateRegistry::default`]
 /// must answer identically, because both resolve every `AGG(<iri>, …)` IRI to
 /// nothing.
 #[test]
@@ -469,8 +352,8 @@ fn the_canonical_empty_registry_and_a_freshly_built_empty_registry_answer_identi
     let ds = dataset();
     let query = format!("SELECT ?s WHERE {{ ?s <{EX}val> ?v }} ORDER BY ?s");
     let canonical_empty_options = QueryOptions::EMPTY;
-    let fresh_empty_env = env_of(AggregateRegistry::new());
-    let fresh_empty_options = with_aggregates(&fresh_empty_env);
+    let fresh_empty_env = env_of(AggregateRegistry::default());
+    let fresh_empty_options = with_env(&fresh_empty_env);
 
     let via_canonical = run(&ds, &query, canonical_empty_options);
     let via_fresh = run(&ds, &query, fresh_empty_options);
@@ -508,8 +391,8 @@ fn stable_custom_aggregate_is_deterministic_at_parallel_scale() {
         "SELECT ?g (AGG(<{SUM_IRI}>, ?v) AS ?total) WHERE {{ \
          ?s <{EX}group> ?g . ?s <{EX}val> ?v }} GROUP BY ?g ORDER BY ?g"
     );
-    let first = run(&ds, &query, with_aggregates(&reg));
-    let second = run(&ds, &query, with_aggregates(&reg));
+    let first = run(&ds, &query, with_env(&reg));
+    let second = run(&ds, &query, with_env(&reg));
     assert_eq!(
         rows(&first).len(),
         GROUPS,
@@ -543,8 +426,8 @@ fn volatile_custom_aggregate_is_still_correct_and_deterministic_at_scale() {
         "SELECT ?g (AGG(<{VOLATILE_SUM_IRI}>, ?v) AS ?total) WHERE {{ \
          ?s <{EX}group> ?g . ?s <{EX}val> ?v }} GROUP BY ?g ORDER BY ?g"
     );
-    let first = run(&ds, &query, with_aggregates(&reg));
-    let second = run(&ds, &query, with_aggregates(&reg));
+    let first = run(&ds, &query, with_env(&reg));
+    let second = run(&ds, &query, with_env(&reg));
     assert_eq!(rows(&first).len(), GROUPS);
     assert_eq!(rows(&first), rows(&second));
     let expected_group0: i64 = (0..N as i64).step_by(GROUPS).sum();
@@ -561,7 +444,7 @@ fn volatile_custom_aggregate_is_still_correct_and_deterministic_at_scale() {
 const STAT_NS: &str = "http://example.org/agg/";
 
 fn statistical_registry() -> ExtensionEnv {
-    let mut registry = AggregateRegistry::new();
+    let mut registry = AggregateRegistry::default();
     registry.register_statistical_aggregates(STAT_NS);
     ExtensionEnv::over_aggregates(registry).expect("the fixture declarations read cleanly")
 }
@@ -610,7 +493,7 @@ fn group_by_query_computes_several_statistical_members_per_group() {
          (AGG(<{STAT_NS}LAST>, ?v) AS ?last) \
          WHERE {{ ?s <{EX}cat> ?cat . ?s <{EX}val> ?v }} GROUP BY ?cat ORDER BY ?cat"
     );
-    let result = run(&ds, &query, with_aggregates(&reg));
+    let result = run(&ds, &query, with_env(&reg));
     let result_rows = rows(&result);
     assert_eq!(result_rows.len(), 2);
 
@@ -649,7 +532,7 @@ fn mode_finds_the_genuine_repeat_not_a_coincidental_stand_in() {
     }
     let ds = b.freeze().expect("freeze");
     let query = format!("SELECT (AGG(<{STAT_NS}MODE>, ?v) AS ?mode) WHERE {{ ?s <{EX}val> ?v }}");
-    let result = run(&ds, &query, with_aggregates(&reg));
+    let result = run(&ds, &query, with_env(&reg));
     assert_eq!(
         stat_lex(&rows(&result)[0], 0),
         "20",
@@ -666,7 +549,7 @@ fn percentile_named_scalarval_form_end_to_end() {
         "SELECT (AGG(<{STAT_NS}PERCENTILE>, ?v; P=0.5) AS ?p) \
          WHERE {{ ?s <{EX}cat> <{EX}g1> . ?s <{EX}val> ?v }}"
     );
-    let result = run(&ds, &query, with_aggregates(&reg));
+    let result = run(&ds, &query, with_env(&reg));
     // P=0.5 over {1,2,3,4} is the same interpolated median as MEDIAN itself.
     assert_eq!(stat_lex(&rows(&result)[0], 0), "2.5");
 }
@@ -686,7 +569,7 @@ fn percentile_at_a_genuinely_interpolating_fraction() {
         "SELECT (AGG(<{STAT_NS}PERCENTILE>, ?v; P=0.1) AS ?p) \
          WHERE {{ ?s <{EX}cat> <{EX}g1> . ?s <{EX}val> ?v }}"
     );
-    let result = run(&ds, &query, with_aggregates(&reg));
+    let result = run(&ds, &query, with_env(&reg));
     assert_eq!(stat_lex(&rows(&result)[0], 0), "1.3");
 }
 
@@ -698,7 +581,7 @@ fn percentile_out_of_range_p_is_unbound_not_a_hard_error() {
         "SELECT (AGG(<{STAT_NS}PERCENTILE>, ?v; P=1.5) AS ?p) \
          WHERE {{ ?s <{EX}cat> <{EX}g1> . ?s <{EX}val> ?v }}"
     );
-    let result = run(&ds, &query, with_aggregates(&reg));
+    let result = run(&ds, &query, with_env(&reg));
     assert!(
         rows(&result)[0][0].is_none(),
         "P outside [0, 1] poisons the fold to unbound, never a query-aborting error"
@@ -714,7 +597,7 @@ fn percentile_missing_p_is_refused_at_prepare_time() {
     let query =
         format!("SELECT (AGG(<{STAT_NS}PERCENTILE>, ?v) AS ?p) WHERE {{ ?s <{EX}val> ?v }}");
     let error = engine
-        .prepare_query_with_options(&query, None, with_aggregates(&reg))
+        .prepare_query_with_options(&query, None, with_env(&reg))
         .expect_err("a missing required scalarval must be refused at prepare time");
     assert_eq!(error.code, "native-sparql-aggregate-function");
     assert!(error.message.contains('P'), "{}", error.message);
@@ -729,7 +612,7 @@ fn percentile_unknown_scalarval_name_is_refused_at_prepare_time() {
     let query =
         format!("SELECT (AGG(<{STAT_NS}PERCENTILE>, ?v; Q=0.5) AS ?p) WHERE {{ ?s <{EX}val> ?v }}");
     let error = engine
-        .prepare_query_with_options(&query, None, with_aggregates(&reg))
+        .prepare_query_with_options(&query, None, with_env(&reg))
         .expect_err("an unrecognized scalarval name must be refused at prepare time");
     assert_eq!(error.code, "native-sparql-aggregate-function");
 }
@@ -743,7 +626,7 @@ fn percentile_duplicate_scalarval_is_refused_at_prepare_time() {
         "SELECT (AGG(<{STAT_NS}PERCENTILE>, ?v; P=0.5; P=0.9) AS ?p) WHERE {{ ?s <{EX}val> ?v }}"
     );
     let error = engine
-        .prepare_query_with_options(&query, None, with_aggregates(&reg))
+        .prepare_query_with_options(&query, None, with_env(&reg))
         .expect_err("a duplicate scalarval name must be refused at prepare time");
     assert_eq!(error.code, "native-sparql-aggregate-function");
 }
@@ -758,7 +641,7 @@ fn percentile_wrong_typed_scalarval_is_refused_at_prepare_time() {
         "SELECT (AGG(<{STAT_NS}PERCENTILE>, ?v; P=\"high\") AS ?p) WHERE {{ ?s <{EX}val> ?v }}"
     );
     let error = engine
-        .prepare_query_with_options(&query, None, with_aggregates(&reg))
+        .prepare_query_with_options(&query, None, with_env(&reg))
         .expect_err("a wrong-typed scalarval value must be refused at prepare time");
     assert_eq!(error.code, "native-sparql-aggregate-function");
 }
@@ -771,7 +654,7 @@ fn topk_end_to_end() {
         "SELECT (AGG(<{STAT_NS}TOPK>, ?v; K=2) AS ?top) \
          WHERE {{ ?s <{EX}cat> <{EX}g1> . ?s <{EX}val> ?v }}"
     );
-    let result = run(&ds, &query, with_aggregates(&reg));
+    let result = run(&ds, &query, with_env(&reg));
     assert_eq!(stat_lex(&rows(&result)[0], 0), "4 3");
 }
 
@@ -786,14 +669,14 @@ fn distinct_interacts_with_a_statistical_member() {
         "SELECT (AGG(<{STAT_NS}MEDIAN>, DISTINCT ?v) AS ?median) \
          WHERE {{ ?s <{EX}cat> <{EX}g2> . ?s <{EX}val> ?v }}"
     );
-    let distinct_result = run(&ds, &query, with_aggregates(&reg));
+    let distinct_result = run(&ds, &query, with_env(&reg));
     assert_eq!(stat_lex(&rows(&distinct_result)[0], 0), "15");
 
     let query_plain = format!(
         "SELECT (AGG(<{STAT_NS}MEDIAN>, ?v) AS ?median) \
          WHERE {{ ?s <{EX}cat> <{EX}g2> . ?s <{EX}val> ?v }}"
     );
-    let plain_result = run(&ds, &query_plain, with_aggregates(&reg));
+    let plain_result = run(&ds, &query_plain, with_env(&reg));
     assert_eq!(stat_lex(&rows(&plain_result)[0], 0), "10");
 }
 
@@ -830,7 +713,7 @@ fn moments_stddev_variance_and_var_pop_end_to_end() {
          (AGG(<{STAT_NS}STDDEV>, ?v) AS ?stddev) \
          WHERE {{ ?s <{EX}mval> ?v }}"
     );
-    let result = run(&ds, &query, with_aggregates(&reg));
+    let result = run(&ds, &query, with_env(&reg));
     let result_rows = rows(&result);
     assert_eq!(result_rows.len(), 1);
     assert_eq!(
@@ -856,7 +739,7 @@ fn a_local_name_outside_the_closed_set_is_refused_at_prepare_time() {
     let engine = NativeSparqlEngine::new();
     let query =
         format!("SELECT (AGG(<{STAT_NS}NOT_A_MEMBER>, ?v) AS ?x) WHERE {{ ?s <{EX}val> ?v }}");
-    let options = with_aggregates(&reg);
+    let options = with_env(&reg);
     let error = engine
         .prepare_query_with_options(&query, None, options)
         .expect_err("a local name outside the closed set is simply unregistered");
@@ -873,8 +756,8 @@ fn statistical_aggregates_are_deterministic_at_parallel_scale() {
         "SELECT ?g (AGG(<{STAT_NS}FIRST>, ?v) AS ?f) (AGG(<{STAT_NS}MEDIAN>, ?v) AS ?m) WHERE {{ \
          ?s <{EX}group> ?g . ?s <{EX}val> ?v }} GROUP BY ?g ORDER BY ?g"
     );
-    let first_run = run(&ds, &query, with_aggregates(&reg));
-    let second_run = run(&ds, &query, with_aggregates(&reg));
+    let first_run = run(&ds, &query, with_env(&reg));
+    let second_run = run(&ds, &query, with_env(&reg));
     assert_eq!(rows(&first_run).len(), GROUPS);
     assert_eq!(
         rows(&first_run),
@@ -955,7 +838,7 @@ impl CustomAggregate for ZeroArityAggregate {
 #[test]
 fn zero_arity_custom_aggregate_cannot_be_constructed_and_therefore_never_row_counts() {
     const ZERO_ARITY_IRI: &str = "http://example.org/agg#zeroArity";
-    let mut declarations = AggregateRegistry::new();
+    let mut declarations = AggregateRegistry::default();
     declarations.register(ZERO_ARITY_IRI, Arc::new(ZeroArityAggregate));
     // The registry itself is untroubled by the zero-arity declaration.
     assert!(declarations.resolve(ZERO_ARITY_IRI).is_some());
@@ -968,7 +851,7 @@ fn zero_arity_custom_aggregate_cannot_be_constructed_and_therefore_never_row_cou
     let engine = NativeSparqlEngine::new();
     let query = format!("SELECT (AGG(<{ZERO_ARITY_IRI}>) AS ?x) WHERE {{ ?s <{EX}val> ?v }}");
     engine
-        .prepare_query_with_options(&query, None, with_aggregates(&reg))
+        .prepare_query_with_options(&query, None, with_env(&reg))
         .expect_err("AGG(<iri>) with zero positional args is a hard parse-time syntax error");
 
     // And even bypassing the SPARQL parser entirely — building the algebra node
@@ -1000,65 +883,10 @@ fn zero_arity_custom_aggregate_cannot_be_constructed_and_therefore_never_row_cou
 // because two independently built registries can register the same IRI to two
 // entirely different accumulators while describing identically.
 
-/// A `PRODUCT`-alike accumulator: multiplies rather than sums. Declares EXACTLY
-/// the same [`Arity`]/[`Volatility`]/[`AlgebraicClass`]/state-bound as
-/// [`SumAggregate`] (`registry()`'s `SUM_IRI` registration) — nothing about its
-/// DECLARATION can distinguish it from a SUM — but its computed answer is
-/// completely different.
-struct ProductAccumulator {
-    total: i64,
-}
-
-impl AggregateAccumulator for ProductAccumulator {
-    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        if let Some(TermValue::Literal { lexical_form, .. }) = args.first()
-            && let Ok(n) = lexical_form.parse::<i64>()
-        {
-            self.total *= n;
-        }
-        Ok(())
-    }
-
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
-        if let Some(TermValue::Literal { lexical_form, .. }) = other.finish()?
-            && let Ok(n) = lexical_form.parse::<i64>()
-        {
-            self.total *= n;
-        }
-        Ok(())
-    }
-
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
-        self
-    }
-
-    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        Ok(Some(TermValue::typed_literal(
-            self.total.to_string(),
-            XSD_INTEGER,
-        )))
-    }
-}
-
-struct ProductAggregate;
-
-impl CustomAggregate for ProductAggregate {
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
-    fn volatility(&self) -> Volatility {
-        Volatility::Stable
-    }
-    fn algebraic_class(&self) -> AlgebraicClass {
-        AlgebraicClass::Commutative
-    }
-    fn state_bound(&self) -> u64 {
-        0
-    }
-    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
-        Box::new(ProductAccumulator { total: 1 })
-    }
-}
+// The `PRODUCT`-alike is [`Fold::Product`]: it declares EXACTLY the same
+// [`Arity`]/[`Volatility`]/[`AlgebraicClass`]/state-bound as the SUM (`registry()`'s
+// `SUM_IRI` registration) — nothing about its DECLARATION can distinguish it from a SUM —
+// but its computed answer is completely different.
 
 /// The exact reproduction: registry A binds `SUM_IRI` to a SUM; registry B binds
 /// the SAME IRI to a PRODUCT with identical declared arity, volatility, algebraic
@@ -1068,15 +896,16 @@ impl CustomAggregate for ProductAggregate {
 #[test]
 fn a_plan_prepared_under_one_registry_refuses_to_execute_under_a_different_registry_with_identical_declarations()
  {
-    let mut registry_a = AggregateRegistry::new();
+    let mut registry_a = AggregateRegistry::default();
     registry_a.register(
         SUM_IRI,
-        Arc::new(SumAggregate {
+        Arc::new(FoldAggregate {
+            fold: Fold::Sum,
             volatility: Volatility::Stable,
         }),
     );
-    let mut registry_b = AggregateRegistry::new();
-    registry_b.register(SUM_IRI, Arc::new(ProductAggregate));
+    let mut registry_b = AggregateRegistry::default();
+    registry_b.register(SUM_IRI, Arc::new(FoldAggregate::stable(Fold::Product)));
 
     // The reproduction only means what it claims if the two registries' DECLARED
     // metadata is byte-identical for this IRI — confirm that first.
@@ -1094,16 +923,11 @@ fn a_plan_prepared_under_one_registry_refuses_to_execute_under_a_different_regis
     let query = format!("SELECT (AGG(<{SUM_IRI}>, ?v) AS ?total) WHERE {{ ?s <{EX}val> ?v }}");
 
     let prepared = engine
-        .prepare_query_with_options(&query, None, with_aggregates(&env_of(registry_a.clone())))
+        .prepare_query_with_options(&query, None, with_env(&env_of(registry_a.clone())))
         .expect("registry A admits and prepares the call");
 
     let error = engine
-        .query_prepared_view(
-            &*ds,
-            &prepared,
-            &[],
-            with_aggregates(&env_of(registry_b.clone())),
-        )
+        .query_prepared_view(&*ds, &prepared, &[], with_env(&env_of(registry_b.clone())))
         .expect_err(
             "a plan prepared under registry A must be REFUSED under registry B, never silently \
              executed against B's different accumulator",
@@ -1125,10 +949,10 @@ fn a_plan_prepared_and_executed_under_the_same_registry_instance_still_works() {
     let query = format!("SELECT (AGG(<{SUM_IRI}>, ?v) AS ?total) WHERE {{ ?s <{EX}val> ?v }}");
 
     let prepared = engine
-        .prepare_query_with_options(&query, None, with_aggregates(&reg))
+        .prepare_query_with_options(&query, None, with_env(&reg))
         .expect("the registry admits and prepares the call");
     let result = engine
-        .query_prepared_view(&*ds, &prepared, &[], with_aggregates(&reg))
+        .query_prepared_view(&*ds, &prepared, &[], with_env(&reg))
         .expect("the SAME registry instance must be accepted at execution");
     assert_eq!(int_cell(&rows(&result)[0], 0), 15, "1 + 2 + 2 + 10");
 }

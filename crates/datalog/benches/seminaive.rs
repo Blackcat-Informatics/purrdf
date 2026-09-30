@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Semi-naive join benchmarks.
@@ -32,7 +32,7 @@
 //! Report-only, per this repository's rule: benches exist so a later change has a
 //! number to move, never so a speedup can be asserted. Nothing here fails a build.
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
 use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause};
 use purrdf_datalog::seminaive::{Evaluation, compile, evaluate};
@@ -47,13 +47,13 @@ fn surface(name: &str) -> String {
     format!("<{EX}{name}>")
 }
 
-fn var(name: &str) -> ClauseTerm {
-    ClauseTerm::var(name)
-}
-
 /// `subject predicate object` with both terminals as variables.
 fn atom(subject: &str, predicate: &str, object: &str) -> ClauseAtom {
-    ClauseAtom::positive(var(subject), format!("{EX}{predicate}"), var(object))
+    ClauseAtom::positive(
+        ClauseTerm::var(subject),
+        format!("{EX}{predicate}"),
+        ClauseTerm::var(object),
+    )
 }
 
 /// Run one program to fixpoint, panicking rather than reporting a partial answer —
@@ -110,21 +110,9 @@ fn frame_rules(pairs: usize) -> Vec<DlClause> {
     )]
 }
 
-fn frame_store(pairs: usize) -> RelationStore {
-    let mut store = RelationStore::new();
-    for i in 0..pairs {
-        store.insert(
-            &surface(&format!("n{i}")),
-            &surface("p"),
-            &surface(&format!("n{}", i + 1)),
-            RelationStore::DEFAULT_GRAPH,
-        );
-    }
-    store
-}
-
-/// `edge` chain of `n` links, closed transitively — `n * (n + 1) / 2` derived facts
-/// over `n` rounds.
+/// The `p` chain `n0 -> n1 -> … -> n{n}` of `n` links: the frame the join benches
+/// walk, and the base the closure benches close transitively into `n * (n + 1) / 2`
+/// derived facts over `n` rounds.
 fn chain_store(n: usize) -> RelationStore {
     let mut store = RelationStore::new();
     for i in 0..n {
@@ -148,7 +136,7 @@ fn closure_rules() -> Vec<DlClause> {
     ]
 }
 
-fn fanout(c: &mut Criterion) {
+fn fanout(c: &mut Bench) {
     let mut group = c.benchmark_group("seminaive_fanout");
     for width in [8_usize, 24, 48] {
         let store = fanout_store(width);
@@ -159,10 +147,10 @@ fn fanout(c: &mut Criterion) {
     group.finish();
 }
 
-fn frame_width(c: &mut Criterion) {
+fn frame_width(c: &mut Bench) {
     let mut group = c.benchmark_group("seminaive_frame_width");
     for pairs in [2_usize, 6, 12] {
-        let store = frame_store(pairs);
+        let store = chain_store(pairs);
         group.bench_with_input(BenchmarkId::from_parameter(pairs), &pairs, |bch, _| {
             bch.iter(|| run(frame_rules(pairs), store.clone()));
         });
@@ -170,7 +158,7 @@ fn frame_width(c: &mut Criterion) {
     group.finish();
 }
 
-fn recursion(c: &mut Criterion) {
+fn recursion(c: &mut Bench) {
     let mut group = c.benchmark_group("seminaive_recursion");
     for n in [16_usize, 48, 96] {
         let store = chain_store(n);
@@ -181,5 +169,5 @@ fn recursion(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, fanout, frame_width, recursion);
-criterion_main!(benches);
+bench_group!(benches, fanout, frame_width, recursion);
+bench_main!(benches);

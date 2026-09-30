@@ -25,7 +25,7 @@ crate-type = ["rlib"]
 path = "src/lib.rs"
 
 [dependencies]
-# Oxigraph-free: the slice catalog/emitters/linters parse via the native
+# The slice catalog/emitters/linters parse via the native
 # `gts` text codecs (`parse_dataset`) into the `RdfDataset` IR and query it directly.
 # NOT workspace-inherited: renamed deps (`package = ...`) cannot be expressed
 # at an inheriting use site, and the workspace key `purrdf` is the umbrella.
@@ -38,15 +38,22 @@ purrdf = { package = "purrdf-rdf", path = "../rdf", version = "2.0.2" }
 # dependency instead of laundering it. Already upstream of this crate in the
 # publish order, so the release lane is unchanged.
 purrdf-core = { workspace = true }
+# The one extension-to-media-type table (`purrdf_gts::files::media_type_for_path`),
+# behind the catalog's artifact media types and the RDF query loader's syntax
+# routing. Already upstream of this crate through `purrdf-rdf`.
+purrdf-gts = { workspace = true }
 # Native SPARQL parser — competency/verify queries are PARSED
-# (RFC §10), never text-searched, to extract referenced term IRIs. Replaces the
-# oxigraph-family SPARQL parser; RDF-1.2 quoted triple terms are first-class.
+# (RFC §10), never text-searched, to extract referenced term IRIs.
+# RDF-1.2 quoted triple terms are first-class.
 purrdf-sparql-algebra = { workspace = true }
 # The IRI value space. `BaseIri` validates the RFC-8089 `file://` retrieval IRI this
 # crate derives for every on-disk document it parses (RFC-3986 5.1.3) — the one
 # implementation of that step in the workspace, since `purrdf-slice` is the only
 # library crate here that opens files. Zero-dependency foundation crate.
 purrdf-iri = { workspace = true }
+# The RDF 1.2 term syntax and literal escaper the analysis-graph Turtle writer
+# spells its literals and IRIs with.
+purrdf-lex = { workspace = true }
 # Default features (std) re-enabled; the workspace-level entry is
 # default-features = false for the wasm-clean eval path.
 sha2 = { workspace = true, default-features = true }
@@ -58,13 +65,10 @@ purrdf-hash = { workspace = true }
 # so the S0.9 layering gate is unaffected.
 regex = { workspace = true }
 rayon = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 
 [dev-dependencies]
 # Temporary slice trees under the target directory, for the tests and the bench.
 purrdf-testkit = { workspace = true }
-criterion = { workspace = true }
 
 [[bench]]
 name = "ownership"

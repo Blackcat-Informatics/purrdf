@@ -30,10 +30,14 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use purrdf_rdf::{
-    BlankScope, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, SerializeGraph, TermRef,
-    parse_dataset, serialize_dataset,
+    BlankScope, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, SerializeGraph, parse_dataset,
+    serialize_dataset,
 };
 use purrdf_testkit::prop::prelude::*;
+
+#[path = "support/blank_identity.rs"]
+mod blank_identity;
+use blank_identity::blank_nodes;
 
 /// Serialize a dataset to `format`'s text, or explain which format refused.
 fn serialize(dataset: &RdfDataset, format: NativeRdfFormat) -> Vec<u8> {
@@ -50,20 +54,6 @@ fn parse(bytes: &[u8], format: NativeRdfFormat) -> Arc<RdfDataset> {
             String::from_utf8_lossy(bytes)
         )
     })
-}
-
-/// The distinct blank `(label, scope)` pairs a dataset holds, straight off the
-/// IR (never through the owned rendering, which would re-encode them).
-fn blank_nodes(dataset: &RdfDataset) -> BTreeSet<(String, u32)> {
-    let mut blanks = BTreeSet::new();
-    for quad in dataset.quads() {
-        for id in [quad.s, quad.o] {
-            if let TermRef::Blank { label, scope } = dataset.resolve(id) {
-                blanks.insert((label.to_owned(), scope.ordinal()));
-            }
-        }
-    }
-    blanks
 }
 
 /// A one-quad dataset whose subject is a blank node with the given raw

@@ -27,14 +27,10 @@
 //! [`RdfDatasetBuilder::freeze`]: super::builder::RdfDatasetBuilder::freeze
 
 use crate::RdfDiagnostic;
+use purrdf_events::MAX_TERM_NESTING_DEPTH;
 
 use super::builder::RdfDatasetBuilder;
 use super::term::{InternedTerm, TermId};
-
-/// Maximum triple-term nesting depth: how many triple terms one chain may hold, the
-/// outermost included (`<<( s p <<( s p o )>> )>>` holds two). Reuses the GTS importer's
-/// nesting bound so the IR and the transport agree on the acyclicity cliff.
-pub(crate) const MAX_TERM_NESTING_DEPTH: usize = 16;
 
 /// Validate the builder's accumulated structure. Returns `Ok(())` when the dataset
 /// is structurally sound, or a precise [`RdfDiagnostic`] on the first violation.
@@ -63,7 +59,12 @@ pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic>
             check_id_in_range(g, term_count, || quad_ref_ctx(i, "graph"))?;
         }
 
-        require_asserted_subject(builder, q.s, || quad_ref_ctx(i, "subject"))?;
+        require_subject(
+            builder,
+            q.s,
+            || quad_ref_ctx(i, "subject"),
+            ASSERTED_SUBJECT,
+        )?;
         require_iri_predicate(builder, q.p, || quad_ref_ctx(i, "predicate"))?;
         if let Some(g) = q.g {
             require_graph_name(builder, g, || quad_ref_ctx(i, "graph"))?;
@@ -74,7 +75,12 @@ pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic>
     for (i, (reifier, triple, graph)) in builder.reifier_rows().iter().enumerate() {
         check_id_in_range(*reifier, term_count, || format!("reifier #{i} resource"))?;
         check_id_in_range(*triple, term_count, || format!("reifier #{i} target"))?;
-        require_asserted_subject(builder, *reifier, || format!("reifier #{i} resource"))?;
+        require_subject(
+            builder,
+            *reifier,
+            || format!("reifier #{i} resource"),
+            ASSERTED_SUBJECT,
+        )?;
         if let Some(g) = graph {
             require_graph_name(builder, *g, || format!("reifier #{i} graph"))?;
         }
@@ -95,7 +101,12 @@ pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic>
         check_id_in_range(*p, term_count, || format!("annotation #{i} predicate"))?;
         check_id_in_range(*o, term_count, || format!("annotation #{i} object"))?;
         require_iri_predicate(builder, *p, || format!("annotation #{i} predicate"))?;
-        require_asserted_subject(builder, *reifier, || format!("annotation #{i} reifier"))?;
+        require_subject(
+            builder,
+            *reifier,
+            || format!("annotation #{i} reifier"),
+            ASSERTED_SUBJECT,
+        )?;
         if let Some(g) = graph {
             require_graph_name(builder, *g, || format!("annotation #{i} graph"))?;
         }
@@ -147,7 +158,12 @@ fn validate_triple_terms(
             check_id_in_range(s, term_count, || format!("triple term #{raw} subject"))?;
             check_id_in_range(p, term_count, || format!("triple term #{raw} predicate"))?;
             check_id_in_range(o, term_count, || format!("triple term #{raw} object"))?;
-            require_triple_component_subject(builder, s, || format!("triple term #{raw} subject"))?;
+            require_subject(
+                builder,
+                s,
+                || format!("triple term #{raw} subject"),
+                TRIPLE_COMPONENT_SUBJECT,
+            )?;
             require_iri_predicate(builder, p, || format!("triple term #{raw} predicate"))?;
         }
     }
@@ -254,18 +270,30 @@ fn check_id_in_range(
     Ok(())
 }
 
-/// An ASSERTED subject-like position — a quad subject, a reifier resource, an
-/// annotation reifier — MUST be an IRI or a blank node. A literal there is illegal,
-/// and a triple term there is illegal too: an asserted statement cannot have a quoted
-/// triple as its subject (only an IRI/blank can be asserted about). This is also the
-/// downstream contract: the owned-model / oxigraph conversions assume an asserted
-/// subject is IRI/blank, so admitting a triple term here would let it reach an
-/// `unreachable!` panic. (The subject position *inside* a quoted triple carries the
-/// same rule — see [`require_triple_component_subject`].)
-fn require_asserted_subject(
+/// A subject position MUST be an IRI or a blank node; `triple_reason` says why a
+/// triple term is refused where this subject stands.
+///
+/// Two positions carry the rule, one body checks both:
+///
+/// * an ASSERTED subject-like position — a quad subject, a reifier resource, an
+///   annotation reifier ([`ASSERTED_SUBJECT`]). An asserted statement cannot have a
+///   quoted triple as its subject (only an IRI/blank can be asserted about). This is
+///   also the downstream contract: the owned-model conversions assume an asserted
+///   subject is IRI/blank, so admitting a triple term here would let it reach an
+///   `unreachable!` panic;
+/// * the subject position WITHIN a quoted triple term ([`TRIPLE_COMPONENT_SUBJECT`]).
+///   RDF 1.2's term model admits a triple term in exactly one nested position, the
+///   OBJECT of another triple term; the legacy RDF-star spelling
+///   `<< <<s p o>> p2 o2 >>` is not RDF 1.2 and is refused here. This is the term
+///   model a PurRDF *reader* accepts, so the freeze gate and the codecs agree:
+///   `purrdf-rdf`'s N-Triples/N-Quads statement validator rejects a nested
+///   triple-term subject, so admitting one here would let the writers emit a
+///   document the readers refuse.
+fn require_subject(
     builder: &RdfDatasetBuilder,
     id: TermId,
     ctx: impl FnOnce() -> String,
+    triple_reason: &str,
 ) -> Result<(), RdfDiagnostic> {
     match builder.term(id) {
         InternedTerm::Iri(_) | InternedTerm::Blank { .. } => Ok(()),
@@ -275,45 +303,17 @@ fn require_asserted_subject(
         )),
         InternedTerm::Triple { .. } => Err(diag(
             "rdf-ir-triple-subject",
-            format!(
-                "{} must be an IRI or blank node; an asserted statement cannot have a \
-                 quoted triple as its subject",
-                ctx()
-            ),
+            format!("{} must be an IRI or blank node; {triple_reason}", ctx()),
         )),
     }
 }
 
-/// The subject position WITHIN a quoted triple term MUST be an IRI or a blank node —
-/// the SAME rule as an asserted subject. RDF 1.2's term model admits a triple term in
-/// exactly one nested position, the OBJECT of another triple term; the legacy
-/// RDF-star spelling `<< <<s p o>> p2 o2 >>` is not RDF 1.2 and is refused here.
-///
-/// This is the term model a PurRDF *reader* accepts, so the freeze gate and the
-/// codecs agree: `purrdf-rdf`'s N-Triples/N-Quads statement validator rejects a
-/// nested triple-term subject, so admitting one here would let the writers emit a
-/// document the readers refuse.
-fn require_triple_component_subject(
-    builder: &RdfDatasetBuilder,
-    id: TermId,
-    ctx: impl FnOnce() -> String,
-) -> Result<(), RdfDiagnostic> {
-    match builder.term(id) {
-        InternedTerm::Iri(_) | InternedTerm::Blank { .. } => Ok(()),
-        InternedTerm::Literal(_) => Err(diag(
-            "rdf-ir-literal-subject",
-            format!("{} must not be a literal", ctx()),
-        )),
-        InternedTerm::Triple { .. } => Err(diag(
-            "rdf-ir-triple-subject",
-            format!(
-                "{} must be an IRI or blank node; RDF 1.2 nests a triple term only in \
-                 the OBJECT of another triple term",
-                ctx()
-            ),
-        )),
-    }
-}
+/// Why a triple term cannot be an asserted subject (see [`require_subject`]).
+const ASSERTED_SUBJECT: &str = "an asserted statement cannot have a quoted triple as its subject";
+
+/// Why a triple term cannot be a triple term's subject (see [`require_subject`]).
+const TRIPLE_COMPONENT_SUBJECT: &str =
+    "RDF 1.2 nests a triple term only in the OBJECT of another triple term";
 
 /// A predicate MUST be an IRI.
 fn require_iri_predicate(
@@ -426,8 +426,8 @@ mod tests {
     }
 
     /// Gate 3: a triple term in subject position hard-fails. RDF 1.2 admits a triple
-    /// term only in object position; a triple subject would otherwise reach the owned
-    /// / oxigraph boundaries that assume an IRI/blank subject and panic there.
+    /// term only in object position; a triple subject would otherwise reach the owned-model
+    /// boundaries that assume an IRI/blank subject and panic there.
     #[test]
     fn freeze_err_on_triple_term_subject() {
         let mut b = RdfDatasetBuilder::new();
@@ -437,6 +437,45 @@ mod tests {
         b.push_quad(triple, p, o, None);
         let err = b.freeze().expect_err("triple-term subject must fail");
         assert_eq!(err.code, "rdf-ir-triple-subject");
+    }
+
+    /// The one subject rule names why a triple term is refused where it stands: as an
+    /// asserted subject, and as the subject of a triple term. The neighbouring triple
+    /// term in OBJECT position still freezes.
+    #[test]
+    fn a_triple_term_subject_is_refused_with_the_reason_of_its_position() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let triple = b.intern_triple(s, p, o);
+        b.push_quad(triple, p, o, None);
+        let err = b
+            .freeze()
+            .expect_err("an asserted triple-term subject fails");
+        assert_eq!(err.code, "rdf-ir-triple-subject");
+        assert!(err.message.ends_with(ASSERTED_SUBJECT), "{}", err.message);
+
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let inner = b.intern_triple(s, p, o);
+        let outer = b.intern_triple(inner, p, o);
+        b.push_quad(s, p, outer, None);
+        let err = b.freeze().expect_err("a nested triple-term subject fails");
+        assert_eq!(err.code, "rdf-ir-triple-subject");
+        assert!(
+            err.message.ends_with(TRIPLE_COMPONENT_SUBJECT),
+            "{}",
+            err.message
+        );
+
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let inner = b.intern_triple(s, p, o);
+        let outer = b.intern_triple(s, p, inner);
+        b.push_quad(s, p, outer, None);
+        assert!(
+            b.freeze().is_ok(),
+            "a triple term as a triple term's object freezes"
+        );
     }
 
     /// Gate 3: a cyclic triple term hard-fails. We build a self-referential triple by

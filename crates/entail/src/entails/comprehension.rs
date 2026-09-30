@@ -96,15 +96,17 @@
 //! that the closure holds. Two runs over one premise and one conclusion mint the same triples
 //! and cite the same licences, on `wasm32` as on native.
 
+use super::is;
 use std::collections::{BTreeMap, BTreeSet};
 
+use purrdf_core::collections::{ListVocab, build_rdf_list};
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_xsd::range::{DataRange, Known};
 use purrdf_xsd::{XsdDatatype, parse};
 
 use crate::engine::surface_of;
 use crate::entails::fresh::{FreshBlanks, labels_of};
-use crate::entails::graph::{Triple, default_graph_triples, show};
+use crate::entails::graph::{Indexed, Triple, read_collection, show};
 use crate::entails::homomorphism::{Binding, Closure};
 use crate::entails::membership::Membership;
 use crate::entails::warrant::{EntailmentMechanism, EntailmentWarrant, Replay};
@@ -114,7 +116,7 @@ use crate::vocab::{
     OWL_INTERSECTIONOF, OWL_MAXCARDINALITY, OWL_MAXQUALIFIEDCARDINALITY, OWL_MINCARDINALITY,
     OWL_MINQUALIFIEDCARDINALITY, OWL_ONDATARANGE, OWL_ONDATATYPE, OWL_ONEOF, OWL_ONPROPERTIES,
     OWL_ONPROPERTY, OWL_QUALIFIEDCARDINALITY, OWL_RESTRICTION, OWL_SOMEVALUESFROM, OWL_UNIONOF,
-    OWL_WITHRESTRICTIONS, RDF_FIRST, RDF_LIST, RDF_NIL, RDF_REST, RDF_TYPE, RDFS_CLASS,
+    OWL_WITHRESTRICTIONS, RDF_LIST, RDF_NIL, RDF_TYPE, RDFS_CLASS,
 };
 use crate::{EntailError, Regime};
 
@@ -301,16 +303,6 @@ const UNREAD_CONSTRUCTORS: [&str; 10] = [
     OWL_WITHRESTRICTIONS,
 ];
 
-/// Whether `term` is the IRI `iri`.
-fn is(term: &TermValue, iri: &str) -> bool {
-    matches!(term, TermValue::Iri(value) if value == iri)
-}
-
-/// Whether `term` names an IRI.
-fn is_named(term: &TermValue) -> bool {
-    matches!(term, TermValue::Iri(_))
-}
-
 /// Whether `count` is a literal whose value lies in the `xsd:nonNegativeInteger` value space.
 ///
 /// The comprehension condition for a cardinality restriction quantifies over the non-negative
@@ -341,56 +333,6 @@ fn is_non_negative_integer(count: &TermValue) -> bool {
         &DataRange::Datatype(XsdDatatype::NonNegativeInteger),
         &value,
     ) == Known::Yes
-}
-
-/// One conclusion graph, indexed the two ways the recognizer reads it.
-struct Indexed {
-    /// Every default-graph triple, in the dataset's frozen quad order.
-    triples: Vec<Triple>,
-    /// Subject surface → the indices of the triples it is the subject of.
-    by_subject: BTreeMap<String, Vec<usize>>,
-    /// Term surface → the indices of the triples mentioning it in ANY position.
-    mentions: BTreeMap<String, Vec<usize>>,
-}
-
-impl Indexed {
-    /// Index `ds`'s default graph.
-    fn of(ds: &RdfDataset) -> Self {
-        let triples = default_graph_triples(ds);
-        let mut by_subject: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-        let mut mentions: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-        for (index, triple) in triples.iter().enumerate() {
-            by_subject
-                .entry(surface_of(&triple[0]))
-                .or_default()
-                .push(index);
-            for position in triple {
-                let slot = mentions.entry(surface_of(position)).or_default();
-                if slot.last() != Some(&index) {
-                    slot.push(index);
-                }
-            }
-        }
-        Self {
-            triples,
-            by_subject,
-            mentions,
-        }
-    }
-
-    /// The indices of the triples `term` is the subject of.
-    fn subject_of(&self, term: &TermValue) -> &[usize] {
-        self.by_subject
-            .get(&surface_of(term))
-            .map_or(&[][..], Vec::as_slice)
-    }
-
-    /// The indices of the triples mentioning `term` anywhere.
-    fn mentioning(&self, term: &TermValue) -> &[usize] {
-        self.mentions
-            .get(&surface_of(term))
-            .map_or(&[][..], Vec::as_slice)
-    }
 }
 
 /// Split `conclusion` into the anonymous class expressions this mechanism mints and the rest.
@@ -532,7 +474,7 @@ fn recognize(
             if property.is_some() {
                 return refuse("it restricts two properties at once");
             }
-            if !is_named(object) {
+            if !object.is_iri() {
                 return refuse("it restricts a property expression rather than a named property");
             }
             property = Some(object.clone());
@@ -552,7 +494,17 @@ fn recognize(
     let mut cell_nodes: Vec<TermValue> = Vec::new();
     let constructor = match (operands, property, constraint, restriction_typed) {
         (Some((which, head)), None, None, false) => {
-            let members = walk(indexed, &head, node, &mut cells, &mut cell_nodes)?;
+            let collection = read_collection(indexed, &head, node, "the operand list")?;
+            if let Some(member) = collection.members.iter().find(|member| !member.is_iri()) {
+                return Err(format!(
+                    "the operand list member {}: a NESTED anonymous operand is a class \
+                     expression whose own axioms this recognizer has not read",
+                    show(member)
+                ));
+            }
+            cells = collection.triples;
+            cell_nodes = collection.cells;
+            let members = collection.members;
             if members.is_empty() {
                 // The empty union is `owl:Nothing` and the empty intersection is
                 // `owl:Thing`; both are NAMED classes of the vocabulary, so a conclusion
@@ -590,8 +542,7 @@ fn recognize(
             continue;
         }
         let [subject, predicate, object] = &indexed.triples[index];
-        if !is(predicate, RDF_TYPE) || surface_of(object) != surface_of(node) || !is_named(subject)
-        {
+        if !is(predicate, RDF_TYPE) || surface_of(object) != surface_of(node) || !subject.is_iri() {
             return refuse("it is mentioned somewhere this lane did not look");
         }
         // A membership in a RESTRICTION is a counting or witness question — "does `x` have a
@@ -624,14 +575,16 @@ fn recognize(
 fn constraint_of(predicate: &TermValue, object: &TermValue) -> Option<Constraint> {
     for which in [OWL_SOMEVALUESFROM, OWL_ALLVALUESFROM] {
         if is(predicate, which) {
-            return is_named(object).then(|| Constraint::Values {
+            return object.is_iri().then(|| Constraint::Values {
                 predicate: which,
                 class: object.clone(),
             });
         }
     }
     if is(predicate, OWL_HASVALUE) {
-        return is_named(object).then(|| Constraint::HasValue(object.clone()));
+        return object
+            .is_iri()
+            .then(|| Constraint::HasValue(object.clone()));
     }
     for which in [OWL_MINCARDINALITY, OWL_MAXCARDINALITY, OWL_CARDINALITY] {
         if is(predicate, which) {
@@ -642,85 +595,6 @@ fn constraint_of(predicate: &TermValue, object: &TermValue) -> Option<Constraint
         }
     }
     None
-}
-
-/// Walk the RDF collection headed by `head`, collecting its NAMED members and its cells.
-///
-/// A cell must be a BLANK node with exactly one `rdf:first`, exactly one `rdf:rest` and at
-/// most an `rdf:type rdf:List` typing beside them, pointed at only by its predecessor; every
-/// member must be a named class; and the walk must reach `rdf:nil`. Anything else refuses —
-/// the discipline [`crate::lists`] applies inside the chase, for the same reason.
-///
-/// The `rdf:type rdf:List` typing is ADMITTED rather than merely tolerated: the list
-/// comprehension condition puts every comprehended list in `ICEXT(rdf:List)`, so a conclusion
-/// stating it is stating something the same condition licenses, and W3C's `i5-5-005` does.
-fn walk(
-    indexed: &Indexed,
-    head: &TermValue,
-    previous: &TermValue,
-    cells: &mut BTreeSet<usize>,
-    cell_nodes: &mut Vec<TermValue>,
-) -> Result<Vec<TermValue>, String> {
-    let mut members = Vec::new();
-    let mut current = head.clone();
-    let mut from = previous.clone();
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    while !is(&current, RDF_NIL) {
-        let refuse = |why: &str| Err(format!("the operand list at {}: {why}", show(&current)));
-        if !matches!(current, TermValue::Blank { .. }) {
-            return refuse("a collection cell must be a blank node");
-        }
-        if !seen.insert(surface_of(&current)) {
-            return refuse("the collection is cyclic");
-        }
-        let own = indexed.subject_of(&current);
-        let own_set: BTreeSet<usize> = own.iter().copied().collect();
-        let mut member: Option<TermValue> = None;
-        let mut rest: Option<TermValue> = None;
-        for &index in own {
-            let [_, predicate, object] = &indexed.triples[index];
-            if is(predicate, RDF_FIRST) {
-                if member.is_some() {
-                    return refuse("the cell carries two rdf:first values");
-                }
-                if !is_named(object) {
-                    return refuse(
-                        "a NESTED anonymous operand is a class expression whose own axioms \
-                         this lane has not read",
-                    );
-                }
-                member = Some(object.clone());
-            } else if is(predicate, RDF_REST) {
-                if rest.is_some() {
-                    return refuse("the cell carries two rdf:rest values");
-                }
-                rest = Some(object.clone());
-            } else if !(is(predicate, RDF_TYPE) && is(object, RDF_LIST)) {
-                return refuse("the cell carries a triple that is not part of a collection");
-            }
-        }
-        // Reached from exactly one place, and that place is the predecessor.
-        for &index in indexed.mentioning(&current) {
-            if own_set.contains(&index) {
-                continue;
-            }
-            let [subject, _, object] = &indexed.triples[index];
-            if surface_of(subject) != surface_of(&from)
-                || surface_of(object) != surface_of(&current)
-            {
-                return refuse("the cell is reached from more than one place");
-            }
-        }
-        let (Some(member), Some(rest)) = (member, rest) else {
-            return refuse("the cell is missing its rdf:first or its rdf:rest");
-        };
-        cells.extend(own_set);
-        cell_nodes.push(current.clone());
-        members.push(member);
-        from = current;
-        current = rest;
-    }
-    Ok(members)
 }
 
 // ── Minting ────────────────────────────────────────────────────────────────────────────
@@ -862,22 +736,28 @@ fn list_triples(
     cells: &[TermValue],
     witnesses: &BTreeMap<String, TermValue>,
 ) -> Vec<Triple> {
-    let cell_at = |index: usize| {
-        cells
-            .get(index)
-            .map_or_else(|| TermValue::iri(RDF_NIL), |cell| witness(cell, witnesses))
-    };
-    let mut out = vec![[node.clone(), TermValue::iri(predicate), cell_at(0)]];
-    for (index, member) in members.iter().enumerate() {
-        let cell = cell_at(index);
-        out.push([
-            cell.clone(),
-            TermValue::iri(RDF_TYPE),
-            TermValue::iri(RDF_LIST),
-        ]);
-        out.push([cell.clone(), TermValue::iri(RDF_FIRST), member.clone()]);
-        out.push([cell, TermValue::iri(RDF_REST), cell_at(index + 1)]);
-    }
+    let vocab = ListVocab::term_values();
+    let mut out = Vec::with_capacity(3 * members.len() + 1);
+    let head = build_rdf_list(
+        members.iter().cloned(),
+        &vocab,
+        |index| {
+            cells
+                .get(index)
+                .map_or_else(|| TermValue::iri(RDF_NIL), |cell| witness(cell, witnesses))
+        },
+        |cell, predicate, object| {
+            if predicate == vocab.first {
+                out.push([
+                    cell.clone(),
+                    TermValue::iri(RDF_TYPE),
+                    TermValue::iri(RDF_LIST),
+                ]);
+            }
+            out.push([cell, predicate, object]);
+        },
+    );
+    out.insert(0, [node.clone(), TermValue::iri(predicate), head]);
     out
 }
 
@@ -1139,7 +1019,7 @@ mod tests {
     }
 
     fn decide(premise: &RdfDataset, conclusion: &RdfDataset) -> EntailmentOutcome {
-        entails(premise, conclusion, Regime::OwlRl, &ImportMap::new())
+        entails(premise, conclusion, Regime::OwlRl, &ImportMap::default())
             .expect("a consistent premise")
             .into_parts()
             .0

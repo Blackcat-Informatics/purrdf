@@ -6,10 +6,13 @@
 //!
 //! The parser admits a request of any depth — it keeps what encloses the cursor on
 //! heap-allocated stacks — but the evaluator recurses: one written level of
-//! `FILTER NOT EXISTS` costs the evaluator about 16.7 KB of wasm32 shadow stack, one of
-//! `LATERAL` about 9.5 KB, and any other algebra level (`OPTIONAL`, `MINUS`, `BIND`, a
-//! sibling spine) about 4.8 KB — far more than the parser spent on it — while the flat
-//! and shallow requests need a fraction of any stack. Exhausting the stack is not an
+//! `FILTER NOT EXISTS` or `FILTER EXISTS` costs the evaluator about 5.3 KB of wasm32
+//! shadow stack, one of `BIND` about 2.4 KB, and one of `LATERAL`, `OPTIONAL` or
+//! `MINUS` about 1.2 to 1.4 KB — far more than the parser spent on it — while the flat
+//! and shallow requests need a fraction of any stack. (Measured on the shipped npm
+//! artifact as the growth of a job's deepest poll between 20 and 60 levels. The
+//! figures hold only while `eval::eval_node` stays a thin dispatcher, since its frame
+//! is paid twice per level of a negation.) Exhausting the stack is not an
 //! error anywhere: natively the process aborts, and on `wasm32-unknown-unknown` the
 //! shadow stack runs below its floor and traps with the instance's memory in an unknown
 //! state.
@@ -132,17 +135,6 @@ pub(crate) fn walk_is_low(construct: &'static str) -> bool {
 mod tests {
     use super::*;
 
-    /// Run `body` on a fresh thread with `bytes` of stack, so the thread-local floor is
-    /// read for that thread alone.
-    fn on_thread<T: Send + 'static>(bytes: usize, body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(bytes)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("join")
-    }
-
     /// A check passes on a roomy stack and refuses, typed, once a recursion has eaten
     /// into the margin — and the thread keeps running afterwards.
     #[test]
@@ -153,7 +145,8 @@ mod tests {
             let frame = core::hint::black_box([0u8; 4096]);
             descend(level + 1).map(|deepest| deepest.max(level + usize::from(frame[0])))
         }
-        let refused = on_thread(1024 * 1024, || (descend(0), check("after")));
+        let refused =
+            purrdf_stack::on_stack(1024 * 1024, || (descend(0), check("after"))).expect("spawn");
         assert_eq!(
             refused.0,
             Err(EvalError::StackExhausted {

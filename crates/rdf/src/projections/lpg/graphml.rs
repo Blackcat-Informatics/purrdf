@@ -4,18 +4,18 @@
 //! Deterministic GraphML 1.0 carrier for canonical LPG.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io;
 
 use purrdf_core::DatasetView;
-use roxmltree::{Document, Node};
+use purrdf_lex::xml::Node;
 
+use super::super::json_codec::ToJson;
 use super::super::{
     ProjectionArtifactSink, ProjectionError, ProjectionPackage, ProjectionPackageSink,
     escape_xml_attribute, escape_xml_text,
 };
 use super::carrier_util::{
     BoundedText, LpgTextWriter, hex_decode, json_string, read_manifest, require_canonical_package,
-    required_artifact, validate_package_bounds, write_manifest,
+    validate_package_bounds, write_manifest,
 };
 use super::csv::{LpgPackageProjection, native_labels, native_property_cell, property_token};
 use super::mapping::{LpgProjection, project_lpg, project_lpg_with_progress};
@@ -173,12 +173,12 @@ pub fn read_lpg_graphml(
 ) -> Result<LpgGraph, ProjectionError> {
     validate_package_bounds(package, config.limits())?;
     let schema_version = read_manifest(
-        required_artifact(package, MANIFEST_PATH)?,
+        package.required(MANIFEST_PATH)?,
         PROFILE,
         config,
         MANIFEST_PATH,
     )?;
-    let bytes = required_artifact(package, GRAPHML_PATH)?;
+    let bytes = package.required(GRAPHML_PATH)?;
     let text = std::str::from_utf8(bytes).map_err(|error| {
         ProjectionError::syntax(format!("GraphML is not UTF-8: {error}")).at_path(GRAPHML_PATH)
     })?;
@@ -188,20 +188,22 @@ pub fn read_lpg_graphml(
                 .at_path(GRAPHML_PATH),
         );
     }
-    // `roxmltree`'s tokenizer recurses once per element, so a deeply nested document aborts
-    // the process rather than returning an error. The nesting is measured first and refused.
-    crate::nesting::guard_xml_nesting(text).map_err(|depth| {
-        ProjectionError::syntax(format!(
+    let document = crate::nesting::parse_xml(text).map_err(|error| match error {
+        crate::nesting::XmlReadError::TooDeep(depth) => ProjectionError::syntax(format!(
             "GraphML XML nests {depth} elements deep, past the parser limit"
         ))
-        .at_path(GRAPHML_PATH)
-    })?;
-    let document = Document::parse(text).map_err(|error| {
-        ProjectionError::syntax(format!("parse GraphML XML: {error}")).at_path(GRAPHML_PATH)
+        .at_path(GRAPHML_PATH),
+        crate::nesting::XmlReadError::DeclarationsUnread => {
+            ProjectionError::syntax(crate::nesting::XmlReadError::UNREAD_MESSAGE)
+                .at_path(GRAPHML_PATH)
+        }
+        crate::nesting::XmlReadError::Malformed(error) => {
+            ProjectionError::syntax(format!("parse GraphML XML: {error}")).at_path(GRAPHML_PATH)
+        }
     })?;
     let root = document.root_element();
     require_element(root, "graphml")?;
-    if namespaced_attribute(root, XSI_NS, "schemaLocation") != Some(SCHEMA_LOCATION) {
+    if root.attribute((XSI_NS, "schemaLocation")) != Some(SCHEMA_LOCATION) {
         return Err(ProjectionError::integrity(
             "GraphML root has the wrong or missing xsi:schemaLocation",
         )
@@ -379,9 +381,7 @@ fn render_graphml_into<W: LpgTextWriter + ?Sized>(
     }
     output.push("  <graph id=\"G\" edgedefault=\"directed\">\n")?;
     output.push(&format!("    <data key=\"{GRAPH_JSON}\">"))?;
-    serde_json::to_writer(HexWriter(output), graph).map_err(|error| {
-        ProjectionError::integrity(format!("serialize GraphML LPG JSON payload: {error}"))
-    })?;
+    output.push_hex(purrdf_lex::json::write_compact(&graph.to_json()).as_bytes())?;
     output.push("</data>\n")?;
     for node in &graph.nodes {
         output.push(&format!(
@@ -502,21 +502,6 @@ fn push_hex_data<W: LpgTextWriter + ?Sized>(
     output.push("</data>\n")
 }
 
-struct HexWriter<'a, W: ?Sized>(&'a mut W);
-
-impl<W: LpgTextWriter + ?Sized> io::Write for HexWriter<'_, W> {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        self.0
-            .push_hex(buffer)
-            .map(|()| buffer.len())
-            .map_err(|error| io::Error::other(error.to_string()))
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
 fn require_element(node: Node<'_, '_>, local: &str) -> Result<(), ProjectionError> {
     require_graphml_namespace(node)?;
     if node.tag_name().name() != local {
@@ -547,12 +532,6 @@ fn required_attribute<'a>(node: Node<'a, '_>, name: &str) -> Result<&'a str, Pro
         ))
         .at_path(GRAPHML_PATH)
     })
-}
-
-fn namespaced_attribute<'a>(node: Node<'a, '_>, namespace: &str, local: &str) -> Option<&'a str> {
-    node.attributes()
-        .find(|attribute| attribute.namespace() == Some(namespace) && attribute.name() == local)
-        .map(|attribute| attribute.value())
 }
 
 fn element_text<'a>(node: Node<'a, '_>) -> Result<&'a str, ProjectionError> {
@@ -651,7 +630,7 @@ mod tests {
         assert!(xml.contains("edgedefault=\"directed\""));
         assert!(xml.contains("RdfProp_"));
         assert!(!xml.contains('\u{ffff}'));
-        let document = Document::parse(xml).expect("XML oracle");
+        let document = purrdf_lex::xml::Document::parse(xml).expect("XML oracle");
         assert_eq!(
             document.root_element().tag_name().namespace(),
             Some(GRAPHML_NS)

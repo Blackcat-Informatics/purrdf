@@ -13,7 +13,9 @@
 //! * `reason --regime rdfs` materializes the inferred `rdf:type` triple;
 //! * `reason --regime owl-direct` materializes the tableau augmentation.
 
-use std::path::Path;
+mod support;
+use support::write_file as write_fixture;
+
 use std::process::Command;
 
 /// The path to the built `purrdf` binary.
@@ -30,13 +32,6 @@ fn run(args: &[&str]) -> (i32, Vec<u8>, String) {
         output.stdout,
         String::from_utf8(output.stderr).expect("utf-8 stderr"),
     )
-}
-
-/// Write `contents` to `dir/name` and return the path as an owned string.
-fn write_fixture(dir: &Path, name: &str, contents: &str) -> String {
-    let path = dir.join(name);
-    std::fs::write(&path, contents).expect("write fixture");
-    path.to_str().expect("utf-8 path").to_owned()
 }
 
 #[test]

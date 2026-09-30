@@ -25,9 +25,9 @@
 //! survive truncation of the source).
 
 use std::fmt::Write as _;
-use std::process::{Command, Output};
 
 mod support;
+use support::{run, run_with_input as run_with_stdin, stderr};
 
 use purrdf_testkit::{TempDir, temp_dir};
 
@@ -39,24 +39,6 @@ const SAMPLE_TTL: &str = concat!(
     "ex:Cat rdfs:subClassOf ex:Animal .\n",
 );
 
-/// A `Command` for the built `purrdf` binary.
-fn purrdf() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_purrdf"))
-}
-
-/// Run `purrdf args`, returning the captured [`Output`].
-fn run(args: &[&str]) -> Output {
-    purrdf()
-        .args(args)
-        .output()
-        .expect("spawn the built purrdf binary")
-}
-
-/// Run `purrdf args` with `stdin_bytes` piped to standard input.
-fn run_with_stdin(args: &[&str], stdin_bytes: &[u8]) -> Output {
-    support::run_with_stdin(purrdf().args(args), stdin_bytes)
-}
-
 /// `dir/name` as an owned UTF-8 path string.
 fn path(dir: &TempDir, name: &str) -> String {
     dir.path()
@@ -64,10 +46,6 @@ fn path(dir: &TempDir, name: &str) -> String {
         .to_str()
         .expect("temp path is valid UTF-8")
         .to_owned()
-}
-
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
 /// Write `ttl` to a temp `.ttl` and convert it to a `.purrpck` pack, returning both

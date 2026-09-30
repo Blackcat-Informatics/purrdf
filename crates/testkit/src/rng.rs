@@ -2,56 +2,52 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The workspace's one deterministic pseudo-random stream for tests and
-//! benches: a SplitMix64 finaliser and a xoshiro256** generator seeded
-//! through it.
+//! benches: SplitMix64 and a xoshiro256** generator seeded through it.
 //!
 //! Every crate that needs a fixed-seed stream for generated test inputs draws
-//! from here rather than hand-copying the mixing step, so there is exactly
-//! one place that defines what "the stream" means. [`prop`](crate::prop)
-//! itself is built on this module.
+//! from here, and the SplitMix64 function itself is [`purrdf_hash::mix`], so
+//! there is exactly one place that defines what "the stream" means.
+//! [`prop`](crate::prop) itself is built on this module.
+//!
+//! Two older recurrences live here too, because fixtures and frozen vectors
+//! were generated from them and must keep regenerating bit for bit: Marsaglia's
+//! xorshift64 ([`xorshift64_next`]) and the 64-bit linear congruential
+//! generator with Knuth's MMIX multiplier ([`lcg64_next`]). New tests draw
+//! from SplitMix64; these exist so an existing fixture's bytes do not move.
 //!
 //! Nothing here is cryptographically secure, and nothing here ships in a
 //! release artifact's data path: it exists only behind `[dev-dependencies]`.
 
-/// The SplitMix64 finalizer, without the golden-ratio increment: two
-/// xor-shift-multiply rounds and a final xor-shift.
-const fn mix_rounds(z: u64) -> u64 {
-    let mut z = z;
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
+/// The SplitMix64 generator and its self-composed step, from
+/// [`purrdf_hash::mix`], where the function and its pinned outputs live.
+pub use purrdf_hash::mix::{splitmix64_next, splitmix64_step};
+
+/// The `[-1, 1)` draws over both SplitMix64 streams, from
+/// [`purrdf_hash::mix`], where the mapping and its pinned outputs live: the
+/// HNSW determinism corpus is published code built on them.
+pub use purrdf_hash::mix::{
+    signed_unit, signed_unit_next, signed_unit_next_nonzero, signed_unit_nonzero, signed_unit_step,
+    signed_unit_step_nonzero,
+};
+
+/// One step of Marsaglia's xorshift64 with the shift triple `(13, 7, 17)`:
+/// `state` is advanced and the new state is the output.
+///
+/// Bit-exact with the recurrence the frozen BLAKE3 random vectors and several
+/// fixed-seed corpora were generated from, so they regenerate unchanged. A zero
+/// state stays zero; seed with a non-zero value.
+#[must_use]
+pub const fn xorshift64_next(state: &mut u64) -> u64 {
+    *state ^= *state << 13;
+    *state ^= *state >> 7;
+    *state ^= *state << 17;
+    *state
 }
 
-/// A deterministic SplitMix64 step (Steele, Lea and Flood) over a plain
-/// counter: `state` is advanced by the golden-ratio increment, then the
-/// advanced value is mixed and returned. The next call advances the SAME raw
-/// counter again, not the mixed output.
-#[must_use]
-pub const fn splitmix64_next(state: &mut u64) -> u64 {
-    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    mix_rounds(*state)
-}
-
-/// A self-composed SplitMix64 step: the golden-ratio increment is added to
-/// `state` and the result mixed, and the caller is expected to feed the
-/// returned value back in as the next `state` — so the counter itself is the
-/// fully mixed value, not a raw increment. This is a DIFFERENT stream from
-/// [`splitmix64_next`]'s (that one re-mixes a plain incrementing counter from
-/// scratch on every call); the two are not interchangeable.
-#[must_use]
-pub const fn splitmix64_step(state: u64) -> u64 {
-    mix_rounds(state.wrapping_add(0x9E37_79B9_7F4A_7C15))
-}
-
-/// One value in `[-1, 1)` from the [`splitmix64_next`] counter stream: the
-/// top 53 bits of the next output as a fraction of 2^53, doubled and shifted
-/// down by one. Every step is exact in binary64, so the value is the same on
-/// every target.
-#[must_use]
-pub fn signed_unit_next(state: &mut u64) -> f64 {
-    let z = splitmix64_next(state);
-    ((z >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0)
-}
+/// The 64-bit linear congruential generator with Knuth's MMIX multiplier, from
+/// [`purrdf_hash::mix`], where the step and its pinned outputs live (the
+/// hash crate's own tests draw from it and cannot depend on this crate).
+pub use purrdf_hash::mix::{LCG64_MMIX_INCREMENT, LCG64_MULTIPLIER, lcg64_next};
 
 /// `len` values in `[-1, 1)` from the [`splitmix64_next`] counter stream
 /// started at `seed`, drawn with [`signed_unit_next`].
@@ -59,6 +55,24 @@ pub fn signed_unit_next(state: &mut u64) -> f64 {
 pub fn signed_unit_stream(len: usize, seed: u64) -> Vec<f64> {
     let mut state = seed;
     (0..len).map(|_| signed_unit_next(&mut state)).collect()
+}
+
+/// A deterministic permutation of `items` selected by `seed`.
+///
+/// An unbiased Fisher-Yates shuffle over [`Xoshiro256::up_to`], which redraws rather
+/// than reducing modulo the bound, seeded through [`SplitMix64`] like every
+/// [`Xoshiro256`]. The same `seed` yields the same order on every target, so a test that
+/// asserts an order-independence law names the seed that broke it.
+#[must_use]
+pub fn permute<T: Clone>(items: &[T], seed: u64) -> Vec<T> {
+    let mut out = items.to_vec();
+    let mut rng = Xoshiro256::from_seed(seed);
+    for i in (1..out.len()).rev() {
+        // `i` widens losslessly to `u64`, and a draw in `0..=i` narrows back.
+        let j = rng.up_to(i as u64) as usize;
+        out.swap(i, j);
+    }
+    out
 }
 
 /// SplitMix64 (Steele, Lea and Flood): a seed expander and a strong 64-bit
@@ -77,6 +91,32 @@ impl SplitMix64 {
     #[must_use]
     pub const fn next_u64(&mut self) -> u64 {
         splitmix64_next(&mut self.0)
+    }
+
+    /// The next output reduced modulo `bound`: a value in `0..bound`.
+    ///
+    /// Plain modulo reduction, bias and all, because the fixed-seed corpora
+    /// built on it are pinned to exactly these values; a caller that needs an
+    /// unbiased draw uses [`Xoshiro256::up_to`].
+    ///
+    /// # Panics
+    ///
+    /// When `bound` is zero: there is no value below it.
+    #[must_use]
+    pub const fn below(&mut self, bound: u64) -> u64 {
+        self.next_u64() % bound
+    }
+
+    /// [`Self::below`] for an index into a collection of `len` elements.
+    ///
+    /// # Panics
+    ///
+    /// When `len` is zero.
+    #[must_use]
+    pub const fn below_usize(&mut self, len: usize) -> usize {
+        // A `usize` widens losslessly to `u64` on every supported target, and a
+        // value below `len` narrows back.
+        (self.below(len as u64)) as usize
     }
 }
 
@@ -148,9 +188,189 @@ impl Xoshiro256 {
     }
 }
 
+/// The first `length` bytes of the little-endian `u64` stream of the
+/// [`Xoshiro256`] seeded at `seed`: the input recipe the frozen vector files of
+/// the digest and codec suites state in their headers.
+#[must_use]
+pub fn xoshiro256_bytes(length: usize, seed: u64) -> Vec<u8> {
+    let mut rng = Xoshiro256::from_seed(seed);
+    le_words(length, || rng.next_u64())
+}
+
+/// The first `length` bytes of the little-endian SplitMix64 `next` stream
+/// ([`splitmix64_next`]) from `seed`.
+#[must_use]
+pub fn splitmix64_bytes(length: usize, seed: u64) -> Vec<u8> {
+    let mut state = seed;
+    le_words(length, || splitmix64_next(&mut state))
+}
+
+/// The first `length` bytes of the words `next` draws, each little-endian.
+fn le_words(length: usize, mut next: impl FnMut() -> u64) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(length + 8);
+    while bytes.len() < length {
+        bytes.extend_from_slice(&next().to_le_bytes());
+    }
+    bytes.truncate(length);
+    bytes
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{SplitMix64, Xoshiro256, signed_unit_stream, splitmix64_next, splitmix64_step};
+    use super::{
+        LCG64_MMIX_INCREMENT, SplitMix64, Xoshiro256, lcg64_next, signed_unit_stream,
+        splitmix64_bytes, splitmix64_next, xorshift64_next, xoshiro256_bytes,
+    };
+
+    #[test]
+    fn byte_streams_are_the_little_endian_words_truncated_to_the_length() {
+        let mut rng = Xoshiro256::from_seed(7);
+        let mut words = rng.next_u64().to_le_bytes().to_vec();
+        words.extend_from_slice(&rng.next_u64().to_le_bytes());
+        assert_eq!(xoshiro256_bytes(11, 7), words[..11]);
+        let mut state = 11;
+        let first = splitmix64_next(&mut state).to_le_bytes();
+        assert_eq!(splitmix64_bytes(5, 11), first[..5]);
+        assert_eq!(xoshiro256_bytes(0, 7), []);
+    }
+
+    #[test]
+    fn below_reduces_the_splitmix64_stream_modulo_the_bound() {
+        // The first outputs from seed 0 (pinned below) modulo 10.
+        let mut generator = SplitMix64::new(0);
+        let drawn: Vec<u64> = (0..6).map(|_| generator.below(10)).collect();
+        assert_eq!(drawn, [5, 0, 9, 4, 7, 0]);
+        let mut generator = SplitMix64::new(0);
+        // The first output is below `u64::MAX`, so the widest bound returns it whole.
+        assert_eq!(generator.below(u64::MAX), 0xE220_A839_7B1D_CDAF);
+        assert_eq!(generator.below(1), 0);
+        let mut by_index = SplitMix64::new(0);
+        let indices: Vec<usize> = (0..6).map(|_| by_index.below_usize(10)).collect();
+        assert_eq!(indices, [5, 0, 9, 4, 7, 0]);
+    }
+
+    #[test]
+    fn permute_is_a_deterministic_permutation_that_reaches_every_arrangement() {
+        let items: Vec<u32> = (0..6).collect();
+        let a = super::permute(&items, 7);
+        assert_eq!(
+            a,
+            super::permute(&items, 7),
+            "the same seed, the same order"
+        );
+        let mut sorted = a;
+        sorted.sort_unstable();
+        assert_eq!(sorted, items, "an arrangement of the same items");
+        // Neighbours: the empty and one-element inputs are returned as they are.
+        assert_eq!(super::permute::<u32>(&[], 1), Vec::<u32>::new());
+        assert_eq!(super::permute(&[9u32], 1), [9]);
+        // Every one of the 3! arrangements of three items appears over enough seeds.
+        let mut seen = std::collections::BTreeSet::new();
+        for seed in 0..200 {
+            seen.insert(super::permute(&[0u8, 1, 2], seed));
+        }
+        assert_eq!(seen.len(), 6);
+    }
+
+    #[test]
+    #[should_panic(expected = "remainder with a divisor of zero")]
+    fn below_zero_has_no_value() {
+        let _ = SplitMix64::new(0).below(0);
+    }
+
+    /// Marsaglia's xorshift64 `(13, 7, 17)` from the seeds the existing
+    /// fixtures use, and from 1, whose first output is the published one.
+    #[test]
+    fn xorshift64_matches_the_pinned_reference_outputs() {
+        for (seed, expected) in [
+            (
+                0x2545_F491_4F6C_DD1D_u64,
+                [
+                    0x7F6C_280B_EAA8_E3E7,
+                    0xE471_1987_1CF9_ABE0,
+                    0x3517_4A41_58B8_A0B7,
+                    0x62CE_1FFA_D85B_1C36,
+                ],
+            ),
+            (
+                0x9E37_79B9_7F4A_7C15,
+                [
+                    0xDC1B_77AE_0BF3_4DAD,
+                    0x64F0_EEB9_026E_6076,
+                    0x7B07_CE91_E590_6136,
+                    0x305F_050C_368D_CC74,
+                ],
+            ),
+            (
+                1,
+                [
+                    0x0000_0000_4082_2041,
+                    0x1000_4106_0C01_1441,
+                    0x9B1E_842F_6E86_2629,
+                    0xF554_F503_555D_8025,
+                ],
+            ),
+        ] {
+            let mut state = seed;
+            let observed: Vec<u64> = (0..4).map(|_| xorshift64_next(&mut state)).collect();
+            assert_eq!(observed, expected, "seed {seed:#x}");
+            assert_eq!(state, expected[3], "the output is the state");
+        }
+        let mut zero = 0;
+        assert_eq!(xorshift64_next(&mut zero), 0, "zero is a fixed point");
+    }
+
+    /// The 64-bit LCG under both increments the existing fixtures use.
+    #[test]
+    fn lcg64_matches_the_pinned_reference_outputs() {
+        for (seed, increment, expected) in [
+            (
+                0x2545_F491_4F6C_DD1D_u64,
+                LCG64_MMIX_INCREMENT,
+                [
+                    0x78DC_9D8B_3D1C_C268,
+                    0x3765_A806_006F_4597,
+                    0xE188_6FBB_935F_A5DA,
+                    0x9C3A_48CE_9260_CEA1,
+                ],
+            ),
+            (
+                0x9E37_79B9_7F4A_7C15,
+                LCG64_MMIX_INCREMENT,
+                [
+                    0x2CEA_EE21_BF46_BC00,
+                    0xAA80_754D_1A1A_8D4F,
+                    0xB3C4_904A_6D27_8932,
+                    0xBC69_CF42_7684_6D19,
+                ],
+            ),
+            (
+                0x2545_F491_4F6C_DD1D,
+                1,
+                [
+                    0x64D7_220C_45B5_411A,
+                    0x75AE_AE21_C84A_5793,
+                    0x0743_8468_B312_51D8,
+                    0x013A_242B_538A_8AF9,
+                ],
+            ),
+            (
+                0x9E37_79B9_7F4A_7C15,
+                1,
+                [
+                    0x18E5_72A2_C7DF_3AB2,
+                    0xE8C9_7B68_E1F5_9F4B,
+                    0xD97F_A4F7_8CDA_3530,
+                    0x2169_AA9F_37AE_2971,
+                ],
+            ),
+        ] {
+            let mut state = seed;
+            let observed: Vec<u64> = (0..4).map(|_| lcg64_next(&mut state, increment)).collect();
+            assert_eq!(observed, expected, "seed {seed:#x}, increment {increment}");
+            assert_eq!(state, expected[3], "the output is the state");
+        }
+    }
 
     #[test]
     fn splitmix64_matches_the_reference_outputs() {
@@ -181,90 +401,6 @@ mod tests {
         }
         assert_eq!(seen, [true; 5]);
         assert_eq!(generator.up_to(0), 0);
-    }
-
-    /// `purrdf-iri`, `purrdf-columnar`, `purrdf-entail` and
-    /// `purrdf-sparql-results` share this exact SplitMix64 body — one
-    /// golden-ratio increment and the SplitMix64 finalizer — through this
-    /// module. This test pins the first 16 outputs from seed 0 and from
-    /// `0x9E3779B97F4A7C15`, so a future edit to this module cannot silently
-    /// change what any of those crates' existing tests generate.
-    #[test]
-    fn splitmix64_next_matches_the_pinned_reference_outputs() {
-        const SEED_ZERO: [u64; 16] = [
-            0xE220_A839_7B1D_CDAF,
-            0x6E78_9E6A_A1B9_65F4,
-            0x06C4_5D18_8009_454F,
-            0xF88B_B8A8_724C_81EC,
-            0x1B39_896A_51A8_749B,
-            0x53CB_9F0C_747E_A2EA,
-            0x2C82_9ABE_1F45_32E1,
-            0xC584_133A_C916_AB3C,
-            0x3EE5_7890_41C9_8AC3,
-            0xF3B8_488C_368C_B0A6,
-            0x657E_ECDD_3CB1_3D09,
-            0xC2D3_26E0_055B_DEF6,
-            0x8621_A03F_E0BB_DB7B,
-            0x8E1F_7555_983A_A92F,
-            0xB54E_0F16_00CC_4D19,
-            0x84BB_3F97_971D_80AB,
-        ];
-        const SEED_GOLDEN_RATIO: [u64; 16] = [
-            0x6E78_9E6A_A1B9_65F4,
-            0x06C4_5D18_8009_454F,
-            0xF88B_B8A8_724C_81EC,
-            0x1B39_896A_51A8_749B,
-            0x53CB_9F0C_747E_A2EA,
-            0x2C82_9ABE_1F45_32E1,
-            0xC584_133A_C916_AB3C,
-            0x3EE5_7890_41C9_8AC3,
-            0xF3B8_488C_368C_B0A6,
-            0x657E_ECDD_3CB1_3D09,
-            0xC2D3_26E0_055B_DEF6,
-            0x8621_A03F_E0BB_DB7B,
-            0x8E1F_7555_983A_A92F,
-            0xB54E_0F16_00CC_4D19,
-            0x84BB_3F97_971D_80AB,
-            0x7D29_825C_7552_1255,
-        ];
-        let mut state = 0u64;
-        let seed_zero: [u64; 16] = std::array::from_fn(|_| splitmix64_next(&mut state));
-        assert_eq!(seed_zero, SEED_ZERO);
-
-        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
-        let seed_golden_ratio: [u64; 16] = std::array::from_fn(|_| splitmix64_next(&mut state));
-        assert_eq!(seed_golden_ratio, SEED_GOLDEN_RATIO);
-    }
-
-    /// `purrdf-core` and `purrdf-sparql-eval` each use this self-composed
-    /// stream under the name `splitmix64_step`. This test pins its output
-    /// from state `0xC057`.
-    #[test]
-    fn splitmix64_step_matches_the_pinned_reference_outputs() {
-        const FROM_0XC057: [u64; 16] = [
-            0x1C22_A3B7_31BC_110E,
-            0x5973_9F6F_16CD_4B42,
-            0x6F5F_6C53_8C96_CFA8,
-            0xAE1A_77B8_EB2F_2665,
-            0x7E4E_CF20_F8E6_7C2F,
-            0xFE83_248D_BB90_6BF0,
-            0x2B62_FEC6_6B02_87AD,
-            0x1D53_503C_ADFA_1E99,
-            0x1BB6_C297_3F03_A2BA,
-            0xC0A4_B544_205C_859B,
-            0xF2D0_474A_D47E_8818,
-            0xCF18_FF27_6E5E_0796,
-            0x7713_D23D_9B4D_FF82,
-            0x9C99_5235_29DC_7B13,
-            0x311B_A5D7_578A_F63A,
-            0x106C_1FC2_2115_832A,
-        ];
-        let mut state = 0xC057_u64;
-        let observed: [u64; 16] = std::array::from_fn(|_| {
-            state = splitmix64_step(state);
-            state
-        });
-        assert_eq!(observed, FROM_0XC057);
     }
 
     /// `purrdf-sparql-eval`'s kNN tests draw their fixture

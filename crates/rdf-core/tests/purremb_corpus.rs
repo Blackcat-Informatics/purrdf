@@ -3,51 +3,35 @@
 
 //! Sharded external corpora, overlapping chunks, and extension behavior.
 
+use purrdf_core::purremb_fixture::Identities;
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, CorpusTarget, DimensionalityPolicy, DistanceMetric,
-    DocumentTarget, EmbeddingBuilder, EmbeddingFamilyContract, EmbeddingView, ExtensionSection,
-    MatrixInput, MatrixRow, PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, RelationKind,
-    SECTION_CRITICAL, SECTION_DERIVED, SECTION_EXTENSION_MIN, StageImplementation, TargetId,
-    TargetRelation, TargetSet, TextChunkTarget, TokenSpan, VectorDtype, verify_embedding,
+    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, ContentDigest, CorpusTarget,
+    DimensionalityPolicy, DistanceMetric, DocumentTarget, EmbeddingBuilder,
+    EmbeddingFamilyContract, EmbeddingView, ExtensionSection, MatrixInput, MatrixRow,
+    PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, RelationKind, SECTION_CRITICAL,
+    SECTION_DERIVED, SECTION_EXTENSION_MIN, TargetId, TargetRelation, TargetSet, TextChunkTarget,
+    TokenSpan, VectorDtype, verify_embedding,
 };
 
 const EXTENSION_KIND: u32 = SECTION_EXTENSION_MIN + 0x43;
 const EXTENSION_BYTES: &[u8] = b"opaque corpus partition evidence";
 
-fn artifact(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        format!("https://example.org/corpus/{name}"),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("artifact")
-}
-
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            format!("https://example.org/corpus/{name}"),
-            ContentDigest::of(name.as_bytes()),
-            "application/cbor",
-            vec![0xa1, 0x01, 0x01],
-        )
-        .expect("stage"),
-    )
-}
+const FX: Identities = Identities {
+    stage_media: "application/cbor",
+    stage_payload: &[0xa1, 1, 1],
+    ..Identities::at("https://example.org/corpus/")
+};
 
 fn family(name: &str, chunking: &str) -> EmbeddingFamilyContract {
     EmbeddingFamilyContract {
-        model: artifact(&format!("model-{name}")),
-        engine: artifact("engine"),
-        tokenizer: artifact(&format!("tokenizer-{name}")),
-        execution: stage("execution"),
-        subject_projection: stage("chunk-text"),
-        preprocessing: stage("unicode-nfc"),
-        chunking: stage(chunking),
-        pooling: stage("mean-pooling"),
+        model: FX.artifact(&format!("model-{name}")),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact(&format!("tokenizer-{name}")),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("chunk-text"),
+        preprocessing: FX.stage("unicode-nfc"),
+        chunking: FX.stage(chunking),
+        pooling: FX.stage("mean-pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F32,

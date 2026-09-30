@@ -69,28 +69,26 @@ pub enum ShexError {
     UnknownShape(String),
 }
 
+purrdf_lex::constructors! {
+    impl ShexError {
+        /// Construct a [`ShexError::Lex`] at a byte offset.
+        pub fn lex(reason, at: usize) -> Self::Lex { .. };
+
+        /// Construct a [`ShexError::Syntax`] at a byte offset.
+        pub fn syntax(reason, at: usize) -> Self::Syntax { .. };
+
+        /// Construct a [`ShexError::Shexj`] from any displayable reason.
+        pub fn shexj(reason) -> Self::Shexj;
+
+        /// Construct a [`ShexError::ImportConflict`] for a conflicting shape label.
+        pub fn import_conflict(label) -> Self::ImportConflict;
+
+        /// Construct a [`ShexError::UnknownShape`] from a rendered shape selector.
+        pub fn unknown_shape(selector) -> Self::UnknownShape;
+    }
+}
+
 impl ShexError {
-    /// Construct a [`ShexError::Lex`] at a byte offset.
-    pub fn lex(reason: impl Into<String>, at: usize) -> Self {
-        Self::Lex {
-            reason: reason.into(),
-            at,
-        }
-    }
-
-    /// Construct a [`ShexError::Syntax`] at a byte offset.
-    pub fn syntax(reason: impl Into<String>, at: usize) -> Self {
-        Self::Syntax {
-            reason: reason.into(),
-            at,
-        }
-    }
-
-    /// Construct a [`ShexError::Shexj`] from any displayable reason.
-    pub fn shexj(reason: impl Into<String>) -> Self {
-        Self::Shexj(reason.into())
-    }
-
     /// Construct a [`ShexError::Iri`] from a `purrdf-iri` failure, prefixing the
     /// reason with that crate's [`diagnostic_code`].
     ///
@@ -124,16 +122,6 @@ impl ShexError {
             iri: iri.into(),
             cause: Box::new(cause),
         }
-    }
-
-    /// Construct a [`ShexError::ImportConflict`] for a conflicting shape label.
-    pub fn import_conflict(label: impl Into<String>) -> Self {
-        Self::ImportConflict(label.into())
-    }
-
-    /// Construct a [`ShexError::UnknownShape`] from a rendered shape selector.
-    pub fn unknown_shape(selector: impl Into<String>) -> Self {
-        Self::UnknownShape(selector.into())
     }
 
     /// The byte offset the failure was reported at, for the position-bearing

@@ -33,6 +33,26 @@ pub type FastSet<T> = std::collections::HashSet<T, FastHasher>;
 /// A [`FastSet`] of interned [`TermId`](crate::TermId)s — the common id-membership set.
 pub type IdSet = FastSet<crate::TermId>;
 
+/// The [`FastHasher`] hash of `value`: the bucket hash of the IR's store-once
+/// tables and interners. Equal values hash alike within one build; the hash only
+/// chooses a bucket, is never persisted, and never orders an output.
+pub(crate) use purrdf_hash::fixed::hash_one as hash_of;
+
+/// The coarse size fingerprint of a dataset holding `quads` quads over `terms`
+/// distinct terms: the answer every counted backend gives to
+/// [`DatasetView::stats_fingerprint`](crate::DatasetView::stats_fingerprint).
+///
+/// A *cache discriminator* for a dataset-aware cache key (a join-order cache),
+/// not a content digest: a collision can only make a cache reuse an order
+/// computed for a same-size dataset, which is at worst suboptimal. It is a
+/// [`FixedState`](purrdf_hash::fixed::FixedState) hash, so it is stable within
+/// one build and never persisted.
+#[inline]
+pub(crate) fn stats_fingerprint(quads: usize, terms: usize) -> u64 {
+    use core::hash::BuildHasher as _;
+    FastHasher::new().hash_one((quads, terms))
+}
+
 /// Hash an IRI for the primary term index, including its variant tag.
 ///
 /// The builder, global dictionary and frozen dataset must use this exact
@@ -135,12 +155,14 @@ pub(crate) fn hash_triple_for_interner(s: u64, p: u64, o: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{hash_blank_for_interner, hash_literal_for_interner, hash_triple_for_interner};
+    use super::{
+        FastSet, hash_blank_for_interner, hash_literal_for_interner, hash_triple_for_interner,
+    };
     use crate::RdfTextDirection::{Ltr, Rtl};
 
     #[test]
     fn packed_fields_preserve_boundaries_presence_and_high_id_bits() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = FastSet::default();
         for lexical in [
             "",
             "a",

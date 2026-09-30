@@ -263,9 +263,17 @@ def measure_all(gate, manifest, configs, keep_for, options):
     try:
         for config in configs:
             futures[pool.submit(runner.configuration, config, manifest, keep_for(config))] = config.name
+        # Every configuration runs to its verdict: a failing one does not cancel the
+        # others, so one run reports the problems of the whole matrix at once.
         out = {}
+        failures = {}
         for future in concurrent.futures.as_completed(futures):
-            out[futures[future]] = future.result()
+            try:
+                out[futures[future]] = future.result()
+            except gate.GateError as err:
+                failures[futures[future]] = str(err)
+        if failures:
+            raise gate.GateError("\n".join(failures[name] for name in gate.CONFIG_NAMES if name in failures))
         options.timings = runner.timings
         return out
     finally:

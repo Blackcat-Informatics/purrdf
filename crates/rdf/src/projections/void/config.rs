@@ -1,20 +1,27 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use crate::direction_json::{direction_from_json, direction_to_json};
+use crate::projections::util::absolute_iri;
+use crate::projections::util::validate_portable_bound;
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Deserializer, Serialize};
+use purrdf_lex::json::{Object, Value};
 
 use crate::native_codecs::NativeRdfFormat;
 
+use super::super::dataset_description::{format_from_json, format_to_json};
+use super::super::json_codec::role_map_json;
+use super::super::util::validate_role_map;
 use super::super::{
     ProjectionDirection, ProjectionError, ProjectionLimits, validate_absolute_iri,
     validate_language_tag,
 };
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
+use purrdf_lex::json_string_enum;
 
 /// Exact source graph selected for one VoID input role.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-#[serde(tag = "mode", rename_all = "kebab-case")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VoidGraphSelector {
     /// The RDF dataset default graph.
     DefaultGraph,
@@ -46,29 +53,36 @@ impl VoidGraphSelector {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(tag = "mode", rename_all = "kebab-case", deny_unknown_fields)]
-enum RawVoidGraphSelector {
-    DefaultGraph,
-    NamedGraph { graph_iri: String },
+impl FromJson for VoidGraphSelector {
+    /// `{"mode": "default-graph"}` or `{"mode": "named-graph", "graph_iri": …}`.
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum RawVoidGraphSelector")?;
+        let selector = match fields.tag("mode", &["default-graph", "named-graph"])? {
+            "default-graph" => Self::DefaultGraph,
+            _ => {
+                let graph_iri: String = fields.required("graph_iri")?;
+                fields.deny_unknown()?;
+                return Ok(Self::named(graph_iri)?);
+            }
+        };
+        fields.deny_unknown()?;
+        Ok(selector)
+    }
 }
 
-impl<'de> Deserialize<'de> for VoidGraphSelector {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        match RawVoidGraphSelector::deserialize(deserializer)? {
-            RawVoidGraphSelector::DefaultGraph => Ok(Self::DefaultGraph),
-            RawVoidGraphSelector::NamedGraph { graph_iri } => {
-                Self::named(graph_iri).map_err(serde::de::Error::custom)
-            }
-        }
+impl ToJson for VoidGraphSelector {
+    fn to_json(&self) -> Value {
+        Value::Object(match self {
+            Self::DefaultGraph => Object::new().with("mode", "default-graph"),
+            Self::NamedGraph { graph_iri } => Object::new()
+                .with("mode", "named-graph")
+                .with("graph_iri", graph_iri.as_str()),
+        })
     }
 }
 
 /// Complete caller-owned source predicate binding for VoID extraction.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoidSourceRoles {
     rdf_type: String,
     header_version: String,
@@ -131,28 +145,20 @@ impl VoidSourceRoles {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawVoidSourceRoles {
-    rdf_type: String,
-    header_version: String,
-    header_abstract: String,
-}
+purrdf_lex::json_record!(impl FromJson for VoidSourceRoles as "struct RawVoidSourceRoles" {
+    "rdf_type" => rdf_type: required::<String>,
+    "header_version" => header_version: required::<String>,
+    "header_abstract" => header_abstract: required::<String>,
+} => VoidSourceRoles::new);
 
-impl<'de> Deserialize<'de> for VoidSourceRoles {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawVoidSourceRoles::deserialize(deserializer)?;
-        Self::new(raw.rdf_type, raw.header_version, raw.header_abstract)
-            .map_err(serde::de::Error::custom)
-    }
-}
+purrdf_lex::json_record!(impl ToJson for VoidSourceRoles {
+    "rdf_type" => rdf_type,
+    "header_version" => header_version,
+    "header_abstract" => header_abstract,
+});
 
 /// Semantic target role in a caller-owned VoID vocabulary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VoidRole {
     /// RDF type predicate.
     RdfType,
@@ -200,6 +206,31 @@ pub enum VoidRole {
     XsdNonNegativeInteger,
 }
 
+json_string_enum!(VoidRole {
+    RdfType => "rdf-type",
+    DatasetClass => "dataset-class",
+    LinksetClass => "linkset-class",
+    ClassPartitionClass => "class-partition-class",
+    PropertyPartitionClass => "property-partition-class",
+    Version => "version",
+    Abstract => "abstract",
+    Subset => "subset",
+    Triples => "triples",
+    Entities => "entities",
+    Classes => "classes",
+    Properties => "properties",
+    ClassPartition => "class-partition",
+    PropertyPartition => "property-partition",
+    Class => "class",
+    Property => "property",
+    DistinctSubjects => "distinct-subjects",
+    DistinctObjects => "distinct-objects",
+    SubjectsTarget => "subjects-target",
+    ObjectsTarget => "objects-target",
+    LinkPredicate => "link-predicate",
+    XsdNonNegativeInteger => "xsd-non-negative-integer",
+});
+
 /// Every mandatory VoID target role, in stable configuration order.
 pub const VOID_ROLES: &[VoidRole] = &[
     VoidRole::RdfType,
@@ -227,8 +258,7 @@ pub const VOID_ROLES: &[VoidRole] = &[
 ];
 
 /// Complete caller-owned target vocabulary for VoID output.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoidVocabulary(BTreeMap<VoidRole, String>);
 
 impl VoidVocabulary {
@@ -238,27 +268,9 @@ impl VoidVocabulary {
     ///
     /// Rejects a missing/unknown role, a relative IRI, or two roles bound to one IRI.
     pub fn new(terms: BTreeMap<VoidRole, String>) -> Result<Self, ProjectionError> {
-        for role in VOID_ROLES {
-            let iri = terms.get(role).ok_or_else(|| {
-                ProjectionError::configuration(format!(
-                    "VoID target vocabulary is missing role `{role:?}`"
-                ))
-            })?;
-            validate_absolute_iri(iri, &format!("VoID target role `{role:?}`"))?;
-        }
-        if terms.len() != VOID_ROLES.len() {
-            return Err(ProjectionError::configuration(
-                "VoID target vocabulary contains an unsupported role",
-            ));
-        }
-        let mut inverse = BTreeMap::<&str, VoidRole>::new();
-        for (&role, iri) in &terms {
-            if let Some(previous) = inverse.insert(iri, role) {
-                return Err(ProjectionError::configuration(format!(
-                    "VoID target roles `{previous:?}` and `{role:?}` collide at `{iri}`"
-                )));
-            }
-        }
+        validate_role_map(&terms, VOID_ROLES, "VoID target vocabulary", |role, iri| {
+            validate_absolute_iri(iri, &format!("VoID target role `{role:?}`"))
+        })?;
         Ok(Self(terms))
     }
 
@@ -275,18 +287,10 @@ impl VoidVocabulary {
     }
 }
 
-impl<'de> Deserialize<'de> for VoidVocabulary {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let terms = BTreeMap::<VoidRole, String>::deserialize(deserializer)?;
-        Self::new(terms).map_err(serde::de::Error::custom)
-    }
-}
+role_map_json!(VoidVocabulary);
 
 /// One deterministic IRI-prefix to dataset identity binding.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VoidDatasetPrefix {
     dataset_iri: String,
     iri_prefix: String,
@@ -302,13 +306,9 @@ impl VoidDatasetPrefix {
         dataset_iri: impl Into<String>,
         iri_prefix: impl Into<String>,
     ) -> Result<Self, ProjectionError> {
-        let dataset_iri = dataset_iri.into();
-        let iri_prefix = iri_prefix.into();
-        validate_absolute_iri(&dataset_iri, "VoID prefix dataset IRI")?;
-        validate_absolute_iri(&iri_prefix, "VoID resource IRI prefix")?;
         Ok(Self {
-            dataset_iri,
-            iri_prefix,
+            dataset_iri: absolute_iri(dataset_iri, "VoID prefix dataset IRI")?,
+            iri_prefix: absolute_iri(iri_prefix, "VoID resource IRI prefix")?,
         })
     }
 
@@ -323,25 +323,18 @@ impl VoidDatasetPrefix {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawVoidDatasetPrefix {
-    dataset_iri: String,
-    iri_prefix: String,
-}
+purrdf_lex::json_record!(impl FromJson for VoidDatasetPrefix as "struct RawVoidDatasetPrefix" {
+    "dataset_iri" => dataset_iri: required::<String>,
+    "iri_prefix" => iri_prefix: required::<String>,
+} => VoidDatasetPrefix::new);
 
-impl<'de> Deserialize<'de> for VoidDatasetPrefix {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawVoidDatasetPrefix::deserialize(deserializer)?;
-        Self::new(raw.dataset_iri, raw.iri_prefix).map_err(serde::de::Error::custom)
-    }
-}
+purrdf_lex::json_record!(impl ToJson for VoidDatasetPrefix {
+    "dataset_iri" => dataset_iri,
+    "iri_prefix" => iri_prefix,
+});
 
 /// Source-to-target predicate mapping for metadata-graph external IRI links.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VoidExternalLinkMapping {
     source_predicate: String,
     target_predicate: String,
@@ -357,13 +350,15 @@ impl VoidExternalLinkMapping {
         source_predicate: impl Into<String>,
         target_predicate: impl Into<String>,
     ) -> Result<Self, ProjectionError> {
-        let source_predicate = source_predicate.into();
-        let target_predicate = target_predicate.into();
-        validate_absolute_iri(&source_predicate, "VoID external-link source predicate")?;
-        validate_absolute_iri(&target_predicate, "VoID external-link target predicate")?;
         Ok(Self {
-            source_predicate,
-            target_predicate,
+            source_predicate: absolute_iri(
+                source_predicate,
+                "VoID external-link source predicate",
+            )?,
+            target_predicate: absolute_iri(
+                target_predicate,
+                "VoID external-link target predicate",
+            )?,
         })
     }
 
@@ -378,26 +373,18 @@ impl VoidExternalLinkMapping {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawVoidExternalLinkMapping {
-    source_predicate: String,
-    target_predicate: String,
-}
+purrdf_lex::json_record!(impl FromJson for VoidExternalLinkMapping as "struct RawVoidExternalLinkMapping" {
+    "source_predicate" => source_predicate: required::<String>,
+    "target_predicate" => target_predicate: required::<String>,
+} => VoidExternalLinkMapping::new);
 
-impl<'de> Deserialize<'de> for VoidExternalLinkMapping {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawVoidExternalLinkMapping::deserialize(deserializer)?;
-        Self::new(raw.source_predicate, raw.target_predicate).map_err(serde::de::Error::custom)
-    }
-}
+purrdf_lex::json_record!(impl ToJson for VoidExternalLinkMapping {
+    "source_predicate" => source_predicate,
+    "target_predicate" => target_predicate,
+});
 
 /// Caller-authored IRI or RDF literal on the described dataset.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VoidStaticValue {
     /// Absolute IRI object.
     Iri {
@@ -462,8 +449,8 @@ impl VoidStaticValue {
     /// with its own siblings, [`Self::iri`] and [`Self::typed_literal`], which
     /// already validate rather than merely checking for emptiness.
     ///
-    /// Reached by `serde` as well as by Rust: `VoidStaticValue`'s
-    /// [`Deserialize`] impl funnels the `language-literal` arm of a caller's
+    /// Reached by a configuration document as well as by Rust: `VoidStaticValue`'s
+    /// JSON reader funnels the `language-literal` arm of a caller's
     /// configuration document straight through here, so a malformed tag in a
     /// config file is refused where it is written.
     ///
@@ -488,45 +475,62 @@ impl VoidStaticValue {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
-enum RawVoidStaticValue {
-    Iri {
-        value: String,
-    },
-    TypedLiteral {
-        lexical: String,
-        datatype: String,
-    },
-    LanguageLiteral {
-        lexical: String,
-        language: String,
-        direction: Option<ProjectionDirection>,
-    },
+impl FromJson for VoidStaticValue {
+    /// `{"kind": "iri" | "typed-literal" | "language-literal", …}`, each arm
+    /// through its validating constructor, and no undeclared member.
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum RawVoidStaticValue")?;
+        let static_value =
+            match fields.tag("kind", &["iri", "typed-literal", "language-literal"])? {
+                "iri" => {
+                    let value: String = fields.required("value")?;
+                    fields.deny_unknown()?;
+                    Self::iri(value)
+                }
+                "typed-literal" => {
+                    let lexical: String = fields.required("lexical")?;
+                    let datatype: String = fields.required("datatype")?;
+                    fields.deny_unknown()?;
+                    Self::typed_literal(lexical, datatype)
+                }
+                _ => {
+                    let lexical: String = fields.required("lexical")?;
+                    let language: String = fields.required("language")?;
+                    let direction = fields.optional_with("direction", direction_from_json)?;
+                    fields.deny_unknown()?;
+                    Self::language_literal(lexical, language, direction)
+                }
+            };
+        Ok(static_value?)
+    }
 }
 
-impl<'de> Deserialize<'de> for VoidStaticValue {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        match RawVoidStaticValue::deserialize(deserializer)? {
-            RawVoidStaticValue::Iri { value } => Self::iri(value).map_err(serde::de::Error::custom),
-            RawVoidStaticValue::TypedLiteral { lexical, datatype } => {
-                Self::typed_literal(lexical, datatype).map_err(serde::de::Error::custom)
-            }
-            RawVoidStaticValue::LanguageLiteral {
+impl ToJson for VoidStaticValue {
+    /// `kind` first, then the arm's members; an absent direction is `null`.
+    fn to_json(&self) -> Value {
+        Value::Object(match self {
+            Self::Iri { value } => Object::new()
+                .with("kind", "iri")
+                .with("value", value.as_str()),
+            Self::TypedLiteral { lexical, datatype } => Object::new()
+                .with("kind", "typed-literal")
+                .with("lexical", lexical.as_str())
+                .with("datatype", datatype.as_str()),
+            Self::LanguageLiteral {
                 lexical,
                 language,
                 direction,
-            } => Self::language_literal(lexical, language, direction)
-                .map_err(serde::de::Error::custom),
-        }
+            } => Object::new()
+                .with("kind", "language-literal")
+                .with("lexical", lexical.as_str())
+                .with("language", language.as_str())
+                .with("direction", direction_to_json(*direction)),
+        })
     }
 }
 
 /// One caller-authored statement whose subject is the described dataset IRI.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VoidStaticStatement {
     predicate: String,
     object: VoidStaticValue,
@@ -558,25 +562,18 @@ impl VoidStaticStatement {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawVoidStaticStatement {
-    predicate: String,
-    object: VoidStaticValue,
-}
+purrdf_lex::json_record!(impl FromJson for VoidStaticStatement as "struct RawVoidStaticStatement" {
+    "predicate" => predicate: required::<String>,
+    "object" => object: required,
+} => VoidStaticStatement::new);
 
-impl<'de> Deserialize<'de> for VoidStaticStatement {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawVoidStaticStatement::deserialize(deserializer)?;
-        Self::new(raw.predicate, raw.object).map_err(serde::de::Error::custom)
-    }
-}
+purrdf_lex::json_record!(impl ToJson for VoidStaticStatement {
+    "predicate" => predicate,
+    "object" => object,
+});
 
 /// Explicit compute and materialization bounds for VoID generation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(
     clippy::struct_field_names,
     reason = "execution-limit JSON fields intentionally share the `max_` policy prefix"
@@ -625,7 +622,7 @@ impl VoidExecutionLimits {
             ),
             (max_static_statements, "VoID max_static_statements"),
         ] {
-            validate_bound(value, label)?;
+            validate_portable_bound(value, label)?;
         }
         Ok(Self {
             max_input_records,
@@ -680,45 +677,30 @@ impl VoidExecutionLimits {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-#[allow(
-    clippy::struct_field_names,
-    reason = "raw execution-limit fields mirror the validated public JSON contract"
-)]
-struct RawVoidExecutionLimits {
-    max_input_records: usize,
-    max_output_records: usize,
-    max_partitions: usize,
-    max_linksets: usize,
-    max_partition_memberships: usize,
-    max_dataset_prefixes: usize,
-    max_external_link_mappings: usize,
-    max_static_statements: usize,
-}
+purrdf_lex::json_record!(impl FromJson for VoidExecutionLimits as "struct RawVoidExecutionLimits" {
+    "max_input_records" => max_input_records: required,
+    "max_output_records" => max_output_records: required,
+    "max_partitions" => max_partitions: required,
+    "max_linksets" => max_linksets: required,
+    "max_partition_memberships" => max_partition_memberships: required,
+    "max_dataset_prefixes" => max_dataset_prefixes: required,
+    "max_external_link_mappings" => max_external_link_mappings: required,
+    "max_static_statements" => max_static_statements: required,
+} => VoidExecutionLimits::new);
 
-impl<'de> Deserialize<'de> for VoidExecutionLimits {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawVoidExecutionLimits::deserialize(deserializer)?;
-        Self::new(
-            raw.max_input_records,
-            raw.max_output_records,
-            raw.max_partitions,
-            raw.max_linksets,
-            raw.max_partition_memberships,
-            raw.max_dataset_prefixes,
-            raw.max_external_link_mappings,
-            raw.max_static_statements,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+purrdf_lex::json_record!(impl ToJson for VoidExecutionLimits {
+    "max_input_records" => max_input_records,
+    "max_output_records" => max_output_records,
+    "max_partitions" => max_partitions,
+    "max_linksets" => max_linksets,
+    "max_partition_memberships" => max_partition_memberships,
+    "max_dataset_prefixes" => max_dataset_prefixes,
+    "max_external_link_mappings" => max_external_link_mappings,
+    "max_static_statements" => max_static_statements,
+});
 
 /// Complete deterministic VoID dataset-description policy.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoidConfig {
     format: NativeRdfFormat,
     dataset_iri: String,
@@ -1043,79 +1025,87 @@ impl VoidConfig {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawVoidConfig {
-    format: NativeRdfFormat,
-    dataset_iri: String,
-    generated_resource_base_iri: String,
-    header_subject_iri: String,
-    source_roles: VoidSourceRoles,
-    header_graph: VoidGraphSelector,
-    alignment_graph: VoidGraphSelector,
-    metadata_graph: VoidGraphSelector,
-    data_graphs: Vec<VoidGraphSelector>,
-    vocabulary: VoidVocabulary,
-    local_datasets: Vec<VoidDatasetPrefix>,
-    external_datasets: Vec<VoidDatasetPrefix>,
-    external_links: Vec<VoidExternalLinkMapping>,
-    static_statements: Vec<VoidStaticStatement>,
-    limits: ProjectionLimits,
-    execution_limits: VoidExecutionLimits,
-    #[serde(default)]
-    document_base_iri: Option<String>,
+impl FromJson for VoidConfig {
+    /// Every member through [`VoidConfig::new`], then `document_base_iri`
+    /// (absent or `null` for none) through
+    /// [`VoidConfig::with_document_base_iri`].
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct RawVoidConfig")?;
+        let format = format_from_json(&mut fields, "format")?;
+        let dataset_iri: String = fields.required("dataset_iri")?;
+        let generated_resource_base_iri: String = fields.required("generated_resource_base_iri")?;
+        let header_subject_iri: String = fields.required("header_subject_iri")?;
+        let source_roles = fields.required("source_roles")?;
+        let header_graph = fields.required("header_graph")?;
+        let alignment_graph = fields.required("alignment_graph")?;
+        let metadata_graph = fields.required("metadata_graph")?;
+        let data_graphs = fields.required("data_graphs")?;
+        let vocabulary = fields.required("vocabulary")?;
+        let local_datasets = fields.required("local_datasets")?;
+        let external_datasets = fields.required("external_datasets")?;
+        let external_links = fields.required("external_links")?;
+        let static_statements = fields.required("static_statements")?;
+        let limits = fields.required("limits")?;
+        let execution_limits = fields.required("execution_limits")?;
+        let document_base_iri = fields.optional("document_base_iri")?;
+        fields.deny_unknown()?;
+        Ok(Self::new(
+            format,
+            dataset_iri,
+            generated_resource_base_iri,
+            header_subject_iri,
+            source_roles,
+            header_graph,
+            alignment_graph,
+            metadata_graph,
+            data_graphs,
+            vocabulary,
+            local_datasets,
+            external_datasets,
+            external_links,
+            static_statements,
+            limits,
+            execution_limits,
+        )?
+        .with_document_base_iri(document_base_iri)?)
+    }
 }
 
-impl<'de> Deserialize<'de> for VoidConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawVoidConfig::deserialize(deserializer)?;
-        Self::new(
-            raw.format,
-            raw.dataset_iri,
-            raw.generated_resource_base_iri,
-            raw.header_subject_iri,
-            raw.source_roles,
-            raw.header_graph,
-            raw.alignment_graph,
-            raw.metadata_graph,
-            raw.data_graphs,
-            raw.vocabulary,
-            raw.local_datasets,
-            raw.external_datasets,
-            raw.external_links,
-            raw.static_statements,
-            raw.limits,
-            raw.execution_limits,
+impl ToJson for VoidConfig {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("format", format_to_json(self.format))
+                .with("dataset_iri", self.dataset_iri.as_str())
+                .with(
+                    "generated_resource_base_iri",
+                    self.generated_resource_base_iri.as_str(),
+                )
+                .with("header_subject_iri", self.header_subject_iri.as_str())
+                .with("source_roles", self.source_roles.to_json())
+                .with("header_graph", self.header_graph.to_json())
+                .with("alignment_graph", self.alignment_graph.to_json())
+                .with("metadata_graph", self.metadata_graph.to_json())
+                .with("data_graphs", self.data_graphs.to_json())
+                .with("vocabulary", self.vocabulary.to_json())
+                .with("local_datasets", self.local_datasets.to_json())
+                .with("external_datasets", self.external_datasets.to_json())
+                .with("external_links", self.external_links.to_json())
+                .with("static_statements", self.static_statements.to_json())
+                .with("limits", self.limits.to_json())
+                .with("execution_limits", self.execution_limits.to_json())
+                .with("document_base_iri", self.document_base_iri.to_json()),
         )
-        .map_err(serde::de::Error::custom)?
-        .with_document_base_iri(raw.document_base_iri)
-        .map_err(serde::de::Error::custom)
     }
-}
-
-fn validate_bound(value: usize, field: &str) -> Result<(), ProjectionError> {
-    if value == 0 {
-        return Err(ProjectionError::configuration(format!(
-            "{field} must be greater than zero"
-        )));
-    }
-    if u32::try_from(value).is_err() {
-        return Err(ProjectionError::configuration(format!(
-            "{field} exceeds the portable u32 ceiling"
-        )));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_lex::json::record::from_slice;
 
     /// Both halves of `VoidStaticValue::language_literal`'s gate, through BOTH
-    /// of its doors — the Rust constructor and the serde one a caller's config
+    /// of its doors — the Rust constructor and the JSON reader a caller's config
     /// document arrives by.
     ///
     /// The accept list is the load-bearing half. A VoID projection is published
@@ -1143,8 +1133,8 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{tag:?} must still configure: {}", e.message()));
 
             let json = format!(r#"{{"kind":"language-literal","lexical":"v","language":"{tag}"}}"#);
-            serde_json::from_str::<VoidStaticValue>(&json)
-                .unwrap_or_else(|e| panic!("{tag:?} must still deserialize: {e}"));
+            from_slice::<VoidStaticValue>(json.as_bytes())
+                .unwrap_or_else(|e| panic!("{tag:?} must still read: {e}"));
         }
 
         for tag in [
@@ -1167,8 +1157,8 @@ mod tests {
             );
 
             let json = format!(r#"{{"kind":"language-literal","lexical":"v","language":"{tag}"}}"#);
-            let error = serde_json::from_str::<VoidStaticValue>(&json)
-                .expect_err("the serde door must refuse exactly what the Rust door refuses");
+            let error = from_slice::<VoidStaticValue>(json.as_bytes())
+                .expect_err("the JSON door must refuse exactly what the Rust door refuses");
             assert!(
                 error.to_string().contains("invalid language tag"),
                 "{tag:?}: {error}"

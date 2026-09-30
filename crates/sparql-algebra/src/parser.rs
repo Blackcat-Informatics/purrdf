@@ -33,8 +33,10 @@ mod triples;
 use machine::Machine;
 use triples::{PathLevel, TFrame};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+
+use purrdf_hash::fixed::FixedState;
 
 use crate::algebra::{
     AggregateFunction, Expression, Function, GraphPattern, GraphTarget, GraphUpdateOperation,
@@ -50,15 +52,10 @@ use crate::lexer::{Spanned, Token, tokenize};
 use crate::tree::Child;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, IriError, LineIndex, langtag};
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
-const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+use purrdf_iri::vocab::rdf::{
+    FIRST as RDF_FIRST, NIL as RDF_NIL, REIFIES as RDF_REIFIES, REST as RDF_REST, TYPE as RDF_TYPE,
+};
+use purrdf_xsd::datatype::{XSD_BOOLEAN, XSD_DECIMAL, XSD_DOUBLE, XSD_INTEGER};
 
 /// Parse-time configuration for the SPARQL front-end.
 ///
@@ -264,8 +261,7 @@ pub enum UpdateDatasetSlot {
 
 /// A reusable SPARQL query parser.
 ///
-/// Mirrors the prior oxigraph-family `SparqlParser` surface the existing
-/// consumers call so the port is mechanical: `SparqlParser::new().parse_query(text)`.
+/// Consumers call `SparqlParser::new().parse_query(text)`.
 /// Parse-time configuration (the extension-function namespace set) is passed per
 /// call via [`SparqlParser::parse_query_with`] / [`SparqlParser::parse_update_with`];
 /// the plain `parse_*` entries use [`ParserOptions::default`].
@@ -281,18 +277,18 @@ pub struct SparqlParser {
     base: core::result::Result<BaseScope, ParseError>,
 }
 
-impl Default for SparqlParser {
-    fn default() -> Self {
+purrdf_hash::default_from_new!(SparqlParser);
+
+impl SparqlParser {
+    /// Construct a parser with no implicit base IRI; [`Default`] delegates here.
+    ///
+    /// Written out rather than derived: the default base scope is an empty
+    /// [`BaseScope`], not an error, and `Result` has no `Default`.
+    #[must_use]
+    pub fn new() -> Self {
         Self {
             base: Ok(BaseScope::empty()),
         }
-    }
-}
-
-impl SparqlParser {
-    /// Construct a parser with no implicit base IRI.
-    pub fn new() -> Self {
-        Self::default()
     }
 
     /// Set an implicit base IRI used to resolve relative IRI references that
@@ -466,7 +462,7 @@ impl SparqlParser {
             pos: 0,
             src: text,
             end: text.len(),
-            prefixes: HashMap::new(),
+            prefixes: HashMap::with_hasher(FixedState::new()),
             base,
             version: None,
             agg_counter: 0,
@@ -484,7 +480,7 @@ impl SparqlParser {
             pending_exists_scope_checks: Vec::new(),
             #[cfg(debug_assertions)]
             scope_consultations: 0,
-            blank_label_bgps: HashMap::new(),
+            blank_label_bgps: HashMap::with_hasher(FixedState::new()),
             bgp_counter: 0,
             bgp_scope: None,
             machine: Machine::default(),
@@ -538,7 +534,7 @@ struct Parser<'a, 'o> {
     /// The line table is built on that path alone, never on the happy path.
     src: &'a str,
     end: usize,
-    prefixes: HashMap<String, String>,
+    prefixes: HashMap<String, String, FixedState>,
     /// The base IRIs in scope: the caller-supplied base (if any) at the bottom,
     /// rebound in place by every prologue `BASE` directive. Resolution itself is
     /// [`BaseScope`]'s — this parser owns no RFC-3986 arithmetic.
@@ -648,7 +644,7 @@ struct Parser<'a, 'o> {
     /// One map per query, so a label reused in a sub-`SELECT` or an `EXISTS`
     /// body is caught too; one map per UPDATE operation, whose `WHERE` clauses
     /// are separate patterns ([`Parser::parse_update`] clears it between them).
-    blank_label_bgps: HashMap<String, usize>,
+    blank_label_bgps: HashMap<String, usize, FixedState>,
     /// The next basic-graph-pattern ordinal a group's triples block is given.
     bgp_counter: usize,
     /// The basic graph pattern the triples block being parsed belongs to, or
@@ -768,7 +764,7 @@ impl<'a> Parser<'a, '_> {
             // A fork reads a template or quad-pattern block, which is not a basic
             // graph pattern of the query: nothing it reads is scoped to one, so it
             // starts with no scope and records nothing.
-            blank_label_bgps: HashMap::new(),
+            blank_label_bgps: HashMap::with_hasher(FixedState::new()),
             bgp_counter: 0,
             bgp_scope: None,
             machine: Machine::default(),
@@ -868,7 +864,7 @@ impl<'a> Parser<'a, '_> {
     /// pre-existing non-call for its local `VarScope`).
     fn note_exists_scope(&mut self, pattern: &GraphPattern) {
         if self.exists_scope_stack.is_open() {
-            let mut noted = VarScope::new();
+            let mut noted = VarScope::default();
             collect_vars(pattern, &mut noted);
             for v in noted.as_slice() {
                 self.exists_scope_stack.note(v);
@@ -1529,11 +1525,11 @@ impl<'a> Parser<'a, '_> {
         // W3C `basic-update` `insert-where-same-bnode`). `DELETE DATA` / DELETE
         // templates are blank-free by invariant, and anonymous blanks carry
         // process-unique ids, so only author-written `_:label`s can collide.
-        let mut prior_bnode_labels: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut prior_bnode_labels: HashSet<String, FixedState> =
+            HashSet::with_hasher(FixedState::new());
         // Reused across iterations to avoid reallocating the set each loop.
-        let mut this_op_labels: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut this_op_labels: HashSet<String, FixedState> =
+            HashSet::with_hasher(FixedState::new());
         loop {
             if self.pos >= self.tokens.len() {
                 break;
@@ -2516,39 +2512,21 @@ impl<'a> Parser<'a, '_> {
 
     // ── solution modifiers ───────────────────────────────────────────────────
 
-    /// True when the cursor is at a bare (non-parenthesized) `GROUP BY`
-    /// GroupCondition — a `BuiltInCall` or `FunctionCall`. The grammar's bare
-    /// conditions all begin with a callee token (a builtin keyword, an IRI, or a
-    /// prefixed name); the modifier-list terminators (`HAVING`/`ORDER`/`LIMIT`/
-    /// `OFFSET`/`VALUES`) and boolean literals are excluded so the `GROUP BY`
-    /// loop stops cleanly at the next clause.
-    fn at_bare_group_condition(&self) -> bool {
-        match self.peek() {
-            Some(Token::Iri(_) | Token::PrefixedName(_, _)) => true,
-            Some(Token::Word(w)) => !is_modifier_terminator_word(w),
-            _ => false,
-        }
-    }
-
     /// True when the upcoming token can start a bare (non-parenthesized)
-    /// `Constraint` — a `BuiltInCall` or `FunctionCall` (SPARQL 1.1/1.2
-    /// `Constraint ::= BrackettedExpression | BuiltInCall | FunctionCall`).
-    /// Used by `HAVING`'s `Constraint+` list (both to decide whether the
-    /// first, mandatory constraint is bare, and whether a SUBSEQUENT one
-    /// begins) and by `ORDER BY`'s `OrderCondition ::= ... | (Constraint |
-    /// Var)` alternative. The bracketed form (`Token::LParen`) is recognized
-    /// separately at each call site — this only covers the bare spelling, so
-    /// it deliberately excludes a bare `Var` or literal (neither is a
-    /// `Constraint`, only an `OrderCondition`'s OTHER alternative or a
-    /// non-constraint primary expression).
+    /// `BuiltInCall` or `FunctionCall`: the bare alternative of a `Constraint`
+    /// (`Constraint ::= BrackettedExpression | BuiltInCall | FunctionCall`) and,
+    /// by the same productions, of a `GROUP BY` `GroupCondition`. Every bare call
+    /// begins with a callee token (a builtin keyword, an IRI or a prefixed name);
+    /// the modifier-list terminators (`HAVING`/`ORDER`/`LIMIT`/`OFFSET`/`VALUES`)
+    /// and boolean literals are excluded so a `GROUP BY`, `HAVING` or `ORDER BY`
+    /// list stops cleanly at the next clause.
     ///
-    /// Same shape as [`Self::at_bare_group_condition`] (a callee token —
-    /// IRI/prefixed name/keyword — modulo the clause-terminator words that
-    /// can legally follow a `Constraint+`/`OrderCondition*` list), kept
-    /// separate because the terminator set differs slightly (`HAVING` can
-    /// recur inside itself as a callee-shaped word is never in question
-    /// here, since `HAVING` itself cannot re-appear mid-list, but excluding
-    /// it is harmless and keeps the two helpers independently auditable).
+    /// Used by `GROUP BY`'s condition loop, by `HAVING`'s `Constraint+` list (both
+    /// to decide whether the first, mandatory constraint is bare, and whether a
+    /// subsequent one begins) and by `ORDER BY`'s `OrderCondition ::= ... |
+    /// (Constraint | Var)` alternative. The bracketed form (`Token::LParen`) is
+    /// recognized separately at each call site, so this deliberately excludes a
+    /// bare `Var` or literal (neither is a call).
     fn at_bare_constraint(&self) -> bool {
         match self.peek() {
             Some(Token::Iri(_) | Token::PrefixedName(_, _)) => true,
@@ -2814,10 +2792,10 @@ impl Modifiers {
 /// identity table `Z`) on either side so a group that opens with a non-triple
 /// element (`UNION`, a property path, …) is not wrapped in a vacuous `Join`.
 fn join(left: GraphPattern, right: GraphPattern) -> GraphPattern {
-    if is_empty_bgp(&left) {
+    if left.is_empty_bgp() {
         return right;
     }
-    if is_empty_bgp(&right) {
+    if right.is_empty_bgp() {
         return left;
     }
     match (left, right) {
@@ -2830,10 +2808,6 @@ fn join(left: GraphPattern, right: GraphPattern) -> GraphPattern {
             right: Child::new(r),
         },
     }
-}
-
-fn is_empty_bgp(p: &GraphPattern) -> bool {
-    matches!(p, GraphPattern::Bgp { patterns } if patterns.is_empty())
 }
 
 /// Lift a run of template triples into quad patterns, all scoped to `graph`
@@ -2929,10 +2903,6 @@ struct VarScope {
 }
 
 impl VarScope {
-    fn new() -> Self {
-        Self::default()
-    }
-
     /// Record `v` as in scope; a no-op if it already is (first-appearance
     /// order is preserved, so a later re-mention never moves it).
     fn note(&mut self, v: &Variable) {
@@ -3057,7 +3027,7 @@ impl ExistsScopes {
 /// `SELECT` clause that has no real `Project` to read a variable list from
 /// (see `fmt_subselect`'s `no_project_vars`).
 pub(crate) fn visible_variables(p: &GraphPattern) -> Vec<Variable> {
-    let mut scope = VarScope::new();
+    let mut scope = VarScope::default();
     collect_vars(p, &mut scope);
     scope.into_vec()
 }
@@ -3248,11 +3218,16 @@ enum ExistsScopeBasis {
 }
 
 /// Whether a construct that introduces a fresh binding inside the pattern
-/// [`find_scope_conflict`] walks is a `BIND`/`(expr AS ?v)` target or a
-/// `VALUES` variable — the two shapes it can report, matching the two
-/// message forms each call site produces.
+/// the parser's scope-conflict walk (`find_scope_conflict`) visits is a
+/// `BIND`/`(expr AS ?v)` target, a `VALUES` variable or an `UNFOLD` target —
+/// the shapes it can report, matching the message forms each call site
+/// produces.
+///
+/// Public because the evaluator's `EXISTS` row-collision check reports the
+/// same introductions in the same words: one enum, so the parser's refusal
+/// and the evaluator's name a construct identically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScopeIntro {
+pub enum ScopeIntro {
     /// `BIND(expr AS ?v)`, a sub-`SELECT`'s `(expr AS ?v)` projection target,
     /// a `GROUP BY (expr AS ?v)` condition, or a `GROUP BY` aggregate's output
     /// variable — all lower to an `Extend`/`Group` introduction and share one
@@ -3267,7 +3242,10 @@ enum ScopeIntro {
 }
 
 impl ScopeIntro {
-    fn as_str(self) -> &'static str {
+    /// The construct as a diagnostic names it: `BIND target`, `VALUES
+    /// variable` or `UNFOLD target`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Bind => "BIND target",
             Self::Values => "VALUES variable",
@@ -3656,13 +3634,13 @@ fn find_group_extend_conflict<'a>(
 /// Collect the labels of every blank node in a run of quad patterns, descending
 /// into RDF-1.2 quoted triples. Used to enforce the §19.6 rule that a blank node
 /// label may not be shared across two operations of one update request.
-fn collect_quad_bnode_labels(quads: &[QuadPattern], out: &mut std::collections::HashSet<String>) {
+fn collect_quad_bnode_labels(quads: &[QuadPattern], out: &mut HashSet<String, FixedState>) {
     for q in quads {
         collect_triple_bnode_labels(&q.triple, out);
     }
 }
 
-fn collect_triple_bnode_labels(t: &TriplePattern, out: &mut std::collections::HashSet<String>) {
+fn collect_triple_bnode_labels(t: &TriplePattern, out: &mut HashSet<String, FixedState>) {
     let mut pending = vec![&t.object, &t.subject];
     while let Some(term) = pending.pop() {
         match term {
@@ -3708,8 +3686,8 @@ fn iri_error(lexical: &str, error: &IriError) -> ParseError {
 }
 
 /// The clause-terminator / boolean-literal words that end a bare `GROUP BY`
-/// GroupCondition or `HAVING`/`ORDER BY` Constraint list — the shared word set
-/// of [`Parser::at_bare_group_condition`] and [`Parser::at_bare_constraint`].
+/// GroupCondition or `HAVING`/`ORDER BY` Constraint list — the word set
+/// [`Parser::at_bare_constraint`] excludes.
 const MODIFIER_TERMINATOR_WORDS: [&str; 8] = [
     "HAVING", "ORDER", "LIMIT", "OFFSET", "VALUES", "BINDINGS", "TRUE", "FALSE",
 ];
@@ -3765,17 +3743,18 @@ fn is_modifier_terminator_word(w: &str) -> bool {
 /// a query may write is a tag a document may hold.
 fn split_lang_dir(tag: &str, at: usize) -> Result<(String, Option<BaseDirection>)> {
     let (lang, dir) = match tag.split_once("--") {
-        Some((lang, "ltr")) => (lang, Some(BaseDirection::Ltr)),
-        Some((lang, "rtl")) => (lang, Some(BaseDirection::Rtl)),
-        Some((_, dir)) => {
-            return Err(ParseError::syntax(
-                format!(
-                    "invalid base direction `--{dir}` in `@{tag}`: \
-                     must be exactly `ltr` or `rtl` (lower case)"
-                ),
-                at,
-            ));
-        }
+        Some((lang, dir)) => match BaseDirection::from_str_token(dir) {
+            Some(direction) => (lang, Some(direction)),
+            None => {
+                return Err(ParseError::syntax(
+                    format!(
+                        "invalid base direction `--{dir}` in `@{tag}`: \
+                         must be exactly `ltr` or `rtl` (lower case)"
+                    ),
+                    at,
+                ));
+            }
+        },
         None => (tag, None),
     };
     if let Err(error) = langtag::parse_with(lang, LANGTAG_PROFILE) {

@@ -67,12 +67,14 @@ pub(super) fn translate(
     translate_with(
         pattern,
         dot_all,
+        false,
         if case_insensitive {
             CaseMode::EngineFold
         } else {
             CaseMode::Sensitive
         },
     )
+    .map(|translated| translated.source)
 }
 
 /// How the `i` flag reaches the translated source.
@@ -180,9 +182,11 @@ fn push_char_ranges(out: &mut String, chars: &[char]) {
 pub(super) fn translate_with(
     pattern: &str,
     dot_all: bool,
+    multi_line: bool,
     case: CaseMode,
-) -> Result<String, XsdRegexError> {
+) -> Result<Translated, XsdRegexError> {
     let case_insensitive = case == CaseMode::EngineFold;
+    let mut shape = ShapeObserver::default();
     let variants = case == CaseMode::XPathVariants;
     let mut frames: Vec<VariantFrame> = Vec::new();
     let mut out = String::with_capacity(pattern.len() + 16);
@@ -214,6 +218,7 @@ pub(super) fn translate_with(
         if variants && let Some(frame) = frames.last_mut().filter(|frame| frame.open) {
             mirror_normal_member(&mut frame.normal, &token);
         }
+        shape.observe(&token, class_depth);
         match token {
             Token::Literal(c) if variants && class_depth == 0 => {
                 if let Some(case_variants) = super::case_variants::of(c) {
@@ -387,7 +392,238 @@ pub(super) fn translate_with(
             limit: MAX_FOLDED_CLASS_ESCAPES,
         });
     }
-    Ok(out)
+    Ok(Translated {
+        source: out,
+        shape: shape.finish(case, multi_line),
+    })
+}
+
+/// A translated pattern: the `regex`-crate source, and what the pass saw of
+/// its [`Shape`].
+pub(super) struct Translated {
+    pub(super) source: String,
+    pub(super) shape: Shape,
+}
+
+/// What the translation pass saw that decides whether the compiled syntax is
+/// worth reading for a match plan (`prefilter::Plan`), learned from the tokens
+/// the pass reads anyway, so a pattern that needs no plan, or whose plan is a
+/// literal's, never has its translated source parsed a second time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Shape {
+    /// Every token is a literal character outside a class and no `i` flag is
+    /// in force: the pattern matches exactly this text.
+    Literal(String),
+    /// The pattern provably has no plan beyond the engine: no token can
+    /// contribute a single-byte position (an ASCII byte set) to a match (it
+    /// is built of `\i`/`\c`/`\w`/`\d`, their negations, `\S`, `.`, groups,
+    /// anchors and quantifiers), or it is anchored (so it names no window)
+    /// and the atoms next to its anchors are repeated or never ASCII sets (so
+    /// it has no anchored-end check): `^[a-z0-9]+$`, `^\p{L}+$`.
+    Engine,
+    /// Anything else: the plan is read from the parsed syntax.
+    Other,
+}
+
+/// One token outside every class, as [`ShapeObserver::finish`] reads the
+/// pattern's top level. A class is its `Open` and `Close`, a group likewise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// An unescaped `^`.
+    Caret,
+    /// An unescaped `$`.
+    Dollar,
+    /// An unescaped `|`.
+    Bar,
+    /// An unescaped `*`, `+` or `?`: a repetition that may be empty or unbounded.
+    Repeat,
+    /// An unescaped `{`: a counted repetition, which may be exact.
+    Brace,
+    /// A `[` or `(`.
+    Open,
+    /// A `]` or `)`.
+    Close,
+    /// An atom that is never a set of ASCII bytes: `\d`, `\w`, `\i`, `\c`,
+    /// their negations, `\S` and `.`.
+    Wide,
+    /// Any other token: an atom that may be a single-byte position.
+    Narrow,
+}
+
+/// What the translation pass learns for [`Shape`], one token at a time.
+struct ShapeObserver {
+    /// The pattern's text, while every token is a literal character.
+    literal: Option<String>,
+    /// Whether any token can be a single-byte position.
+    positions: bool,
+    /// The tokens outside every class, as far as their anchors need them.
+    top: TopLevel,
+}
+
+impl Default for ShapeObserver {
+    fn default() -> Self {
+        Self {
+            literal: Some(String::new()),
+            positions: false,
+            top: TopLevel::default(),
+        }
+    }
+}
+
+impl ShapeObserver {
+    /// Fold one token in; `class_depth` is the depth before the token.
+    fn observe(&mut self, token: &Token, class_depth: usize) {
+        let (text, kind) = match *token {
+            Token::Literal(c) if class_depth == 0 => match c {
+                '^' => (None, Kind::Caret),
+                '$' => (None, Kind::Dollar),
+                '|' => (None, Kind::Bar),
+                '*' | '+' | '?' => (None, Kind::Repeat),
+                '{' => (None, Kind::Brace),
+                // `}` and a count's digits are Narrow here: harmless, since a
+                // Narrow atom only ever keeps the plan to be read.
+                '}' => (None, Kind::Narrow),
+                c => {
+                    self.positions = true;
+                    (Some(c), Kind::Narrow)
+                }
+            },
+            // `\d`/`\D` are `\p{Nd}` and its complement, never an ASCII set.
+            Token::Escape('d' | 'D') => (None, Kind::Wide),
+            Token::Escape(c) => {
+                self.positions = true;
+                let text = match c {
+                    'n' => '\n',
+                    'r' => '\r',
+                    't' => '\t',
+                    other => other,
+                };
+                ((class_depth == 0).then_some(text), Kind::Narrow)
+            }
+            Token::ClassOpen { .. } => {
+                self.positions = true;
+                (None, Kind::Open)
+            }
+            Token::ClassClose => (None, Kind::Close),
+            Token::GroupOpen { .. } => (None, Kind::Open),
+            Token::GroupClose => (None, Kind::Close),
+            Token::ClassMember(_)
+            | Token::SpaceEscape { negated: false }
+            | Token::UnicodeProperty { .. } => {
+                self.positions = true;
+                (None, Kind::Narrow)
+            }
+            Token::NameEscape { .. }
+            | Token::WordEscape { .. }
+            | Token::SpaceEscape { negated: true }
+            | Token::Dot => (None, Kind::Wide),
+            Token::Literal(_) | Token::Subtract | Token::Backreference(_) => (None, Kind::Narrow),
+        };
+        // A class's own members are not top-level tokens; its `]` is, as the
+        // token that returns the depth to zero.
+        if class_depth == 0 || (class_depth == 1 && matches!(token, Token::ClassClose)) {
+            self.top.push(kind);
+        }
+        match (text, self.literal.as_mut()) {
+            (Some(c), Some(so_far)) => so_far.push(c),
+            _ => self.literal = None,
+        }
+    }
+
+    /// The pattern's [`Shape`], under the pass's case mode and the `m` flag.
+    fn finish(self, case: CaseMode, multi_line: bool) -> Shape {
+        match self.literal {
+            Some(text) if case == CaseMode::Sensitive => Shape::Literal(text),
+            _ if !self.positions => Shape::Engine,
+            _ if !multi_line && self.top.anchored_without_ends() => Shape::Engine,
+            _ => Shape::Other,
+        }
+    }
+}
+
+/// The top-level tokens, read as they stream past: what the first two are,
+/// what follows the atom that begins at the second, what the last two are,
+/// and whether a `|` stands outside every group.
+#[derive(Default)]
+struct TopLevel {
+    count: usize,
+    /// Groups and classes open at this point.
+    depth: usize,
+    /// A `|` outside every group: anchors then bind to one branch only.
+    bar: bool,
+    first: Option<Kind>,
+    second: Option<Kind>,
+    /// The depth the atom beginning at the second token closes back to, while
+    /// it is a group or class still open.
+    head_open: Option<usize>,
+    /// Whether the atom beginning at the second token has ended.
+    head_done: bool,
+    /// The token after that atom.
+    after_head: Option<Kind>,
+    prev: Option<Kind>,
+    last: Option<Kind>,
+}
+
+impl TopLevel {
+    fn push(&mut self, kind: Kind) {
+        if kind == Kind::Bar && self.depth == 0 {
+            self.bar = true;
+        }
+        match self.count {
+            0 => self.first = Some(kind),
+            1 => {
+                self.second = Some(kind);
+                if kind == Kind::Open {
+                    self.head_open = Some(self.depth);
+                } else {
+                    self.head_done = true;
+                }
+            }
+            _ if self.head_done && self.after_head.is_none() => self.after_head = Some(kind),
+            _ => {}
+        }
+        match kind {
+            Kind::Open => self.depth += 1,
+            Kind::Close => {
+                self.depth = self.depth.saturating_sub(1);
+                if !self.head_done && self.head_open == Some(self.depth) {
+                    self.head_done = true;
+                }
+            }
+            _ => {}
+        }
+        self.prev = self.last;
+        self.last = Some(kind);
+        self.count += 1;
+    }
+
+    /// Whether the pattern is anchored at the start or the end of the haystack
+    /// (`^` first or `$` last, no top-level `|`, and no `m`, which the caller
+    /// has checked) with atoms next to its anchors that can never be
+    /// single-byte positions: each is repeated (`*`, `+`, `?`) or never an
+    /// ASCII set. Such a pattern has no window (an anchored one gets none) and
+    /// no anchored-end check, so its plan is the engine without a parse.
+    fn anchored_without_ends(&self) -> bool {
+        if self.bar {
+            return false;
+        }
+        let start = self.first == Some(Kind::Caret)
+            && !matches!(self.second, Some(Kind::Repeat | Kind::Brace));
+        let end = self.count > usize::from(start) && self.last == Some(Kind::Dollar);
+        if !start && !end {
+            return false;
+        }
+        let head = start
+            && match self.second {
+                None | Some(Kind::Dollar | Kind::Wide) => false,
+                Some(Kind::Narrow | Kind::Open) => self.after_head != Some(Kind::Repeat),
+                Some(_) => true,
+            };
+        let tail = end
+            && self.count >= 2
+            && !matches!(self.prev, Some(Kind::Caret | Kind::Repeat | Kind::Wide));
+        !head && !tail
+    }
 }
 
 /// Append `token`'s contribution to a class's normal-member mirror (see

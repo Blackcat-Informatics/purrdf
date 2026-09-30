@@ -1008,12 +1008,10 @@ impl<A: Array> FromIterator<A::Item> for SmallVec<A> {
     }
 }
 
-impl<A: Array> Default for SmallVec<A> {
+purrdf_hash::default_from_new!(
     #[inline]
-    fn default() -> Self {
-        Self::new()
-    }
-}
+    [A: Array] SmallVec<A>
+);
 
 impl<A: Array> Clone for SmallVec<A>
 where

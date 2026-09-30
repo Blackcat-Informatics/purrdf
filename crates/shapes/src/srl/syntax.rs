@@ -50,14 +50,11 @@
 //! In a rule body a blank node "behave[s] like variables"; in a rule head it is fresh per
 //! solution; in a data block it is a blank node of the data.
 
-use std::collections::HashMap;
-
 use ::purrdf::RdfTextDirection;
+use purrdf_core::FastMap;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, LineIndex, langtag};
 use purrdf_sparql_algebra::lexer::{Spanned, Token, tokenize};
-use purrdf_sparql_algebra::{
-    Args, ArithmeticOperator, BaseDirection, Child, Expression, Function, Variable,
-};
+use purrdf_sparql_algebra::{Args, ArithmeticOperator, Child, Expression, Function, Variable};
 
 use super::ir::{Element, ElementRule, PatternTerm, TriplePattern};
 use crate::model::{rdf, xsd};
@@ -127,7 +124,7 @@ pub(crate) fn parse(text: &str, base: Option<&str>) -> Parse<Parsed> {
         tokens,
         pos: 0,
         base,
-        prefixes: HashMap::new(),
+        prefixes: FastMap::default(),
         anon_prefix,
         anon: 0,
     };
@@ -186,7 +183,7 @@ struct SrlParser<'t> {
     /// The base IRIs in scope.
     base: BaseScope,
     /// The declared prefixes.
-    prefixes: HashMap<String, String>,
+    prefixes: FastMap<String, String>,
     /// The label prefix of fresh blank nodes.
     anon_prefix: String,
     /// Fresh blank nodes minted so far.
@@ -989,19 +986,17 @@ impl<'t> SrlParser<'t> {
             items.push(self.graph_node(ctx, out)?);
         }
         self.pos += 1;
-        let cells: Vec<PatternTerm> = items.iter().map(|_| self.fresh()).collect();
-        for (index, (cell, item)) in cells.iter().zip(items).enumerate() {
-            out.push(TriplePattern::new(cell.clone(), iri_term(rdf::FIRST), item));
-            let rest = cells
-                .get(index + 1)
-                .cloned()
-                .unwrap_or_else(|| iri_term(rdf::NIL));
-            out.push(TriplePattern::new(cell.clone(), iri_term(rdf::REST), rest));
-        }
-        Ok(cells
-            .into_iter()
-            .next()
-            .expect("a collection holds at least one item"))
+        let vocab = purrdf_core::ListVocab {
+            first: iri_term(rdf::FIRST),
+            rest: iri_term(rdf::REST),
+            nil: iri_term(rdf::NIL),
+        };
+        Ok(purrdf_core::build_rdf_list(
+            items,
+            &vocab,
+            |_| self.fresh(),
+            |subject, predicate, object| out.push(TriplePattern::new(subject, predicate, object)),
+        ))
     }
 
     /// `ReifiedTriple ::= '<<' ReifiedTripleSubject Verb ReifiedTripleObject Reifier? '>>'`
@@ -1229,8 +1224,11 @@ impl<'t> SrlParser<'t> {
     /// syntax language-tag profile, the profile every other RDF reader here applies.
     fn lang_dir(&self, tag: &str) -> Parse<(String, Option<RdfTextDirection>)> {
         let (language, direction) = match tag.split_once("--") {
-            Some((language, "ltr")) => (language, Some(RdfTextDirection::Ltr)),
-            Some((language, "rtl")) => (language, Some(RdfTextDirection::Rtl)),
+            Some((language, token))
+                if let Some(direction) = RdfTextDirection::from_str_token(token) =>
+            {
+                (language, Some(direction))
+            }
             Some((_, other)) => {
                 return self.error(format!(
                     "`@{tag}`: the base direction `--{other}` is neither `ltr` nor `rtl` (RDF 1.2 \
@@ -1638,14 +1636,9 @@ impl Lit {
     /// As a SPARQL expression constant.
     fn algebra(self) -> purrdf_sparql_algebra::Literal {
         match (self.language, self.datatype) {
-            (Some((language, direction)), _) => purrdf_sparql_algebra::Literal::new_lang(
-                self.lexical,
-                language,
-                direction.map(|d| match d {
-                    RdfTextDirection::Ltr => BaseDirection::Ltr,
-                    RdfTextDirection::Rtl => BaseDirection::Rtl,
-                }),
-            ),
+            (Some((language, direction)), _) => {
+                purrdf_sparql_algebra::Literal::new_lang(self.lexical, language, direction)
+            }
             (None, Some(datatype)) if datatype == xsd::STRING => {
                 purrdf_sparql_algebra::Literal::new_simple(self.lexical)
             }

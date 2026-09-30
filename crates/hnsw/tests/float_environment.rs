@@ -32,69 +32,22 @@
 #[path = "support/purremb.rs"]
 mod purremb;
 
+#[path = "support/fixture.rs"]
+mod fixture;
+use fixture::{bits, knn_invoke, params};
 use std::sync::Arc;
 
 use purrdf_core::DistanceMetric;
+use purrdf_core::distance::control::Mxcsr;
 use purrdf_core::distance::{
     Arithmetic, Bound, Bounded, Exact, FloatEnvironmentError, FloatEnvironmentEvidence, Measure,
     Reassociated, RecordedPathError, Resolved, RowsRef,
 };
-use purrdf_hnsw::{
-    HnswError, HnswIndex, Kernel, Params, Ranked, VectorMatrix, guard, relation::HnswSpace,
-};
+use purrdf_core::purremb_fixture::reference_norm;
+use purrdf_hnsw::{HnswError, HnswIndex, Kernel, Ranked, VectorMatrix, guard, relation::HnswSpace};
 use purrdf_sparql_eval::{
     EmbeddingKnnRelation, EmbeddingSpace, EvalError, KnnGuard, PfArgs, PfRow, PropertyFunction,
 };
-
-/// MXCSR flush-to-zero.
-const FTZ: u32 = 1 << 15;
-
-fn read_mxcsr() -> u32 {
-    let mut value: u32 = 0;
-    // SAFETY: `stmxcsr` stores the 32-bit MXCSR to a live, aligned, writable `u32`.
-    unsafe {
-        core::arch::asm!(
-            "stmxcsr [{ptr}]",
-            ptr = in(reg) &raw mut value,
-            options(nostack, preserves_flags),
-        );
-    }
-    value
-}
-
-fn write_mxcsr(value: u32) {
-    // SAFETY: `ldmxcsr` loads MXCSR from a live, aligned `u32`. Every value written here is
-    // the saved register or the saved register with FTZ added, and `Flushed` restores the
-    // saved one on every exit, including a panic.
-    unsafe {
-        core::arch::asm!(
-            "ldmxcsr [{ptr}]",
-            ptr = in(reg) &raw const value,
-            options(nostack, preserves_flags, readonly),
-        );
-    }
-}
-
-/// FTZ set on this thread for as long as the guard lives.
-struct Flushed(u32);
-
-impl Flushed {
-    fn new() -> Self {
-        let saved = read_mxcsr();
-        write_mxcsr(saved | FTZ);
-        Self(saved)
-    }
-}
-
-impl Drop for Flushed {
-    fn drop(&mut self) {
-        write_mxcsr(self.0);
-    }
-}
-
-fn params() -> Params {
-    Params::new(4, 8, 16, 8).expect("valid")
-}
 
 /// Whether `refusal` is the flush-to-zero refusal this target reports for an FTZ thread:
 /// the MXCSR by name where it is read, and the probe's flushed-result row where not.
@@ -171,16 +124,16 @@ fn every_distance_entry_point_refuses_a_flushing_environment_and_answers_the_def
     let selected = guard::select(&view).expect("one HNSW guard");
 
     {
-        let flushed = Flushed::new();
+        let flushed = Mxcsr::flush_to_zero();
         let build = HnswIndex::build(matrix.clone(), &DistanceMetric::SquaredEuclidean, params());
-        let decode = HnswIndex::decode(matrix.clone(), &image);
+        let decode = HnswIndex::<Exact>::decode(matrix.clone(), &image);
         let verify = index.verify_rebuild();
         let rows = index.search_rows(3, 4);
         let rows_work = index.search_rows_work(3, 4);
         let vector = index.search_vector(&query, 4);
         let vector_work = index.search_vector_work(&query, 4);
         let guard_verify = guard::verify_rebuild(&selected, &matrix, &params());
-        let hnsw_space = HnswSpace::from_artifact(
+        let hnsw_space = HnswSpace::<Exact>::from_artifact(
             &fixture.bytes,
             fixture.target_set,
             fixture.vector_space,
@@ -237,14 +190,14 @@ fn every_distance_entry_point_refuses_a_flushing_environment_and_answers_the_def
     // The valid neighbour: the same calls, on the same thread, after the register was
     // restored, all answer.
     assert!(HnswIndex::build(matrix.clone(), &DistanceMetric::SquaredEuclidean, params()).is_ok());
-    let decoded = HnswIndex::decode(matrix.clone(), &image).expect("decodes");
+    let decoded = HnswIndex::<Exact>::decode(matrix.clone(), &image).expect("decodes");
     assert_eq!(decoded.canonical_image(), image);
     assert!(index.verify_rebuild().expect("rebuilds"));
     assert_eq!(index.search_rows(3, 4).expect("searches").len(), 4);
     assert_eq!(index.search_vector(&query, 4).expect("searches").len(), 4);
     assert!(guard::verify_rebuild(&selected, &matrix, &params()).expect("verifies"));
     assert!(
-        HnswSpace::from_artifact(
+        HnswSpace::<Exact>::from_artifact(
             &fixture.bytes,
             fixture.target_set,
             fixture.vector_space,
@@ -265,16 +218,19 @@ fn every_reassociated_entry_point_refuses_a_flushing_environment_and_answers_the
     // refusal from every entry point, and the same answers once the register is restored.
     let fixture = purremb::Fixture::new_reassociated(40, 20, params());
     let matrix = fixture.matrix.clone();
-    let index =
-        HnswIndex::build_reassociated(matrix.clone(), &DistanceMetric::SquaredEuclidean, params())
-            .expect("builds in the default environment");
+    let index = purrdf_hnsw::build::<Reassociated>(
+        matrix.clone(),
+        &DistanceMetric::SquaredEuclidean,
+        params(),
+    )
+    .expect("builds in the default environment");
     let image = index.canonical_image();
     let query = matrix.row_to_vec(3);
     let mut view = purrdf_core::EmbeddingView::from_bytes(&fixture.bytes).expect("opens");
     purrdf_core::verify_embedding(&mut view).expect("verifies");
     let selected = guard::select(&view).expect("one HNSW guard");
     let open = || {
-        HnswSpace::from_artifact_reassociated(
+        HnswSpace::<Reassociated>::from_artifact(
             &fixture.bytes,
             fixture.target_set,
             fixture.vector_space,
@@ -284,13 +240,13 @@ fn every_reassociated_entry_point_refuses_a_flushing_environment_and_answers_the
     };
 
     {
-        let flushed = Flushed::new();
-        let build = HnswIndex::build_reassociated(
+        let flushed = Mxcsr::flush_to_zero();
+        let build = purrdf_hnsw::build::<Reassociated>(
             matrix.clone(),
             &DistanceMetric::SquaredEuclidean,
             params(),
         );
-        let decode = HnswIndex::decode_reassociated(matrix.clone(), &image);
+        let decode = HnswIndex::<Reassociated>::decode(matrix.clone(), &image);
         let verify = index.verify_rebuild();
         let rows = index.search_rows(3, 4);
         let vector = index.search_vector(&query, 4);
@@ -315,54 +271,25 @@ fn every_reassociated_entry_point_refuses_a_flushing_environment_and_answers_the
         );
         assert!(
             is_ftz_eval(&space.expect_err("refuses")),
-            "HnswSpace::from_artifact_reassociated keeps the named variant"
+            "HnswSpace::<Reassociated>::from_artifact keeps the named variant"
         );
     }
 
     assert!(
-        HnswIndex::build_reassociated(matrix.clone(), &DistanceMetric::SquaredEuclidean, params())
-            .is_ok()
+        purrdf_hnsw::build::<Reassociated>(
+            matrix.clone(),
+            &DistanceMetric::SquaredEuclidean,
+            params()
+        )
+        .is_ok()
     );
-    let decoded = HnswIndex::decode_reassociated(matrix.clone(), &image).expect("decodes");
+    let decoded = HnswIndex::<Reassociated>::decode(matrix.clone(), &image).expect("decodes");
     assert_eq!(decoded.canonical_image(), image);
     assert!(index.verify_rebuild().expect("rebuilds"));
     assert_eq!(index.search_rows(3, 4).expect("searches").len(), 4);
     assert_eq!(index.search_vector(&query, 4).expect("searches").len(), 4);
     assert!(guard::verify_rebuild(&selected, &matrix, &params()).expect("verifies"));
     assert!(open().is_ok());
-}
-
-/// Every row of one kNN invocation seeded at `seed`: the ranked read of depth `k` when
-/// `neighbour` is free, the membership lookup of `neighbour` when it is bound.
-fn knn_invoke<A: Arithmetic>(
-    relation: &EmbeddingKnnRelation<A>,
-    seed: &purrdf_core::TermValue,
-    neighbour: Option<&purrdf_core::TermValue>,
-) -> Result<Vec<PfRow>, EvalError> {
-    let count =
-        purrdf_core::TermValue::typed_literal("3", "http://www.w3.org/2001/XMLSchema#integer");
-    let subject = [neighbour];
-    let object = [Some(seed), neighbour.is_none().then_some(&count), None];
-    let args = PfArgs::new(&subject, &object);
-    let mut cursor = relation.open(&args, None)?;
-    let mut rows = Vec::new();
-    while let Some(row) = cursor.next()? {
-        rows.push(row);
-    }
-    Ok(rows)
-}
-
-/// A batch answer as its rows and distance bits, so equality is bit-identity.
-fn bits(batch: &[Vec<Ranked>]) -> Vec<Vec<(usize, u64)>> {
-    batch
-        .iter()
-        .map(|ranked| {
-            ranked
-                .iter()
-                .map(|scored| (scored.row, scored.distance.to_bits()))
-                .collect()
-        })
-        .collect()
 }
 
 /// What one thread's calls answered, every compute entry that runs on a shared index or
@@ -402,9 +329,12 @@ fn a_worker_thread_is_checked_where_it_computes_not_where_the_index_was_built() 
     let matrix = fixture.matrix.clone();
     let exact = HnswIndex::build(matrix.clone(), &DistanceMetric::SquaredEuclidean, params())
         .expect("builds in the default environment");
-    let fast =
-        HnswIndex::build_reassociated(matrix.clone(), &DistanceMetric::SquaredEuclidean, params())
-            .expect("builds in the default environment");
+    let fast = purrdf_hnsw::build::<Reassociated>(
+        matrix.clone(),
+        &DistanceMetric::SquaredEuclidean,
+        params(),
+    )
+    .expect("builds in the default environment");
     let space = Arc::new(
         EmbeddingSpace::from_artifact(
             &fixture.without_index,
@@ -446,7 +376,7 @@ fn a_worker_thread_is_checked_where_it_computes_not_where_the_index_was_built() 
 
     let (flushed, clean) = std::thread::scope(|scope| {
         let flushed = scope.spawn(|| {
-            let _flushed = Flushed::new();
+            let _flushed = Mxcsr::flush_to_zero();
             answers()
         });
         let clean = scope.spawn(answers);
@@ -612,7 +542,7 @@ fn every_pair_entry_point_needs_a_handle_a_flushing_thread_cannot_obtain() {
     // refused by name, so no pair distance can be computed there.
     let matrix = VectorMatrix::new(3, 2, subnormal_rows()).expect("finite rows");
     let (flushed_square, exact, fast, recorded, fast_recorded) = {
-        let flushed = Flushed::new();
+        let flushed = Mxcsr::flush_to_zero();
         let square = core::hint::black_box(TINY) * core::hint::black_box(TINY);
         let exact = Exact::resolve();
         let fast = Reassociated::resolve();
@@ -732,35 +662,6 @@ fn every_pair_entry_point_needs_a_handle_a_flushing_thread_cannot_obtain() {
 /// results returns `+0` for it.
 const SUBNORMAL_ROW: [f64; 2] = [3e-310, 4e-310];
 
-/// PURREMB §13.2's scaled L2 fold, transcribed from the specification's written order:
-/// the reference every public norm entry point is held to, and the arithmetic a flushed
-/// thread is shown to run differently. No handle, so it can be run where none can be
-/// obtained; `black_box` keeps the compiler from folding it at compile time, under the
-/// default environment, instead of on the thread under test.
-fn reference_norm(values: &[f64]) -> f64 {
-    let mut scale = 0.0_f64;
-    let mut ssq = 1.0_f64;
-    for &value in core::hint::black_box(values) {
-        let value = value.abs();
-        if value == 0.0 {
-            continue;
-        }
-        if scale < value {
-            let ratio = scale / value;
-            let square = ratio * ratio;
-            let product = ssq * square;
-            ssq = 1.0 + product;
-            scale = value;
-        } else {
-            let ratio = value / scale;
-            let square = ratio * ratio;
-            ssq += square;
-        }
-    }
-    let root = ssq.sqrt();
-    core::hint::black_box(scale) * root
-}
-
 #[test]
 fn every_norm_entry_point_needs_the_exact_handle_a_flushing_thread_cannot_obtain() {
     // The public norm entry points -- `Resolved::<Exact>::norm` (re-exported by the kNN
@@ -770,7 +671,7 @@ fn every_norm_entry_point_needs_the_exact_handle_a_flushing_thread_cannot_obtain
     // thread by name. So no norm, and no cosine kernel dividing by one, is computed there.
     let matrix = VectorMatrix::new(1, 2, SUBNORMAL_ROW.to_vec()).expect("finite row");
     let (flushed_norm, exact, fast, recorded) = {
-        let flushed = Flushed::new();
+        let flushed = Mxcsr::flush_to_zero();
         let norm = reference_norm(&SUBNORMAL_ROW);
         let exact = Exact::resolve();
         let fast = Reassociated::resolve();

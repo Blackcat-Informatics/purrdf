@@ -144,20 +144,11 @@ fn json_string(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-
-    fn repo_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf()
-    }
+    use purrdf_testkit::paths::workspace_root;
 
     #[test]
     fn dsl_stats_matches_committed() {
-        let root = repo_root();
+        let root = workspace_root();
         // Committed-artifact parity: the committed stats were generated with the
         // blackcatinformatics purrdf namespace, so this cross-check must use it
         // (pure fixtures elsewhere use example.org).

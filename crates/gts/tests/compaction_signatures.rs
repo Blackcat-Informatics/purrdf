@@ -10,13 +10,15 @@
 //! construct a request that omits it — an unsigned pack cannot be
 //! represented, let alone emitted.
 
+use purrdf_hash::fixed::FixedState;
 use std::collections::HashMap;
 
-use ed25519_dalek::SigningKey;
+use purrdf_ed25519::SigningKey;
 use purrdf_gts::compact::{
     CompactionParams, DictPlan, compact_streamable, detached_signature_leaves,
     detached_signature_proof,
 };
+use purrdf_gts::fixture::{fixed_key, object_literal};
 use purrdf_gts::mmr;
 use purrdf_gts::model::{Graph, Signature};
 use purrdf_gts::reader::read;
@@ -24,12 +26,6 @@ use purrdf_gts::stream;
 use purrdf_gts::verify::verify_file_with_keyring;
 use purrdf_gts::wire::blake3_256;
 use purrdf_gts::writer::Writer;
-
-/// A fixed, deterministic Ed25519 signing key (RFC 8032 signing is
-/// deterministic per key + message, so tests stay byte-reproducible).
-fn fixed_key(byte: u8) -> SigningKey {
-    SigningKey::from_bytes(&[byte; 32])
-}
 
 /// A source GTS file whose every frame (including the blob frames a
 /// streamable compaction turns into detached-signature provenance) is
@@ -52,18 +48,6 @@ fn source_unsigned(blob_count: u32) -> Vec<u8> {
         w.add_blob_owned(blob, Some("text/plain"), None);
     }
     w.into_bytes()
-}
-
-/// The literal value of the object of the first quad using `predicate_iri`.
-fn object_literal(g: &Graph, predicate_iri: &str) -> Option<String> {
-    let p = g
-        .terms
-        .iter()
-        .position(|t| t.value.as_deref() == Some(predicate_iri))?;
-    g.quads
-        .iter()
-        .find(|&&(_, pred, _, _)| pred == p)
-        .and_then(|&(_, _, o, _)| g.terms[o].value.clone())
 }
 
 fn packaging_params<'a>(packaging_key: SigningKey, packaging_kid: &str) -> CompactionParams<'a> {
@@ -236,7 +220,7 @@ fn the_packaging_head_signature_is_distinct_from_carried_authorship_signatures()
     );
 
     let public = fixed_key(7).verifying_key();
-    let mut keyring = HashMap::new();
+    let mut keyring = HashMap::with_hasher(FixedState::new());
     keyring.insert(packaging_kid.to_string(), public);
     let result = verify_file_with_keyring(&packed, &keyring);
     assert_eq!(
@@ -276,7 +260,7 @@ fn every_compacted_pack_carries_the_mandatory_packaging_signature_even_over_an_u
     );
 
     let public = fixed_key(13).verifying_key();
-    let keyring = HashMap::from([(packaging_kid.to_string(), public)]);
+    let keyring = HashMap::<_, _, FixedState>::from_iter([(packaging_kid.to_string(), public)]);
     let result = verify_file_with_keyring(&packed, &keyring);
     assert!(
         result.ok && result.valid == 1 && result.signed == 1,
@@ -294,8 +278,11 @@ fn keyring_rotation_flips_the_packaging_signature_from_unverified_to_valid() {
 
     // A keyring that has rotated PAST the packaging key (missing "pack-v2")
     // leaves the packaging signature unverified.
-    let stale_keyring: HashMap<String, ed25519_dalek::VerifyingKey> =
-        HashMap::from([("pack-v1".to_string(), fixed_key(1).verifying_key())]);
+    let stale_keyring: HashMap<String, purrdf_ed25519::VerifyingKey, FixedState> =
+        HashMap::<_, _, FixedState>::from_iter([(
+            "pack-v1".to_string(),
+            fixed_key(1).verifying_key(),
+        )]);
     let stale = verify_file_with_keyring(&packed, &stale_keyring);
     assert!(
         !stale.ok,
@@ -306,10 +293,11 @@ fn keyring_rotation_flips_the_packaging_signature_from_unverified_to_valid() {
 
     // A keyring carrying both the retired and the current packaging key
     // (rotation-capable) resolves the signature.
-    let rotated_keyring: HashMap<String, ed25519_dalek::VerifyingKey> = HashMap::from([
-        ("pack-v1".to_string(), fixed_key(1).verifying_key()),
-        (packaging_kid.to_string(), fixed_key(9).verifying_key()),
-    ]);
+    let rotated_keyring: HashMap<String, purrdf_ed25519::VerifyingKey, FixedState> =
+        HashMap::<_, _, FixedState>::from_iter([
+            ("pack-v1".to_string(), fixed_key(1).verifying_key()),
+            (packaging_kid.to_string(), fixed_key(9).verifying_key()),
+        ]);
     let rotated = verify_file_with_keyring(&packed, &rotated_keyring);
     assert!(
         rotated.ok,

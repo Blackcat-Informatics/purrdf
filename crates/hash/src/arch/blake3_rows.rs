@@ -25,6 +25,8 @@ fn indices<const A: usize, const B: usize, const C: usize, const D: usize>() -> 
     // SAFETY: the array contains sixteen readable lanes.
     unsafe { _mm512_loadu_si512(words.as_ptr().cast()) }
 }
+/// The BLAKE3 message-word permutation applied to the four row registers between rounds:
+/// a fixed shuffle of message words, not a seeded shuffle of a slice.
 #[inline]
 #[target_feature(enable = "avx512f")]
 fn permute(m: &mut [__m512i; 4]) {

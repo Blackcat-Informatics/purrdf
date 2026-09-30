@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Report-only benchmark for the ShEx per-engine shape precompilation path.
@@ -26,9 +26,9 @@
 
 use std::sync::Arc;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_shex::{ShapeSelector, parse_shexc, validate};
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 
 const NODE_COUNT: usize = 3_000;
 const NS: &str = "http://example.org/ns#";
@@ -86,7 +86,7 @@ fn fixture() -> (
     (schema, data, map)
 }
 
-fn bench_prepared_validate(c: &mut Criterion) {
+fn bench_prepared_validate(c: &mut Bench) {
     let (schema, data, map) = fixture();
 
     let mut group = c.benchmark_group("shex_prepared_validate");
@@ -104,5 +104,5 @@ fn bench_prepared_validate(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_prepared_validate);
-criterion_main!(benches);
+bench_group!(benches, bench_prepared_validate);
+bench_main!(benches);

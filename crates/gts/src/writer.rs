@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use ciborium::value::Value;
+use purrdf_lex::cbor::Value;
 
 use crate::codec::{Codec, CodecError, EncodeOptions, encode_chain_with_options};
 use crate::model::{
@@ -24,23 +24,15 @@ use crate::wire::{
 /// Payloads larger than this select `zstd-rsyncable` over `zstd` in snapshot helpers.
 pub const DEFAULT_RSYNCABLE_THRESHOLD: usize = 65_536;
 
-fn iv(n: i64) -> Value {
-    Value::Integer(ciborium::value::Integer::from(n))
-}
-
-fn uv(n: usize) -> Value {
-    Value::Integer(ciborium::value::Integer::from(n as u64))
-}
-
 /// Serialise a [`Term`] to its wire map (dropping absent fields).
 pub fn term_to_wire(t: &Term) -> Value {
     let mut entries: Vec<(Value, Value)> = Vec::with_capacity(6);
-    entries.push(("k".into(), iv(t.kind as i64)));
+    entries.push(("k".into(), Value::from(t.kind as i64)));
     if let Some(v) = &t.value {
         entries.push(("v".into(), v.clone().into()));
     }
     if let Some(dt) = t.datatype {
-        entries.push(("dt".into(), iv(dt as i64)));
+        entries.push(("dt".into(), Value::from(dt)));
     }
     if let Some(l) = &t.lang {
         entries.push(("l".into(), l.clone().into()));
@@ -49,7 +41,7 @@ pub fn term_to_wire(t: &Term) -> Value {
         entries.push(("dir".into(), direction.to_string().into()));
     }
     if let Some(rf) = t.reifier {
-        entries.push(("rf".into(), iv(rf as i64)));
+        entries.push(("rf".into(), Value::from(rf)));
     }
     // A self-describing quoted triple carries its own components, so the wire
     // never has to route a triple TERM's identity through a reifier id (which
@@ -57,7 +49,7 @@ pub fn term_to_wire(t: &Term) -> Value {
     if let Some((s, p, o)) = t.triple {
         entries.push((
             "tt".into(),
-            Value::Array(vec![iv(s as i64), iv(p as i64), iv(o as i64)]),
+            Value::Array(vec![Value::from(s), Value::from(p), Value::from(o)]),
         ));
     }
     Value::Map(entries)
@@ -301,7 +293,7 @@ pub fn snapshot_from_graph(
 
     if let Some(signer) = signer {
         writer.sign_with(
-            ed25519_dalek::SigningKey::from_bytes(&signer.secret),
+            purrdf_ed25519::SigningKey::from_bytes(&signer.secret),
             &signer.kid,
         );
         writer.add_meta(Value::Map(vec![(
@@ -366,18 +358,19 @@ pub(crate) fn terms_payload(terms: &[Term]) -> Value {
     Value::Array(terms.iter().map(term_to_wire).collect())
 }
 
-/// The canonical `quads`-frame payload (graph slot dropped when `None`).
+/// The canonical `quads`-frame payload (graph slot dropped when `None`), and the
+/// `annot`-frame one ([`annot_payload`]).
 pub(crate) fn quads_payload(quads: &[Quad]) -> Value {
     Value::Array(
         quads
             .iter()
             .map(|&(s, p, o, g)| {
                 let mut row = Vec::with_capacity(3 + usize::from(g.is_some()));
-                row.push(iv(s as i64));
-                row.push(iv(p as i64));
-                row.push(iv(o as i64));
+                row.push(Value::from(s));
+                row.push(Value::from(p));
+                row.push(Value::from(o));
                 if let Some(gv) = g {
-                    row.push(iv(gv as i64));
+                    row.push(Value::from(gv));
                 }
                 Value::Array(row)
             })
@@ -392,12 +385,12 @@ pub(crate) fn reifies_payload(bindings: &[ReifierRow]) -> Value {
             .iter()
             .map(|&(rid, (s, p, o), g)| {
                 let mut row = Vec::with_capacity(4 + usize::from(g.is_some()));
-                row.push(iv(rid as i64));
-                row.push(iv(s as i64));
-                row.push(iv(p as i64));
-                row.push(iv(o as i64));
+                row.push(Value::from(rid));
+                row.push(Value::from(s));
+                row.push(Value::from(p));
+                row.push(Value::from(o));
                 if let Some(gv) = g {
-                    row.push(iv(gv as i64));
+                    row.push(Value::from(gv));
                 }
                 Value::Array(row)
             })
@@ -405,23 +398,10 @@ pub(crate) fn reifies_payload(bindings: &[ReifierRow]) -> Value {
     )
 }
 
-/// The canonical `annot`-frame payload.
-pub(crate) fn annot_payload(rows: &[AnnotationRow]) -> Value {
-    Value::Array(
-        rows.iter()
-            .map(|&(s, p, o, g)| {
-                let mut row = Vec::with_capacity(3 + usize::from(g.is_some()));
-                row.push(iv(s as i64));
-                row.push(iv(p as i64));
-                row.push(iv(o as i64));
-                if let Some(gv) = g {
-                    row.push(iv(gv as i64));
-                }
-                Value::Array(row)
-            })
-            .collect(),
-    )
-}
+/// The canonical `annot`-frame payload. An annotation row
+/// `(reifier, predicate, value, graph?)` has a quad's four columns and the same
+/// optional graph slot, so it is written by [`quads_payload`].
+pub(crate) use self::quads_payload as annot_payload;
 
 /// The canonical `suppress`-frame payload.
 pub(crate) fn suppress_payload(
@@ -485,7 +465,7 @@ pub struct Writer {
     types: Vec<String>,
     frame_ids: Vec<Vec<u8>>,
     // When set, every appended frame is COSE_Sign1-signed over its id (§9.2).
-    signer: Option<(ed25519_dalek::SigningKey, String)>,
+    signer: Option<(purrdf_ed25519::SigningKey, String)>,
     // The pinned in-band pack dictionaries by name (§5 header `"dct"`), which a
     // frame selects through `FrameOptions::dict`.
     dicts: BTreeMap<String, Vec<u8>>,
@@ -791,15 +771,15 @@ impl Writer {
                 if let Some(level) = options.zstd_level.filter(|_| is_dict_capable(name)) {
                     // §8.5 `level?`: declared so the authoring level is
                     // recoverable from the wire, not merely asserted.
-                    ce.push(("level".into(), iv(i64::from(level))));
+                    ce.push(("level".into(), Value::from(i64::from(level))));
                 }
-                (iv(*id), Value::Map(ce))
+                (Value::from(*id), Value::Map(ce))
             })
             .collect();
 
         let mut header: Vec<(Value, Value)> = vec![
             ("gts".into(), "GTS1".into()),
-            ("v".into(), iv(1)),
+            ("v".into(), Value::from(1)),
             ("prof".into(), profile.into()),
             ("cat".into(), Value::Map(cat_entries)),
         ];
@@ -920,7 +900,7 @@ impl Writer {
     }
 
     /// Sign every subsequently appended frame's id with this Ed25519 key (§9.2).
-    pub fn sign_with(&mut self, key: ed25519_dalek::SigningKey, kid: &str) {
+    pub fn sign_with(&mut self, key: purrdf_ed25519::SigningKey, kid: &str) {
         self.signer = Some((key, kid.to_string()));
     }
 
@@ -1096,7 +1076,7 @@ impl Writer {
             }
             frame.push((
                 "x".into(),
-                Value::Array(x_ids.into_iter().map(iv).collect()),
+                Value::Array(x_ids.into_iter().map(Value::from).collect()),
             ));
             Some(Value::Bytes(source))
         } else {
@@ -1245,7 +1225,7 @@ impl Writer {
     /// index wins (§6.2).
     fn add_index_impl(&mut self, include_mmr: bool) -> Vec<u8> {
         let mut payload: Vec<(Value, Value)> = vec![
-            ("count".into(), iv(self.types.len() as i64)),
+            ("count".into(), Value::from(self.types.len())),
             ("head".into(), Value::Bytes(self.prev.clone())),
         ];
         if include_mmr {
@@ -1256,15 +1236,15 @@ impl Writer {
         }
         if !self.offsets.is_empty() {
             // "off"/"ti" are [+ uint]-shaped — omit when empty
-            let off: Vec<Value> = self.offsets.iter().map(|&o| iv(o as i64)).collect();
+            let off: Vec<Value> = self.offsets.iter().map(|&o| Value::from(o)).collect();
             let mut ti: Vec<(Value, Value)> = Vec::new();
             for (pos, ftype) in self.types.iter().enumerate() {
                 match ti
                     .iter_mut()
                     .find(|(k, _)| matches!(k, Value::Text(t) if t == ftype))
                 {
-                    Some((_, Value::Array(positions))) => positions.push(iv(pos as i64)),
-                    _ => ti.push((ftype.clone().into(), Value::Array(vec![iv(pos as i64)]))),
+                    Some((_, Value::Array(positions))) => positions.push(Value::from(pos)),
+                    _ => ti.push((ftype.clone().into(), Value::Array(vec![Value::from(pos)]))),
                 }
             }
             payload.push(("off".into(), Value::Array(off)));
@@ -1453,9 +1433,9 @@ pub fn snapshot_payload(graph: &Graph) -> Value {
                 quads
                     .iter()
                     .map(|&(s, p, o, g)| {
-                        let mut row = vec![uv(s), uv(p), uv(o)];
+                        let mut row = vec![Value::from(s), Value::from(p), Value::from(o)];
                         if let Some(graph_name) = g {
-                            row.push(uv(graph_name));
+                            row.push(Value::from(graph_name));
                         }
                         Value::Array(row)
                     })
@@ -1488,9 +1468,14 @@ pub fn snapshot_payload(graph: &Graph) -> Value {
                 reifiers
                     .iter()
                     .map(|&(rid, (s, p, o), g)| {
-                        let mut row = vec![uv(rid), uv(s), uv(p), uv(o)];
+                        let mut row = vec![
+                            Value::from(rid),
+                            Value::from(s),
+                            Value::from(p),
+                            Value::from(o),
+                        ];
                         if let Some(graph_name) = g {
-                            row.push(uv(graph_name));
+                            row.push(Value::from(graph_name));
                         }
                         Value::Array(row)
                     })
@@ -1520,9 +1505,9 @@ pub fn snapshot_payload(graph: &Graph) -> Value {
                 annotations
                     .iter()
                     .map(|&(r, p, v, g)| {
-                        let mut row = vec![uv(r), uv(p), uv(v)];
+                        let mut row = vec![Value::from(r), Value::from(p), Value::from(v)];
                         if let Some(graph_name) = g {
-                            row.push(uv(graph_name));
+                            row.push(Value::from(graph_name));
                         }
                         Value::Array(row)
                     })
@@ -1651,9 +1636,13 @@ fn remap_term(term: &Term, old_to_new: &[usize]) -> Term {
 }
 
 fn quad_key(quad: &Quad) -> Vec<u8> {
-    let mut row = vec![iv(quad.0 as i64), iv(quad.1 as i64), iv(quad.2 as i64)];
+    let mut row = vec![
+        Value::from(quad.0),
+        Value::from(quad.1),
+        Value::from(quad.2),
+    ];
     if let Some(graph_name) = quad.3 {
-        row.push(iv(graph_name as i64));
+        row.push(Value::from(graph_name));
     }
     canonical(&Value::Array(row))
 }
@@ -1694,7 +1683,7 @@ fn remap_suppression_target(target: &Value, old_to_new: &[usize]) -> Value {
                 _ => "",
             };
             if (kind == "term" || kind == "reifier") && key_text == "id" {
-                if let Some(tid) = value_idx(value) {
+                if let Some(tid) = crate::reader::as_idx(value) {
                     return (key.clone(), Value::from(remap_id(old_to_new, tid) as u64));
                 }
             } else if kind == "quad"
@@ -1704,7 +1693,7 @@ fn remap_suppression_target(target: &Value, old_to_new: &[usize]) -> Value {
                 let remapped = ids
                     .iter()
                     .map(|id| {
-                        value_idx(id).map_or_else(
+                        crate::reader::as_idx(id).map_or_else(
                             || id.clone(),
                             |tid| Value::from(remap_id(old_to_new, tid) as u64),
                         )
@@ -1740,14 +1729,6 @@ fn map_text<'a>(value: &'a Value, wanted: &str) -> Option<&'a str> {
     })
 }
 
-fn value_idx(value: &Value) -> Option<usize> {
-    if let Value::Integer(i) = value {
-        usize::try_from(i128::from(*i)).ok()
-    } else {
-        None
-    }
-}
-
 /// Pack bytes into a `blake3:<hex>` digest string.
 ///
 /// # Examples
@@ -1771,7 +1752,7 @@ mod term_walk_tests {
     //! recursive references, on generated term tables with cycles and dangling ids, and
     //! over a chain far deeper than a 128 KiB thread could recurse.
 
-    use ciborium::value::Value;
+    use purrdf_lex::cbor::Value;
 
     use super::{canonical, term_identity_key, term_nesting_depth, text_or_null};
     use crate::model::{Graph, Term, TermKind};
@@ -1844,15 +1825,6 @@ mod term_walk_tests {
         value
     }
 
-    /// A SplitMix64 draw from the counter at `state`.
-    const fn splitmix64(state: &mut u64) -> u64 {
-        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = *state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
     fn term(kind: TermKind, value: Option<&str>) -> Term {
         Term {
             kind,
@@ -1868,8 +1840,8 @@ mod term_walk_tests {
     /// A generated term table: every kind, triple terms naming any id — themselves,
     /// each other in cycles, or one past the end — and some unbound.
     fn generated(seed: u64) -> Graph {
-        let mut state = seed;
-        let mut draw = |n: u64| splitmix64(&mut state) % n;
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(seed);
+        let mut draw = |n: u64| rng.below(n);
         let len = 1 + draw(9);
         let mut graph = Graph::default();
         for _ in 0..len {
@@ -1930,42 +1902,38 @@ mod term_walk_tests {
     #[test]
     fn a_deep_chain_is_measured_and_keyed_on_a_128_kib_thread() {
         const LEVELS: usize = 3_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut graph = Graph::default();
-                graph
-                    .terms
-                    .push(term(TermKind::Iri, Some("http://example.org/s")));
-                graph
-                    .terms
-                    .push(term(TermKind::Iri, Some("http://example.org/p")));
-                graph
-                    .terms
-                    .push(term(TermKind::Iri, Some("http://example.org/o")));
-                let mut below = 2;
-                for _ in 0..LEVELS {
-                    let mut triple = term(TermKind::Triple, None);
-                    triple.triple = Some((0, 1, below));
-                    graph.terms.push(triple);
-                    below = graph.terms.len() - 1;
-                }
-                let mut stack = Vec::new();
-                assert_eq!(term_nesting_depth(&graph, below, &mut stack), LEVELS);
-                let key = term_identity_key(&graph, below, &mut stack);
-                assert_eq!(stack, Vec::<usize>::new());
-                let iri = |value: &str| canonical(&Value::Array(vec!["iri".into(), value.into()]));
-                let level = 1
-                    + canonical(&Value::Text("triple".into())).len()
-                    + iri("http://example.org/s").len()
-                    + iri("http://example.org/p").len();
-                assert_eq!(
-                    key.len(),
-                    LEVELS * level + iri("http://example.org/o").len()
-                );
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no walk overflowed the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut graph = Graph::default();
+            graph
+                .terms
+                .push(term(TermKind::Iri, Some("http://example.org/s")));
+            graph
+                .terms
+                .push(term(TermKind::Iri, Some("http://example.org/p")));
+            graph
+                .terms
+                .push(term(TermKind::Iri, Some("http://example.org/o")));
+            let mut below = 2;
+            for _ in 0..LEVELS {
+                let mut triple = term(TermKind::Triple, None);
+                triple.triple = Some((0, 1, below));
+                graph.terms.push(triple);
+                below = graph.terms.len() - 1;
+            }
+            let mut stack = Vec::new();
+            assert_eq!(term_nesting_depth(&graph, below, &mut stack), LEVELS);
+            let key = term_identity_key(&graph, below, &mut stack);
+            assert_eq!(stack, Vec::<usize>::new());
+            let iri = |value: &str| canonical(&Value::Array(vec!["iri".into(), value.into()]));
+            let level = 1
+                + canonical(&Value::Text("triple".into())).len()
+                + iri("http://example.org/s").len()
+                + iri("http://example.org/p").len();
+            assert_eq!(
+                key.len(),
+                LEVELS * level + iri("http://example.org/o").len()
+            );
+        })
+        .expect("the thread starts");
     }
 }

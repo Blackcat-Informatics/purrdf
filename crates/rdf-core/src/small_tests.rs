@@ -7,14 +7,13 @@
 //! over-aligned, variance, auto-trait and overflow cases.
 
 use std::cell::{Cell, RefCell};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
 use purrdf_testkit::prop::prelude::*;
 
 use super::{Array, IdVec, IntoIter, SmallVec};
+use crate::hash::hash_of;
 
 /// Cases per property; fewer under Miri, whose interpreter is slow.
 const CASES: u32 = if cfg!(miri) { 6 } else { 256 };
@@ -33,12 +32,6 @@ fn op_sequences() -> impl Strategy<Value = Vec<Op>> {
         ),
         0..max_ops,
     )
-}
-
-fn hash_of<T: Hash + ?Sized>(value: &T) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    value.hash(&mut hasher);
-    hasher.finish()
 }
 
 /// Every observable property of `sv` agrees with the model.
@@ -895,7 +888,7 @@ fn id_rows_behave_as_slices() {
     let long: IdVec = ids.iter().copied().collect();
     assert!(long.spilled());
     assert!(row < long);
-    let mut set = std::collections::HashSet::new();
+    let mut set = crate::FastSet::default();
     set.insert(row);
     assert!(set.contains(&IdVec::from_slice(&ids[..3])));
     assert_eq!(IdVec::default(), IdVec::new());

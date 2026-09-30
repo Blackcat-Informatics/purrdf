@@ -51,10 +51,9 @@ struct ListTerm {
     ty: &'static str,
 }
 
-const RDF_LIST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#List";
-const RDFS_RESOURCE: &str = "http://www.w3.org/2000/01/rdf-schema#Resource";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+use purrdf_core::datatype::{XSD_BOOLEAN, XSD_INTEGER};
+use purrdf_iri::vocab::rdf::LIST as RDF_LIST;
+use purrdf_iri::vocab::rdfs::RESOURCE as RDFS_RESOURCE;
 
 /// The six functions, in stable order.
 const FUNCTIONS: &[ListFn] = &[
@@ -259,7 +258,7 @@ mod tests {
     /// The fixture namespace the vocab mints terms under.
     const NS: &str = "https://example.org/vocab/";
 
-    const RDFS_LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
+    use purrdf_iri::vocab::rdfs::LABEL as RDFS_LABEL;
     const FNO_FUNCTION: &str = "https://w3id.org/function/ontology#Function";
     const FNO_OUTPUT: &str = "https://w3id.org/function/ontology#Output";
     const FNO_PARAMETER: &str = "https://w3id.org/function/ontology#Parameter";

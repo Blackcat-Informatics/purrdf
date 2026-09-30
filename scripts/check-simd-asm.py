@@ -25,7 +25,7 @@ rmeta and a ``.s`` per crate are all produced), LTO off and one codegen unit::
     wasm32-simd128       wasm32-unknown-unknown, -C target-feature=+simd128
 
 That emits a ``.s`` for EVERY crate in the graph, dependencies included, so a
-dependency's own kernels (memchr's, sha2's) are measured in that dependency's symbols.
+dependency's own kernels (sha2's) are measured in that dependency's symbols.
 The asm is per crate and before LTO. LTO may inline, specialize or eliminate bodies;
 these counts prove this build's kernel lowering, not final-binary throughput.
 
@@ -53,8 +53,11 @@ clone is still one kernel.
 
 Names are demangled by a small built-in demangler for both the v0 (``_R...``) and the
 legacy (``_ZN...E``) schemes, enough to recover the path and the crate. A manifest
-entry matches by that crate plus a substring of the demangled path. A private or
-inlined site is measured in the enclosing hot symbol, which its entry names.
+entry matches by that crate plus its demangled path, anchored: the path is the
+symbol, or the symbol followed by its generic arguments (``::<...>``) or a
+compiler-generated item nested in it (a ``::{closure…}`` or ``::{shim…}``). Never a substring, so
+``scan::find_byte`` does not also claim ``scan::find_byte2``. A private or inlined
+site is measured in the enclosing hot symbol, which its entry names.
 
 Counting
 --------
@@ -116,7 +119,9 @@ functions are cached by assembly content, reader version and selectors; verdicts
 always recomputed. Context leases cover both Cargo and the reader. On Stage the shim
 recognizes the explicit assembly context and preserves the lease and private outputs.
 
-``--jobs`` bounds concurrent configurations within one total Cargo job budget.
+``--jobs`` bounds concurrent configurations within one total Cargo job budget. A
+failing configuration does not cancel the others: every configuration runs to its
+verdict and the problems of all of them are reported together.
 ``--config`` runs a checked partial shard; only a full matrix may write the document.
 ``--fresh`` allocates new contexts (the external compiler cache remains enabled).
 ``--report`` writes checked JSON evidence; ``--merge-reports`` requires all seven
@@ -136,7 +141,9 @@ Document mode (``--doc``)
 
 Parity: every manifest id is a row; every row that names a function has a manifest
 entry, whatever its verdict; a row that names no function is crate-level, its verdict
-is ``leave``, and its reason cites ``crates/<crate>/benches/``, which must not exist;
+is ``leave``, and its reason cites ``crates/<crate>/benches/``, which must not exist
+unless the member is unpublished and every bench in it maps only to sites of other
+members (a conformance crate timing the hot paths of the crate it tests);
 the generated cells equal the measured counts (``--write-doc`` regenerates them).
 Coverage: every workspace member has a row; every bench file has a row naming only
 known site ids; every roster site below is in the ``covers`` cell of a row that names a
@@ -1051,8 +1058,24 @@ class Result:
     problems: tuple[str, ...]
 
 
+def symbol_names(path: str, symbol: str) -> bool:
+    """Whether a measure's ``symbol`` names the function whose demangled path is ``path``.
+
+    Anchored, never a substring: the path IS the symbol, or the symbol followed by
+    its generic arguments (``::<...>``) or a compiler-generated item nested in it
+    (a ``::{closure…}`` or ``::{shim…}``). A substring would let
+    ``purrdf_lex::scan::find_byte`` also claim ``find_byte2`` and ``find_byte_pair``
+    (a different kernel's counts judged against the wrong floor), and would let a
+    symbol that lost its function keep matching a longer neighbour's.
+    """
+    if not path.startswith(symbol):
+        return False
+    rest = path[len(symbol):]
+    return not rest or rest.startswith(("::<", "::{"))
+
+
 def matches(func: Function, measure: Measure) -> bool:
-    return func.crate == measure.crate and measure.symbol in func.path
+    return func.crate == measure.crate and symbol_names(func.path, measure.symbol)
 
 
 def _is_nested_closure(func: Function, symbol: str) -> bool:
@@ -1063,8 +1086,11 @@ def _is_nested_closure(func: Function, symbol: str) -> bool:
     parent's with `::{closure#N}`. It carries none of the parent's evidence, so when
     the parent itself is matched the closure is not a second copy of the site.
     """
-    at = func.path.find(symbol)
-    return at >= 0 and "{closure" in func.path[at + len(symbol):] and "{closure" not in symbol
+    return (
+        symbol_names(func.path, symbol)
+        and "{closure" in func.path[len(symbol):]
+        and "{closure" not in symbol
+    )
 
 
 def measured(functions: list[Function], measure: Measure) -> list[Function]:
@@ -1340,7 +1366,7 @@ def manifest_keep(manifest: Manifest):
         for measure in measures:
             patterns.setdefault(measure.crate, set()).add(measure.symbol)
         return Chooser(
-            select=lambda d: any(symbol in d.path for symbol in patterns.get(d.crate, ())),
+            select=lambda d: any(symbol_names(d.path, symbol) for symbol in patterns.get(d.crate, ())),
             keep=None,
         )
     return keep_for
@@ -1479,18 +1505,22 @@ class DocWorld:
     member_dirs: dict  # package name -> relative crate dir
     bench_files: tuple[str, ...]  # crates/<crate>/benches/<file>.rs
     bench_dirs: frozenset  # relative crate dirs that have a benches/ directory
+    unpublished: frozenset = frozenset()  # package names with `publish = false`
 
 
 def workspace_world() -> DocWorld:
     root = tomllib.loads((REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8"))
-    members, dirs = [], {}
+    members, dirs, unpublished = [], {}, set()
     for rel in root["workspace"]["members"]:
-        name = tomllib.loads((REPO_ROOT / rel / "Cargo.toml").read_text(encoding="utf-8"))["package"]["name"]
+        package = tomllib.loads((REPO_ROOT / rel / "Cargo.toml").read_text(encoding="utf-8"))["package"]
+        name = package["name"]
         members.append(name)
         dirs[name] = rel
+        if package.get("publish") is False:
+            unpublished.add(name)
     benches = sorted(str(p.relative_to(REPO_ROOT)) for p in REPO_ROOT.glob("crates/*/benches/*.rs"))
     bench_dirs = frozenset(rel for rel in dirs.values() if (REPO_ROOT / rel / "benches").is_dir())
-    return DocWorld(tuple(members), dirs, tuple(benches), bench_dirs)
+    return DocWorld(tuple(members), dirs, tuple(benches), bench_dirs, frozenset(unpublished))
 
 
 def doc_checks(doc: str, manifest: Manifest, cells: dict, world: DocWorld, configs=CONFIG_NAMES, compare=True) -> list[str]:
@@ -1507,6 +1537,31 @@ def doc_checks(doc: str, manifest: Manifest, cells: dict, world: DocWorld, confi
         return problems
     col = {name: header.index(name) for name in (*SITE_COLUMNS, *CONFIG_NAMES)}
     ids = manifest.ids()
+    site_crate = {_plain(row[col["id"]]): _plain(row[col["crate"]]) for row in rows}
+    bheader, brows, _ = parse_table(doc, BENCHES_BEGIN, BENCHES_END)
+    if "bench" not in bheader or "sites" not in bheader:
+        problems.append("the bench table needs `bench` and `sites` columns")
+        return problems
+    bcol, scol = bheader.index("bench"), bheader.index("sites")
+    mapped: dict[str, list[str]] = {}
+    for brow in brows:
+        bench = _plain(brow[bcol])
+        mapped[bench] = [_plain(s) for s in brow[scol].split(",") if _plain(s) not in EMPTY_CELL]
+
+    def measures_only_other_members(crate: str, crate_dir: str) -> bool:
+        """An unpublished harness member whose every bench maps to sites that
+        belong to other members: its benches time those members' hot paths,
+        and it has none of its own."""
+        benches = [bench for bench in world.bench_files if bench.startswith(f"{crate_dir}/benches/")]
+        return (
+            crate in world.unpublished
+            and bool(benches)
+            and all(
+                mapped.get(bench) and all(site_crate.get(sid, crate) != crate for sid in mapped[bench])
+                for bench in benches
+            )
+        )
+
     row_ids: dict[str, list[str]] = {}
     for row in rows:
         rid = _plain(row[col["id"]])
@@ -1535,7 +1590,7 @@ def doc_checks(doc: str, manifest: Manifest, cells: dict, world: DocWorld, confi
                 problems.append(f"crate-level row `{rid}` must be `leave`, not `{verdict}`")
             if cite not in row[col["reason"]]:
                 problems.append(f"crate-level row `{rid}` must cite that `{cite}` does not exist")
-            if crate_dir in world.bench_dirs:
+            if crate_dir in world.bench_dirs and not measures_only_other_members(crate, crate_dir):
                 problems.append(
                     f"crate-level row `{rid}`: `{cite}` exists, so `{crate}` has a hot path to "
                     f"measure -- give it a function row with a manifest entry"
@@ -1555,15 +1610,6 @@ def doc_checks(doc: str, manifest: Manifest, cells: dict, world: DocWorld, confi
         if member not in covered_crates:
             problems.append(f"workspace member `{member}` has no site row")
     # (b) bench coverage
-    bheader, brows, _ = parse_table(doc, BENCHES_BEGIN, BENCHES_END)
-    if "bench" not in bheader or "sites" not in bheader:
-        problems.append("the bench table needs `bench` and `sites` columns")
-        return problems
-    bcol, scol = bheader.index("bench"), bheader.index("sites")
-    mapped: dict[str, list[str]] = {}
-    for row in brows:
-        bench = _plain(row[bcol])
-        mapped[bench] = [_plain(s) for s in row[scol].split(",") if _plain(s) not in EMPTY_CELL]
     for bench in world.bench_files:
         if bench not in mapped:
             problems.append(f"bench `{bench}` has no row in the bench table")
@@ -1787,7 +1833,7 @@ _X86_FAST_DUP = _X86_FAST_FMA + _X86_FAST_FMA.replace("1111111111111111", "22222
 
 
 _FIXTURE_MEASURE = Measure(
-    configs=CONFIG_NAMES, crate="demo", symbol="kernel::dot", label="", min_vector_ops=1,
+    configs=CONFIG_NAMES, crate="demo", symbol="demo::kernel::dot", label="", min_vector_ops=1,
     require_mnemonics=(), max_fma=0, min_fma=None, forbid_relaxed=True, single_copy=False,
 )
 
@@ -1810,7 +1856,7 @@ def _manifest_dict(**site_overrides) -> dict:
     site = {
         "id": "demo.dot", "summary": "fixture",
         "measure": [{
-            "configs": list(CONFIG_NAMES), "crate": "demo", "symbol": "kernel::dot",
+            "configs": list(CONFIG_NAMES), "crate": "demo", "symbol": "demo::kernel::dot",
             "min_vector_ops": 0, "max_fma": 0, "forbid_relaxed": True,
         }],
     }
@@ -1914,7 +1960,7 @@ def self_test() -> int:
     expect(any("relaxed_" in p for p in _problems(_WASM_RELAXED, "wasm", _measure(max_fma=None, min_fma=0))), "f64x2.relaxed_madd must fail forbid_relaxed")
     expect(not _problems(_WASM_EXACT, "wasm", _measure(require_mnemonics=("f64x2.add", "f64x2.mul"))), "f64x2.add + f64x2.mul without relaxed must pass")
     # -- min_fma on a fast fn
-    fast = _measure(crate="demo", symbol="fast::dot", max_fma=None, min_fma=1, single_copy=True)
+    fast = _measure(crate="demo", symbol="demo::fast::dot", max_fma=None, min_fma=1, single_copy=True)
     expect(any("below the fast floor" in p for p in _problems(_X86_FAST, "x86", fast)), "a fast fn without FMA must fail min_fma >= 1")
     expect(not _problems(_X86_FAST_FMA, "x86", fast), "a fast fn with FMA (and a folded .cold clone) must pass")
     # -- single_copy
@@ -1930,8 +1976,21 @@ def self_test() -> int:
         any("single_copy" in p for p in _problems_in([("demo.s", _X86_FAST_DUP, 0), ("demo-2.s", _X86_FAST_FMA, 1)], "x86", fast)),
         "a duplicate inside one graph fails even when another graph is clean",
     )
+    # -- anchored symbol matching: a path is named by its own symbol, its generic
+    # instances and its nested closures, never by a prefix of a longer name or a
+    # substring from its middle
+    expect(symbol_names("demo::kernel::dot", "demo::kernel::dot"), "the exact path is named")
+    expect(symbol_names("demo::kernel::dot::<f64, f32>", "demo::kernel::dot"), "a generic instance is named")
+    expect(symbol_names("demo::kernel::dot::{closure#0}", "demo::kernel::dot"), "a nested closure is named")
+    expect(not symbol_names("demo::kernel::dot2", "demo::kernel::dot"), "a longer name is not named by its prefix")
+    expect(not symbol_names("demo::kernel::dot_pair", "demo::kernel::dot"), "a sibling with a suffix is not named")
+    expect(not symbol_names("demo::kernel::dot::inner", "demo::kernel::dot"), "a nested item fn is its own function")
+    expect(not symbol_names("demo::kernel::dot", "kernel::dot"), "a symbol from the middle of a path is not a match")
+    dot2 = _X86_PACKED.replace("6kernel3dot17h", "6kernel4dot217h")
+    expect(any("renamed or inlined away" in p for p in _problems(dot2, "x86", _measure())), "a longer neighbour cannot stand in for a missing symbol")
+    expect(not _problems(_X86_PACKED + dot2.replace("0123456789abcdef", "1111111111111111"), "x86", _measure(single_copy=True)), "a longer neighbour is not a second copy")
     # -- presence
-    expect(any("renamed or inlined away" in p for p in _problems(_X86_PACKED, "x86", _measure(symbol="kernel::gone"))), "a missing symbol must fail")
+    expect(any("renamed or inlined away" in p for p in _problems(_X86_PACKED, "x86", _measure(symbol="demo::kernel::gone"))), "a missing symbol must fail")
     expect(any("renamed or inlined away" in p for p in _problems(_X86_PACKED, "x86", _measure(crate="other"))), "the crate must match, not just the path")
 
     # -- manifest validation
@@ -2114,6 +2173,31 @@ def self_test() -> int:
         f"| `demo-cli` | `demo-cli` | — | — | leave | no hot path; `crates/demo-cli/benches/` does not exist | {dash} |\n"
     )
     expect(not doc_checks(_fixture_doc(rows=function_row_instead), manifest, cells, _FIXTURE_WORLD), "the same crate given a function row with an entry must pass")
+    harness_world = DocWorld(
+        members=("demo-core", "demo-cli", "demo-harness"),
+        member_dirs={"demo-core": "crates/demo-core", "demo-cli": "crates/demo-cli", "demo-harness": "crates/demo-harness"},
+        bench_files=("crates/demo-core/benches/dot.rs", "crates/demo-harness/benches/timing.rs"),
+        bench_dirs=frozenset({"crates/demo-core", "crates/demo-harness"}),
+        unpublished=frozenset({"demo-harness"}),
+    )
+    harness_rows = function_row_instead + (
+        f"| `demo-harness.crate` | `demo-harness` | — | — | leave | a conformance harness; `crates/demo-harness/benches/` times `demo-core`'s sites | {dash} |\n"
+    )
+    harness_benches = "| `crates/demo-core/benches/dot.rs` | demo.dot |\n| `crates/demo-harness/benches/timing.rs` | demo.dot |\n"
+    expect(
+        not doc_checks(_fixture_doc(rows=harness_rows, benches=harness_benches), manifest, cells, harness_world),
+        "an unpublished harness whose benches time only other members' sites may have a crate-level row",
+    )
+    published_harness = dataclasses.replace(harness_world, unpublished=frozenset())
+    expect(
+        any("exists, so" in p for p in doc_checks(_fixture_doc(rows=harness_rows, benches=harness_benches), manifest, cells, published_harness)),
+        "the same crate-level row for a published member with benches/ must fail",
+    )
+    own_site_rows = harness_rows.replace("| `demo.dot` | `demo-core` |", "| `demo.dot` | `demo-harness` |")
+    expect(
+        any("exists, so" in p for p in doc_checks(_fixture_doc(rows=own_site_rows, benches=harness_benches), manifest, cells, harness_world)),
+        "an unpublished member whose bench times one of its own sites must give it a function row",
+    )
     uncited = f"| `demo.dot` | `demo-core` | `kernel::dot` | {covers} | leave | r | {vals} |\n| `demo-cli` | `demo-cli` | — | — | leave | no hot path | {dash} |\n"
     expect(any("must cite" in p for p in doc_checks(_fixture_doc(rows=uncited), manifest, cells, _FIXTURE_WORLD)), "an exempt row that cites no benches/ must fail")
     missing_crate = f"| `demo.dot` | `demo-core` | `kernel::dot` | {covers} | leave | r | {vals} |\n"

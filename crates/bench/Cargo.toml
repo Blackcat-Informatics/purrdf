@@ -21,10 +21,23 @@ workspace = true
 name = "bench-corpus"
 path = "src/main.rs"
 
+[dependencies]
+# The generator's SplitMix64 stream is `purrdf_hash::mix`, the zero-dependency
+# root every crate may reach. The W3C terms the corpus writes (`rdf:reifies`,
+# the XSD datatype namespace) come from the workspace's one spelling of each;
+# none of these crates takes a third-party dependency. Everything else is pure
+# arithmetic and formatting.
+purrdf-hash = { workspace = true }
+purrdf-iri = { workspace = true }
+purrdf-xsd = { workspace = true }
+
 [dev-dependencies]
 # Test-only round-trip validation: every generated row must satisfy the
-# project's own strict N-Quads reader. The generator itself has zero
-# dependencies — pure arithmetic and formatting.
+# project's own strict N-Quads reader.
 purrdf-rdf = { workspace = true }
 # Test-only: parse the --manifest JSON contract in the CLI integration tests.
-serde_json = { workspace = true }
+purrdf-lex = { workspace = true }
+# Test-only: the base16 reader and writer the percent-escape checks spell octets with.
+purrdf-hash = { workspace = true }
+# Test-only: the workspace root the make-driven tests run `make` from.
+purrdf-testkit = { workspace = true }

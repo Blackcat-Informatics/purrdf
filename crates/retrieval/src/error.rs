@@ -120,6 +120,21 @@ pub enum PlanError {
         source: purrdf_core::IriError,
     },
 
+    /// A JSON document is not the JSON form of the value it is read as: it is
+    /// not JSON, or a member is missing, repeated or of the wrong type, or an
+    /// enum names no variant the value has.
+    ///
+    /// A document that is well shaped but breaks one of the value's own
+    /// construction laws (an IRI that does not parse, a statistics subject named
+    /// twice) is refused with that law's own variant instead.
+    InvalidJson {
+        /// The RFC 6901 JSON Pointer of the offending value (`""` is the whole
+        /// document).
+        pointer: String,
+        /// What the value at `pointer` fails to be.
+        reason: String,
+    },
+
     /// The canonical encoding held bytes after the last field.
     TrailingBytes {
         /// The number of unconsumed bytes.
@@ -477,6 +492,9 @@ impl std::fmt::Display for PlanError {
                 write!(f, "plan canonical encoding carries invalid UTF-8 in {what}")
             }
             Self::InvalidIri { text, source } => write!(f, "invalid IRI {text:?}: {source}"),
+            Self::InvalidJson { pointer, reason } => {
+                write!(f, "invalid plan JSON at {pointer:?}: {reason}")
+            }
             Self::TrailingBytes { extra } => {
                 write!(f, "plan canonical encoding has {extra} trailing byte(s)")
             }
@@ -613,6 +631,7 @@ impl PlanError {
             Self::InvalidTag { .. } => "invalid-tag",
             Self::InvalidUtf8 { .. } => "invalid-utf8",
             Self::InvalidIri { .. } => "invalid-iri",
+            Self::InvalidJson { .. } => "invalid-json",
             Self::TrailingBytes { .. } => "trailing-bytes",
             Self::UndeclaredRowBound { .. } => "undeclared-row-bound",
             Self::DuplicateStatisticsSubject { .. } => "duplicate-statistics-subject",

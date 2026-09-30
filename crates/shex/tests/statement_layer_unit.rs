@@ -41,7 +41,7 @@ const SOURCE: &str = "http://example.org/source";
 const R1: &str = "http://example.org/r1";
 const R2: &str = "http://example.org/r2";
 const R3: &str = "http://example.org/r3";
-const REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES;
 
 /// The fixture graph.
 ///
@@ -191,7 +191,7 @@ fn selector_over_rdf_reifies_both_directions() {
     // Anchoring the object on a concrete triple term picks its reifiers.
     assert_eq!(
         selected(&format!(
-            "{{FOCUS <{REIFIES}> << <{ALICE}> <{KNOWS}> <{BOB}> >>}}@START"
+            "{{FOCUS <{REIFIES}> <<( <{ALICE}> <{KNOWS}> <{BOB}> )>>}}@START"
         )),
         vec![TermValue::iri(R1), TermValue::iri(R2)],
     );

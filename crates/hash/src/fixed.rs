@@ -91,13 +91,12 @@ pub fn pack_short_bytes(bytes: &[u8]) -> u128 {
         1 => u128::from(bytes[0]),
         2 => u128::from(u16::from_le_bytes(bytes.try_into().expect("two bytes"))),
         3 => {
-            u128::from(u16::from_le_bytes(
-                bytes[..2].try_into().expect("two bytes"),
-            )) | (u128::from(bytes[2]) << 16)
+            u128::from(u16::from_le_bytes(*bytes.first_chunk().expect("two bytes")))
+                | (u128::from(bytes[2]) << 16)
         }
         4..=7 => {
-            let first = u32::from_le_bytes(bytes[..4].try_into().expect("four bytes"));
-            let last = u32::from_le_bytes(bytes[len - 4..].try_into().expect("four bytes"));
+            let first = u32::from_le_bytes(*bytes.first_chunk().expect("four bytes"));
+            let last = u32::from_le_bytes(*bytes.last_chunk().expect("four bytes"));
             if len == 4 {
                 u128::from(first)
             } else {
@@ -393,5 +392,36 @@ impl BuildHasher for FixedState {
     }
 }
 
+/// The [`FixedHasher`] hash of `value`: [`FixedState`]'s
+/// [`hash_one`](BuildHasher::hash_one), as a function, so a table that keeps
+/// its own index hashes its entries with the same call it hashes its probes with.
+#[inline]
+#[must_use]
+pub fn hash_one<T: core::hash::Hash + ?Sized>(value: &T) -> u64 {
+    FixedState::new().hash_one(value)
+}
+
 /// The name of the path this build's [`FixedHasher`] runs.
 pub(crate) const SELECTED_NAME: &str = Selected::NAME;
+
+#[cfg(test)]
+mod hash_one_tests {
+    use core::hash::{Hash, Hasher};
+
+    use super::{FixedHasher, hash_one};
+
+    #[test]
+    fn hash_one_is_one_fixed_hasher_run() {
+        for value in [
+            "",
+            "http://example.org/s",
+            "a longer value spanning several words",
+        ] {
+            let mut hasher = FixedHasher::default();
+            value.hash(&mut hasher);
+            assert_eq!(hash_one(value), hasher.finish(), "{value:?}");
+        }
+        assert_eq!(hash_one(&(1_u32, "x")), hash_one(&(1_u32, "x")));
+        assert_ne!(hash_one(&1_u64), hash_one(&2_u64));
+    }
+}

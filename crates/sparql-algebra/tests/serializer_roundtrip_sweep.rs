@@ -99,19 +99,17 @@
 //! cleanly (the gap got fixed and nobody removed the ledger row) fails the
 //! sweep rather than sitting stale.
 
+#[path = "support/patterns.rs"]
+mod patterns;
+
+use patterns::where_body;
 use purrdf_sparql_algebra::Child;
 use std::path::{Path, PathBuf};
 
 use purrdf_sparql_algebra::{
     GraphPattern, GraphUpdateOperation, Query, SparqlParser, Update, pattern_to_select_query,
 };
-
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("workspace root resolves")
-}
+use purrdf_testkit::paths::workspace_root;
 
 /// Every file with extension `ext` under `dir`, recursively. Shared by the
 /// `.rq` (query) and `.ru` (update) collection passes below — every other
@@ -208,26 +206,6 @@ fn collect_doc_examples(dir: &Path) -> Vec<(String, String)> {
         }
     }
     out
-}
-
-/// A query's WHERE-body pattern, whichever [`Query`] variant it is.
-fn query_pattern(q: &Query) -> &GraphPattern {
-    match q {
-        Query::Select { pattern, .. }
-        | Query::Construct { pattern, .. }
-        | Query::Describe { pattern, .. }
-        | Query::Ask { pattern, .. } => pattern,
-    }
-}
-
-/// Strip exactly one outer `Project` (the `SELECT` scaffold) to recover the
-/// WHERE body — the shape [`pattern_to_select_query`] consumes and always
-/// re-produces on re-parse (see this file's module doc's "Method" section).
-fn where_body(p: &GraphPattern) -> GraphPattern {
-    match p {
-        GraphPattern::Project { inner, .. } => (**inner).clone(),
-        other => other.clone(),
-    }
 }
 
 /// Left-linearize every `Join` spine in `p` — the ONE permitted modulo this
@@ -379,7 +357,7 @@ fn flatten_join<'a>(p: &'a GraphPattern, out: &mut Vec<&'a GraphPattern>) {
 /// violation (`pattern_to_select_query`'s own re-parse yielding something
 /// other than `Query::Select`, which its own doc guarantees never happens).
 fn roundtrip(original: &Query) -> Result<(), String> {
-    let body = where_body(query_pattern(original));
+    let body = where_body(original.pattern());
     let text = pattern_to_select_query(&body);
     let reparsed = SparqlParser::new()
         .parse_query(&text)
@@ -620,13 +598,15 @@ fn corpus_round_trips_through_the_serializer() {
     // fixture convention.
     let parser = SparqlParser::new().with_base_iri("https://example.org/corpus/");
     let mut unparseable = 0usize;
-    let mut xfail_matched: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut xfail_matched: std::collections::HashSet<&str, purrdf_hash::fixed::FixedState> =
+        std::collections::HashSet::with_hasher(purrdf_hash::fixed::FixedState::new());
     let mut failures = Vec::new();
     // The `.ru` lane's counters, declared here rather than at that loop
     // because a doc example that parses as an UPDATE is routed into them
     // below, before the `.ru` files themselves are swept.
     let mut unparseable_ru = 0usize;
-    let mut ru_xfail_matched: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut ru_xfail_matched: std::collections::HashSet<&str, purrdf_hash::fixed::FixedState> =
+        std::collections::HashSet::with_hasher(purrdf_hash::fixed::FixedState::new());
 
     let mut items: Vec<(String, String)> = Vec::with_capacity(seen);
     for path in &rq_files {

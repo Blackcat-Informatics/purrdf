@@ -9,20 +9,19 @@
 //! across 4,096 retained document shards. Set `PURREMB_CATALOG_SUBJECTS` only
 //! for local smoke runs; published observations use the one-million default.
 
+use purrdf_core::purremb_fixture::Identities;
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 use std::io::Cursor;
 
 use purrdf_core::distance::{Exact, Resolved};
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, CorpusTarget, DimensionalityPolicy, DistanceMetric,
-    DocumentTarget, EffectiveMatrixView, EffectivePrefix, EmbeddingBuilder,
-    EmbeddingFamilyContract, EmbeddingStreamWriter, EmbeddingTarget, EmbeddingView,
-    ExtensionTarget, MatrixCommitment, MatrixInput, MatrixRow, PrefixPostprocessing,
-    ProjectionCommitment, ProjectionSpec, RdfDatasetBuilder, RelationKind, StageImplementation,
-    TargetId, TargetRelation, TargetSet, TextChunkTarget, VectorDtype, VectorSpaceId,
-    verify_embedding,
+    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, ContentDigest, CorpusTarget,
+    DimensionalityPolicy, DistanceMetric, DocumentTarget, EffectiveMatrixView, EffectivePrefix,
+    EmbeddingBuilder, EmbeddingFamilyContract, EmbeddingStreamWriter, EmbeddingTarget,
+    EmbeddingView, ExtensionTarget, MatrixCommitment, MatrixInput, MatrixRow, PrefixPostprocessing,
+    ProjectionCommitment, ProjectionSpec, RdfDatasetBuilder, RelationKind, TargetId,
+    TargetRelation, TargetSet, TextChunkTarget, VectorDtype, VectorSpaceId, verify_embedding,
 };
 
 pub(crate) const F32_ROWS: usize = 16_384;
@@ -41,28 +40,12 @@ pub(crate) fn usize_to_u64(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
 
-fn artifact(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        format!("https://example.org/bench/purremb/{name}"),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        Some(b"deterministic-benchmark-v1".to_vec()),
-        ArtifactIdentityKind::Single,
-    )
-    .expect("benchmark artifact identity")
-}
-
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            format!("https://example.org/bench/purremb/{name}"),
-            ContentDigest::of(name.as_bytes()),
-            "application/cbor",
-            vec![0xa1, 0x61, b'v', 0x01],
-        )
-        .expect("benchmark stage"),
-    )
-}
+const FX: Identities = Identities {
+    artifact_salt: Some(b"deterministic-benchmark-v1"),
+    stage_media: "application/cbor",
+    stage_payload: &[0xa1, 0x61, b'v', 0x01],
+    ..Identities::at("https://example.org/bench/purremb/")
+};
 
 fn source() -> (CertifiedPurrpckSource, EmbeddingTarget) {
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty RDF source");
@@ -73,14 +56,14 @@ fn source() -> (CertifiedPurrpckSource, EmbeddingTarget) {
 
 fn f32_contract() -> EmbeddingFamilyContract {
     EmbeddingFamilyContract {
-        model: artifact("f32-model"),
-        engine: artifact("engine"),
-        tokenizer: artifact("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("extension-subject-projection"),
+        model: FX.artifact("f32-model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("extension-subject-projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F32,
@@ -106,14 +89,14 @@ fn f32_contract() -> EmbeddingFamilyContract {
 
 fn f64_contract() -> EmbeddingFamilyContract {
     EmbeddingFamilyContract {
-        model: artifact("f64-model"),
-        engine: artifact("engine"),
-        tokenizer: artifact("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("extension-subject-projection"),
+        model: FX.artifact("f64-model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("extension-subject-projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F64,
@@ -488,14 +471,14 @@ fn catalog_subject_count() -> usize {
 
 fn catalog_contract() -> EmbeddingFamilyContract {
     EmbeddingFamilyContract {
-        model: artifact("catalog-model"),
-        engine: artifact("engine"),
-        tokenizer: artifact("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("rdf-dataset-projection"),
+        model: FX.artifact("catalog-model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("rdf-dataset-projection"),
         preprocessing: AppliedStage::NotApplied,
-        chunking: stage("catalog-chunking"),
-        pooling: stage("pooling"),
+        chunking: FX.stage("catalog-chunking"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F32,

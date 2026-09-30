@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-ed25519"
+description = "Native Ed25519 signatures (RFC 8032) for PurRDF: key expansion, deterministic signing over constant-time radix-2^51 field and Montgomery scalar arithmetic, and strict cofactorless verification that refuses non-canonical S, non-canonical point encodings and small-order keys and R"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-ed25519"
+rust-version.workspace = true
+keywords = ["ed25519", "eddsa", "signature", "rfc8032", "cryptography"]
+categories = ["cryptography", "algorithms"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only. Portable Rust with `unsafe` forbidden: no threads, no filesystem,
+# no clock and no entropy (keys come from caller-supplied seeds), so it is
+# wasm32-clean on every target.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_ed25519"
+
+[dependencies]
+# The base16 codec the `Debug` renderings of keys and signatures print with.
+purrdf-hash = { workspace = true }
+# SHA-512, which RFC 8032 fixes as Ed25519's hash: the workspace's single SHA-2
+# implementation.
+sha2 = { workspace = true }
+
+[dev-dependencies]
+# The SplitMix64 stream the seeded tests draw from, and the frozen-vector
+# reader the reference vectors replay through.
+purrdf-testkit = { workspace = true }
+# The one JSON reader, which reads the vendored Wycheproof vectors.
+purrdf-lex = { workspace = true }
+
+[[bench]]
+name = "ed25519"
+harness = false

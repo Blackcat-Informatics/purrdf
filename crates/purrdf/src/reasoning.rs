@@ -15,13 +15,14 @@ use purrdf_entail::{
     RuleSet, materialize_combined_until,
 };
 use purrdf_rdf::{
-    DatasetView, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfQuad, RdfTerm, RdfTextDirection,
-    SparqlRequest, SparqlResult, TermValue, dataset_from_view,
+    DatasetView, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfQuad, RdfTerm, SparqlRequest,
+    SparqlResult, dataset_from_view,
 };
 use purrdf_sparql_algebra::{
-    BaseDirection, BlankNode, Expression, GraphPattern, GroundTerm, Literal, NamedNodePattern,
-    OrderExpression, PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
+    BlankNode, Expression, GraphPattern, GroundTerm, NamedNodePattern, OrderExpression,
+    PropertyFunctionCall, Query, TermPattern, Variable,
 };
+use purrdf_sparql_eval::convert;
 use purrdf_sparql_eval::{
     BudgetExhausted, EvalError, GovernedOutcome, NativeSparqlEngine, PreparedQuery,
     PropertyFunctionRegistry, QueryGovernors, QueryOptions, StopCause, StopSignal, TrippedGovernor,
@@ -79,6 +80,28 @@ pub enum QueryEntailment<'a> {
     Rif(&'a RuleSet),
 }
 
+impl<'a> QueryEntailment<'a> {
+    /// The query plan for `regime`, with `rules` as the RIF rule set.
+    ///
+    /// The one mapping from a resolved [`Regime`] to its query plan, total over the seven
+    /// regimes: every host that resolves a regime (the owned [`QueryEntailmentPlan`], a
+    /// command line) borrows its plan through here, so no two hosts can map one regime to
+    /// two plans. `rules` is read only for [`Regime::Rif`], the one regime whose calculus
+    /// is the caller's rather than a specification's.
+    #[must_use]
+    pub const fn for_regime(regime: Regime, rules: &'a RuleSet) -> Self {
+        match regime {
+            Regime::Simple => Self::Simple,
+            Regime::Rdf => Self::Rdf,
+            Regime::Rdfs => Self::Rdfs,
+            Regime::OwlRl => Self::OwlRl,
+            Regime::D => Self::D,
+            Regime::OwlDirect => Self::OwlDirect,
+            Regime::Rif => Self::Rif(rules),
+        }
+    }
+}
+
 /// Owned, host-neutral configuration for one entailment-aware SPARQL query.
 ///
 /// Language bindings receive a regime spelling plus a string program rather than a
@@ -114,15 +137,7 @@ impl QueryEntailmentPlan {
     /// Borrow this owned configuration in the native query orchestrator's form.
     #[must_use]
     pub const fn entailment(&self) -> QueryEntailment<'_> {
-        match self.regime {
-            Regime::Simple => QueryEntailment::Simple,
-            Regime::Rdf => QueryEntailment::Rdf,
-            Regime::Rdfs => QueryEntailment::Rdfs,
-            Regime::OwlRl => QueryEntailment::OwlRl,
-            Regime::D => QueryEntailment::D,
-            Regime::OwlDirect => QueryEntailment::OwlDirect,
-            Regime::Rif => QueryEntailment::Rif(&self.rules),
-        }
+        QueryEntailment::for_regime(self.regime, &self.rules)
     }
 
     /// The resolved native regime.
@@ -166,17 +181,10 @@ impl std::error::Error for ReasoningError {
     }
 }
 
-impl From<RdfDiagnostic> for ReasoningError {
-    fn from(value: RdfDiagnostic) -> Self {
-        Self::Query(value)
-    }
-}
-
-impl From<EntailError> for ReasoningError {
-    fn from(value: EntailError) -> Self {
-        Self::Entailment(value)
-    }
-}
+purrdf_lex::variant_from!(ReasoningError {
+    Query(RdfDiagnostic),
+    Entailment(EntailError),
+});
 
 /// How a caller's **dataset-derived** property-function relations are re-derived over the
 /// closure an entailment-regime query is actually answered against.
@@ -401,7 +409,7 @@ pub fn query_with_entailment<D: DatasetView>(
     // `collect_query_bgp` is bound outside the match because the OWL-Direct plan BORROWS
     // it; it is computed for that mode alone.
     let pattern = match entailment {
-        QueryEntailment::OwlDirect => collect_query_bgp(prepared_query.query()),
+        QueryEntailment::OwlDirect => query_bgp(prepared_query.query()),
         _ => Vec::new(),
     };
     // `surrogates` is populated only when the OWL-Direct lane answered through the COMBINED
@@ -415,7 +423,7 @@ pub fn query_with_entailment<D: DatasetView>(
     // The import table is EMPTY here: this entry point takes none, so a dataset that
     // imports a document it does not already hold is refused by name rather than closed as a
     // smaller premise. `query_with_entailment_closure_governed` is the one that takes one.
-    let imports = ImportMap::new();
+    let imports = ImportMap::default();
     let Closed {
         dataset: prepared,
         report,
@@ -734,21 +742,35 @@ pub enum GovernedEntailment {
 }
 
 impl GovernedEntailment {
+    /// Phase two's outcome and the certificate of the closure it was drawn from,
+    /// when the closure was computed at all.
+    ///
+    /// The one reading of the [`GovernedEntailment::Answered`] arm: the outcome and
+    /// the report travel together, so [`Self::outcome`] and [`Self::report`] are
+    /// its two halves.
+    #[must_use]
+    pub const fn answered(&self) -> Option<(&GovernedOutcome, &ReasoningReport)> {
+        match self {
+            Self::Answered { outcome, report } => Some((outcome, report)),
+            Self::ClosureStopped { .. } => None,
+        }
+    }
+
     /// Phase two's outcome, when the closure was computed at all.
     #[must_use]
     pub const fn outcome(&self) -> Option<&GovernedOutcome> {
-        match self {
-            Self::Answered { outcome, .. } => Some(outcome),
-            Self::ClosureStopped { .. } => None,
+        match self.answered() {
+            Some((outcome, _)) => Some(outcome),
+            None => None,
         }
     }
 
     /// The reasoning certificate, when a closure was produced.
     #[must_use]
     pub const fn report(&self) -> Option<&ReasoningReport> {
-        match self {
-            Self::Answered { report, .. } => Some(report),
-            Self::ClosureStopped { .. } => None,
+        match self.answered() {
+            Some((_, report)) => Some(report),
+            None => None,
         }
     }
 
@@ -902,7 +924,7 @@ pub fn query_with_entailment_governed<D: DatasetView>(
     relations: &ClosureRelations<'_>,
     governors: &QueryGovernors,
 ) -> Result<GovernedEntailment, ReasoningError> {
-    let imports = ImportMap::new();
+    let imports = ImportMap::default();
     query_with_entailment_closure_governed(
         engine,
         dataset,
@@ -951,7 +973,7 @@ pub fn query_with_entailment_closure_governed<D: DatasetView>(
     let prepared_query =
         engine.prepare_query_with_options(request.query, request.base_iri, options)?;
     let pattern = match entailment {
-        QueryEntailment::OwlDirect => collect_query_bgp(prepared_query.query()),
+        QueryEntailment::OwlDirect => query_bgp(prepared_query.query()),
         _ => Vec::new(),
     };
     // The execution's stop signal, wearing the reasoner's trait. Built once and shared by
@@ -1123,7 +1145,7 @@ fn withhold_surrogates_from_outcome(
 /// front of the caller.
 fn observable_variables(query: &Query) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
-    let pattern = query_pattern(query);
+    let pattern = query.pattern();
     match query {
         Query::Select { .. } => match find_projection(pattern) {
             Some(projected) => names.extend(projected),
@@ -1134,7 +1156,7 @@ fn observable_variables(query: &Query) -> BTreeSet<String> {
         },
         Query::Construct { template, .. } => {
             for quad in template {
-                collect_triple_pattern_variables(&quad.triple, &mut names);
+                quad.triple.collect_variable_names(&mut names);
                 // A template GRAPH variable is observable: its binding decides
                 // which graph the row's statement lands in, so the caller reads
                 // the value back off the result dataset's graph name just as
@@ -1156,16 +1178,6 @@ fn observable_variables(query: &Query) -> BTreeSet<String> {
     }
     collect_returned_value_variables(pattern, &mut names);
     names
-}
-
-/// The root graph pattern of any query form.
-fn query_pattern(query: &Query) -> &GraphPattern {
-    match query {
-        Query::Select { pattern, .. }
-        | Query::Construct { pattern, .. }
-        | Query::Describe { pattern, .. }
-        | Query::Ask { pattern, .. } => pattern,
-    }
 }
 
 /// The variable list of the first [`GraphPattern::Project`] reached by peeling off solution
@@ -1282,7 +1294,7 @@ fn collect_returned_value_variables(pattern: &GraphPattern, names: &mut BTreeSet
 /// of them is visible in the enclosing group graph pattern.
 fn collect_call_variables(call: &PropertyFunctionCall, names: &mut BTreeSet<String>) {
     for term in call.subject_args.iter().chain(&call.object_args) {
-        collect_term_pattern_variable(term, names);
+        term.collect_variable_names(names);
     }
 }
 
@@ -1334,14 +1346,14 @@ fn collect_all_variables(pattern: &GraphPattern, names: &mut BTreeSet<String>) {
         match pattern {
             GraphPattern::Bgp { patterns } => {
                 for triple in patterns {
-                    collect_triple_pattern_variables(triple, names);
+                    triple.collect_variable_names(names);
                 }
             }
             GraphPattern::Path {
                 subject, object, ..
             } => {
-                collect_term_pattern_variable(subject, names);
-                collect_term_pattern_variable(object, names);
+                subject.collect_variable_names(names);
+                object.collect_variable_names(names);
             }
             GraphPattern::Values { variables, .. } | GraphPattern::Project { variables, .. } => {
                 names.extend(variables.iter().map(|v| v.as_str().to_owned()));
@@ -1391,36 +1403,6 @@ fn collect_all_variables(pattern: &GraphPattern, names: &mut BTreeSet<String>) {
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. } => pending.push(inner),
             GraphPattern::PropertyFunction(call) => collect_call_variables(call, names),
-        }
-    }
-}
-
-/// The variables of one triple pattern, in all three positions.
-fn collect_triple_pattern_variables(triple: &TriplePattern, names: &mut BTreeSet<String>) {
-    collect_term_pattern_variable(&triple.subject, names);
-    if let NamedNodePattern::Variable(variable) = &triple.predicate {
-        names.insert(variable.as_str().to_owned());
-    }
-    collect_term_pattern_variable(&triple.object, names);
-}
-
-/// `term`'s variable name, if it is one — descending, over a work list, into an RDF 1.2
-/// quoted triple, whose nested variables bind exactly the way a top-level one does and
-/// can therefore carry a witness just as visibly.
-fn collect_term_pattern_variable(term: &TermPattern, names: &mut BTreeSet<String>) {
-    let mut pending = vec![term];
-    while let Some(term) = pending.pop() {
-        match term {
-            TermPattern::Variable(variable) => {
-                names.insert(variable.as_str().to_owned());
-            }
-            TermPattern::Triple(triple) => {
-                if let NamedNodePattern::Variable(variable) = &triple.predicate {
-                    names.insert(variable.as_str().to_owned());
-                }
-                pending.extend([&triple.subject, &triple.object]);
-            }
-            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
         }
     }
 }
@@ -1812,15 +1794,17 @@ fn simple_report() -> ReasoningReport {
     )
 }
 
-fn collect_query_bgp(query: &Query) -> Vec<QTriple> {
-    let pattern = match query {
-        Query::Select { pattern, .. }
-        | Query::Construct { pattern, .. }
-        | Query::Describe { pattern, .. }
-        | Query::Ask { pattern, .. } => pattern,
-    };
+/// Every basic-graph-pattern triple of `query`, in written order, as the [`QTriple`]s the
+/// OWL 2 Direct-Semantics reasoner augments a dataset for.
+///
+/// The walk descends through every join, filter, graph, optional, union and modifier
+/// wrapper; a property path, an inline `VALUES` and a property-function call hold no
+/// triple pattern and contribute nothing. A triple whose subject or object is an RDF 1.2
+/// triple term is skipped, since a triple term never scaffolds a class expression.
+#[must_use]
+pub fn query_bgp(query: &Query) -> Vec<QTriple> {
     let mut triples = Vec::new();
-    collect_bgp(pattern, &mut triples);
+    collect_bgp(query.pattern(), &mut triples);
     triples
 }
 
@@ -1866,35 +1850,24 @@ fn collect_bgp(pattern: &GraphPattern, output: &mut Vec<QTriple>) {
     }
 }
 
+/// A subject or object pattern as a [`QNode`]: a variable, or the ground term's value
+/// under the evaluator's own query-text conversion. `None` for an RDF 1.2 triple term,
+/// which never scaffolds a class expression.
 fn term_to_qnode(term: &TermPattern) -> Option<QNode> {
-    Some(match term {
-        TermPattern::Variable(variable) => QNode::Var(variable.as_str().to_owned()),
-        TermPattern::NamedNode(node) => QNode::Term(TermValue::iri(node.as_str())),
-        TermPattern::BlankNode(node) => QNode::Term(TermValue::blank(node.as_str())),
-        TermPattern::Literal(literal) => QNode::Term(literal_to_term_value(literal)),
-        TermPattern::Triple(_) => return None,
-    })
-}
-
-fn named_node_pattern_to_qnode(pattern: &NamedNodePattern) -> QNode {
-    match pattern {
-        NamedNodePattern::NamedNode(node) => QNode::Term(TermValue::iri(node.as_str())),
-        NamedNodePattern::Variable(variable) => QNode::Var(variable.as_str().to_owned()),
+    match term {
+        TermPattern::Variable(variable) => Some(QNode::Var(variable.as_str().to_owned())),
+        TermPattern::Triple(_) => None,
+        ground => convert::ground_term_pattern_to_value(ground, "a basic graph pattern")
+            .ok()
+            .map(QNode::Term),
     }
 }
 
-fn literal_to_term_value(literal: &Literal) -> TermValue {
-    match literal.language() {
-        Some(language) => TermValue::Literal {
-            lexical_form: literal.value().to_owned(),
-            datatype: literal.datatype().as_str().to_owned(),
-            language: Some(language.to_ascii_lowercase()),
-            direction: literal.direction().map(|direction| match direction {
-                BaseDirection::Ltr => RdfTextDirection::Ltr,
-                BaseDirection::Rtl => RdfTextDirection::Rtl,
-            }),
-        },
-        None => TermValue::typed_literal(literal.value(), literal.datatype().as_str()),
+/// A predicate pattern as a [`QNode`].
+fn named_node_pattern_to_qnode(pattern: &NamedNodePattern) -> QNode {
+    match pattern {
+        NamedNodePattern::NamedNode(node) => QNode::Term(convert::named_node_to_value(node)),
+        NamedNodePattern::Variable(variable) => QNode::Var(variable.as_str().to_owned()),
     }
 }
 
@@ -1905,8 +1878,26 @@ mod tests {
 
     use super::*;
 
-    const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-    const RDFS_SUBCLASS: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+    use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+    use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASS;
+
+    #[test]
+    fn every_regime_maps_to_its_own_query_plan_and_only_rif_reads_the_rules() {
+        let rules = RuleSet::default();
+        let plan = |regime| QueryEntailment::for_regime(regime, &rules);
+        assert!(matches!(plan(Regime::Simple), QueryEntailment::Simple));
+        assert!(matches!(plan(Regime::Rdf), QueryEntailment::Rdf));
+        assert!(matches!(plan(Regime::Rdfs), QueryEntailment::Rdfs));
+        assert!(matches!(plan(Regime::OwlRl), QueryEntailment::OwlRl));
+        assert!(matches!(plan(Regime::D), QueryEntailment::D));
+        assert!(matches!(
+            plan(Regime::OwlDirect),
+            QueryEntailment::OwlDirect
+        ));
+        assert!(
+            matches!(plan(Regime::Rif), QueryEntailment::Rif(lent) if std::ptr::eq(lent, &raw const rules))
+        );
+    }
 
     /// A caller can walk from the wrapper to the failure it wraps.
     ///
@@ -2026,7 +2017,7 @@ mod tests {
 
         // The call scaffolds nothing for the query-directed OWL-Direct augmentation:
         // only the one triple actually written in the query is there.
-        let bgp = collect_query_bgp(&query);
+        let bgp = query_bgp(&query);
         assert_eq!(bgp.len(), 1, "{bgp:?}");
 
         // Witness restriction wraps the data leaf and leaves the call alone.
@@ -2187,7 +2178,7 @@ mod tests {
     /// EVERY MODE CARRIES ITS CERTIFICATE OUT, and each names its own regime.
     #[test]
     fn every_mode_returns_the_report_of_the_run_it_made() {
-        let rules = RuleSet::new();
+        let rules = RuleSet::default();
         for (mode, regime) in [
             (QueryEntailment::Simple, Regime::Simple),
             (QueryEntailment::Rdf, Regime::Rdf),
@@ -2226,7 +2217,7 @@ mod tests {
         let dataset = purrdf_rdf::parse_dataset(VALUES_TTL.as_bytes(), "text/turtle", None)
             .expect("the fixture parses");
 
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register_statistical_aggregates("https://example.org/agg#");
 
         let query = "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
@@ -2329,7 +2320,7 @@ mod tests {
 
     #[test]
     fn rif_query_sees_rule_derived_fact() {
-        let mut rules = RuleSet::new();
+        let mut rules = RuleSet::default();
         rules.push_rule(Rule {
             body: vec![Atom {
                 s: RifTerm::Var("subject".to_owned()),
@@ -2351,10 +2342,10 @@ mod tests {
     // ── The combined approach: a non-distinguished variable, answered correctly ────────
 
     const COMBINED_NS: &str = "https://example.org/combined#";
-    const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
-    const OWL_RESTRICTION: &str = "http://www.w3.org/2002/07/owl#Restriction";
-    const OWL_ON_PROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
-    const OWL_SOME_VALUES_FROM: &str = "http://www.w3.org/2002/07/owl#someValuesFrom";
+    use purrdf_iri::vocab::owl::CLASS as OWL_CLASS;
+    use purrdf_iri::vocab::owl::ON_PROPERTY as OWL_ON_PROPERTY;
+    use purrdf_iri::vocab::owl::RESTRICTION as OWL_RESTRICTION;
+    use purrdf_iri::vocab::owl::SOME_VALUES_FROM as OWL_SOME_VALUES_FROM;
 
     /// `A ⊑ ∃r.B`, `a : A` — the classic shape a query-independent, whole-vocabulary
     /// augmentation cannot answer correctly for a non-distinguished variable, because no
@@ -2496,8 +2487,8 @@ mod tests {
 
     // ── Filtration: the witness never reaches the caller, and no answer is lost ────────
 
-    const OWL_EQUIVALENT_CLASS: &str = "http://www.w3.org/2002/07/owl#equivalentClass";
-    const RDFS_SUBPROPERTY: &str = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf";
+    use purrdf_iri::vocab::owl::EQUIVALENT_CLASS as OWL_EQUIVALENT_CLASS;
+    use purrdf_iri::vocab::rdfs::SUB_PROPERTY_OF as RDFS_SUBPROPERTY;
 
     /// The `some_values_from_ontology` plus ASSERTED data a witness has nothing to do with:
     /// `c : B` and `a s c`. Without it every query in the corpus below would answer nothing
@@ -2551,7 +2542,7 @@ mod tests {
     fn augmentation_only(ds: &Arc<RdfDataset>, query: &str) -> SparqlResult {
         let engine = NativeSparqlEngine::new();
         let prepared = engine.prepare_query(query, None).expect("parse");
-        let pattern = collect_query_bgp(prepared.query());
+        let pattern = query_bgp(prepared.query());
         let (closure, _) =
             purrdf_entail::materialize(ds, Materialization::OwlDirect(&pattern)).expect("augment");
         engine
@@ -2934,14 +2925,8 @@ mod term_walk_tests {
         }
     }
 
-    /// A SplitMix64 draw from the counter at `state`.
-    const fn splitmix64(state: &mut u64) -> u64 {
-        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = *state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
+    // A SplitMix64 draw from the counter at `state`.
+    use purrdf_testkit::rng::splitmix64_next as splitmix64;
 
     /// A generated owned term of at most `budget` triple terms, its blank nodes drawn
     /// from `w0`, `w1` and `b`.
@@ -2981,27 +2966,23 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_searched_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let surrogates = BTreeSet::from(["w".to_owned()]);
-                let mut term = RdfTerm::blank_node("w");
-                for _ in 0..LEVELS {
-                    term = RdfTerm::triple(RdfTriple::new(
-                        RdfTerm::iri("http://example.org/s"),
-                        "http://example.org/p",
-                        term,
-                    ));
-                }
-                assert!(term_mentions_surrogate(&term, &surrogates));
-                // The owned model's derived drop descends once per level, so the chain
-                // is taken apart one level at a time.
-                while let RdfTerm::Triple(triple) = term {
-                    term = triple.object;
-                }
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the search did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let surrogates = BTreeSet::from(["w".to_owned()]);
+            let mut term = RdfTerm::blank_node("w");
+            for _ in 0..LEVELS {
+                term = RdfTerm::triple(RdfTriple::new(
+                    RdfTerm::iri("http://example.org/s"),
+                    "http://example.org/p",
+                    term,
+                ));
+            }
+            assert!(term_mentions_surrogate(&term, &surrogates));
+            // The owned model's derived drop descends once per level, so the chain
+            // is taken apart one level at a time.
+            while let RdfTerm::Triple(triple) = term {
+                term = triple.object;
+            }
+        })
+        .expect("the thread starts");
     }
 }

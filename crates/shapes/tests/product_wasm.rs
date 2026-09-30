@@ -143,13 +143,14 @@ mod shacl12_subset {
     use purrdf_shapes::data::{GraphFilter, native_quads};
     use purrdf_shapes::engine::validate_dataset_with_shapes_graph;
     use purrdf_shapes::free_expression::{FreeExpression, evaluate};
+    use purrdf_shapes::shacl_corpora::named as iri;
     use purrdf_shapes::shapes::from_dataset_with_config_and_graph;
     use purrdf_shapes::srl::{self, InferOptions};
-    use purrdf_shapes::term::{NamedNode, Term};
+    use purrdf_shapes::term::Term;
     use purrdf_shapes::text_ingest::parse_turtle_document;
 
-    const SH: &str = "http://www.w3.org/ns/shacl#";
-    const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    use purrdf_iri::vocab::rdf::NS as RDF;
+    use purrdf_iri::vocab::sh::NS as SH;
     const MF: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#";
     const SHT: &str = "http://www.w3.org/ns/shacl-test#";
 
@@ -157,10 +158,6 @@ mod shacl12_subset {
     /// and their entries relatively, and no filesystem path exists on wasm32.
     fn base(name: &str) -> String {
         format!("http://example.org/shacl12/{name}")
-    }
-
-    fn iri(value: &str) -> Term {
-        Term::NamedNode(NamedNode::new_unchecked(value))
     }
 
     fn objects(dataset: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {

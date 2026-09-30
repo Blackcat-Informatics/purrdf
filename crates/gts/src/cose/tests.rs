@@ -1,36 +1,29 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Differential coverage against the complete CBOR decoder and its error order.
+//! Differential coverage against the complete CBOR decoder and its error order,
+//! and the strictness of COSE_Sign1 verification.
 
 use std::cell::RefCell;
 
 use super::*;
 
 fn fixture() -> (Vec<u8>, [u8; 32]) {
-    let value: serde_json::Value =
-        serde_json::from_str(include_str!("../../../../vectors/encrypt0/basic.json")).unwrap();
-    let bytes = |field: &str| {
-        value[field]
-            .as_str()
-            .unwrap()
-            .as_bytes()
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
-            .collect::<Vec<_>>()
-    };
+    let value =
+        purrdf_lex::json::read(include_str!("../../../../vectors/encrypt0/basic.json")).unwrap();
+    let bytes = |field: &str| purrdf_hash::hex::decode(value[field].as_str().unwrap()).unwrap();
     (bytes("cose"), bytes("key").try_into().unwrap())
 }
 
 fn parts(blob: &[u8]) -> [Value; 3] {
-    let Value::Tag(_, value) = ciborium::de::from_reader(blob).unwrap() else {
+    let mut value = cbor::decode(blob, cbor::Limits::DEFAULT).unwrap();
+    let Value::Tag(_, value) = &mut value else {
         panic!("fixture must have an outer tag");
     };
-    let Value::Array(value) = *value else {
-        panic!("fixture must contain an array");
-    };
+    let value = value
+        .take()
+        .into_array()
+        .expect("fixture must contain an array");
     value.try_into().unwrap()
 }
 
@@ -356,4 +349,83 @@ fn protected_header_bytes_are_opaque_even_when_they_are_not_cbor() {
         );
         differential(&encoded, key);
     }
+}
+
+/// `blob`, a COSE_Sign1, with its signature replaced by `signature`.
+fn with_signature(blob: &[u8], signature: [u8; 64]) -> Vec<u8> {
+    let mut value = cbor::decode(blob, cbor::Limits::DEFAULT).unwrap();
+    let Value::Tag(tag, value) = &mut value else {
+        panic!("a COSE_Sign1 has an outer tag");
+    };
+    let tag = *tag;
+    let mut fields = value.take().into_array().expect("a COSE_Sign1 is an array");
+    fields[3] = Value::Bytes(signature.to_vec());
+    wire::encode(&Value::Tag(tag, Box::new(Value::Array(fields))))
+}
+
+/// The identity point as a public key: small order, and it decodes.
+fn identity_key() -> VerifyingKey {
+    let mut encoding = [0u8; 32];
+    encoding[0] = 1;
+    VerifyingKey::from_bytes(&encoding).expect("the identity decodes")
+}
+
+/// A signature the identity key satisfies for every message: R = [S]B with
+/// S = 0x09..09, so the equation [S]B = R + [k]A holds whatever k is. A
+/// permissive verifier accepts it for any frame id.
+fn universal_forgery() -> [u8; 64] {
+    purrdf_hash::hex::decode(concat!(
+        "4faa93763d0702316ddef05a7921b30b30e81530b44cf9f35773ffee16f68638",
+        "0909090909090909090909090909090909090909090909090909090909090909",
+    ))
+    .unwrap()
+    .try_into()
+    .unwrap()
+}
+
+#[test]
+fn a_signature_under_a_small_order_key_is_invalid_even_when_the_equation_holds() {
+    let forged = universal_forgery();
+    let signer = SigningKey::from_bytes(&[3; 32]);
+    for frame_id in [&b""[..], b"frame-1", b"another frame"] {
+        let cose = with_signature(&sign_id(frame_id, &signer, "weak"), forged);
+        assert_eq!(parse(&cose).map(|(_, _, sig)| sig), Some(forged));
+        assert_eq!(
+            verify_sig(&cose, frame_id, &identity_key()),
+            SigStatus::Invalid
+        );
+    }
+
+    // Neighbour: an honest signature under a prime-order key is valid, and
+    // stays bound to its frame id.
+    let honest = sign_id(b"frame-1", &signer, "strong");
+    let public = signer.verifying_key();
+    assert_eq!(verify_sig(&honest, b"frame-1", &public), SigStatus::Valid);
+    assert_eq!(verify_sig(&honest, b"frame-2", &public), SigStatus::Invalid);
+}
+
+#[test]
+fn verify_signatures_marks_a_small_order_key_invalid_and_a_real_key_valid() {
+    let signer = SigningKey::from_bytes(&[4; 32]);
+    let observation = |cose: Vec<u8>| model::Signature {
+        frame_id: b"frame".to_vec(),
+        kid: None,
+        status: String::new(),
+        cose: Some(cose),
+    };
+    let mut signatures = vec![
+        observation(sign_id(b"frame", &signer, "real")),
+        observation(with_signature(
+            &sign_id(b"frame", &signer, "weak"),
+            universal_forgery(),
+        )),
+    ];
+    verify_signatures(&mut signatures, |kid| match kid {
+        "real" => Some(signer.verifying_key()),
+        "weak" => Some(identity_key()),
+        _ => None,
+    });
+    assert_eq!(signatures[0].status, "valid");
+    assert_eq!(signatures[1].status, "invalid");
+    assert_eq!(signatures[1].kid.as_deref(), Some("weak"));
 }

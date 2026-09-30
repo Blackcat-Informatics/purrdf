@@ -19,9 +19,7 @@
 
 use std::sync::Arc;
 
-use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
-};
+use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, TermValue};
 use purrdf_sparql_eval::{
     ExtensionEnv, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
 };
@@ -39,57 +37,13 @@ const SEARCH: &str = "http://example.org/pf#search";
 /// The one predicate whose literals the fixture indexes.
 const NOTE: &str = "http://example.org/note";
 
-/// The datatype `?rank` comes back as.
-const INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+// The datatype `?rank` comes back as.
+use purrdf_core::datatype::XSD_INTEGER as INTEGER;
 
-// ── rendering ────────────────────────────────────────────────────────────────
+#[path = "support/sparql.rs"]
+mod sparql;
 
-/// One answer cell in an exact, unambiguous textual form.
-fn render(cell: Option<&TermValue>) -> String {
-    match cell {
-        None => "UNBOUND".to_owned(),
-        Some(TermValue::Iri(iri)) => format!("<{iri}>"),
-        Some(TermValue::Blank { label, scope }) => format!("_:{label}/{}", scope.ordinal()),
-        Some(TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            ..
-        }) => match language {
-            Some(tag) => format!("{lexical_form:?}@{tag}"),
-            None if datatype == "http://www.w3.org/2001/XMLSchema#string" => {
-                format!("{lexical_form:?}")
-            }
-            None => format!("{lexical_form:?}^^<{datatype}>"),
-        },
-        Some(TermValue::Triple { s, p, o }) => format!(
-            "<<{} {} {}>>",
-            render(Some(s)),
-            render(Some(p)),
-            render(Some(o))
-        ),
-    }
-}
-
-/// A typed literal cell as [`render`] writes it.
-fn typed(lexical: &str, datatype: &str) -> String {
-    format!("{lexical:?}^^<{datatype}>")
-}
-
-/// An IRI cell under the fixture namespace, as [`render`] writes it.
-fn subject(local: &str) -> String {
-    format!("<http://example.org/{local}>")
-}
-
-/// The solution rows of `result`, rendered.
-fn solutions(result: &SparqlResult) -> Vec<Vec<String>> {
-    let SparqlResult::Solutions { rows, .. } = result else {
-        panic!("a SELECT answers with solutions, got {result:?}");
-    };
-    rows.iter()
-        .map(|row| row.iter().map(|cell| render(cell.as_ref())).collect())
-        .collect()
-}
+use sparql::{answer, solutions, subject, typed};
 
 // ── the fixture ──────────────────────────────────────────────────────────────
 
@@ -146,29 +100,6 @@ fn registry(index: &Arc<TextIndex>) -> PropertyFunctionRegistry {
         Arc::new(TextSearchRelation::new(Arc::clone(index))),
     );
     registry
-}
-
-/// Evaluate `query` against `dataset` with `relations` in scope.
-fn answer(
-    dataset: &RdfDataset,
-    relations: &PropertyFunctionRegistry,
-    query: &str,
-) -> Vec<Vec<String>> {
-    let result = NativeSparqlEngine::new()
-        .query_with_options_view(
-            dataset,
-            SparqlRequest {
-                query,
-                base_iri: None,
-                substitutions: &[],
-            },
-            QueryOptions::new().with_env(
-                &ExtensionEnv::over_relations(relations.clone())
-                    .expect("the fixture declarations read cleanly"),
-            ),
-        )
-        .unwrap_or_else(|error| panic!("the query must evaluate: {error}"));
-    solutions(&result)
 }
 
 // ── the positions themselves ─────────────────────────────────────────────────

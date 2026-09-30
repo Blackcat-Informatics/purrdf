@@ -42,7 +42,7 @@ use wasm_bindgen::prelude::*;
 use crate::async_query::{AsyncCounters, AsyncOperationKind, add_ms, now_ms};
 use crate::protocol::not_acceptable_message;
 use crate::query::{
-    GovernorArgs, NegotiatedValue, aggregate_env_message, build_aggregates, negotiable_result_kind,
+    GovernorArgs, NegotiatedValue, aggregate_env_message, negotiable_result_kind,
     serialize_configured_graph, serialize_query_result, sparql_request,
 };
 use crate::shacl::{
@@ -519,9 +519,13 @@ fn ungoverned_query(
 
 /// The aggregate environment a governed operation's `aggregateNamespace` requests.
 fn governed_env(
-    aggregate_namespace: Option<String>,
+    aggregate_namespace: Option<&str>,
 ) -> Result<purrdf_sparql_eval::ExtensionEnv, JobError> {
-    aggregate_env_message(build_aggregates(aggregate_namespace).as_ref())
+    // The ENTIRE wasm surface for the first-party statistical aggregate set: one
+    // namespace string crosses the boundary, with no callback and no per-aggregate
+    // marshaling; the general custom-aggregate seam is Rust-host-only.
+    let aggregates = purrdf_validate::query::statistical_aggregates(aggregate_namespace);
+    aggregate_env_message(aggregates.as_ref())
         .map_err(|message| JobError::message(EXTENSION_CODE, message))
 }
 
@@ -568,8 +572,12 @@ impl OperationInput<'_> {
                 })?))
             }
             AsyncOperationKind::Governed => {
-                let env = governed_env(aggregate_namespace)?;
-                let governors = run.governors(ceilings.ceilings());
+                let env = governed_env(aggregate_namespace.as_deref())?;
+                let governors = run.governors(
+                    ceilings
+                        .ceilings()
+                        .map_err(|message| JobError::message(OPTIONS_CODE, message))?,
+                );
                 let outcome = run
                     .evaluate(|| {
                         engine.query_governed(&frozen, request, run.options(&env), &governors)
@@ -579,8 +587,12 @@ impl OperationInput<'_> {
                 Ok(JobOutcome::Governed(Box::new(outcome)))
             }
             AsyncOperationKind::Negotiated => {
-                let env = governed_env(aggregate_namespace)?;
-                let governors = run.governors(ceilings.ceilings());
+                let env = governed_env(aggregate_namespace.as_deref())?;
+                let governors = run.governors(
+                    ceilings
+                        .ceilings()
+                        .map_err(|message| JobError::message(OPTIONS_CODE, message))?,
+                );
                 let outcome = run
                     .evaluate(|| {
                         engine.query_governed(&frozen, request, run.options(&env), &governors)
@@ -627,8 +639,12 @@ impl OperationInput<'_> {
                 .map_err(|message| JobError::message(ENTAILMENT_CODE, message))?;
                 let limits =
                     crate::entail::wasm_limits(closure.max_stored_facts, closure.max_join_steps);
-                let env = governed_env(aggregate_namespace)?;
-                let governors = run.governors(ceilings.ceilings());
+                let env = governed_env(aggregate_namespace.as_deref())?;
+                let governors = run.governors(
+                    ceilings
+                        .ceilings()
+                        .map_err(|message| JobError::message(OPTIONS_CODE, message))?,
+                );
                 let outcome = run
                     .evaluate(|| {
                         query_with_entailment_closure_governed(
@@ -728,8 +744,12 @@ impl OperationInput<'_> {
                 crate::async_query::SHACL_STARTS_ELSEWHERE,
             )),
             AsyncOperationKind::UpdateGoverned => {
-                let env = governed_env(aggregate_namespace)?;
-                let governors = run.governors(ceilings.ceilings());
+                let env = governed_env(aggregate_namespace.as_deref())?;
+                let governors = run.governors(
+                    ceilings
+                        .update_ceilings()
+                        .map_err(|message| JobError::message(OPTIONS_CODE, message))?,
+                );
                 let mut target = Arc::clone(&frozen);
                 let outcome = run
                     .evaluate(|| {

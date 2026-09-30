@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-sparql-algebra"
-description = "Native, wasm-clean SPARQL 1.1/1.2 parser → RDF 1.2-native query algebra AST (quoted triple terms, property paths, FILTER/BIND/VALUES, solution modifiers, GROUP BY) for the RDF 1.2 query stack — replaces the direct oxigraph-family SPARQL-parser dependency"
+description = "Native, wasm-clean SPARQL 1.1/1.2 parser → RDF 1.2-native query algebra AST (quoted triple terms, property paths, FILTER/BIND/VALUES, solution modifiers, GROUP BY) for the RDF 1.2 query stack"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -22,11 +22,8 @@ workspace = true
 
 [lib]
 # rlib-only, wasm-clean leaf: the SPARQL front-end of the native query stack. It
-# must NOT pull any oxigraph-family crate (it replaces the oxigraph-family SPARQL
-# parser). It builds on the two CLOSED foundation leaves `purrdf-iri` and
-# `purrdf-xsd`, plus `memchr` (a wasm-clean SIMD byte-scan primitive for the
-# tokenizer hot paths — not a foundation leaf, the same class of infra dep as the
-# rayon edges elsewhere); it deliberately does NOT depend on `purrdf-core`
+# builds on the foundation leaves `purrdf-lex`, `purrdf-iri` and
+# `purrdf-xsd`; it deliberately does NOT depend on `purrdf-core`
 # (whose terms are dataset-interned `TermId` and which pulls a `gts` default feature).
 crate-type = ["rlib"]
 path = "src/lib.rs"
@@ -41,18 +38,21 @@ purrdf-xsd = { workspace = true }
 # closed leaf over `purrdf-iri` + `purrdf-xsd` only, so it adds no edge this
 # crate does not already carry and keeps the front-end `purrdf-core`-free.
 purrdf-cdt = { workspace = true }
-# SIMD byte scanning on the tokenizer hot paths (string-literal body, IRIREF end,
-# comment/EOL). SIMD on x86/aarch64, portable SWAR fallback — wasm-clean, no feature
-# gate. NOT an oxigraph-family crate, so the front-end stays a clean native leaf.
-memchr = { workspace = true }
+# The fixed-key table hasher behind the parser's prefix and blank-label maps:
+# their iteration order is the same on every run.
+purrdf-hash = { workspace = true }
+# The lexical layer: terminals, escape decoders and the chunked byte scans on
+# the tokenizer hot paths (string-literal body, IRIREF end, comment/EOL).
+purrdf-lex = { workspace = true }
 
 [dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
 # Byte-exact golden files for the algebra snapshots, and the property harness
 # (lexer round-trips, parser robustness). Path-only and unpublished, so it is
 # stripped from the packaged manifest.
 purrdf-testkit = { workspace = true }
-# Tokenizer hot-path baselines (dev-dep only).
-criterion = { workspace = true }
 # Text extraction for `tests/shipped_sparql_examples.rs` — the gate that pulls
 # SPARQL query/update text and `AGG(<iri>...)` call fragments out of the book,
 # `--help` text, `.pyi`, `.d.ts`, and rustdoc, and parses each with THIS crate's

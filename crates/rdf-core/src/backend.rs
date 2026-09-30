@@ -4,10 +4,10 @@
 //! Narrow purrdf backend traits (P2d).
 //!
 //! These are the dependency-inversion seams that remain after `DatasetView`
-//! the oxigraph crate ring-fence, and `DatasetMut`: term
+//! and `DatasetMut`: term
 //! interning, parser ingress, SPARQL execution, and serializer egress. They live in
 //! `purrdf-core` so consumers can depend on the contract without depending on
-//! oxigraph. Concrete oxigraph adapters live in the sibling `purrdf` crate.
+//! an engine. Concrete adapters live in the sibling `purrdf` crate.
 
 use std::convert::Infallible;
 use std::io::Write;
@@ -92,7 +92,7 @@ impl TermFactory for RdfDatasetBuilder {
 }
 
 /// RDF parser request. Formats are named by media type or local format id at the
-/// contract boundary so the core trait does not leak an oxigraph enum.
+/// contract boundary so the core trait does not leak an engine-specific enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RdfParseRequest<'a> {
     /// The raw RDF bytes to parse.
@@ -126,8 +126,7 @@ pub trait RdfParserBackend {
 /// `substitutions` carries variable **pre-bindings**:
 /// each `(name, value)` pre-binds the query variable `name` to `value` before
 /// evaluation, as if the `WHERE` had been joined with a single-row
-/// `VALUES { ?name value }`. This is the native replacement for oxigraph's
-/// `PreparedSparqlQuery::substitute_variable`, used by SHACL-AF to inject the focus
+/// `VALUES { ?name value }`. It is used by SHACL-AF to inject the focus
 /// node as `$this`. A slice (rather than a `Vec`) keeps the request `Copy` and
 /// borrow-only; the empty slice (`&[]`) is "no pre-binding". `value` is a
 /// [`TermValue`], so a blank-node focus node is representable (unlike a `VALUES`
@@ -142,6 +141,10 @@ pub struct SparqlRequest<'a> {
     /// Variable pre-bindings (`(name, value)` pairs); `&[]` means none.
     pub substitutions: &'a [(String, TermValue)],
 }
+
+/// One solution of a [`SparqlResult::Solutions`] sequence: the binding for each
+/// projected variable, in projection order (`None` = unbound).
+pub type SolutionRow = Vec<Option<TermValue>>;
 
 /// Materialized SPARQL result model independent of any concrete query engine.
 #[derive(Debug, Clone)]
@@ -165,7 +168,52 @@ pub enum SparqlResult {
     Boolean(bool),
 }
 
-/// SPARQL query/update seam. The dataset type is associated so an oxigraph-backed
+impl SparqlResult {
+    /// The query form this result answers, as the lowercase SPARQL keyword the result
+    /// formats record it under: `select` for a solution sequence, `ask` for a boolean,
+    /// `construct` for a graph (a DESCRIBE graph included, since it has the same shape).
+    ///
+    /// The one mapping from a result's shape to its query form: the SPARQL Results
+    /// serializers' `queryForm` discriminator and every diagnostic that names a result's
+    /// kind read it here.
+    #[must_use]
+    pub const fn query_form(&self) -> &'static str {
+        match self {
+            Self::Solutions { .. } => "select",
+            Self::Boolean(_) => "ask",
+            Self::Graph(_) => "construct",
+        }
+    }
+
+    /// The projected variables and the rows of a solution sequence, or `None` for a
+    /// graph or boolean result.
+    #[must_use]
+    pub fn solutions(&self) -> Option<(&[String], &[SolutionRow])> {
+        match self {
+            Self::Solutions {
+                variables, rows, ..
+            } => Some((variables, rows)),
+            Self::Graph(_) | Self::Boolean(_) => None,
+        }
+    }
+
+    /// The projected variables and the rows of a solution sequence, taken out of the
+    /// result; any other result is handed back unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns `self` when it is a graph or boolean result.
+    pub fn into_solutions(self) -> Result<(Vec<String>, Vec<SolutionRow>), Self> {
+        match self {
+            Self::Solutions {
+                variables, rows, ..
+            } => Ok((variables, rows)),
+            other @ (Self::Graph(_) | Self::Boolean(_)) => Err(other),
+        }
+    }
+}
+
+/// SPARQL query/update seam. The dataset type is associated so a store-backed
 /// engine can operate on its store while a future native engine can operate on the
 /// IR/native query store.
 pub trait SparqlEngine {
@@ -207,7 +255,7 @@ pub enum SerializeGraph<'a> {
 }
 
 /// RDF serializer request. Formats are media types/local ids for the same reason
-/// as [`RdfParseRequest`]: the core trait must not expose an oxigraph enum.
+/// as [`RdfParseRequest`]: the core trait must not expose an engine-specific enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RdfSerializeRequest<'a> {
     /// The output format's media type (or local format id).
@@ -242,6 +290,19 @@ mod tests {
 
     fn iri(value: &str) -> TermValue {
         TermValue::Iri(value.to_owned())
+    }
+
+    #[test]
+    fn each_result_shape_names_its_query_form() {
+        let empty = || RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        let solutions = SparqlResult::Solutions {
+            variables: Vec::new(),
+            rows: Vec::new(),
+            aux: empty(),
+        };
+        assert_eq!(solutions.query_form(), "select");
+        assert_eq!(SparqlResult::Boolean(true).query_form(), "ask");
+        assert_eq!(SparqlResult::Graph(empty()).query_form(), "construct");
     }
 
     #[test]
@@ -298,7 +359,7 @@ mod term_walk_tests {
     //! thousand levels on a 128 KiB thread.
 
     use super::TermFactory;
-    use crate::test_terms::TermShape;
+    use crate::term_fixture::TermShape;
     use crate::{RdfDatasetBuilder, TermId, TermValue};
 
     fn reference(builder: &mut RdfDatasetBuilder, value: &TermValue) -> TermId {
@@ -320,7 +381,12 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(&mut state, &mut budget, TermShape::Any);
+            let value = crate::term_fixture::term_value(
+                &mut state,
+                purrdf_testkit::rng::splitmix64_next,
+                &mut budget,
+                TermShape::Any,
+            );
             let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
             assert_eq!(
                 found.intern_value(&value),
@@ -341,15 +407,11 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_value_interns_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = crate::test_terms::triple_chain(LEVELS);
-                let mut builder = RdfDatasetBuilder::new();
-                assert_eq!(builder.intern_value(&value).index(), LEVELS + 2);
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("interning did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = crate::term_fixture::triple_chain(LEVELS);
+            let mut builder = RdfDatasetBuilder::new();
+            assert_eq!(builder.intern_value(&value).index(), LEVELS + 2);
+        })
+        .expect("the thread starts");
     }
 }

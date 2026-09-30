@@ -45,39 +45,13 @@
 //! The REAL `purrdf` binary is proved acceptable by `make lubm` and `make watdiv` themselves,
 //! which is where a real binary belongs; this file pins the laws, not the build.
 
-use std::os::unix::fs::PermissionsExt;
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
+use support::{scratch, unique_tag, write_executable};
 
-/// A monotonically increasing counter, so every call to [`unique_tag`] in this process is
-/// distinct even across parallel test threads.
-static UNIQUE: AtomicU64 = AtomicU64::new(0);
-
-fn unique_tag() -> String {
-    format!(
-        "{}-{}",
-        std::process::id(),
-        UNIQUE.fetch_add(1, Ordering::Relaxed)
-    )
-}
-
-/// The repository root, resolved from `CARGO_MANIFEST_DIR` (`crates/bench`) rather than the
-/// process's current directory, so these tests are independent of how `cargo test` was invoked.
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("crates/bench has two ancestors: crates/ and the repository root")
-        .to_path_buf()
-}
-
-/// A scratch directory unique to this process, created and returned.
-fn scratch(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("purrdf-bench-lane-{label}-{}", unique_tag()));
-    std::fs::create_dir_all(&dir).expect("create the scratch directory");
-    dir
-}
+use purrdf_testkit::paths::workspace_root;
 
 /// Runs `make <args>` from the repository root, returning (exit code, stdout, stderr).
 ///
@@ -85,7 +59,7 @@ fn scratch(label: &str) -> PathBuf {
 /// a plain shell with no pending `make` recursion.
 fn run_make(args: &[&str]) -> (i32, String, String) {
     let output = Command::new("make")
-        .current_dir(repo_root())
+        .current_dir(workspace_root())
         .env_remove("MAKEFLAGS")
         .env_remove("MFLAGS")
         .env_remove("MAKELEVEL")
@@ -144,7 +118,7 @@ const LANES: &[(&str, &str, &str)] = &[
 
 /// Runs one lane with `<bin knob>=<binary>` in a private arena.
 fn run_lane_with_bin(lane: &str, bin_knob: &str, out_knob: &str, binary: &str) -> (i32, String) {
-    let arena = scratch(&format!("{lane}-arena"));
+    let arena = scratch("purrdf-bench-lane", &format!("{lane}-arena"));
     let (code, stdout, stderr) = run_make(&[
         lane,
         &format!("{bin_knob}={binary}"),
@@ -166,21 +140,10 @@ fn run_lane_with_bin(lane: &str, bin_knob: &str, out_knob: &str, binary: &str) -
 /// because the kernel's check is about the parent's type rather than about
 /// permission. It is also confined to the scratch directory.
 fn uncreatable_arena(label: &str) -> (String, PathBuf) {
-    let root = scratch(label);
+    let root = scratch("purrdf-bench-lane", label);
     let blocker = root.join("not-a-directory");
     std::fs::write(&blocker, b"").expect("write the file that blocks arena creation");
     (format!("{}/deeper", blocker.display()), root)
-}
-
-/// Writes `contents` to `path` and makes it executable, returning `path`.
-fn write_executable(path: PathBuf, contents: &str) -> PathBuf {
-    std::fs::write(&path, contents).expect("write the executable script");
-    let mut permissions = std::fs::metadata(&path)
-        .expect("stat the freshly written script")
-        .permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&path, permissions).expect("make the script executable");
-    path
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -258,7 +221,7 @@ fn every_lane_refuses_a_binary_that_produces_nothing_and_publishes_no_digest() {
     // `true --version` prints a real version banner, so it passes a version probe and is the
     // WRONG stand-in for "produces nothing" (it is instead a fine stand-in for "produces nothing
     // USEFUL", which `the_lubm_lane_refuses_an_empty_conversion_and_publishes_no_digest` covers).
-    let dir = scratch("silent-binary");
+    let dir = scratch("purrdf-bench-lane", "silent-binary");
     let silent = write_executable(dir.join("silent-purrdf"), "#!/bin/sh\nexit 0\n");
     let silent = silent.display().to_string();
 
@@ -415,7 +378,7 @@ fn every_lane_refuses_a_binary_that_converts_everything_to_nothing_and_publishes
     //
     // It needs NO JRE, NO network and NO built binary: the lane's own conversion probe runs before
     // step 1, so the refusal happens on the knob rather than six steps later.
-    let dir = scratch("silent-drop");
+    let dir = scratch("purrdf-bench-lane", "silent-drop");
     let stand_in = convert_stand_in(dir.join("silent-drop-purrdf"), "");
 
     for (lane, bin_knob, out_knob) in LANES {
@@ -476,9 +439,9 @@ fn the_watdiv_lane_refuses_a_pack_that_is_not_a_pack_and_stamps_nothing() {
     // NON-EMPTY IS NOT "IS A PACK". Eight bytes of something else passed the lane's emptiness
     // check, got a `.pack-stamp`, survived the failure that followed, and were reused by every
     // later run under "reusing the one already stamped with this dataset digest and this binary".
-    let dir = scratch("not-a-pack");
+    let dir = scratch("purrdf-bench-lane", "not-a-pack");
     let stand_in = convert_stand_in(dir.join("eight-byte-purrdf"), "NOTAPACK");
-    let arena = scratch("not-a-pack-arena");
+    let arena = scratch("purrdf-bench-lane", "not-a-pack-arena");
 
     let (code, stdout, stderr) = run_make(&[
         "watdiv",
@@ -549,19 +512,19 @@ fn every_lane_refuses_a_binary_knob_that_does_not_exist_and_quotes_the_bytes_bac
 
 #[test]
 fn every_lane_accepts_a_credible_binary_at_an_awkward_but_legal_path() {
-    let dir = scratch("awkward-path");
+    let dir = scratch("purrdf-bench-lane", "awkward-path");
     let real = credible_stand_in(dir.join("purrdf-stand-in"));
 
     for (lane, bin_knob, out_knob) in LANES {
         // One path that is a SYMLINK, is RELATIVE to the repository root (the lane's own working
         // directory), and contains a SPACE — all three properties at once, so a single lane run
         // covers all three counter-checks.
-        let arena = repo_root().join(format!("target/lane over refusal {}", unique_tag()));
+        let arena = workspace_root().join(format!("target/lane over refusal {}", unique_tag()));
         std::fs::create_dir_all(&arena).expect("create the space-containing arena");
         let link = arena.join("purrdf link");
         std::os::unix::fs::symlink(&real, &link).expect("symlink the stand-in");
         let relative = link
-            .strip_prefix(repo_root())
+            .strip_prefix(workspace_root())
             .expect("the arena is under the repository root")
             .to_path_buf();
 
@@ -621,7 +584,7 @@ fn every_lane_names_its_arena_knob_when_the_arena_cannot_be_created() {
     // everywhere, with no network and no artifacts, and it doubles as the over-refusal check that
     // a wrapper an operator writes around the CLI is accepted — the run must fail on the ARENA,
     // never on the binary.
-    let dir = scratch("arena-unusable");
+    let dir = scratch("purrdf-bench-lane", "arena-unusable");
     let wrapper = credible_stand_in(dir.join("purrdf wrapper"));
     let (unusable, unusable_root) = uncreatable_arena("arena-blocked");
 
@@ -694,7 +657,7 @@ fn every_lane_names_its_arena_knob_when_the_arena_cannot_be_created() {
 
 /// Runs a lane with extra knob assignments in a private arena, returning the exit code and output.
 fn run_lane_with_knobs(lane: &str, out_knob: &str, knobs: &[String]) -> (i32, String) {
-    let arena = scratch(&format!("{lane}-knobs"));
+    let arena = scratch("purrdf-bench-lane", &format!("{lane}-knobs"));
     let mut args: Vec<String> = vec![lane.to_string()];
     args.extend(knobs.iter().cloned());
     args.push(format!("{out_knob}={}", arena.display()));
@@ -982,7 +945,7 @@ fn run_stand_in(binary: &Path, cwd: &Path, args: &[&str]) -> (i32, String, Vec<S
 
 #[test]
 fn a_stand_in_writes_nowhere_but_the_destination_a_lane_actually_names() {
-    let root = scratch("stand-in-destinations");
+    let root = scratch("purrdf-bench-lane", "stand-in-destinations");
     let workdir = root.join("cwd");
     std::fs::create_dir_all(&workdir).expect("create the working directory");
 

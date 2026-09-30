@@ -503,95 +503,93 @@ pub(crate) fn ledger_source_map(
 
 /// [`ledger_source_map`]'s spine walk. See that function's doc.
 ///
-/// Two kinds of node wait on the work list. A **spine** node of `original` is one
-/// `normalize` erased or fell through, whose normalized counterpart is the whole
-/// `normalized` tree; the walk steps through the same wrappers `normalize` erased, by the
-/// same gates. A **clone** pair is a node of the terminal shape `normalize` copied
-/// wholesale, beside its copy: the copy is recorded against the node, and every one of
-/// its descendants — INCLUDING any `EXISTS` pattern reached through a nested expression
-/// — is paired with its own copy and queued. `counts_rows` is unconditionally `true`
+/// A **spine** node of `original` is one `normalize` erased or fell through, whose
+/// normalized counterpart is the whole `normalized` tree; the walk steps through the same
+/// wrappers `normalize` erased, by the same gates, in a loop. The node of the terminal
+/// shape `normalize` copied wholesale is then paired with its copy by [`map_clone`]: the
+/// copy is recorded against the node, and every one of its descendants — INCLUDING any
+/// `EXISTS` pattern reached through a nested expression — with its own copy.
+/// `counts_rows` is unconditionally `true`
 /// throughout: unlike `LATERAL`'s Values-Insertion machinery, this walk never adds a
 /// node `original` did not already have, so there is no wrapper/wrapped ambiguity to
 /// arbitrate — every node here really is the one true output of the real node it
 /// corresponds to.
 fn map_spine(original: &GraphPattern, normalized: &GraphPattern, map: &mut SubstitutionSourceMap) {
-    /// A node still to be mapped.
-    enum Pending<'a> {
-        /// A node on `original`'s erasable spine.
-        Spine(&'a GraphPattern),
-        /// A node of the wholesale clone, with its copy.
-        Clone(&'a GraphPattern, &'a GraphPattern),
-    }
-    let mut pending = vec![Pending::Spine(original)];
-    while let Some(next) = pending.pop() {
-        match next {
-            Pending::Spine(original) => match original {
-                GraphPattern::LeftJoin {
-                    left,
-                    right,
-                    expression,
-                } if left_join_erasable(right, expression.as_ref()) => {
-                    pending.push(Pending::Spine(left));
-                }
-                GraphPattern::OrderBy { inner, expression } if order_by_erasable(expression) => {
-                    pending.push(Pending::Spine(inner));
-                }
-                GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
-                    pending.push(Pending::Spine(inner));
-                }
-                // Mirrors law 4a: an offset-zero slice with room for at least one row
-                // erases. A `Slice(_, Some(0))` reached here is, by construction, the
-                // can-hard-error terminal-clone case (see `normalize`'s law 4b): if it
-                // had folded empty instead, EVERY enclosing step that transparently
-                // forwarded it here would have folded empty too, and
-                // `ledger_source_map`'s caller would never have had an `Enf::Pattern` —
-                // and therefore a `normalized` tree — to walk in the first place. It
-                // falls through to the terminal arm below, exactly like `normalize`'s
-                // own `(_, Some(0)) if can_hard_error` branch.
-                GraphPattern::Slice {
-                    inner,
-                    start: 0,
-                    length,
-                } if *length != Some(0) => {
-                    pending.push(Pending::Spine(inner));
-                }
-                // `Project`/`Union`: synthesizing cases this walk declines to track — see
-                // [`ledger_source_map`]'s doc.
-                GraphPattern::Project { .. } | GraphPattern::Union { .. } => {}
-                // Every other shape, including a non-erasing `LeftJoin`/`OrderBy`/`Slice`,
-                // is the terminal shape `normalize` clones wholesale.
-                _ => pending.push(Pending::Clone(original, normalized)),
-            },
-            Pending::Clone(original, normalized) => {
-                map.insert(
-                    std::ptr::from_ref(normalized) as usize,
-                    SubstitutionSource {
-                        source: std::ptr::from_ref(original) as usize,
-                        counts_rows: true,
-                    },
-                );
-                let mut original_children: purrdf_core::SmallVec<[&GraphPattern; 4]> =
-                    purrdf_core::SmallVec::new();
-                soundness::visit_classified_children(original, &mut |child, _edge| {
-                    original_children.push(child);
-                    false
-                });
-                let mut normalized_children: purrdf_core::SmallVec<[&GraphPattern; 4]> =
-                    purrdf_core::SmallVec::new();
-                soundness::visit_classified_children(normalized, &mut |child, _edge| {
-                    normalized_children.push(child);
-                    false
-                });
-                debug_assert_eq!(
-                    original_children.len(),
-                    normalized_children.len(),
-                    "normalized is a structural clone of original at this point in the walk, \
-                     so their classified children must pair up 1:1"
-                );
-                for (o, n) in original_children.into_iter().zip(normalized_children).rev() {
-                    pending.push(Pending::Clone(o, n));
-                }
+    let mut original = original;
+    loop {
+        match original {
+            GraphPattern::LeftJoin {
+                left,
+                right,
+                expression,
+            } if left_join_erasable(right, expression.as_ref()) => original = left,
+            GraphPattern::OrderBy { inner, expression } if order_by_erasable(expression) => {
+                original = inner;
             }
+            GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => original = inner,
+            // Mirrors law 4a: an offset-zero slice with room for at least one row
+            // erases. A `Slice(_, Some(0))` reached here is, by construction, the
+            // can-hard-error terminal-clone case (see `normalize`'s law 4b): if it
+            // had folded empty instead, EVERY enclosing step that transparently
+            // forwarded it here would have folded empty too, and
+            // `ledger_source_map`'s caller would never have had an `Enf::Pattern` —
+            // and therefore a `normalized` tree — to walk in the first place. It
+            // falls through to the terminal arm below, exactly like `normalize`'s
+            // own `(_, Some(0)) if can_hard_error` branch.
+            GraphPattern::Slice {
+                inner,
+                start: 0,
+                length,
+            } if *length != Some(0) => original = inner,
+            // `Project`/`Union`: synthesizing cases this walk declines to track — see
+            // [`ledger_source_map`]'s doc.
+            GraphPattern::Project { .. } | GraphPattern::Union { .. } => return,
+            // Every other shape, including a non-erasing `LeftJoin`/`OrderBy`/`Slice`,
+            // is the terminal shape `normalize` clones wholesale.
+            _ => return map_clone(original, normalized, map),
+        }
+    }
+}
+
+/// Record every node of `copy` — a structural clone of `original` — against the node of
+/// `original` it copies, `counts_rows` set: each copied node's output IS its original's.
+/// Every descendant is paired, INCLUDING any `EXISTS` pattern reached through a nested
+/// expression. The pairs wait on a work list, so a tree of any depth is mapped without a
+/// machine-stack frame per level.
+pub(crate) fn map_clone(
+    original: &GraphPattern,
+    copy: &GraphPattern,
+    map: &mut SubstitutionSourceMap,
+) {
+    let mut pending = vec![(original, copy)];
+    while let Some((original, copy)) = pending.pop() {
+        map.insert(
+            std::ptr::from_ref(copy) as usize,
+            SubstitutionSource {
+                source: std::ptr::from_ref(original) as usize,
+                counts_rows: true,
+            },
+        );
+        let mut original_children: purrdf_core::SmallVec<[&GraphPattern; 4]> =
+            purrdf_core::SmallVec::new();
+        soundness::visit_classified_children(original, &mut |child, _edge| {
+            original_children.push(child);
+            false
+        });
+        let mut copy_children: purrdf_core::SmallVec<[&GraphPattern; 4]> =
+            purrdf_core::SmallVec::new();
+        soundness::visit_classified_children(copy, &mut |child, _edge| {
+            copy_children.push(child);
+            false
+        });
+        debug_assert_eq!(
+            original_children.len(),
+            copy_children.len(),
+            "the copy is a structural clone of the original, so their classified children \
+             must pair up 1:1"
+        );
+        for (o, c) in original_children.into_iter().zip(copy_children).rev() {
+            pending.push((o, c));
         }
     }
 }
@@ -1196,7 +1194,6 @@ mod iterative_walk_tests {
     use super::{Enf, copied, ledger_source_map, left_join_erasable, normalize, order_by_erasable};
     use crate::expr::{SubstitutionSource, SubstitutionSourceMap};
     use crate::governor::soundness;
-    use purrdf_testkit::rng::splitmix64_next;
 
     const EX: &str = "http://example.org/";
 
@@ -1348,12 +1345,12 @@ mod iterative_walk_tests {
 
     /// The choices one generated shape is built from: a SplitMix64 counter stream, so
     /// a seed names a shape.
-    struct Choices(u64);
+    struct Choices(purrdf_testkit::rng::SplitMix64);
 
     impl Choices {
         /// One choice in `0..bound`.
         fn pick(&mut self, bound: u64) -> u64 {
-            splitmix64_next(&mut self.0) % bound
+            self.0.below(bound)
         }
 
         /// One even choice.
@@ -1539,16 +1536,6 @@ mod iterative_walk_tests {
         }
     }
 
-    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
-    }
-
     // ── The checks ─────────────────────────────────────────────────────────────────
 
     /// Over two hundred generated spines, the loop normalizes to what the recursion
@@ -1557,7 +1544,7 @@ mod iterative_walk_tests {
     #[test]
     fn the_loops_agree_with_the_recursive_references_over_generated_spines() {
         for seed in 0..200_u64 {
-            let mut choices = Choices(seed);
+            let mut choices = Choices(purrdf_testkit::rng::SplitMix64::new(seed));
             let mut budget = 3 + choices.pick(10) as usize;
             let pattern = gen_pattern(&mut choices, &mut budget);
 
@@ -1591,7 +1578,7 @@ mod iterative_walk_tests {
     /// leaf, on a thread whose stack holds a few hundred frames of any recursion.
     #[test]
     fn a_hundred_thousand_wrappers_normalize_and_map_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let leaf = bgp(0);
             let mut spine = leaf.clone();
             for level in 0..DEPTH {
@@ -1624,6 +1611,7 @@ mod iterative_walk_tests {
                     true,
                 )]
             );
-        });
+        })
+        .expect("spawn");
     }
 }

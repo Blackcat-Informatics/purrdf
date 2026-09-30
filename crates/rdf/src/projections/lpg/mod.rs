@@ -30,7 +30,7 @@ pub use mapping::{
 pub use model::{
     LpgAnnotation, LpgConfig, LpgEdge, LpgExecutionLimits, LpgGraph, LpgGraphContext,
     LpgIriSelection, LpgLabel, LpgNamedGraphSelection, LpgNode, LpgProperty, LpgPropertyAtom,
-    LpgRdfQuad, LpgReifier, LpgScope,
+    LpgRdfQuad, LpgReifier, LpgScope, LpgSelection,
 };
 pub use stream::{
     LpgProgress, LpgProgressObserver, LpgProgressPhase, LpgProjectionReport, LpgStreamProjection,

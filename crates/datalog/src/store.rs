@@ -134,11 +134,6 @@ pub struct TermInterner {
 }
 
 impl TermInterner {
-    /// A fresh, empty dictionary.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Intern `surface`, minting a new insertion-ordered id if it is new, else
     /// returning the existing id.
     pub fn intern(&mut self, surface: &str) -> TermId {
@@ -984,7 +979,7 @@ impl<'a> Iterator for Partitions<'a> {
 /// them through [`Self::term_id`]. See the module docs for how the partitioning keeps a
 /// constant-predicate atom exactly as fast as it was when predicates were relation
 /// symbols.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct RelationStore {
     /// The store's term dictionary, shared by every position of every partition. This is
     /// the persistent term arena: never reset within the store's lifetime, because a
@@ -1015,7 +1010,24 @@ pub struct RelationStore {
     empty: Relation,
 }
 
+purrdf_hash::default_from_new!(RelationStore);
+
 impl RelationStore {
+    /// A fresh, empty store; [`Default`] delegates here.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            interner: TermInterner::default(),
+            relations: Vec::new(),
+            keys: Vec::new(),
+            by_key: BTreeMap::new(),
+            order: Vec::new(),
+            row_count: 0,
+            row_log: Vec::new(),
+            empty: Relation::default(),
+        }
+    }
+
     /// The lexical surface of the DEFAULT GRAPH: the EMPTY surface.
     ///
     /// RDF's default graph has no name, and PurRDF mints no vocabulary, so the store says
@@ -1024,11 +1036,6 @@ impl RelationStore {
     /// denotation [`ClauseTerm::DefaultGraph`](crate::clause::ClauseTerm::DefaultGraph)
     /// renders to, which is what makes a clause constant and stored data comparable.
     pub const DEFAULT_GRAPH: &'static str = "";
-
-    /// A fresh, empty store.
-    pub fn new() -> Self {
-        Self::default()
-    }
 
     /// Insert the quad `(subject, predicate, object, graph)`, all four as lexical
     /// surfaces.
@@ -2244,12 +2251,15 @@ mod tests {
 
     /// A tail of `len` rows over a small id space (so keys collide across rows
     /// in either column), with the tuples it was built from.
-    fn random_tail(len: usize, state: &mut u64) -> (Tail, Vec<(TermId, TermId, RowId)>) {
+    fn random_tail(
+        len: usize,
+        rng: &mut purrdf_testkit::rng::SplitMix64,
+    ) -> (Tail, Vec<(TermId, TermId, RowId)>) {
         let mut tail = Tail::default();
         let mut rows = Vec::with_capacity(len);
         for i in 0..len {
-            let s = TermId::from_index((purrdf_testkit::rng::splitmix64_next(state) % 24) as usize);
-            let o = TermId::from_index((purrdf_testkit::rng::splitmix64_next(state) % 24) as usize);
+            let s = TermId::from_index(rng.below_usize(24));
+            let o = TermId::from_index(rng.below_usize(24));
             let r = RowId::from_index(i);
             tail.push(s, o, r);
             rows.push((s, o, r));
@@ -2264,11 +2274,11 @@ mod tests {
     /// miss everywhere).
     #[test]
     fn tail_contains_matches_the_tuple_scan() {
-        let mut state = 0x5EED_0F7A_11C0_u64;
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(0x5EED_0F7A_11C0);
         let outside = TermId::from_index(1_000);
         for len in 0..=TAIL_SEAL_THRESHOLD {
             for _ in 0..4 {
-                let (tail, rows) = random_tail(len, &mut state);
+                let (tail, rows) = random_tail(len, &mut rng);
                 assert_eq!(tail.len(), len);
                 assert_eq!(tail.is_empty(), len == 0);
                 let mut probes = vec![(outside, outside)];
@@ -2342,9 +2352,9 @@ mod tests {
     /// in that order and leaves it empty.
     #[test]
     fn tail_columns_round_trip_rows_in_insertion_order() {
-        let mut state = 0xC011_u64;
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(0xC011);
         for len in [0, 1, 7, 8, 9, TAIL_SEAL_THRESHOLD - 1, TAIL_SEAL_THRESHOLD] {
-            let (mut tail, rows) = random_tail(len, &mut state);
+            let (mut tail, rows) = random_tail(len, &mut rng);
             let by_position: Vec<_> = (0..tail.len()).map(|i| tail.row(i)).collect();
             assert_eq!(by_position, rows);
             assert_eq!(tail.iter().collect::<Vec<_>>(), rows);

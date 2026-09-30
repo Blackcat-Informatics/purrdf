@@ -27,7 +27,7 @@
 //! The kernel owns the bundle SHAPE but NOT the concrete handle payloads. The
 //! payload type `H` is generic so that pipeline-side types (logic programs,
 //! rendered docs, reasoning results) never enter `purrdf-core` — the
-//! oxigraph-free / PyO3-free ring-fence stays intact. A handle bundles its payload
+//! PyO3-free ring-fence stays intact. A handle bundles its payload
 //! with a PINNED [`ContentDigest`] of the named graph it projects.
 //!
 //! ## Content addressing
@@ -84,6 +84,7 @@
 //! stop agreeing; on either carrier it is what makes the exact per-graph
 //! invalidation below sound.
 
+use purrdf_hash::Domain;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -104,8 +105,8 @@ use super::view_accounting::{
 use crate::dataset_view::{DatasetView, GraphMatch};
 use crate::provenance::DatasetProvenance;
 use crate::{
-    ContentDigest, ContentStore, QuadIds, QuadRef, RdfDiagnostic, RdfLookaside,
-    RdfStoreCapabilities, TermRef, TermValue,
+    ContentDigest, ContentStore, QuadIds, RdfDiagnostic, RdfLookaside, RdfStoreCapabilities,
+    TermRef, TermValue,
 };
 
 /// Field separator inside the digest fold (mirrors `StageProduct::from_artifacts`).
@@ -148,7 +149,7 @@ const SEP_SECTION: u8 = 0x1d;
 /// to record an empty declaration at all. A declaration-only graph whose name is a
 /// BLANK node is invisible to both, for the same reason: it owns no row, and its
 /// name is not addressable.
-pub const PIPELINE_ROOT_DOMAIN: &str = "purrdf.pipeline-root.v1";
+pub const PIPELINE_ROOT_DOMAIN: Domain = Domain::new(b"purrdf.pipeline-root.v1");
 
 /// The key identifying the named graph a typed handle backs. An IRI string is the
 /// stable, dataset-independent name of the graph the handle projects.
@@ -735,15 +736,6 @@ impl<D: DatasetView> DatasetView for ResidueView<'_, D> {
 
     fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.0.quads().filter(|q| self.keeps(q.g))
-    }
-
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_, Self::Id>> + '_ {
-        self.quads().map(|q| QuadRef {
-            s: self.resolve(q.s),
-            p: self.resolve(q.p),
-            o: self.resolve(q.o),
-            g: q.g.map(|id| self.resolve(id)),
-        })
     }
 
     fn resolve(&self, id: Self::Id) -> TermRef<'_, Self::Id> {
@@ -2403,6 +2395,16 @@ mod core_tests {
         let g = b.intern_iri(graph);
         b.push_quad(anon, p, o, Some(g));
         b.freeze().expect("valid")
+    }
+
+    /// The pipeline root is frozen over the fixture carrier: a moved root is a changed
+    /// published carrier identity.
+    #[test]
+    fn the_pipeline_root_is_frozen() {
+        assert_eq!(
+            bundle(base()).pipeline_root().to_hex(),
+            "a04da97c5160a57a7a022ec256205bac9733b0840c65767144cc8240c33c4a98"
+        );
     }
 
     #[test]

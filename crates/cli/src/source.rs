@@ -25,7 +25,7 @@
 //!
 //! ## Pack sources and immutable acquisition
 //!
-//! A pack source is acquired through [`ImmutableInput`](crate::immutable::ImmutableInput),
+//! A pack source is acquired through [`ImmutableInput`],
 //! which yields bytes guaranteed **stable and un-truncatable** for the lifetime of
 //! the owner: a disk pack is memory-mapped only when the mapping cannot be faulted
 //! by a hostile concurrent pathname writer (a verified kernel seal, or our own
@@ -183,6 +183,18 @@ fn transport_name(path: &str) -> Option<&str> {
 /// truncated or corrupt stream returns an error rather than the prefix it inflated.
 pub(crate) fn read_bytes(path: &str) -> Result<Vec<u8>, CliError> {
     read_bytes_with_transport(path, TransportPolicy::Detect)
+}
+
+/// Read `path` (or stdin) as UTF-8 text, with no format resolution. `what` names the
+/// flag in the refusal of a document that is not UTF-8 (exit 1).
+///
+/// The reader for every argument that is text but not an RDF document (a ShEx schema, a
+/// basic graph pattern): there is no format to resolve, and the text goes to its own
+/// parser exactly as written.
+pub(crate) fn read_text(path: &str, what: &str) -> Result<String, CliError> {
+    let bytes = read_bytes(path)?;
+    String::from_utf8(bytes)
+        .map_err(|error| CliError::Runtime(format!("{what} {path}: not UTF-8 text: {error}")))
 }
 
 /// [`read_bytes`] under an explicit [`TransportPolicy`].

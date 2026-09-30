@@ -8,9 +8,11 @@ The workspace's shared test support, written once instead of once per crate.
 Never published, never a runtime dependency: it appears only in
 `[dev-dependencies]`, so no release crate and no release wasm build ever sees
 it. It builds and runs on `wasm32-unknown-unknown` too, where the workspace's
-cross-target test targets run on its harness. It
-depends on no `purrdf-*` crate — every member's tests may use it, and a
-first-party edge from here would close a cycle through that member.
+cross-target test targets run on its harness. Its
+one first-party dependency is `purrdf-hash`, the zero-dependency root, whose
+own tests and benches do not use this crate — every member's tests may use it,
+and any further first-party edge from here would close a cycle through that
+member.
 
 ## What it provides
 
@@ -61,3 +63,20 @@ first-party edge from here would close a cycle through that member.
   never OS entropy — and `PURRDF_PROP_SEED` replaces it for one run;
   `prop::cases_from_env(n)` reads `PURRDF_PROP_CASES` for properties that offer
   a deeper search on demand.
+* **A micro-benchmark harness** — `purrdf_testkit::bench`, which every
+  `harness = false` bench target in the workspace runs on:
+  `bench_group!(benches, target)` and `bench_main!(benches)` over
+  `fn target(c: &mut Bench)`, with `benchmark_group`, `BenchmarkId`,
+  `Throughput`, and `Bencher::iter`/`iter_batched`/`iter_batched_ref`/
+  `iter_with_large_drop`. Each benchmark is warmed up, sampled at a fixed
+  iteration count per sample, and reported as its median time per iteration
+  with the MAD and a 95% bootstrap interval seeded from its id through
+  `purrdf_hash::mix`, so one set of samples always yields one report. Outliers
+  are counted by Tukey's fences, throughput is printed as a rate, and
+  `--save-baseline`/`--baseline`/`--baseline-lenient` save and compare records
+  with a bootstrapped change. Every measured benchmark writes a fixed-schema
+  `estimates.json` under `PURRDF_BENCH_HOME`, or else `purrdf-bench/` beside the
+  build's `CARGO_TARGET_TMPDIR` (`target/purrdf-bench/` by default); `--test`
+  runs each routine once instead, and an unknown option is refused by name. The
+  same binaries run on `wasm32-unknown-unknown` under the test runner, where
+  the store options are refused because there is no file system.

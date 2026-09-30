@@ -48,7 +48,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help doctor metadata fmt check test-shard geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt hooks check test-shard geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene layer-hygiene helpers-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite binaryen-prerequisite cnschema-probe benchmark-acquire lubm watdiv miri
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -81,6 +81,9 @@ metadata: ## Regenerate + verify workspace metadata and generated artifacts.
 fmt: ## Auto-format the workspace.
 	cargo fmt --all
 
+hooks: ## Install the pre-commit hook: the quick subset of `make check`, run on the staged snapshot.
+	git config core.hooksPath .githooks
+
 check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clippy, build, tests, hygiene.
 	cargo fmt --all --check
 	cargo fmt --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --check
@@ -112,6 +115,14 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	python3 scripts/fetch-locked-deps.py
 	python3 scripts/check-banned-deps.py --self-test
 	python3 scripts/check-banned-deps.py
+	python3 scripts/check-banned-deps.py --ledger-complete
+	python3 scripts/check-layers.py --self-test
+	python3 scripts/check-layers.py
+	cargo run -q --locked -p helper-census -- --self-test
+	python3 scripts/check-shared-helpers.py --self-test
+	python3 scripts/check-shared-helpers.py
+	python3 scripts/check-hash-domains.py --self-test
+	python3 scripts/check-hash-domains.py
 	python3 scripts/check-corpus-frozen.py
 	bash scripts/check-generated.sh
 	python3 scripts/check-issue-refs.py
@@ -129,7 +140,7 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	python3 scripts/check-python-stub-parity.py
 	python3 scripts/conformance-matrix.py --self-test
 	python3 scripts/check-simd-asm.py --self-test
-	python3 scripts/bench-criterion-targets.py --self-test
+	python3 scripts/bench-suite-targets.py --self-test
 	python3 scripts/cleanroom/transcript_audit.py --self-test
 	python3 scripts/cleanroom/guard_hook.py --self-test
 	python3 scripts/cleanroom/deny_settings.py --self-test
@@ -272,7 +283,7 @@ test-gts-selected-blobs: ## Check bounded selected-blob import and native scope 
 	cargo test -p purrdf-rdf --test gts_selected_blobs --locked
 	cargo test -p purrdf-shapes --test shared_shapes_dataset --locked
 
-doc: ## Build docs for the 29 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 31 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -311,8 +322,8 @@ bench-prepared-reuse: ## Measure cold/warm preparation and prepared execution on
 	CARGO_PROFILE_RELEASE_DEBUG=false \
 	cargo bench --locked --profile release -p purrdf-sparql-eval --bench prepared_reuse -- $(BENCH_ARGS)
 
-bench: ## Run criterion benchmarks (report-only; never a gate).
-	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-hash -p purrdf-deflate -p purrdf-jsonschema
+bench: ## Run the purrdf_testkit::bench suites (report-only; never a gate).
+	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-lex -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-hash-conformance -p purrdf-deflate -p purrdf-jsonschema
 
 # HOW A LANE KNOB REACHES ITS SCRIPT: as environment bytes, unparsed.
 #
@@ -427,7 +438,7 @@ miri: ## Check SmallVec storage and BLAKE3 streaming under Miri (own lane, NOT p
 	cargo miri test -p purrdf-core small --target i686-unknown-linux-gnu
 	@# Bounded streaming vectors cover buffer/tree boundaries and snapshots.
 	@# The scalar rotation uses Rust under Miri; native lowering is checked separately.
-	MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --locked -p purrdf-hash --test blake3 streaming_boundary_answers
+	MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --locked -p purrdf-hash-conformance --test blake3 streaming_boundary_answers
 
 # CI runs the matrix split across runners through CONFORMANCE_ARGS: one
 # `--shard NAME --emit-results FILE` per shard, then one `--from-results DIR` that
@@ -438,6 +449,17 @@ conformance: ## Umbrella conformance matrix: native Rust W3C suites + the Python
 
 iri-resolver-hygiene: ## Prove the resolver ring-fence: RFC 3986 reference resolution only in crates/iri/src.
 	python3 scripts/check-iri-resolver-singleton.py
+
+layer-hygiene: ## Prove every first-party crate edge is one layers.toml allows, and the table is exact.
+	python3 scripts/check-layers.py --self-test
+	python3 scripts/check-layers.py
+
+helpers-hygiene: ## Prove helpers-ledger.toml holds (one home per job, no forbidden copy, no stale exemption, no cross-crate #[path]) and every hash domain is a unique, prefix-free purrdf_hash::Domain.
+	cargo run -q --locked -p helper-census -- --self-test
+	python3 scripts/check-shared-helpers.py --self-test
+	python3 scripts/check-shared-helpers.py
+	python3 scripts/check-hash-domains.py --self-test
+	python3 scripts/check-hash-domains.py
 
 serializer-rewind-hygiene: ## Prove no serializer takes back output it already produced.
 	python3 scripts/check-serializer-rewinds.py --self-test
@@ -459,27 +481,17 @@ build-profile-hygiene: ## Prove the gate really compiles at opt-level 3 with deb
 	python3 scripts/check-build-profiles.py --self-test
 	python3 scripts/check-build-profiles.py
 
-rdf-core-hygiene: ## Prove the kernel ring-fence: no oxigraph/PyO3 in purrdf-core, zero-dep leaves.
+rdf-core-hygiene: ## Prove the kernel ring-fence: no PyO3 in purrdf-core; the root and the ring-fenced crates depend only on what layers.toml lists.
 	@tree=$$(cargo tree --color never -p purrdf-core --edges normal -f "{p}") || { echo "FAIL: cargo tree errored"; exit 1; }; \
-	if echo "$$tree" | grep -Eq '(oxigraph|oxrdf|oxsdatatypes|oxiri|pyo3) v'; then \
-		echo "FAIL: purrdf-core pulls an oxigraph-family or PyO3 crate as a NORMAL dependency"; \
-		echo "$$tree" | grep -E '(oxigraph|oxrdf|oxsdatatypes|oxiri|pyo3) v'; exit 1; \
+	if echo "$$tree" | grep -q 'pyo3 v'; then \
+		echo "FAIL: purrdf-core pulls PyO3 as a NORMAL dependency"; \
+		echo "$$tree" | grep 'pyo3 v'; exit 1; \
 	fi; \
-	echo "OK: purrdf-core has no oxigraph/PyO3 normal dependency"
-	@for leaf in purrdf-iri purrdf-xsd purrdf-events purrdf-hash; do \
-		tree=$$(cargo tree --color never --prefix none -p $$leaf --edges normal --depth 1 -f "{p}") || { echo "FAIL: cargo tree errored for $$leaf"; exit 1; }; \
-		deps=$$(printf '%s\n' "$$tree" | tail -n +2); \
-		if [ -n "$$deps" ]; then \
-			echo "FAIL: $$leaf must stay zero-dependency but depends on:"; echo "$$deps"; exit 1; \
-		fi; \
-		echo "OK: $$leaf is zero-dependency"; \
-	done
-	@tree=$$(cargo tree --color never --prefix none -p purrdf-deflate --edges normal --depth 1 -f "{p}") || { echo "FAIL: cargo tree errored for purrdf-deflate"; exit 1; }; \
-	deps=$$(printf '%s\n' "$$tree" | tail -n +2 | sed 's/ v.*//'); \
-	if [ "$$deps" != "purrdf-hash" ]; then \
-		echo "FAIL: purrdf-deflate must depend on purrdf-hash alone but depends on:"; echo "$$deps"; exit 1; \
-	fi; \
-	echo "OK: purrdf-deflate depends on purrdf-hash alone"
+	echo "OK: purrdf-core has no PyO3 normal dependency"
+	@# The root (`root` in layers.toml) must have zero runtime dependencies, and
+	@# every crate whose row carries `external` may depend only on its row's
+	@# `deps` and `external`, counting every target's normal edges.
+	python3 scripts/check-layers.py --ring-fence
 
 cnschema-probe: ## Reproduce the pinned cnSchema 4.0 round-trip evidence (fetches by digest; not a CI gate).
 	python3 scripts/cnschema-probe.py --self-test
@@ -554,7 +566,7 @@ watdiv: ## Run the WatDiv comparison workload end to end - acquire the frozen da
 wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if target absent; CI hard-fails).
 	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 		cargo build --locked --release --target wasm32-unknown-unknown --lib \
-			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-jsonschema -p purrdf-hash -p purrdf-deflate -p purrdf-stack -p purrdf-gts -p purrdf-core -p purrdf-columnar \
+			-p purrdf-events -p purrdf-lex -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-jsonschema -p purrdf-hash -p purrdf-deflate -p purrdf-stack -p purrdf-ed25519 -p purrdf-gts -p purrdf-core -p purrdf-columnar \
 			-p purrdf-datalog \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval -p purrdf-hnsw \
 			-p purrdf-rdf -p purrdf-markdown -p purrdf-json -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
@@ -633,10 +645,9 @@ hnsw-determinism: ## Prove purrdf-hnsw's native and wasm32 canonical bytes are i
 # The SIMD asm evidence gate: seven release builds (x86_64 baseline, x86-64-v3,
 # x86-64-v4, aarch64, aarch64 neoverse-v1, wasm32, wasm32 +simd128) with
 # `--emit=asm`, then every site in scripts/simd-asm-manifest.toml is counted in the
-# emitted functions. It needs the aarch64 and wasm32 standard libraries, and clang +
-# llvm-ar for the C that build scripts compile for the cross targets; any of them
-# missing is a failure here, never a skip. Too slow for `check`, which runs only its
-# `--self-test`.
+# emitted functions. It needs the aarch64 and wasm32 standard libraries (the audited
+# graph is pure Rust, so no C toolchain); a missing one is a failure here, never a
+# skip. Too slow for `check`, which runs only its `--self-test`.
 #
 # `--doc` adds the audit document's checks: every manifest site is a row of
 # docs/design/purrdf-simd.md and every function row has a manifest site, its
@@ -667,7 +678,7 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# compiles the cross-target test targets to wasm32 and runs them in Node, against the same
 	@# pinned expectations the native `cargo test` run asserts. Ordered JSON also
 	@# crosses the same production RDF codecs against a pinned byte corpus.
-	@# purrdf-hash replays its frozen digest vectors there, so the portable MD5,
+	@# purrdf-hash-conformance replays purrdf-hash's frozen digest vectors there, so the portable MD5,
 	@# SHA-1, SHA-3 and CRC-32 paths wasm32 runs answer as every native path does.
 	@# BLAKE3 replays its full streaming corpus on baseline and SIMD128 builds.
 	@# Base16 tests also run on the baseline and +simd128 builds, so the
@@ -680,6 +691,9 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# runs its round trips, refusals and kernel differentials on the baseline
 	@# build (portable kernels) and the +simd128 build (simd128 kernels), so the
 	@# encoder's bytes and the decoder's output are held to one answer there.
+	@# purrdf-lex replays its frozen lexical vectors (UCHAR/ECHAR, JSON strings
+	@# and pointers, every percent-encoding set, needle search) on both builds,
+	@# so the byte scanners' simd128 and scalar lanes give the native answers.
 	@#
 	@# The prepared SHACL product is the same hazard with a longer fuse: a product
 	@# is written by a build tool on a host and restored months later in a browser,
@@ -689,6 +703,18 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@#
 	@# The fixed-key table hasher's portable path computes its folded multiplies
 	@# from 32-bit halves on wasm32; its frozen answers are replayed there too.
+	@# SplitMix64's streams and FNV-1a's digests replay their frozen answers
+	@# there as well, where every 64-bit multiply is lowered for wasm32.
+	@#
+	@# The bench harness (purrdf_testkit::bench) runs there too: its own suite
+	@# (statistics, command line, estimates file, whole in-process runs, and the
+	@# refusal of the store options wasm32 has no file system for), then two real
+	@# bench binaries under `--test`, so every routine of the hash benches runs
+	@# once on wasm32 through the same runner and host clock.
+	@#
+	@# purrdf-stack's `on_stack` runs there on its inline path: a computation under
+	@# a fresh floor that many bytes below the caller, and the typed refusal of a
+	@# request larger than the stack left, beside a neighbour that fits.
 	@#
 	@# Every target here is `harness = false` on purrdf_testkit's runner, so the
 	@# same named cases run natively under `cargo test` and here. Cargo hands each
@@ -764,15 +790,24 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 			-p purrdf-shapes --test product_wasm \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-hash --test digest_differential --test hex --test blake3 \
+			-p purrdf-hash-conformance --test digest_differential --test hex --test blake3 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-hash --test fixed_hasher \
+			-p purrdf-hash-conformance --test fixed_hasher --test splitmix_fnv --test frame_le \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-testkit --test bench \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-stack --test on_stack \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo bench --locked --target wasm32-unknown-unknown \
+			-p purrdf-hash-conformance --bench hasher --bench digests -- --test \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-hash --test hex --test blake3 \
+			-p purrdf-hash-conformance --test hex --test blake3 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-core --test csv_scan_wasm \
@@ -788,7 +823,15 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-deflate --test deflate_conformance; \
+			-p purrdf-deflate --test deflate_conformance \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-lex --test frozen_vectors \
+		&& env -u RUSTFLAGS \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-lex --test frozen_vectors; \
 	fi
 
 wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web bindings) into crates/rdf-wasm/js/pkg/.

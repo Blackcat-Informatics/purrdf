@@ -6,12 +6,13 @@
 use core::mem::size_of;
 
 use crate::ContentDigest;
+use crate::bytes::{read_u32_le, read_u64_le};
 use crate::distance::binary64::{Binary64, Precision};
 use crate::distance::{Exact, Resolved};
 
 use super::contract::{
     DistanceMetric, PrefixPostprocessing, TlvEntryRef, TlvWireType, VectorDtype, canonical_tlv,
-    validate_sha256_field,
+    optional_tlv, required_tlv, validate_sha256_field,
 };
 use super::error::{DigestKind, EmbeddingError};
 use super::identity::{
@@ -20,6 +21,7 @@ use super::identity::{
     ProjectionId, TargetId, TargetIdentityDigest, TargetSetId, VectorSpaceId,
     derive_chunking_contract_id,
 };
+use super::metadata::{edge_count, require_edge, require_edge_count};
 use super::target::{TargetKind, validate_target_identity as validate_canonical_target_identity};
 use super::wire::{
     PURREMB_DIRECTORY_ENTRY_LENGTH, PURREMB_FILE_ALIGNMENT, PURREMB_HEADER_LENGTH, PURREMB_MAGIC,
@@ -27,7 +29,7 @@ use super::wire::{
     SECTION_CONTRACTS, SECTION_CRITICAL, SECTION_DERIVED, SECTION_EXTENSION_MIN,
     SECTION_EXTERNAL_BINDINGS, SECTION_INDEX_GUARDS, SECTION_INDEX_PAYLOAD, SECTION_MATRICES,
     SECTION_MATRIX_DATA, SECTION_RELATIONS, SECTION_SOURCE, SECTION_TARGET_SETS, SECTION_TARGETS,
-    SECTION_TOKEN_SPANS, SectionKey, checked_align_up,
+    SECTION_TOKEN_SPANS, SectionKey,
 };
 
 const SOURCE_LENGTH: usize = 128;
@@ -589,7 +591,7 @@ impl<'a> MatrixView<'a> {
         {
             return None;
         }
-        native_f32(self.row_bytes(row).ok()?)
+        native_floats(self.row_bytes(row).ok()?)
     }
 
     /// Native aligned `f64` row after full verification, when the host permits it.
@@ -601,7 +603,7 @@ impl<'a> MatrixView<'a> {
         {
             return None;
         }
-        native_f64(self.row_bytes(row).ok()?)
+        native_floats(self.row_bytes(row).ok()?)
     }
 }
 
@@ -768,7 +770,7 @@ impl<'a> EffectiveMatrixView<'a> {
             && cfg!(target_endian = "little")
             && self.matrix.dtype().ok()? == VectorDtype::F32
             && self.projection.postprocessing().ok()? == PrefixPostprocessing::None)
-            .then(|| native_f32(self.raw_prefix_bytes(row).ok()?))?
+            .then(|| native_floats(self.raw_prefix_bytes(row).ok()?))?
     }
 
     /// Native stored `f64` prefix after full verification when no postprocessing applies.
@@ -778,7 +780,7 @@ impl<'a> EffectiveMatrixView<'a> {
             && cfg!(target_endian = "little")
             && self.matrix.dtype().ok()? == VectorDtype::F64
             && self.projection.postprocessing().ok()? == PrefixPostprocessing::None)
-            .then(|| native_f64(self.raw_prefix_bytes(row).ok()?))?
+            .then(|| native_floats(self.raw_prefix_bytes(row).ok()?))?
     }
 }
 
@@ -983,19 +985,27 @@ impl Iterator for F64Scalars<'_> {
 
 impl ExactSizeIterator for F64Scalars<'_> {}
 
-/// Logical `f32` prefix values, raw or deterministically L2-normalized.
+/// Logical prefix values of one row, raw or deterministically L2-normalized: one
+/// enum for both scalar widths, so a row is read through one `Iterator` whichever
+/// width it stores.
 #[derive(Debug, Clone)]
-pub enum EffectiveF32Row<'a> {
+pub enum EffectiveRow<R, N> {
     /// Exact stored leading-prefix values.
-    Raw(F32Scalars<'a>),
+    Raw(R),
     /// Values normalized by the normative binary64 fold.
-    Normalized(L2F32Scalars<'a>),
+    Normalized(N),
 }
 
-impl Iterator for EffectiveF32Row<'_> {
-    type Item = Result<f32, EmbeddingError>;
+/// Logical `f32` prefix values, raw or deterministically L2-normalized.
+pub type EffectiveF32Row<'a> = EffectiveRow<F32Scalars<'a>, L2F32Scalars<'a>>;
 
-    fn next(&mut self) -> Option<Self::Item> {
+/// Logical `f64` prefix values, raw or deterministically L2-normalized.
+pub type EffectiveF64Row<'a> = EffectiveRow<F64Scalars<'a>, L2F64Scalars<'a>>;
+
+impl<T, R: Iterator<Item = T>, N: Iterator<Item = T>> Iterator for EffectiveRow<R, N> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
         match self {
             Self::Raw(values) => values.next(),
             Self::Normalized(values) => values.next(),
@@ -1010,7 +1020,10 @@ impl Iterator for EffectiveF32Row<'_> {
     }
 }
 
-impl ExactSizeIterator for EffectiveF32Row<'_> {}
+impl<T, R: ExactSizeIterator<Item = T>, N: ExactSizeIterator<Item = T>> ExactSizeIterator
+    for EffectiveRow<R, N>
+{
+}
 
 impl EffectiveF32Row<'_> {
     /// Append every remaining logical value to `out`, in order.
@@ -1037,35 +1050,6 @@ impl EffectiveF32Row<'_> {
         }
     }
 }
-
-/// Logical `f64` prefix values, raw or deterministically L2-normalized.
-#[derive(Debug, Clone)]
-pub enum EffectiveF64Row<'a> {
-    /// Exact stored leading-prefix values.
-    Raw(F64Scalars<'a>),
-    /// Values normalized by the normative binary64 fold.
-    Normalized(L2F64Scalars<'a>),
-}
-
-impl Iterator for EffectiveF64Row<'_> {
-    type Item = Result<f64, EmbeddingError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Raw(values) => values.next(),
-            Self::Normalized(values) => values.next(),
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match self {
-            Self::Raw(values) => values.size_hint(),
-            Self::Normalized(values) => values.size_hint(),
-        }
-    }
-}
-
-impl ExactSizeIterator for EffectiveF64Row<'_> {}
 
 /// Allocation-free deterministic-L2 `f32` projection iterator.
 #[derive(Debug, Clone)]
@@ -1993,30 +1977,30 @@ fn validate_complete_relations(view: &EmbeddingView<'_>) -> Result<(), Embedding
         match target.kind()? {
             TargetKind::Corpus | TargetKind::RdfDataset | TargetKind::Extension => {}
             TargetKind::Document => {
-                require_borrowed_edge_count(&incoming, target.id(), 1, 1)?;
+                require_edge_count(&incoming, target.id(), 1, 1)?;
                 if let Some(parent) = borrowed_target_id(target, 1)? {
-                    require_borrowed_edge(&edges, parent, 1, target.id())?;
+                    require_edge(&edges, parent, 1, target.id())?;
                 }
             }
             TargetKind::Chunk => {
-                require_borrowed_edge_count(&incoming, target.id(), 2, 1)?;
+                require_edge_count(&incoming, target.id(), 2, 1)?;
                 if let Some(parent) = borrowed_target_id(target, 1)? {
-                    require_borrowed_edge(&edges, parent, 2, target.id())?;
+                    require_edge(&edges, parent, 2, target.id())?;
                 }
             }
             TargetKind::RdfGraph => {
-                require_borrowed_edge_count(&incoming, target.id(), 16, 1)?;
+                require_edge_count(&incoming, target.id(), 16, 1)?;
                 if let Some(dataset) = borrowed_target_id(target, 1)? {
-                    require_borrowed_edge(&edges, dataset, 16, target.id())?;
+                    require_edge(&edges, dataset, 16, target.id())?;
                     match borrowed_u32(target, 2)?
                         .ok_or(EmbeddingError::Missing("retained RDF graph form"))?
                     {
-                        0 => require_borrowed_edge_count(&edges, target.id(), 26, 0)?,
+                        0 => require_edge_count(&edges, target.id(), 26, 0)?,
                         1 => {
                             let name =
                                 borrowed_required_target_id(target, 3, "retained RDF graph name")?;
-                            require_borrowed_edge_count(&edges, target.id(), 26, 1)?;
-                            require_borrowed_edge(&edges, target.id(), 26, name)?;
+                            require_edge_count(&edges, target.id(), 26, 1)?;
+                            require_edge(&edges, target.id(), 26, name)?;
                             validate_borrowed_term_position(view, name, &[1, 2], "RDF graph name")?;
                         }
                         value => {
@@ -2026,36 +2010,36 @@ fn validate_complete_relations(view: &EmbeddingView<'_>) -> Result<(), Embedding
                             });
                         }
                     }
-                } else if borrowed_edge_count(&edges, target.id(), 26) > 1 {
+                } else if edge_count(&edges, target.id(), 26) > 1 {
                     return Err(EmbeddingError::Duplicate("RDF graph name relation"));
                 }
             }
             TargetKind::RdfStatement => {
-                require_borrowed_edge_count(&incoming, target.id(), 17, 1)?;
+                require_edge_count(&incoming, target.id(), 17, 1)?;
                 for kind in 18..=20 {
-                    require_borrowed_edge_count(&edges, target.id(), kind, 1)?;
+                    require_edge_count(&edges, target.id(), kind, 1)?;
                 }
                 if let Some(graph) = borrowed_target_id(target, 1)? {
-                    require_borrowed_edge(&edges, graph, 17, target.id())?;
+                    require_edge(&edges, graph, 17, target.id())?;
                     let subject = borrowed_required_target_id(target, 2, "statement subject")?;
                     let predicate = borrowed_required_target_id(target, 3, "statement predicate")?;
                     let object = borrowed_required_target_id(target, 4, "statement object")?;
-                    require_borrowed_edge(&edges, target.id(), 18, subject)?;
-                    require_borrowed_edge(&edges, target.id(), 19, predicate)?;
-                    require_borrowed_edge(&edges, target.id(), 20, object)?;
+                    require_edge(&edges, target.id(), 18, subject)?;
+                    require_edge(&edges, target.id(), 19, predicate)?;
+                    require_edge(&edges, target.id(), 20, object)?;
                     validate_borrowed_term_position(view, subject, &[1, 2, 4], "RDF subject")?;
                     validate_borrowed_term_position(view, predicate, &[1], "RDF predicate")?;
                 }
             }
             TargetKind::RdfReifier => {
-                require_borrowed_edge_count(&incoming, target.id(), 21, 1)?;
-                require_borrowed_edge_count(&edges, target.id(), 22, 1)?;
+                require_edge_count(&incoming, target.id(), 21, 1)?;
+                require_edge_count(&edges, target.id(), 22, 1)?;
                 if borrowed_target_id(target, 1)?.is_some() {
                     let graph = borrowed_required_target_id(target, 1, "reifier graph")?;
                     let statement = borrowed_required_target_id(target, 2, "reified statement")?;
                     let term = borrowed_required_target_id(target, 3, "reifier term")?;
-                    require_borrowed_edge(&edges, statement, 21, target.id())?;
-                    require_borrowed_edge(&edges, target.id(), 22, term)?;
+                    require_edge(&edges, statement, 21, target.id())?;
+                    require_edge(&edges, target.id(), 22, term)?;
                     validate_borrowed_term_position(view, term, &[1, 2], "RDF reifier term")?;
                     require_borrowed_composite_graph(
                         view,
@@ -2066,17 +2050,17 @@ fn validate_complete_relations(view: &EmbeddingView<'_>) -> Result<(), Embedding
                 }
             }
             TargetKind::RdfAnnotation => {
-                require_borrowed_edge_count(&incoming, target.id(), 23, 1)?;
-                require_borrowed_edge_count(&edges, target.id(), 24, 1)?;
-                require_borrowed_edge_count(&edges, target.id(), 25, 1)?;
+                require_edge_count(&incoming, target.id(), 23, 1)?;
+                require_edge_count(&edges, target.id(), 24, 1)?;
+                require_edge_count(&edges, target.id(), 25, 1)?;
                 if borrowed_target_id(target, 1)?.is_some() {
                     let graph = borrowed_required_target_id(target, 1, "annotation graph")?;
                     let reifier = borrowed_required_target_id(target, 2, "annotation reifier")?;
                     let predicate = borrowed_required_target_id(target, 3, "annotation predicate")?;
                     let object = borrowed_required_target_id(target, 4, "annotation object")?;
-                    require_borrowed_edge(&edges, reifier, 23, target.id())?;
-                    require_borrowed_edge(&edges, target.id(), 24, predicate)?;
-                    require_borrowed_edge(&edges, target.id(), 25, object)?;
+                    require_edge(&edges, reifier, 23, target.id())?;
+                    require_edge(&edges, target.id(), 24, predicate)?;
+                    require_edge(&edges, target.id(), 25, object)?;
                     validate_borrowed_term_position(view, predicate, &[1], "annotation predicate")?;
                     require_borrowed_composite_graph(
                         view,
@@ -2097,13 +2081,13 @@ fn validate_borrowed_triple_relations(
     edges: &[BorrowedBuiltinEdge],
     target: TargetView<'_>,
 ) -> Result<(), EmbeddingError> {
-    let counts = [32, 33, 34].map(|kind| borrowed_edge_count(edges, target.id(), kind));
+    let counts = [32, 33, 34].map(|kind| edge_count(edges, target.id(), kind));
     match borrowed_u32(target, 1)? {
         Some(4) => {
             for (tag, kind) in (2..=4).zip(32..=34) {
-                require_borrowed_edge_count(edges, target.id(), kind, 1)?;
+                require_edge_count(edges, target.id(), kind, 1)?;
                 let component = borrowed_required_target_id(target, tag, "triple-term component")?;
-                require_borrowed_edge(edges, target.id(), kind, component)?;
+                require_edge(edges, target.id(), kind, component)?;
                 if tag == 2 {
                     validate_borrowed_term_position(view, component, &[1, 2, 4], "triple subject")?;
                 } else if tag == 3 {
@@ -2199,40 +2183,6 @@ fn require_borrowed_composite_graph(
         return Err(EmbeddingError::Malformed(context));
     }
     Ok(())
-}
-
-fn require_borrowed_edge(
-    edges: &[BorrowedBuiltinEdge],
-    subject: TargetId,
-    kind: u32,
-    object: TargetId,
-) -> Result<(), EmbeddingError> {
-    if edges.binary_search(&(subject, kind, object)).is_err() {
-        return Err(EmbeddingError::MissingReference(
-            "required built-in target relation",
-        ));
-    }
-    Ok(())
-}
-
-fn require_borrowed_edge_count(
-    edges: &[BorrowedBuiltinEdge],
-    target: TargetId,
-    kind: u32,
-    expected: usize,
-) -> Result<(), EmbeddingError> {
-    if borrowed_edge_count(edges, target, kind) != expected {
-        return Err(EmbeddingError::Malformed(
-            "built-in target relation cardinality",
-        ));
-    }
-    Ok(())
-}
-
-fn borrowed_edge_count(edges: &[BorrowedBuiltinEdge], target: TargetId, kind: u32) -> usize {
-    let start = edges.partition_point(|edge| (edge.0, edge.1) < (target, kind));
-    let end = edges.partition_point(|edge| (edge.0, edge.1) <= (target, kind));
-    end - start
 }
 
 /// Iterator over one target's contiguous relation range.
@@ -2499,12 +2449,11 @@ fn open_framing(bytes: &[u8]) -> Result<(DirectoryView<'_>, ArtifactRoot), Embed
         .checked_mul(PURREMB_DIRECTORY_ENTRY_LENGTH)
         .ok_or(EmbeddingError::ArithmeticOverflow("directory length"))?;
     require_u64(bytes, 32, directory_length, "directory length")?;
-    let first_section_offset = checked_align_up(
-        u64::from(PURREMB_HEADER_LENGTH)
-            .checked_add(directory_length)
-            .ok_or(EmbeddingError::ArithmeticOverflow("directory end"))?,
-        PURREMB_FILE_ALIGNMENT,
-    )?;
+    let first_section_offset = u64::from(PURREMB_HEADER_LENGTH)
+        .checked_add(directory_length)
+        .ok_or(EmbeddingError::ArithmeticOverflow("directory end"))?
+        .checked_next_multiple_of(PURREMB_FILE_ALIGNMENT)
+        .ok_or(EmbeddingError::ArithmeticOverflow("alignment"))?;
     require_u64(bytes, 40, first_section_offset, "first section offset")?;
     let trailer_offset = read_u64(bytes, 48)?;
     let file_length = read_u64(bytes, 56)?;
@@ -2592,12 +2541,11 @@ fn validate_directory(
             });
         }
         borrowed_span(directory.file, offset, length, "section")?;
-        expected_offset = checked_align_up(
-            offset
-                .checked_add(length)
-                .ok_or(EmbeddingError::ArithmeticOverflow("section end"))?,
-            PURREMB_FILE_ALIGNMENT,
-        )?;
+        expected_offset = offset
+            .checked_add(length)
+            .ok_or(EmbeddingError::ArithmeticOverflow("section end"))?
+            .checked_next_multiple_of(PURREMB_FILE_ALIGNMENT)
+            .ok_or(EmbeddingError::ArithmeticOverflow("alignment"))?;
         validate_zero_padding(directory.file, offset + length, expected_offset)?;
 
         match key.kind {
@@ -4374,25 +4322,6 @@ fn validate_loss_contract(bytes: &[u8]) -> Result<(), EmbeddingError> {
     Ok(())
 }
 
-fn required_tlv<'a>(
-    bytes: &'a [u8],
-    tag: u16,
-    wire: TlvWireType,
-    context: &'static str,
-) -> Result<TlvEntryRef<'a>, EmbeddingError> {
-    let entry = optional_tlv(bytes, tag)?.ok_or(EmbeddingError::Missing(context))?;
-    if entry.wire_type != wire || !entry.critical {
-        return Err(EmbeddingError::MalformedTlv(
-            "required field has wrong type or criticality",
-        ));
-    }
-    Ok(entry)
-}
-
-fn optional_tlv(bytes: &[u8], tag: u16) -> Result<Option<TlvEntryRef<'_>>, EmbeddingError> {
-    Ok(canonical_tlv(bytes)?.find(|entry| entry.tag == tag))
-}
-
 fn require_nonempty_tlv<'a>(
     bytes: &'a [u8],
     tag: u16,
@@ -4668,23 +4597,22 @@ fn finish_norm(
     Ok(norm)
 }
 
-fn native_f32(bytes: &[u8]) -> Option<&[f32]> {
-    if !bytes.len().is_multiple_of(size_of::<f32>()) {
-        return None;
-    }
-    // SAFETY: every bit pattern is a valid `f32`; `align_to` reports any
-    // unaligned prefix or incomplete suffix instead of constructing a bad view.
-    let (prefix, native, suffix) = unsafe { bytes.align_to::<f32>() };
-    (prefix.is_empty() && suffix.is_empty()).then_some(native)
-}
+/// The float element types a native row view may reinterpret bytes as: types for
+/// which every bit pattern is a valid value. Private, so no other type can join.
+trait NativeFloat: Copy {}
 
-fn native_f64(bytes: &[u8]) -> Option<&[f64]> {
-    if !bytes.len().is_multiple_of(size_of::<f64>()) {
+impl NativeFloat for f32 {}
+impl NativeFloat for f64 {}
+
+/// `bytes` as a slice of `T` in place, when it is whole elements and aligned.
+fn native_floats<T: NativeFloat>(bytes: &[u8]) -> Option<&[T]> {
+    if !bytes.len().is_multiple_of(size_of::<T>()) {
         return None;
     }
-    // SAFETY: every bit pattern is a valid `f64`; `align_to` reports any
-    // unaligned prefix or incomplete suffix instead of constructing a bad view.
-    let (prefix, native, suffix) = unsafe { bytes.align_to::<f64>() };
+    // SAFETY: `T` is `f32` or `f64` (the private `NativeFloat`), for which every bit pattern is a
+    // valid value; `align_to` reports any unaligned prefix or incomplete suffix
+    // instead of constructing a bad view.
+    let (prefix, native, suffix) = unsafe { bytes.align_to::<T>() };
     (prefix.is_empty() && suffix.is_empty()).then_some(native)
 }
 
@@ -4727,50 +4655,24 @@ fn fixed_record(
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, EmbeddingError> {
-    let end = offset
-        .checked_add(4)
-        .ok_or(EmbeddingError::ArithmeticOverflow("u32 read"))?;
-    Ok(u32::from_le_bytes(
-        bytes
-            .get(offset..end)
-            .ok_or(EmbeddingError::Truncated)?
-            .try_into()
-            .map_err(|_| EmbeddingError::Truncated)?,
-    ))
+    read_u32_le(bytes, offset).ok_or(EmbeddingError::Truncated)
 }
 
 fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, EmbeddingError> {
-    let end = offset
-        .checked_add(8)
-        .ok_or(EmbeddingError::ArithmeticOverflow("u64 read"))?;
-    Ok(u64::from_le_bytes(
-        bytes
-            .get(offset..end)
-            .ok_or(EmbeddingError::Truncated)?
-            .try_into()
-            .map_err(|_| EmbeddingError::Truncated)?,
-    ))
+    read_u64_le(bytes, offset).ok_or(EmbeddingError::Truncated)
 }
 
 fn infallible_u32(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(
-        bytes[offset..offset + 4]
-            .try_into()
-            .expect("structurally validated fixed u32 field"),
-    )
+    read_u32_le(bytes, offset).expect("structurally validated fixed u32 field")
 }
 
 fn infallible_u64(bytes: &[u8], offset: usize) -> u64 {
-    u64::from_le_bytes(
-        bytes[offset..offset + 8]
-            .try_into()
-            .expect("structurally validated fixed u64 field"),
-    )
+    read_u64_le(bytes, offset).expect("structurally validated fixed u64 field")
 }
 
 fn array32(bytes: &[u8], offset: usize) -> [u8; 32] {
-    bytes[offset..offset + 32]
-        .try_into()
+    *bytes[offset..]
+        .first_chunk()
         .expect("structurally validated 32-byte field")
 }
 
@@ -4857,8 +4759,7 @@ fn checked_table_end(offset: usize, count: usize, width: usize) -> Result<usize,
 
 fn align8(value: usize) -> Result<usize, EmbeddingError> {
     value
-        .checked_add(7)
-        .map(|biased| biased & !7)
+        .checked_next_multiple_of(8)
         .ok_or(EmbeddingError::ArithmeticOverflow("8-byte alignment"))
 }
 

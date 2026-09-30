@@ -39,8 +39,18 @@ purrdf-sparql-eval.workspace = true
 # Fixed-output-length hashing for the index fingerprint. Deterministic and
 # keyless, so the same index yields the same digest on every target.
 purrdf-hash.workspace = true
+# `wide::mul_div`, the exact `a × b / c` past `u128` the fixed-point product
+# and quotient take. A wasm32-clean leaf already under `purrdf-core`.
+purrdf-xsd.workspace = true
+# The Unicode normalization pipeline and its stages, which the analysis form
+# composes with this crate's case fold, and the two-stage table lookup the fold
+# and word-break tables are read through.
+purrdf-lex.workspace = true
 
 [dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
 # Solution-sequence shapes for the ranked-row tests.
 purrdf-sparql-results.workspace = true
 # Property tests (encoding injectivity, and the fixed-point arithmetic laws), and
@@ -48,16 +58,6 @@ purrdf-sparql-results.workspace = true
 # wasm32-unknown-unknown alike. Path-only and unpublished, so it is stripped from
 # the packaged manifest; wasm32-clean, so it needs no target gate.
 purrdf-testkit.workspace = true
-
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-# Native-only, because `make wasm-test` builds a test target of this crate for
-# wasm32 and cargo builds every declared dev-dependency for any test target.
-# Criterion drives benches, which the wasm lane never runs, and it is not
-# wasm32-clean (it reaches for processes, terminals and wall-clock timing).
-#
-# The report-only profiling harness in `benches/`. Never a gate: no measurement
-# here asserts a timing, and behaviour is fixed by the test suite instead.
-criterion.workspace = true
 
 # The one test in this crate that must EXECUTE on wasm32-unknown-unknown rather
 # than merely compile for it. Ranking needs a natural logarithm, and "the same

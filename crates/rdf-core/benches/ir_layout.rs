@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Layout / IR benchmark for the value-interned `RdfDataset` (C1, Task 7).
@@ -15,7 +15,7 @@
 //!
 //! It does three things:
 //!
-//! 1. **Times** the operational hot paths as criterion groups: dataset *build*
+//! 1. **Times** the operational hot paths as bench groups: dataset *build*
 //!    (intern + push + freeze → `Arc<RdfDataset>`), ID-native *iteration*
 //!    (`quads()`), and resolved *resolution* (`quad_refs()`/`resolve()`).
 //! 2. **Reports the operational metrics beyond quads/sec** — total allocated bytes,
@@ -36,21 +36,24 @@
 //! its "index-build cost" is already folded into the build group); this is noted in
 //! the build group rather than benched as a separate index pass.
 
+#[path = "../tests/support/borrowed.rs"]
+mod borrowed;
+use borrowed::term_ref_len;
 use std::sync::Arc;
 
-use criterion::{Criterion, criterion_group, criterion_main};
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, Measurement};
 use purrdf_core::{
     BlankScope, DatasetView, GraphMatch, QuadIds, RdfDataset, RdfDatasetBuilder, RdfLiteral,
     TermId, TermRef, TermValue,
 };
+use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
 // ---------------------------------------------------------------------------
 // Counting allocator — operational metrics beyond quads/sec.
 // ---------------------------------------------------------------------------
 //
 // The workspace's shared instrument, in the window that counts the *current
-// thread* only, so a sibling criterion thread cannot contaminate the region under
+// thread* only, so a sibling thread cannot contaminate the region under
 // measurement. The same window backs `crates/rdf-core/tests/ir_zero_alloc.rs`;
 // beyond the bare count that test keeps, the measurement also carries total bytes
 // requested and a high-water mark of net live bytes, so the bench can report
@@ -218,7 +221,7 @@ fn consume_ids(q: QuadIds) -> u64 {
     let mut acc = 0u64;
     for id in [Some(q.s), Some(q.p), Some(q.o), q.g] {
         acc = acc
-            .wrapping_mul(1_099_511_628_211)
+            .wrapping_mul(purrdf_hash::fnv::PRIME)
             .wrapping_add(id.map_or(0xFFFF_FFFF, |_| 1));
     }
     acc
@@ -227,21 +230,10 @@ fn consume_ids(q: QuadIds) -> u64 {
 /// Resolve every position of a quad to a borrowed view and sum borrowed `&str`
 /// lengths — touches resolved content without copying it (no allocation).
 fn resolve_len(ds: &RdfDataset, q: QuadIds) -> usize {
-    term_len(ds.resolve(q.s))
-        + term_len(ds.resolve(q.p))
-        + term_len(ds.resolve(q.o))
-        + q.g.map_or(0, |g| term_len(ds.resolve(g)))
-}
-
-fn term_len(t: TermRef<'_>) -> usize {
-    match t {
-        TermRef::Iri(s) => s.len(),
-        TermRef::Blank { label, .. } => label.len(),
-        TermRef::Literal {
-            lexical, language, ..
-        } => lexical.len() + language.map_or(0, str::len),
-        TermRef::Triple { .. } => 0,
-    }
+    term_ref_len(ds.resolve(q.s))
+        + term_ref_len(ds.resolve(q.p))
+        + term_ref_len(ds.resolve(q.o))
+        + q.g.map_or(0, |g| term_ref_len(ds.resolve(g)))
 }
 
 // ---------------------------------------------------------------------------
@@ -249,7 +241,7 @@ fn term_len(t: TermRef<'_>) -> usize {
 // ---------------------------------------------------------------------------
 
 /// Measure and PRINT the operational metrics the RFC requires (allocated bytes,
-/// allocation count, peak) for one full build and one full iteration. Criterion only
+/// allocation count, peak) for one full build and one full iteration. Bench only
 /// reports time; these `println!`s carry the alloc story alongside it.
 fn print_alloc_metrics() {
     // Build cost: interning + pushing + freeze.
@@ -306,10 +298,10 @@ fn print_alloc_metrics() {
 }
 
 // ---------------------------------------------------------------------------
-// Criterion groups.
+// Bench groups.
 // ---------------------------------------------------------------------------
 
-fn bench_build(c: &mut Criterion) {
+fn bench_build(c: &mut Bench) {
     let mut group = c.benchmark_group("ir_build");
     group.bench_function("intern_push_freeze", |b| {
         b.iter(|| std::hint::black_box(build_dataset()));
@@ -325,9 +317,9 @@ fn bench_build(c: &mut Criterion) {
 /// measures what the dispatch guard costs an ordinary literal (which must be
 /// nothing but two string comparisons), what a composite literal with no blank
 /// node costs, and what one carrying blank nodes costs.
-fn bench_literal_intern(c: &mut Criterion) {
+fn bench_literal_intern(c: &mut Bench) {
     const LIST: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List";
-    const XSD_INT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    use purrdf_xsd::datatype::XSD_INTEGER as XSD_INT;
 
     // Distinct lexical forms per iteration so the interner's dedup does not turn
     // the measurement into a hash hit.
@@ -402,7 +394,7 @@ fn bench_literal_intern(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_iterate(c: &mut Criterion) {
+fn bench_iterate(c: &mut Bench) {
     let ds = build_dataset();
     let soa = SoaQuads::from_dataset(&ds);
     let adj = PredicateAdjacency::from_dataset(&ds);
@@ -441,7 +433,7 @@ fn bench_iterate(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_resolve(c: &mut Criterion) {
+fn bench_resolve(c: &mut Bench) {
     let ds = build_dataset();
     let mut group = c.benchmark_group("ir_resolve");
     group.bench_function("quad_refs_resolve", |b| {
@@ -456,7 +448,7 @@ fn bench_resolve(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_value_lookup(c: &mut Criterion) {
+fn bench_value_lookup(c: &mut Bench) {
     let ds = build_dataset();
     let iri = "http://example.org/s400";
     let iri_id = ds.term_id_by_iri(iri).expect("representative IRI");
@@ -491,7 +483,7 @@ fn bench_value_lookup(c: &mut Criterion) {
 /// P4b indexed `quads_for_pattern` vs the linear scan, on WARM permutation
 /// indexes. Each `(s|p|o)`-bound shape exercises a different permutation (SPOG / POS /
 /// OSP); the scan baseline is the same id-equality filter the trait default runs.
-fn bench_pattern_warm(c: &mut Criterion) {
+fn bench_pattern_warm(c: &mut Bench) {
     let ds = build_dataset();
     let sample = ds.quads().next().expect("build_dataset yields quads");
     let (subj, pred, obj) = (sample.s, sample.p, sample.o);
@@ -546,7 +538,7 @@ fn bench_pattern_warm(c: &mut Criterion) {
 ///
 /// REPORT ONLY, like every bench in this tree: it is not a gate, asserts no speedup,
 /// and the numbers it prints depend entirely on how loaded the host is.
-fn bench_reifier_lookup(c: &mut Criterion) {
+fn bench_reifier_lookup(c: &mut Bench) {
     let ds = build_dataset();
     let reifiers: Vec<TermId> = ds.reifier_quads().map(|q| q.s).collect();
     assert!(
@@ -582,8 +574,8 @@ fn bench_reifier_lookup(c: &mut Criterion) {
 /// P4b cold cost: a fresh dataset's first predicate-bound query pays the one-time POS
 /// permutation build. `iter_batched` keeps the (expensive) dataset construction in
 /// UN-timed setup so the measured region is just the cold index build + first query.
-fn bench_pattern_cold(c: &mut Criterion) {
-    use criterion::BatchSize;
+fn bench_pattern_cold(c: &mut Bench) {
+    use purrdf_testkit::bench::BatchSize;
     let mut group = c.benchmark_group("ir_pattern_cold");
     group.bench_function("first_pos_query_cold_index", |b| {
         // `iter_batched_ref` (not `iter_batched`) so the dataset's Drop — freeing the
@@ -609,8 +601,8 @@ fn bench_pattern_cold(c: &mut Criterion) {
 /// fresh dataset. `iter_batched` keeps dataset construction in UN-timed setup so the
 /// measured region is the `get_or_init` race + queries (correctness guaranteed by
 /// `OnceLock`; this measures its cost under contention).
-fn bench_pattern_concurrent(c: &mut Criterion) {
-    use criterion::BatchSize;
+fn bench_pattern_concurrent(c: &mut Bench) {
+    use purrdf_testkit::bench::BatchSize;
     let mut group = c.benchmark_group("ir_pattern_concurrent");
     group.bench_function("concurrent_first_pos_access_x4", |b| {
         // `iter_batched_ref` excludes the dataset's Drop from the timed region.
@@ -644,10 +636,10 @@ fn bench_pattern_concurrent(c: &mut Criterion) {
     group.finish();
 }
 
-/// Print the allocation metrics once (criterion's first call), then run all timed
-/// groups. Criterion calls each `bench_*` once per run; the metrics print is a
+/// Print the allocation metrics once (the harness's first call), then run all timed
+/// groups. The harness calls each `bench_*` once per run; the metrics print is a
 /// separate leading function so it runs exactly once.
-fn bench_metrics(_c: &mut Criterion) {
+fn bench_metrics(_c: &mut Bench) {
     print_alloc_metrics();
 }
 
@@ -657,7 +649,7 @@ fn bench_metrics(_c: &mut Criterion) {
 /// whose first-degree hashes collide and force the n-degree search. Reports the
 /// per-blank label/predicate rendering and issuer paths that canonicalization
 /// spends its time in; no threshold asserted.
-fn bench_canonicalize(c: &mut Criterion) {
+fn bench_canonicalize(c: &mut Bench) {
     const CHAINS: u32 = 64;
     const LEN: u32 = 8;
     const RING: u32 = 6;
@@ -691,7 +683,7 @@ fn bench_canonicalize(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
+bench_group!(
     benches,
     bench_metrics,
     bench_build,
@@ -705,4 +697,4 @@ criterion_group!(
     bench_pattern_cold,
     bench_pattern_concurrent
 );
-criterion_main!(benches);
+bench_main!(benches);

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The named execution paths of SHA-1, CRC-32 and base16 encoding, for
-//! tests and benches.
+//! tests and benches. Each is a [`Backend`] family (`sha1`, `crc32` and
+//! `hex` in [`PURRDF_REQUIRE_SIMD_PATHS`](crate::dispatch::REQUIRE_SIMD_PATHS)).
 //!
 //! Not a stable interface. Every path computes the same bytes; this module
 //! exists so a test can run each path the host supports and compare it with
@@ -17,6 +18,7 @@
 
 use crate::arch::{self, Crc32Update, HexEncode, Sha1Blocks};
 use crate::crc32::{self, Crc32};
+use crate::dispatch::Backend;
 use crate::sha1::Sha1;
 
 /// A SHA-1 block-function path.
@@ -31,32 +33,23 @@ pub enum Sha1Backend {
     Aarch64Sha1,
 }
 
-impl Sha1Backend {
-    /// Every path, in order of preference (the last is always available).
-    pub const ALL: [Self; 3] = [Self::X86Sha, Self::Aarch64Sha1, Self::Portable];
+impl Backend for Sha1Backend {
+    const ALL: &'static [Self] = &[Self::X86Sha, Self::Aarch64Sha1, Self::Portable];
 
-    /// The path's name, as `PURRDF_REQUIRE_HASH_PATHS` spells it.
-    pub const fn name(self) -> &'static str {
+    fn is_available(self) -> bool {
+        self.blocks().is_some()
+    }
+
+    fn name(self) -> &'static str {
         match self {
             Self::Portable => "portable",
             Self::X86Sha => "x86-sha",
             Self::Aarch64Sha1 => "aarch64-sha1",
         }
     }
+}
 
-    /// Whether this processor can run the path.
-    pub fn is_available(self) -> bool {
-        self.blocks().is_some()
-    }
-
-    /// The path [`Sha1::new`] and [`Sha1::digest`] use on this processor.
-    pub fn selected() -> Self {
-        Self::ALL
-            .into_iter()
-            .find(|backend| backend.is_available())
-            .unwrap_or(Self::Portable)
-    }
-
+impl Sha1Backend {
     /// A hasher pinned to this path, if the processor can run it.
     pub fn hasher(self) -> Option<Sha1> {
         self.blocks().map(|blocks| Sha1::on(self, blocks))
@@ -95,18 +88,28 @@ pub enum Crc32Backend {
     Aarch64Pmull,
 }
 
-impl Crc32Backend {
-    /// Every path; the first available one in this order is selected, except
-    /// that [`Aarch64Pmull`](Self::Aarch64Pmull) is never selected.
-    pub const ALL: [Self; 4] = [
+impl Backend for Crc32Backend {
+    const ALL: &'static [Self] = &[
         Self::X86Pclmulqdq,
         Self::Aarch64Crc32,
         Self::Aarch64Pmull,
         Self::Portable,
     ];
 
-    /// The path's name, as `PURRDF_REQUIRE_HASH_PATHS` spells it.
-    pub const fn name(self) -> &'static str {
+    /// The first available path, except that
+    /// [`Aarch64Pmull`](Self::Aarch64Pmull) is never selected: it is the path
+    /// [`Crc32::new`] and [`Crc32::checksum`] use on this processor.
+    fn selected() -> Self {
+        Self::all_available()
+            .find(|backend| *backend != Self::Aarch64Pmull)
+            .unwrap_or(Self::Portable)
+    }
+
+    fn is_available(self) -> bool {
+        self.update_fn().is_some()
+    }
+
+    fn name(self) -> &'static str {
         match self {
             Self::Portable => "portable",
             Self::X86Pclmulqdq => "x86-pclmulqdq",
@@ -114,21 +117,9 @@ impl Crc32Backend {
             Self::Aarch64Pmull => "aarch64-pmull",
         }
     }
+}
 
-    /// Whether this processor can run the path.
-    pub fn is_available(self) -> bool {
-        self.update_fn().is_some()
-    }
-
-    /// The path [`Crc32::new`] and [`Crc32::checksum`] use on this processor.
-    pub fn selected() -> Self {
-        Self::ALL
-            .into_iter()
-            .filter(|backend| *backend != Self::Aarch64Pmull)
-            .find(|backend| backend.is_available())
-            .unwrap_or(Self::Portable)
-    }
-
+impl Crc32Backend {
     /// A CRC pinned to this path, if the processor can run it.
     pub fn hasher(self) -> Option<Crc32> {
         self.update_fn().map(|update| Crc32::on(self, update))
@@ -152,11 +143,12 @@ impl Crc32Backend {
     }
 }
 
-/// A base16 encoding path, the one [`hex::Lower`](crate::hex::Lower) renders
-/// through.
+/// A base16 encoding path: the one [`hex`](crate::hex) renders inputs longer
+/// than [`hex::SHORT_MAX`](crate::hex::SHORT_MAX) through.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HexBackend {
-    /// A sixteen-entry alphabet table; always available.
+    /// The compare-select loop, which the compiler packs on every vector
+    /// target; always available.
     Portable,
     /// SSSE3 `pshufb` nibble lookup, x86-64 with `ssse3`.
     X86Ssse3,
@@ -166,17 +158,19 @@ pub enum HexBackend {
     Wasm32Simd128,
 }
 
-impl HexBackend {
-    /// Every path, in order of preference (the last is always available).
-    pub const ALL: [Self; 4] = [
+impl Backend for HexBackend {
+    const ALL: &'static [Self] = &[
         Self::X86Ssse3,
         Self::Aarch64Neon,
         Self::Wasm32Simd128,
         Self::Portable,
     ];
 
-    /// The path's name.
-    pub const fn name(self) -> &'static str {
+    fn is_available(self) -> bool {
+        self.encode_fn_if_available().is_some()
+    }
+
+    fn name(self) -> &'static str {
         match self {
             Self::Portable => "portable",
             Self::X86Ssse3 => "x86-ssse3",
@@ -184,29 +178,27 @@ impl HexBackend {
             Self::Wasm32Simd128 => "wasm32-simd128",
         }
     }
+}
 
-    /// Whether this processor and build can run the path.
-    pub fn is_available(self) -> bool {
-        self.encode_fn_if_available().is_some()
-    }
-
-    /// The path [`hex::Lower`](crate::hex::Lower) uses on this processor.
-    pub fn selected() -> Self {
-        Self::ALL
-            .into_iter()
-            .find(|backend| backend.is_available())
-            .unwrap_or(Self::Portable)
-    }
-
+impl HexBackend {
     /// Writes the lowercase base16 encoding of `input` into `output` on this
     /// path. `None`, writing nothing, when the processor cannot run the path
     /// or `output` is not exactly twice as long as `input`.
     pub fn encode(self, input: &[u8], output: &mut [u8]) -> Option<()> {
+        self.encode_case(input, output, false)
+    }
+
+    /// [`encode`](Self::encode) with `A`-`F`.
+    pub fn encode_upper(self, input: &[u8], output: &mut [u8]) -> Option<()> {
+        self.encode_case(input, output, true)
+    }
+
+    fn encode_case(self, input: &[u8], output: &mut [u8], upper: bool) -> Option<()> {
         if Some(output.len()) != input.len().checked_mul(2) {
             return None;
         }
         self.encode_fn_if_available()
-            .map(|encode| encode(input, output))
+            .map(|encode| encode(input, output, upper))
     }
 
     /// This path's encoder, or the portable one when it is unavailable.

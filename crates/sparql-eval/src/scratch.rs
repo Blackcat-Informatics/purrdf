@@ -43,10 +43,9 @@
 //! `RdfLiteral::language_tagged` build one. Both are public; see their docs for
 //! which is which and for the SPARQL 1.1 §17.2 reading of the [`None`].
 
-use purrdf_core::TermBox;
-use purrdf_core::{DatasetView, TermId, TermRef, TermValue, ViewTermId};
+use purrdf_core::{DatasetView, TermId, TermValue, ViewTermId};
 
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 use hashbrown::HashTable;
 
@@ -204,12 +203,6 @@ fn is_query_scoped_blank(value: &TermValue) -> bool {
     matches!(value, TermValue::Blank { scope, .. } if *scope == crate::convert::QUERY_BLANK_SCOPE)
 }
 
-fn hash_value(value: &TermValue) -> u64 {
-    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    value.hash(&mut hasher);
-    hasher.finish()
-}
-
 /// The profile every language tag in this workspace is judged on — the parser's,
 /// the codecs', the IR kernel's, and (since `eval_str_lang`) `STRLANG`'s.
 ///
@@ -257,11 +250,6 @@ pub(crate) fn language_tags_well_formed(value: &TermValue) -> bool {
 }
 
 impl ScratchInterner {
-    /// A fresh, empty interner.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Empty this interner while KEEPING the tables it has already grown.
     ///
     /// Observationally a fresh [`Self::new`] — every id it could answer is gone, the
@@ -493,7 +481,7 @@ impl ScratchInterner {
         {
             return SolutionTerm::Existing(id);
         }
-        let hash = hash_value(&value);
+        let hash = purrdf_hash::fixed::hash_one(&value);
         if let Some(&sid) = self
             .index
             .find(hash, |sid| self.values[sid.index()] == value)
@@ -503,8 +491,9 @@ impl ScratchInterner {
         let sid = ScratchId::from_index(self.values.len());
         self.minted_bytes = self.minted_bytes.saturating_add(value_bytes(&value));
         self.values.push(value);
-        self.index
-            .insert_unique(hash, sid, |sid| hash_value(&self.values[sid.index()]));
+        self.index.insert_unique(hash, sid, |sid| {
+            purrdf_hash::fixed::hash_one(&self.values[sid.index()])
+        });
         SolutionTerm::Computed(sid)
     }
 
@@ -553,74 +542,19 @@ impl ScratchInterner {
     }
 }
 
-/// Resolve a dataset-local [`TermId`] to an owned, dataset-independent
-/// [`TermValue`].
+/// Resolve a dataset-local id to an owned, dataset-independent [`TermValue`]
+/// through [`DatasetView::term_value`] (the C0.8 boundary), for an id the view
+/// itself handed to the evaluator.
 ///
-/// Walks through RDF-1.2 triple terms and expands a literal's datatype id to its
-/// IRI string, so the result carries no dataset-local ids (the C0.8 boundary).
+/// # Panics
 ///
-/// The value is assembled bottom-up over a work list: a triple term's components
-/// are resolved subject, predicate, object — each fully before the next — and the
-/// triple is built once all three exist, so a term of any nesting costs no more
-/// machine stack.
+/// On an id the view did not mint: a literal whose datatype does not resolve to an
+/// IRI. Every id the evaluator holds was read out of the view it is resolved
+/// against.
 pub(crate) fn term_id_to_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermValue {
-    enum Step<I> {
-        Resolve(I),
-        Assemble,
-    }
-    // Inline until a term nests deeper than a quoted triple of quoted triples, so a
-    // plain term costs only its own value.
-    let mut steps: purrdf_core::SmallVec<[Step<D::Id>; 8]> =
-        purrdf_core::smallvec![Step::Resolve(id)];
-    let mut values: purrdf_core::SmallVec<[TermValue; 3]> = purrdf_core::SmallVec::new();
-    while let Some(step) = steps.pop() {
-        match step {
-            Step::Resolve(id) => match dataset.resolve(id) {
-                TermRef::Iri(iri) => values.push(TermValue::Iri(iri.to_owned())),
-                TermRef::Blank { label, scope } => values.push(TermValue::Blank {
-                    label: label.to_owned(),
-                    scope,
-                }),
-                TermRef::Literal {
-                    lexical,
-                    datatype,
-                    language,
-                    direction,
-                } => {
-                    let datatype = match dataset.resolve(datatype) {
-                        TermRef::Iri(iri) => iri.to_owned(),
-                        // A literal's datatype is always an interned IRI (C0.1).
-                        other => unreachable!("literal datatype must be an IRI, got {other:?}"),
-                    };
-                    values.push(TermValue::Literal {
-                        lexical_form: lexical.to_owned(),
-                        datatype,
-                        language: language.map(str::to_owned),
-                        direction,
-                    });
-                }
-                TermRef::Triple { s, p, o } => steps.extend([
-                    Step::Assemble,
-                    Step::Resolve(o),
-                    Step::Resolve(p),
-                    Step::Resolve(s),
-                ]),
-            },
-            Step::Assemble => {
-                let o = values.pop().expect("a triple term's object is resolved");
-                let p = values.pop().expect("a triple term's predicate is resolved");
-                let s = values.pop().expect("a triple term's subject is resolved");
-                values.push(TermValue::Triple {
-                    s: TermBox::new(s),
-                    p: TermBox::new(p),
-                    o: TermBox::new(o),
-                });
-            }
-        }
-    }
-    values
-        .pop()
-        .expect("the root term's value is the last one assembled")
+    dataset
+        .term_value(id)
+        .expect("an id the view handed the evaluator resolves to a value")
 }
 
 #[cfg(test)]
@@ -641,7 +575,7 @@ mod tests {
     #[test]
     fn existing_value_is_promoted_not_computed() {
         let ds = dataset_with_one_iri();
-        let mut scratch = ScratchInterner::new();
+        let mut scratch = ScratchInterner::default();
         let term = scratch.intern(&ds, TermValue::Iri("https://example.org/s".to_owned()));
         // The value is in the dataset → it MUST resolve to an Existing id, and the
         // scratch table stays empty (the promotion rule).
@@ -652,7 +586,7 @@ mod tests {
     #[test]
     fn novel_value_is_computed_and_deduped() {
         let ds = dataset_with_one_iri();
-        let mut scratch = ScratchInterner::new();
+        let mut scratch = ScratchInterner::default();
         let novel = TermValue::Literal {
             lexical_form: "hello world".to_owned(),
             datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
@@ -670,7 +604,7 @@ mod tests {
     #[test]
     fn existing_and_computed_are_never_equal() {
         let ds = dataset_with_one_iri();
-        let mut scratch = ScratchInterner::new();
+        let mut scratch = ScratchInterner::default();
         let existing = scratch.intern(&ds, TermValue::Iri("https://example.org/s".to_owned()));
         let computed = scratch.intern(
             &ds,
@@ -685,7 +619,7 @@ mod tests {
     #[test]
     fn value_of_round_trips_existing_and_computed() {
         let ds = dataset_with_one_iri();
-        let mut scratch = ScratchInterner::new();
+        let mut scratch = ScratchInterner::default();
 
         let iri = TermValue::Iri("https://example.org/s".to_owned());
         let existing = scratch.intern(&ds, iri.clone());
@@ -717,7 +651,7 @@ mod tests {
         b.push_quad(s, p, o, None);
         let ds = b.freeze().expect("freeze");
 
-        let scratch = ScratchInterner::new();
+        let scratch = ScratchInterner::default();
         let value = scratch.value_of(&ds, SolutionTerm::Existing(o));
         assert_eq!(
             value,
@@ -760,7 +694,7 @@ mod tests {
             "abcdefgh",
             "en-x-cantbethislong",
         ] {
-            let mut scratch = ScratchInterner::new();
+            let mut scratch = ScratchInterner::default();
             assert!(
                 scratch.intern_checked(&ds, tagged(tag)).is_some(),
                 "{tag} is a tag real data carries and must still bind"
@@ -779,7 +713,7 @@ mod tests {
             "abcdefghi",
             "",
         ] {
-            let mut scratch = ScratchInterner::new();
+            let mut scratch = ScratchInterner::default();
             assert!(
                 scratch.intern_checked(&ds, tagged(tag)).is_none(),
                 "{tag:?} must not become a solution term"
@@ -806,7 +740,7 @@ mod tests {
                 direction: None,
             }),
         };
-        let mut scratch = ScratchInterner::new();
+        let mut scratch = ScratchInterner::default();
         assert!(scratch.intern_checked(&ds, quoted("en-US")).is_some());
         assert!(scratch.intern_checked(&ds, quoted("en us")).is_none());
     }
@@ -831,27 +765,27 @@ mod term_walk_tests {
     use std::sync::Arc;
 
     const EX: &str = "http://example.org/";
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+    use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+    use purrdf_xsd::datatype::XSD_INTEGER;
+    use purrdf_xsd::datatype::XSD_STRING;
     const DEPTH: usize = 100_000;
     const SMALL_STACK: usize = 128 * 1024;
 
     /// A deterministic choice sequence.
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
-            Self { state: seed }
+            Self {
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
+            }
         }
 
         /// One choice below `n`.
         fn choose(&mut self, n: usize) -> usize {
-            let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
-                .expect("a draw below the count fits")
+            self.state.below_usize(n)
         }
     }
 
@@ -1008,16 +942,6 @@ mod term_walk_tests {
         (builder.freeze().expect("the generated values freeze"), ids)
     }
 
-    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
-    }
-
     /// A triple-term chain `depth` levels deep over `innermost`.
     fn chain(depth: usize, innermost: TermValue) -> TermValue {
         let mut term = innermost;
@@ -1065,7 +989,7 @@ mod term_walk_tests {
 
     #[test]
     fn a_hundred_thousand_level_term_is_measured_and_checked_on_a_128_kib_stack() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let well_formed = chain(DEPTH, tagged("x", "en"));
             let s_len = format!("{EX}s").len() as u64;
             let p_len = format!("{EX}p").len() as u64;
@@ -1077,6 +1001,7 @@ mod term_walk_tests {
 
             let ill_formed = chain(DEPTH, tagged("x", "en-"));
             assert!(!language_tags_well_formed(&ill_formed));
-        });
+        })
+        .expect("spawn");
     }
 }

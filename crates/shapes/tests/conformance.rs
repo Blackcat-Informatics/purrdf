@@ -13,7 +13,7 @@
 //! reader for this crate's two SHACL corpora, so this file is only the grading
 //! half.
 
-mod shacl_corpora;
+use purrdf_shapes::shacl_corpora;
 
 use std::collections::BTreeSet;
 use std::fs;

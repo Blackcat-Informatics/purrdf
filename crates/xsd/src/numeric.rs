@@ -11,16 +11,15 @@ use crate::datatype::XsdDatatype;
 use crate::ieee;
 use crate::value::{XsdError, XsdValue};
 
-/// An exact decimal: `value = mantissa × 10^(-scale)`. Mirrors `oxsdatatypes`'
-/// `i128`-backed design (scale bounded so the mantissa stays in `i128`).
+/// An exact decimal: `value = mantissa × 10^(-scale)`, `i128`-backed (scale
+/// bounded so the mantissa stays in `i128`).
 #[derive(Debug, Clone, Copy)]
 pub struct Decimal {
     mantissa: i128,
     scale: u8,
 }
 
-/// Max fractional digits we retain; keeps the mantissa within `i128` headroom and
-/// matches `oxsdatatypes`' precision.
+/// Max fractional digits we retain; keeps the mantissa within `i128` headroom.
 const MAX_DECIMAL_SCALE: u8 = 18;
 
 impl Decimal {
@@ -209,12 +208,28 @@ impl Decimal {
     }
 }
 
-fn invalid(dt: XsdDatatype, lexical: &str, reason: &'static str) -> XsdError {
-    XsdError::InvalidLexical {
-        datatype: dt,
-        lexical: lexical.to_string(),
-        reason,
-    }
+/// Whether `lexical` is in the `xsd:integer` lexical space (XSD 1.1 Part 2
+/// §3.4.13.1): an optional `+` or `-`, then one or more ASCII digits. Unbounded:
+/// this is the lexical space, not the `i128` this crate parses into. No
+/// whitespace is trimmed; a caller applying the datatype's `collapse` facet
+/// trims first.
+#[must_use]
+pub fn is_integer_lexical(lexical: &str) -> bool {
+    let body = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
+    !body.is_empty() && body.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Whether `lexical` is in the `xsd:decimal` lexical space (XSD 1.1 Part 2
+/// §3.3.3.1): an optional `+` or `-`, then digits with at most one `.`, and at
+/// least one digit (`.5`, `1.`, `1.5` and `12` all qualify; no exponent).
+/// Unbounded, and no whitespace is trimmed, as for [`is_integer_lexical`].
+#[must_use]
+pub fn is_decimal_lexical(lexical: &str) -> bool {
+    let body = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
+    let (int, frac) = body.split_once('.').unwrap_or((body, ""));
+    !(int.is_empty() && frac.is_empty())
+        && int.bytes().all(|b| b.is_ascii_digit())
+        && frac.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// `xsd:integer`: optional leading `+`/`-`, then one or more ASCII digits.
@@ -222,9 +237,12 @@ fn invalid(dt: XsdDatatype, lexical: &str, reason: &'static str) -> XsdError {
 /// integer-family parsing use [`parse_integer_typed`].
 pub fn parse_integer(s: &str) -> Result<i128, XsdError> {
     let dt = XsdDatatype::Integer;
-    let body = s.strip_prefix(['+', '-']).unwrap_or(s);
-    if body.is_empty() || !body.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(invalid(dt, s, "expected an optional sign then digits"));
+    if !is_integer_lexical(s) {
+        return Err(XsdError::invalid(
+            dt,
+            s,
+            "expected an optional sign then digits",
+        ));
     }
     s.parse::<i128>().map_err(|_| XsdError::OutOfRange {
         datatype: dt,
@@ -243,13 +261,12 @@ pub fn parse_integer_typed(lexical: &str, datatype: XsdDatatype) -> Result<i128,
     // InvalidLexical for malformed input, or OutOfRange for beyond-i128).
     // We call parse_integer but report the error under `datatype` for non-Integer
     // subtypes, so callers see the correct IRI in the error.
-    let body = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
-    if body.is_empty() || !body.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(XsdError::InvalidLexical {
+    if !is_integer_lexical(lexical) {
+        return Err(XsdError::invalid(
             datatype,
-            lexical: lexical.to_string(),
-            reason: "expected an optional sign then digits",
-        });
+            lexical,
+            "expected an optional sign then digits",
+        ));
     }
     let value = lexical.parse::<i128>().map_err(|_| XsdError::OutOfRange {
         datatype,
@@ -284,14 +301,14 @@ pub fn parse_decimal(s: &str) -> Result<Decimal, XsdError> {
     // A second '.' can only live after the first one, i.e. inside `frac_str`:
     // one scan of the tail replaces the `contains` + `matches().count()` pair.
     if frac_str.contains('.') {
-        return Err(invalid(dt, s, "more than one decimal point"));
+        return Err(XsdError::invalid(dt, s, "more than one decimal point"));
     }
     if int_str.is_empty() && frac_str.is_empty() {
-        return Err(invalid(dt, s, "no digits"));
+        return Err(XsdError::invalid(dt, s, "no digits"));
     }
     if !int_str.bytes().all(|b| b.is_ascii_digit()) || !frac_str.bytes().all(|b| b.is_ascii_digit())
     {
-        return Err(invalid(dt, s, "non-digit character"));
+        return Err(XsdError::invalid(dt, s, "non-digit character"));
     }
     if frac_str.len() > usize::from(MAX_DECIMAL_SCALE) {
         return Err(XsdError::OutOfRange {
@@ -335,7 +352,7 @@ pub fn parse_float(s: &str) -> Result<f32, XsdError> {
     }
     reject_non_xsd_numeric(s, dt)?;
     s.parse::<f32>()
-        .map_err(|_| invalid(dt, s, "not a valid float lexical"))
+        .map_err(|_| XsdError::invalid(dt, s, "not a valid float lexical"))
 }
 
 /// XSD **1.0**-pinned `xsd:double` parse: identical to [`parse_double`] but rejects
@@ -345,7 +362,7 @@ pub fn parse_float(s: &str) -> Result<f32, XsdError> {
 /// turning the whole crate back to 1.0.
 pub fn parse_double_xsd10(s: &str) -> Result<f64, XsdError> {
     if s == "+INF" {
-        return Err(invalid(
+        return Err(XsdError::invalid(
             XsdDatatype::Double,
             s,
             "XSD 1.0 spells positive infinity INF",
@@ -361,7 +378,7 @@ pub fn parse_double_xsd10(s: &str) -> Result<f64, XsdError> {
 /// turning the whole crate back to 1.0.
 pub fn parse_float_xsd10(s: &str) -> Result<f32, XsdError> {
     if s == "+INF" {
-        return Err(invalid(
+        return Err(XsdError::invalid(
             XsdDatatype::Float,
             s,
             "XSD 1.0 spells positive infinity INF",
@@ -380,7 +397,7 @@ fn parse_ieee(s: &str, dt: XsdDatatype) -> Result<f64, XsdError> {
     }
     reject_non_xsd_numeric(s, dt)?;
     s.parse::<f64>()
-        .map_err(|_| invalid(dt, s, "not a valid double lexical"))
+        .map_err(|_| XsdError::invalid(dt, s, "not a valid double lexical"))
 }
 
 /// Reject lexicals Rust's float parser would accept but XSD forbids (`inf`,
@@ -390,7 +407,7 @@ fn reject_non_xsd_numeric(s: &str, dt: XsdDatatype) -> Result<(), XsdError> {
     if s.bytes()
         .any(|b| b.is_ascii_alphabetic() && b != b'e' && b != b'E')
     {
-        return Err(invalid(dt, s, "non-XSD numeric token"));
+        return Err(XsdError::invalid(dt, s, "non-XSD numeric token"));
     }
     Ok(())
 }
@@ -1219,8 +1236,7 @@ pub(crate) fn decimal_div_raw(dividend: &Decimal, divisor: &Decimal) -> Result<D
 ///
 /// `None` when the resulting MANTISSA does not fit `i128` — `xsd:decimal`'s
 /// [`Decimal`] representation is deliberately `i128`-mantissa-bounded (this
-/// crate's documented design, unchanged by this function; matches
-/// `oxsdatatypes`' precision). Scaling to `MAX_DECIMAL_SCALE` (18) fractional
+/// crate's documented design, unchanged by this function). Scaling to `MAX_DECIMAL_SCALE` (18) fractional
 /// digits BEFORE dividing multiplies the required headroom by 18 decimal
 /// digits, so this fails far more readily than the bare integer quotient
 /// would: an escaped-`i128` `dividend` needs a `count` on the order of
@@ -1293,7 +1309,7 @@ pub fn bigint_avg_decimal_lexical(dividend: &crate::bigint::BigInt, count: u64) 
     let (quotient, _remainder) = scaled
         .div_rem_u64(count)
         .expect("count != 0 was just asserted");
-    quotient.to_decimal_lexical(MAX_DECIMAL_SCALE)
+    quotient.to_decimal_lexical(u32::from(MAX_DECIMAL_SCALE))
 }
 
 /// `op:numeric-unary-minus` — the numeric-TIER unary `-` only. Negates the

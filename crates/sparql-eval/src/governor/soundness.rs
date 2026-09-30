@@ -635,12 +635,7 @@ where
                 aggregate
                     .args()
                     .iter()
-                    .chain(
-                        aggregate
-                            .order_by()
-                            .iter()
-                            .map(crate::modifier::order_sort_key),
-                    )
+                    .chain(aggregate.order_by().iter().map(OrderExpression::expression))
                     .any(|e| visit(PatternPart::Expression(e)))
             })
         }
@@ -1484,50 +1479,6 @@ fn node_analysis<'a>(
     table.get(&(std::ptr::from_ref(pattern) as usize))
 }
 
-/// Collect the variables a term pattern mentions, descending into a quoted
-/// triple's own component positions — the analysis-module twin of
-/// `crate::expr::term_pattern_vars`, kept local so this module needs no
-/// visibility change into `crate::expr`'s private helpers.
-///
-/// A term that is not a quoted triple is answered without allocating. A quoted
-/// triple is walked over a work list — subject, predicate, object, at every level —
-/// so a term nested to any depth needs no more machine stack.
-fn collect_term_pattern_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
-    /// One position of the walk: a term, or a quoted triple's predicate.
-    enum Position<'a> {
-        Term(&'a TermPattern),
-        Predicate(&'a NamedNodePattern),
-    }
-    match term {
-        TermPattern::Variable(v) => {
-            out.insert(v.clone());
-            return;
-        }
-        TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
-            return;
-        }
-        TermPattern::Triple(_) => {}
-    }
-    let mut pending = vec![Position::Term(term)];
-    while let Some(position) = pending.pop() {
-        match position {
-            Position::Term(TermPattern::Variable(v))
-            | Position::Predicate(NamedNodePattern::Variable(v)) => {
-                out.insert(v.clone());
-            }
-            Position::Term(TermPattern::Triple(triple)) => {
-                pending.push(Position::Term(&triple.object));
-                pending.push(Position::Predicate(&triple.predicate));
-                pending.push(Position::Term(&triple.subject));
-            }
-            Position::Term(
-                TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_),
-            )
-            | Position::Predicate(NamedNodePattern::NamedNode(_)) => {}
-        }
-    }
-}
-
 /// Whether a `Path` endpoint term can make `crate::path::resolve_end` raise
 /// [`crate::error::EvalError::unsupported_deferred`] with
 /// [`crate::error::UnsupportedKind::QuotedTripleTermVariable`] — the hard error
@@ -1548,7 +1499,7 @@ fn path_endpoint_can_hard_error(term: &TermPattern) -> bool {
         return false;
     }
     let mut vars = DetHashSet::default();
-    collect_term_pattern_vars(term, &mut vars);
+    term.collect_variables(&mut vars);
     !vars.is_empty()
 }
 
@@ -1830,7 +1781,7 @@ fn push_pattern_parts<'a>(pattern: &'a GraphPattern, steps: &mut Vec<AnalysisSte
         GraphPattern::OrderBy { inner, expression } => {
             steps.push(AnalysisStep::EnterPattern(inner));
             for oe in expression {
-                steps.push(AnalysisStep::EnterExpr(crate::modifier::order_sort_key(oe)));
+                steps.push(AnalysisStep::EnterExpr(oe.expression()));
             }
         }
         GraphPattern::Group {
@@ -1841,7 +1792,7 @@ fn push_pattern_parts<'a>(pattern: &'a GraphPattern, steps: &mut Vec<AnalysisSte
                 for arg in agg
                     .args()
                     .iter()
-                    .chain(agg.order_by().iter().map(crate::modifier::order_sort_key))
+                    .chain(agg.order_by().iter().map(OrderExpression::expression))
                 {
                     steps.push(AnalysisStep::EnterExpr(arg));
                 }
@@ -1909,11 +1860,11 @@ fn assemble_pattern(pattern: &GraphPattern, values: &mut AnalysisValues) -> Node
         GraphPattern::Bgp { patterns } => {
             let mut vars = DetHashSet::default();
             for tp in patterns {
-                collect_term_pattern_vars(&tp.subject, &mut vars);
+                tp.subject.collect_variables(&mut vars);
                 if let NamedNodePattern::Variable(v) = &tp.predicate {
                     vars.insert(v.clone());
                 }
-                collect_term_pattern_vars(&tp.object, &mut vars);
+                tp.object.collect_variables(&mut vars);
             }
             NodeAnalysis {
                 certainly_bound: vars.clone(),
@@ -1926,8 +1877,8 @@ fn assemble_pattern(pattern: &GraphPattern, values: &mut AnalysisValues) -> Node
             subject, object, ..
         } => {
             let mut vars = DetHashSet::default();
-            collect_term_pattern_vars(subject, &mut vars);
-            collect_term_pattern_vars(object, &mut vars);
+            subject.collect_variables(&mut vars);
+            object.collect_variables(&mut vars);
             NodeAnalysis {
                 certainly_bound: vars.clone(),
                 free_vars: vars,
@@ -1964,7 +1915,7 @@ fn assemble_pattern(pattern: &GraphPattern, values: &mut AnalysisValues) -> Node
         GraphPattern::PropertyFunction(call) => {
             let mut vars = DetHashSet::default();
             for term in call.subject_args.iter().chain(&call.object_args) {
-                collect_term_pattern_vars(term, &mut vars);
+                term.collect_variables(&mut vars);
             }
             NodeAnalysis {
                 free_vars: vars,
@@ -2594,33 +2545,11 @@ fn pattern_probe_step<'p, 't>(
 }
 
 /// Whether the fresh binding [`exists_row_collision`] reports is an `Extend`/
-/// `(expr AS ?v)` target or a `VALUES` column — the same two shapes, and the
-/// same message wording, as `purrdf_sparql_algebra`'s parser-side
-/// `ScopeIntro` (that type is private to the parser crate, so this is a
-/// separate, deliberately identical, enum rather than a shared one — see
-/// [`exists_row_collision`]'s doc for why the eval crate needs its own copy
-/// of the same theorem).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RowCollisionIntro {
-    /// A `BIND(expr AS ?v)` target, a sub-`SELECT`'s `(expr AS ?v)`
-    /// projection target, a `GROUP BY (expr AS ?v)` condition, or a `GROUP
-    /// BY` aggregate's output variable.
-    Bind,
-    /// A `VALUES` block's column variable.
-    Values,
-    /// An `UNFOLD(expr AS ?e, ?i)` target — either of the two.
-    Unfold,
-}
-
-impl RowCollisionIntro {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Bind => "BIND target",
-            Self::Values => "VALUES variable",
-            Self::Unfold => "UNFOLD target",
-        }
-    }
-}
+/// `(expr AS ?v)` target, a `VALUES` column or an `UNFOLD` target — the same
+/// shapes, and the same message wording, as the parser's scope check reports:
+/// the parser's own [`ScopeIntro`](purrdf_sparql_algebra::parser::ScopeIntro),
+/// so the two can never name a construct differently.
+pub(crate) use purrdf_sparql_algebra::parser::ScopeIntro as RowCollisionIntro;
 
 /// Find the first variable `pattern` introduces (via `BIND`, a sub-`SELECT`'s
 /// `(expr AS ?v)` projection target, a `GROUP BY` aggregate's output
@@ -3062,19 +2991,8 @@ mod tests {
             }
             pattern
         }
-        fn on_thread<T: Send + 'static>(
-            bytes: usize,
-            body: impl FnOnce() -> T + Send + 'static,
-        ) -> T {
-            std::thread::Builder::new()
-                .stack_size(bytes)
-                .spawn(body)
-                .expect("spawn")
-                .join()
-                .expect("the thread returned")
-        }
 
-        on_thread(64 * 1024 * 1024, || {
+        purrdf_stack::on_stack(64 * 1024 * 1024, || {
             validate_graph_pattern_depth(&nested(1_000))
                 .expect("a thousand levels are admitted where the stack holds their walks");
             // A hundred thousand levels need 51 MB of walks at the parser's 512-byte
@@ -3082,20 +3000,16 @@ mod tests {
             // the same tree, borrowed there, is refused typed. It is built and dropped
             // here, where its own drop fits.
             let tall = nested(100_000);
-            let error = std::thread::scope(|scope| {
-                std::thread::Builder::new()
-                    .stack_size(256 * 1024)
-                    .spawn_scoped(scope, || validate_graph_pattern_depth(&tall))
-                    .expect("spawn")
-                    .join()
-                    .expect("the small thread returned")
-            })
-            .expect_err("direct algebra too tall for the stack is refused");
+            let error =
+                purrdf_stack::on_stack_scoped(256 * 1024, || validate_graph_pattern_depth(&tall))
+                    .expect("the small stack runs the check")
+                    .expect_err("direct algebra too tall for the stack is refused");
             assert!(
                 matches!(error, crate::EvalError::StackExhausted { .. }),
                 "{error:?}"
             );
-        });
+        })
+        .expect("spawn");
     }
 
     // ---- prefix-monotone operators certify --------------------------------
@@ -4152,7 +4066,6 @@ mod iterative_walks {
     };
 
     use super::*;
-    use purrdf_testkit::rng::splitmix64_next;
 
     const EX: &str = "http://example.org/";
 
@@ -4390,8 +4303,7 @@ mod iterative_walks {
                 let mut stateful = i.has_stateful_builtin;
                 let mut hard_error = i.can_hard_error;
                 for oe in expression {
-                    let (f, s, h) =
-                        reference_analyze_expr(crate::modifier::order_sort_key(oe), table);
+                    let (f, s, h) = reference_analyze_expr(oe.expression(), table);
                     free_vars.extend(f);
                     stateful |= s;
                     hard_error |= h;
@@ -4438,7 +4350,7 @@ mod iterative_walks {
                     for arg in agg
                         .args()
                         .iter()
-                        .chain(agg.order_by().iter().map(crate::modifier::order_sort_key))
+                        .chain(agg.order_by().iter().map(OrderExpression::expression))
                     {
                         let (f, s, h) = reference_analyze_expr(arg, table);
                         free_vars.extend(f);
@@ -4851,21 +4763,21 @@ mod iterative_walks {
     /// A deterministic choice sequence: every shape is a pure function of its seed, and
     /// a size budget bounds it.
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         fn new(seed: u64, budget: usize) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget,
             }
         }
 
         /// One choice among `n`.
         fn pick(&mut self, n: usize) -> usize {
-            (splitmix64_next(&mut self.state) % n as u64) as usize
+            self.state.below_usize(n)
         }
 
         fn coin(&mut self) -> bool {
@@ -5184,7 +5096,7 @@ mod iterative_walks {
 
         /// An outer schema over the variable pool.
         fn schema(&mut self) -> VarSchema {
-            let mut schema = VarSchema::new();
+            let mut schema = VarSchema::default();
             for variable in self.variables(4) {
                 schema.push(variable);
             }
@@ -5342,16 +5254,6 @@ mod iterative_walks {
 
     // ---- deep cases ---------------------------------------------------------
 
-    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
-    }
-
     fn var(name: &str) -> Variable {
         Variable::new(name)
     }
@@ -5361,7 +5263,7 @@ mod iterative_walks {
     }
 
     fn schema_of(names: &[&str]) -> VarSchema {
-        let mut schema = VarSchema::new();
+        let mut schema = VarSchema::default();
         for &name in names {
             schema.push(var(name));
         }
@@ -5413,7 +5315,7 @@ mod iterative_walks {
     /// introduction to collide with.
     #[test]
     fn a_hundred_thousand_filters_are_analyzed_and_admitted_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let pattern = nested(leaf_xy(), filter_bound_x);
             let mut table = NodeAnalysisTable::default();
             let (root, entered) = counted(|| analyze_pattern(&pattern, &mut table));
@@ -5426,7 +5328,8 @@ mod iterative_walks {
             assert!(probe_admissible(&pattern, &table, &schema_of(&["x"])));
             assert!(!pattern_can_hard_error(&pattern));
             assert_eq!(exists_row_collision(&pattern, &vars(&["x", "y"])), None);
-        });
+        })
+        .expect("spawn");
     }
 
     /// The same wrappers over a `VALUES ?x` block: every filter is admissible against
@@ -5434,7 +5337,7 @@ mod iterative_walks {
     /// levels down — refuses the probe for rebinding the current row's `?x`.
     #[test]
     fn a_refusal_a_hundred_thousand_levels_down_is_reached_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let values = GraphPattern::Values {
                 variables: vec![var("x")],
                 bindings: vec![vec![Some(GroundTerm::NamedNode(NamedNode::new_unchecked(
@@ -5446,14 +5349,15 @@ mod iterative_walks {
             analyze_pattern(&pattern, &mut table);
             assert!(!probe_admissible(&pattern, &table, &schema_of(&["x"])));
             assert!(probe_admissible(&pattern, &table, &schema_of(&["q"])));
-        });
+        })
+        .expect("spawn");
     }
 
     /// A hundred thousand `!` over `BOUND(?x)`: the expression walk, alone and as a
     /// filter condition judged for the probe.
     #[test]
     fn a_hundred_thousand_negations_are_analyzed_and_admitted_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let mut expr = Expression::Bound(var("x"));
             for _ in 0..DEPTH {
                 expr = Expression::Not(Child::new(expr));
@@ -5471,14 +5375,15 @@ mod iterative_walks {
             let mut table = NodeAnalysisTable::default();
             analyze_pattern(&pattern, &mut table);
             assert!(probe_admissible(&pattern, &table, &schema_of(&["x"])));
-        });
+        })
+        .expect("spawn");
     }
 
     /// A `BIND` a hundred thousand `DISTINCT` wrappers down collides exactly when the
     /// row scope names its target.
     #[test]
     fn a_collision_a_hundred_thousand_levels_down_is_found_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let pattern = nested(bind(leaf_xy(), "z"), |inner| GraphPattern::Distinct {
                 inner: Child::new(inner),
             });
@@ -5491,7 +5396,8 @@ mod iterative_walks {
             let root = analyze_pattern(&pattern, &mut table);
             assert_eq!(root.free_vars, vars(&["x", "y", "z"]));
             assert_eq!(root.certainly_bound, vars(&["x", "y", "z"]));
-        });
+        })
+        .expect("spawn");
     }
 
     /// A hundred thousand sub-`SELECT`s, each narrowing the row scope to `?z`, over a
@@ -5499,7 +5405,7 @@ mod iterative_walks {
     /// projection drops is answered without descending.
     #[test]
     fn a_hundred_thousand_narrowing_projections_are_searched_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let pattern = nested(bind(leaf_xy(), "z"), |inner| GraphPattern::Project {
                 inner: Child::new(inner),
                 variables: vec![var("z")],
@@ -5515,14 +5421,15 @@ mod iterative_walks {
             assert_eq!(root.certainly_bound, vars(&["z"]));
             assert!(probe_admissible(&pattern, &table, &schema_of(&["x", "y"])));
             assert!(!probe_admissible(&pattern, &table, &schema_of(&["z"])));
-        });
+        })
+        .expect("spawn");
     }
 
     /// A grouping-key `BIND` a hundred thousand filters beneath its `GROUP BY` is found
     /// by the grouping-key search.
     #[test]
     fn a_grouping_key_bind_a_hundred_thousand_levels_down_is_found_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let pattern = GraphPattern::Group {
                 inner: Child::new(nested(bind(leaf_xy(), "k"), filter_bound_x)),
                 variables: vec![var("k")],
@@ -5533,7 +5440,8 @@ mod iterative_walks {
                 Some((&var("k"), RowCollisionIntro::Bind))
             );
             assert_eq!(exists_row_collision(&pattern, &vars(&["x"])), None);
-        });
+        })
+        .expect("spawn");
     }
 
     /// A quoted triple nested a hundred thousand levels in an object position: its
@@ -5541,7 +5449,7 @@ mod iterative_walks {
     /// inside a quoted endpoint raises.
     #[test]
     fn a_hundred_thousand_level_quoted_triple_is_walked_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let p = NamedNodePattern::NamedNode(NamedNode::new_unchecked(format!("{EX}p")));
             let mut term = TermPattern::Variable(var("o"));
             for _ in 0..DEPTH {
@@ -5552,7 +5460,7 @@ mod iterative_walks {
                 }));
             }
             let mut collected = DetHashSet::default();
-            collect_term_pattern_vars(&term, &mut collected);
+            term.collect_variables(&mut collected);
             assert_eq!(collected, vars(&["s", "o"]));
             let bgp = GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
@@ -5571,6 +5479,7 @@ mod iterative_walks {
                 object: TermPattern::Variable(var("t")),
             };
             assert!(pattern_can_hard_error(&path));
-        });
+        })
+        .expect("spawn");
     }
 }

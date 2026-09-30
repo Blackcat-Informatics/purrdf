@@ -19,6 +19,12 @@ workspace = true
 
 [dependencies]
 purrdf-core.workspace = true
+# The workspace root: the profile and document identity preimages open under
+# registered `purrdf_hash::Domain` constants.
+purrdf-hash.workspace = true
+# The one JSON string-escape decoder and RFC 6901 token escape every PurRDF JSON
+# reader shares.
+purrdf-lex.workspace = true
 
 [dev-dependencies]
 # The workspace's shared counting allocator, for the `ordered_json_alloc` bench
@@ -32,11 +38,6 @@ purrdf-sparql-eval.workspace = true
 # unpublished, so it is stripped from the packaged manifest; wasm32-clean, so it
 # needs no target gate.
 purrdf-testkit.workspace = true
-
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-# Native-only: criterion drives benches, which the wasm lane never runs, and it
-# is not wasm32-clean (it reaches for processes, terminals and wall-clock timing).
-criterion.workspace = true
 
 # The frozen corpus crossed through the production RDF codecs, on every target:
 # `harness = false` on the shared runner, so `make wasm-test` runs the same named

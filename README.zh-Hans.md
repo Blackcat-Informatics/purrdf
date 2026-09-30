@@ -440,9 +440,13 @@ ORDER BY ?rank
   RDF↔GTS **损失台账**（[`generated/rdf-loss-matrix.json`](./generated/rdf-loss-matrix.json)），
   SSSOM 映射 TSV 支持与一个 FnO 函数目录编解码器（二者都位于 `purrdf-core` 中，而非
   slice crate）。
-- **零依赖的基础层**——`purrdf-iri`（RFC 3987/3986）与 `purrdf-xsd`（XSD 1.1 值
-  空间）完全没有运行时依赖；`purrdf-events`（对象安全的摄入扩展点）与 `purrdf-hash`
-  （MD5、SHA-1、SHA-3 与 CRC-32 摘要）同样没有，而 `purrdf-cdt` 是恰好建立在前两者之上的
+- **第一方基础层**——`purrdf-hash`（BLAKE3、MD5、SHA-1、SHA-3 与 CRC-32 摘要，base16、
+  分帧与表哈希器）与 `purrdf-events`（对象安全的摄入扩展点，以及唯一的 RDF 1.2
+  基础方向类型）没有运行时依赖；`purrdf-lex`（每个 crate 共享的语法终结符、字节类扫描器、转义器，
+  以及 JSON、YAML、CBOR 与 XML 编解码器）仅依赖 `purrdf-hash`，`purrdf-xsd`（XSD 1.1
+  值空间）与 `purrdf-iri`（RFC 3987/3986）依赖 `purrdf-lex` 与 `purrdf-hash`，
+  `purrdf-ed25519`（RFC 8032 签名）依赖 `purrdf-hash` 与 `sha2`，而 `purrdf-cdt` 是建立在
+  `purrdf-events`、`purrdf-iri`、`purrdf-xsd`、`purrdf-lex` 与 `purrdf-hash` 之上的
   `no_std` 封闭叶。
 
 ## 快速入门
@@ -570,7 +574,7 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 | [`purrdf-sparql-algebra`](./crates/sparql-algebra/) | SPARQL 1.1/1.2 解析器 → 查询代数 AST。 |
 | [`purrdf-sparql-eval`](./crates/sparql-eval/) | 驻留 `TermId` 空间中的多重集 SPARQL 求值器，带有以调用方为键的扩展点（标量函数、属性函数——含路径见证与嵌入 k 近邻关系——自定义聚合，以及逐服务的 `ServiceResolver`）与执行 governor。 |
 | [`purrdf-sparql-results`](./crates/sparql-results/) | SPARQL 结果的 JSON/XML/CSV/TSV，外加一个携带溯源的扩展。 |
-| [`purrdf-cdt`](./crates/cdt/) | SEP-0009 SPARQL 复合数据类型（`cdt:List`/`cdt:Map`）：值空间、一个迭代式的有界词法扫描器、规范拼写，以及十五个函数的函数库。建立在 `purrdf-iri` + `purrdf-xsd` 之上的 `no_std` 封闭叶；经由求值器访问，不由门面 crate 重新导出。 |
+| [`purrdf-cdt`](./crates/cdt/) | SEP-0009 SPARQL 复合数据类型（`cdt:List`/`cdt:Map`）：值空间、一个迭代式的有界词法扫描器、规范拼写，以及十五个函数的函数库。建立在 `purrdf-events`、`purrdf-iri`、`purrdf-xsd`、`purrdf-lex` 与 `purrdf-hash` 之上的 `no_std` 封闭叶；经由求值器访问，不由门面 crate 重新导出。 |
 | [`purrdf-stack`](./crates/stack/) | 当前线程还剩多少栈空间——原生平台读取操作系统给出的线程栈上限（通过按目标启用的 `libc`/`windows-sys` 声明，无需构建期 C 工具链），wasm32 则以宿主可安装的栈底衡量影子栈——以及 SPARQL 求值器据以拒绝请求（返回带类型的错误）而不致栈溢出的余量。 |
 | [`purrdf-shapes`](./crates/shapes/) | SHACL 1.2 验证与规则引擎（Core、SPARQL 扩展、节点表达式、推理规则、SPARQL 1.2 RL）。 |
 | [`purrdf-shex`](./crates/shex/) | ShEx 2.1：ShExC/ShExJ 模式与验证。 |
@@ -581,12 +585,14 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 | [`purrdf-retrieval`](./crates/retrieval/) | 位于各带排名生产者（ranked producer）之上的组合层：一个请求经过规划、准入、执行与融合，在调用方于属性函数扩展点上注册的每一个带排名关系之间，得出一个有序答案。纯数据的计划，带规范的 BLAKE3 同一性；一条精确的、内容寻址的融合法则；逐行、逐层（stratum）的溯源，以及逐词项的未服务证据（unserved evidence）。生产者、层与权重均由调用方提供，不设任何默认值。由门面 crate 重新导出为 `purrdf::retrieval`。 |
 | [`purrdf-validate`](./crates/validate/) | 共享的宿主边界：SARIF 2.1.0 诊断，以及 Python/wasm/C 绑定所调用的蕴涵机制字符串接口。 |
 | [`purrdf-markdown`](./crates/markdown/) | Markdown → RDF 1.2 结构化编解码器，遵循一份随附规范（[SPEC](./crates/markdown/SPEC.md)）：一篇文档成为一张图，图中是它自身的各级标题、编号节与段落，带逐字对应的字节区间与对照表引用——全部在调用方提供的词汇表与内容寻址 Profile 之下——且这张图可逐字节解码还原为原文档，并以图中自带的源摘要（哈希）为证。由门面 crate 重新导出为 `purrdf::markdown`。 |
-| [`purrdf-jsonschema`](./crates/jsonschema/) | 原生 JSON Schema 校验，支持 draft 2020-12、2019-09 与 07，每个 schema 资源按其自身方言处理：全部词汇表、`$dynamicRef`、`$recursiveRef`、`unevaluated*`、`$vocabulary`，以及 flag/basic/detailed 三种标准输出格式。数字保留精确十进制值。ECMA-262 `/u` 模式的常规部分由 `regex` 执行，前后查找、反向引用和局部修饰符由有资源上限的显式栈匹配器执行，并使用 Unicode 17 属性范围；匹配耗尽预算时，校验返回带类型的错误。以官方 JSON-Schema-Test-Suite 对三个草案逐一检验；仅依赖 `serde_json`、`regex` 与 `purrdf-iri`，可构建到 wasm32。 |
+| [`purrdf-jsonschema`](./crates/jsonschema/) | 原生 JSON Schema 校验，支持 draft 2020-12、2019-09 与 07，每个 schema 资源按其自身方言处理：全部词汇表、`$dynamicRef`、`$recursiveRef`、`unevaluated*`、`$vocabulary`，以及 flag/basic/detailed 三种标准输出格式。数字保留精确十进制值。ECMA-262 `/u` 模式的常规部分由 `regex` 执行，前后查找、反向引用和局部修饰符由有资源上限的显式栈匹配器执行，并使用 Unicode 17 属性范围；匹配耗尽预算时，校验返回带类型的错误。以官方 JSON-Schema-Test-Suite 对三个草案逐一检验；仅依赖 `regex`、`purrdf-iri`、`purrdf-xsd`、`purrdf-lex` 与 `purrdf-hash`，可构建到 wasm32。 |
 | [`purrdf-slice`](./crates/slice/) | 切片目录：清单、带类型的工件、所有权/依赖分析。 |
-| [`purrdf-iri`](./crates/iri/) | 零依赖的 IRI/URI 解析、规范化、CURIE，以及工作区唯一的 RFC 3986 基础解析层（`BaseIri`/`BaseScope`）。 |
-| [`purrdf-xsd`](./crates/xsd/) | 零依赖的 XSD 1.1 值空间，带 SPARQL 数值提升。 |
+| [`purrdf-lex`](./crates/lex/) | 由每种语法共享的词法基础层，仅依赖 `purrdf-hash`：精确的 Turtle/SPARQL/XML 终结符字符类、降低为打包比较指令的分块字节类扫描器、字面量与 IRI 转义器、RDF 1.2 词项语法、百分号编码、Unicode 规范化，以及唯一的 JSON 读取器/写出器、YAML 1.2 读取器/输出器（emitter）、CBOR 编解码器与 XML 读取器。 |
+| [`purrdf-ed25519`](./crates/ed25519/) | Ed25519 签名（RFC 8032）：确定性签名与严格的无余因子（cofactorless）验证，建立在 `purrdf-hash` 与 `sha2` 之上。 |
+| [`purrdf-iri`](./crates/iri/) | IRI/URI 解析、规范化、CURIE，以及工作区唯一的 RFC 3986 基础解析层（`BaseIri`/`BaseScope`）。 |
+| [`purrdf-xsd`](./crates/xsd/) | XSD 1.1 值空间，带 SPARQL 数值提升；运行时依赖为 `purrdf-lex` 与 `purrdf-hash`。 |
 | [`purrdf-events`](./crates/rdf-events/) | 零依赖、对象安全的 RDF 事件汇/源扩展点。 |
-| [`purrdf-hash`](./crates/hash/) | 零依赖的 MD5、SHA-1、SHA-3 与 CRC-32 摘要，支持流式与一次性计算；处理器具备 SHA 与 CRC 指令时，SHA-1 与 CRC-32 直接使用这些指令。 |
+| [`purrdf-hash`](./crates/hash/) | 零依赖的 BLAKE3、MD5、SHA-1、SHA-3 与 CRC-32 摘要，支持流式与一次性计算，另含 base16、长度分帧与已登记的哈希域；处理器具备 SHA 与 CRC 指令时，SHA-1 与 CRC-32 直接使用这些指令。 |
 | [`purrdf-deflate`](./crates/deflate/) | 原生 DEFLATE 与 gzip：推送式流解码器逐一解码每个 gzip 成员、校验每个尾部，并拒绝尾随垃圾字节或超出调用方上限的输出；确定性编码器的输出只取决于输入与压缩级别。匹配复制与比较在 SSE2/AVX2、NEON 与 wasm simd128 上向量化；仅依赖 `purrdf-hash`。 |
 | [`purrdf-wasm`](./crates/rdf-wasm/) | `purrdf` ESM 包背后的 wasm32 引擎。 |
 | [`purrdf-capi`](./crates/rdf-capi/) | `libpurrdf` C ABI（不发布；经由 cargo-c 构建）。 |
@@ -624,7 +630,7 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 
 IR 把每个词项在字符串存储区中**只存一次**，以可复制的 `NonZeroU32` id 寻址，在所有
 热点处用固定密钥的 `FixedHasher` 做哈希，并把数据集冻结为 `Box<[QuadRow]>` 表，带惰性的
-序数置换索引（每条四元组每个轴约 4 字节）。性能声称由 criterion 基准而非形容词
+序数置换索引（每条四元组每个轴约 4 字节）。性能声称由基准测试而非形容词
 支撑——`crates/rdf-core/benches/ir_layout.rs` 度量结构数组、数组结构与谓词邻接三种
 布局（分配次数、高水位、端到端延迟），最终采用的布局就是胜出的那个。用 `make bench`
 运行它们。
@@ -674,7 +680,7 @@ SPARQL 的广度经由以调用方为键的扩展点增长——标量函数、�
 ```sh
 make metadata   # regenerate + verify generated artifacts
 make check      # fmt, build, tests, hygiene gates
-make bench      # criterion benchmarks
+make bench      # purrdf_testkit::bench benchmarks
 make scale-corpus  # the deterministic scale corpus, across shards
 make lubm       # the LUBM comparison workload, per entailment regime
 make watdiv     # the WatDiv comparison workload over a frozen dataset

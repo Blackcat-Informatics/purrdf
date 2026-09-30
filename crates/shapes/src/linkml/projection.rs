@@ -6,9 +6,10 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::json_model::{Map, Object, Value, ValueKind};
 use ::purrdf::RdfLocation;
 use ::purrdf::loss::{LossEntry, LossLedger};
-use serde_json::{Map, Value};
+use purrdf_hash::fnv::fnv1a64;
 
 use super::{
     LINKML_METAMODEL_VERSION, LinkmlConfig, LinkmlDocument, LinkmlError, LinkmlPackage,
@@ -18,8 +19,8 @@ use super::{
 };
 use crate::json_schema::CompiledSchema;
 use crate::schema_catalog::{
-    CompiledSchemaCatalog, definition_path, pointer_escape, reference_key, schema_array_keywords,
-    schema_map_keywords, schema_single_keywords,
+    CompiledSchemaCatalog, definition_path, is_annotation_keyword, pointer_escape, reference_key,
+    schema_array_keywords, schema_map_keywords, schema_single_keywords,
 };
 
 const LOSS_FROM: &str = "json-schema";
@@ -125,16 +126,25 @@ pub(super) fn emit(
         Value::Array(vec![Value::String("linkml:types".to_owned())]),
     );
     if !renderer.types.is_empty() {
-        root.insert("types".to_owned(), Value::Object(renderer.types));
+        root.insert(
+            "types".to_owned(),
+            crate::json_model::object(renderer.types),
+        );
     }
     if !renderer.enums.is_empty() {
-        root.insert("enums".to_owned(), Value::Object(renderer.enums));
+        root.insert(
+            "enums".to_owned(),
+            crate::json_model::object(renderer.enums),
+        );
     }
     if !renderer.classes.is_empty() {
-        root.insert("classes".to_owned(), Value::Object(renderer.classes));
+        root.insert(
+            "classes".to_owned(),
+            crate::json_model::object(renderer.classes),
+        );
     }
 
-    let document = LinkmlDocument::from_value(Value::Object(root))?;
+    let document = LinkmlDocument::from_value(crate::json_model::object(root))?;
     let yaml = write_linkml(&document)?;
     Ok(LinkmlPackage {
         document,
@@ -151,9 +161,7 @@ pub(super) fn emit(
     })
 }
 
-fn element_infos(
-    definitions: &Map<String, Value>,
-) -> Result<BTreeMap<String, ElementInfo>, LinkmlError> {
+fn element_infos(definitions: &Object) -> Result<BTreeMap<String, ElementInfo>, LinkmlError> {
     let mut names = BTreeMap::new();
     let mut reverse = BTreeMap::<String, String>::new();
     for key in definitions.keys() {
@@ -191,7 +199,7 @@ fn element_infos(
 
 fn resolve_element_kind(
     key: &str,
-    definitions: &Map<String, Value>,
+    definitions: &Object,
     resolved: &mut BTreeMap<String, ElementKind>,
     visiting: &mut BTreeSet<String>,
 ) -> Result<ElementKind, LinkmlError> {
@@ -231,7 +239,7 @@ fn resolve_element_kind(
     Ok(kind)
 }
 
-fn is_enum_definition(object: &Map<String, Value>) -> bool {
+fn is_enum_definition(object: &Object) -> bool {
     object
         .get("enum")
         .and_then(Value::as_array)
@@ -246,7 +254,7 @@ fn is_enum_definition(object: &Map<String, Value>) -> bool {
         })
 }
 
-fn is_object_schema(object: &Map<String, Value>) -> bool {
+fn is_object_schema(object: &Object) -> bool {
     matches!(object.get("type"), Some(Value::String(kind)) if kind == "object")
         || [
             "properties",
@@ -260,10 +268,10 @@ fn is_object_schema(object: &Map<String, Value>) -> bool {
             "dependentSchemas",
         ]
         .iter()
-        .any(|keyword| object.contains_key(*keyword))
+        .any(|keyword| object.contains_key(keyword))
 }
 
-fn is_alias_only(object: &Map<String, Value>) -> bool {
+fn is_alias_only(object: &Object) -> bool {
     object.get("$ref").is_some_and(Value::is_string)
         && object
             .keys()
@@ -304,7 +312,7 @@ pub(super) fn element_name(raw: &str) -> String {
         output.insert(0, 'N');
     }
     if output.len() > 120 {
-        output = format!("SchemaElement{:016x}", fnv1a(raw.as_bytes()));
+        output = format!("SchemaElement{:016x}", fnv1a64(raw.as_bytes()));
     }
     debug_assert!(is_linkml_identifier(&output));
     output
@@ -332,15 +340,6 @@ fn reserved_element_names() -> &'static [&'static str] {
         "Uri",
         "Uriorcurie",
     ]
-}
-
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -396,7 +395,7 @@ fn slot_name_seed(config: &LinkmlConfig, source: &str) -> Result<SlotNameSeed, L
 
     if config.slot_rehomes().contains(source) {
         let mut reasons = vec![LinkmlSlotReason::CallerRehome];
-        let local = sanitized_local(trailing_local(source), &mut reasons);
+        let local = sanitized_local(purrdf_iri::local_name(source), &mut reasons);
         let direct_name = bounded_curie(
             config.default_prefix(),
             local.as_ref(),
@@ -464,7 +463,7 @@ fn slot_name_seed(config: &LinkmlConfig, source: &str) -> Result<SlotNameSeed, L
             (prefix, local)
         } else {
             reasons.push(LinkmlSlotReason::UnmatchedNamespace);
-            (config.default_prefix(), trailing_local(source))
+            (config.default_prefix(), purrdf_iri::local_name(source))
         };
         let local = sanitized_local(local, &mut reasons);
         let direct_name = bounded_curie(prefix, local.as_ref(), source, &mut reasons)?;
@@ -492,7 +491,7 @@ fn slot_name_seed(config: &LinkmlConfig, source: &str) -> Result<SlotNameSeed, L
     }
 
     let mut reasons = vec![LinkmlSlotReason::BareName];
-    let local = sanitized_local(trailing_local(source), &mut reasons);
+    let local = sanitized_local(purrdf_iri::local_name(source), &mut reasons);
     let direct_name = bounded_curie(
         config.default_prefix(),
         local.as_ref(),
@@ -510,25 +509,17 @@ fn slot_name_seed(config: &LinkmlConfig, source: &str) -> Result<SlotNameSeed, L
     })
 }
 
+/// The CURIE of `source` under the caller's longest matching namespace
+/// ([`purrdf_iri::contract`]), as `(prefix, local)`; `None` when no namespace
+/// matches or the local part is empty (a namespace IRI itself names no slot).
 fn longest_namespace_match<'a>(
     config: &'a LinkmlConfig,
     source: &'a str,
 ) -> Option<(&'a str, &'a str)> {
-    config
-        .prefixes()
-        .iter()
-        .filter_map(|(prefix, namespace)| {
-            source
-                .strip_prefix(namespace)
-                .filter(|local| !local.is_empty())
-                .map(|local| (namespace.len(), prefix.as_str(), local))
-        })
-        .min_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(right.1)))
-        .map(|(_, prefix, local)| (prefix, local))
-}
-
-fn trailing_local(source: &str) -> &str {
-    source.rsplit(['#', '/', ':']).next().unwrap_or(source)
+    let curie = purrdf_iri::contract(source, config.curies())?;
+    let (prefix, local) = curie.split_once(':')?;
+    let (prefix, _) = config.prefixes().get_key_value(prefix)?;
+    (!local.is_empty()).then(|| (prefix.as_str(), &source[source.len() - local.len()..]))
 }
 
 fn sanitized_local<'a>(source: &'a str, reasons: &mut Vec<LinkmlSlotReason>) -> Cow<'a, str> {
@@ -576,7 +567,7 @@ fn bounded_curie(
         return Ok(direct);
     }
     push_reason(reasons, LinkmlSlotReason::LengthBound);
-    let hashed = format!("{prefix}:Slot{:016x}", fnv1a(source.as_bytes()));
+    let hashed = format!("{prefix}:Slot{:016x}", fnv1a64(source.as_bytes()));
     if hashed.len() > MAX_GENERATED_SLOT_NAME_BYTES {
         return Err(LinkmlError::new(format!(
             "LinkML prefix {prefix:?} leaves no room within the {MAX_GENERATED_SLOT_NAME_BYTES}-byte generated slot-name limit"
@@ -592,9 +583,9 @@ fn collision_name(base: &str, source: &str, ordinal: usize) -> Result<String, Li
         ))
     })?;
     let suffix = if ordinal == 0 {
-        format!("_{:016x}", fnv1a(source.as_bytes()))
+        format!("_{:016x}", fnv1a64(source.as_bytes()))
     } else {
-        format!("_{:016x}_{ordinal}", fnv1a(source.as_bytes()))
+        format!("_{:016x}_{ordinal}", fnv1a64(source.as_bytes()))
     };
     let fixed = prefix
         .len()
@@ -611,10 +602,7 @@ fn collision_name(base: &str, source: &str, ordinal: usize) -> Result<String, Li
             "LinkML prefix {prefix:?} leaves no local-name byte within the {MAX_GENERATED_SLOT_NAME_BYTES}-byte generated slot-name limit"
         )));
     }
-    let mut end = local.len().min(local_budget);
-    while !local.is_char_boundary(end) {
-        end -= 1;
-    }
+    let end = local.floor_char_boundary(local_budget);
     if end == 0 {
         return Err(LinkmlError::new(format!(
             "LinkML prefix {prefix:?} leaves no complete local-name character within the {MAX_GENERATED_SLOT_NAME_BYTES}-byte generated slot-name limit"
@@ -729,17 +717,17 @@ impl<'a> Renderer<'a> {
             ElementKind::Class => {
                 let rendered = self.render_class(&info.name, Some(key), definition, &path)?;
                 self.classes
-                    .insert(info.name.clone(), Value::Object(rendered));
+                    .insert(info.name.clone(), crate::json_model::object(rendered));
             }
             ElementKind::Enum => {
                 let rendered = self.render_enum(&info.name, definition, &path)?;
                 self.enums
-                    .insert(info.name.clone(), Value::Object(rendered));
+                    .insert(info.name.clone(), crate::json_model::object(rendered));
             }
             ElementKind::Type => {
                 let rendered = self.render_type(&info.name, definition, &path)?;
                 self.types
-                    .insert(info.name.clone(), Value::Object(rendered));
+                    .insert(info.name.clone(), crate::json_model::object(rendered));
             }
         }
         Ok(())
@@ -808,11 +796,11 @@ impl Renderer<'_> {
                     Value::String((*description).to_owned()),
                 );
             }
-            permissible_values.insert(text, Value::Object(permissible));
+            permissible_values.insert(text, crate::json_model::object(permissible));
         }
         enumeration.insert(
             "permissible_values".to_owned(),
-            Value::Object(permissible_values),
+            crate::json_model::object(permissible_values),
         );
         Ok(enumeration)
     }
@@ -847,7 +835,7 @@ impl Renderer<'_> {
                 if let Some(expression) =
                     self.equality_expression(value, &format!("{path}/enum/{index}"), "enum member")
                 {
-                    expressions.push(Value::Object(expression));
+                    expressions.push(crate::json_model::object(expression));
                 }
             }
             if !expressions.is_empty() {
@@ -865,11 +853,7 @@ impl Renderer<'_> {
         Ok(definition)
     }
 
-    fn type_definition_base(
-        &mut self,
-        object: &Map<String, Value>,
-        path: &str,
-    ) -> Result<String, LinkmlError> {
+    fn type_definition_base(&mut self, object: &Object, path: &str) -> Result<String, LinkmlError> {
         if let Some(reference) = object.get("$ref") {
             let target = self
                 .reference_info(reference, &format!("{path}/$ref"))?
@@ -968,7 +952,7 @@ impl Renderer<'_> {
 
     fn apply_type_compositions(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         definition: &mut Map<String, Value>,
         base: &str,
         path: &str,
@@ -989,7 +973,7 @@ impl Renderer<'_> {
                 if let Some(expression) =
                     self.render_type_expression(branch, base, &format!("{path}/{source}/{index}"))?
                 {
-                    expressions.push(Value::Object(expression));
+                    expressions.push(crate::json_model::object(expression));
                 }
             }
             if !expressions.is_empty() {
@@ -1002,7 +986,7 @@ impl Renderer<'_> {
         {
             definition.insert(
                 "none_of".to_owned(),
-                Value::Array(vec![Value::Object(expression)]),
+                Value::Array(vec![crate::json_model::object(expression)]),
             );
         }
         Ok(())
@@ -1057,7 +1041,7 @@ impl Renderer<'_> {
 
     fn apply_scalar_constraints(
         &self,
-        object: &Map<String, Value>,
+        object: &Object,
         target: &mut Map<String, Value>,
         path: &str,
     ) -> Result<(), LinkmlError> {
@@ -1201,9 +1185,12 @@ impl Renderer<'_> {
                     "required".to_owned(),
                     Value::Bool(required.contains(planned.source_name.as_str())),
                 );
-                attributes.insert(planned.emitted_name, Value::Object(slot));
+                attributes.insert(planned.emitted_name, crate::json_model::object(slot));
             }
-            class.insert("attributes".to_owned(), Value::Object(attributes));
+            class.insert(
+                "attributes".to_owned(),
+                crate::json_model::object(attributes),
+            );
         }
 
         let extra = match object.get("additionalProperties") {
@@ -1228,7 +1215,7 @@ impl Renderer<'_> {
 
     fn apply_class_compositions(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         class: &mut Map<String, Value>,
         path: &str,
     ) -> Result<(), LinkmlError> {
@@ -1247,7 +1234,7 @@ impl Renderer<'_> {
             for (index, branch) in branches.iter().enumerate() {
                 let branch_path = format!("{path}/{source}/{index}");
                 if let Some(expression) = self.render_class_expression(branch, &branch_path)? {
-                    expressions.push(Value::Object(expression));
+                    expressions.push(crate::json_model::object(expression));
                 }
             }
             if !expressions.is_empty() {
@@ -1260,7 +1247,7 @@ impl Renderer<'_> {
         {
             class.insert(
                 "none_of".to_owned(),
-                Value::Array(vec![Value::Object(expression)]),
+                Value::Array(vec![crate::json_model::object(expression)]),
             );
         }
         Ok(())
@@ -1310,7 +1297,7 @@ impl Renderer<'_> {
                 if let Some(branch) =
                     self.render_class_expression(branch, &format!("{path}/{source}/{index}"))?
                 {
-                    nested.push(Value::Object(branch));
+                    nested.push(crate::json_model::object(branch));
                 }
             }
             if !nested.is_empty() {
@@ -1322,7 +1309,7 @@ impl Renderer<'_> {
         {
             expression.insert(
                 "none_of".to_owned(),
-                Value::Array(vec![Value::Object(negated)]),
+                Value::Array(vec![crate::json_model::object(negated)]),
             );
         }
         if expression.is_empty() {
@@ -1343,9 +1330,11 @@ impl Renderer<'_> {
         }
         let name = self.allocate_inline_name(path, "Object")?;
         self.inline_classes.insert(path.to_owned(), name.clone());
-        self.classes.insert(name.clone(), Value::Object(Map::new()));
+        self.classes
+            .insert(name.clone(), crate::json_model::object(Map::new()));
         let rendered = self.render_class(&name, None, schema, path)?;
-        self.classes.insert(name.clone(), Value::Object(rendered));
+        self.classes
+            .insert(name.clone(), crate::json_model::object(rendered));
         Ok(name)
     }
 
@@ -1353,7 +1342,7 @@ impl Renderer<'_> {
         &mut self,
         emitted_class: &str,
         source_class: &str,
-        properties: &Map<String, Value>,
+        properties: &Object,
         path: &str,
     ) -> Result<Vec<PlannedSlot>, LinkmlError> {
         self.total_slots = checked_slot_total(self.total_slots, properties.len(), path)?;
@@ -1655,7 +1644,7 @@ impl Renderer<'_> {
                         &format!("{path}/enum/{index}"),
                         "enum member",
                     ) {
-                        expressions.push(Value::Object(expression));
+                        expressions.push(crate::json_model::object(expression));
                     }
                 }
                 if !expressions.is_empty() {
@@ -1692,7 +1681,11 @@ impl Renderer<'_> {
                             )));
                         }
                         let mut branch = object.clone();
-                        branch.insert("type".to_owned(), Value::String(kind.to_owned()));
+                        crate::json_model::insert_sorted(
+                            &mut branch,
+                            "type".to_owned(),
+                            Value::String(kind.to_owned()),
+                        );
                         branch.remove("anyOf");
                         branch.remove("oneOf");
                         branch.remove("allOf");
@@ -1706,7 +1699,7 @@ impl Renderer<'_> {
                             );
                             continue;
                         }
-                        expressions.push(Value::Object(
+                        expressions.push(crate::json_model::object(
                             self.render_slot_expression(&Value::Object(branch), &branch_path)?,
                         ));
                     }
@@ -1765,7 +1758,7 @@ impl Renderer<'_> {
     fn apply_slot_type(
         &mut self,
         kind: &str,
-        object: &Map<String, Value>,
+        object: &Object,
         slot: &mut Map<String, Value>,
         path: &str,
     ) -> Result<(), LinkmlError> {
@@ -1805,7 +1798,7 @@ impl Renderer<'_> {
 
     fn apply_array(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         slot: &mut Map<String, Value>,
         path: &str,
     ) -> Result<(), LinkmlError> {
@@ -1819,7 +1812,7 @@ impl Renderer<'_> {
             }
             let mut synthetic = Map::new();
             synthetic.insert("anyOf".to_owned(), Value::Array(branches));
-            Value::Object(synthetic)
+            crate::json_model::object(synthetic)
         } else {
             object.get("items").cloned().unwrap_or(Value::Bool(true))
         };
@@ -1895,7 +1888,7 @@ impl Renderer<'_> {
             let member_path = format!("{path}/contains");
             let member = self.render_slot_expression(contained, &member_path)?;
             let member = self.anonymous_expression(member, &member_path);
-            slot.insert("has_member".to_owned(), Value::Object(member));
+            slot.insert("has_member".to_owned(), crate::json_model::object(member));
             self.stated_contains.insert(member_path);
         } else if object.contains_key("contains") {
             self.stated_contains.insert(format!("{path}/contains"));
@@ -1923,7 +1916,7 @@ impl Renderer<'_> {
 
     fn apply_slot_compositions(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         slot: &mut Map<String, Value>,
         path: &str,
     ) -> Result<(), LinkmlError> {
@@ -1942,7 +1935,7 @@ impl Renderer<'_> {
             for (index, branch) in branches.iter().enumerate() {
                 let branch_path = format!("{path}/{source}/{index}");
                 let expression = self.render_slot_expression(branch, &branch_path)?;
-                expressions.push(Value::Object(
+                expressions.push(crate::json_model::object(
                     self.anonymous_expression(expression, &branch_path),
                 ));
             }
@@ -1951,7 +1944,7 @@ impl Renderer<'_> {
         if let Some(negated) = object.get("not") {
             let expression = self.render_slot_expression(negated, &format!("{path}/not"))?;
             let expression = self.anonymous_expression(expression, &format!("{path}/not"));
-            conjoin_expression(slot, "none_of", vec![Value::Object(expression)]);
+            conjoin_expression(slot, "none_of", vec![crate::json_model::object(expression)]);
         }
         Ok(())
     }
@@ -1988,7 +1981,8 @@ impl Renderer<'_> {
         let name = self.allocate_inline_name(path, "Enum")?;
         self.inline_enums.insert(path.to_owned(), name.clone());
         let rendered = self.render_enum(&name, schema, path)?;
-        self.enums.insert(name.clone(), Value::Object(rendered));
+        self.enums
+            .insert(name.clone(), crate::json_model::object(rendered));
         Ok(name)
     }
 
@@ -2007,11 +2001,11 @@ impl Renderer<'_> {
 
         if ["if", "then", "else"]
             .iter()
-            .any(|keyword| object.contains_key(*keyword))
+            .any(|keyword| object.contains_key(keyword))
         {
             let keyword = ["if", "then", "else"]
                 .into_iter()
-                .find(|keyword| object.contains_key(*keyword))
+                .find(|keyword| object.contains_key(keyword))
                 .expect("presence checked");
             self.record(
                 "conditional-validation-dropped",
@@ -2147,32 +2141,28 @@ impl Renderer<'_> {
         }
 
         for keyword in schema_map_keywords() {
-            if let Some(children) = object.get(*keyword).and_then(Value::as_object) {
+            if let Some(children) = object.get(keyword).and_then(Value::as_object) {
                 for (key, child) in children {
                     self.audit_schema(child, &format!("{path}/{keyword}/{}", pointer_escape(key)))?;
                 }
             }
         }
         for keyword in schema_array_keywords() {
-            if let Some(children) = object.get(*keyword).and_then(Value::as_array) {
+            if let Some(children) = object.get(keyword).and_then(Value::as_array) {
                 for (index, child) in children.iter().enumerate() {
                     self.audit_schema(child, &format!("{path}/{keyword}/{index}"))?;
                 }
             }
         }
         for keyword in schema_single_keywords() {
-            if let Some(child) = object.get(*keyword) {
+            if let Some(child) = object.get(keyword) {
                 self.audit_schema(child, &format!("{path}/{keyword}"))?;
             }
         }
         Ok(())
     }
 
-    fn validate_keyword_values(
-        &self,
-        object: &Map<String, Value>,
-        path: &str,
-    ) -> Result<(), LinkmlError> {
+    fn validate_keyword_values(&self, object: &Object, path: &str) -> Result<(), LinkmlError> {
         if let Some(value) = object.get("type") {
             let mut seen = BTreeSet::new();
             match value {
@@ -2295,7 +2285,7 @@ impl Renderer<'_> {
 
     fn copy_element_annotations(
         &self,
-        source: &Map<String, Value>,
+        source: &Object,
         target: &mut Map<String, Value>,
         path: &str,
     ) -> Result<(), LinkmlError> {
@@ -2352,30 +2342,26 @@ fn extra_slots(allowed: bool, range_expression: Option<Map<String, Value>>) -> V
     if let Some(range_expression) = range_expression {
         extra.insert(
             "range_expression".to_owned(),
-            Value::Object(range_expression),
+            crate::json_model::object(range_expression),
         );
     }
-    Value::Object(extra)
+    crate::json_model::object(extra)
 }
 
-fn object_map<'a>(
-    object: &'a Map<String, Value>,
-    key: &str,
-    path: &str,
-) -> Result<&'a Map<String, Value>, LinkmlError> {
+fn object_map<'a>(object: &'a Object, key: &str, path: &str) -> Result<&'a Object, LinkmlError> {
     match object.get(key) {
         Some(Value::Object(values)) => Ok(values),
         Some(_) => Err(LinkmlError::new(format!("{path}/{key} must be an object"))),
         None => {
-            static EMPTY: std::sync::OnceLock<Map<String, Value>> = std::sync::OnceLock::new();
-            Ok(EMPTY.get_or_init(Map::new))
+            static EMPTY: std::sync::OnceLock<Object> = std::sync::OnceLock::new();
+            Ok(EMPTY.get_or_init(Object::new))
         }
     }
 }
 
 fn required_names(
-    object: &Map<String, Value>,
-    properties: &Map<String, Value>,
+    object: &Object,
+    properties: &Object,
     path: &str,
 ) -> Result<BTreeSet<String>, LinkmlError> {
     let mut required = BTreeSet::new();
@@ -2424,7 +2410,7 @@ fn format_range(format: &str) -> Option<&'static str> {
     }
 }
 
-fn string_extension_array<'a>(object: &'a Map<String, Value>, key: &str) -> Option<Vec<&'a str>> {
+fn string_extension_array<'a>(object: &'a Object, key: &str) -> Option<Vec<&'a str>> {
     let values = object.get(key)?.as_array()?;
     values.iter().map(Value::as_str).collect()
 }
@@ -2486,26 +2472,6 @@ fn known_schema_keyword(keyword: &str) -> bool {
     )
 }
 
-fn is_annotation_keyword(keyword: &str) -> bool {
-    keyword.starts_with("x-")
-        || matches!(
-            keyword,
-            "$schema"
-                | "$id"
-                | "$anchor"
-                | "$dynamicAnchor"
-                | "$vocabulary"
-                | "$comment"
-                | "title"
-                | "description"
-                | "default"
-                | "examples"
-                | "deprecated"
-                | "readOnly"
-                | "writeOnly"
-        )
-}
-
 fn conjoin_expression(target: &mut Map<String, Value>, key: &str, values: Vec<Value>) {
     if values.is_empty() {
         return;
@@ -2524,12 +2490,15 @@ fn conjoin_expression(target: &mut Map<String, Value>, key: &str, values: Vec<Va
         return;
     };
 
-    let mut all_of = match target.remove("all_of") {
-        Some(Value::Array(existing)) => existing,
+    let mut all_of = match target.remove("all_of").map(crate::json_model::into_array) {
+        Some(Ok(existing)) => existing,
         _ => Vec::new(),
     };
-    all_of.push(Value::Object(Map::from_iter([(key.to_owned(), existing)])));
-    all_of.push(Value::Object(Map::from_iter([(
+    all_of.push(crate::json_model::object(Map::from_iter([(
+        key.to_owned(),
+        existing,
+    )])));
+    all_of.push(crate::json_model::object(Map::from_iter([(
         key.to_owned(),
         Value::Array(values),
     )])));
@@ -2541,16 +2510,13 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+    use crate::json_model::json;
     use ::purrdf::loss::check_ledger_sound;
     use purrdf_testkit::prop::prelude::*;
-    use serde_json::json;
 
     fn compiled(schema: &Value) -> CompiledSchema {
         CompiledSchema {
-            schema_json: format!(
-                "{}\n",
-                serde_json::to_string_pretty(schema).expect("fixture serializes")
-            ),
+            schema_json: format!("{}\n", crate::json_model::write_pretty(schema)),
             openapi_json: "{}\n".to_owned(),
             losses: LossLedger::new(),
         }
@@ -3379,7 +3345,7 @@ mod tests {
             .iter()
             .find(|rename| rename.source_name == "ex:nested/value")
             .expect("nested report");
-        let nested = &output.document.as_value()["classes"][&nested_report.emitted_class]["attributes"]
+        let nested = &output.document.as_value()["classes"][nested_report.emitted_class.as_str()]["attributes"]
             ["ex:nested_value"];
         assert_eq!(nested["alias"], "ex:nested/value");
         assert_eq!(nested["required"], true);

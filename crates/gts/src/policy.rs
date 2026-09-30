@@ -9,9 +9,11 @@
 //! verified under a resolved key, not that the signer is authorized or that the
 //! signed claim is true.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 
-use ciborium::value::Value;
+use crate::FastSet;
+
+use purrdf_lex::cbor::Value;
 
 use crate::model::{Graph, Signature, TermKind};
 use crate::stream::{SEALED_SOURCE, STREAM_NS};
@@ -33,7 +35,7 @@ const PROFILE_VOCABS: &[(&str, &str)] = &[("files", FILES_NS)];
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TrustPolicy {
     /// Signer `kid` values trusted by the deployment.
-    pub trusted_signers: HashSet<String>,
+    pub trusted_signers: FastSet<String>,
     /// Require at least one cryptographically valid signature from
     /// [`Self::trusted_signers`] for profiles that require signatures.
     pub require_trusted_signer: bool,
@@ -48,7 +50,7 @@ pub struct TrustPolicy {
 impl Default for TrustPolicy {
     fn default() -> Self {
         Self {
-            trusted_signers: HashSet::new(),
+            trusted_signers: FastSet::default(),
             require_trusted_signer: false,
             pseudonymous_kid_pattern: DEFAULT_PSEUDONYMOUS_KID_PATTERN.to_string(),
         }
@@ -353,7 +355,7 @@ fn evidence_head_findings(graph: &Graph, segment_index: Option<usize>) -> Vec<Pr
     if has_sealed_source(graph) {
         return Vec::new();
     }
-    let heads: HashSet<&[u8]> = graph.segment_heads.iter().map(Vec::as_slice).collect();
+    let heads: FastSet<&[u8]> = graph.segment_heads.iter().map(Vec::as_slice).collect();
     let valid_heads = signed_heads(&graph.signatures, "valid");
     let signed_heads = if valid_heads.is_empty() {
         signed_heads(&graph.signatures, "unverified")
@@ -372,7 +374,7 @@ fn evidence_head_findings(graph: &Graph, segment_index: Option<usize>) -> Vec<Pr
     Vec::new()
 }
 
-fn signed_heads<'a>(signatures: &'a [Signature], status: &str) -> HashSet<&'a [u8]> {
+fn signed_heads<'a>(signatures: &'a [Signature], status: &str) -> FastSet<&'a [u8]> {
     signatures
         .iter()
         .filter(|sig| sig.status == status)
@@ -426,16 +428,6 @@ fn opaque_recipient_findings(
     findings
 }
 
-fn namespace(iri: &str) -> &str {
-    if let Some(i) = iri.rfind('#') {
-        &iri[..=i]
-    } else if let Some(i) = iri.rfind('/') {
-        &iri[..=i]
-    } else {
-        iri
-    }
-}
-
 fn term_iri_value(graph: &Graph, tid: usize) -> Option<&str> {
     graph
         .terms
@@ -446,14 +438,14 @@ fn term_iri_value(graph: &Graph, tid: usize) -> Option<&str> {
         })
 }
 
-fn used_vocabs(graph: &Graph) -> HashSet<&'static str> {
-    let mut out = HashSet::new();
+fn used_vocabs(graph: &Graph) -> FastSet<&'static str> {
+    let mut out = FastSet::default();
     let term_vocabs: Vec<Option<&'static str>> = graph
         .terms
         .iter()
         .map(|term| match (term.kind, term.value.as_deref()) {
             (TermKind::Iri, Some(iri)) => {
-                let ns = namespace(iri);
+                let (ns, _) = purrdf_iri::split_local_name(iri);
                 PROFILE_VOCABS
                     .iter()
                     .find(|&&(_, vocab)| ns == vocab)

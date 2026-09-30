@@ -1,21 +1,22 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use std::borrow::Cow;
+use crate::projections::loss::{record_logical_loss, record_row_loss};
+use crate::projections::source_rows::{
+    SourceAnnotation, SourceQuad, SourceReifier, source_identifier,
+};
+use crate::projections::util::reject_duplicates;
 use std::collections::{BTreeMap, BTreeSet};
 
+use purrdf_core::collections::{ListErrorKind, ListFault, RdfListWalk, SoleObject};
 use purrdf_core::loss::{
     LOSS_OBO_ANNOTATION_DROPPED, LOSS_OBO_BLANK_IDENTITY_DROPPED,
     LOSS_OBO_LITERAL_FIDELITY_WIDENED, LOSS_OBO_NAMED_GRAPH_DROPPED,
     LOSS_OBO_NON_PROFILE_STATEMENT_DROPPED, LOSS_OBO_REIFIER_DROPPED, LOSS_OBO_TRIPLE_TERM_DROPPED,
 };
-use purrdf_core::{
-    DatasetView, LossEntry, LossLedger, RdfLocation, check_ledger_sound,
-    rdf_to_obo_graphs_loss_ledger,
-};
-use serde::Serialize;
+use purrdf_core::{DatasetView, LossLedger, check_ledger_sound, rdf_to_obo_graphs_loss_ledger};
 
-use super::super::{ProjectionError, ProjectionTerm, stable_identifier};
+use super::super::{ProjectionError, ProjectionTerm};
 use super::{
     OboDomainRangeAxiom, OboEdge, OboEquivalentNodesSet, OboExistentialRestriction, OboGraph,
     OboGraphDocument, OboGraphsConfig, OboLogicalDefinitionAxiom, OboMeta, OboNode, OboNodeType,
@@ -29,29 +30,6 @@ pub struct OboGraphsProjection {
     pub document: OboGraphDocument,
     /// Located, always-computed runtime loss ledger.
     pub loss_ledger: LossLedger,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-struct SourceQuad {
-    subject: ProjectionTerm,
-    predicate: String,
-    object: ProjectionTerm,
-    graph: Option<ProjectionTerm>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-struct SourceReifier {
-    reifier: ProjectionTerm,
-    statement: ProjectionTerm,
-    graph: Option<ProjectionTerm>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-struct SourceAnnotation {
-    reifier: ProjectionTerm,
-    predicate: String,
-    object: ProjectionTerm,
-    graph: Option<ProjectionTerm>,
 }
 
 #[derive(Default)]
@@ -144,18 +122,19 @@ impl<'a> Projector<'a> {
         let mut cache = BTreeMap::new();
         let mut quads = Vec::new();
         for quad in view.quads() {
-            let subject = resolve_term(view, quad.s, config, &mut cache)?;
+            let subject =
+                ProjectionTerm::resolve_cached(view, quad.s, config.limits(), &mut cache)?;
             let ProjectionTerm::Iri { value: predicate } =
-                resolve_term(view, quad.p, config, &mut cache)?
+                ProjectionTerm::resolve_cached(view, quad.p, config.limits(), &mut cache)?
             else {
                 return Err(ProjectionError::integrity(
                     "RDF dataset view exposed a non-IRI predicate",
                 ));
             };
-            let object = resolve_term(view, quad.o, config, &mut cache)?;
+            let object = ProjectionTerm::resolve_cached(view, quad.o, config.limits(), &mut cache)?;
             let graph = quad
                 .g
-                .map(|id| resolve_term(view, id, config, &mut cache))
+                .map(|id| ProjectionTerm::resolve_cached(view, id, config.limits(), &mut cache))
                 .transpose()?;
             quads.push(SourceQuad {
                 subject,
@@ -169,14 +148,17 @@ impl<'a> Projector<'a> {
 
         let mut reifiers = Vec::new();
         for quad in view.reifier_quads() {
-            let reifier = resolve_term(view, quad.s, config, &mut cache)?;
-            let predicate = resolve_term(view, quad.p, config, &mut cache)?;
-            if predicate != iri(config.vocabulary().rdf().rdf_reifies()) {
+            let reifier =
+                ProjectionTerm::resolve_cached(view, quad.s, config.limits(), &mut cache)?;
+            let predicate =
+                ProjectionTerm::resolve_cached(view, quad.p, config.limits(), &mut cache)?;
+            if predicate != ProjectionTerm::iri(config.vocabulary().rdf().rdf_reifies()) {
                 return Err(ProjectionError::integrity(
                     "RDF dataset view exposed a reifier row whose predicate differs from the caller-supplied rdf:reifies role",
                 ));
             }
-            let statement = resolve_term(view, quad.o, config, &mut cache)?;
+            let statement =
+                ProjectionTerm::resolve_cached(view, quad.o, config.limits(), &mut cache)?;
             if !matches!(statement, ProjectionTerm::Triple { .. }) {
                 return Err(ProjectionError::integrity(
                     "RDF dataset view exposed a reifier binding to a non-triple term",
@@ -184,7 +166,7 @@ impl<'a> Projector<'a> {
             }
             let graph = quad
                 .g
-                .map(|id| resolve_term(view, id, config, &mut cache))
+                .map(|id| ProjectionTerm::resolve_cached(view, id, config.limits(), &mut cache))
                 .transpose()?;
             reifiers.push(SourceReifier {
                 reifier,
@@ -197,18 +179,19 @@ impl<'a> Projector<'a> {
 
         let mut annotations = Vec::new();
         for quad in view.annotation_quads() {
-            let reifier = resolve_term(view, quad.s, config, &mut cache)?;
+            let reifier =
+                ProjectionTerm::resolve_cached(view, quad.s, config.limits(), &mut cache)?;
             let ProjectionTerm::Iri { value: predicate } =
-                resolve_term(view, quad.p, config, &mut cache)?
+                ProjectionTerm::resolve_cached(view, quad.p, config.limits(), &mut cache)?
             else {
                 return Err(ProjectionError::integrity(
                     "RDF dataset view exposed a non-IRI annotation predicate",
                 ));
             };
-            let object = resolve_term(view, quad.o, config, &mut cache)?;
+            let object = ProjectionTerm::resolve_cached(view, quad.o, config.limits(), &mut cache)?;
             let graph = quad
                 .g
-                .map(|id| resolve_term(view, id, config, &mut cache))
+                .map(|id| ProjectionTerm::resolve_cached(view, id, config.limits(), &mut cache))
                 .transpose()?;
             annotations.push(SourceAnnotation {
                 reifier,
@@ -222,7 +205,12 @@ impl<'a> Projector<'a> {
 
         let mut named_graphs = Vec::new();
         for graph in view.named_graphs() {
-            named_graphs.push(resolve_term(view, graph, config, &mut cache)?);
+            named_graphs.push(ProjectionTerm::resolve_cached(
+                view,
+                graph,
+                config.limits(),
+                &mut cache,
+            )?);
         }
         named_graphs.sort();
         reject_duplicates(&named_graphs, "named graph declarations")?;
@@ -396,10 +384,10 @@ impl<'a> Projector<'a> {
     fn record_placement_and_reifier_losses(&mut self) -> Result<(), ProjectionError> {
         for index in 0..self.named_graphs.len() {
             self.record_named_graph_loss(index, LOSS_OBO_NAMED_GRAPH_DROPPED)?;
-            if contains_blank(&self.named_graphs[index]) {
+            if self.named_graphs[index].contains_blank() {
                 self.record_named_graph_loss(index, LOSS_OBO_BLANK_IDENTITY_DROPPED)?;
             }
-            if contains_triple(&self.named_graphs[index]) {
+            if self.named_graphs[index].is_triple() {
                 self.record_named_graph_loss(index, LOSS_OBO_TRIPLE_TERM_DROPPED)?;
             }
         }
@@ -414,7 +402,7 @@ impl<'a> Projector<'a> {
             }
             self.record_reifier_loss(index, LOSS_OBO_REIFIER_DROPPED)?;
             self.record_reifier_loss(index, LOSS_OBO_TRIPLE_TERM_DROPPED)?;
-            if contains_blank(&self.reifiers[index].reifier) {
+            if self.reifiers[index].reifier.contains_blank() {
                 self.record_reifier_loss(index, LOSS_OBO_BLANK_IDENTITY_DROPPED)?;
             }
         }
@@ -1104,7 +1092,7 @@ impl<'a> Projector<'a> {
             graph,
             "restriction declaration",
         )?;
-        if declaration.1 != iri(self.config.vocabulary().owl().owl_restriction()) {
+        if declaration.1 != ProjectionTerm::iri(self.config.vocabulary().owl().owl_restriction()) {
             return Err(ProjectionError::integrity(
                 "restriction blank node is not declared with the configured owl:Restriction IRI",
             ));
@@ -1165,56 +1153,76 @@ impl<'a> Projector<'a> {
         })
     }
 
+    /// The members of the RDF collection headed by `head` in `graph`, and the
+    /// indices of its `rdf:first`/`rdf:rest` statements (cell by cell), read by
+    /// the strict walker every reader of a collection shares
+    /// ([`RdfListWalk`]) over the configured list vocabulary. A cell must also
+    /// be a blank node: an OWL axiom's collection is never named.
     fn parse_list(
         &self,
         head: &ProjectionTerm,
         graph: Option<&ProjectionTerm>,
     ) -> Result<(Vec<ProjectionTerm>, Vec<usize>), ProjectionError> {
-        let nil = iri(self.config.vocabulary().rdf().rdf_nil());
-        if *head == nil {
-            return Ok((Vec::new(), Vec::new()));
-        }
-        let mut cursor = head.clone();
-        let mut visited = BTreeSet::new();
+        let rdf = self.config.vocabulary().rdf();
+        let nil = ProjectionTerm::iri(rdf.rdf_nil());
+        let (mut firsts, mut rests) = (Vec::new(), Vec::new());
         let mut members = Vec::new();
-        let mut structural = Vec::new();
-        loop {
-            if cursor == nil {
-                break;
-            }
-            if !matches!(cursor, ProjectionTerm::Blank { .. }) {
-                return Err(ProjectionError::integrity(
-                    "RDF collection tail must be the configured rdf:nil IRI or a blank list node",
-                ));
-            }
-            if !visited.insert(cursor.clone()) {
-                return Err(ProjectionError::integrity(
-                    "cyclic RDF collection in OWL axiom",
-                ));
-            }
-            if visited.len() > self.config.max_records() {
+        let walk = RdfListWalk::new(
+            head,
+            Some(&nil),
+            |cell: &ProjectionTerm| {
+                // A cell that is not a blank node is read as having no
+                // `rdf:first`, and that fault is reported as the wrong kind of
+                // tail below.
+                if *cell != nil && !matches!(cell, ProjectionTerm::Blank { .. }) {
+                    return SoleObject::None;
+                }
+                self.sole_statement(cell, rdf.rdf_first(), graph, &mut firsts)
+            },
+            |cell| self.sole_statement(cell, rdf.rdf_rest(), graph, &mut rests),
+        );
+        for item in walk {
+            let member = item.map_err(|fault| list_fault(&fault, &nil))?;
+            if members.len() == self.config.max_records() {
                 return Err(ProjectionError::limit(
                     "RDF collection exceeds the configured OBO Graphs record limit",
                 ));
             }
-            let first = self.required_object(
-                &cursor,
-                self.config.vocabulary().rdf().rdf_first(),
-                graph,
-                "RDF collection first",
-            )?;
-            let rest = self.required_object(
-                &cursor,
-                self.config.vocabulary().rdf().rdf_rest(),
-                graph,
-                "RDF collection rest",
-            )?;
-            structural.push(first.0);
-            structural.push(rest.0);
-            members.push(first.1);
-            cursor = rest.1;
+            members.push(member.clone());
         }
+        let structural = firsts
+            .into_iter()
+            .zip(rests)
+            .flat_map(<[usize; 2]>::from)
+            .collect();
         Ok((members, structural))
+    }
+
+    /// How many statements `(subject, predicate, ?)` has in `graph`, counted up
+    /// to two, as the list walker asks it; the index of a sole statement is
+    /// recorded in `indices`.
+    fn sole_statement<'q>(
+        &'q self,
+        subject: &ProjectionTerm,
+        predicate: &str,
+        graph: Option<&ProjectionTerm>,
+        indices: &mut Vec<usize>,
+    ) -> SoleObject<&'q ProjectionTerm> {
+        let mut matches = self
+            .by_subject_predicate
+            .get(&(subject.clone(), predicate.to_owned()))
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|&index| self.quads[index].graph.as_ref() == graph);
+        match (matches.next(), matches.next()) {
+            (None, _) => SoleObject::None,
+            (Some(index), None) => {
+                indices.push(index);
+                SoleObject::One(&self.quads[index].object)
+            }
+            (Some(_), Some(_)) => SoleObject::Many,
+        }
     }
 
     fn required_object(
@@ -1306,10 +1314,10 @@ impl<'a> Projector<'a> {
                 continue;
             }
             let quad = self.quads[index].clone();
-            if contains_triple(&quad.subject) || contains_triple(&quad.object) {
+            if quad.subject.is_triple() || quad.object.is_triple() {
                 self.record_quad_loss(index, LOSS_OBO_TRIPLE_TERM_DROPPED)?;
             }
-            if contains_blank(&quad.subject) || contains_blank(&quad.object) {
+            if quad.subject.contains_blank() || quad.object.contains_blank() {
                 self.record_quad_loss(index, LOSS_OBO_BLANK_IDENTITY_DROPPED)?;
             }
             self.record_quad_loss(index, LOSS_OBO_NON_PROFILE_STATEMENT_DROPPED)?;
@@ -1318,11 +1326,11 @@ impl<'a> Projector<'a> {
             if self.annotation_handled[index] {
                 continue;
             }
-            if contains_triple(&self.annotations[index].object) {
+            if self.annotations[index].object.is_triple() {
                 self.record_annotation_loss(index, LOSS_OBO_TRIPLE_TERM_DROPPED)?;
             }
-            if contains_blank(&self.annotations[index].reifier)
-                || contains_blank(&self.annotations[index].object)
+            if self.annotations[index].reifier.contains_blank()
+                || self.annotations[index].object.contains_blank()
             {
                 self.record_annotation_loss(index, LOSS_OBO_BLANK_IDENTITY_DROPPED)?;
             }
@@ -1378,60 +1386,45 @@ impl<'a> Projector<'a> {
     }
 
     fn boolean_from_quad(&self, index: usize) -> Result<bool, ProjectionError> {
-        let ProjectionTerm::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } = &self.quads[index].object
-        else {
-            return Err(ProjectionError::integrity(
-                "configured owl:deprecated value must be an xsd:boolean literal",
-            ));
-        };
-        if datatype != self.config.vocabulary().rdf().xsd_boolean()
-            || language.is_some()
-            || direction.is_some()
-        {
-            return Err(ProjectionError::integrity(
-                "configured owl:deprecated value must use the caller-supplied xsd:boolean IRI without language or direction",
-            ));
-        }
-        match lexical.as_str() {
-            "true" | "1" => Ok(true),
-            "false" | "0" => Ok(false),
-            _ => Err(ProjectionError::integrity(
-                "configured owl:deprecated literal has an invalid xsd:boolean lexical form",
-            )),
-        }
+        self.deprecated_boolean(&self.quads[index].object, "value")
     }
 
     fn boolean_from_annotation(&self, index: usize) -> Result<bool, ProjectionError> {
+        self.deprecated_boolean(&self.annotations[index].object, "annotation")
+    }
+
+    /// The `xsd:boolean` a configured `owl:deprecated` statement carries;
+    /// `what` names the statement kind in a refusal.
+    fn deprecated_boolean(
+        &self,
+        object: &ProjectionTerm,
+        what: &str,
+    ) -> Result<bool, ProjectionError> {
         let ProjectionTerm::Literal {
             lexical,
             datatype,
             language,
             direction,
-        } = &self.annotations[index].object
+        } = object
         else {
-            return Err(ProjectionError::integrity(
-                "configured owl:deprecated annotation must be an xsd:boolean literal",
-            ));
+            return Err(ProjectionError::integrity(format!(
+                "configured owl:deprecated {what} must be an xsd:boolean literal"
+            )));
         };
         if datatype != self.config.vocabulary().rdf().xsd_boolean()
             || language.is_some()
             || direction.is_some()
         {
-            return Err(ProjectionError::integrity(
-                "configured owl:deprecated annotation must use the caller-supplied xsd:boolean IRI without language or direction",
-            ));
+            return Err(ProjectionError::integrity(format!(
+                "configured owl:deprecated {what} must use the caller-supplied xsd:boolean IRI without language or direction"
+            )));
         }
         match lexical.as_str() {
             "true" | "1" => Ok(true),
             "false" | "0" => Ok(false),
-            _ => Err(ProjectionError::integrity(
-                "configured owl:deprecated annotation has an invalid xsd:boolean lexical form",
-            )),
+            _ => Err(ProjectionError::integrity(format!(
+                "configured owl:deprecated {what} has an invalid xsd:boolean lexical form"
+            ))),
         }
     }
 
@@ -1516,7 +1509,13 @@ impl<'a> Projector<'a> {
         code: &'static str,
     ) -> Result<(), ProjectionError> {
         let subject = self.quad_location(index)?;
-        self.record_loss(code, "obo-graphs:quad", subject);
+        record_logical_loss(
+            &mut self.ledger,
+            &self.contract,
+            code,
+            "obo-graphs:quad",
+            subject,
+        );
         Ok(())
     }
 
@@ -1525,9 +1524,14 @@ impl<'a> Projector<'a> {
         index: usize,
         code: &'static str,
     ) -> Result<(), ProjectionError> {
-        let subject = source_identifier("graph", &self.named_graphs[index])?;
-        self.record_loss(code, "obo-graphs:named-graph", subject);
-        Ok(())
+        record_row_loss(
+            &mut self.ledger,
+            &self.contract,
+            code,
+            "obo-graphs:named-graph",
+            "graph",
+            &self.named_graphs[index],
+        )
     }
 
     fn record_reifier_loss(
@@ -1535,9 +1539,14 @@ impl<'a> Projector<'a> {
         index: usize,
         code: &'static str,
     ) -> Result<(), ProjectionError> {
-        let subject = source_identifier("reifier", &self.reifiers[index])?;
-        self.record_loss(code, "obo-graphs:reifier", subject);
-        Ok(())
+        record_row_loss(
+            &mut self.ledger,
+            &self.contract,
+            code,
+            "obo-graphs:reifier",
+            "reifier",
+            &self.reifiers[index],
+        )
     }
 
     fn record_annotation_loss(
@@ -1545,85 +1554,44 @@ impl<'a> Projector<'a> {
         index: usize,
         code: &'static str,
     ) -> Result<(), ProjectionError> {
-        let subject = source_identifier("annotation", &self.annotations[index])?;
-        self.record_loss(code, "obo-graphs:annotation", subject);
-        Ok(())
+        record_row_loss(
+            &mut self.ledger,
+            &self.contract,
+            code,
+            "obo-graphs:annotation",
+            "annotation",
+            &self.annotations[index],
+        )
     }
 
     fn quad_location(&self, index: usize) -> Result<String, ProjectionError> {
         source_identifier("quad", &self.quads[index])
     }
-
-    fn record_loss(&mut self, code: &'static str, logical: &str, subject: String) {
-        let template = self
-            .contract
-            .entries()
-            .iter()
-            .find(|entry| entry.code == code)
-            .expect("runtime OBO Graphs code must exist in the closed contract");
-        self.ledger.record(LossEntry {
-            code: Cow::Borrowed(code),
-            from: template.from.clone(),
-            to: template.to.clone(),
-            note: template.note.clone(),
-            location: Some(Box::new(
-                RdfLocation::logical(logical).with_subject(subject),
-            )),
-        });
-    }
 }
 
-fn resolve_term<D: DatasetView>(
-    view: &D,
-    id: D::Id,
-    config: &OboGraphsConfig,
-    cache: &mut BTreeMap<D::Id, ProjectionTerm>,
-) -> Result<ProjectionTerm, ProjectionError> {
-    if let Some(term) = cache.get(&id) {
-        return Ok(term.clone());
-    }
-    let term = ProjectionTerm::from_view(view, id, config.limits())?;
-    let _ = term.to_canonical_json(config.limits())?;
-    cache.insert(id, term.clone());
-    Ok(term)
-}
-
-fn iri(value: &str) -> ProjectionTerm {
-    ProjectionTerm::Iri {
-        value: value.to_owned(),
-    }
-}
-
-fn source_identifier(prefix: &str, value: &impl Serialize) -> Result<String, ProjectionError> {
-    let bytes = serde_json::to_vec(value).map_err(|error| {
-        ProjectionError::integrity(format!("serialize source location: {error}"))
-    })?;
-    stable_identifier(prefix, &bytes)
-}
-
-fn reject_duplicates<T: Ord>(values: &[T], description: &str) -> Result<(), ProjectionError> {
-    if values.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err(ProjectionError::integrity(format!(
-            "dataset view exposed duplicate {description}"
-        )));
-    }
-    Ok(())
-}
-
-fn contains_blank(term: &ProjectionTerm) -> bool {
-    match term {
-        ProjectionTerm::Blank { .. } => true,
-        ProjectionTerm::Triple {
-            subject,
-            predicate,
-            object,
-        } => contains_blank(subject) || contains_blank(predicate) || contains_blank(object),
-        ProjectionTerm::Iri { .. } | ProjectionTerm::Literal { .. } => false,
-    }
-}
-
-fn contains_triple(term: &ProjectionTerm) -> bool {
-    matches!(term, ProjectionTerm::Triple { .. })
+/// The projection error for a malformed OWL-axiom collection.
+fn list_fault(fault: &ListFault<&ProjectionTerm>, nil: &ProjectionTerm) -> ProjectionError {
+    let message = match fault.kind {
+        ListErrorKind::MissingFirst
+            if fault.node != nil && !matches!(fault.node, ProjectionTerm::Blank { .. }) =>
+        {
+            "RDF collection tail must be the configured rdf:nil IRI or a blank list node"
+        }
+        ListErrorKind::MissingFirst => "missing RDF collection first",
+        ListErrorKind::MultipleFirst => {
+            "ambiguous RDF collection first: expected exactly one statement in the source graph"
+        }
+        ListErrorKind::MissingRest => "missing RDF collection rest",
+        ListErrorKind::MultipleRest => {
+            "ambiguous RDF collection rest: expected exactly one statement in the source graph"
+        }
+        ListErrorKind::Cycle => "cyclic RDF collection in OWL axiom",
+        ListErrorKind::NonEmptyNil => {
+            "the configured rdf:nil carries an RDF collection first or rest"
+        }
+        _ => "malformed RDF collection in OWL axiom",
+    };
+    ProjectionError::integrity(message)
 }
 
 fn merge_meta_option(target: &mut OboMeta, source: Option<OboMeta>) -> Result<(), ProjectionError> {
@@ -1675,6 +1643,8 @@ mod tests {
     };
 
     use super::*;
+    use crate::projections::json_codec::FromJson;
+    use crate::projections::json_codec::ToJson;
     use crate::projections::{
         OboGraphsVocabulary, OboMetadataRoles, OboOwlRoles, OboRdfRoles, ProjectionLimits,
     };
@@ -2195,12 +2165,12 @@ mod tests {
     #[test]
     fn rejects_incomplete_vocabulary_and_ambiguous_owl() {
         let configuration = config(2_000);
-        let mut value = serde_json::to_value(&configuration).expect("config JSON");
+        let mut value = configuration.to_json();
         value["vocabulary"]["rdf"]
             .as_object_mut()
             .expect("RDF roles")
             .remove("rdf_type");
-        assert!(serde_json::from_value::<OboGraphsConfig>(value).is_err());
+        assert!(OboGraphsConfig::from_json(&value).is_err());
 
         let duplicate_metadata = OboMetadataRoles::new(
             format!("{RDFS}label"),
@@ -2246,6 +2216,92 @@ mod tests {
             super::super::super::ProjectionErrorKind::Integrity
         );
         assert!(error.message().contains("ambiguous restriction property"));
+    }
+
+    /// `ex:r owl:propertyChainAxiom (ex:p ex:q)`, its tail `rdf:rest` pointing
+    /// at `tail` (`None` for `rdf:nil`), plus `extra` statements on the cells
+    /// `_:chain-1`, `_:chain-2` or `rdf:nil`.
+    fn chain_dataset(
+        tail: Option<&str>,
+        extra: &[(&str, &str, &str)],
+    ) -> std::sync::Arc<RdfDataset> {
+        let mut builder = RdfDatasetBuilder::new();
+        let node = |builder: &mut RdfDatasetBuilder, name: &str| match name {
+            "_:chain-1" | "_:chain-2" => builder.intern_blank(&name[2..], BlankScope::DEFAULT),
+            "rdf:nil" | "rdf:first" | "rdf:rest" => iri(builder, &format!("{RDF}{}", &name[4..])),
+            _ => iri(builder, &format!("{EX}{name}")),
+        };
+        let rdf_type = iri(&mut builder, &format!("{RDF}type"));
+        let object_property = iri(&mut builder, &format!("{OWL}ObjectProperty"));
+        for name in ["p", "q", "r"] {
+            let property = node(&mut builder, name);
+            builder.push_quad(property, rdf_type, object_property, None);
+        }
+        let chain = iri(&mut builder, &format!("{OWL}propertyChainAxiom"));
+        let (r, p, q) = (
+            node(&mut builder, "r"),
+            node(&mut builder, "p"),
+            node(&mut builder, "q"),
+        );
+        let (head, second) = (
+            node(&mut builder, "_:chain-1"),
+            node(&mut builder, "_:chain-2"),
+        );
+        let (first, rest) = (
+            node(&mut builder, "rdf:first"),
+            node(&mut builder, "rdf:rest"),
+        );
+        let end = node(&mut builder, tail.unwrap_or("rdf:nil"));
+        builder.push_quad(r, chain, head, None);
+        builder.push_quad(head, first, p, None);
+        builder.push_quad(head, rest, second, None);
+        builder.push_quad(second, first, q, None);
+        builder.push_quad(second, rest, end, None);
+        for (s, p, o) in extra {
+            let (s, p, o) = (
+                node(&mut builder, s),
+                node(&mut builder, p),
+                node(&mut builder, o),
+            );
+            builder.push_quad(s, p, o, None);
+        }
+        builder.freeze().expect("structurally valid chain")
+    }
+
+    fn chain_error(dataset: &RdfDataset) -> String {
+        project_obo_graphs(dataset, &config(2_000))
+            .expect_err("a malformed property-chain collection is refused")
+            .message()
+            .to_owned()
+    }
+
+    /// The property-chain collection is read by the strict list walker: a
+    /// well-formed chain projects, and a cycle, a named cell, an ambiguous
+    /// `rdf:first` and an `rdf:nil` that carries an edge are each refused,
+    /// naming the fault.
+    #[test]
+    fn property_chain_collections_are_read_strictly() {
+        let projection =
+            project_obo_graphs(chain_dataset(None, &[]).as_ref(), &config(2_000)).expect("chain");
+        assert_eq!(projection.document.graphs[0].property_chain_axioms.len(), 1);
+
+        let cycle = chain_error(&chain_dataset(Some("_:chain-1"), &[]));
+        assert_eq!(cycle, "cyclic RDF collection in OWL axiom");
+        let named = chain_error(&chain_dataset(Some("elsewhere"), &[]));
+        assert_eq!(
+            named,
+            "RDF collection tail must be the configured rdf:nil IRI or a blank list node"
+        );
+        let ambiguous = chain_error(&chain_dataset(None, &[("_:chain-2", "rdf:first", "r")]));
+        assert!(
+            ambiguous.starts_with("ambiguous RDF collection first"),
+            "{ambiguous}"
+        );
+        let loaded_nil = chain_error(&chain_dataset(None, &[("rdf:nil", "rdf:first", "p")]));
+        assert_eq!(
+            loaded_nil,
+            "the configured rdf:nil carries an RDF collection first or rest"
+        );
     }
 
     #[test]

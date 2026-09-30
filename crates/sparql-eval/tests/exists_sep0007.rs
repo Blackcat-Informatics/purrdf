@@ -61,12 +61,14 @@
 //!   therefore read as UNBOUND there, not as a leak — an unbound comparison is an
 //!   error, and `FILTER`/`HAVING` treats an error as `false`.
 
-use std::collections::BTreeMap;
+mod support;
+
+use support::{Row, row, run_prefixed, sorted_rows};
+
 use std::sync::Arc;
 
 use purrdf_core::{
-    BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest,
-    SparqlResult, TermValue,
+    BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
 };
 use purrdf_sparql_eval::{
     ExtensionEnv, MemoryRelation, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
@@ -363,13 +365,6 @@ fn request(query: &str) -> SparqlRequest<'_> {
     }
 }
 
-fn run(ds: &Arc<RdfDataset>, query_body: &str) -> SparqlResult {
-    let text = format!("{PFX}{query_body}");
-    NativeSparqlEngine::new()
-        .query(ds, request(&text))
-        .unwrap_or_else(|e| panic!("query failed: {e:?}\nquery: {text}"))
-}
-
 /// [`run`], with a property-function registry injected (group P only).
 fn run_with_registry(
     ds: &Arc<RdfDataset>,
@@ -402,41 +397,6 @@ fn cell(value: Option<&TermValue>) -> String {
     }
 }
 
-type Row = BTreeMap<String, String>;
-
-/// A SELECT result's rows as variable-name-keyed maps, SORTED — every assertion
-/// in this file compares solutions as a SET (SPARQL's multiset order is
-/// unspecified outside an explicit top-level `ORDER BY`, which none of the outer
-/// queries below use), never by column or row position.
-fn rows(result: &SparqlResult) -> Vec<Row> {
-    let SparqlResult::Solutions {
-        variables, rows, ..
-    } = result
-    else {
-        panic!("expected a SELECT result, got {result:?}");
-    };
-    let mut out: Vec<Row> = rows
-        .iter()
-        .map(|row| {
-            variables
-                .iter()
-                .cloned()
-                .zip(row.iter().map(|c| cell(c.as_ref())))
-                .collect()
-        })
-        .collect();
-    out.sort();
-    out
-}
-
-/// Build one expected row from `(variable, rendered-value)` pairs.
-fn row(pairs: &[(&str, &str)]) -> Row {
-    pairs
-        .iter()
-        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-        .collect()
-}
-
 /// Sort a hand-written expected row set the same way [`rows`] sorts the actual
 /// one, so `assert_eq!` compares two SETS rather than two SEQUENCES.
 fn expect(mut rows: Vec<Row>) -> Vec<Row> {
@@ -456,12 +416,13 @@ fn expect(mut rows: Vec<Row>) -> Vec<Row> {
 #[test]
 fn exists_optional_padding_answers_per_spec() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?x :aAnchor \"yes\" FILTER EXISTS { OPTIONAL { ?x :aQ ?y } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![
             row(&[("x", "<https://example.org/exists#aOa>")]),
             row(&[("x", "<https://example.org/exists#aOb>")])
@@ -476,12 +437,13 @@ fn exists_optional_padding_answers_per_spec() {
 #[test]
 fn not_exists_optional_padding_does_not_fabricate() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?x :aAnchor \"yes\" FILTER NOT EXISTS { OPTIONAL { ?x :aQ ?y } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         Vec::<Row>::new(),
         "the negated F2 shape must drop every row, never fabricate one"
     );
@@ -497,12 +459,13 @@ fn not_exists_optional_padding_does_not_fabricate() {
 #[test]
 fn exists_optional_beside_a_bgp_answers_per_spec() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?x :aAnchor \"yes\" FILTER EXISTS { ?x :aP ?b OPTIONAL { ?x :aQ ?y } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![row(&[("x", "<https://example.org/exists#aOa>")])]),
         "only `:aOa` (has `:aP`) survives — `:aOb` has `:aQ` but no `:aP`, and the \
          `OPTIONAL` cannot rescue it"
@@ -519,12 +482,13 @@ fn exists_optional_beside_a_bgp_answers_per_spec() {
 #[test]
 fn exists_nested_not_exists_correlates() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?x :bN \"1\" FILTER EXISTS { FILTER NOT EXISTS { ?x :bQ ?y } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![row(&[("x", "<https://example.org/exists#bNb>")])]),
         "`:bNb` (no `:bQ` edge) is the only row whose inner NOT EXISTS is true"
     );
@@ -535,12 +499,13 @@ fn exists_nested_not_exists_correlates() {
 #[test]
 fn not_exists_nested_not_exists_correlates() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?x :bN \"1\" FILTER NOT EXISTS { FILTER NOT EXISTS { ?x :bQ ?y } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![row(&[("x", "<https://example.org/exists#bNa>")])]),
         "`:bNa` (has a `:bQ` edge) is the only row the double negation keeps"
     );
@@ -564,13 +529,14 @@ fn not_exists_nested_not_exists_correlates() {
 #[test]
 fn exists_correlated_graph_variable_e2e() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?r :cLink ?g \
          FILTER EXISTS { GRAPH ?g { SELECT * { ?m :cFlag \"yes\" } LIMIT 1 } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![
             row(&[
                 ("r", "<https://example.org/exists#cR1>"),
@@ -596,13 +562,14 @@ fn exists_correlated_graph_variable_e2e() {
 #[test]
 fn exists_bind_fresh_variable_evaluates() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :dTag \"go\" \
          FILTER EXISTS { ?s :dVal ?n BIND(?n * 2 AS ?doubled) FILTER(?doubled > 10) } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![row(&[("s", "<https://example.org/exists#dS2>")])]),
         "only `:dS2` (value 10, doubled 20) clears the `> 10` bar"
     );
@@ -629,13 +596,14 @@ fn exists_bind_fresh_variable_evaluates() {
 #[test]
 fn exists_sep_count_example_answers() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :eValue ?v \
          FILTER EXISTS { { SELECT (COUNT(*) AS ?C) { ?s :eProperty ?w } } FILTER(?C < ?v) } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![
             row(&[("s", "<https://example.org/exists#eS1>"), ("v", "10")]),
             row(&[("s", "<https://example.org/exists#eS3>"), ("v", "10")]),
@@ -669,12 +637,13 @@ fn exists_sep_count_example_answers() {
 #[test]
 fn exists_sep_minus_example_answers() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT ?x { ?x :sepP :sepC FILTER EXISTS { ?x :sepP :sepC MINUS { ?x :sepP :sepC } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         Vec::<Row>::new(),
         "the correct (non-flipped) answer is empty: `?x = :sepD` is always \
          subtracted by its own identical right-hand match"
@@ -706,13 +675,14 @@ fn exists_sep_minus_example_answers() {
 #[test]
 fn exists_sep_disconnected_variable_example() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT ?x { BIND(:gD AS ?x) \
          FILTER EXISTS { BIND(:gIrrelevant AS ?z) { SELECT ?y WHERE { ?x :gP :gC } } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![row(&[("x", "<https://example.org/exists#gD>")])]),
         "the inner, unprojected `?x` is disconnected from the outer `?x = :gD`: it \
          finds `:gOther`'s (unrelated) `:gP :gC` fact and the row survives, even \
@@ -735,12 +705,13 @@ fn exists_sep_disconnected_variable_example() {
 #[test]
 fn exists_over_limit_one_subselect() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :hTag \"x\" FILTER EXISTS { SELECT * { ?z :hItem ?s } LIMIT 1 } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![
             row(&[("s", "<https://example.org/exists#hCa>")]),
             row(&[("s", "<https://example.org/exists#hCb>")]),
@@ -758,12 +729,13 @@ fn exists_over_limit_one_subselect() {
 #[test]
 fn exists_over_offset_subselect_commits_per_row() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :hTag \"x\" FILTER EXISTS { SELECT * { ?z :hItem ?s } OFFSET 1 } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![row(&[("s", "<https://example.org/exists#hCa>")])]),
         "only `:hCa` (two matches) survives an OFFSET of 1; `:hCb` (one match) is \
          emptied by it and `:hCc` (none) was already empty"
@@ -775,12 +747,13 @@ fn exists_over_offset_subselect_commits_per_row() {
 #[test]
 fn exists_over_distinct_subselect() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :hTag \"x\" FILTER EXISTS { SELECT DISTINCT * { ?z :hItem ?s } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![
             row(&[("s", "<https://example.org/exists#hCa>")]),
             row(&[("s", "<https://example.org/exists#hCb>")]),
@@ -794,12 +767,13 @@ fn exists_over_distinct_subselect() {
 #[test]
 fn exists_over_order_by_subselect() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :hTag \"x\" FILTER EXISTS { SELECT * { ?z :hItem ?s } ORDER BY ?z } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![
             row(&[("s", "<https://example.org/exists#hCa>")]),
             row(&[("s", "<https://example.org/exists#hCb>")]),
@@ -827,13 +801,14 @@ fn exists_over_order_by_subselect() {
 #[test]
 fn exists_over_group_by_subselect_correlates() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :hTag \"x\" \
          FILTER EXISTS { SELECT ?s (COUNT(*) AS ?c) { ?w :hItem ?s } GROUP BY ?s HAVING(COUNT(*) >= 2) } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![row(&[("s", "<https://example.org/exists#hCa>")])]),
         "only `:hCa` (two `:hItem` facts, count 2) clears the `>= 2` bar; `:hCb` \
          (count 1) and `:hCc` (grouping by `?s` over zero rows yields ZERO groups, \
@@ -852,12 +827,13 @@ fn exists_over_group_by_subselect_correlates() {
 #[test]
 fn exists_bare_values_inner() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :iTag \"go\" FILTER EXISTS { VALUES ?w { \"a\" \"b\" } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![
             row(&[("s", "<https://example.org/exists#iS1>")]),
             row(&[("s", "<https://example.org/exists#iS2>")]),
@@ -878,12 +854,13 @@ fn exists_bare_values_inner() {
 #[test]
 fn exists_bare_subselect_inner() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :jTag \"go\" FILTER EXISTS { SELECT ?anything { ?m :jFlag \"yes\" } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![
             row(&[("s", "<https://example.org/exists#jS1>")]),
             row(&[("s", "<https://example.org/exists#jS2>")]),
@@ -905,12 +882,13 @@ fn exists_bare_subselect_inner() {
 #[test]
 fn exists_unprojected_outer_variable_stays_unseen() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s2 :kMark \"keep\" FILTER EXISTS { SELECT ?a { ?s2 :q ?a } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![
             row(&[("s2", "<https://example.org/exists#kM1>")]),
             row(&[("s2", "<https://example.org/exists#kM2>")]),
@@ -940,13 +918,14 @@ fn exists_unprojected_outer_variable_stays_unseen() {
 #[test]
 fn exists_having_sees_only_the_subselect_scope() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?d :lCount ?c \
          FILTER EXISTS { SELECT ?g { ?g :lItem ?w } GROUP BY ?g HAVING(?c < 100) } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         Vec::<Row>::new(),
         "the outer `?c` never reaches `HAVING`'s own (disconnected) scope, so the \
          comparison is always an unbound-operand error — every row is dropped, \
@@ -969,13 +948,14 @@ fn exists_having_sees_only_the_subselect_scope() {
 #[test]
 fn exists_quoted_triple_outer_binding_correlates() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?r1 rdf:reifies ?tt \
          FILTER EXISTS { ?r2 rdf:reifies ?x FILTER(sameTerm(?tt, ?x) && ?r2 != ?r1) } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![
             row(&[
                 ("r1", "<https://example.org/exists#reifierM1a>"),
@@ -1005,12 +985,13 @@ fn exists_quoted_triple_outer_binding_correlates() {
 #[test]
 fn exists_blank_node_outer_binding_correlates() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :nHasAnon ?bn \
          FILTER EXISTS { ?other :nAlias ?bn2 FILTER(sameTerm(?bn, ?bn2)) } }",
     );
-    let solutions = rows(&result);
+    let solutions = sorted_rows(&result, cell);
     assert_eq!(
         solutions.len(),
         1,
@@ -1036,13 +1017,14 @@ fn exists_blank_node_outer_binding_correlates() {
 #[test]
 fn exists_graph_iri_name_with_correlated_body() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?x :oMarker \"go\" \
          FILTER EXISTS { GRAPH <https://example.org/exists#oG> { ?x :oItem ?y } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![row(&[("x", "<https://example.org/exists#oX1>")])]),
         "only `:oX1` has an `:oItem` edge inside `:oG`; `:oX2` correctly drops"
     );
@@ -1091,7 +1073,7 @@ fn exists_property_function_inner_sees_outer_binding() {
         &registry,
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![row(&[("s", "<https://example.org/exists#pS1>")])]),
         "only `:pS1` is a subject the relation matches; `:pS2` correctly drops"
     );
@@ -1111,14 +1093,15 @@ fn exists_property_function_inner_sees_outer_binding() {
 #[test]
 fn exists_triple_nesting_alternating_polarity() {
     let ds = dataset();
-    let result = run(
+    let result = run_prefixed(
         &ds,
+        PFX,
         "SELECT * { ?s :tMarker \"go\" \
          FILTER EXISTS { ?m1 :qMid \"1\" \
            FILTER NOT EXISTS { ?m2 :qMid \"1\" FILTER EXISTS { ?s :qLeaf ?v } } } }",
     );
     assert_eq!(
-        rows(&result),
+        sorted_rows(&result, cell),
         expect(vec![row(&[("s", "<https://example.org/exists#tS2>")])]),
         "`:tS1` has a `:qLeaf` edge, so the innermost EXISTS is true, the middle \
          NOT EXISTS is false, and the outer EXISTS is false — dropped. `:tS2` has \

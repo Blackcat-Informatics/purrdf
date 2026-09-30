@@ -1,11 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The named kernel paths, for tests and benches.
+//! The named kernel paths, for tests and benches: the `deflate` family of
+//! [`purrdf_hash::Backend`], so `PURRDF_REQUIRE_SIMD_PATHS` names them as
+//! `deflate:<path>`.
 //!
 //! Not a stable interface. Every path produces the same bytes; this module
 //! exists so a test can run each path the host supports against the portable
 //! one, and a bench can time each.
+
+use purrdf_hash::Backend as _;
 
 use crate::arch::{self, VectorKernels};
 use crate::kernels::{
@@ -13,20 +17,22 @@ use crate::kernels::{
     hash_windows_portable, match_length_portable,
 };
 
-/// A kernel path.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Backend {
-    /// Portable safe code; always available.
-    Portable,
-    /// x86_64 SSE2 (the architecture baseline): 16-byte copies and compares.
-    Sse2,
-    /// x86_64 AVX2, detected at run time: 32-byte copies and compares, and
-    /// eight 4-byte windows hashed per shuffle + lane multiply.
-    Avx2,
-    /// aarch64 NEON: 16-byte copies and compares, four windows per hash step.
-    Neon,
-    /// wasm32 simd128, in a `+simd128` build: as NEON.
-    Simd128,
+purrdf_hash::vector_backend! {
+    /// A kernel path.
+    pub enum Backend {
+        /// Portable safe code; always available.
+        Portable,
+        /// x86_64 SSE2 (the architecture baseline): 16-byte copies and compares.
+        Sse2,
+        /// x86_64 AVX2, detected at run time: 32-byte copies and compares, and
+        /// eight 4-byte windows hashed per shuffle + lane multiply.
+        Avx2,
+        /// aarch64 NEON: 16-byte copies and compares, four windows per hash step.
+        Neon,
+        /// wasm32 simd128, in a `+simd128` build: as NEON.
+        Simd128,
+    }
+    available: |path| path.kernels().is_some();
 }
 
 /// A path's resolved kernels.
@@ -47,39 +53,6 @@ impl std::fmt::Debug for Kernels {
 }
 
 impl Backend {
-    /// Every path, in order of preference (the last is always available).
-    pub const ALL: [Self; 5] = [
-        Self::Avx2,
-        Self::Sse2,
-        Self::Neon,
-        Self::Simd128,
-        Self::Portable,
-    ];
-
-    /// The path's name.
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Portable => "portable",
-            Self::Sse2 => "sse2",
-            Self::Avx2 => "avx2",
-            Self::Neon => "neon",
-            Self::Simd128 => "simd128",
-        }
-    }
-
-    /// Whether this processor and build can run the path.
-    pub fn is_available(self) -> bool {
-        self.kernels().is_some()
-    }
-
-    /// The path the decoder and encoder use by default here.
-    pub fn selected() -> Self {
-        Self::ALL
-            .into_iter()
-            .find(|backend| backend.is_available())
-            .unwrap_or(Self::Portable)
-    }
-
     pub(crate) fn kernels(self) -> Option<Kernels> {
         let vector = |found: Option<VectorKernels>| {
             found.map(|v| Kernels {

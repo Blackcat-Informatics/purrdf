@@ -70,23 +70,22 @@
 //! their labels. The crate's test suite pins this with an adversarial test
 //! rather than leaving it implied.
 
-use purrdf_core::TermBox;
+use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_le;
 use std::cmp::Ordering;
 
-use purrdf_core::{
-    DatasetView, FastMap, GraphMatch, RdfTextDirection, TermRef, TermValue, fold_term,
-};
+use purrdf_core::{DatasetView, FastMap, RdfTextDirection, TermValue};
 
 use crate::analysis::{Analyzer, UnicodeVersions, unicode_versions};
 use crate::error::TextError;
 use crate::fixed::Fixed;
 use crate::ranking::{FIELD_LENGTH_MAX, FieldInput, MAX_FIELDS, PreparedCorpus, RankingProfile};
-use crate::term_bytes::{FINGERPRINT_BYTES, encode_term, push_str};
+use crate::term_bytes::{FINGERPRINT_BYTES, encode_term};
 
 /// Domain-separation prefix for [`TextIndex::fingerprint`].
-const INDEX_DIGEST_DOMAIN: &str = "purrdf-text/index/v2";
+const INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/index/v2");
 /// Domain-separation prefix for [`TextIndex::source_fingerprint`].
-const SOURCE_DIGEST_DOMAIN: &str = "purrdf-text/source/v1";
+const SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/source/v1");
 
 /// Digest tag for [`GraphSelector::Any`].
 const SELECTOR_ANY: u8 = 0x01;
@@ -104,28 +103,7 @@ const PRESENT: u8 = 0x01;
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// Which graph's literals an index is built over.
-///
-/// This is deliberately in **value** space rather than
-/// [`GraphMatch`](purrdf_core::GraphMatch) space. `GraphMatch::Named` holds a
-/// dataset-local term id, which means something only inside the one dataset that
-/// minted it; a configuration is a statement the caller writes down once and may
-/// apply to several datasets, so it must name a graph by its IRI.
-/// [`TextIndex::from_dataset`] resolves the selector to a `GraphMatch` against
-/// the dataset in hand.
-///
-/// Deliberately exhaustive, like `GraphMatch`: a quad's graph is the default
-/// graph or exactly one named graph, so the three cases are closed.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum GraphSelector {
-    /// Index literals from every graph, default and named alike. Each graph
-    /// still yields its own documents and its own partitions.
-    Any,
-    /// Index literals from the default graph only.
-    Default,
-    /// Index literals from the one named graph this IRI identifies.
-    Named(TermValue),
-}
+pub use purrdf_core::GraphSelector;
 
 /// The caller's complete, dataset-independent statement of what to index.
 ///
@@ -654,8 +632,15 @@ impl TextIndex {
 
     /// Tokenization identity, independent of ranking and predicate routing.
     /// Includes the complete Unicode table versions.
+    ///
+    /// It opens with no registered hash domain: [`crate::ANALYZER_PROFILE_ID`] is
+    /// the first field absorbed, and already names the preimage family. The
+    /// fingerprint is its own kind, compared only against another analyzer
+    /// fingerprint, and it is a published identity, so opening it under a
+    /// `Domain` now would change every recorded value.
     pub fn analyzer_fingerprint(&self) -> [u8; FINGERPRINT_BYTES] {
-        let mut digest = Digest::new(crate::ANALYZER_PROFILE_ID);
+        let mut digest = Digest::bare();
+        digest.text(crate::ANALYZER_PROFILE_ID);
         for version in [
             self.unicode.core,
             self.unicode.normalization,
@@ -740,6 +725,10 @@ impl TextIndex {
     }
 
     /// Retained predicate frequencies along a term's existing posting walk.
+    ///
+    /// The walk is [`Self::partition_postings`], shared with [`Self::postings`]; this
+    /// projection yields each posting's per-predicate frequencies, the BM25F field
+    /// statistics input, where `postings` yields its token positions.
     pub(crate) fn field_postings<'a>(
         &'a self,
         partition: &PartitionKey,
@@ -1294,7 +1283,7 @@ fn collect_rows<D: DatasetView>(
     dataset: &D,
     config: &TextIndexConfig,
 ) -> Result<(Vec<SourceRow>, SourceCoverage), TextError> {
-    let Some(graph) = resolve_graph(dataset, config.graph()) else {
+    let Some(graph) = config.graph().resolve(dataset) else {
         return Ok((
             Vec::new(),
             SourceCoverage::nothing_in_scope(dataset, config),
@@ -1441,73 +1430,18 @@ fn push_row<D: DatasetView>(
     Ok(())
 }
 
-/// Resolve `selector` against `dataset`'s own id space, or `None` when no quad
-/// of this dataset can possibly match it.
+/// Resolve a dataset-local id to its dataset-independent [`TermValue`] through
+/// [`DatasetView::term_value`], which follows a literal's datatype and a triple term's
+/// `(s, p, o)` to any depth.
 ///
-/// `None` arises for exactly one reason: a [`GraphSelector::Named`] graph whose
-/// IRI the dataset has not interned. There is then no id a quad's graph could
-/// equal, so the match is empty rather than unrepresentable — `GraphMatch` holds
-/// dataset-local ids and has no id that names an absent term, so the emptiness is
-/// carried here instead of being encoded as one. `Any` and `Default` name no term
-/// and so always resolve.
-fn resolve_graph<D: DatasetView>(
-    dataset: &D,
-    selector: &GraphSelector,
-) -> Option<GraphMatch<D::Id>> {
-    Some(match selector {
-        GraphSelector::Any => GraphMatch::Any,
-        GraphSelector::Default => GraphMatch::Default,
-        GraphSelector::Named(name) => GraphMatch::Named(dataset.term_id_by_value(name)?),
-    })
-}
-
-/// Resolve a dataset-local id to its dataset-independent [`TermValue`], through a
-/// literal's datatype and a triple term's `(s, p, o)`.
+/// # Errors
 ///
-/// A triple term is assembled bottom-up over [`fold_term`]'s work list: its
-/// subject, predicate and object are resolved in that order, each fully before the
-/// next. That is why a subject may be a triple term, nested to any depth, without
-/// any special case here.
+/// [`TextError`] naming the inconsistency when the view hands back an id that is not
+/// its own — a literal whose datatype does not resolve to an IRI.
 fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> Result<TermValue, TextError> {
-    fold_term(
-        dataset,
-        id,
-        |_, term| {
-            Ok(match term {
-                TermRef::Iri(iri) => TermValue::iri(iri),
-                TermRef::Blank { label, scope } => TermValue::Blank {
-                    label: label.to_owned(),
-                    scope,
-                },
-                TermRef::Literal {
-                    lexical,
-                    datatype,
-                    language,
-                    direction,
-                } => {
-                    let TermRef::Iri(datatype) = dataset.resolve(datatype) else {
-                        return Err(TextError::data(
-                            "a literal's datatype did not resolve to an IRI".to_owned(),
-                        ));
-                    };
-                    TermValue::Literal {
-                        lexical_form: lexical.to_owned(),
-                        datatype: datatype.to_owned(),
-                        language: language.map(str::to_owned),
-                        direction,
-                    }
-                }
-                TermRef::Triple { .. } => unreachable!("a triple term is folded from its parts"),
-            })
-        },
-        |_, s, p, o| {
-            Ok(TermValue::Triple {
-                s: TermBox::new(s),
-                p: TermBox::new(p),
-                o: TermBox::new(o),
-            })
-        },
-    )
+    dataset
+        .term_value(id)
+        .map_err(|error| TextError::data(error.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -1821,14 +1755,21 @@ struct Digest {
 
 impl Digest {
     /// A digest opened under `domain`, so two digests of different things over
-    /// the same bytes cannot coincide.
-    fn new(domain: &str) -> Self {
-        let mut digest = Self {
+    /// the same bytes cannot coincide. The domain is absorbed as the first
+    /// length-prefixed string.
+    fn new(domain: Domain) -> Self {
+        let mut digest = Self::bare();
+        digest.text(domain.as_str());
+        digest
+    }
+
+    /// A digest with no domain of its own, for an identity whose first absorbed
+    /// field is the published identifier it is named by.
+    fn bare() -> Self {
+        Self {
             hasher: purrdf_hash::blake3::Hasher::new(),
             scratch: Vec::new(),
-        };
-        digest.text(domain);
-        digest
+        }
     }
 
     /// Absorb a one-byte tag.
@@ -1854,7 +1795,7 @@ impl Digest {
     /// Absorb a length-prefixed string.
     fn text(&mut self, value: &str) {
         self.scratch.clear();
-        push_str(value, &mut self.scratch);
+        frame_le(&mut self.scratch, value.as_bytes());
         self.hasher.update(&self.scratch);
     }
 

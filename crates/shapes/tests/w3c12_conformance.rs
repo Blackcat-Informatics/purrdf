@@ -58,7 +58,11 @@
 //! total. Run with `--nocapture` for the per-section and per-type scoreboard:
 //! `cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture`
 
-mod shacl_corpora;
+#[path = "support/report.rs"]
+mod report;
+
+use purrdf_shapes::shacl_corpora;
+use report::merge;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -87,7 +91,7 @@ use shacl_corpora::{Expected, Multiset, Tuple, W3cCase, file_iri, parse_turtle_f
 // ── Xfail ledger ──────────────────────────────────────────────────────────────
 
 /// `rdf:reifies`.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// Entries the engine currently fails, with the reason: `(test id, reason)`,
 /// where the id is the entry's IRI relative to `vectors/shacl12/tests` (see
@@ -326,7 +330,7 @@ fn eval_node_expr_case(tc: &NodeExprCase) -> Result<Vec<Term>, String> {
     let _function_scope =
         sparql::enter_function_scope(sparql::bind_in_current_env(&shapes.functions)?);
     let _aggregate_scope = sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
-    let mut guard = RecursionGuard::new();
+    let mut guard = RecursionGuard::default();
     eval_in_scope(&data, &focus, &expr, &mut guard, &tc.scope, Scope::EMPTY)
 }
 
@@ -367,14 +371,6 @@ fn infer(tc: &InferCase) -> Result<(Arc<RdfDataset>, Arc<RdfDataset>), String> {
     let holder = ShaclData::new(Arc::clone(&projected), Arc::clone(&projected), None);
     let inferred = apply_rules(&holder, &shapes).map_err(|e| format!("apply_rules failed: {e}"))?;
     Ok((inferred, projected))
-}
-
-/// `base ⊎ derived`, blank labels standardized apart per source.
-fn merge(base: &RdfDataset, derived: &RdfDataset) -> Result<Arc<RdfDataset>, String> {
-    let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(base);
-    builder.push_dataset(derived);
-    builder.freeze().map_err(|e| e.to_string())
 }
 
 /// The expected inferred triples as a dataset of their own.
@@ -810,9 +806,8 @@ fn a_listed_entry_is_never_amended() {
         graded_expectation(id, false, tc).is_ok(),
         "the unlisted entry is graded through its delta"
     );
-    let error = graded_expectation(id, true, tc)
-        .err()
-        .expect("the same entry, were it listed, is refused");
+    let error =
+        graded_expectation(id, true, tc).expect_err("the same entry, were it listed, is refused");
     assert!(error.contains("an upstream manifest lists"), "{error}");
 }
 
@@ -1471,7 +1466,7 @@ fn engine_emits_the_canonical_decimal_lexical_form() {
     let data = ShaclData::new(Arc::clone(&projected), projected, None);
     let _function_scope =
         sparql::enter_function_scope(sparql::bind_in_current_env(&shapes.functions).expect("bind"));
-    let mut guard = RecursionGuard::new();
+    let mut guard = RecursionGuard::default();
     let out = eval_node_expr_in_scope(
         &data,
         &Term::blank(ABSENT_FOCUS),
@@ -1671,7 +1666,7 @@ fn the_grader_grades_sh_detail_where_it_is_stated() {
 fn validator_001_passes_in_both_suites_with_no_import_supplied() {
     const ID: &str = "sparql/component/validator-001";
     const DASH: &str = "http://datashapes.org/dash";
-    const OWL_IMPORTS: &str = "http://www.w3.org/2002/07/owl#imports";
+    use purrdf_iri::vocab::owl::IMPORTS as OWL_IMPORTS;
 
     let suite12 = shacl12_cases();
     let Body::Validate(tc12) = &suite12

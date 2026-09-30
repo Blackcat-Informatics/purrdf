@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-sparql-results"
-description = "Native, wasm-clean serializer for the SPARQL result model (SELECT/ASK/CONSTRUCT) to SPARQL Results JSON/XML/CSV/TSV plus a provenance-carrying purrdf extension — the canonical results-serialization authority replacing the oxigraph-family `sparesults`"
+description = "Native, wasm-clean serializer for the SPARQL result model (SELECT/ASK/CONSTRUCT) to SPARQL Results JSON/XML/CSV/TSV plus a provenance-carrying purrdf extension — the canonical results-serialization authority"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -22,25 +22,30 @@ workspace = true
 
 [lib]
 # rlib-only, wasm-clean leaf: serializes the `purrdf-core` SparqlResult egress
-# model to the four W3C SPARQL Results formats + a provenance extension. It must
-# NOT pull any oxigraph-family crate (it replaces the oxigraph-family `sparesults`)
-# and depends on `purrdf-core`.
+# model to the four W3C SPARQL Results formats + a provenance extension. It
+# depends on `purrdf-core`.
 crate-type = ["rlib"]
 path = "src/lib.rs"
 name = "purrdf_sparql_results"
 
 [dependencies]
+# The workspace's one JSON reader (the SRJ readers' grammar, tree and pull
+# reader), its string escape law (the SRJ writer's spelling), and its one XML
+# reader, for SPARQL Results XML documents.
+purrdf-lex = { workspace = true }
 purrdf-core = { workspace = true }
 # The IRI/URI value space: validates a caller-supplied `ProvenanceNamespace`
 # namespace IRI as an absolute RFC-3987 IRI (see `model::ProvenanceNamespace::new`).
 # Also the language-tag grammar (`langtag`) the SRJ/SRX READERS hold an incoming
 # `xml:lang` to — a results document is parsed input, and it is how a federated
 # SERVICE response's tag enters the engine (see `error::language_tag_refusal`).
-# Zero-dep, wasm-clean leaf — does not compromise this crate's no-oxigraph
-# discipline.
+# Zero-dep, wasm-clean leaf.
 purrdf-iri = { workspace = true }
 
 [dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
 # Byte-exact golden files for the results corpus, CRLF record ends included.
 # Path-only and unpublished, so it is stripped from the packaged manifest.
 purrdf-testkit = { workspace = true }
@@ -50,10 +55,6 @@ purrdf-testkit = { workspace = true }
 # windows exactly as a streamed document does. Only an allocator can tell them
 # apart. Dev-only, so no release crate and no wasm build ever sees it.
 purrdf-alloc-probe = { workspace = true }
-# Borrowed-writer streaming N-Triples serialization hot-path baseline. Defaults
-# off (no plotters/rayon) like the sibling crates, so `make bench` stays lean and
-# no oxigraph-family edge enters the dev tree.
-criterion = { workspace = true }
 
 [[bench]]
 # CONSTRUCT-graph -> N-Triples streaming serialization (`to_json`'s `Graph`

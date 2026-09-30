@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Native RDF codec hot-path benchmark.
@@ -11,7 +11,6 @@
 //! deterministic N-Quads with default and named graph rows so both parser and
 //! serializer exercise dataset-capable paths.
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_rdf::native_codecs::jsonld::{
     CompiledJsonLdContext, JsonLdSerializeOptions, derive_jsonld_context, parse_jsonld,
     serialize_dataset_to_jsonld, serialize_dataset_to_jsonld_with_options,
@@ -21,6 +20,7 @@ use purrdf_rdf::{
     SerializeOptions, StatementLayer, parse_dataset, parse_dataset_from_reader, parse_dataset_with,
     serialize_dataset, serialize_dataset_to_writer_with,
 };
+use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main, black_box};
 
 #[path = "support/jsonld.rs"]
 mod jsonld_fixture;
@@ -47,7 +47,7 @@ fn nquads_fixture(rows: usize) -> String {
     out
 }
 
-fn bench_parse_nquads(c: &mut Criterion) {
+fn bench_parse_nquads(c: &mut Bench) {
     let text = nquads_fixture(ROWS);
     let mut group = c.benchmark_group("native_codecs_parse");
     group.throughput(Throughput::Bytes(text.len() as u64));
@@ -67,7 +67,7 @@ fn bench_parse_nquads(c: &mut Criterion) {
 /// single-threaded pipeline as the baseline. Outputs are byte-identical (the
 /// determinism tests in `native_codecs::text_parse` are the gate); only wall time
 /// differs.
-fn bench_parse_nquads_parallel_vs_sequential(c: &mut Criterion) {
+fn bench_parse_nquads_parallel_vs_sequential(c: &mut Bench) {
     let text = nquads_fixture(LARGE_ROWS);
     let mut group = c.benchmark_group("native_codecs_parse_50k");
     group.sample_size(10);
@@ -101,7 +101,7 @@ fn bench_parse_nquads_parallel_vs_sequential(c: &mut Criterion) {
 /// one line at a time does not cost throughput out of proportion — the streaming lane's
 /// claim is about RESIDENCY, which `stream_parse_alloc` measures instead, and which no
 /// timing here would show.
-fn bench_parse_nquads_streamed_vs_buffered(c: &mut Criterion) {
+fn bench_parse_nquads_streamed_vs_buffered(c: &mut Bench) {
     let text = nquads_fixture(LARGE_ROWS);
     let mut group = c.benchmark_group("native_codecs_parse_50k_stream");
     group.sample_size(10);
@@ -149,11 +149,11 @@ fn nquads_fixture_escape_heavy(rows: usize) -> String {
 /// zero-sized `NoSpans` collector — the same disabled-recording path
 /// `parse_dataset` compiles to; the `on` arm sets `track_source_spans=true`,
 /// forcing the sequential line pipeline and populating a `SpanTable`. This exists
-/// so the `off` path can be OBSERVED in the criterion report to be unchanged; it
+/// so the `off` path can be OBSERVED in the harness report to be unchanged; it
 /// asserts NOTHING about relative timing (the machine is not quiet and numbers are
 /// indicative only) — the byte-identical dataset guarantee is proven by the
 /// `parse::tests` (`tracking_off_returns_no_table`, `dataset_is_identical_with_tracking`).
-fn bench_parse_nquads_span_tracking(c: &mut Criterion) {
+fn bench_parse_nquads_span_tracking(c: &mut Bench) {
     let text = nquads_fixture(ROWS);
     let mut group = c.benchmark_group("native_codecs_parse_span_tracking");
     group.throughput(Throughput::Bytes(text.len() as u64));
@@ -190,7 +190,7 @@ fn bench_parse_nquads_span_tracking(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_serialize_nquads(c: &mut Criterion) {
+fn bench_serialize_nquads(c: &mut Bench) {
     let clean = nquads_fixture(ROWS);
     let clean_ds = parse_dataset(clean.as_bytes(), "application/n-quads", None).expect("parse");
     let dirty = nquads_fixture_escape_heavy(ROWS);
@@ -246,7 +246,7 @@ fn bench_serialize_nquads(c: &mut Criterion) {
                         statement_layer: StatementLayer::PerFormatCapability,
                         jsonld_options: None,
                     },
-                    &mut Discard,
+                    &mut std::io::sink(),
                 )
                 .expect("serialize");
                 black_box(report.bytes_written);
@@ -256,24 +256,10 @@ fn bench_serialize_nquads(c: &mut Criterion) {
     group.finish();
 }
 
-/// A writer that keeps nothing, so a streamed arm measures the emitter rather than
-/// the bench's own accumulation of what it produced.
-struct Discard;
-
-impl std::io::Write for Discard {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 /// Pre-change expanded JSON-LD parse/serialize timing over one deterministic RDF 1.2
 /// fixture at two scales. Allocation and peak-memory metrics live in the separate
-/// `jsonld_alloc` process so allocator atomics cannot perturb Criterion timings.
-fn bench_jsonld_expanded(c: &mut Criterion) {
+/// `jsonld_alloc` process so allocator atomics cannot perturb the harness's timings.
+fn bench_jsonld_expanded(c: &mut Bench) {
     let mut group = c.benchmark_group("jsonld_expanded_baseline");
     for rows in [JSONLD_SMALL_ROWS, JSONLD_LARGE_ROWS] {
         let dataset = jsonld_fixture::build_dataset(rows);
@@ -313,7 +299,7 @@ fn bench_jsonld_expanded(c: &mut Criterion) {
 
 /// Configured context compilation and caller/derived serialization are measured
 /// separately so context reuse is visible rather than hidden in codec throughput.
-fn bench_jsonld_configured(c: &mut Criterion) {
+fn bench_jsonld_configured(c: &mut Bench) {
     use std::sync::Arc;
 
     {
@@ -386,7 +372,7 @@ fn bench_jsonld_configured(c: &mut Criterion) {
 
 /// Context derivation has an explicit work ceiling; this adversarial shape keeps
 /// many profitable namespaces and distinct IRIs below it while exposing scaling.
-fn bench_jsonld_derived_many_namespaces(c: &mut Criterion) {
+fn bench_jsonld_derived_many_namespaces(c: &mut Bench) {
     const NAMESPACES: usize = 64;
     const IRIS_PER_NAMESPACE: usize = 32;
 
@@ -403,7 +389,7 @@ fn bench_jsonld_derived_many_namespaces(c: &mut Criterion) {
 
 /// Named-graph usage accounting and multivalue ordering are independent carrier
 /// hot paths, so keep adversarial shapes for both in the report-only benchmark.
-fn bench_jsonld_carrier_stress(c: &mut Criterion) {
+fn bench_jsonld_carrier_stress(c: &mut Bench) {
     let context = std::sync::Arc::new(
         CompiledJsonLdContext::from_prefixes([("bench", "https://bench.example/")])
             .expect("compile benchmark context"),
@@ -485,7 +471,7 @@ fn star_fixture(rows: usize, star: bool) -> std::sync::Arc<RdfDataset> {
 /// Turtle / TriG / RDF-XML / HexTuples / JSON-LD egress over one ~2k-quad dataset with
 /// quoted-triple and reifier rows and datatyped literals (HexTuples has no triple-term
 /// surface, so it takes the same fixture without the star rows). Report-only.
-fn bench_serialize_formats(c: &mut Criterion) {
+fn bench_serialize_formats(c: &mut Bench) {
     let star = star_fixture(ROWS / 4, true);
     let plain = star_fixture(ROWS / 4, false);
     let mut group = c.benchmark_group("native_codecs_serialize_formats");
@@ -550,7 +536,7 @@ fn turtle_collections_fixture(rows: usize) -> String {
     out
 }
 
-fn bench_parse_turtle_collections(c: &mut Criterion) {
+fn bench_parse_turtle_collections(c: &mut Bench) {
     let text = turtle_collections_fixture(ROWS);
     let mut group = c.benchmark_group("native_codecs_parse_turtle");
     group.throughput(Throughput::Bytes(text.len() as u64));
@@ -587,7 +573,7 @@ fn repeated_predicates_fixture(rows: usize) -> std::sync::Arc<RdfDataset> {
     builder.freeze().expect("repeated-predicate fixture")
 }
 
-fn bench_serialize_turtle_repeated_predicates(c: &mut Criterion) {
+fn bench_serialize_turtle_repeated_predicates(c: &mut Bench) {
     let dataset = repeated_predicates_fixture(ROWS * 4);
     let mut group = c.benchmark_group("native_codecs_serialize_turtle");
     group.throughput(Throughput::Elements(dataset.quad_count() as u64));
@@ -605,7 +591,7 @@ fn bench_serialize_turtle_repeated_predicates(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
+bench_group!(
     benches,
     bench_parse_nquads,
     bench_parse_nquads_parallel_vs_sequential,
@@ -620,4 +606,4 @@ criterion_group!(
     bench_jsonld_derived_many_namespaces,
     bench_jsonld_carrier_stress
 );
-criterion_main!(benches);
+bench_main!(benches);

@@ -3,19 +3,18 @@
 
 //! Media-type → native RDF text format routing.
 //!
-//! [`NativeRdfFormat`] is the single chokepoint the eventual `oxigraph::io::RdfFormat`
-//! removal retargets: every codec consumer names a format by media type at the
+//! [`NativeRdfFormat`] is the single format chokepoint: every codec consumer names a format by media type at the
 //! contract boundary and [`classify`] resolves it once. Unknown media types HARD-fail
 //! (`native-codec-unsupported-format`) rather than degrading — no optional fallback
 //! codec (`.goals` no-optionality).
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use purrdf_lex::json::Value;
 
 use crate::RdfDiagnostic;
 
 /// The RDF text serializations the native codec backend parses and serializes via the
-/// `purrdf-gts` codecs. This is the codec-selector enum that replaces
-/// `oxigraph::io::RdfFormat`'s *use as a router* across the workspace.
+/// `purrdf-gts` codecs. This is the codec-selector enum used as the format router
+/// across the workspace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeRdfFormat {
     /// Turtle (`text/turtle`).
@@ -359,22 +358,28 @@ impl NativeRdfFormat {
     }
 }
 
-impl Serialize for NativeRdfFormat {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(self.id())
+impl NativeRdfFormat {
+    /// The format as a JSON value: its registry id ([`Self::id`]) as a string.
+    pub fn to_json(self) -> Value {
+        Value::from(self.id())
     }
-}
 
-impl<'de> Deserialize<'de> for NativeRdfFormat {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        classify(&value).map_err(serde::de::Error::custom)
+    /// The format a JSON string names, resolved by [`classify`]: a registry id, a media
+    /// type, or a `.`-prefixed extension.
+    ///
+    /// # Errors
+    ///
+    /// `native-codec-unsupported-format` when `value` is not a string or names no format.
+    pub fn from_json(value: &Value) -> Result<Self, RdfDiagnostic> {
+        value.as_str().map_or_else(
+            || {
+                Err(RdfDiagnostic::error(
+                    "native-codec-unsupported-format",
+                    format!("an RDF format is named by a JSON string, not {value}"),
+                ))
+            },
+            classify,
+        )
     }
 }
 
@@ -656,7 +661,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_ids_extensions_and_serde_are_total_and_unique() {
+    fn registry_ids_extensions_and_json_are_total_and_unique() {
         let mut ids = std::collections::BTreeSet::new();
         let mut extensions = std::collections::BTreeSet::new();
         for row in FORMATS {
@@ -671,16 +676,20 @@ mod tests {
                 classify(&format!(".{}", row.extension)).unwrap(),
                 row.format
             );
-            let json = serde_json::to_string(&row.format).expect("serialize format");
-            assert_eq!(json, format!("\"{}\"", row.id));
+            let json = row.format.to_json();
             assert_eq!(
-                serde_json::from_str::<NativeRdfFormat>(&json).expect("deserialize format"),
+                purrdf_lex::json::write_compact(&json),
+                format!("\"{}\"", row.id)
+            );
+            assert_eq!(
+                NativeRdfFormat::from_json(&json).expect("deserialize format"),
                 row.format
             );
         }
         assert_eq!(ids.len(), FORMATS.len());
         assert_eq!(extensions.len(), FORMATS.len());
-        assert!(serde_json::from_str::<NativeRdfFormat>("\"unknown\"").is_err());
+        assert!(NativeRdfFormat::from_json(&"unknown".into()).is_err());
+        assert!(NativeRdfFormat::from_json(&1_u8.into()).is_err());
     }
 
     #[test]

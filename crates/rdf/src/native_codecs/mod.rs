@@ -10,12 +10,11 @@
 //! longer route through the external `purrdf-gts` text/RDF-XML codecs. It implements
 //! the narrow
 //! [`RdfParserBackend`]/[`RdfSerializer`] traits and is **codec-only** — it never
-//! touches the oxigraph Store, so it compiles under `--no-default-features --features
-//! gts` (no oxigraph). That is the  end-state: the text path needs no Store.
+//! touches a store, so it compiles under `--no-default-features --features gts`: the
+//! text path needs no Store.
 //!
-//! [`GtsCodecBackend`] is the always-on native replacement for `OxigraphBackend`'s
-//! codec role; the workspace-wide sweep (Tasks 2–5) routes every
-//! `oxigraph::io` text parse/serialize call site through it.
+//! [`GtsCodecBackend`] is the always-on native codec backend; every text
+//! parse/serialize call site in the workspace routes through it.
 
 mod media_type;
 // The shared source/container routing identity that subsumes `media_type::classify`
@@ -27,8 +26,8 @@ mod source_format;
 // `pub(crate)` so the container bridge (`crate::gts::gts_to_ser`) can construct a
 // `SerGraph` from a real purrdf-gts model graph read out of a bundle.
 pub(crate) mod ser_model;
-// `pub(crate)` so the legacy `dataset_io` oxigraph path can reuse the SHARED
-// `fold_statement_layer` (one fold, no drift) — Task 1.
+// `pub(crate)` so sibling ingest paths can reuse the SHARED
+// `fold_statement_layer` (one fold, no drift).
 pub(crate) mod parse;
 mod serialize;
 // First-party JSON-LD-star / YAML-LD-star codec: serializes the frozen IR to the PurRDF
@@ -37,29 +36,29 @@ mod serialize;
 // validate / pipeline consumers share, so all three call it here (the codec previously
 // lived in `purrdf-pipeline::stages::yaml_ld`, above `rdf` and `validate`).
 pub mod jsonld;
-/// Native in-memory Open Knowledge Format Markdown-bundle codec.
 pub mod okf;
 // First-party N-Triples / N-Quads / Turtle / TriG text parser: lowers
 // directly to the in-memory GtsGraph the statement-layer fold consumes, replacing the
 // purrdf-gts text codecs for the line/Turtle family.
 mod text_parse;
 // First-party RDF/XML codec: implements the W3C RDF/XML grammar in-repo on
-// a pure-Rust XML DOM (`roxmltree`), parsing straight into the frozen IR through the
+// the workspace's one XML reader (`purrdf_lex::xml`), parsing straight into the frozen IR through the
 // shared statement-layer fold and serializing from the first-party `SerGraph` —
 // replacing the external purrdf-gts `rdf_codecs::{from_rdf_xml, to_rdf_xml}` codec
 // entry points (the first-party mandate). It is fully purrdf-gts free.
 mod rdfxml;
 // First-party TriX codec ("Triples in XML"): a quads/named-graph XML serialization
-// parsed on the same pure-Rust XML DOM (`roxmltree`) as `rdfxml` and serialized by
+// parsed on the same XML reader (`purrdf_lex::xml`) as `rdfxml` and serialized by
 // hand-rolled deterministic XML emission from the first-party `SerGraph`.
 mod trix;
-// First-party HexTuples codec: a line-oriented NDJSON quads serialization, encoded and
-// decoded through `serde_json` (already a dep) into/from the first-party `SerGraph`.
+// First-party HexTuples codec: a line-oriented NDJSON quads serialization, read and
+// written through `purrdf_lex::json` into/from the first-party `SerGraph`.
 mod hextuples;
 // Opt-in triple → source-position side table (SARIF source tracing). A runtime option,
 // NOT a Cargo feature; the default `NoSpans` collector monomorphizes the recording out
 // so the pre-existing parse path is byte-identical.
 mod span;
+mod syntax;
 // Per-format codec dispatch: the single `NativeRdfFormat` → behavior chokepoint. Holds
 // the `RdfCodec` trait, the shared `LineCodec` for the line/Turtle family, and the
 // `codec_for` resolver every parse/serialize call site routes through (replacing the
@@ -137,7 +136,7 @@ pub fn transcode_under_document_base(
 }
 
 /// The native codec backend: a codec-only [`RdfParserBackend`] + [`RdfSerializer`] over
-/// the `purrdf-gts` text codecs. Holds no state and references no oxigraph Store.
+/// the `purrdf-gts` text codecs. Holds no state and references no store.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GtsCodecBackend;
 
@@ -259,8 +258,10 @@ mod tests {
 
         let yaml = jsonld::serialize_dataset_to_yamlld(&dataset, None).expect("YAML-LD");
         let yaml_as_json = jsonld::yamlld_to_jsonld(yaml.as_bytes()).expect("YAML to JSON");
-        let expected: serde_json::Value = serde_json::from_str(&json).expect("expected JSON");
-        let actual: serde_json::Value = serde_json::from_str(&yaml_as_json).expect("actual JSON");
+        let mut expected = purrdf_lex::json::read(&json).expect("expected JSON");
+        let mut actual = purrdf_lex::json::read(&yaml_as_json).expect("actual JSON");
+        expected.sort_keys();
+        actual.sort_keys();
         assert_eq!(actual, expected);
         assert!(!yaml.contains("schema:"));
         assert!(yaml.contains("https://schema.org/name"));
@@ -776,8 +777,8 @@ mod tests {
 
     #[test]
     fn lexical_form_is_preserved_verbatim() {
-        // B2 fidelity: the native path must NOT canonicalize typed literals the way the
-        // oxigraph Store does. "0.70", a "+00:00" dateTime, and "1.0E0" survive
+        // B2 fidelity: the native path must NOT value-space-canonicalize typed literals.
+        // "0.70", a "+00:00" dateTime, and "1.0E0" survive
         // parse → serialize → re-parse with their lexical form UNCHANGED.
         let cases = [
             ("0.70", "http://www.w3.org/2001/XMLSchema#decimal"),
@@ -816,7 +817,7 @@ mod tests {
         // bool/null/number/timestamp on re-parse unless the emitter quotes them.
         // Every lexical form below is exactly one of those adversarial tokens; the
         // round-trip bar is LOSSLESS (`assert_round_trips` requires isomorphism), so
-        // the JSON->YAML bridge must force-quote them rather than let serde_yaml's
+        // the YAML emitter must force-quote them rather than let a YAML reader's
         // default resolver re-coerce the type.
         let adversarial = [
             "true",

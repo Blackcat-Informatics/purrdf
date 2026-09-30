@@ -4,12 +4,12 @@
 //! Isolate cold preparation, cache hits and prepared execution. Uses existing
 //! public APIs so the identical benchmark can measure the base revision.
 
-use criterion::{Criterion, criterion_main};
 use purrdf_core::ir::pack::dataset_from_view;
 use purrdf_core::{
     BlankScope, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, canonical_relabel,
 };
 use purrdf_sparql_eval::{InternedOutcome, NativeSparqlEngine, PlanCache, QueryOptions};
+use purrdf_testkit::bench::{Bench, bench_main};
 use std::hint::black_box;
 
 const QUERY: &str = "SELECT ?s ?value WHERE { ?s <http://example.org/p> ?value } ORDER BY ?s";
@@ -28,7 +28,7 @@ const QUERY: &str = "SELECT ?s ?value WHERE { ?s <http://example.org/p> ?value }
 /// strategies. Keeping the text identical removes that confound.
 const PARAMETERIZED: &str = QUERY;
 
-fn bench(c: &mut Criterion) {
+fn bench(c: &mut Bench) {
     let mut builder = RdfDatasetBuilder::new();
     let predicate = builder.intern_iri("http://example.org/p");
     let value = builder.intern_iri("http://example.org/value");
@@ -127,7 +127,7 @@ fn bench(c: &mut Criterion) {
     group.finish();
 }
 
-fn canonical_reuse(c: &mut Criterion) {
+fn canonical_reuse(c: &mut Bench) {
     let mut group = c.benchmark_group("canonical_relabel");
     for (name, blanks) in [
         ("ground_literal_payload", false),
@@ -155,7 +155,7 @@ fn canonical_reuse(c: &mut Criterion) {
     group.finish();
 }
 
-fn typed_materialization(c: &mut Criterion) {
+fn typed_materialization(c: &mut Bench) {
     let mut builder = RdfDatasetBuilder::new();
     let predicate = builder.intern_iri("http://example.org/p");
     let literal = builder.intern_literal(RdfLiteral::simple("payload".repeat(512)));
@@ -171,11 +171,11 @@ fn typed_materialization(c: &mut Criterion) {
     });
 }
 
-/// Run the prepared-query comparison group with Criterion CLI configuration.
+/// Run the prepared-query comparison group with the harness's command-line configuration.
 pub fn benches() {
-    let mut criterion = Criterion::default().configure_from_args();
+    let mut criterion = Bench::default().configure_from_args();
     bench(&mut criterion);
     canonical_reuse(&mut criterion);
     typed_materialization(&mut criterion);
 }
-criterion_main!(benches);
+bench_main!(benches);

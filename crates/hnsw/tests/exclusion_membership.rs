@@ -28,19 +28,22 @@
 //! Fixtures use `example.org` throughout; every IRI below is fixture configuration, never
 //! a minted vocabulary.
 
+#[path = "support/fixture.rs"]
+mod fixture;
+use fixture::{params, seeded_matrix};
 use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::distance::{Arithmetic, Exact, Path, Reassociated};
 use purrdf_core::{DistanceMetric, TermValue};
 use purrdf_hnsw::relation::{HnswObservations, HnswRelation, HnswSpace};
-use purrdf_hnsw::{HnswIndex, Params, VectorMatrix, level::splitmix64};
+use purrdf_hnsw::{HnswIndex, Params, VectorMatrix};
 use purrdf_sparql_eval::{
     CandidateDomains, Completeness, ExclusionBasis, KnnGuard, OrderFidelity, PfArgs, PfRow,
     PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, TermKind,
 };
 
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_xsd::datatype::XSD_INTEGER;
 const PREDICATE: &str = "https://example.org/pf/nearest";
 const STRATUM: &str = "https://example.org/stratum/vector";
 
@@ -54,23 +57,6 @@ const ROWS: usize = 32;
 /// neither half of the agreement is vacuous.
 const STRANGERS: usize = 24;
 
-fn params() -> Params {
-    Params::new(4, 8, 16, 8).expect("the fixture parameters are valid")
-}
-
-/// A deterministic fixture matrix. Nothing here reads a clock or an RNG.
-fn matrix(rows: usize, dims: usize) -> VectorMatrix {
-    let mut state = 0x51DE_0000_1234_ABCD_u64;
-    let mut data = Vec::with_capacity(rows * dims);
-    for _ in 0..rows * dims {
-        state = splitmix64(state);
-        let unit = (state >> 11) as f64 / (1_u64 << 53) as f64;
-        let value = unit.mul_add(2.0, -1.0);
-        data.push(if value == 0.0 { 0.25 } else { value });
-    }
-    VectorMatrix::new(rows, dims, data).expect("the fixture matrix is valid")
-}
-
 /// The fixture's whole term universe: the terms the space holds, then the strangers.
 fn universe() -> Vec<TermValue> {
     (0..ROWS + STRANGERS)
@@ -80,7 +66,7 @@ fn universe() -> Vec<TermValue> {
 
 /// A space over the first [`ROWS`] terms of the universe, at beam width `ef_search`.
 fn space_at(ef_search: usize) -> (VectorMatrix, Arc<HnswSpace>) {
-    let vectors = matrix(ROWS, 4);
+    let vectors = seeded_matrix(ROWS, 4, 0x51DE_0000_1234_ABCD, Some(0.25));
     let index = HnswIndex::build(
         vectors.clone(),
         &DistanceMetric::SquaredEuclidean,
@@ -107,8 +93,8 @@ const WIDE: usize = 150;
 /// A reassociated space over the first [`ROWS`] terms of the universe, [`WIDE`]
 /// components per row, at the widest beam the fixture admits, beside its matrix.
 fn reassociated_space() -> (VectorMatrix, Arc<HnswSpace<Reassociated>>) {
-    let vectors = matrix(ROWS, WIDE);
-    let index = HnswIndex::build_reassociated(
+    let vectors = seeded_matrix(ROWS, WIDE, 0x51DE_0000_1234_ABCD, Some(0.25));
+    let index = purrdf_hnsw::build::<Reassociated>(
         vectors.clone(),
         &DistanceMetric::SquaredEuclidean,
         Params::new(4, 8, 16, ROWS).expect("the fixture beam is valid"),

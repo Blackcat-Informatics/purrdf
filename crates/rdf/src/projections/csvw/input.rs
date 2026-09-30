@@ -3,15 +3,13 @@
 
 //! Filesystem-free CSVW input resources and diagnostics.
 
+use crate::projections::util::byte_entries;
 use std::collections::BTreeMap;
-
-use serde::{Deserialize, Serialize};
 
 use super::super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
 
 /// Explicit CSVW processing entry point selected by the host.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", tag = "kind")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CsvwAction {
     /// Process a table, optionally with a host-selected metadata document.
     Table {
@@ -103,9 +101,7 @@ impl CsvwInput {
 
     /// Deterministically ordered resources.
     pub fn resources(&self) -> impl ExactSizeIterator<Item = (&str, &[u8])> {
-        self.resources
-            .iter()
-            .map(|(iri, bytes)| (iri.as_str(), bytes.as_slice()))
+        byte_entries(&self.resources)
     }
 }
 
@@ -121,8 +117,7 @@ fn action_iris(action: &CsvwAction) -> impl Iterator<Item = &str> {
 }
 
 /// Stable severity for a non-fatal CSVW metadata or row diagnostic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CsvwWarningKind {
     /// Invalid metadata value ignored according to the Recommendation.
     InvalidValue,
@@ -133,8 +128,7 @@ pub enum CsvwWarningKind {
 }
 
 /// Deterministic non-fatal CSVW diagnostic.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CsvwWarning {
     /// Stable diagnostic category.
     pub kind: CsvwWarningKind,

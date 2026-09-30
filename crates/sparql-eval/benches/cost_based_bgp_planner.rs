@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Cost-based BGP join-planner latency benchmark: end-to-end evaluation of a skewed
@@ -20,27 +20,16 @@
 //! Report-only, `cargo bench -p purrdf-sparql-eval` (the `make bench` lane) — excluded
 //! from `make check`.
 
-use std::sync::Arc;
+#[path = "../tests/support/mod.rs"]
+mod support;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use support::skewed_star;
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder};
+use purrdf_testkit::bench::{Bench, bench_group, bench_main};
+
+use purrdf_core::RdfDataset;
 use purrdf_sparql_algebra::SparqlParser;
 use purrdf_sparql_eval::{EvalCtx, evaluate_query};
-
-/// A skewed star: `:hub --pred--> N leaves` for each `(name, N)` pair.
-fn skewed_star(spec: &[(&str, usize)]) -> Arc<RdfDataset> {
-    let mut b = RdfDatasetBuilder::new();
-    let hub = b.intern_iri("http://ex/hub");
-    for &(name, count) in spec {
-        let pred = b.intern_iri(&format!("http://ex/{name}"));
-        for i in 0..count {
-            let leaf = b.intern_iri(&format!("http://ex/{name}{i}"));
-            b.push_quad(hub, pred, leaf, None);
-        }
-    }
-    b.freeze().expect("freeze")
-}
 
 const STAR_QUERY: &str = "SELECT ?a ?b ?c ?d WHERE { \
      ?s <http://ex/hot> ?a . ?s <http://ex/warm> ?b . \
@@ -51,10 +40,10 @@ const STAR_QUERY: &str = "SELECT ?a ?b ?c ?d WHERE { \
 fn eval(ds: &RdfDataset, parsed: &purrdf_sparql_algebra::Query) {
     let mut ctx = EvalCtx::new(ds);
     let outcome = evaluate_query(parsed, &mut ctx).expect("eval");
-    criterion::black_box(outcome);
+    std::hint::black_box(outcome);
 }
 
-fn bench_skewed_star(c: &mut Criterion) {
+fn bench_skewed_star(c: &mut Bench) {
     let parsed = SparqlParser::new().parse_query(STAR_QUERY).expect("parse");
 
     let mut group = c.benchmark_group("cost_based_bgp_planner");
@@ -74,5 +63,5 @@ fn bench_skewed_star(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_skewed_star);
-criterion_main!(benches);
+bench_group!(benches, bench_skewed_star);
+bench_main!(benches);

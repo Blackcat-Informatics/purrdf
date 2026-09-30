@@ -12,15 +12,19 @@ members = [
     "crates/columnar",
     "crates/datalog",
     "crates/deflate",
+    "crates/ed25519",
     "crates/entail",
     "crates/envelope-probe",
     "crates/geo",
     "crates/gts",
     "crates/hash",
+    "crates/hash-conformance",
+    "crates/helper-census",
     "crates/hnsw",
     "crates/iri",
     "crates/json",
     "crates/jsonschema",
+    "crates/lex",
     "crates/markdown",
     "crates/purrdf",
     "crates/rdf",
@@ -76,6 +80,7 @@ purrdf-columnar = { path = "crates/columnar", version = "2.0.2" }
 purrdf-core = { path = "crates/rdf-core", version = "2.0.2" }
 purrdf-datalog = { path = "crates/datalog", version = "2.0.2" }
 purrdf-deflate = { path = "crates/deflate", version = "2.0.2" }
+purrdf-ed25519 = { path = "crates/ed25519", version = "2.0.2" }
 purrdf-entail = { path = "crates/entail", version = "2.0.2" }
 purrdf-events = { path = "crates/rdf-events", version = "2.0.2" }
 purrdf-geo = { path = "crates/geo", version = "2.0.2" }
@@ -85,6 +90,7 @@ purrdf-hnsw = { path = "crates/hnsw", version = "2.0.2" }
 purrdf-iri = { path = "crates/iri", version = "2.0.2" }
 purrdf-json = { path = "crates/json", version = "2.0.2" }
 purrdf-jsonschema = { path = "crates/jsonschema", version = "2.0.2" }
+purrdf-lex = { path = "crates/lex", version = "2.0.2" }
 purrdf-markdown = { path = "crates/markdown", version = "2.0.2" }
 purrdf-rdf = { path = "crates/rdf", version = "2.0.2" }
 purrdf-retrieval = { path = "crates/retrieval", version = "2.0.2" }
@@ -97,8 +103,10 @@ purrdf-sparql-results = { path = "crates/sparql-results", version = "2.0.2" }
 # DEV-ONLY test support (`publish = false`): goldens, temporary paths under the
 # target directory, frozen differential vectors and the `harness = false`
 # runner. PATH-ONLY with NO `version`, for the reason given for
-# `purrdf-alloc-probe` above. It depends on no `purrdf-*` crate, so any member's
-# tests may use it without closing a cycle.
+# `purrdf-alloc-probe` above. Its one first-party dependency is `purrdf-hash`,
+# the zero-dependency root, whose frozen-vector suites live in the unpublished
+# `purrdf-hash-conformance` rather than in its own tests, so any member's tests
+# may use it without closing a cycle.
 purrdf-testkit = { path = "crates/testkit" }
 purrdf-stack = { path = "crates/stack", version = "2.0.2" }
 purrdf-text = { path = "crates/text", version = "2.0.2" }
@@ -106,26 +114,25 @@ purrdf-validate = { path = "crates/validate", version = "2.0.2" }
 purrdf-xsd = { path = "crates/xsd", version = "2.0.2" }
 
 # --- external crates ---
-# Test-only structural source census; both already occur in the resolved graph.
-proc-macro2 = "1"
+# The structural source censuses (the rdf and shapes census tests and the
+# unpublished helper-census binary); both already occur in the resolved graph.
+# `span-locations` gives the helper census line numbers and the byte ranges it
+# re-lexes function bodies from; it changes nothing inside a real proc macro.
+proc-macro2 = { version = "1", features = ["span-locations"] }
 syn = { version = "2", features = ["full", "visit"] }
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
-ciborium = "0.2"
 # Argument parsing for the `purrdf` CLI (native-only binary crate `crates/cli`).
 # `derive` supplies the `Parser`/`Subcommand`/`ValueEnum` macros the CLI models
 # its command tree with. Not a library dependency, so the wasm gate (which
 # builds `--lib` on an explicit `-p` allowlist that omits `purrdf-cli`) is
 # unaffected.
 clap = { version = "4", features = ["derive"] }
-criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
-ed25519-dalek = { version = "3", default-features = false, features = ["fast", "zeroize"] }
 # OS entropy for the SPARQL RAND()/UUID()/STRUUID() seed on native targets (see
 # crates/sparql-eval's target-gated dependency section).
 getrandom = "0.3"
 # Only the raw `HashTable` is used; every caller supplies its own fixed-key hash
 # (`purrdf_hash::fixed::FixedHasher`),
-# so the default hasher (foldhash) and allocator-api2 stay OFF. Tracks the same
-# major `indexmap` (via serde_yaml_ng) resolves, so the graph holds one hashbrown.
+# so the default hasher (foldhash) and allocator-api2 stay OFF.
 hashbrown = { version = "0.17", default-features = false }
 # The C library bindings behind the CLI's immutable-input authority on Linux:
 # `mmap`/`munmap` for the read-only pack mapping, and `memfd_create` + `fcntl`
@@ -135,32 +142,14 @@ hashbrown = { version = "0.17", default-features = false }
 libc = "0.2"
 # purrdf-stack also uses these target-gated declarations to measure the current
 # native thread stack; wasm32 uses its own shadow-stack floor and no libc.
-# SIMD byte scanning (SWAR fallback, wasm-clean). Used by the purrdf-rdf codec
-# hot paths and the purrdf-sparql-algebra tokenizer.
-memchr = "2"
 pyo3 = { version = "0.29", features = ["abi3-py313", "extension-module"] }
 rayon = "1"
-regex = "1"
+# Built without `perf-literal`: its literal prefilter is aho-corasick and memchr,
+# a second byte-search implementation beside `purrdf_lex::scan`. Every other
+# performance feature (lazy DFA, one-pass, bounded backtracker, cache, inline)
+# stays on.
+regex = { version = "1", default-features = false, features = ["std", "unicode", "perf-cache", "perf-dfa", "perf-onepass", "perf-backtrack", "perf-inline"] }
 regex-syntax = "0.8.11"
-roxmltree = "0.20"
-serde = { version = "1", features = ["derive"] }
-# `float_roundtrip`: a JSON number that becomes an `f64` becomes the binary64
-# nearest its decimal value. Without it `serde_json` scales a `u64` significand
-# by a binary64 power of ten, rounding at each step and dropping every digit past
-# the nineteenth, so a JSON-LD, CSVW, OKF or ShExJ number could land on the
-# neighbour of the value it spells (`122.416294033786585` read as
-# `122.4162940337866`). The feature's reader is exact: a fast path only where
-# the significand and the power are exact binary64 values, an 80-bit estimate
-# only where its error bound cannot straddle a midpoint, and otherwise a
-# big-integer comparison against the midpoint over up to 768 digits and a sticky
-# digit. It is one feature for the whole graph, which is the point.
-# Exact JSON Schema bounds need arbitrary_precision. Value visitors must decode
-# typed numbers instead of treating serde's internal number map as a JSON object.
-# RDF binary64 conversion and YAML emission use explicit primitive serializers.
-serde_json = { version = "1", features = ["float_roundtrip", "arbitrary_precision"] }
-# Maintained continuation of the archived serde_yaml 0.9 (same API; the
-# `serde_yaml` name is kept at use sites via this package rename).
-serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
 # SHA-256/384/512 (the SPARQL SHA-2 built-ins, content digests); pure software.
 sha2 = { version = "0.11", default-features = false }
 structured-zstd = "0.0.49"
@@ -349,7 +338,7 @@ debug = false
 # unoptimized one. The deleted `[profile.dev.package."*"] opt-level = 2` table
 # reached them only because `package."*"` outranks `build-override`, so raising
 # the base alone would have QUIETLY DE-OPTIMIZED sixty units that are pure build
-# time: `serde_derive`, `clap_derive`, `displaydoc` and the rest expand on every
+# time: `clap_derive`, `pyo3-macros`, `wasm-bindgen-macro` and the rest expand on every
 # compile of every crate that uses them. Named here, where the population is
 # named, instead of riding on a glob that means something else.
 [profile.dev.build-override]

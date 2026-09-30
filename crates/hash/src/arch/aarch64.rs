@@ -17,7 +17,7 @@ use std::arch::is_aarch64_feature_detected;
 
 use super::{Crc32Update, HexEncode, Sha1Blocks};
 use crate::crc32::FOLD;
-use crate::hex::{ALPHABET, encode_portable};
+use crate::hex::{ALPHABET, UPPER_ALPHABET, encode_portable};
 use crate::sha1::K;
 
 /// Sixteen bytes as a vector, byte `i` in lane `i`.
@@ -226,20 +226,20 @@ pub(crate) fn hex_aarch64_neon() -> Option<HexEncode> {
     is_aarch64_feature_detected!("neon").then_some(hex_encode as HexEncode)
 }
 
-fn hex_encode(input: &[u8], output: &mut [u8]) {
+fn hex_encode(input: &[u8], output: &mut [u8], upper: bool) {
     // SAFETY: this function escapes the module only through
     // `hex_aarch64_neon`, which returns it after detecting `neon`, the one
     // feature the kernel is compiled for.
-    unsafe { hex_kernel(input, output) }
+    unsafe { hex_kernel(input, output, upper) }
 }
 
 /// Sixteen input bytes per step: the high and low nibbles of every byte,
 /// each looked up in the alphabet with `tbl`, then zipped high-first into
 /// thirty-two characters. The tail after the last whole step is encoded by
-/// the portable table.
+/// the portable compare-select loop.
 #[target_feature(enable = "neon")]
-fn hex_kernel(input: &[u8], output: &mut [u8]) {
-    let alphabet = load(ALPHABET);
+fn hex_kernel(input: &[u8], output: &mut [u8], upper: bool) {
+    let alphabet = load(if upper { UPPER_ALPHABET } else { ALPHABET });
     let low_nibble = vdupq_n_u8(0x0f);
     let (chunks, tail) = input.as_chunks::<16>();
     let (pairs, _) = output.as_chunks_mut::<32>();
@@ -252,7 +252,7 @@ fn hex_kernel(input: &[u8], output: &mut [u8]) {
         store(&mut halves[1], vzip2q_u8(high, low));
     }
     let done = chunks.len() * 16;
-    encode_portable(tail, &mut output[2 * done..]);
+    encode_portable(tail, &mut output[2 * done..], upper);
 }
 
 // --- The fixed hasher's AES round ------------------------------------------

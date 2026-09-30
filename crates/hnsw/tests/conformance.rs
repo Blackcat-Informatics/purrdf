@@ -40,20 +40,23 @@
 //! `M` sets, would be a statement about two different indexes wearing one corpus, which is
 //! exactly what the task forbids.
 
+#[path = "support/fixture.rs"]
+mod fixture;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use purrdf_core::DistanceMetric;
 use purrdf_core::distance::{Arithmetic, Exact, Reassociated};
+use purrdf_hash::fnv::fnv1a64;
 use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{
-    HnswIndex, IMPLEMENTATION_ID, IMPLEMENTATION_ID_REASSOCIATED, INDEX_MEDIA_TYPE, Params,
-    VectorMatrix, profile,
+    HnswIndex, IMPLEMENTATION_ID, IMPLEMENTATION_ID_REASSOCIATED, INDEX_MEDIA_TYPE,
+    IndexArithmetic, Params, VectorMatrix, profile,
 };
-use purrdf_sparql_eval::knn::{Kernel, Ranked, best};
+use purrdf_sparql_eval::knn::{Kernel, best};
 use std::fmt::Write as _;
 
-use serde_json::{Value, json};
+use purrdf_lex::json::{self, Object, Value};
 
 /// The one kernel both the index and the oracle rank by.
 const KERNEL: Kernel = Kernel::SquaredEuclidean;
@@ -70,17 +73,6 @@ struct Fixture {
     matrix: VectorMatrix,
 }
 
-/// FNV-1a over the canonical payload bytes: fixed constants, no hasher choice to drift.
-const fn fnv1a_64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    let mut index = 0;
-    while index < bytes.len() {
-        hash = (hash ^ bytes[index] as u64).wrapping_mul(0x0000_0100_0000_01b3);
-        index += 1;
-    }
-    hash
-}
-
 /// A uniform family in `[-1, 1)` from the splitmix64 stream, exact zero displaced.
 fn uniform(rows: usize, dims: usize, seed: u64) -> VectorMatrix {
     let elements = rows
@@ -89,10 +81,9 @@ fn uniform(rows: usize, dims: usize, seed: u64) -> VectorMatrix {
     let mut state = seed;
     let mut data = Vec::with_capacity(elements);
     for _ in 0..elements {
-        state = splitmix64(state);
-        let unit = (state >> 11) as f64 / (1_u64 << 53) as f64;
-        let value = unit.mul_add(2.0, -1.0);
-        data.push(if value == 0.0 { 0.25 } else { value });
+        data.push(purrdf_testkit::rng::signed_unit_step_nonzero(
+            &mut state, 0.25,
+        ));
     }
     VectorMatrix::new(rows, dims, data).expect("the generated matrix is finite and rectangular")
 }
@@ -158,10 +149,7 @@ fn hub(rows: usize, dims: usize) -> VectorMatrix {
         .map(|row| {
             let scale = if row + 1 == rows { 10.0 } else { 0.01 };
             (0..dims)
-                .map(|_| {
-                    state = splitmix64(state);
-                    ((state >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0) * scale
-                })
+                .map(|_| purrdf_testkit::rng::signed_unit_step(&mut state) * scale)
                 .collect()
         })
         .collect();
@@ -237,20 +225,6 @@ fn norms_of(matrix: &VectorMatrix) -> Vec<f64> {
         .collect()
 }
 
-/// Every row scored against `query`, in the exact path's order.
-fn exact_scored(matrix: &VectorMatrix, norms: &[f64], query: usize) -> Vec<Ranked> {
-    let exact = Exact::resolve().expect("the test thread runs the default float environment");
-    let vector = matrix.row(query);
-    (0..matrix.rows())
-        .map(|row| Ranked {
-            distance: KERNEL
-                .distance(exact, vector, norms[query], matrix.row(row), norms[row])
-                .expect("the fixture is finite and the kernel keeps it so"),
-            row,
-        })
-        .collect()
-}
-
 /// One run's receipt value plus the two facts the caller asserts on.
 struct Run {
     json: Value,
@@ -285,7 +259,7 @@ fn run_regime(fixture: &Fixture, index: &HnswIndex, norms: &[f64], ef: usize, k:
 /// [`run_regime`] for an index under any arithmetic, whose reported distances must equal
 /// `oracle`'s bits. Recall is always counted against the EXACT top-`k`: the approximation
 /// is graded against the exact answer whatever arithmetic the index ranks under.
-fn run_regime_under<A: Arithmetic>(
+fn run_regime_under<A: IndexArithmetic>(
     fixture: &Fixture,
     index: &HnswIndex<A>,
     norms: &[f64],
@@ -306,7 +280,7 @@ fn run_regime_under<A: Arithmetic>(
     let mut rank_by_row = vec![usize::MAX; rows];
 
     for query in 0..rows {
-        let mut ordered = exact_scored(&fixture.matrix, norms, query);
+        let mut ordered = fixture::exact_scored(KERNEL, &fixture.matrix, norms, query);
         ordered.sort_unstable();
         let exact_top = best(k, ordered.iter().copied());
 
@@ -385,45 +359,54 @@ fn run_regime_under<A: Arithmetic>(
             fixture.name
         );
 
-        observations.push(json!({
-            "query": query,
-            "offered": offered_rows.len(),
-            "visited": visited,
-            "hits": this_hits,
-            "offered_rows": offered_rows,
-            "exact_rows": exact_rows,
-        }));
+        observations.push(Value::from(
+            Object::new()
+                .with("query", query)
+                .with("offered", offered_rows.len())
+                .with("visited", visited)
+                .with("hits", this_hits)
+                .with("offered_rows", offered_rows)
+                .with("exact_rows", exact_rows),
+        ));
     }
 
     let recall = hits as f64 / (rows * k) as f64;
-    let digest = fnv1a_64(&index.canonical_image());
-    let run = json!({
-        "fixture": fixture.name,
-        "index_identity": {
-            "implementation": profile::implementation_id_for::<A>(),
-            "parameter_encoding": profile::PARAMETER_ENCODING,
-            "payload_media_type": INDEX_MEDIA_TYPE,
-            "loss_evidence": profile::loss_evidence_for::<A>(index.arithmetic().path()),
-            "canonical_image_digest": format!("{digest:016x}"),
-        },
-        "metric": "squared-euclidean",
-        "parameters": {
-            "M": params.m(),
-            "M0": params.m0(),
-            "ef_construction": params.ef_construction(),
-            "ef_search": params.ef_search(),
-        },
-        "rows": rows,
-        "dims": fixture.matrix.dims(),
-        "k": k,
-        "queries": rows,
-        "offered_total": offered_total,
-        "visited_total": visited_total,
-        "visited_mean": visited_total as f64 / rows as f64,
-        "recall_at_k": recall,
-        "complete": false,
-        "queries_detail": observations,
-    });
+    let digest = fnv1a64(&index.canonical_image());
+    let run = Value::from(
+        Object::new()
+            .with("fixture", fixture.name)
+            .with(
+                "index_identity",
+                Object::new()
+                    .with("implementation", A::IMPLEMENTATION_ID)
+                    .with("parameter_encoding", profile::PARAMETER_ENCODING)
+                    .with("payload_media_type", INDEX_MEDIA_TYPE)
+                    .with(
+                        "loss_evidence",
+                        profile::loss_evidence_for::<A>(index.arithmetic().path()),
+                    )
+                    .with("canonical_image_digest", format!("{digest:016x}")),
+            )
+            .with("metric", "squared-euclidean")
+            .with(
+                "parameters",
+                Object::new()
+                    .with("M", params.m())
+                    .with("M0", params.m0())
+                    .with("ef_construction", params.ef_construction())
+                    .with("ef_search", params.ef_search()),
+            )
+            .with("rows", rows)
+            .with("dims", fixture.matrix.dims())
+            .with("k", k)
+            .with("queries", rows)
+            .with("offered_total", offered_total)
+            .with("visited_total", visited_total)
+            .with("visited_mean", visited_total as f64 / rows as f64)
+            .with("recall_at_k", recall)
+            .with("complete", false)
+            .with("queries_detail", observations),
+    );
     Run {
         json: run,
         missed,
@@ -448,15 +431,19 @@ fn receipt(name: &str, runs: &[Value]) -> Value {
 
 /// A receipt document for the implementation `implementation` publishing `evidence`.
 fn receipt_for(name: &str, implementation: &str, evidence: &str, runs: &[Value]) -> Value {
-    json!({
-        "schema": "purrdf-hnsw-conformance-receipt-v1",
-        "receipt": name,
-        "implementation": implementation,
-        "parameter_encoding": profile::PARAMETER_ENCODING,
-        "payload_media_type": INDEX_MEDIA_TYPE,
-        "loss_evidence": evidence,
-        "runs": runs,
-    })
+    let mut document = Value::from(
+        Object::new()
+            .with("schema", "purrdf-hnsw-conformance-receipt-v1")
+            .with("receipt", name)
+            .with("implementation", implementation)
+            .with("parameter_encoding", profile::PARAMETER_ENCODING)
+            .with("payload_media_type", INDEX_MEDIA_TYPE)
+            .with("loss_evidence", evidence)
+            .with("runs", runs),
+    );
+    // Members by name, at every level: the receipt's published layout.
+    document.sort_keys();
+    document
 }
 
 /// Write a receipt and read it back, proving the artifact was emitted and parses.
@@ -464,7 +451,7 @@ fn emit(name: &str, document: &Value) -> PathBuf {
     let dir = receipt_dir();
     std::fs::create_dir_all(&dir).expect("the receipt directory is creatable");
     let path = dir.join(format!("{name}.json"));
-    let text = serde_json::to_string_pretty(document).expect("the receipt serializes");
+    let text = json::write_pretty(document);
     std::fs::write(&path, &text).expect("the receipt is writable");
     assert!(
         path.is_file(),
@@ -482,23 +469,21 @@ fn reread(path: &Path) -> Value {
 /// [`reread`] for a receipt of the implementation `implementation`.
 fn reread_for(path: &Path, implementation: &str) -> Value {
     let text = std::fs::read_to_string(path).expect("the emitted receipt reads back");
-    let value: Value = serde_json::from_str(&text).expect("the emitted receipt is valid JSON");
+    let value = json::read(&text).expect("the emitted receipt is valid JSON");
     let runs = value["runs"]
         .as_array()
         .expect("the receipt holds a runs array");
     assert!(!runs.is_empty(), "a conformance receipt records its runs");
     for run in runs {
         assert_eq!(
-            run["complete"],
-            json!(false),
+            run["complete"], false,
             "complete must be false on every run: an approximate offer never certifies absence"
         );
-        assert_eq!(
-            run["index_identity"]["implementation"],
-            json!(implementation)
-        );
+        assert_eq!(run["index_identity"]["implementation"], implementation);
         assert!(
-            run["index_identity"]["canonical_image_digest"].is_string(),
+            run["index_identity"]["canonical_image_digest"]
+                .as_str()
+                .is_some(),
             "every run records the index identity digest"
         );
         let ef = run["parameters"]["ef_search"]
@@ -800,7 +785,7 @@ fn tied_distances_break_by_row_in_both_paths() {
         // lower row comes first. The index's offer inherits that order, which `run_regime`
         // already asserted row by row; here the tie structure itself is pinned.
         let ordered = {
-            let mut scored = exact_scored(&fixture.matrix, &norms, 0);
+            let mut scored = fixture::exact_scored(KERNEL, &fixture.matrix, &norms, 0);
             scored.sort_unstable();
             scored
         };
@@ -851,7 +836,7 @@ fn reassociated_distances_match_reassociated_kernel() {
     for fixture in &family() {
         let norms = norms_of(&fixture.matrix);
         for regime in regimes() {
-            let index = HnswIndex::build_reassociated(fixture.matrix.clone(), &METRIC, regime)
+            let index = purrdf_hnsw::build::<Reassociated>(fixture.matrix.clone(), &METRIC, regime)
                 .expect("the fixture builds");
             assert_eq!(
                 index.arithmetic(),
@@ -871,7 +856,7 @@ fn reassociated_distances_match_reassociated_kernel() {
             }
         }
     }
-    let evidence = profile::loss_evidence_reassociated(resolved.path());
+    let evidence = profile::loss_evidence_for::<Reassociated>(resolved.path());
     let path = emit(
         "reassociated-conformance",
         &receipt_for(
@@ -883,7 +868,7 @@ fn reassociated_distances_match_reassociated_kernel() {
     );
     let value = reread_for(&path, IMPLEMENTATION_ID_REASSOCIATED);
     assert_eq!(value["runs"].as_array().expect("runs").len(), runs.len());
-    assert_eq!(value["loss_evidence"], json!(evidence));
+    assert_eq!(value["loss_evidence"], evidence);
 }
 
 /// The reassociated index's recall, graded against the exact oracle exactly as the exact
@@ -905,7 +890,7 @@ fn reassociated_recall_meets_exact_floor() {
     for fixture in &family() {
         let norms = norms_of(&fixture.matrix);
         for (ordinal, regime) in regimes().into_iter().enumerate() {
-            let index = HnswIndex::build_reassociated(fixture.matrix.clone(), &METRIC, regime)
+            let index = purrdf_hnsw::build::<Reassociated>(fixture.matrix.clone(), &METRIC, regime)
                 .expect("the fixture builds");
             for &k in &KS {
                 let run = run_regime_under(fixture, &index, &norms, regime.ef_search(), k, &oracle);

@@ -1,24 +1,22 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Renderer-neutral RDF 1.2 projection, scene, and layout benchmark.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use purrdf_core::ir::TermValue;
 use purrdf_rdf::viz::{
     VizGraphInput, VizInputAnnotation, VizInputQuad, VizInputReifier, VizInputStatement,
     VizLayoutOptions, VizSpec, build_scene, layout_scene, project_graph_input,
 };
+use purrdf_testkit::bench::{Bench, bench_group, bench_main, black_box};
 
-const EX: &str = "https://example.org/";
-
-fn iri(local: &str) -> TermValue {
-    TermValue::Iri(format!("{EX}{local}"))
-}
+#[path = "../tests/support/viz_terms.rs"]
+mod viz_terms;
+use viz_terms::{EX, iri};
 
 fn input() -> VizGraphInput {
     let mut quads = Vec::new();
@@ -65,7 +63,7 @@ fn input() -> VizGraphInput {
     }
 }
 
-fn benchmark(c: &mut Criterion) {
+fn benchmark(c: &mut Bench) {
     let input = input();
     let spec = VizSpec {
         max_statements: 500,
@@ -84,5 +82,5 @@ fn benchmark(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, benchmark);
-criterion_main!(benches);
+bench_group!(benches, benchmark);
+bench_main!(benches);

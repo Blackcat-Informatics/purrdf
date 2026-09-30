@@ -16,18 +16,6 @@ use purrdf_gts::model::{Graph, Term, TermKind};
 use purrdf_gts::reader::read;
 use purrdf_gts::writer::Writer;
 
-fn iri(value: &str) -> Term {
-    Term {
-        kind: TermKind::Iri,
-        value: Some(value.to_string()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
 fn triple_term(s: usize, p: usize, o: usize) -> Term {
     Term {
         kind: TermKind::Triple,
@@ -43,11 +31,11 @@ fn triple_term(s: usize, p: usize, o: usize) -> Term {
 /// Terms `0..=4`: `a`, `related`, `b`, `c`, `r1`.
 fn base_terms() -> Vec<Term> {
     vec![
-        iri("http://example.org/a"),
-        iri("http://example.org/related"),
-        iri("http://example.org/b"),
-        iri("http://example.org/c"),
-        iri("http://example.org/r1"),
+        Term::iri("http://example.org/a"),
+        Term::iri("http://example.org/related"),
+        Term::iri("http://example.org/b"),
+        Term::iri("http://example.org/c"),
+        Term::iri("http://example.org/r1"),
     ]
 }
 
@@ -57,8 +45,8 @@ fn base_terms() -> Vec<Term> {
 #[test]
 fn a_reifier_id_may_bind_several_triples() {
     let mut terms = base_terms();
-    terms.push(iri("http://example.org/g1")); // 5
-    terms.push(iri("http://example.org/g2")); // 6
+    terms.push(Term::iri("http://example.org/g1")); // 5
+    terms.push(Term::iri("http://example.org/g2")); // 6
 
     let mut writer = Writer::new("purrdf-test");
     writer.add_terms(&terms);
@@ -180,10 +168,10 @@ fn a_forward_referencing_tt_is_reported() {
 #[test]
 fn nested_triple_terms_stay_topologically_ordered() {
     let mut graph = Graph::default();
-    graph.terms.push(iri("http://example.org/a")); // 0
-    graph.terms.push(iri("http://example.org/p")); // 1
-    graph.terms.push(iri("http://example.org/z")); // 2
-    graph.terms.push(iri("http://example.org/b")); // 3
+    graph.terms.push(Term::iri("http://example.org/a")); // 0
+    graph.terms.push(Term::iri("http://example.org/p")); // 1
+    graph.terms.push(Term::iri("http://example.org/z")); // 2
+    graph.terms.push(Term::iri("http://example.org/b")); // 3
     graph.terms.push(triple_term(2, 1, 3)); // 4 — <<( z p b )>>
     graph.terms.push(triple_term(0, 1, 4)); // 5 — <<( a p <<( z p b )>> )>>
     graph.quads.push((0, 1, 5, None));

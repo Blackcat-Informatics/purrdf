@@ -3,7 +3,7 @@
 
 //! One-shot allocation probes for the pre-change expanded JSON-LD codec.
 //!
-//! This process is separate from Criterion because allocator accounting would
+//! This process is separate from the timing harness because allocator accounting would
 //! contaminate latency measurements. It reports allocation count, requested bytes,
 //! retained bytes, peak working bytes, and output bytes for the exact fixtures used by
 //! the timed bench, each phase bracketed by a whole-process window from the

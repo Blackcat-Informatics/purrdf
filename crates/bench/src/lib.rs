@@ -412,15 +412,10 @@ mod tags {
     pub(super) const BLANK: u64 = 0xB1A4_0009;
 }
 
-/// `splitmix64` — the classic public-domain mixing step: deterministic,
-/// allocation-free, and identical on every target.
-#[must_use]
-pub const fn splitmix64(state: u64) -> u64 {
-    let mut z = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
-}
+/// `splitmix64` — one self-composed SplitMix64 step,
+/// [`purrdf_hash::mix::splitmix64_step`]: deterministic, allocation-free, and
+/// identical on every target.
+pub use purrdf_hash::mix::splitmix64_step as splitmix64;
 
 /// Mixes the seed with a stream tag and an index into one draw.
 const fn draw(seed: u64, tag: u64, index: u64) -> u64 {
@@ -629,11 +624,11 @@ fn predicate_of(seed: u64, slot: u64) -> &'static str {
 /// The RDF 1.2 reification predicate. W3C standard vocabulary: using it is
 /// what the spec requires, not a vocabulary this project mints. Every *data*
 /// IRI in the corpus stays under `example.org`.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// The XML Schema datatype namespace — again W3C standard vocabulary, used as
 /// the specs require.
-const XSD_NAMESPACE: &str = "http://www.w3.org/2001/XMLSchema#";
+use purrdf_xsd::datatype::XSD_NS as XSD_NAMESPACE;
 
 /// The datatypes typed-literal rows cycle over, as local names under
 /// [`XSD_NAMESPACE`]. Positions here are the arms of [`write_typed_literal`].
@@ -1444,7 +1439,9 @@ mod tests {
             saw_lowercase_hex_letter |= lower.bytes().any(|b| b.is_ascii_lowercase());
 
             for hex in [upper, lower] {
-                let octet = u8::from_str_radix(hex, 16).expect("two hex digits");
+                let [octet] = purrdf_hash::hex::decode(hex).expect("two hex digits")[..] else {
+                    panic!("an escape spells one octet: {hex}");
+                };
                 assert!(
                     RESERVED_OCTETS.contains(&octet),
                     "escaped octet {octet:#04x} must be an RFC 3986 reserved octet"
@@ -1583,10 +1580,7 @@ mod tests {
              itself may hold fewer: identical rows deduplicate under set
              semantics)"
         );
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        for byte in text.bytes() {
-            hash = (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01B3);
-        }
+        let hash = purrdf_hash::fnv::fnv1a64(text.as_bytes());
         assert_eq!(
             hash, 0xEA2E_E654_BA6F_44D3,
             "byte-level FNV pin moved: {CORPUS_PROFILE_ID} must be bumped"
@@ -2053,8 +2047,8 @@ mod tests {
                         saw_raw_han_iri = true;
                     }
                     for octet in RESERVED_OCTETS {
-                        let upper = format!("%{octet:02X}");
-                        let lower = format!("%{octet:02x}");
+                        let upper = format!("%{}", purrdf_hash::hex::Upper(&[octet]));
+                        let lower = format!("%{}", purrdf_hash::hex::Lower(&[octet]));
                         if iri.contains(&upper) || iri.contains(&lower) {
                             saw_intact_percent_escape = true;
                             percent_escape_example.get_or_insert_with(|| iri.to_string());

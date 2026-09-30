@@ -5,7 +5,7 @@
 //!
 //! OKF is a deterministic in-memory bundle of UTF-8 Markdown documents with YAML
 //! frontmatter. This module deliberately owns no filesystem API: callers can map
-//! [`OkfBundle`](crate::native_codecs::okf::OkfBundle) entries to directories, archives, browser
+//! [`OkfBundle`] entries to directories, archives, browser
 //! storage, or another transport without making the release crate non-wasm. The RDF vocabulary and
 //! document base are mandatory caller configuration; PurRDF provides no namespace
 //! default and mints no vocabulary IRI.
@@ -13,8 +13,8 @@
 mod reader;
 mod writer;
 
+use purrdf_iri::percent;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 
 pub use reader::lift_okf_bundle;
 pub use writer::{OkfWriteOutcome, OkfWriter, write_okf_bundle};
@@ -47,32 +47,11 @@ const RESERVED_PROFILE_KEYS: &[&str] = &[
     "path",
 ];
 
-/// A typed hard failure from OKF configuration, parsing, lifting, or writing.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OkfError {
-    detail: String,
+purrdf_lex::message_error! {
+    /// A typed hard failure from OKF configuration, parsing, lifting, or writing.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct OkfError, detail;
 }
-
-impl OkfError {
-    pub(super) fn new(detail: impl Into<String>) -> Self {
-        Self {
-            detail: detail.into(),
-        }
-    }
-
-    /// The stable human-readable error detail.
-    pub fn detail(&self) -> &str {
-        &self.detail
-    }
-}
-
-impl fmt::Display for OkfError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.detail)
-    }
-}
-
-impl std::error::Error for OkfError {}
 
 pub(super) fn decimal_lexical_from_f64(value: f64) -> Result<String, OkfError> {
     if !value.is_finite() {
@@ -306,7 +285,8 @@ impl OkfConfig {
 ///
 /// Paths are normalized POSIX-relative `.md` names and iteration is lexical by
 /// path. Documents are UTF-8 [`String`] values, so invalid body/frontmatter bytes
-/// cannot enter the codec. Construction enforces the public resource limits.
+/// cannot enter the codec. Construction enforces the public resource limits. The
+/// [`Default`] bundle is empty.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OkfBundle {
     documents: BTreeMap<String, String>,
@@ -314,11 +294,6 @@ pub struct OkfBundle {
 }
 
 impl OkfBundle {
-    /// Construct an empty bundle.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Construct a bundle from path/document pairs.
     ///
     /// # Errors
@@ -330,7 +305,7 @@ impl OkfBundle {
         P: Into<String>,
         D: Into<String>,
     {
-        let mut bundle = Self::new();
+        let mut bundle = Self::default();
         for (path, document) in documents {
             bundle.insert(path, document)?;
         }
@@ -497,27 +472,13 @@ fn validate_profile_key(key: &str) -> Result<(), OkfError> {
 }
 
 pub(super) fn minted_document_iri(config: &OkfConfig, path: &str) -> Result<String, OkfError> {
-    let iri = format!("{}{}", config.document_base_iri, percent_encode_path(path));
+    let iri = format!(
+        "{}{}",
+        config.document_base_iri,
+        percent::encode(path, percent::UNRESERVED_SLASH)
+    );
     validate_absolute_iri("minted OKF document IRI", &iri)?;
     Ok(iri)
-}
-
-fn percent_encode_path(path: &str) -> String {
-    let mut out = String::with_capacity(path.len());
-    for byte in path.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
-                out.push(char::from(byte));
-            }
-            _ => {
-                const HEX: &[u8; 16] = b"0123456789ABCDEF";
-                out.push('%');
-                out.push(char::from(HEX[usize::from(byte >> 4)]));
-                out.push(char::from(HEX[usize::from(byte & 0x0f)]));
-            }
-        }
-    }
-    out
 }
 
 #[cfg(test)]

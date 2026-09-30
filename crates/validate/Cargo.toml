@@ -22,13 +22,15 @@ workspace = true
 
 [lib]
 # rlib-only, wasm-clean boundary crate: consumes the report/diagnostic types and
-# emits SARIF JSON. NO PyO3, NO oxigraph-family edge, NO ambient I/O — so it stays
+# emits SARIF JSON. NO PyO3, NO ambient I/O — so it stays
 # wasm32-unknown-unknown-clean like every release crate.
 crate-type = ["rlib"]
 path = "src/lib.rs"
 name = "purrdf_validate"
 
 [dependencies]
+# Base16 rendering and reading of the digests this crate prints and parses.
+purrdf-hash = { workspace = true }
 # SHACL validation report types (ValidationReport / ValidationResult / Severity /
 # Path) — the primary input rendered to SARIF.
 purrdf-shapes = { workspace = true }
@@ -50,15 +52,20 @@ purrdf-entail = { workspace = true }
 # The evaluation limits a materialization runs under (`EvalOptions`) and the limit
 # refusals `src/regime.rs` renders in each host's own spelling.
 purrdf-datalog = { workspace = true }
-# Hand-rolled SARIF serde model (no heavyweight SARIF crate). serde_json's default
-# BTreeMap-backed object keeps key order stable for byte-deterministic output.
-serde = { workspace = true }
-serde_json = { workspace = true }
+# The evaluator's governor configuration, which `src/governors.rs` builds for every
+# host from one metered base. Also the `Arity` and `Volatility` a host declaring a
+# native SPARQL function names in a prepared-shapes-product restore.
+purrdf-sparql-eval = { workspace = true }
+# The SPARQL-results provenance carrier `src/query.rs` fills.
+purrdf-sparql-results = { workspace = true }
+# SHA-256 of the query text: the `sha256:` query identity `src/query.rs` carries.
+sha2 = { workspace = true }
+# The workspace's one JSON value and writer: the hand-rolled SARIF model writes
+# itself as a `purrdf_lex::json::Value` and prints through `write_pretty`.
+purrdf-lex = { workspace = true }
 
 [dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
 purrdf-testkit = { workspace = true }
-# Declaring a native SPARQL function takes `Arity` and `Volatility`, which is what
-# a host wiring its own implementations into a prepared-shapes-product restore does.
-# Test-only: the product boundary itself names the three registry types through
-# `purrdf_shapes::product`, so the library builds without this edge.
-purrdf-sparql-eval = { workspace = true }

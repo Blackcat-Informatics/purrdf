@@ -16,16 +16,15 @@ use purrdf_rdf::{
     QuadValues, RdfDataset, RdfDatasetBuilder, TermValue, canonical_flat_nquads, parse_dataset,
 };
 
-const EX: &str = "https://example.org/";
+#[path = "support/viz_terms.rs"]
+mod viz_terms;
+use viz_terms::{EX, iri};
+
 const NQUADS: &str = concat!(
     "<https://example.org/alice> <https://example.org/knows> <https://example.org/bob> <https://example.org/facts> .\n",
     "<https://example.org/claim> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://example.org/alice> <https://example.org/knows> <https://example.org/bob> )>> <https://example.org/claims> .\n",
     "<https://example.org/claim> <https://example.org/confidence> \"0.8\"^^<http://www.w3.org/2001/XMLSchema#decimal> <https://example.org/provenance> .\n",
 );
-
-fn iri(local: &str) -> TermValue {
-    TermValue::Iri(format!("{EX}{local}"))
-}
 
 fn fixture() -> Arc<RdfDataset> {
     parse_dataset(NQUADS.as_bytes(), "application/n-quads", None).expect("valid fixture")
@@ -65,23 +64,9 @@ fn input() -> VizGraphInput {
     }
 }
 
-fn all_quads(dataset: &RdfDataset) -> Vec<QuadValues> {
-    dataset
-        .quads()
-        .chain(dataset.reifier_quads())
-        .chain(dataset.annotation_quads())
-        .map(|quad| QuadValues {
-            s: dataset.term_value(quad.s),
-            p: dataset.term_value(quad.p),
-            o: dataset.term_value(quad.o),
-            g: quad.g.map(|graph| dataset.term_value(graph)),
-        })
-        .collect()
-}
-
 fn added_fixture(dataset: &RdfDataset) -> MutableDataset {
     let mut added = MutableDataset::new(RdfDatasetBuilder::new().freeze().expect("empty"));
-    for quad in all_quads(dataset) {
+    for quad in QuadValues::surface_of(dataset) {
         assert!(added.insert(quad).expect("valid quad"));
     }
     added
@@ -182,7 +167,7 @@ fn graph_filters_select_occurrences_without_reassigning_reifier_roles() {
 fn removing_and_restoring_reification_updates_roles_without_changing_properties() {
     let parsed = fixture();
     let mut mutable = MutableDataset::new(Arc::clone(&parsed));
-    let declaration = all_quads(&parsed)
+    let declaration = QuadValues::surface_of(&parsed)
         .into_iter()
         .find(|quad| matches!(&quad.o, TermValue::Triple { .. }))
         .expect("reification declaration");

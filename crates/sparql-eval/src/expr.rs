@@ -55,11 +55,10 @@ use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+use purrdf_xsd::datatype::XSD_BOOLEAN;
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// Evaluate an expression over a solution, compiling and linking it for this one call.
 /// See the [module docs](self) for the `Ok(Some)` / `Ok(None)` / `Err` contract. The
@@ -110,6 +109,8 @@ pub(crate) fn eval_ebv<D: DatasetView + Sync>(
 /// matter — it is an opaque edge, because a truncated `EXISTS` inner bag drops rows the
 /// true query keeps and a truncated `NOT EXISTS` inner bag fabricates rows outright — so
 /// the whole output is withheld and only the barrier crosses.
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_filter<D: DatasetView + Sync>(
     node: &GraphPattern,
     expr: &Expression,
@@ -206,6 +207,8 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
 /// [`crate::parallel::portable_row`] while its scratch is still alive, and this
 /// function re-interns each portable row against `ctx.scratch` afterwards, in
 /// source-index order, via [`crate::parallel::reintern_portable_row`].
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_extend<D: DatasetView + Sync>(
     node: &GraphPattern,
     inner: &GraphPattern,
@@ -319,6 +322,14 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
 /// [`ScratchInterner::intern_checked`](crate::scratch::ScratchInterner::intern_checked). Every
 /// caller here is inside an expression, so the mapping is the one §17.2 already
 /// states and `eval_str_lang` already performs: the expression is unbound.
+///
+/// The one door every expression module interns through. For the CDT functions
+/// (`crate::cdt_fn`) the gate is a real seam: a composite member is parsed out of a
+/// literal's lexical form, a caller-supplied string no kernel check has admitted. For
+/// the `rdf:List` functions (`crate::list_fn`) it is vacuous today — their members were
+/// admitted on the way into the dataset and the cells they mint are blank nodes — and
+/// is kept because their walk also reads the per-query constructed buffer, so one door
+/// is cheaper to keep right than two whose difference must be re-derived per writer.
 pub(crate) fn intern<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: TermValue,
@@ -367,7 +378,7 @@ pub(crate) fn value_of<D: DatasetView + Sync>(
 /// intern probe once, not N times. The cache is exact — interning is
 /// deterministic for the context's pinned dataset and dedup-by-value scratch, so
 /// the cached term is the same `SolutionTerm` a fresh intern would produce.
-pub(crate) fn bool_term<D: DatasetView + Sync>(
+pub(crate) fn intern_boolean<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     b: bool,
 ) -> SolutionTerm<D::Id> {
@@ -375,7 +386,7 @@ pub(crate) fn bool_term<D: DatasetView + Sync>(
     if let Some(term) = ctx.cached_bool_terms[slot] {
         return term;
     }
-    let term = typed_term(ctx, if b { "true" } else { "false" }, XSD_BOOLEAN);
+    let term = ctx.scratch.intern(ctx.dataset, TermValue::boolean(b));
     ctx.cached_bool_terms[slot] = Some(term);
     term
 }
@@ -388,12 +399,12 @@ fn string_term<D: DatasetView + Sync>(
     typed_term(ctx, lexical, XSD_STRING)
 }
 
-/// Intern an `xsd:integer` literal.
-fn integer_term<D: DatasetView + Sync>(
+/// Intern the `xsd:integer` literal [`TermValue::integer`] spells for `value`.
+pub(crate) fn intern_integer<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
-    value: i64,
+    value: impl Into<i128>,
 ) -> SolutionTerm<D::Id> {
-    typed_term(ctx, &value.to_string(), XSD_INTEGER)
+    ctx.scratch.intern(ctx.dataset, TermValue::integer(value))
 }
 
 /// Build a typed (no-language) literal value.
@@ -578,7 +589,7 @@ fn cdt_compare<D: DatasetView + Sync>(
 ) -> Option<SolutionTerm<D::Id>> {
     let av = value_of(ctx, ta);
     let bv = value_of(ctx, tb);
-    crate::cdt_fn::compare(relation, &av, &bv).map(|answer| bool_term(ctx, answer))
+    crate::cdt_fn::compare(relation, &av, &bv).map(|answer| intern_boolean(ctx, answer))
 }
 
 /// A comparison over two evaluated operands: compare in the XSD value space, and test
@@ -605,7 +616,7 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
     }
     // sameTerm short-circuit: identical terms are equal regardless of value space.
     if ta == tb {
-        return Some(bool_term(ctx, keep(Ordering::Equal)));
+        return Some(intern_boolean(ctx, keep(Ordering::Equal)));
     }
     // Value-space comparison over borrowed term views (no owned TermValue
     // clones). Distinct non-value terms (IRIs/blanks) or incomparable value
@@ -618,7 +629,7 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
         (Some(ax), Some(bx)) => value_cmp(&ax, &bx),
         _ => None,
     };
-    ord.map(|ord| bool_term(ctx, keep(ord)))
+    ord.map(|ord| intern_boolean(ctx, keep(ord)))
 }
 
 /// `a = b` over two evaluated operands, under SPARQL RDF-term equality (SPARQL 1.2 §17.4.2.2
@@ -655,7 +666,7 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
     }
     // sameTerm short-circuit: identical terms are equal regardless of value space.
     if ta == tb {
-        return Some(bool_term(ctx, true));
+        return Some(intern_boolean(ctx, true));
     }
     // Distinct `SolutionTerm`s are distinct RDF terms BY CONSTRUCTION: the dataset
     // builder interns terms by value (one id per value, table kept as-is at
@@ -670,7 +681,7 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
     if term_is_triple(ctx, ta) && term_is_triple(ctx, tb) {
         let av = value_of(ctx, ta);
         let bv = value_of(ctx, tb);
-        return rdf_equal(&av, &bv).map(|eq| bool_term(ctx, eq));
+        return rdf_equal(&av, &bv).map(|eq| intern_boolean(ctx, eq));
     }
     let ax = xsd_of_term(ctx, ta);
     let bx = xsd_of_term(ctx, tb);
@@ -686,7 +697,7 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
             }
         }
     };
-    eq.map(|eq| bool_term(ctx, eq))
+    eq.map(|eq| intern_boolean(ctx, eq))
 }
 
 /// One `expr IN (list)` candidate against the evaluated needle `target` (whose value is
@@ -949,25 +960,25 @@ fn collect_vars(mut pending: Vec<VarNode<'_>>, out: &mut DetHashSet<Variable>) {
                 match pattern {
                     GraphPattern::Bgp { patterns } => {
                         for tp in patterns {
-                            term_pattern_vars(&tp.subject, out);
+                            tp.subject.collect_variables(out);
                             if let NamedNodePattern::Variable(v) = &tp.predicate {
                                 out.insert(v.clone());
                             }
-                            term_pattern_vars(&tp.object, out);
+                            tp.object.collect_variables(out);
                         }
                     }
                     GraphPattern::Path {
                         subject, object, ..
                     } => {
-                        term_pattern_vars(subject, out);
-                        term_pattern_vars(object, out);
+                        subject.collect_variables(out);
+                        object.collect_variables(out);
                     }
                     GraphPattern::Values { variables, .. } => {
                         out.extend(variables.iter().cloned());
                     }
                     GraphPattern::PropertyFunction(call) => {
                         for term in call.subject_args.iter().chain(&call.object_args) {
-                            term_pattern_vars(term, out);
+                            term.collect_variables(out);
                         }
                     }
                     GraphPattern::Graph { name, inner } => {
@@ -1053,11 +1064,11 @@ fn collect_vars(mut pending: Vec<VarNode<'_>>, out: &mut DetHashSet<Variable>) {
                         out.extend(variables.iter().cloned());
                         for (v, agg) in aggregates {
                             out.insert(v.clone());
-                            for arg in agg
-                                .args()
-                                .iter()
-                                .chain(agg.order_by().iter().map(crate::modifier::order_sort_key))
-                            {
+                            for arg in agg.args().iter().chain(
+                                agg.order_by()
+                                    .iter()
+                                    .map(purrdf_sparql_algebra::OrderExpression::expression),
+                            ) {
                                 pending.push(VarNode::Expression(arg));
                             }
                         }
@@ -1074,29 +1085,6 @@ fn collect_vars(mut pending: Vec<VarNode<'_>>, out: &mut DetHashSet<Variable>) {
                     }
                 }
             }
-        }
-    }
-}
-
-/// Collect the variables a term pattern mentions, its quoted triples' own component
-/// positions included, over a work list of the positions still to be read.
-fn term_pattern_vars(term: &purrdf_sparql_algebra::TermPattern, out: &mut DetHashSet<Variable>) {
-    use purrdf_sparql_algebra::{NamedNodePattern, TermPattern};
-
-    let mut pending: purrdf_core::SmallVec<[_; 8]> = purrdf_core::smallvec![term];
-    while let Some(term) = pending.pop() {
-        match term {
-            TermPattern::Variable(variable) => {
-                out.insert(variable.clone());
-            }
-            TermPattern::Triple(triple) => {
-                if let NamedNodePattern::Variable(variable) = &triple.predicate {
-                    out.insert(variable.clone());
-                }
-                pending.push(&triple.object);
-                pending.push(&triple.subject);
-            }
-            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
         }
     }
 }
@@ -1401,6 +1389,7 @@ pub(crate) fn exists<D: DatasetView + Sync>(
         .deferred_exists
         .as_ref()
         .and_then(|placeholders| placeholders.get(&address))
+        .and_then(crate::deferred_exists::Deferred::exists)
         .cloned()
     {
         return exists_deferred(&slot, row, schema, ctx);
@@ -2204,7 +2193,11 @@ impl<'a> Deferral<'a> {
     )> {
         let sites = self.sites?;
         let address = std::ptr::from_ref(body) as usize;
-        if let Some(slot) = self.enclosing.and_then(|map| map.get(&address)) {
+        if let Some(slot) = self
+            .enclosing
+            .and_then(|map| map.get(&address))
+            .and_then(crate::deferred_exists::Deferred::exists)
+        {
             return Some((&slot.site, Some(&slot.env)));
         }
         if self.eager_depth > 0 {
@@ -2226,8 +2219,48 @@ impl<'a> Deferral<'a> {
             env,
         };
         let placeholder = crate::deferred_exists::placeholder();
-        self.placeholders
-            .insert(std::ptr::from_ref(placeholder.as_ref()) as usize, slot);
+        self.placeholders.insert(
+            std::ptr::from_ref(placeholder.as_ref()) as usize,
+            crate::deferred_exists::Deferred::Exists(slot),
+        );
+        Some(placeholder)
+    }
+
+    /// Leave `right`, a `LATERAL`'s right operand, as a lateral placeholder owed `row`,
+    /// returning the placeholder — or `None` when this walk substitutes `right` in full:
+    /// an eager walk, a walk inside a `SERVICE` body, and an operand
+    /// `crate::deferred_exists` does not defer. A placeholder of the window this walk
+    /// copies from carries its substitution on, with `row` after it.
+    fn defer_lateral(
+        &mut self,
+        right: &GraphPattern,
+        row: &SubstitutionRow,
+    ) -> Option<Box<GraphPattern>> {
+        let sites = self.sites?;
+        let address = std::ptr::from_ref(right) as usize;
+        let (site, env) = match self
+            .enclosing
+            .and_then(|map| map.get(&address))
+            .and_then(crate::deferred_exists::Deferred::lateral)
+        {
+            Some(slot) => (&slot.site, slot.env.then(row, &slot.site.vars)),
+            None if self.eager_depth > 0 => return None,
+            None => {
+                let site = sites.lateral.get(&address)?;
+                (
+                    site,
+                    crate::deferred_exists::SubstitutionEnv::default().then(row, &site.vars),
+                )
+            }
+        };
+        let placeholder = crate::deferred_exists::lateral_placeholder(&site.schema);
+        self.placeholders.insert(
+            std::ptr::from_ref(placeholder.as_ref()) as usize,
+            crate::deferred_exists::Deferred::Lateral(crate::deferred_exists::DeferredLateral {
+                site: Arc::clone(site),
+                env,
+            }),
+        );
         Some(placeholder)
     }
 
@@ -2334,9 +2367,10 @@ impl FreeVars {
 ///   estimate that predicts only `source`'s own — the miscalibration this type exists to
 ///   prevent.
 ///
-///   A `LATERAL` nested inside another `LATERAL`'s per-row substituted copy is where the
-///   local rule alone stops being enough: the INNER window's walk substitutes an already
-///   Values-Insertion-wrapped subtree (`Join(leaf, Values)`) the OUTER window built, and the
+///   A `LATERAL` nested inside another `LATERAL`'s per-row substituted copy, with a right
+///   operand the walk does not defer (one holding a variable-endpoint `SERVICE`, see
+///   `crate::deferred_exists`), is where the local rule alone stops being enough: the
+///   INNER window's walk substitutes an already Values-Insertion-wrapped subtree (`Join(leaf, Values)`) the OUTER window built, and the
 ///   inner walk's generic recursion re-copies every node in it — the leaf, the `Values`
 ///   table, AND the outer `Join` wrapper — exactly as if each were fresh, unrelated source
 ///   material. Left alone, EACH of those re-copies would independently satisfy the local
@@ -2494,11 +2528,11 @@ fn substitute_pattern_impl(
         GraphPattern::Bgp { patterns } => {
             let mut vars = DetHashSet::default();
             for tp in patterns {
-                term_pattern_vars(&tp.subject, &mut vars);
+                tp.subject.collect_variables(&mut vars);
                 if let purrdf_sparql_algebra::NamedNodePattern::Variable(v) = &tp.predicate {
                     vars.insert(v.clone());
                 }
-                term_pattern_vars(&tp.object, &mut vars);
+                tp.object.collect_variables(&mut vars);
             }
             let leaf = boxed_and_mapped(
                 GraphPattern::Bgp {
@@ -2515,8 +2549,8 @@ fn substitute_pattern_impl(
             object,
         } => {
             let mut vars = DetHashSet::default();
-            term_pattern_vars(subject, &mut vars);
-            term_pattern_vars(object, &mut vars);
+            subject.collect_variables(&mut vars);
+            object.collect_variables(&mut vars);
             let leaf = boxed_and_mapped(
                 GraphPattern::Path {
                     subject: subject.clone(),
@@ -2698,6 +2732,10 @@ fn substitute_pattern_impl(
                     None => left_sub,
                 };
                 (left_sub, right_sub)
+            } else if let Some(placeholder) = defer.defer_lateral(right, row) {
+                // Substituted when the copied `LATERAL` evaluates it, once per left row,
+                // with this row and that one together: see `crate::deferred_exists`.
+                (left_sub, placeholder)
             } else {
                 (left_sub, substitute_pattern_impl(right, row, map, defer))
             };
@@ -2874,7 +2912,7 @@ fn substitute_pattern_impl(
                 // omitting them would leave `FOLD(?v ORDER BY ?k)`'s `?k`
                 // unbound in the substituted pattern.
                 for order in agg.order_by() {
-                    defer.expr_vars(crate::modifier::order_sort_key(order), &mut free);
+                    defer.expr_vars(order.expression(), &mut free);
                 }
             }
             let inner_sub = substitute_pattern_impl(inner, row, map, defer);
@@ -2898,7 +2936,7 @@ fn substitute_pattern_impl(
                                     crate::modifier::rebuild_order(
                                         order,
                                         substitute_expr(
-                                            crate::modifier::order_sort_key(order),
+                                            order.expression(),
                                             row,
                                             &mut *map,
                                             &mut *defer,
@@ -3526,9 +3564,7 @@ pub(crate) fn outer_bindings_for_substitution<D: DatasetView + Sync>(
 /// sees a value read back out of `ctx.scratch`), matching
 /// `outer_bindings_for_substitution`'s sibling `Expression` construction.
 fn ground_term_from_term_value(value: &TermValue) -> Option<purrdf_sparql_algebra::GroundTerm> {
-    use purrdf_sparql_algebra::{
-        BaseDirection, BlankNode, GroundTerm, GroundTriple, Literal, NamedNode,
-    };
+    use purrdf_sparql_algebra::{BlankNode, GroundTerm, GroundTriple, Literal, NamedNode};
 
     /// One step of the build: convert a value, or assemble a quoted triple under its
     /// predicate IRI from the two ground terms built last — its object, then its
@@ -3555,16 +3591,9 @@ fn ground_term_from_term_value(value: &TermValue) -> Option<purrdf_sparql_algebr
                 direction,
             }) => {
                 let lit = if let Some(lang) = language {
-                    // The algebra's `BaseDirection` and the IR's `RdfTextDirection` are
-                    // the same two-value RDF 1.2 base-direction enum in two crates;
-                    // `crate::convert::map_direction` maps the OTHER way (algebra → IR,
-                    // for a query-authored literal reaching the dataset lookup key), so
-                    // this direction gets the mirrored match inline.
-                    let dir = direction.map(|d| match d {
-                        RdfTextDirection::Ltr => BaseDirection::Ltr,
-                        RdfTextDirection::Rtl => BaseDirection::Rtl,
-                    });
-                    Literal::new_lang(lexical_form, lang, dir)
+                    // The algebra's `BaseDirection` and the IR's `RdfTextDirection`
+                    // are the one base-direction type, so the direction passes through.
+                    Literal::new_lang(lexical_form, lang, *direction)
                 } else {
                     Literal::new_typed(lexical_form, NamedNode::new_unchecked(datatype))
                 };
@@ -3642,24 +3671,24 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     match function {
         // ---- type tests (total: never a type error) -----------------------
-        Function::IsIri | Function::IsUri => Ok(Some(bool_term(
+        Function::IsIri | Function::IsUri => Ok(Some(intern_boolean(
             ctx,
             matches!(vals.first(), Some(Some(TermValue::Iri(_)))),
         ))),
-        Function::IsBlank => Ok(Some(bool_term(
+        Function::IsBlank => Ok(Some(intern_boolean(
             ctx,
             matches!(vals.first(), Some(Some(TermValue::Blank { .. }))),
         ))),
-        Function::IsLiteral => Ok(Some(bool_term(
+        Function::IsLiteral => Ok(Some(intern_boolean(
             ctx,
             matches!(vals.first(), Some(Some(TermValue::Literal { .. }))),
         ))),
         Function::IsNumeric => {
             let numeric =
-                matches!(arg(vals, 0), Some(v) if xsd_of(v).is_some_and(|xv| is_numeric(&xv)));
-            Ok(Some(bool_term(ctx, numeric)))
+                matches!(arg(vals, 0), Some(v) if xsd_of(v).is_some_and(|xv| xv.is_numeric()));
+            Ok(Some(intern_boolean(ctx, numeric)))
         }
-        Function::IsTriple => Ok(Some(bool_term(
+        Function::IsTriple => Ok(Some(intern_boolean(
             ctx,
             matches!(vals.first(), Some(Some(TermValue::Triple { .. }))),
         ))),
@@ -3692,16 +3721,16 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         Function::HasLang => match arg(vals, 0) {
             None => Ok(None),
             Some(TermValue::Literal { language, .. }) => {
-                Ok(Some(bool_term(ctx, language.is_some())))
+                Ok(Some(intern_boolean(ctx, language.is_some())))
             }
-            Some(_) => Ok(Some(bool_term(ctx, false))),
+            Some(_) => Ok(Some(intern_boolean(ctx, false))),
         },
         Function::HasLangDir => match arg(vals, 0) {
             None => Ok(None),
             Some(TermValue::Literal { direction, .. }) => {
-                Ok(Some(bool_term(ctx, direction.is_some())))
+                Ok(Some(intern_boolean(ctx, direction.is_some())))
             }
-            Some(_) => Ok(Some(bool_term(ctx, false))),
+            Some(_) => Ok(Some(intern_boolean(ctx, false))),
         },
         Function::Datatype => match arg(vals, 0) {
             Some(TermValue::Literal { datatype, .. }) => Ok(Some(iri_term(ctx, datatype.clone()))),
@@ -3710,7 +3739,7 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
 
         // ---- string functions ---------------------------------------------
         Function::StrLen => match string_arg(vals, 0) {
-            Some((s, _)) => Ok(Some(integer_term(ctx, s.chars().count() as i64))),
+            Some((s, _)) => Ok(Some(intern_integer(ctx, s.chars().count() as i64))),
             None => Ok(None),
         },
         Function::UCase => map_string(ctx, vals, str::to_uppercase),
@@ -3781,7 +3810,10 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
 
         // ---- ENCODE_FOR_URI -----------------------------------------------
         Function::EncodeForUri => match string_arg(vals, 0) {
-            Some((s, _)) => Ok(Some(string_term(ctx, &encode_for_uri(&s)))),
+            Some((s, _)) => Ok(Some(string_term(
+                ctx,
+                &purrdf_iri::percent::encode(&s, purrdf_iri::percent::UNRESERVED),
+            ))),
             None => Ok(None),
         },
 
@@ -3790,28 +3822,28 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
 
         // ---- Date/time component extraction --------------------------------
         Function::Year => match arg(vals, 0).and_then(xsd_of) {
-            Some(XsdValue::DateTime(dt)) => Ok(Some(integer_term(ctx, dt.year()))),
-            Some(XsdValue::Date(d)) => Ok(Some(integer_term(ctx, d.year()))),
+            Some(XsdValue::DateTime(dt)) => Ok(Some(intern_integer(ctx, dt.year()))),
+            Some(XsdValue::Date(d)) => Ok(Some(intern_integer(ctx, d.year()))),
             _ => Ok(None),
         },
         Function::Month => match arg(vals, 0).and_then(xsd_of) {
-            Some(XsdValue::DateTime(dt)) => Ok(Some(integer_term(ctx, i64::from(dt.month())))),
-            Some(XsdValue::Date(d)) => Ok(Some(integer_term(ctx, i64::from(d.month())))),
+            Some(XsdValue::DateTime(dt)) => Ok(Some(intern_integer(ctx, i64::from(dt.month())))),
+            Some(XsdValue::Date(d)) => Ok(Some(intern_integer(ctx, i64::from(d.month())))),
             _ => Ok(None),
         },
         Function::Day => match arg(vals, 0).and_then(xsd_of) {
-            Some(XsdValue::DateTime(dt)) => Ok(Some(integer_term(ctx, i64::from(dt.day())))),
-            Some(XsdValue::Date(d)) => Ok(Some(integer_term(ctx, i64::from(d.day())))),
+            Some(XsdValue::DateTime(dt)) => Ok(Some(intern_integer(ctx, i64::from(dt.day())))),
+            Some(XsdValue::Date(d)) => Ok(Some(intern_integer(ctx, i64::from(d.day())))),
             _ => Ok(None),
         },
         Function::Hours => match arg(vals, 0).and_then(xsd_of) {
-            Some(XsdValue::DateTime(dt)) => Ok(Some(integer_term(ctx, i64::from(dt.hour())))),
-            Some(XsdValue::Time(t)) => Ok(Some(integer_term(ctx, i64::from(t.hour())))),
+            Some(XsdValue::DateTime(dt)) => Ok(Some(intern_integer(ctx, i64::from(dt.hour())))),
+            Some(XsdValue::Time(t)) => Ok(Some(intern_integer(ctx, i64::from(t.hour())))),
             _ => Ok(None),
         },
         Function::Minutes => match arg(vals, 0).and_then(xsd_of) {
-            Some(XsdValue::DateTime(dt)) => Ok(Some(integer_term(ctx, i64::from(dt.minute())))),
-            Some(XsdValue::Time(t)) => Ok(Some(integer_term(ctx, i64::from(t.minute())))),
+            Some(XsdValue::DateTime(dt)) => Ok(Some(intern_integer(ctx, i64::from(dt.minute())))),
+            Some(XsdValue::Time(t)) => Ok(Some(intern_integer(ctx, i64::from(t.minute())))),
             _ => Ok(None),
         },
         Function::Seconds => match arg(vals, 0).and_then(xsd_of) {
@@ -3826,7 +3858,7 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
                 Some(off_min) => Ok(Some(typed_term(
                     ctx,
                     &format_daytime_duration(off_min),
-                    "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
+                    purrdf_xsd::datatype::XSD_DAY_TIME_DURATION,
                 ))),
                 None => Ok(None), // SPARQL §17.4.5.7: no timezone → error
             },
@@ -3834,7 +3866,7 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
                 Some(off_min) => Ok(Some(typed_term(
                     ctx,
                     &format_daytime_duration(off_min),
-                    "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
+                    purrdf_xsd::datatype::XSD_DAY_TIME_DURATION,
                 ))),
                 None => Ok(None),
             },
@@ -3842,7 +3874,7 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
                 Some(off_min) => Ok(Some(typed_term(
                     ctx,
                     &format_daytime_duration(off_min),
-                    "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
+                    purrdf_xsd::datatype::XSD_DAY_TIME_DURATION,
                 ))),
                 None => Ok(None),
             },
@@ -3915,35 +3947,35 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         Function::Md5 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = purrdf_hash::md5::Md5::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha1 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = purrdf_hash::sha1::Sha1::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha256 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha256::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha384 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha384::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha512 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha512::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))))
             }
             None => Ok(None),
         },
@@ -3954,28 +3986,28 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         Function::Sha3_224 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = purrdf_hash::sha3::Sha3_224::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha3_256 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = purrdf_hash::sha3::Sha3_256::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha3_384 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = purrdf_hash::sha3::Sha3_384::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha3_512 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = purrdf_hash::sha3::Sha3_512::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))))
             }
             None => Ok(None),
         },
@@ -4355,7 +4387,7 @@ fn eval_held_in<D: DatasetView + Sync>(
         ctx.dataset.term_id_by_value(reifier_val),
         ctx.dataset.term_id_by_value(standpoint_val),
     ) else {
-        return Ok(Some(bool_term(ctx, false)));
+        return Ok(Some(intern_boolean(ctx, false)));
     };
 
     let according_to_id = ctx
@@ -4390,11 +4422,11 @@ fn eval_held_in<D: DatasetView + Sync>(
             })
     });
 
-    Ok(Some(bool_term(ctx, held)))
+    Ok(Some(intern_boolean(ctx, held)))
 }
 
 /// The value at argument index `i`, if it was bound (not unbound/error).
-fn arg(vals: &[Option<TermValue>], i: usize) -> Option<&TermValue> {
+pub(crate) fn arg(vals: &[Option<TermValue>], i: usize) -> Option<&TermValue> {
     vals.get(i).and_then(|v| v.as_ref())
 }
 
@@ -4460,14 +4492,6 @@ pub(crate) fn lang_lexical_term<D: DatasetView + Sync>(
             _ => None,
         },
     }
-}
-
-/// Whether an XSD value is in the numeric tower.
-fn is_numeric(v: &XsdValue) -> bool {
-    matches!(
-        v,
-        XsdValue::Integer { .. } | XsdValue::Decimal(_) | XsdValue::Float(_) | XsdValue::Double(_)
-    )
 }
 
 /// Extract `(lexical, language)` from a plain/`xsd:string`/`rdf:langString` literal
@@ -4855,7 +4879,7 @@ const LANGTAG_PROFILE: purrdf_iri::langtag::Profile =
 ///
 /// # Case
 ///
-/// Called on the tag **as the query wrote it**, before `to_ascii_lowercase`.
+/// Called on the tag **as the query wrote it**, before `identity_fold`.
 /// That is not a coin-flip: under [`LANGTAG_PROFILE`] every production is
 /// defined over case-insensitive character classes (`ALPHA` is `[a-zA-Z]`, the
 /// terminal's later subtags are `[a-zA-Z0-9]`) and the only other rule is a
@@ -4895,12 +4919,16 @@ fn eval_str_lang<D: DatasetView + Sync>(
     if !well_formed_langtag(&lang) {
         return Ok(None); // not a language tag at all — see `well_formed_langtag`
     }
-    Ok(make_string(ctx, lex, Some(lang.to_ascii_lowercase())))
+    Ok(make_string(
+        ctx,
+        lex,
+        Some(purrdf_iri::langtag::identity_fold(&lang)),
+    ))
 }
 
 /// `STRLANGDIR(lexical, lang, dir)` — RDF 1.2 directional-language-string
-/// constructor. An empty `dir` yields a plain `rdf:langString`; `ltr`/`rtl`
-/// (case-insensitive) yield an `rdf:dirLangString`; any other direction errors.
+/// constructor. `ltr`/`rtl` (case-sensitive) yield an `rdf:dirLangString`; any
+/// other direction, including an empty one, errors.
 ///
 /// The language half is held to [`LANGTAG_PROFILE`] exactly as [`eval_str_lang`]
 /// holds it, and refuses the same way — unbound, not a query abort. A direction
@@ -4925,17 +4953,15 @@ fn eval_str_lang_dir<D: DatasetView + Sync>(
     }
     // The base direction must be exactly `ltr`/`rtl` (case-sensitive); anything
     // else, including an empty string, is a type error (unbound).
-    let direction = match dir.as_str() {
-        "ltr" => RdfTextDirection::Ltr,
-        "rtl" => RdfTextDirection::Rtl,
-        _ => return Ok(None),
+    let Some(direction) = RdfTextDirection::from_str_token(&dir) else {
+        return Ok(None);
     };
     Ok(intern_leaf(
         ctx,
         TermValue::Literal {
             lexical_form: lex,
             datatype: RDF_DIR_LANG_STRING.to_owned(),
-            language: Some(lang.to_ascii_lowercase()),
+            language: Some(purrdf_iri::langtag::identity_fold(&lang)),
             direction: Some(direction),
         },
     ))
@@ -5000,23 +5026,36 @@ fn eval_triple_ctor<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let (Some(s), Some(p), Some(o)) = (arg(vals, 0), arg(vals, 1), arg(vals, 2)) else {
-        return Ok(None);
+    let triple = triple_value(
+        arg(vals, 0).cloned(),
+        arg(vals, 1).cloned(),
+        arg(vals, 2).cloned(),
+    );
+    Ok(triple.and_then(|triple| intern(ctx, triple)))
+}
+
+/// The triple term `TRIPLE(s, p, o)` builds from its operands' values, uninterned: unbound
+/// when an operand is. A triple term's subject must be an IRI or blank node and its
+/// predicate an IRI. Under RDF 1.2 a triple term may nest only in *object* position, so
+/// a triple term (or literal) in the subject/predicate slot is a type error, as is a
+/// literal predicate — all of which yield an unbound result.
+pub(crate) fn triple_value(
+    s: Option<TermValue>,
+    p: Option<TermValue>,
+    o: Option<TermValue>,
+) -> Option<TermValue> {
+    let (Some(s), Some(p), Some(o)) = (s, p, o) else {
+        return None;
     };
-    // A triple term's subject must be an IRI or blank node and its predicate an
-    // IRI. Under RDF 1.2 a triple term may nest only in *object* position, so a
-    // triple term (or literal) in the subject/predicate slot is a type error, as
-    // is a literal predicate — all of which yield an unbound result.
     if !matches!(s, TermValue::Iri(_) | TermValue::Blank { .. }) || !matches!(p, TermValue::Iri(_))
     {
-        return Ok(None);
+        return None;
     }
-    let triple = TermValue::Triple {
-        s: TermBox::new(s.clone()),
-        p: TermBox::new(p.clone()),
-        o: TermBox::new(o.clone()),
-    };
-    Ok(intern(ctx, triple))
+    Some(TermValue::Triple {
+        s: TermBox::new(s),
+        p: TermBox::new(p),
+        o: TermBox::new(o),
+    })
 }
 
 /// Extract a component of a triple term (`SUBJECT`/`PREDICATE`/`OBJECT`).
@@ -5141,14 +5180,10 @@ fn unary_numeric_fn<D: DatasetView + Sync>(
 // extraction, NOW, RAND, and UUID/STRUUID
 // ---------------------------------------------------------------------------
 
-/// Splitmix64 step: advance the PRNG state and return the next pseudo-random u64.
-/// Algorithm: <https://prng.di.unimi.it/splitmix64.c>
-fn next_u64<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> u64 {
-    ctx.rng_state = ctx.rng_state.wrapping_add(0x9e37_79b9_7f4a_7c15);
-    let mut z = ctx.rng_state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    z ^ (z >> 31)
+/// The next draw of the context's SplitMix64 generator
+/// ([`purrdf_hash::mix::splitmix64_next`] over `rng_state` as its counter).
+const fn next_u64<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> u64 {
+    purrdf_hash::mix::splitmix64_next(&mut ctx.rng_state)
 }
 
 /// Mint a fresh blank node (`BNODE()`/`BNODE(strExpr)`'s cache-miss path).
@@ -5176,33 +5211,6 @@ fn resolve_against_base(base: Option<&str>, reference: &str) -> Option<String> {
     let base = base?;
     let base_iri = purrdf_iri::parse(base).ok()?;
     Some(base_iri.resolve(reference).ok()?.as_str().to_owned())
-}
-
-/// Percent-encode every byte except unreserved characters (RFC 3986 §2.3:
-/// `A-Za-z0-9 - _ . ~`). All other bytes become `%XX` in uppercase hex.
-fn encode_for_uri(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for byte in s.as_bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(char::from(*byte));
-            }
-            b => {
-                out.push('%');
-                out.push(
-                    char::from_digit(u32::from(b >> 4), 16)
-                        .unwrap()
-                        .to_ascii_uppercase(),
-                );
-                out.push(
-                    char::from_digit(u32::from(b & 0xf), 16)
-                        .unwrap()
-                        .to_ascii_uppercase(),
-                );
-            }
-        }
-    }
-    out
 }
 
 /// Format a timezone offset in minutes as an `xsd:dayTimeDuration` string,
@@ -5318,11 +5326,11 @@ fn make_uuid<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> (String, [u8; 1
     // Set variant bits (RFC 4122 §4.1.1): top 2 bits of octet 8 = 10.
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     // One rendering pass for all 16 bytes, then slice the 32-character result at
-    // the RFC 4122 group boundaries. `hex::lower` emits exactly two characters
+    // the RFC 4122 group boundaries. `hex::encode` emits exactly two characters
     // per byte, so byte *b* occupies characters `2b..2b+2` and every group
     // boundary is a character index: 8, 12, 16, 20. Every character is ASCII, so
     // the byte slices are also character slices.
-    let hex = purrdf_core::hex::lower(&bytes);
+    let hex = purrdf_hash::hex::encode(&bytes);
     let uuid = format!(
         "{}-{}-{}-{}-{}",
         &hex[0..8],
@@ -5360,14 +5368,14 @@ mod tests {
     /// Evaluate a constant expression (empty solution) and return the EBV.
     fn ebv(ds: &RdfDataset, expr: &Expression) -> Option<bool> {
         let mut ctx = EvalCtx::new(ds);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         eval_ebv(expr, &[], &schema, &mut ctx).expect("eval")
     }
 
     /// Evaluate a constant expression to a string lexical form, if it is a literal.
     fn lex(ds: &RdfDataset, expr: &Expression) -> Option<String> {
         let mut ctx = EvalCtx::new(ds);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let term = eval_expr(expr, &[], &schema, &mut ctx).expect("eval")?;
         match value_of(&ctx, term) {
             TermValue::Literal { lexical_form, .. } => Some(lexical_form),
@@ -5376,7 +5384,7 @@ mod tests {
         }
     }
 
-    const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    use purrdf_xsd::datatype::XSD_INTEGER as XINT;
 
     #[test]
     fn numeric_comparison_uses_value_space() {
@@ -5443,8 +5451,8 @@ mod tests {
         // treats NaN as unordered (`f64`/`f32` `partial_cmp`, correctly, for
         // `<`/`>`/`ORDER BY`). Regression guard for the gap `sparql_value_eq`
         // closes: this used to evaluate to a type error (unbound), not `true`.
-        const XDOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-        const XFLOAT: &str = "http://www.w3.org/2001/XMLSchema#float";
+        use purrdf_xsd::datatype::XSD_DOUBLE as XDOUBLE;
+        use purrdf_xsd::datatype::XSD_FLOAT as XFLOAT;
         let ds = empty_ds();
         let eq = Expression::Equal(
             Child::new(typed_lit("NaN", XDOUBLE)),
@@ -5499,7 +5507,7 @@ mod tests {
     #[test]
     fn string_predicates_do_not_mint_nested_str_terms() {
         let ds = empty_ds();
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let mut ctx = EvalCtx::new(&ds);
         let expr = Expression::FunctionCall(
             Function::StrStarts,
@@ -5528,8 +5536,8 @@ mod tests {
     fn lang_matches_byte_comparison_matches_lowercased_semantics() {
         // The reference: what the allocation-based implementation computed.
         fn reference(tag: &str, range: &str) -> bool {
-            let tag = tag.to_ascii_lowercase();
-            let range = range.to_ascii_lowercase();
+            let tag = purrdf_iri::langtag::identity_fold(tag);
+            let range = purrdf_iri::langtag::identity_fold(range);
             range == "*" || tag == range || tag.starts_with(&(range + "-"))
         }
         let cases: &[(&str, &str, bool)] = &[
@@ -5597,7 +5605,7 @@ mod tests {
     #[test]
     fn regex_cache_reuses_compiled_pattern_and_failures() {
         let ds = empty_ds();
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let mut ctx = EvalCtx::new(&ds);
         let re = Expression::FunctionCall(
             Function::Regex,
@@ -5643,7 +5651,7 @@ mod tests {
     #[test]
     fn regex_q_flag_compiles_and_caches_like_any_other() {
         let ds = empty_ds();
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let mut ctx = EvalCtx::new(&ds);
         let re = Expression::FunctionCall(
             Function::Regex,
@@ -5971,7 +5979,7 @@ mod tests {
         assert_eq!(lex(&ds, &expr), Some("fallback".to_owned()));
     }
 
-    const XDEC: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+    use purrdf_xsd::datatype::XSD_DECIMAL as XDEC;
 
     // ---- arithmetic: positive tests ----------------------------------------
 
@@ -6054,7 +6062,7 @@ mod tests {
         // "a" + 1 → type error → Ok(None) (a FILTER drops the row; no hard Err).
         let expr = Expression::arithmetic(lit("a"), ArithmeticOperator::Add, typed_lit("1", XINT));
         let mut ctx = EvalCtx::new(&ds);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let result = eval_expr(&expr, &[], &schema, &mut ctx).expect("no hard error");
         assert!(
             result.is_none(),
@@ -6072,7 +6080,7 @@ mod tests {
             typed_lit("0", XINT),
         );
         let mut ctx = EvalCtx::new(&ds);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let result = eval_expr(&expr, &[], &schema, &mut ctx).expect("no hard error");
         assert!(result.is_none(), "divide-by-zero must be Ok(None)");
     }
@@ -6215,8 +6223,8 @@ mod tests {
     /// `=` is total).
     fn temporal_graph() -> Arc<RdfDataset> {
         use purrdf_core::RdfLiteral;
-        const XDATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
-        const XDURATION: &str = "http://www.w3.org/2001/XMLSchema#duration";
+        use purrdf_xsd::datatype::XSD_DATE_TIME as XDATETIME;
+        use purrdf_xsd::datatype::XSD_DURATION as XDURATION;
         let mut b = RdfDatasetBuilder::new();
         let start = b.intern_iri("http://ex/start");
         let end = b.intern_iri("http://ex/end");
@@ -6319,7 +6327,7 @@ mod tests {
     }
 
     fn subjects(ds: &RdfDataset, seq: &SolutionSeq, var: &str) -> Vec<String> {
-        let scratch = crate::scratch::ScratchInterner::new();
+        let scratch = crate::scratch::ScratchInterner::default();
         let col = seq.schema.index_of(&Variable::new(var)).unwrap();
         let mut out: Vec<String> = seq
             .rows
@@ -6627,7 +6635,7 @@ mod tests {
 
     // ---- hash functions -------------------------------------------------
 
-    const XSD_DATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
+    use purrdf_xsd::datatype::XSD_DATE_TIME as XSD_DATETIME;
 
     #[test]
     fn md5_abc() {
@@ -6924,10 +6932,10 @@ mod tests {
     // Functions and Operators §9.6); see `Function::Adjust` and
     // `adjust_timezone_arg` for the full source trail.
 
-    const XSD_DATE: &str = "http://www.w3.org/2001/XMLSchema#date";
-    const XSD_TIME: &str = "http://www.w3.org/2001/XMLSchema#time";
-    const XSD_DAYTIME_DURATION: &str = "http://www.w3.org/2001/XMLSchema#dayTimeDuration";
-    const XSD_YEARMONTH_DURATION: &str = "http://www.w3.org/2001/XMLSchema#yearMonthDuration";
+    use purrdf_xsd::datatype::XSD_DATE;
+    use purrdf_xsd::datatype::XSD_DAY_TIME_DURATION as XSD_DAYTIME_DURATION;
+    use purrdf_xsd::datatype::XSD_TIME;
+    use purrdf_xsd::datatype::XSD_YEAR_MONTH_DURATION as XSD_YEARMONTH_DURATION;
 
     fn adjust(value: Expression, timezone: Expression) -> Expression {
         Expression::FunctionCall(Function::Adjust, vec![value, timezone].into())
@@ -6936,7 +6944,7 @@ mod tests {
     /// The (lexical, datatype) pair of an evaluated constant expression.
     fn lex_and_dt(ds: &RdfDataset, expr: &Expression) -> Option<(String, String)> {
         let mut ctx = EvalCtx::new(ds);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let term = eval_expr(expr, &[], &schema, &mut ctx).expect("eval")?;
         match value_of(&ctx, term) {
             TermValue::Literal {
@@ -7068,7 +7076,7 @@ mod tests {
 
     // ---- SEP-0002 date/time/duration arithmetic, wired through `+ - * /` --
 
-    const XSD_DURATION: &str = "http://www.w3.org/2001/XMLSchema#duration";
+    use purrdf_xsd::datatype::XSD_DURATION;
 
     #[test]
     fn datetime_plus_year_month_duration_clamps_to_month_end() {
@@ -7208,7 +7216,7 @@ mod tests {
     #[test]
     fn duration_times_a_double_factor_is_a_type_error() {
         let ds = empty_ds();
-        const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        use purrdf_xsd::datatype::XSD_DOUBLE;
         // The exact-tier rule: an inexact binary factor cannot scale an exact
         // duration without silent rounding, so this is a type error, not a
         // coerced multiplication.
@@ -7305,7 +7313,7 @@ mod tests {
         // Override now with a known value for deterministic testing.
         let known_dt = purrdf_xsd::datetime_from_unix_seconds(0);
         let mut ctx = EvalCtx::new(&ds).with_now(XsdValue::DateTime(known_dt));
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let expr = Expression::FunctionCall(Function::Now, vec![].into());
         let term = eval_expr(&expr, &[], &schema, &mut ctx)
             .expect("NOW()")
@@ -7433,7 +7441,7 @@ mod tests {
     fn rand_deterministic_with_fixed_seed() {
         let ds = empty_ds();
         let mut ctx = EvalCtx::new(&ds).with_rng_seed(12345);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let expr = Expression::FunctionCall(Function::Rand, vec![].into());
         // First call
         let t1 = eval_expr(&expr, &[], &schema, &mut ctx)
@@ -7475,7 +7483,7 @@ mod tests {
         let ds = empty_ds();
         let mut ctx = EvalCtx::new(&ds);
         ctx.rng_state = 0xDEAD_BEEF_CAFE_BABEu64;
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let expr = Expression::FunctionCall(Function::Uuid, vec![].into());
         let term = eval_expr(&expr, &[], &schema, &mut ctx)
             .expect("UUID")
@@ -7512,7 +7520,7 @@ mod tests {
         let ds = empty_ds();
         let mut ctx = EvalCtx::new(&ds);
         ctx.rng_state = 0x1234_5678_9ABC_DEF0u64;
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let expr = Expression::FunctionCall(Function::StrUuid, vec![].into());
         let term = eval_expr(&expr, &[], &schema, &mut ctx)
             .expect("STRUUID")
@@ -7563,25 +7571,18 @@ mod tests {
                 32,
                 "draw {draw} must carry 32 hex characters"
             );
-            assert!(
-                stripped
-                    .chars()
-                    .all(|ch| ch.is_ascii_digit() || ('a'..='f').contains(&ch)),
-                "draw {draw} must be lowercase hex outside its hyphens"
-            );
+            let decoded = purrdf_hash::hex::decode_canonical(&stripped).unwrap_or_else(|err| {
+                panic!("draw {draw} must be lowercase hex outside its hyphens: {err}")
+            });
             assert_eq!(&stripped[12..13], "4", "draw {draw} must carry version 4");
             assert!(
                 matches!(&stripped[16..17], "8" | "9" | "a" | "b"),
                 "draw {draw} must carry the RFC 4122 variant nibble"
             );
-            for (index, byte) in bytes.iter().enumerate() {
-                let pair = &stripped[index * 2..index * 2 + 2];
-                assert_eq!(
-                    u8::from_str_radix(pair, 16).expect("a hex pair parses"),
-                    *byte,
-                    "draw {draw} pair {index} must render byte {byte:#04x}"
-                );
-            }
+            assert_eq!(
+                decoded, bytes,
+                "draw {draw} must render each byte as its own pair"
+            );
         }
     }
 
@@ -8678,7 +8679,7 @@ mod tests {
     fn held_in(ds: &RdfDataset, arg0: Expression, arg1: Expression) -> Option<bool> {
         let expr = Expression::FunctionCall(held_in_fn(), vec![arg0, arg1].into());
         let mut ctx = EvalCtx::new(ds).with_standpoint_predicates(ex_standpoints());
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         eval_ebv(&expr, &[], &schema, &mut ctx).expect("eval")
     }
 
@@ -8692,7 +8693,7 @@ mod tests {
             vec![iri("http://ex/r"), iri("http://ex/T1")].into(),
         );
         let mut ctx = EvalCtx::new(&ds);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let err = eval_ebv(&expr, &[], &schema, &mut ctx)
             .expect_err("heldIn without a predicate table must hard-error");
         assert!(
@@ -8767,7 +8768,7 @@ mod tests {
         use purrdf_core::RdfLiteral;
         use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, TriplePattern};
 
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
 
         let mut b = RdfDatasetBuilder::new();
         let val = b.intern_iri("http://ex/val");
@@ -9570,7 +9571,7 @@ mod tests {
     /// expression is unbound (a SPARQL expression error).
     fn str_lang(ds: &RdfDataset, lexical: &str, tag: &str) -> Option<TermValue> {
         let mut ctx = EvalCtx::new(ds);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let expr = Expression::FunctionCall(Function::StrLang, vec![lit(lexical), lit(tag)].into());
         let term = eval_expr(&expr, &[], &schema, &mut ctx).expect("eval")?;
         Some(value_of(&ctx, term))
@@ -9579,7 +9580,7 @@ mod tests {
     /// `STRLANGDIR(lexical, tag, dir)` as a whole [`TermValue`], or `None`.
     fn str_lang_dir(ds: &RdfDataset, lexical: &str, tag: &str, dir: &str) -> Option<TermValue> {
         let mut ctx = EvalCtx::new(ds);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let expr = Expression::FunctionCall(
             Function::StrLangDir,
             vec![lit(lexical), lit(tag), lit(dir)].into(),
@@ -9617,7 +9618,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("STRLANG(\"x\", {tag:?}) must still bind"));
             assert_eq!(
                 tag_of(&value),
-                Some(tag.to_ascii_lowercase().as_str()),
+                Some(purrdf_iri::langtag::identity_fold(tag).as_str()),
                 "the gate must not change which tag STRLANG produces, only \
                  whether it produces one"
             );
@@ -9646,7 +9647,10 @@ mod tests {
                 let value = str_lang_dir(&ds, "x", tag, dir).unwrap_or_else(|| {
                     panic!("STRLANGDIR(\"x\", {tag:?}, {dir:?}) must still bind")
                 });
-                assert_eq!(tag_of(&value), Some(tag.to_ascii_lowercase().as_str()));
+                assert_eq!(
+                    tag_of(&value),
+                    Some(purrdf_iri::langtag::identity_fold(tag).as_str())
+                );
             }
         }
     }
@@ -9661,8 +9665,8 @@ mod tests {
         for tag in ACCEPTED_TAGS.iter().chain(REFUSED_TAGS) {
             assert_eq!(
                 well_formed_langtag(tag),
-                well_formed_langtag(&tag.to_ascii_lowercase()),
-                "gating before vs after `to_ascii_lowercase` must accept the same \
+                well_formed_langtag(&purrdf_iri::langtag::identity_fold(tag)),
+                "gating before vs after `identity_fold` must accept the same \
                  set, else the order of the two lines would be load-bearing ({tag:?})"
             );
         }
@@ -9674,7 +9678,7 @@ mod tests {
     /// expression is unbound (a SPARQL expression error).
     fn str_dt(ds: &RdfDataset, lexical: &str, dt: &str) -> Option<TermValue> {
         let mut ctx = EvalCtx::new(ds);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let expr = Expression::FunctionCall(Function::StrDt, vec![lit(lexical), iri(dt)].into());
         let term = eval_expr(&expr, &[], &schema, &mut ctx).expect("eval")?;
         Some(value_of(&ctx, term))
@@ -9832,7 +9836,7 @@ mod tests {
     /// The data the strictness samples read: the one-member `rdf:List` headed by
     /// `<https://example.org/list>`, holding `"a"`.
     fn list_ds() -> Arc<RdfDataset> {
-        const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+        use purrdf_iri::vocab::rdf::NS as RDF;
         let mut builder = RdfDatasetBuilder::new();
         let head = builder.intern_iri("https://example.org/list");
         let first = builder.intern_iri(&format!("{RDF}first"));
@@ -9852,7 +9856,7 @@ mod tests {
                 "https://example.org/accordingTo",
                 "https://example.org/sharpens",
             ));
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         matches!(eval_expr(expr, &[], &schema, &mut ctx), Ok(Some(_)))
     }
 
@@ -9862,7 +9866,7 @@ mod tests {
     #[allow(clippy::too_many_lines)] // one table row per built-in, kept together
     fn strictness_samples(function: &Function) -> Vec<Vec<Expression>> {
         use purrdf_cdt::CdtFn;
-        const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+        use purrdf_xsd::datatype::XSD_NS as XSD;
         let int = |n: &str| typed_lit(n, &format!("{XSD}integer"));
         let date_time = || typed_lit("2020-01-02T03:04:05Z", &format!("{XSD}dateTime"));
         let cdt = |kind: CdtFn, args: Vec<Expression>| {
@@ -10150,7 +10154,7 @@ mod tests {
         // parameter is optional — so the planner may not call any position strict.
         const HOST_FN: &str = "https://example.org/fn/host";
         let custom = Function::Custom(NamedNode::new_unchecked(HOST_FN));
-        let mut registry = crate::user_fn::UserFunctionRegistry::new();
+        let mut registry = crate::user_fn::UserFunctionRegistry::default();
         registry.insert(
             HOST_FN,
             crate::user_fn::UserFunction {
@@ -10169,7 +10173,7 @@ mod tests {
         let answer = eval_expr(
             &Expression::FunctionCall(custom.clone(), vec![unbound()].into()),
             &[],
-            &VarSchema::new(),
+            &VarSchema::default(),
             &mut ctx,
         );
         // The failure names which way the call went rather than printing its value:
@@ -10196,7 +10200,7 @@ mod tests {
     /// effective boolean value and compared.
     #[test]
     fn a_constant_s_effective_boolean_value_is_the_evaluator_s() {
-        const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+        use purrdf_xsd::datatype::XSD_NS as XSD;
         let ds = empty_ds();
         let literals = [
             Literal::new_simple(""),
@@ -10221,7 +10225,7 @@ mod tests {
 
     // ---- n-ary chains are the left fold of their binary operator ---------------
 
-    const XBOOL: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+    use purrdf_xsd::datatype::XSD_BOOLEAN as XBOOL;
 
     /// A `true`, `false` or type-error operand, by its three-valued value.
     fn truth(value: Option<bool>) -> Expression {
@@ -10318,7 +10322,7 @@ mod tests {
         };
         let run = |expr: &Expression| {
             let mut ctx = EvalCtx::new(&*ds);
-            eval_ebv(expr, &[], &VarSchema::new(), &mut ctx)
+            eval_ebv(expr, &[], &VarSchema::default(), &mut ctx)
         };
         let or = Expression::Or(
             Chain::try_from(vec![truth(Some(true)), truth(None), hard()])
@@ -10341,9 +10345,9 @@ mod tests {
     /// doubles on both sides of a rounding tie, `NaN`, zero (for division), and a
     /// string, which is a type error.
     fn arithmetic_operand(index: usize) -> Expression {
-        const XDEC: &str = "http://www.w3.org/2001/XMLSchema#decimal";
-        const XFLT: &str = "http://www.w3.org/2001/XMLSchema#float";
-        const XDBL: &str = "http://www.w3.org/2001/XMLSchema#double";
+        use purrdf_xsd::datatype::XSD_DECIMAL as XDEC;
+        use purrdf_xsd::datatype::XSD_DOUBLE as XDBL;
+        use purrdf_xsd::datatype::XSD_FLOAT as XFLT;
         match index % 11 {
             0 => typed_lit("7", XINT),
             1 => typed_lit("-3", XINT),
@@ -10375,16 +10379,18 @@ mod tests {
         ];
         let term = |expr: &Expression| {
             let mut ctx = EvalCtx::new(&*ds);
-            let term = eval_expr(expr, &[], &VarSchema::new(), &mut ctx).expect("no hard error");
+            let term =
+                eval_expr(expr, &[], &VarSchema::default(), &mut ctx).expect("no hard error");
             term.map(|t| value_of(&ctx, t))
         };
         // A fixed linear congruential sequence: the cases are the same on every run.
         let mut state: u64 = 0x2545_f491_4f6c_dd1d;
         let mut next = |bound: usize| {
-            state = state
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            usize::try_from(state >> 33).expect("31 bits fit") % bound
+            let drawn = purrdf_testkit::rng::lcg64_next(
+                &mut state,
+                purrdf_testkit::rng::LCG64_MMIX_INCREMENT,
+            );
+            usize::try_from(drawn >> 33).expect("31 bits fit") % bound
         };
         let mut values = 0;
         for _ in 0..400 {
@@ -10417,7 +10423,7 @@ mod tests {
         let ds = empty_ds();
         let run = |expr: &Expression| {
             let mut ctx = EvalCtx::new(&*ds);
-            eval_expr(expr, &[], &VarSchema::new(), &mut ctx).map(|term| term.is_some())
+            eval_expr(expr, &[], &VarSchema::default(), &mut ctx).map(|term| term.is_some())
         };
         let hard = Expression::FunctionCall(
             Function::Custom(NamedNode::new_unchecked(
@@ -10455,14 +10461,14 @@ mod walk_tests {
 
     use purrdf_core::{BlankScope, RdfTextDirection, TermBox, TermValue};
     use purrdf_sparql_algebra::{
-        AggregateExpression, AggregateFunction, BaseDirection, BlankNode, Chain, Child, Expression,
-        Function, GraphPattern, GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern,
+        AggregateExpression, AggregateFunction, BlankNode, Chain, Child, Expression, Function,
+        GraphPattern, GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern,
         OrderExpression, PropertyFunctionCall, TermPattern, TriplePattern, Variable,
     };
 
     use super::{
         Deferral, FreeVars, expr_vars, ground_term_from_term_value, pattern_all_vars,
-        pattern_vars_outside, term_pattern_vars,
+        pattern_vars_outside,
     };
     use crate::DetHashSet;
 
@@ -10658,7 +10664,7 @@ mod walk_tests {
                     for arg in agg
                         .args()
                         .iter()
-                        .chain(agg.order_by().iter().map(crate::modifier::order_sort_key))
+                        .chain(agg.order_by().iter().map(OrderExpression::expression))
                     {
                         reference_expr_vars(arg, out);
                     }
@@ -10687,11 +10693,7 @@ mod walk_tests {
                 direction,
             } => {
                 let lit = if let Some(lang) = language {
-                    let dir = direction.map(|d| match d {
-                        RdfTextDirection::Ltr => BaseDirection::Ltr,
-                        RdfTextDirection::Rtl => BaseDirection::Rtl,
-                    });
-                    Literal::new_lang(lexical_form, lang, dir)
+                    Literal::new_lang(lexical_form, lang, *direction)
                 } else {
                     Literal::new_typed(lexical_form, NamedNode::new_unchecked(datatype))
                 };
@@ -10755,22 +10757,20 @@ mod walk_tests {
     // ── A deterministic shape generator ────────────────────────────────────────────
 
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 48,
             }
         }
 
         fn choose(&mut self, options: usize) -> usize {
-            let bound = u64::try_from(options).expect("a choice count fits");
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
-                .expect("a draw below the count fits")
+            self.state.below_usize(options)
         }
 
         /// Whether one more compound node fits the budget.
@@ -11070,15 +11070,6 @@ mod walk_tests {
         names
     }
 
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
-    }
-
     fn a_triple(choices: &mut Choices) -> TriplePattern {
         TriplePattern {
             subject: TermPattern::Variable(var(choices)),
@@ -11126,7 +11117,7 @@ mod walk_tests {
             assert_eq!(sorted(&ours), sorted(&expected), "seed {seed}: {expr:?}");
 
             let mut ours = DetHashSet::default();
-            term_pattern_vars(&term, &mut ours);
+            term.collect_variables(&mut ours);
             let mut expected = DetHashSet::default();
             reference_term_pattern_vars(&term, &mut expected);
             assert_eq!(sorted(&ours), sorted(&expected), "seed {seed}: {term:?}");
@@ -11143,46 +11134,48 @@ mod walk_tests {
     /// 128 KiB stack.
     #[test]
     fn a_hundred_thousand_level_pattern_and_expression_are_read_on_a_128_kib_thread() {
-        let (pattern_vars, expr_vars_found, term_vars) = on_small_stack(|| {
-            let mut shape = GraphPattern::Bgp {
-                patterns: vec![TriplePattern {
-                    subject: TermPattern::Variable(Variable::new("deep")),
-                    predicate: NamedNodePattern::NamedNode(iri(0)),
-                    object: TermPattern::NamedNode(iri(1)),
-                }],
-            };
-            for _ in 0..DEPTH {
-                shape = GraphPattern::Filter {
-                    expr: Expression::Exists(Child::new(shape)),
-                    inner: Child::new(GraphPattern::Bgp {
-                        patterns: Vec::new(),
-                    }),
+        let (pattern_vars, expr_vars_found, term_vars) =
+            purrdf_stack::on_stack(SMALL_STACK, || {
+                let mut shape = GraphPattern::Bgp {
+                    patterns: vec![TriplePattern {
+                        subject: TermPattern::Variable(Variable::new("deep")),
+                        predicate: NamedNodePattern::NamedNode(iri(0)),
+                        object: TermPattern::NamedNode(iri(1)),
+                    }],
                 };
-            }
-            let mut expr = Expression::Variable(Variable::new("negated"));
-            for _ in 0..DEPTH {
-                expr = Expression::Not(Child::new(expr));
-            }
-            let mut term = TermPattern::Variable(Variable::new("quoted"));
-            for _ in 0..DEPTH {
-                term = TermPattern::Triple(Child::new(TriplePattern {
-                    subject: TermPattern::NamedNode(iri(0)),
-                    predicate: NamedNodePattern::NamedNode(iri(1)),
-                    object: term,
-                }));
-            }
-            let mut pattern_vars = DetHashSet::default();
-            pattern_all_vars(&shape, &mut pattern_vars);
-            let mut expr_vars_found = DetHashSet::default();
-            expr_vars(&expr, &mut expr_vars_found);
-            let mut term_vars = DetHashSet::default();
-            term_pattern_vars(&term, &mut term_vars);
-            (
-                sorted(&pattern_vars),
-                sorted(&expr_vars_found),
-                sorted(&term_vars),
-            )
-        });
+                for _ in 0..DEPTH {
+                    shape = GraphPattern::Filter {
+                        expr: Expression::Exists(Child::new(shape)),
+                        inner: Child::new(GraphPattern::Bgp {
+                            patterns: Vec::new(),
+                        }),
+                    };
+                }
+                let mut expr = Expression::Variable(Variable::new("negated"));
+                for _ in 0..DEPTH {
+                    expr = Expression::Not(Child::new(expr));
+                }
+                let mut term = TermPattern::Variable(Variable::new("quoted"));
+                for _ in 0..DEPTH {
+                    term = TermPattern::Triple(Child::new(TriplePattern {
+                        subject: TermPattern::NamedNode(iri(0)),
+                        predicate: NamedNodePattern::NamedNode(iri(1)),
+                        object: term,
+                    }));
+                }
+                let mut pattern_vars = DetHashSet::default();
+                pattern_all_vars(&shape, &mut pattern_vars);
+                let mut expr_vars_found = DetHashSet::default();
+                expr_vars(&expr, &mut expr_vars_found);
+                let mut term_vars = DetHashSet::default();
+                term.collect_variables(&mut term_vars);
+                (
+                    sorted(&pattern_vars),
+                    sorted(&expr_vars_found),
+                    sorted(&term_vars),
+                )
+            })
+            .expect("spawn");
         assert_eq!(pattern_vars, vec!["deep"]);
         assert_eq!(expr_vars_found, vec!["negated"]);
         assert_eq!(term_vars, vec!["quoted"]);
@@ -11215,7 +11208,7 @@ mod walk_tests {
     /// A quoted triple a hundred thousand levels deep is converted on a 128 KiB stack.
     #[test]
     fn a_hundred_thousand_level_quoted_triple_is_converted_on_a_128_kib_thread() {
-        let depth = on_small_stack(|| {
+        let depth = purrdf_stack::on_stack(SMALL_STACK, || {
             let mut value = TermValue::iri(format!("{EX}bottom"));
             for _ in 0..DEPTH {
                 value = TermValue::Triple {
@@ -11236,7 +11229,8 @@ mod walk_tests {
                 GroundTerm::NamedNode(NamedNode::new_unchecked(format!("{EX}bottom")))
             );
             depth
-        });
+        })
+        .expect("spawn");
         assert_eq!(depth, DEPTH);
     }
 
@@ -11336,7 +11330,7 @@ mod walk_tests {
     /// of an undeferred one there, are reported on a 128 KiB stack.
     #[test]
     fn a_hundred_thousand_level_expression_is_read_by_the_deferral_walk_on_a_128_kib_thread() {
-        let (deferred, direct) = on_small_stack(|| {
+        let (deferred, direct) = purrdf_stack::on_stack(SMALL_STACK, || {
             let mut choices = Choices::new(7);
             let body = GraphPattern::Bgp {
                 patterns: vec![a_triple(&mut choices)],
@@ -11362,7 +11356,8 @@ mod walk_tests {
                 (deferred.sites.len(), sorted(&deferred.direct)),
                 (direct.sites.len(), sorted(&direct.direct), sorted(&vars)),
             )
-        });
+        })
+        .expect("spawn");
         assert_eq!(deferred, (1, Vec::new()));
         assert_eq!(direct.0, 0);
         assert_eq!(direct.1, direct.2);
@@ -11427,22 +11422,20 @@ mod rdf_equal_tests {
 
     /// A deterministic choice sequence.
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 12,
             }
         }
 
         fn choose(&mut self, n: usize) -> usize {
-            let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
-                .expect("a draw below the count fits")
+            self.state.below_usize(n)
         }
 
         fn spend(&mut self) -> bool {
@@ -11589,23 +11582,19 @@ mod rdf_equal_tests {
     /// only in the innermost object compare unequal, on a 128 KiB thread.
     #[test]
     fn a_hundred_thousand_level_pair_compares_on_a_128_kib_thread() {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(|| {
-                let a = chain(DEPTH, "http://example.org/o");
-                let same = chain(DEPTH, "http://example.org/o");
-                let other = chain(DEPTH, "http://example.org/x");
-                let shorter = chain(DEPTH - 1, "http://example.org/o");
-                assert_eq!(rdf_equal(&a, &same), Some(true));
-                assert_eq!(rdf_equal(&a, &other), Some(false));
-                assert_eq!(rdf_equal(&a, &shorter), Some(false));
-                drop(shorter);
-                drop(other);
-                drop(same);
-                drop(a);
-            })
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned");
+        purrdf_stack::on_stack(SMALL_STACK, || {
+            let a = chain(DEPTH, "http://example.org/o");
+            let same = chain(DEPTH, "http://example.org/o");
+            let other = chain(DEPTH, "http://example.org/x");
+            let shorter = chain(DEPTH - 1, "http://example.org/o");
+            assert_eq!(rdf_equal(&a, &same), Some(true));
+            assert_eq!(rdf_equal(&a, &other), Some(false));
+            assert_eq!(rdf_equal(&a, &shorter), Some(false));
+            drop(shorter);
+            drop(other);
+            drop(same);
+            drop(a);
+        })
+        .expect("spawn");
     }
 }

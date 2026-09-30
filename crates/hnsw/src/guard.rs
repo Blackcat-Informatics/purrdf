@@ -25,7 +25,7 @@
 //!    ([`verify_payload_commitment`]) — a substituted payload is rejected even when the
 //!    container's own verification was never asked to run;
 //! 3. the canonical image decodes over the matrix under the arithmetic the guard names
-//!    ([`load`] for the exact index, [`load_reassociated`] for the reassociated one), its
+//!    ([`load`], generic over the arithmetic), its
 //!    header records a code that implementation publishes -- and for the reassociated one,
 //!    this build's shape, identity included -- and its embedded parameters agree with the guard's parameter
 //!    block.
@@ -48,13 +48,14 @@ use purrdf_core::{
     IndexUseRole, TargetSetId, TlvEntryRef, TlvWireType, VectorDtype, VectorSpaceId, canonical_tlv,
 };
 
-use purrdf_core::distance::{Arithmetic, Exact, Reassociated, Resolved};
+use purrdf_core::distance::{Exact, Reassociated, Resolved};
 
 use crate::error::{HnswError, Result};
 use crate::graph::VectorMatrix;
-use crate::profile::Published;
+use crate::profile::{Published, profile_error};
 use crate::{
-    HnswIndex, IMPLEMENTATION_ID, IMPLEMENTATION_ID_REASSOCIATED, INDEX_MEDIA_TYPE, Params, profile,
+    HnswIndex, IMPLEMENTATION_ID, IMPLEMENTATION_ID_REASSOCIATED, INDEX_MEDIA_TYPE,
+    IndexArithmetic, Params, profile,
 };
 
 // ---------------------------------------------------------------------------
@@ -100,7 +101,7 @@ pub fn guard_contract(params: Params, role: IndexUseRole) -> IndexGuardContract 
 /// arithmetic on the dispatch path its image records, and the same loss contract,
 /// parameter encoding and payload media type under either arithmetic.
 #[must_use]
-pub fn guard_contract_for<A: Arithmetic>(
+pub fn guard_contract_for<A: IndexArithmetic>(
     index: &HnswIndex<A>,
     role: IndexUseRole,
 ) -> IndexGuardContract {
@@ -140,7 +141,7 @@ fn contract(
 ///
 /// [`HnswError`] wrapping any [`purrdf_core::EmbeddingError`] — an empty payload, a
 /// non-deterministic inline payload, or a guard whose contract is malformed.
-pub fn derived_index<A: Arithmetic>(
+pub fn derived_index<A: IndexArithmetic>(
     coordinates: IndexCoordinates,
     index: &HnswIndex<A>,
     role: IndexUseRole,
@@ -246,20 +247,18 @@ pub(crate) fn validate_profile(guard: &IndexGuardView<'_>) -> Result<(Params, Pu
     let entries = guard_entries(guard)?;
     let identity = required(&entries, 1, "the implementation identity")?;
     if identity.wire_type != TlvWireType::Block {
-        return Err(profile_failure(
-            "the implementation identity is not a block",
-        ));
+        return Err(profile_error("the implementation identity is not a block"));
     }
     let (identifier, media_type, revision) = identity_block_fields(identity.value)?;
     let published = profile::published();
     if !published.iter().any(|row| row.implementation == identifier) {
-        return Err(profile_failure(format!(
+        return Err(profile_error(format!(
             "the implementation identifier is `{identifier}`, not `{IMPLEMENTATION_ID}` or \
              `{IMPLEMENTATION_ID_REASSOCIATED}`"
         )));
     }
     if media_type != profile::IMPLEMENTATION_MEDIA_TYPE {
-        return Err(profile_failure(format!(
+        return Err(profile_error(format!(
             "the implementation media type is `{media_type}`, not \
              `{}`",
             profile::IMPLEMENTATION_MEDIA_TYPE
@@ -274,7 +273,7 @@ pub(crate) fn validate_profile(guard: &IndexGuardView<'_>) -> Result<(Params, Pu
 
     let encoding = required_utf8(&entries, 2, "the parameter encoding")?;
     if encoding != profile::PARAMETER_ENCODING {
-        return Err(profile_failure(format!(
+        return Err(profile_error(format!(
             "the parameter encoding is `{encoding}`, not `{}`",
             profile::PARAMETER_ENCODING
         )));
@@ -282,7 +281,7 @@ pub(crate) fn validate_profile(guard: &IndexGuardView<'_>) -> Result<(Params, Pu
 
     let parameters = required(&entries, 3, "the parameter block")?;
     if parameters.wire_type != TlvWireType::Bytes {
-        return Err(profile_failure("the parameter block is not a byte string"));
+        return Err(profile_error("the parameter block is not a byte string"));
     }
     let params = profile::parse_parameters(parameters.value)?;
 
@@ -290,21 +289,21 @@ pub(crate) fn validate_profile(guard: &IndexGuardView<'_>) -> Result<(Params, Pu
 
     let media_type = required_utf8(&entries, 7, "the payload media type")?;
     if media_type != INDEX_MEDIA_TYPE {
-        return Err(profile_failure(format!(
+        return Err(profile_error(format!(
             "the payload media type is `{media_type}`, not `{INDEX_MEDIA_TYPE}`"
         )));
     }
 
     let role = required(&entries, 6, "the index use role")?;
     if role.wire_type != TlvWireType::U32 {
-        return Err(profile_failure("the index use role is not a u32"));
+        return Err(profile_error("the index use role is not a u32"));
     }
     if role.value.len() != 4 {
-        return Err(profile_failure("the index use role is not four bytes"));
+        return Err(profile_error("the index use role is not four bytes"));
     }
     let role = u32::from_le_bytes(role.value.try_into().expect("checked length"));
     if !matches!(role, 1..=3) {
-        return Err(profile_failure(format!("unknown index use role {role}")));
+        return Err(profile_error(format!("unknown index use role {role}")));
     }
 
     Ok((params, row))
@@ -319,13 +318,13 @@ fn foreign_revision(identifier: &str, revision: Option<&[u8]>) -> HnswError {
         .into_iter()
         .find(|row| row.implementation != identifier && revision == Some(row.revision.as_bytes()));
     match other {
-        Some(row) => profile_failure(format!(
+        Some(row) => profile_error(format!(
             "the implementation `{identifier}` carries the evidence revision `{}` publishes \
              for the {} arithmetic; an implementation must publish its own arithmetic's \
              evidence, so the pairing is refused",
             row.implementation, row.arithmetic
         )),
-        None => profile_failure(
+        None => profile_error(
             "the implementation evidence revision is not the profile's approximation \
              statement; an HNSW guard must publish what it does not promise",
         ),
@@ -335,17 +334,17 @@ fn foreign_revision(identifier: &str, revision: Option<&[u8]>) -> HnswError {
 /// Validate the loss block: approximate, and no vector transform.
 fn validate_loss(loss: TlvEntryRef<'_>) -> Result<()> {
     if loss.wire_type != TlvWireType::Block {
-        return Err(profile_failure("the loss contract is not a block"));
+        return Err(profile_error("the loss contract is not a block"));
     }
     let entries = canonical_tlv(loss.value)?;
     let entries: Vec<TlvEntryRef<'_>> = entries.collect();
     let approximate = required(&entries, 1, "the approximation flag")?;
     if approximate.value != [1] {
-        return Err(profile_failure("the loss contract is not approximate"));
+        return Err(profile_error("the loss contract is not approximate"));
     }
     let transforms = required(&entries, 2, "the vector-transform flag")?;
     if transforms.value != [0] {
-        return Err(profile_failure(
+        return Err(profile_error(
             "the loss contract claims an HNSW payload transforms vectors; this profile \
              stores no vectors, so the claim is false",
         ));
@@ -421,7 +420,7 @@ pub fn check_coordinates(
     let matrix = effective.matrix();
     let projection = effective.projection();
     let mismatch = |field: &str| {
-        profile_failure(format!(
+        profile_error(format!(
             "guard {} is stale or substituted: its {field} does not name the searched \
              effective matrix",
             guard.id()
@@ -523,7 +522,7 @@ pub fn verify_payload_commitment(guard: &IndexGuardView<'_>, bytes: &[u8]) -> Re
     Ok(())
 }
 
-/// Verify the guard profile, the payload commitment, and decode the exact index over
+/// Verify the guard profile, the payload commitment, and decode the index under `A` over
 /// `matrix`.
 ///
 /// The decoded graph must have one node per matrix row, and its embedded identity
@@ -532,39 +531,20 @@ pub fn verify_payload_commitment(guard: &IndexGuardView<'_>, bytes: &[u8]) -> Re
 ///
 /// # Errors
 ///
-/// [`HnswError::GuardProfile`] (a guard naming the reassociated implementation among
-/// them: load it with [`load_reassociated`]), [`HnswError::PayloadUnavailable`],
-/// [`HnswError::PayloadCommitment`], or any decoder error from [`HnswIndex::decode`].
-pub fn load(guard: &IndexGuardView<'_>, matrix: VectorMatrix) -> Result<HnswIndex> {
-    load_as(guard, matrix, HnswIndex::decode)
-}
-
-/// [`load`] for a guard naming the reassociated implementation, decoding the index with
-/// [`HnswIndex::decode_reassociated`].
-///
-/// # Errors
-///
-/// As [`load`], with [`HnswError::GuardProfile`] for a guard naming the exact
-/// implementation or one whose revision names another dispatch path than the payload
-/// records, [`HnswError::ArithmeticPathUnavailable`] for a payload recorded on a path
-/// this process cannot run, and [`HnswError::ArithmeticBuildMismatch`] for one recorded by
-/// a build of another shape.
-pub fn load_reassociated(
+/// [`HnswError::GuardProfile`] (a guard naming the implementation of another arithmetic
+/// among them, or one whose revision names another dispatch path than the payload
+/// records), [`HnswError::PayloadUnavailable`], [`HnswError::PayloadCommitment`], or any
+/// decoder error from [`HnswIndex::decode`] -- for a reassociated payload,
+/// [`HnswError::ArithmeticPathUnavailable`] for one recorded on a path this process cannot
+/// run and [`HnswError::ArithmeticBuildMismatch`] for one recorded by a build of another
+/// shape among them.
+pub fn load<A: IndexArithmetic>(
     guard: &IndexGuardView<'_>,
     matrix: VectorMatrix,
-) -> Result<HnswIndex<Reassociated>> {
-    load_as(guard, matrix, HnswIndex::decode_reassociated)
-}
-
-/// [`load`] under arithmetic `A`, decoding with `decode`.
-fn load_as<A: Arithmetic>(
-    guard: &IndexGuardView<'_>,
-    matrix: VectorMatrix,
-    decode: fn(VectorMatrix, &[u8]) -> Result<HnswIndex<A>>,
 ) -> Result<HnswIndex<A>> {
     let (params, row) = validate_profile(guard)?;
     if row.arithmetic != A::ID {
-        return Err(profile_failure(format!(
+        return Err(profile_error(format!(
             "the guard names the `{}` implementation, whose distances are computed under the \
              {} arithmetic, and it is being loaded as an index computed under {}",
             row.implementation,
@@ -574,10 +554,10 @@ fn load_as<A: Arithmetic>(
     }
     let bytes = payload_bytes(guard)?;
     verify_payload_commitment(guard, bytes)?;
-    let index = decode(matrix, bytes)?;
+    let index = HnswIndex::<A>::decode(matrix, bytes)?;
     let recorded = index.arithmetic().image_code();
     if !row.codes.contains(&recorded) {
-        return Err(profile_failure(format!(
+        return Err(profile_error(format!(
             "the guard's evidence revision names the dispatch path of arithmetic code(s) \
              {:?}, and the payload records code {recorded} ({}); the guard and the payload \
              describe two different compilations",
@@ -586,7 +566,7 @@ fn load_as<A: Arithmetic>(
         )));
     }
     if index.params() != params {
-        return Err(profile_failure(
+        return Err(profile_error(
             "the guard's parameter block and the payload's embedded parameters disagree",
         ));
     }
@@ -723,9 +703,9 @@ pub fn verify_rebuild(
         .ok()
         .and_then(|entries| find(&entries, 1))
         .and_then(|identity| identity_block_identifier(identity.value).ok())
-        .is_some_and(|identifier| identifier == profile::implementation_id_for::<Reassociated>());
+        .is_some_and(|identifier| identifier == Reassociated::IMPLEMENTATION_ID);
     let verdict = if reassociated {
-        HnswIndex::verify_bytes_against_reassociated(source_matrix, bytes)?
+        HnswIndex::<Reassociated>::verify_bytes_against(source_matrix, bytes)?
     } else {
         HnswIndex::<Exact>::verify_bytes_against(source_matrix, bytes)?
     };
@@ -746,17 +726,17 @@ fn guard_entries<'a>(guard: &IndexGuardView<'a>) -> Result<Vec<TlvEntryRef<'a>>>
 
 /// One required entry by tag, with a profile-shaped error on absence.
 fn required<'a>(entries: &[TlvEntryRef<'a>], tag: u16, what: &str) -> Result<TlvEntryRef<'a>> {
-    find(entries, tag).ok_or_else(|| profile_failure(format!("{what} is missing")))
+    find(entries, tag).ok_or_else(|| profile_error(format!("{what} is missing")))
 }
 
 /// One required UTF-8 entry by tag.
 fn required_utf8<'a>(entries: &[TlvEntryRef<'a>], tag: u16, what: &str) -> Result<&'a str> {
     let entry = required(entries, tag, what)?;
     if entry.wire_type != TlvWireType::Utf8 {
-        return Err(profile_failure(format!("{what} is not UTF-8")));
+        return Err(profile_error(format!("{what} is not UTF-8")));
     }
     core::str::from_utf8(entry.value)
-        .map_err(|_| profile_failure(format!("{what} is not valid UTF-8")))
+        .map_err(|_| profile_error(format!("{what} is not valid UTF-8")))
 }
 
 /// The use role a guard declares, read from its canonical block.
@@ -768,17 +748,17 @@ fn declared_use_role(guard: &IndexGuardView<'_>) -> Result<IndexUseRole> {
     let entries = guard_entries(guard)?;
     let entry = required(&entries, 6, "the use role")?;
     if entry.wire_type != TlvWireType::U32 {
-        return Err(profile_failure("the use role is not a u32"));
+        return Err(profile_error("the use role is not a u32"));
     }
     let bytes: [u8; 4] = entry
         .value
         .try_into()
-        .map_err(|_| profile_failure("the use role is not four bytes"))?;
+        .map_err(|_| profile_error("the use role is not four bytes"))?;
     match u32::from_le_bytes(bytes) {
         1 => Ok(IndexUseRole::Generic),
         2 => Ok(IndexUseRole::CoarsePrefixRetrieval),
         3 => Ok(IndexUseRole::FullPrefixReranking),
-        other => Err(profile_failure(format!(
+        other => Err(profile_error(format!(
             "the use role is {other}, which PURREMB does not define"
         ))),
     }
@@ -794,13 +774,11 @@ fn identity_block_identifier(block: &[u8]) -> Result<String> {
     let entries: Vec<TlvEntryRef<'_>> = canonical_tlv(block)?.collect();
     let identifier = required(&entries, 1, "the implementation identifier")?;
     if identifier.wire_type != TlvWireType::Utf8 {
-        return Err(profile_failure(
-            "the implementation identifier is not UTF-8",
-        ));
+        return Err(profile_error("the implementation identifier is not UTF-8"));
     }
     core::str::from_utf8(identifier.value)
         .map(str::to_owned)
-        .map_err(|_| profile_failure("the implementation identifier is not valid UTF-8"))
+        .map_err(|_| profile_error("the implementation identifier is not valid UTF-8"))
 }
 
 /// The identifier, media type, and optional revision of an implementation identity block.
@@ -811,20 +789,13 @@ fn identity_block_fields(block: &[u8]) -> Result<(String, String, Option<Vec<u8>
     let revision = match find(&entries, 4) {
         Some(entry) if entry.wire_type == TlvWireType::Bytes => Some(entry.value.to_vec()),
         Some(_) => {
-            return Err(profile_failure(
+            return Err(profile_error(
                 "the implementation revision is not a byte string",
             ));
         }
         None => None,
     };
     Ok((identifier, media_type, revision))
-}
-
-/// A guard-profile failure.
-fn profile_failure(description: impl Into<String>) -> HnswError {
-    HnswError::GuardProfile {
-        description: description.into(),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -849,7 +820,7 @@ mod tests {
         );
     }
 
-    /// Re-encode an artifact identity's fields the way rdf-core does, for the helper test.
+    /// Encode an artifact identity's fields through rdf-core's TLV writer, for the helper test.
     fn identity_block_bytes(identity: &ArtifactIdentity) -> Vec<u8> {
         let mut out = Vec::new();
         put(
@@ -878,12 +849,6 @@ mod tests {
     }
 
     fn put(out: &mut Vec<u8>, tag: u16, wire: TlvWireType, value: &[u8]) {
-        out.extend_from_slice(&tag.to_le_bytes());
-        out.push(wire as u8);
-        out.push(1);
-        out.extend_from_slice(&(value.len() as u32).to_le_bytes());
-        out.extend_from_slice(value);
-        let aligned = (out.len() + 7) & !7;
-        out.resize(aligned, 0);
+        purrdf_core::push_tlv(out, tag, wire, true, value).expect("a canonical critical entry");
     }
 }

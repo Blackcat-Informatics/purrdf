@@ -4,10 +4,10 @@
 //! Typed CONSTRUCT publication versus an intermediate frozen result dataset.
 #![allow(missing_docs)]
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use purrdf_core::ir::import::DatasetImporter;
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlResult};
 use purrdf_sparql_eval::{NativeSparqlEngine, PreparedQuery, QueryOptions};
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 use std::sync::Arc;
 
 fn data(rows: usize) -> Arc<RdfDataset> {
@@ -56,7 +56,7 @@ fn verify_publication(engine: &NativeSparqlEngine, plan: &PreparedQuery, data: &
     );
 }
 
-fn bench(c: &mut Criterion) {
+fn bench(c: &mut Bench) {
     let engine = NativeSparqlEngine::new();
     let plan = engine.prepare_query("CONSTRUCT { ?s <https://example.org/output> ?o } WHERE { ?s <https://example.org/p> ?o }",None).expect("plan");
     let mut group = c.benchmark_group("construct_publication");
@@ -98,5 +98,5 @@ fn bench(c: &mut Criterion) {
     }
     group.finish();
 }
-criterion_group!(benches, bench);
-criterion_main!(benches);
+bench_group!(benches, bench);
+bench_main!(benches);

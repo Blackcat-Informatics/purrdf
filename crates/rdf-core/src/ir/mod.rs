@@ -19,10 +19,10 @@ pub mod bundle;
 pub mod pipeline_bundle;
 // Native full W3C RDFC-1.0 dataset canonicalization: stable canonical blank
 // labels + canonical N-Quads, extended for the RDF-1.2 reifier/annotation overlay.
-// The canonicalization authority for the purrdf family — explicitly NOT oxigraph.
+// The canonicalization authority for the purrdf family.
 pub mod canon;
 // The `RdfDataset`-direct, blank-aware structural comparator (C1/C2): the
-// equality oracle for importer equivalence — explicitly NOT oxigraph.
+// equality oracle for importer equivalence.
 pub mod compare;
 pub mod composite;
 pub mod dataset;
@@ -98,7 +98,7 @@ pub use pipeline_bundle::{
     PipelineBundle, PipelineBundleError, PipelineViewBundle,
 };
 pub use skolem::{GENID_WELL_KNOWN_PATH, SkolemError, deskolemize, skolemize};
-pub use term::{BlankScope, TermId, TermValue};
+pub use term::{BlankScope, NonIriPredicate, TermId, TermValue};
 pub use term_walk::{Nested, TermBox, TermVisit, fold_term, try_fold_nested, visit_nested};
 
 pub use composite::{

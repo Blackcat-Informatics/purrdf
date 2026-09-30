@@ -111,9 +111,9 @@ use purrdf_xsd::{
     BigInt, XsdDatatype, XsdValue, numeric_add, numeric_div, parse_by_iri, value_total_cmp,
 };
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+use purrdf_xsd::datatype::XSD_DECIMAL;
+use purrdf_xsd::datatype::XSD_INTEGER;
+use purrdf_xsd::datatype::XSD_STRING;
 
 use crate::agg_fn::AggregateAccumulator as _;
 use crate::convert::{ground_term_to_value, literal_to_value, named_node_to_value};
@@ -129,6 +129,8 @@ use crate::{DetHashMap, DetHashSet, DetHasher};
 
 /// Inline `VALUES`: one solution per binding row, each cell an interned ground term
 /// (or unbound for `UNDEF`).
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_values<D: DatasetView + Sync>(
     variables: &[Variable],
     bindings: &[Vec<Option<purrdf_sparql_algebra::GroundTerm>>],
@@ -188,6 +190,8 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
 
 /// `SELECT`-list projection: restrict to `variables` in order. A projected variable
 /// absent from the inner solution yields an all-unbound column.
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_project<D: DatasetView + Sync>(
     node: &GraphPattern,
     inner: &GraphPattern,
@@ -211,32 +215,18 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
     Ok(lift.finish(SolutionSeq { schema: out, rows }))
 }
 
-/// `DISTINCT`: drop duplicate whole-solution rows, preserving first-seen order.
-pub(crate) fn eval_distinct<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    inner: &GraphPattern,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    dedup_lifted(node, inner, ctx)
-}
-
-/// `REDUCED`: permitted to drop duplicates; we apply the same dedup as `DISTINCT`
-/// (a stronger-but-permitted reduction than the spec's minimum).
-pub(crate) fn eval_reduced<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    inner: &GraphPattern,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    dedup_lifted(node, inner, ctx)
-}
-
-/// The shared `DISTINCT`/`REDUCED` body.
+/// `DISTINCT` and `REDUCED`: drop duplicate whole-solution rows, preserving first-seen
+/// order. `REDUCED` is permitted to drop duplicates, and applying the same dedup as
+/// `DISTINCT` is a stronger-but-permitted reduction than the spec's minimum (§18.5), so
+/// the two operators share this one body.
 ///
 /// De-duplication decides each row from the rows already seen, so it depends only on the
 /// prefix and commits **per input row**: a prefix of the input dedups to a prefix of the
 /// output, which is why a truncation below either operator keeps its bound instead of
 /// voiding every `SELECT DISTINCT` in the corpus.
-fn dedup_lifted<D: DatasetView + Sync>(
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
+pub(crate) fn eval_dedup<D: DatasetView + Sync>(
     node: &GraphPattern,
     inner: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
@@ -278,6 +268,8 @@ fn dedup<I: ViewTermId>(seq: SolutionSeq<I>) -> SolutionSeq<I> {
 /// a sub-bag it can select rows the true query never returns. The lift enforces that —
 /// a truncation that reaches this node having lost positional fidelity anywhere below it
 /// yields no rows at all — so the ordinary slice below only ever runs over a prefix.
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_slice<D: DatasetView + Sync>(
     node: &GraphPattern,
     inner: &GraphPattern,
@@ -302,6 +294,8 @@ pub(crate) fn eval_slice<D: DatasetView + Sync>(
 }
 
 /// `ORDER BY`: stable-sort by the sort keys under SPARQL ordering (§15.1).
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_order_by<D: DatasetView + Sync>(
     node: &GraphPattern,
     inner: &GraphPattern,
@@ -351,22 +345,7 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
     Ok(lift.finish(SolutionSeq { schema, rows }))
 }
 
-/// The expression a sort key sorts by, with its `ASC`/`DESC` direction set
-/// aside — the read half of the `(direction, expression)` pair
-/// [`OrderExpression`] is.
-///
-/// Every walk that treats a sort key as an ordinary expression (variable
-/// collection, substitution, prepare-time planning) wants exactly this and
-/// nothing else, and re-spelling the irrefutable
-/// `let (Asc(e) | Desc(e)) = oe;` binding at each of them is how one of them
-/// eventually diverges from the rest.
-pub(crate) const fn order_sort_key(order: &OrderExpression) -> &Expression {
-    match order {
-        OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => expr,
-    }
-}
-
-/// [`order_sort_key`]'s write half: put a rewritten expression back under
+/// [`OrderExpression::expression`]'s write half: put a rewritten expression back under
 /// `order`'s ORIGINAL direction. Pairing the two is what keeps a rewrite from
 /// silently turning a `DESC` key into an `ASC` one.
 pub(crate) fn rebuild_order(order: &OrderExpression, expr: Expression) -> OrderExpression {
@@ -378,6 +357,8 @@ pub(crate) fn rebuild_order(order: &OrderExpression, expr: Expression) -> OrderE
 
 /// `GRAPH name { ... }`: scope the inner pattern to a named graph (or, for a
 /// variable, every named graph in turn, binding the variable to each).
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_graph<D: DatasetView + Sync>(
     node: &GraphPattern,
     name: &NamedNodePattern,
@@ -1369,6 +1350,8 @@ pub fn fold_values(
 /// grouped input is opaque and the lift withholds every row, carrying the barrier in
 /// their place. Computing the aggregates anyway and discarding them would be the same
 /// answer at higher cost, so the operator returns before grouping.
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_group<D: DatasetView + Sync>(
     node: &GraphPattern,
     inner: &GraphPattern,
@@ -1515,7 +1498,7 @@ fn link_aggregates<'e, D: DatasetView + Sync>(
         .map(|(_, agg)| {
             agg.args()
                 .iter()
-                .chain(agg.order_by().iter().map(order_sort_key))
+                .chain(agg.order_by().iter().map(OrderExpression::expression))
                 .map(|expr| {
                     let program = crate::vm::program_at(ctx, node, expr);
                     crate::vm::Linked::link(program, expr, schema, ctx)
@@ -2046,15 +2029,6 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     Ok(value.and_then(|v| ctx.scratch.intern_checked(ctx.dataset, v)))
 }
 
-/// Whether an [`XsdValue`] belongs to the SPARQL numeric tower (integer / decimal /
-/// float / double). Boolean, string, temporal, and binary values are NOT numeric.
-pub(crate) fn is_numeric_xsd(v: &XsdValue) -> bool {
-    matches!(
-        v,
-        XsdValue::Integer { .. } | XsdValue::Decimal(_) | XsdValue::Float(_) | XsdValue::Double(_)
-    )
-}
-
 /// The running numeric fold `SUM`/`AVG` share, wrapped `Option`-poisonable by
 /// [`fold_numeric`]'s chain (the poisoned state lives one level up, as `None`,
 /// rather than as a variant here).
@@ -2083,7 +2057,7 @@ pub(crate) fn is_numeric_xsd(v: &XsdValue) -> bool {
 /// SPARQL 1.1 §18.5.1.3 defines `SUM` as repeated `op:numeric-add`, whose domain
 /// is the numeric tower alone; F&O has no `SUM`/`AVG` for `xsd:duration` either.
 /// [`Self::Dur`] extends the aggregate algebra to the duration group, which
-/// `.goals`' MAXIMAL UTILITY line asks for once nothing in [`is_numeric_xsd`]'s
+/// `.goals`' MAXIMAL UTILITY line asks for once nothing in [`XsdValue::is_numeric`]'s
 /// gate has to move to reach it (see [`NumericFold::step_xsd`]'s doc for the exact
 /// gate). The RAW `(months, seconds)` pair is an abelian group under
 /// componentwise `+` unconditionally — see [`Self::Dur`]'s own doc for why the
@@ -2164,8 +2138,8 @@ enum NumericFold {
     /// practice — only the narrowing back to `i64` at `finish` can fail
     /// (checked anyway, for honesty, not because it is expected to fire).
     ///
-    /// `datatype` is the joined result tag ([`join_duration_datatype`]:
-    /// `dayTimeDuration` iff every folded value declared it, likewise
+    /// `datatype` is the joined result tag
+    /// ([`purrdf_xsd::temporal::duration_result_datatype`]: `dayTimeDuration` iff every folded value declared it, likewise
     /// `yearMonthDuration`, else the general `xsd:duration`) — a genuine
     /// semilattice join (associative, commutative, idempotent on its own), so
     /// folding it per step, unlike the sign check, stays safe.
@@ -2199,9 +2173,9 @@ impl NumericFold {
     ///
     /// The gate below accepts the numeric tower OR a duration, never both in
     /// the same group: the duration check sits entirely on
-    /// [`is_numeric_xsd`]'s **failure path** (short-circuit `&&`), so a numeric
+    /// [`XsdValue::is_numeric`]'s **failure path** (short-circuit `&&`), so a numeric
     /// value executes exactly the branches it executed before [`Self::Dur`]
-    /// existed — [`is_numeric_xsd`] itself is unchanged and untouched by this
+    /// existed — [`XsdValue::is_numeric`] itself is unchanged and untouched by this
     /// widening (see its own doc for why: widening THAT predicate, rather than
     /// gating here, would let a mixed numeric+duration group silently coerce
     /// through whichever other call site trusts it). A group that mixes the
@@ -2215,7 +2189,7 @@ impl NumericFold {
     /// [`NumericSummary`] relies on to stop an exact fold at a refused row and
     /// hand that row to the sequential chain instead.
     fn step_xsd(&mut self, xv: &XsdValue) -> bool {
-        if !is_numeric_xsd(xv) && !matches!(xv, XsdValue::Duration(_)) {
+        if !xv.is_numeric() && !matches!(xv, XsdValue::Duration(_)) {
             return false;
         }
         match self {
@@ -2297,7 +2271,8 @@ impl NumericFold {
                 };
                 *months = new_months;
                 *seconds = new_seconds;
-                *datatype = join_duration_datatype(*datatype, dur.datatype());
+                *datatype =
+                    purrdf_xsd::temporal::duration_result_datatype(*datatype, dur.datatype());
                 *count += 1;
                 true
             }
@@ -2328,7 +2303,7 @@ impl NumericFold {
     /// see [`fold_numeric`]) can make one of those three unrepresentable.
     fn finish_sum(self) -> Option<TermValue> {
         match self {
-            Self::Empty => Some(integer_value(0)),
+            Self::Empty => Some(TermValue::integer(0)),
             Self::Int { sum, datatype, .. } => Some(int_sum_value(&sum, datatype)),
             Self::Ok { acc, .. } => Some(crate::expr::xsd_literal_value(&acc)),
             Self::Dur {
@@ -2372,7 +2347,7 @@ impl NumericFold {
     /// overflow — see `purrdf_xsd::numeric::decimal_div_raw`).
     fn finish_avg(self) -> Option<TermValue> {
         match self {
-            Self::Empty => Some(integer_value(0)),
+            Self::Empty => Some(TermValue::integer(0)),
             Self::Int { sum, count, .. } => {
                 Some(purrdf_xsd::bigint_avg_decimal(&sum, count).map_or_else(
                     || TermValue::Literal {
@@ -2535,7 +2510,9 @@ impl NumericFold {
                     .map(|seconds| Self::Dur {
                         months,
                         seconds,
-                        datatype: join_duration_datatype(datatype1, datatype2),
+                        datatype: purrdf_xsd::temporal::duration_result_datatype(
+                            datatype1, datatype2,
+                        ),
                         count: count1 + count2,
                     })
             }),
@@ -2545,28 +2522,6 @@ impl NumericFold {
             (Self::Dur { .. }, Self::Int { .. } | Self::Ok { .. })
             | (Self::Int { .. } | Self::Ok { .. }, Self::Dur { .. }) => None,
         }
-    }
-}
-
-/// The joined result tag for two duration operands' declared datatypes, used
-/// per fold step by [`NumericFold::Dur`]. Mirrors `purrdf_xsd::temporal`'s own
-/// (private) `duration_result_datatype`: `dayTimeDuration` iff both declare
-/// it, `yearMonthDuration` iff both declare it, else the general
-/// `xsd:duration`. A plain match over the pair, never a derived `Ord` + `max`
-/// — `purrdf_xsd::temporal`'s own `Shape` doc explains why a duration tag has
-/// no total order for `max` to invent one from. This join is a genuine
-/// semilattice operation (associative, commutative, idempotent), unlike the
-/// sign-coherence check [`NumericFold::Dur`] defers to `finish` — see that
-/// variant's own doc.
-fn join_duration_datatype(a: XsdDatatype, b: XsdDatatype) -> XsdDatatype {
-    match (a, b) {
-        (XsdDatatype::YearMonthDuration, XsdDatatype::YearMonthDuration) => {
-            XsdDatatype::YearMonthDuration
-        }
-        (XsdDatatype::DayTimeDuration, XsdDatatype::DayTimeDuration) => {
-            XsdDatatype::DayTimeDuration
-        }
-        _ => XsdDatatype::Duration,
     }
 }
 
@@ -2712,7 +2667,7 @@ impl crate::agg_fn::AggregateAccumulator for CountAccumulator {
     }
 
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        Ok(Some(integer_value(self.0)))
+        Ok(Some(TermValue::integer(self.0)))
     }
 }
 
@@ -3312,16 +3267,6 @@ pub(crate) fn lexical_of(value: &TermValue) -> Option<String> {
     }
 }
 
-/// Build an `xsd:integer` literal value (not interned — see [`fold_builtin`]).
-fn integer_value(value: i64) -> TermValue {
-    TermValue::Literal {
-        lexical_form: value.to_string(),
-        datatype: XSD_INTEGER.to_owned(),
-        language: None,
-        direction: None,
-    }
-}
-
 /// Build an `xsd:string` literal value (not interned — see [`fold_builtin`]).
 fn string_value(lexical: String) -> TermValue {
     TermValue::Literal {
@@ -3546,7 +3491,7 @@ mod tests {
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
     use purrdf_sparql_algebra::{NamedNode, NamedNodePattern, TermPattern, TriplePattern};
 
-    const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    use purrdf_xsd::datatype::XSD_INTEGER as XINT;
 
     fn ages() -> Arc<RdfDataset> {
         // :a :age 30 ; :b :age 17 ; :c :age 30  (duplicate age 30)
@@ -3576,7 +3521,7 @@ mod tests {
     }
 
     fn ints(ds: &RdfDataset, seq: &SolutionSeq, var: &str) -> Vec<String> {
-        let scratch = crate::scratch::ScratchInterner::new();
+        let scratch = crate::scratch::ScratchInterner::default();
         let col = seq.schema.index_of(&Variable::new(var)).unwrap();
         seq.rows
             .iter()
@@ -3730,7 +3675,7 @@ mod tests {
         assert_eq!(seq.len(), 2);
         let ncol = seq.schema.index_of(&Variable::new("n")).unwrap();
         let ccol = seq.schema.index_of(&Variable::new("c")).unwrap();
-        let scratch = crate::scratch::ScratchInterner::new();
+        let scratch = crate::scratch::ScratchInterner::default();
         let mut pairs: Vec<(String, String)> = seq
             .rows
             .iter()
@@ -3782,7 +3727,7 @@ mod tests {
         assert_eq!(seq.len(), 2);
         let tcol = seq.schema.index_of(&Variable::new("t")).unwrap();
         let ccol = seq.schema.index_of(&Variable::new("c")).unwrap();
-        let scratch = crate::scratch::ScratchInterner::new();
+        let scratch = crate::scratch::ScratchInterner::default();
         let mut pairs: Vec<(String, String)> = seq
             .rows
             .iter()
@@ -3917,7 +3862,7 @@ mod tests {
     fn sum_with_decimal() {
         // Dataset: {1^^xsd:integer, 0.5^^xsd:decimal} → SUM = 1.5 (decimal).
         use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
-        const XDEC: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+        use purrdf_xsd::datatype::XSD_DECIMAL as XDEC;
         let mut b = RdfDatasetBuilder::new();
         let p = b.intern_iri("http://ex/v");
         for (s, lex, dt) in [("a", "1", XINT), ("b", "0.5", XDEC)] {
@@ -4161,7 +4106,7 @@ mod tests {
         assert_eq!(seq.len(), 2);
         let who_col = seq.schema.index_of(&Variable::new("who")).unwrap();
         let total_col = seq.schema.index_of(&Variable::new("total")).unwrap();
-        let scratch = crate::scratch::ScratchInterner::new();
+        let scratch = crate::scratch::ScratchInterner::default();
         let mut pairs: Vec<(String, String)> = seq
             .rows
             .iter()
@@ -4321,7 +4266,7 @@ mod tests {
     /// above in this module).
     #[test]
     fn avg_double_overflow_is_ieee_infinity_not_poisoned_or_exact() {
-        const XDOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        use purrdf_xsd::datatype::XSD_DOUBLE as XDOUBLE;
         let huge = format!("{:e}", f64::MAX);
         let ds = numeric_fold_dataset(&[("a", &huge, XDOUBLE), ("b", &huge, XDOUBLE)]);
         let result = eval_numeric_fold(&ds, AggregateFunction::Avg);
@@ -4333,7 +4278,7 @@ mod tests {
     /// (which only ever fires for the pure-integer `NumericFold::Int` case).
     #[test]
     fn avg_double_nan_propagates() {
-        const XDOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        use purrdf_xsd::datatype::XSD_DOUBLE as XDOUBLE;
         let ds = numeric_fold_dataset(&[("a", "NaN", XDOUBLE), ("b", "5.0", XDOUBLE)]);
         let result = eval_numeric_fold(&ds, AggregateFunction::Avg);
         assert_eq!(result.as_deref(), Some("NaN"));
@@ -4349,7 +4294,7 @@ mod tests {
     /// below `f64::MAX ≈ 1.8e308`).
     #[test]
     fn sum_overflow_then_double_promotes_without_poisoning() {
-        const XDOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        use purrdf_xsd::datatype::XSD_DOUBLE as XDOUBLE;
         let max = i128::MAX.to_string();
         let ds =
             numeric_fold_dataset(&[("a", &max, XINT), ("b", &max, XINT), ("c", "0.0", XDOUBLE)]);
@@ -4373,7 +4318,7 @@ mod tests {
     /// very first `i128` overflow), just for a different proximate reason.
     #[test]
     fn sum_overflow_then_decimal_poisons_on_decimals_own_bound() {
-        const XDEC: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+        use purrdf_xsd::datatype::XSD_DECIMAL as XDEC;
         let max = i128::MAX.to_string();
         let ds = numeric_fold_dataset(&[("a", &max, XINT), ("b", &max, XINT), ("c", "0.5", XDEC)]);
         let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
@@ -4389,7 +4334,7 @@ mod tests {
     /// tower now is. Mirrors `f64::MAX + f64::MAX == f64::INFINITY`.
     #[test]
     fn sum_double_overflow_is_ieee_infinity_not_poisoned_or_exact() {
-        const XDOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        use purrdf_xsd::datatype::XSD_DOUBLE as XDOUBLE;
         let huge = format!("{:e}", f64::MAX);
         let ds = numeric_fold_dataset(&[("a", &huge, XDOUBLE), ("b", &huge, XDOUBLE)]);
         let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
@@ -4401,7 +4346,7 @@ mod tests {
     /// `xsd:double` lexical form is `"NaN"`, never unbound.
     #[test]
     fn sum_double_nan_propagates() {
-        const XDOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        use purrdf_xsd::datatype::XSD_DOUBLE as XDOUBLE;
         let ds = numeric_fold_dataset(&[("a", "NaN", XDOUBLE), ("b", "5.0", XDOUBLE)]);
         let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
         assert_eq!(result.as_deref(), Some("NaN"));
@@ -4414,7 +4359,7 @@ mod tests {
     /// way.
     #[test]
     fn sum_mixed_integer_and_float_promotes_to_float_as_before() {
-        const XFLOAT: &str = "http://www.w3.org/2001/XMLSchema#float";
+        use purrdf_xsd::datatype::XSD_FLOAT as XFLOAT;
         let ds = numeric_fold_dataset(&[("a", "40", XINT), ("b", "2.5", XFLOAT)]);
         let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
         assert_eq!(result.as_deref(), Some("4.25E1"));
@@ -4477,9 +4422,9 @@ mod tests {
     // `SUM`/`AVG` over `xsd:duration` — PurRDF extension (`NumericFold::Dur`)
     // -----------------------------------------------------------------------
 
-    const XSD_YEAR_MONTH_DURATION: &str = "http://www.w3.org/2001/XMLSchema#yearMonthDuration";
-    const XSD_DAY_TIME_DURATION: &str = "http://www.w3.org/2001/XMLSchema#dayTimeDuration";
-    const XSD_DURATION: &str = "http://www.w3.org/2001/XMLSchema#duration";
+    use purrdf_xsd::datatype::XSD_DAY_TIME_DURATION;
+    use purrdf_xsd::datatype::XSD_DURATION;
+    use purrdf_xsd::datatype::XSD_YEAR_MONTH_DURATION;
 
     /// [`eval_numeric_fold`]'s underlying twin: returns the result's lexical form
     /// AND its datatype IRI, or `None` if unbound — [`eval_numeric_fold`] is a
@@ -5078,7 +5023,7 @@ mod tests {
     fn group_aggregate_forced_parallel_and_sequential_agree() {
         use purrdf_core::RdfLiteral;
 
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
         const GROUPS: i64 = 220;
         const ROWS: i64 = 260;
 
@@ -5199,7 +5144,7 @@ mod tests {
     #[test]
     fn within_group_chunked_fold_forced_parallel_and_sequential_agree() {
         use purrdf_core::RdfLiteral;
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
         const ROWS: i64 = 3000;
 
         let mut b = RdfDatasetBuilder::new();
@@ -5294,7 +5239,7 @@ mod tests {
     #[test]
     fn within_group_distinct_dedup_survives_chunking_keeping_input_order_first_occurrence() {
         use purrdf_core::RdfLiteral;
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
         const ROWS: i64 = 3000;
 
         let mut b = RdfDatasetBuilder::new();
@@ -5886,7 +5831,7 @@ mod tests {
         }
         let ds = b.freeze().expect("freeze");
 
-        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
         registry.register(LIST_COLLECTOR_IRI, Arc::new(ListCollectorAggregate));
 
         let inner = GraphPattern::Bgp {
@@ -5953,7 +5898,7 @@ mod tests {
         }
         let ds = b.freeze().expect("freeze");
 
-        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
         registry.register_statistical_aggregates(NS);
 
         let inner = GraphPattern::Bgp {
@@ -6002,7 +5947,7 @@ mod tests {
     /// determinism pin below shares with [`stat_agg_first_chunked_fold_forced_parallel_and_sequential_agree`].
     fn stat_agg_integer_sequence_dataset(rows: i64) -> Arc<RdfDataset> {
         use purrdf_core::RdfLiteral;
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
 
         let mut b = RdfDatasetBuilder::new();
         let val_pred = b.intern_iri("http://ex/val");
@@ -6073,7 +6018,7 @@ mod tests {
         const NS: &str = "http://example.org/agg/";
 
         let ds = stat_agg_integer_sequence_dataset(ROWS);
-        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
         registry.register_statistical_aggregates(NS);
 
         let (sequential, forced_parallel) =
@@ -6098,7 +6043,7 @@ mod tests {
     /// does not depend on sub-day duration canonicalization.
     fn stat_agg_dt_duration_sequence_dataset(rows: i64) -> Arc<RdfDataset> {
         use purrdf_core::RdfLiteral;
-        const XSD_DAY_TIME_DURATION: &str = "http://www.w3.org/2001/XMLSchema#dayTimeDuration";
+        use purrdf_xsd::datatype::XSD_DAY_TIME_DURATION;
 
         let mut b = RdfDatasetBuilder::new();
         let val_pred = b.intern_iri("http://ex/val");
@@ -6128,7 +6073,7 @@ mod tests {
         const NS: &str = "http://example.org/agg/";
 
         let ds = stat_agg_dt_duration_sequence_dataset(ROWS);
-        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
         registry.register_statistical_aggregates(NS);
 
         let (sequential, forced_parallel) =
@@ -6158,7 +6103,7 @@ mod tests {
         const NS: &str = "http://example.org/agg/";
 
         let ds = stat_agg_integer_sequence_dataset(ROWS);
-        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
         registry.register_statistical_aggregates(NS);
 
         let (sequential, forced_parallel) =
@@ -6183,7 +6128,7 @@ mod tests {
         use purrdf_core::RdfLiteral;
         const ROWS: i64 = 3000;
         const REPEATED_UP_TO: i64 = 1000;
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
         const NS: &str = "http://example.org/agg/";
 
         let mut b = RdfDatasetBuilder::new();
@@ -6201,7 +6146,7 @@ mod tests {
         }
         let ds = b.freeze().expect("freeze");
 
-        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
         registry.register_statistical_aggregates(NS);
 
         let (sequential, forced_parallel) =
@@ -6229,7 +6174,7 @@ mod tests {
         use purrdf_core::RdfLiteral;
         const KNOWN: [i64; 8] = [2, 4, 4, 4, 5, 5, 7, 9];
         const REPEATS: i64 = 400;
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
         const NS: &str = "http://example.org/agg/";
 
         let mut b = RdfDatasetBuilder::new();
@@ -6250,7 +6195,7 @@ mod tests {
         }
         let ds = b.freeze().expect("freeze");
 
-        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
         registry.register_statistical_aggregates(NS);
 
         let (var_sequential, var_forced_parallel) =
@@ -6286,11 +6231,11 @@ mod tests {
     #[test]
     fn stat_agg_topk_chunked_fold_forced_parallel_and_sequential_agree() {
         const ROWS: i64 = 3000;
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
         const NS: &str = "http://example.org/agg/";
 
         let ds = stat_agg_integer_sequence_dataset(ROWS);
-        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
         registry.register_statistical_aggregates(NS);
 
         let inner = GraphPattern::Bgp {
@@ -6350,12 +6295,12 @@ mod numeric_chain_tests {
     use super::*;
     use purrdf_testkit::rng::splitmix64_next;
 
-    const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const XDEC: &str = "http://www.w3.org/2001/XMLSchema#decimal";
-    const XDBL: &str = "http://www.w3.org/2001/XMLSchema#double";
-    const XFLT: &str = "http://www.w3.org/2001/XMLSchema#float";
-    const XDTD: &str = "http://www.w3.org/2001/XMLSchema#dayTimeDuration";
-    const XSTR: &str = "http://www.w3.org/2001/XMLSchema#string";
+    use purrdf_xsd::datatype::XSD_DAY_TIME_DURATION as XDTD;
+    use purrdf_xsd::datatype::XSD_DECIMAL as XDEC;
+    use purrdf_xsd::datatype::XSD_DOUBLE as XDBL;
+    use purrdf_xsd::datatype::XSD_FLOAT as XFLT;
+    use purrdf_xsd::datatype::XSD_INTEGER as XINT;
+    use purrdf_xsd::datatype::XSD_STRING as XSTR;
 
     fn lit(lexical: &str, datatype: &str) -> TermValue {
         TermValue::Literal {
@@ -6698,26 +6643,26 @@ mod sort_key_walk_tests {
     use std::cmp::Ordering;
 
     const EX: &str = "http://example.org/";
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+    use purrdf_xsd::datatype::XSD_INTEGER;
+    use purrdf_xsd::datatype::XSD_STRING;
     const DEPTH: usize = 100_000;
     const SMALL_STACK: usize = 128 * 1024;
 
     /// A deterministic choice sequence.
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
-            Self { state: seed }
+            Self {
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
+            }
         }
 
         /// One choice below `n`.
         fn choose(&mut self, n: usize) -> usize {
-            let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
-                .expect("a draw below the count fits")
+            self.state.below_usize(n)
         }
     }
 
@@ -6780,16 +6725,6 @@ mod sort_key_walk_tests {
         }
     }
 
-    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
-    }
-
     /// A triple-term chain `depth` levels deep whose innermost object is the string
     /// `innermost`.
     fn chain(depth: usize, innermost: &str) -> TermValue {
@@ -6829,7 +6764,7 @@ mod sort_key_walk_tests {
 
     #[test]
     fn a_hundred_thousand_level_key_is_projected_compared_and_released_on_a_128_kib_stack() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let a = chain(DEPTH, "a");
             let b = chain(DEPTH, "b");
             let again = chain(DEPTH, "a");
@@ -6847,7 +6782,8 @@ mod sort_key_walk_tests {
             // other holds a triple term, and a literal ranks below a triple term.
             assert_eq!(total_order(&key_shorter, &key_a), Ordering::Less);
             drop((key_a, key_b, key_again, key_shorter));
-        });
+        })
+        .expect("spawn");
     }
 }
 
@@ -6908,21 +6844,20 @@ mod emptiness_proof_tests {
     // ── A deterministic shape generator ────────────────────────────────────────────
 
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 30,
             }
         }
 
         fn choose(&mut self, options: usize) -> usize {
-            let draw = purrdf_testkit::rng::splitmix64_next(&mut self.state);
-            usize::try_from(draw % options as u64).expect("a choice fits usize")
+            self.state.below_usize(options)
         }
 
         fn spend(&mut self) -> bool {
@@ -7109,47 +7044,43 @@ mod emptiness_proof_tests {
     #[test]
     fn a_hundred_thousand_level_shape_is_proven_on_a_128_kib_thread() {
         const DEPTH: usize = 100_000;
-        let answers = std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut hop = P::NamedNode(iri("p"));
-                let mut zero = P::ZeroOrMore(Child::new(P::NamedNode(iri("p"))));
-                for _ in 0..DEPTH {
-                    hop = P::Reverse(Child::new(hop));
-                    zero = P::OneOrMore(Child::new(zero));
-                }
-                let mut distinct = GraphPattern::Bgp {
-                    patterns: vec![TriplePattern {
-                        subject: var("s"),
-                        predicate: NamedNodePattern::NamedNode(iri("p")),
-                        object: var("o"),
-                    }],
+        let answers = purrdf_stack::on_stack(128 * 1024, || {
+            let mut hop = P::NamedNode(iri("p"));
+            let mut zero = P::ZeroOrMore(Child::new(P::NamedNode(iri("p"))));
+            for _ in 0..DEPTH {
+                hop = P::Reverse(Child::new(hop));
+                zero = P::OneOrMore(Child::new(zero));
+            }
+            let mut distinct = GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: var("s"),
+                    predicate: NamedNodePattern::NamedNode(iri("p")),
+                    object: var("o"),
+                }],
+            };
+            let mut spine = GraphPattern::Values {
+                variables: vec![Variable::new("s")],
+                bindings: vec![vec![None]],
+            };
+            for _ in 0..DEPTH {
+                distinct = GraphPattern::Distinct {
+                    inner: Child::new(distinct),
                 };
-                let mut spine = GraphPattern::Values {
-                    variables: vec![Variable::new("s")],
-                    bindings: vec![vec![None]],
+                spine = GraphPattern::Join {
+                    left: Child::new(spine),
+                    right: Child::new(GraphPattern::Bgp {
+                        patterns: Vec::new(),
+                    }),
                 };
-                for _ in 0..DEPTH {
-                    distinct = GraphPattern::Distinct {
-                        inner: Child::new(distinct),
-                    };
-                    spine = GraphPattern::Join {
-                        left: Child::new(spine),
-                        right: Child::new(GraphPattern::Bgp {
-                            patterns: Vec::new(),
-                        }),
-                    };
-                }
-                [
-                    path_needs_an_edge(&hop),
-                    path_needs_an_edge(&zero),
-                    yields_nothing_without_rows_in_the_active_graph(&distinct),
-                    yields_nothing_without_rows_in_the_active_graph(&spine),
-                ]
-            })
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned");
+            }
+            [
+                path_needs_an_edge(&hop),
+                path_needs_an_edge(&zero),
+                yields_nothing_without_rows_in_the_active_graph(&distinct),
+                yields_nothing_without_rows_in_the_active_graph(&spine),
+            ]
+        })
+        .expect("spawn");
         assert_eq!(answers, [true, false, true, false]);
     }
 }

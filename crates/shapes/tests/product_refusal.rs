@@ -42,6 +42,10 @@
 //! checks that come after it. Raw byte edits are used only where the claim IS
 //! about the envelope (a section digest, the container digest, the trailer).
 
+#[path = "support/report.rs"]
+mod report;
+
+use report::report_nt;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
@@ -269,20 +273,6 @@ fn certify(bytes: &[u8]) -> Result<(), ShapesProductError> {
     ShapesProduct::open(bytes)?.certify()
 }
 
-/// Validate `data` with `prepared` and render the report's canonical N-Triples.
-///
-/// The report's RDF form is the comparison surface rather than a field-by-field
-/// walk: two restores are equal exactly when the graphs they produce are the same
-/// bytes.
-fn report_nt(prepared: &PreparedShapes, data: &Arc<RdfDataset>) -> String {
-    prepared
-        .bind_shared_dataset(Arc::clone(data))
-        .expect("binding the data graph")
-        .validate()
-        .expect("validation runs")
-        .to_ntriples()
-}
-
 /// The report the PLAIN fixture produces when it is parsed rather than restored —
 /// the answer every restore of that fixture has to reproduce.
 fn plain_expected_report() -> String {
@@ -432,7 +422,7 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 /// A registry carrying one native SPARQL function per IRI in `iris`, registered in
 /// the order given.
 fn natives(iris: &[&str]) -> UserFunctionRegistry {
-    let mut registry = UserFunctionRegistry::new();
+    let mut registry = UserFunctionRegistry::default();
     for iri in iris {
         registry.register_native(
             (*iri).to_owned(),
@@ -498,7 +488,7 @@ impl CustomAggregate for DeclaredAggregate {
 
 /// A registry declaring [`AGG_IRI`] with `arity`.
 fn aggregates(arity: Arity) -> AggregateRegistry {
-    let mut registry = AggregateRegistry::new();
+    let mut registry = AggregateRegistry::default();
     registry.register(AGG_IRI, Arc::new(DeclaredAggregate { arity }));
     registry
 }
@@ -1384,7 +1374,7 @@ fn two_native_product() -> Vec<u8> {
 /// Provoke: the host supplies one fewer native than the product was prepared with.
 fn refusal_function_registry() -> ShapesProductError {
     let fewer = natives(&[NATIVE_A]);
-    let aggregates = AggregateRegistry::new();
+    let aggregates = AggregateRegistry::default();
     let relations = PropertyFunctionRegistry::new();
     admit_with(
         &two_native_product(),
@@ -1408,7 +1398,7 @@ fn accepts_function_registry_neighbour() {
     // startup happens to run, and a binding sensitive to that would refuse the
     // same host on its next boot.
     let reordered = natives(&[NATIVE_B, NATIVE_A]);
-    let aggregates = AggregateRegistry::new();
+    let aggregates = AggregateRegistry::default();
     let relations = PropertyFunctionRegistry::new();
     admit_with(
         &two_native_product(),
@@ -1431,7 +1421,7 @@ fn unary_aggregate_product() -> Vec<u8> {
 
 /// Provoke: the host's aggregate declares a different arity.
 fn refusal_aggregate_registry() -> ShapesProductError {
-    let functions = UserFunctionRegistry::new();
+    let functions = UserFunctionRegistry::default();
     let binary = aggregates(Arity::Exact(2));
     let relations = PropertyFunctionRegistry::new();
     admit_with(
@@ -1454,7 +1444,7 @@ fn accepts_aggregate_registry_neighbour() {
     // The same declarations in a FRESH registry instance. A restore happens in
     // another process by definition, so the instance is never the writer's; a
     // check that compared instance identity would refuse every restore there is.
-    let functions = UserFunctionRegistry::new();
+    let functions = UserFunctionRegistry::default();
     let fresh = aggregates(Arity::Exact(1));
     let relations = PropertyFunctionRegistry::new();
     admit_with(
@@ -1498,8 +1488,8 @@ static DECLARING_HOST: std::sync::LazyLock<purrdf_shapes::product::ParserOptions
 /// a namespace is asking for a different parse than the one the product was written
 /// with, and that is the whole condition.
 fn refusal_parse_configuration() -> ShapesProductError {
-    let functions = UserFunctionRegistry::new();
-    let aggregates = AggregateRegistry::new();
+    let functions = UserFunctionRegistry::default();
+    let aggregates = AggregateRegistry::default();
     let relations = PropertyFunctionRegistry::new();
     admit_with(
         &product_of(PLAIN_SHAPES),
@@ -1521,8 +1511,8 @@ fn refuses_parse_configuration() {
         ProductDimension::ParseConfiguration,
     );
 
-    let functions = UserFunctionRegistry::new();
-    let aggregates = AggregateRegistry::new();
+    let functions = UserFunctionRegistry::default();
+    let aggregates = AggregateRegistry::default();
     let relations = PropertyFunctionRegistry::new();
     admit_with(
         &product_of(PLAIN_SHAPES),
@@ -1535,8 +1525,8 @@ fn refuses_parse_configuration() {
 
 /// Provoke: the host declares a different relation IRI than the product requires.
 fn refusal_property_function_registry() -> ShapesProductError {
-    let functions = UserFunctionRegistry::new();
-    let aggregates = AggregateRegistry::new();
+    let functions = UserFunctionRegistry::default();
+    let aggregates = AggregateRegistry::default();
     let wrong = relations(&[RELATION_B]);
     admit_with(
         &relation_product(&[RELATION_A]),
@@ -1554,8 +1544,8 @@ fn refuses_property_function_registry() {
 
     // The plain case a host actually meets: a product of the CORE profile is
     // prepared against NO relations, so wiring one is refused.
-    let functions = UserFunctionRegistry::new();
-    let aggregates = AggregateRegistry::new();
+    let functions = UserFunctionRegistry::default();
+    let aggregates = AggregateRegistry::default();
     let wired = relations(&[RELATION_A]);
     let error = admit_with(
         &product_of(PLAIN_SHAPES),
@@ -1571,8 +1561,8 @@ fn refuses_property_function_registry() {
 #[test]
 fn accepts_property_function_registry_neighbour() {
     // The same IRIs, registered in the opposite order.
-    let functions = UserFunctionRegistry::new();
-    let aggregates = AggregateRegistry::new();
+    let functions = UserFunctionRegistry::default();
+    let aggregates = AggregateRegistry::default();
     let reordered = relations(&[RELATION_B, RELATION_A]);
     admit_with(
         &relation_product(&[RELATION_A, RELATION_B]),
@@ -1615,7 +1605,7 @@ fn native_plain_shapes() -> Shapes {
 /// validate under semantics the product was never compiled against.
 fn refusal_implementation_identity() -> ShapesProductError {
     let same_declarations = natives(&[NATIVE_A, NATIVE_B]);
-    let aggregates = AggregateRegistry::new();
+    let aggregates = AggregateRegistry::default();
     let relations = PropertyFunctionRegistry::new();
     admit_with(
         &two_native_product(),
@@ -1659,7 +1649,7 @@ fn accepts_the_same_implementation_build_neighbour() {
 
     let bytes = product_for_host(native_plain_shapes(), IMPL_A);
     let injected = natives(&[NATIVE_A, NATIVE_B]);
-    let aggregates = AggregateRegistry::new();
+    let aggregates = AggregateRegistry::default();
     let relations = PropertyFunctionRegistry::new();
     let restored = admit_with(
         &bytes,
@@ -1701,8 +1691,8 @@ fn accepts_an_unidentified_common_path_neighbour() {
 
     // ...and an explicitly EMPTY identity is the same fact as no identity at all:
     // one spelling, so there is no second branch for a caller to land on.
-    let functions = UserFunctionRegistry::new();
-    let aggregates = AggregateRegistry::new();
+    let functions = UserFunctionRegistry::default();
+    let aggregates = AggregateRegistry::default();
     let relations = PropertyFunctionRegistry::new();
     admit_with(
         &bytes,
@@ -2234,7 +2224,7 @@ fn accepts_declared_functions_alongside_host_natives() {
     let bytes = product_for_host(shapes, IMPL_A);
 
     let injected = natives(&[NATIVE_A]);
-    let aggregates = AggregateRegistry::new();
+    let aggregates = AggregateRegistry::default();
     let relations = PropertyFunctionRegistry::new();
     let restored = admit_with(
         &bytes,
@@ -2615,8 +2605,8 @@ static REL_ORDER_REVERSED: std::sync::LazyLock<purrdf_shapes::product::ParserOpt
 /// stops two hosts with identical configuration from opening each other's products.
 #[test]
 fn extension_namespace_order_is_configuration_and_relation_namespace_order_is_not() {
-    let functions = UserFunctionRegistry::new();
-    let aggregates = AggregateRegistry::new();
+    let functions = UserFunctionRegistry::default();
+    let aggregates = AggregateRegistry::default();
     let relations = PropertyFunctionRegistry::new();
 
     let written_ext = to_product_for_host(

@@ -88,10 +88,7 @@ impl ExtensionUsage {
     /// Every predicate IRI that became a relation call, anywhere in the graph.
     #[must_use]
     pub fn calls(&self) -> std::collections::BTreeSet<&str> {
-        self.sites
-            .values()
-            .flat_map(|used| used.calls.iter().map(String::as_str))
-            .collect()
+        self.across_sites(|used| &used.calls)
     }
 
     /// Every predicate IRI that stayed an ordinary triple pattern, anywhere.
@@ -99,9 +96,17 @@ impl ExtensionUsage {
     /// An IRI a host believes it registered appearing here is the answer it came for.
     #[must_use]
     pub fn data(&self) -> std::collections::BTreeSet<&str> {
+        self.across_sites(|used| &used.data)
+    }
+
+    /// The union, over every readable site, of the IRI set `pick` selects.
+    fn across_sites<'a>(
+        &'a self,
+        pick: impl Fn(&'a PredicateUse) -> &'a std::collections::BTreeSet<String>,
+    ) -> std::collections::BTreeSet<&'a str> {
         self.sites
             .values()
-            .flat_map(|used| used.data.iter().map(String::as_str))
+            .flat_map(|used| pick(used).iter().map(String::as_str))
             .collect()
     }
 

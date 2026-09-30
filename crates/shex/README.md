@@ -30,7 +30,8 @@ A pure-Rust, wasm-clean leaf crate implementing the
   `^` inverse, annotations and `%…{ … %}` semantic actions, with
   relative-IRI resolution against `BASE` via `purrdf-iri`.
 - **ShExJ** (JSON wire format, spec Appendix A): strict, round-tripping
-  serde support matching the shexTest ground truth.
+  reader and writer over `purrdf_lex::json` matching the shexTest ground
+  truth; a document that repeats an object member name is refused.
 - **Structural checks** (spec §5.7): dangling references, label
   collisions, reference-only cycles, and the negation-stratification
   requirement (over `purrdf_core::graph::tarjan_scc`, the workspace's one

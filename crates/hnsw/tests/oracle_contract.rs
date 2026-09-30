@@ -21,12 +21,15 @@
 #[path = "support/purremb.rs"]
 mod purremb;
 
+#[path = "support/fixture.rs"]
+mod fixture;
+use fixture::seeded_matrix;
 use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{EmbeddingView, TermValue, verify_embedding};
 use purrdf_hnsw::relation::{HnswRelation, HnswSpace, register_hnsw_relation};
-use purrdf_hnsw::{HnswIndex, Params, VectorMatrix, guard, level::splitmix64, profile};
+use purrdf_hnsw::{HnswIndex, Params, VectorMatrix, guard, profile};
 use purrdf_sparql_eval::knn::{Arithmetic as _, Exact, Kernel, Ranked, best};
 use purrdf_sparql_eval::{
     EvalError, KnnGuard, PfArgs, PfRow, PropertyFunction, PropertyFunctionRegistry,
@@ -34,24 +37,11 @@ use purrdf_sparql_eval::{
 
 use purrdf_core::DistanceMetric;
 
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-
-/// A deterministic fixture matrix.
-fn matrix(rows: usize, dims: usize, seed: u64) -> VectorMatrix {
-    let mut state = seed;
-    let mut data = Vec::with_capacity(rows * dims);
-    for _ in 0..rows * dims {
-        state = splitmix64(state);
-        let unit = (state >> 11) as f64 / (1_u64 << 53) as f64;
-        let value = unit.mul_add(2.0, -1.0);
-        data.push(if value == 0.0 { 0.25 } else { value });
-    }
-    VectorMatrix::new(rows, dims, data).expect("valid fixture")
-}
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 /// A space over a fresh fixture, plus the matrix its exact oracle ranks.
 fn fixture_space(rows: usize, dims: usize, params: Params) -> (VectorMatrix, Arc<HnswSpace>) {
-    let matrix = matrix(rows, dims, 0xabcd_ef01_2345_6789);
+    let matrix = seeded_matrix(rows, dims, 0xabcd_ef01_2345_6789, Some(0.25));
     let index = HnswIndex::build(matrix.clone(), &DistanceMetric::SquaredEuclidean, params)
         .expect("builds");
     let terms = (0..rows)
@@ -402,7 +392,7 @@ fn budget_exhaustion_mid_traversal_still_reports_the_work_done() {
 #[test]
 fn a_rejected_payload_is_a_construction_failure_not_a_search() {
     let fixture = purremb::Fixture::new(16, 4, Params::new(4, 8, 16, 8).expect("valid"));
-    let error = HnswSpace::from_artifact(
+    let error = HnswSpace::<Exact>::from_artifact(
         &fixture.tampered_payload(),
         fixture.target_set,
         fixture.vector_space,

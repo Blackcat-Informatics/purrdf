@@ -9,7 +9,7 @@ use crate::algebra::{
     PropertyPathExpression,
 };
 use crate::ast::{GroundTerm, GroundTriple, TermPattern, TriplePattern};
-use crate::tree::{Args, Chain, Child, NonEmpty, Subtree};
+use crate::tree::{Chain, Child, NonEmpty, Subtree};
 use crate::walk::NodeRef;
 use crate::worklist::WorkList;
 
@@ -84,26 +84,16 @@ pub(crate) fn release_ground(node: GroundTerm, work: &mut DropWork) {
     }
 }
 
-fn take_child<T: Subtree>(child: &mut Child<T>, work: &mut DropWork) {
+fn take_child<T: Subtree + purrdf_lex::walk::Dismantle>(child: &mut Child<T>, work: &mut DropWork) {
     if let Some(node) = child.take() {
         (*node).release(work);
     }
 }
 
-fn take_chain<T: Subtree>(chain: &mut Chain<T>, work: &mut DropWork) {
-    for node in chain.take_nodes() {
-        node.release(work);
-    }
-}
-
-fn take_non_empty<T: Subtree>(list: &mut NonEmpty<T>, work: &mut DropWork) {
-    for node in list.take_nodes() {
-        node.release(work);
-    }
-}
-
-fn take_args<T: Subtree>(list: &mut Args<T>, work: &mut DropWork) {
-    for node in list.take_nodes() {
+/// Release every node a list type (`Chain`, `NonEmpty`, `Args`) hands over
+/// through its `take_nodes`, onto the shared work stack.
+fn release_nodes<T: Subtree>(nodes: Vec<T>, work: &mut DropWork) {
+    for node in nodes {
         node.release(work);
     }
 }
@@ -187,7 +177,7 @@ fn take_pattern(pattern: &mut GraphPattern, work: &mut DropWork) {
             take_expr(expr, work);
             take_child(inner, work);
         }
-        G::Union { arms } => take_chain(arms, work),
+        G::Union { arms } => release_nodes(arms.take_nodes(), work),
         G::Extend {
             inner, expression, ..
         }
@@ -234,10 +224,10 @@ fn take_expr(expr: &mut Expression, work: &mut DropWork) {
     use Expression as E;
     match expr {
         E::NamedNode(_) | E::Literal(_) | E::Variable(_) | E::Bound(_) => {}
-        E::Or(operands) | E::And(operands) => take_chain(operands, work),
+        E::Or(operands) | E::And(operands) => release_nodes(operands.take_nodes(), work),
         E::Arithmetic(first, steps) => {
             take_child(first, work);
-            take_non_empty(steps, work);
+            release_nodes(steps.take_nodes(), work);
         }
         E::Equal(a, b)
         | E::SameTerm(a, b)
@@ -251,14 +241,14 @@ fn take_expr(expr: &mut Expression, work: &mut DropWork) {
         E::UnaryPlus(x) | E::UnaryMinus(x) | E::Not(x) => take_child(x, work),
         E::In(x, list) => {
             take_child(x, work);
-            take_args(list, work);
+            release_nodes(list.take_nodes(), work);
         }
         E::If(a, b, c) => {
             take_child(a, work);
             take_child(b, work);
             take_child(c, work);
         }
-        E::Coalesce(list) | E::FunctionCall(_, list) => take_args(list, work),
+        E::Coalesce(list) | E::FunctionCall(_, list) => release_nodes(list.take_nodes(), work),
         E::Exists(pattern) => take_child(pattern, work),
     }
 }
@@ -272,7 +262,9 @@ fn take_path(path: &mut PropertyPathExpression, work: &mut DropWork) {
         | P::OneOrMore(x)
         | P::ZeroOrOne(x)
         | P::Range { inner: x, .. } => take_child(x, work),
-        P::Sequence(elements) | P::Alternative(elements) => take_chain(elements, work),
+        P::Sequence(elements) | P::Alternative(elements) => {
+            release_nodes(elements.take_nodes(), work);
+        }
     }
 }
 

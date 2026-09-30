@@ -18,12 +18,12 @@ use crate::distance::{Arithmetic as _, Exact};
 use super::contract::{PrefixPostprocessing, VectorDtype};
 use super::error::{DigestKind, EmbeddingError};
 use super::identity::{
-    ExternalBindingIdentity, IndexIdentity, ProjectionContentDigest, RdfcDigest, TargetId,
-    TargetSetId, derive_artifact_root, derive_external_binding_id, derive_external_contract_digest,
-    derive_family_contract_digest, derive_family_id, derive_index_guard_digest, derive_index_id,
-    derive_matrix_content_digest, derive_matrix_id, derive_projection_id,
-    derive_relation_role_digest, derive_target_id, derive_target_identity_digest,
-    derive_vector_space_id,
+    D_PROJECTION_CONTENT, D_TARGET_SET, ExternalBindingIdentity, FramedHasher, IndexIdentity,
+    ProjectionContentDigest, RdfcDigest, TargetId, TargetSetId, derive_artifact_root,
+    derive_external_binding_id, derive_external_contract_digest, derive_family_contract_digest,
+    derive_family_id, derive_index_guard_digest, derive_index_id, derive_matrix_content_digest,
+    derive_matrix_id, derive_projection_id, derive_relation_role_digest, derive_target_id,
+    derive_target_identity_digest, derive_vector_space_id,
 };
 use super::target::{
     RdfAnnotationTarget, RdfDatasetTarget, RdfGraphTarget, RdfReifierTarget, RdfStatementTarget,
@@ -34,9 +34,6 @@ use super::view::{
     TargetView,
 };
 use super::wire::{PURREMB_DIRECTORY_ENTRY_LENGTH, PURREMB_HEADER_LENGTH};
-
-const D_TARGET_SET: &[u8] = b"purrdf.purremb.v1.target-set\0";
-const D_PROJECTION_CONTENT: &[u8] = b"purrdf.purremb.v1.projection-content\0";
 
 /// Requested evidence level for an attached source pack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -927,35 +924,6 @@ fn compare_digest(
             expected: *expected,
             actual: *actual,
         })
-    }
-}
-
-struct FramedHasher {
-    hasher: Sha256,
-}
-
-impl FramedHasher {
-    fn new(domain: &[u8]) -> Self {
-        let mut hasher = Sha256::new();
-        hasher.update(domain);
-        Self { hasher }
-    }
-
-    fn field(&mut self, bytes: &[u8]) {
-        self.begin_field(u64::try_from(bytes.len()).expect("an in-memory slice length fits u64"));
-        self.update(bytes);
-    }
-
-    fn begin_field(&mut self, length: u64) {
-        self.hasher.update(length.to_le_bytes());
-    }
-
-    fn update(&mut self, bytes: &[u8]) {
-        self.hasher.update(bytes);
-    }
-
-    fn finish(self) -> [u8; 32] {
-        self.hasher.finalize().into()
     }
 }
 

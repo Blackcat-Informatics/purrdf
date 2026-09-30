@@ -69,14 +69,12 @@
 use core::convert::Infallible;
 use core::ops::ControlFlow;
 use core::slice;
-use purrdf_core::TermBox;
+use purrdf_hash::{Domain, fnv};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
-use purrdf_core::{
-    BlankScope, DatasetView, GraphMatch, RdfTextDirection, TermRef, TermValue, fold_term,
-};
+use purrdf_core::{BlankScope, DatasetView, GraphMatch, RdfTextDirection, TermValue};
 use purrdf_sparql_eval::{
     EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
     Volatility,
@@ -102,12 +100,8 @@ const REWRITE_ARITY: PfArity = PfArity::new(1, 1);
 // Digest
 // ---------------------------------------------------------------------------
 
-/// FNV-1a's 64-bit offset basis.
-const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-/// FNV-1a's 64-bit prime.
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 /// The domain-separation prefix of the index source digest.
-const DIGEST_DOMAIN: &str = "purrdf-geo/index-source/v1";
+const DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-geo/index-source/v1");
 
 /// Digest tag for [`GraphSelector::Any`].
 const SELECTOR_ANY: u8 = 0x01;
@@ -129,17 +123,16 @@ const ABSENT: u8 = 0x20;
 /// Digest presence byte for a present optional field.
 const PRESENT: u8 = 0x21;
 
-/// A hand-rolled FNV-1a accumulator.
+/// An FNV-1a accumulator over [`purrdf_hash::fnv`].
 ///
-/// FNV-1a rather than `std::hash::DefaultHasher` or the workspace's `FixedHasher`
+/// FNV-1a rather than std's default SipHash hasher or the workspace's `FixedHasher`
 /// because a fingerprint is compared against one computed by a *different run* of
-/// this code: `DefaultHasher`'s algorithm is explicitly unspecified across
-/// releases, and `FixedHasher` computes a different function on a build whose
+/// this code: std's default hasher is explicitly unspecified across releases, and `FixedHasher` computes a different function on a build whose
 /// target enables AES than on one that does not. Either would make
 /// [`verify_binding`] answer "different dataset" for a dataset that is in fact
-/// identical, the moment a toolchain moved. FNV-1a is a few lines of fully
-/// specified integer arithmetic, so the fingerprint is a pure function of the
-/// bytes fed to it on every target and every release.
+/// identical, the moment a toolchain moved. FNV-1a is fully specified integer
+/// arithmetic, pinned by its reference test values, so the fingerprint is a pure
+/// function of the bytes fed to it on every target and every release.
 ///
 /// Every variable-length field is written **length-prefixed**, so no two distinct
 /// field sequences can produce the same byte stream by concatenation.
@@ -152,19 +145,14 @@ struct Digest {
 impl Digest {
     /// A fresh accumulator, domain-separated.
     fn new() -> Self {
-        let mut digest = Self {
-            state: FNV_OFFSET_BASIS,
-        };
-        digest.field(DIGEST_DOMAIN);
+        let mut digest = Self { state: fnv::BASIS };
+        digest.field(DIGEST_DOMAIN.as_str());
         digest
     }
 
     /// Absorb raw bytes.
     fn bytes(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.state ^= u64::from(byte);
-            self.state = self.state.wrapping_mul(FNV_PRIME);
-        }
+        self.state = fnv::fold(self.state, bytes);
     }
 
     /// Absorb a one-byte tag.
@@ -177,9 +165,16 @@ impl Digest {
         self.bytes(&(count as u64).to_be_bytes());
     }
 
-    /// Absorb a length-prefixed string.
+    /// Absorb a length-prefixed string: its length as eight **big-endian** bytes,
+    /// then its bytes.
+    ///
+    /// Not `purrdf_hash::frame::frame_le`'s little-endian framing, and never to
+    /// become it: the source fingerprint this digest computes is a published
+    /// identity — `verify_binding` compares it against a fingerprint recorded by
+    /// an earlier run, and the geo determinism goldens pin it — so its byte order
+    /// is frozen with it.
     fn field(&mut self, text: &str) {
-        self.count(text.len());
+        self.bytes(&(text.len() as u64).to_be_bytes());
         self.bytes(text.as_bytes());
     }
 
@@ -247,26 +242,7 @@ impl Digest {
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// Which graph's serializations an index is built over.
-///
-/// Deliberately in **value** space rather than [`GraphMatch`] space.
-/// `GraphMatch::Named` holds a dataset-local term id, which means something only
-/// inside the one dataset that minted it; a configuration is a statement the
-/// caller writes down once and may apply to several datasets, so it names a graph
-/// by its IRI. [`GeoIndex::from_dataset`] resolves the selector against the
-/// dataset in hand.
-///
-/// Deliberately exhaustive, like `GraphMatch`: a quad's graph is the default
-/// graph or exactly one named graph, so the three cases are closed.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum GraphSelector {
-    /// Read serializations from every graph, default and named alike.
-    Any,
-    /// Read serializations from the default graph only.
-    Default,
-    /// Read serializations from the one named graph this IRI identifies.
-    Named(TermValue),
-}
+pub use purrdf_core::GraphSelector;
 
 /// The caller's complete, dataset-independent statement of what to project out of
 /// a dataset for the Query Rewrite extension.
@@ -498,7 +474,7 @@ impl GeoIndex {
         vocab: &GeoVocab,
         config: &GeoIndexConfig,
     ) -> Result<Self, GeoError> {
-        let Some(graph) = resolve_graph(dataset, config.graph()) else {
+        let Some(graph) = config.graph().resolve(dataset) else {
             // The configured named graph is not interned, so the dataset holds no
             // quad in it and nothing can match. The empty projection is built
             // through the ordinary steps — an empty entry table, one empty
@@ -529,7 +505,7 @@ impl GeoIndex {
                 continue;
             };
             for quad in dataset.quads_for_pattern(None, Some(predicate), None, graph) {
-                let object = resolve_value(dataset, quad.o);
+                let object = resolve_value(dataset, quad.o)?;
                 let literal = parse_serialization(&object, property, &datatypes, vocab)?;
                 by_node
                     .entry(quad.s)
@@ -554,8 +530,8 @@ impl GeoIndex {
             }
         }
 
-        let entries = finish_entries(dataset, by_subject);
-        let asserted = collect_asserted(dataset, vocab, graph);
+        let entries = finish_entries(dataset, by_subject)?;
+        let asserted = collect_asserted(dataset, vocab, graph)?;
         let source_fingerprint = fingerprint(config, &entries, &asserted);
         Ok(Self {
             config: config.clone(),
@@ -603,7 +579,7 @@ impl GeoIndex {
 
     /// A digest of the source data this index was built from.
     ///
-    /// A hand-rolled FNV-1a over the configuration, the sorted entries (each
+    /// FNV-1a ([`purrdf_hash::fnv`]) over the configuration, the sorted entries (each
     /// subject and each of its geometries in canonical WKT), and the sorted
     /// asserted pairs. FNV-1a rather than a hasher whose output is a function of
     /// its own version, because the value is compared against one computed by a
@@ -819,75 +795,19 @@ fn parse_serialization(
     )))
 }
 
-/// Resolve the caller's [`GraphSelector`] against the dataset in hand.
+/// Resolve a dataset-local id to its dataset-independent [`TermValue`] through
+/// [`DatasetView::term_value`].
 ///
-/// [`None`] where the selector names a graph this dataset has not interned:
-/// nothing is in a graph that is not there, so no quad can match and the caller
-/// projects the empty index. This cannot fail — an absent graph is a state of the
-/// corpus, not a fault in the wiring.
-fn resolve_graph<D: DatasetView>(
-    dataset: &D,
-    selector: &GraphSelector,
-) -> Option<GraphMatch<D::Id>> {
-    Some(match selector {
-        GraphSelector::Any => GraphMatch::Any,
-        GraphSelector::Default => GraphMatch::Default,
-        GraphSelector::Named(name) => GraphMatch::Named(dataset.term_id_by_value(name)?),
-    })
-}
-
-/// Resolve a dataset-local id to its dataset-independent [`TermValue`].
+/// # Errors
 ///
-/// Follows a literal's datatype and a triple term's components; the walk carries no
-/// depth cap, for the reason `Digest::term` gives. A triple term is assembled
-/// bottom-up over [`fold_term`]'s work list: its subject, predicate and object are
-/// resolved in that order, each fully before the next.
-///
-/// A literal whose datatype does not resolve to an IRI cannot occur in a
-/// well-formed dataset — the IR expands the datatype at intern time — so that
-/// branch falls back to the empty IRI rather than raising a refusal for a state
-/// no [`DatasetView`] implementor in this workspace can produce.
-fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermValue {
-    let value = fold_term(
-        dataset,
-        id,
-        |_, term| {
-            Ok::<_, Infallible>(match term {
-                TermRef::Iri(iri) => TermValue::iri(iri),
-                TermRef::Blank { label, scope } => TermValue::Blank {
-                    label: label.to_owned(),
-                    scope,
-                },
-                TermRef::Literal {
-                    lexical,
-                    datatype,
-                    language,
-                    direction,
-                } => TermValue::Literal {
-                    lexical_form: lexical.to_owned(),
-                    datatype: match dataset.resolve(datatype) {
-                        TermRef::Iri(iri) => iri.to_owned(),
-                        TermRef::Blank { .. }
-                        | TermRef::Literal { .. }
-                        | TermRef::Triple { .. } => String::new(),
-                    },
-                    language: language.map(str::to_owned),
-                    direction,
-                },
-                TermRef::Triple { .. } => unreachable!("a triple term is folded from its parts"),
-            })
-        },
-        |_, s, p, o| {
-            Ok(TermValue::Triple {
-                s: TermBox::new(s),
-                p: TermBox::new(p),
-                o: TermBox::new(o),
-            })
-        },
-    );
-    match value {
-        Ok(value) => value,
-    }
+/// [`GeoError::Config`] when the view hands back an id that is not its own — a
+/// literal whose datatype does not resolve to an IRI. The view is the host's
+/// wiring, so the refusal names it rather than indexing a term with an invented
+/// datatype.
+fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> Result<TermValue, GeoError> {
+    dataset
+        .term_value(id)
+        .map_err(|error| GeoError::config(format!("the dataset view is inconsistent: {error}")))
 }
 
 /// Turn the id-keyed accumulation into the sorted, deduplicated entry table.
@@ -900,11 +820,11 @@ fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermValue {
 fn finish_entries<D: DatasetView>(
     dataset: &D,
     by_subject: BTreeMap<D::Id, Vec<Keyed>>,
-) -> Vec<GeoEntry> {
+) -> Result<Vec<GeoEntry>, GeoError> {
     let mut rows: Vec<(TermValue, Vec<Keyed>)> = by_subject
         .into_iter()
-        .map(|(id, geometries)| (resolve_value(dataset, id), geometries))
-        .collect();
+        .map(|(id, geometries)| Ok((resolve_value(dataset, id)?, geometries)))
+        .collect::<Result<_, GeoError>>()?;
     rows.sort_by(|left, right| left.0.cmp(&right.0));
 
     let mut entries: Vec<GeoEntry> = Vec::with_capacity(rows.len());
@@ -929,7 +849,7 @@ fn finish_entries<D: DatasetView>(
     if let Some(last) = current {
         push_entry(&mut entries, last);
     }
-    entries
+    Ok(entries)
 }
 
 /// Canonicalize one subject's geometries and push it, unless it has none.
@@ -991,7 +911,7 @@ fn collect_asserted<D: DatasetView>(
     dataset: &D,
     vocab: &GeoVocab,
     graph: GraphMatch<D::Id>,
-) -> Vec<Vec<(TermValue, TermValue)>> {
+) -> Result<Vec<Vec<(TermValue, TermValue)>>, GeoError> {
     let mut out: Vec<Vec<(TermValue, TermValue)>> = Vec::with_capacity(SpatialRelation::ALL.len());
     for relation in SpatialRelation::ALL {
         let iri = TermValue::iri(format!(
@@ -1003,8 +923,8 @@ fn collect_asserted<D: DatasetView>(
         if let Some(predicate) = dataset.term_id_by_value(&iri) {
             for quad in dataset.quads_for_pattern(None, Some(predicate), None, graph) {
                 pairs.push((
-                    resolve_value(dataset, quad.s),
-                    resolve_value(dataset, quad.o),
+                    resolve_value(dataset, quad.s)?,
+                    resolve_value(dataset, quad.o)?,
                 ));
             }
         }
@@ -1012,7 +932,7 @@ fn collect_asserted<D: DatasetView>(
         pairs.dedup();
         out.push(pairs);
     }
-    out
+    Ok(out)
 }
 
 /// The source digest of a built index.
@@ -1683,6 +1603,48 @@ mod tests {
         GeoIndex::from_dataset(&*dataset_of(rows), &vocab(), &config()).expect("a clean fixture")
     }
 
+    /// A view whose geometry literals name a non-IRI datatype — ids foreign to it —
+    /// refuses the build; the same dataset through a view that answers its own
+    /// datatypes builds.
+    #[test]
+    fn a_view_handing_back_a_foreign_id_refuses_the_build() {
+        let dataset = dataset_of(&four_branch_rows());
+        let not_an_iri = dataset
+            .quads()
+            .map(|quad| quad.o)
+            .find(|&id| matches!(dataset.resolve(id), purrdf_core::TermRef::Literal { .. }))
+            .expect("the fixture holds a literal");
+        let view = |foreign| purrdf_core::term_fixture::ForeignDatatypeView {
+            inner: Arc::clone(&dataset),
+            datatype: not_an_iri,
+            foreign,
+        };
+        let refused = GeoIndex::from_dataset(&view(true), &vocab(), &config());
+        assert!(
+            matches!(refused, Err(GeoError::Config(ref message)) if message.contains("does not name a term")),
+            "{refused:?}"
+        );
+        let built = GeoIndex::from_dataset(&view(false), &vocab(), &config())
+            .expect("the view answers its own ids");
+        assert_eq!(built.len(), index_of(&four_branch_rows()).len());
+    }
+
+    /// A present literal whose lexical form is empty resolves to the empty string, not to
+    /// a refusal.
+    #[test]
+    fn a_present_empty_literal_resolves_to_the_empty_string() {
+        let dataset = dataset_of(&[row(
+            "s",
+            geo("asWKT"),
+            Obj::Lit(String::new(), geo("wktLiteral")),
+        )]);
+        let object = dataset.quads().next().expect("one quad").o;
+        assert_eq!(
+            super::resolve_value(&*dataset, object),
+            Ok(TermValue::typed_literal("", geo("wktLiteral")))
+        );
+    }
+
     fn relation_of(rows: &[Row], relation: SpatialRelation) -> GeoRelation {
         GeoRelation::new(Arc::new(index_of(rows)), relation)
     }
@@ -1785,6 +1747,18 @@ mod tests {
                 pair("gq", "gq"),
             ],
             "the exact bag, in the (?so1, ?so2) ascending order the relation contracts to"
+        );
+    }
+
+    /// The source fingerprint is frozen over a fixed dataset: `verify_binding` compares
+    /// it across runs and releases, so a moved value reports an identical dataset as a
+    /// different one.
+    #[test]
+    fn the_source_fingerprint_is_frozen() {
+        let index = index_of(&four_branch_rows());
+        assert_eq!(
+            format!("{:#018x}", index.source_fingerprint()),
+            "0x21e852458fc234f7"
         );
     }
 
@@ -2890,10 +2864,11 @@ mod term_walk_tests {
         for seed in 0..300_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = purrdf_core::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::WellFormed,
+                purrdf_core::term_fixture::TermShape::WellFormed,
             );
             let (mut found, mut expected) = (Digest::new(), Digest::new());
             found.term(&value);
@@ -2906,7 +2881,7 @@ mod term_walk_tests {
             let ds = builder.freeze().expect("a generated term freezes");
             let object = ds.quads().next().expect("one quad").o;
             assert_eq!(
-                resolve_value(&*ds, object),
+                resolve_value(&*ds, object).unwrap(),
                 reference_value(&ds, object),
                 "seed {seed}"
             );
@@ -2918,16 +2893,12 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_digested_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let (mut deep, mut shallower) = (Digest::new(), Digest::new());
-                deep.term(&crate::test_terms::triple_chain(LEVELS));
-                shallower.term(&crate::test_terms::triple_chain(LEVELS - 1));
-                assert_ne!(deep.finish(), shallower.finish());
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the digest did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let (mut deep, mut shallower) = (Digest::new(), Digest::new());
+            deep.term(&purrdf_core::term_fixture::triple_chain(LEVELS));
+            shallower.term(&purrdf_core::term_fixture::triple_chain(LEVELS - 1));
+            assert_ne!(deep.finish(), shallower.finish());
+        })
+        .expect("the thread starts");
     }
 }

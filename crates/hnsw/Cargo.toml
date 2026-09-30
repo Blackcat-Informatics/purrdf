@@ -21,13 +21,16 @@ purrdf-sparql-eval = { workspace = true }
 # surfaces emit byte-identical distance literals.
 purrdf-xsd = { workspace = true }
 rayon = { workspace = true }
+# The workspace root: the relation's space-generation hash domain is a registered
+# `purrdf_hash::Domain` (the tests also read `purrdf_hash::dispatch::REQUIRE_SIMD_PATHS`,
+# the name of the variable the path-requirement test reports under).
+purrdf-hash = { workspace = true }
+# The lexical foundations: the error conversions are declared through its one
+# `From`-into-a-variant spelling, and the conformance gate's machine-checkable receipt
+# (a test) is JSON written through its writer.
+purrdf-lex = { workspace = true }
 
 [dev-dependencies]
-# The conformance gate emits a machine-checkable receipt, and a receipt is JSON because
-# its whole purpose is to be read by something other than the process that wrote it. The
-# crate's runtime surface is untouched: a dev-dependency never reaches the wasm32 `--lib`
-# build, and the receipt schema (not serde) is what fixes the record's shape.
-serde_json = { workspace = true }
 # The shared `harness = false` runner the two cross-target targets below run on,
 # natively and on wasm32-unknown-unknown alike. Path-only and unpublished, so it is
 # stripped from the packaged manifest; wasm32-clean, so it needs no target gate.
@@ -54,21 +57,21 @@ harness = false
 name = "determinism"
 harness = false
 
-# Both benches are one-shot, report-only measurement harnesses rather than criterion
+# Both benches are one-shot, report-only measurement harnesses rather than sampled
 # statistical targets, and deliberately so. The build-cost harness measures a build that
-# takes minutes to tens of minutes at the top scales; criterion's whole method is to
+# takes minutes to tens of minutes at the top scales; a sampling harness's whole method is to
 # repeat a closure until the sampling distribution settles, which for a 10^6-row build
 # would mean hours per point and a measurement of the machine's thermal state rather than
 # the code. A harness that times one build per scale and prints it is the honest
 # instrument for this quantity. The recall harness needs p50/p99 percentiles, an
-# exact-rank distribution and visited-work counts — none of which are criterion's output.
+# exact-rank distribution and visited-work counts — none of which is a sampling harness's output.
 [[bench]]
 name = "build"
 harness = false
 
 [[bench]]
 # Sweeps every corpus twice -- the `Exact` index (`HnswIndex::build`) and the
-# `Reassociated` one (`HnswIndex::build_reassociated`) -- each graded against the same
+# `Reassociated` one (`build::<Reassociated>`) -- each graded against the same
 # exact oracle and printed side by side, never divided into each other.
 name = "recall"
 harness = false

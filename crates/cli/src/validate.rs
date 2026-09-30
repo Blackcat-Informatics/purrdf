@@ -95,9 +95,9 @@
 //! naming either takes this run down the incremental lane in [`validate_change`]: the base is
 //! branched into a copy-on-write mutation, the change is applied, and the engine is asked
 //! which focus nodes that change can move — `delta` →
-//! [`affected_focus_node_ids`](purrdf_shapes::engine::PreparedValidator::affected_focus_node_ids)
+//! `affected_focus_node_ids`
 //! →
-//! [`validate_focus_node_ids`](purrdf_shapes::engine::PreparedValidator::validate_focus_node_ids).
+//! `validate_focus_node_ids`.
 //! Only those nodes are re-validated. No CLI-local decision about conformance is made on this
 //! route any more than on the other one: the expansion, the fallback condition and both
 //! reports come from one `PreparedValidator` bound to one mutation snapshot.
@@ -129,7 +129,7 @@
 //! is no lossless-or-refused crossing to make: the engine reads the same IR the parser built.
 //!
 //! The SHAPES graph is read through [`load_shapes`], in two steps that
-//! [`purrdf_shapes::engine::parse_shapes`] performs as one:
+//! `purrdf_shapes::engine::parse_shapes` performs as one:
 //! [`crate::shapes_source::read_shapes_document`] freezes the document into a graph, and
 //! only then is that graph asked to be `Shapes`. That read seam, and the `--import` table
 //! beside it, live in [`crate::shapes_source`] rather than here, because `shacl pack` needs
@@ -189,6 +189,7 @@ use purrdf_core::{DatasetMut, RdfDataset};
 use purrdf_rdf::{JsonLdSerializeOptions, NativeRdfFormat, SourceFormat};
 use purrdf_validate::SarifOptions;
 
+use crate::argv_documents::{refuse_shared_stdin, supplied_readers};
 use crate::cli::{CliRdfFormat, LedgerTarget, ValidateFormat};
 use crate::error::{CliError, CliOutcome};
 use crate::governors::{self, GovernorFlags};
@@ -207,7 +208,7 @@ pub(crate) struct ValidateOptions<'a> {
     /// [`Self::shapes_product`] is `Some` — clap makes the two mutually required.
     pub(crate) shapes: Option<&'a str>,
     /// `--shapes-product`: a prepared product to RESTORE instead of parsing a shapes
-    /// document. See [`load_prepared`].
+    /// document. See `load_prepared`.
     pub(crate) shapes_product: Option<&'a str>,
     /// `--expect-identity`: the input binding `--shapes-product` must carry, as the
     /// operator wrote it. [`ShapesPlan::decide`] turns it into the 32-byte selector the
@@ -235,16 +236,16 @@ pub(crate) struct ValidateOptions<'a> {
     pub(crate) imports: &'a [String],
     /// `--box-role-vocab`: the caller-supplied graph-box role vocabulary NAMESPACE, or
     /// `None` to leave the box-role annotation feature inactive. Threaded to
-    /// [`purrdf_shapes::shapes::from_dataset_with_config`] through
-    /// [`purrdf_shapes::model::BoxRoleVocab::for_namespace`] — see [`load_shapes`].
+    /// `purrdf_shapes::shapes::from_dataset_with_config` through
+    /// `purrdf_shapes::model::BoxRoleVocab::for_namespace` — see `load_shapes`.
     pub(crate) box_role_vocab: Option<&'a str>,
     /// `--conformance-disallows IRI`, repeatable: the conformance-disallow set this run
     /// is judged against, as the operator wrote it. Empty means SHACL's default set.
     /// [`validation_options`] turns it into the engine's
-    /// [`ValidationOptions`](purrdf_shapes::engine::ValidationOptions).
+    /// `ValidationOptions`.
     pub(crate) conformance_disallows: &'a [String],
     /// `--subclass-of-in-shapes-graph`: SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`
-    /// ([`ValidationOptions::subclass_of_in_shapes_graph`](purrdf_shapes::engine::ValidationOptions::subclass_of_in_shapes_graph)).
+    /// (`ValidationOptions::subclass_of_in_shapes_graph`).
     pub(crate) subclass_of_in_shapes_graph: bool,
     /// `--from`: the data-graph format override.
     pub(crate) from: Option<CliRdfFormat>,
@@ -272,7 +273,7 @@ pub(crate) struct ValidateOptions<'a> {
 /// Two arms because there are two spellings of one input — a shapes DOCUMENT to parse or a
 /// prepared PRODUCT to restore — and exactly one thing the engine wants from either: a
 /// `&Shapes`. Making that the enum's only accessor is what keeps the rest of this lane from
-/// branching: everything after [`load_shapes_source`] reads the same borrow whichever route
+/// branching: everything after `load_shapes_source` reads the same borrow whichever route
 /// produced it, so the two routes cannot diverge on anything downstream of the shapes.
 enum ShapesSource {
     /// A shapes document parsed on this run (`--shapes`).
@@ -345,7 +346,7 @@ impl ShapesSource {
     /// digest printed here is the same 64 hexadecimal digits `purrdf shacl explain`
     /// prints on its `identity-digest` line and `--expect-identity` accepts.
     ///
-    /// [`ValidatorProvenance`]: purrdf_shapes::provenance::ValidatorProvenance
+    /// `ValidatorProvenance`: purrdf_shapes::provenance::ValidatorProvenance
     fn provenance(&self) -> String {
         match self {
             Self::Parsed(_) => ValidatorProvenance::Parsed.to_string(),
@@ -380,8 +381,16 @@ pub(crate) fn run(
     options: &ValidateOptions<'_>,
     ledger_target: &LedgerTarget,
 ) -> Result<CliOutcome, CliError> {
-    refuse_two_stdins(options)?;
-    refuse_a_change_document_sharing_stdin(options)?;
+    // IN, the shapes input in either spelling and the two halves of a change set may each
+    // be `-`, and at most one of them may be.
+    let mut readers = vec![("IN".to_owned(), options.input)];
+    readers.extend(supplied_readers(&[
+        ("--shapes", options.shapes),
+        ("--shapes-product", options.shapes_product),
+        ("--changes", options.changes),
+        ("--changes-removed", options.changes_removed),
+    ]));
+    refuse_shared_stdin(&readers)?;
     refuse_a_changes_format_with_no_change_document(options)?;
     refuse_inapplicable_flags(options, ledger_target)?;
     refuse_parse_flags_against_a_product(options)?;
@@ -487,7 +496,7 @@ fn validate(
         data,
         shapes,
         shapes_graph,
-        &options.governors.to_governors(),
+        &options.governors.to_governors()?,
     )
     .map_err(|error| CliError::Runtime(error.into()))?;
 
@@ -637,7 +646,7 @@ fn validate_change(
     let governed = engine::validate_change_with_governors(
         &validator,
         snapshot,
-        &options.governors.to_governors(),
+        &options.governors.to_governors()?,
     )
     .map_err(CliError::Runtime)?;
     // Before the trip or the report, so an operator reading a run that stopped still
@@ -696,7 +705,7 @@ fn apply_changes(
     let mut mutation = MutableDataset::new(Arc::clone(base));
     if let Some((path, format)) = added {
         let document = source::load_dataset(path, format, base_iri)?;
-        for row in surface_rows(&document) {
+        for row in QuadValues::surface_of(&document) {
             mutation.insert(row).map_err(|error| {
                 CliError::Runtime(format!("--changes {path}: {}", error.diagnostic_code()))
             })?;
@@ -704,7 +713,7 @@ fn apply_changes(
     }
     if let Some((path, format)) = removed {
         let document = source::load_dataset(path, format, base_iri)?;
-        for row in surface_rows(&document) {
+        for row in QuadValues::surface_of(&document) {
             // A row the data graph does not carry retracts nothing. That is the
             // `DatasetMut::remove` contract everywhere else in PurRDF, and it is right
             // here: a change set is a description of what moved, not an assertion about
@@ -713,22 +722,6 @@ fn apply_changes(
         }
     }
     Ok(mutation)
-}
-
-/// Every row of `document`'s RDF surface — the plain rows and BOTH statement tables — as
-/// the owned value-quads the COW layer is mutated with.
-fn surface_rows(document: &RdfDataset) -> Vec<QuadValues> {
-    document
-        .quads()
-        .chain(document.reifier_quads())
-        .chain(document.annotation_quads())
-        .map(|quad| QuadValues {
-            s: document.term_value(quad.s),
-            p: document.term_value(quad.p),
-            o: document.term_value(quad.o),
-            g: quad.g.map(|g| document.term_value(g)),
-        })
-        .collect()
 }
 
 /// Serialize `report` to `--format` and write it to `OUT`.
@@ -1049,80 +1042,6 @@ pub(crate) fn shapes_document_base(
             ))),
         },
     }
-}
-
-/// Refuse a command line that reads standard input twice.
-///
-/// The data graph and the shapes input — whichever spelling of it — may each be `-`, and at
-/// most ONE of them may be: a
-/// process has one standard input, so two documents naming it would each get part of one
-/// stream. Refused naming both, exactly as `entails` refuses it, rather than mis-read.
-fn refuse_two_stdins(options: &ValidateOptions<'_>) -> Result<(), CliError> {
-    if options.input != "-" {
-        return Ok(());
-    }
-    if options.shapes == Some("-") {
-        return Err(CliError::Usage(
-            "IN and --shapes both read standard input, and there is only one: a process has a \
-             single stdin stream, so the data graph and the shapes graph would each get part \
-             of one document. Give one of them a path"
-                .to_owned(),
-        ));
-    }
-    if options.shapes_product == Some("-") {
-        return Err(CliError::Usage(
-            "IN and --shapes-product both read standard input, and there is only one: a \
-             process has a single stdin stream, so the data graph and the prepared product \
-             would each get part of one byte stream. Give one of them a path"
-                .to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-/// Refuse a command line in which a CHANGE document shares standard input.
-///
-/// The twin of [`refuse_two_stdins`], extended to the two halves of a change set: a
-/// process has one standard input, and `IN`, `--shapes`/`--shapes-product`, `--changes`
-/// and `--changes-removed` are four documents that may each name it. At most one may.
-///
-/// Separate from [`refuse_two_stdins`] rather than folded into it, and it runs second, so
-/// the pairs that command line already refused keep the message they always had — this one
-/// only ever speaks about a combination involving a change document.
-fn refuse_a_change_document_sharing_stdin(options: &ValidateOptions<'_>) -> Result<(), CliError> {
-    let mut readers: Vec<&str> = Vec::new();
-    if options.input == "-" {
-        readers.push("IN");
-    }
-    if options.shapes == Some("-") {
-        readers.push("--shapes");
-    }
-    if options.shapes_product == Some("-") {
-        readers.push("--shapes-product");
-    }
-    if options.changes == Some("-") {
-        readers.push("--changes");
-    }
-    if options.changes_removed == Some("-") {
-        readers.push("--changes-removed");
-    }
-    let names_a_change = readers
-        .iter()
-        .any(|role| *role == "--changes" || *role == "--changes-removed");
-    if readers.len() < 2 || !names_a_change {
-        return Ok(());
-    }
-    // `A and B`, `A, B and C` — grammatical at every length this can reach, because a
-    // refusal an operator has to re-read is a refusal that reads as a bug.
-    let named = match readers.split_last() {
-        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
-        _ => readers.join(", "),
-    };
-    Err(CliError::Usage(format!(
-        "{named} read standard input, and there is only one: a process has a single stdin \
-         stream, so each of those documents would get part of one byte stream. Give all but \
-         one of them a path"
-    )))
 }
 
 /// Refuse `--changes-from` when there is no change document for it to label.

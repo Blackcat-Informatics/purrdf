@@ -23,8 +23,13 @@
 //! Schema validator, that each projection accepts and rejects what SHACL
 //! validation does.
 
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "../examples/support/metaschemas.rs"]
+mod metaschemas;
+
 use std::collections::BTreeMap;
 
+use purrdf_lex::json::Value;
 use purrdf_shapes::json_schema::{CompiledSchema, Namespaces, compile};
 use purrdf_shapes::shapes::from_dataset;
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
@@ -32,7 +37,6 @@ use purrdf_shapes::{
     GRAPHQL_SCHEMA_PATH, GraphqlConfig, LinkmlConfig, PydanticConfig, TYPESCRIPT_DECLARATION_PATH,
     TypeScriptConfig, emit_graphql, emit_linkml, emit_pydantic, emit_typescript,
 };
-use serde_json::Value;
 
 const PREFIXES: &str = r"
     @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
@@ -221,7 +225,7 @@ fn emit(body: &str) -> Emitted {
     let dataset = parse_turtle_to_dataset(&format!("{PREFIXES}{body}"), None).expect("Turtle");
     let shapes = from_dataset(&dataset).expect("shapes graph");
     let compiled = compile(&shapes, &namespaces()).expect("schema compilation");
-    let schema = serde_json::from_str(&compiled.schema_json).expect("schema JSON");
+    let schema = purrdf_lex::json::read(&compiled.schema_json).expect("schema JSON");
     let typescript = emit_typescript(
         &compiled,
         &TypeScriptConfig::new("example-types", "Example package.", "Example declarations.")
@@ -297,12 +301,16 @@ fn python_json(text: &str) -> String {
     out
 }
 
+/// An expected JSON value, its members in name order as every emitter writes
+/// them, so that equality with an emitted value ignores the literal's order.
 fn json(text: &str) -> Value {
-    serde_json::from_str(text).expect("expected JSON")
+    let mut value = purrdf_lex::json::read(text).expect("expected JSON");
+    value.sort_keys();
+    value
 }
 
 fn ledger_rows(ledger: &str) -> Vec<(String, String, String)> {
-    let ledger: Value = serde_json::from_str(ledger).expect("ledger JSON");
+    let ledger: Value = purrdf_lex::json::read(ledger).expect("ledger JSON");
     ledger["losses"]
         .as_array()
         .expect("losses array")
@@ -358,9 +366,14 @@ fn owned3(rows: &[(&str, &str, &str)]) -> Vec<(String, String, String)> {
 
 /// The declaration of the exported TypeScript type `name`, through its `;`.
 fn ts_type(ts: &str, name: &str) -> Option<String> {
-    let start = ts.find(&format!("export type {name} = "))?;
-    let block = &ts[start..];
-    Some(block[..block.find(";\n\n").expect("declaration end") + 2].to_owned())
+    declaration(ts, &format!("export type {name} = "), ";\n\n")
+}
+
+/// The declaration in `source` that starts at `head` and runs to the first
+/// `end` after it, keeping `end`'s first two bytes; `None` when `head` is absent.
+fn declaration(source: &str, head: &str, end: &str) -> Option<String> {
+    let block = &source[source.find(head)?..];
+    Some(block[..block.find(end).expect("declaration end") + 2].to_owned())
 }
 
 /// The Pydantic field whose alias is `alias`, when the model has one.
@@ -372,9 +385,7 @@ fn py_field(py: &str, alias: &str) -> Option<String> {
 
 /// The GraphQL object type `name`, when the SDL declares one.
 fn gql_type(gql: &str, name: &str) -> Option<String> {
-    let start = gql.find(&format!("type {name} {{\n"))?;
-    let block = &gql[start..];
-    Some(block[..block.find("\n}\n").expect("type end") + 2].to_owned())
+    declaration(gql, &format!("type {name} {{\n"), "\n}\n")
 }
 
 /// Every `$comment` the compiled `Holder` definition carries (its own and each
@@ -401,7 +412,7 @@ fn holder_comments(emitted: &Emitted) -> Vec<String> {
 
 fn assert_pydantic_keeps_comments(emitted: &Emitted) {
     for comment in holder_comments(emitted) {
-        let encoded = serde_json::to_string(&comment).expect("JSON string");
+        let encoded = purrdf_lex::json::write_compact(&Value::from(comment.as_str()));
         assert!(
             emitted.pydantic.contains(&encoded),
             "model_json_schema() keeps {encoded}"
@@ -2276,7 +2287,10 @@ fn linkml_projects_some_value() {
     let emitted = emit(SOME_VALUE);
     let subject = &emitted.linkml["classes"]["Holder"]["attributes"]["ex:subject"];
     assert_eq!(subject["required"], true);
-    assert!(subject["any_of"][0]["all_of"].is_array(), "{subject}");
+    assert!(
+        subject["any_of"][0]["all_of"].as_array().is_some(),
+        "{subject}"
+    );
     assert_eq!(subject["any_of"][1]["minimum_cardinality"], 1);
     let member = &subject["any_of"][1]["has_member"];
     assert_eq!(
@@ -3205,21 +3219,7 @@ fn linkml_projects_reifier_severity() {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod observed {
-    fn metaschemas() -> &'static purrdf_jsonschema::Metaschemas {
-        static SET: std::sync::OnceLock<purrdf_jsonschema::Metaschemas> =
-            std::sync::OnceLock::new();
-        SET.get_or_init(|| {
-            purrdf_jsonschema::Metaschemas::new(
-                purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
-                    .iter()
-                    .map(|&(uri, text)| {
-                        let document: Value = serde_json::from_str(text).expect("meta-schema JSON");
-                        (uri, document)
-                    }),
-            )
-            .expect("the draft 2020-12 meta-schemas")
-        })
-    }
+    use super::metaschemas::metaschemas;
     use super::*;
     use purrdf_shapes::engine::{parse_shapes, validate_dataset_with_shapes_graph};
 
@@ -3240,7 +3240,7 @@ mod observed {
             .find(|node| node["@id"] == "https://example.org/h")
             .expect("ex:h is projected")
             .clone();
-        let schema: Value = serde_json::from_str(&compiled.schema_json).expect("schema JSON");
+        let schema: Value = purrdf_lex::json::read(&compiled.schema_json).expect("schema JSON");
         let location = "mem:///holder.schema.json";
         let mut registry = purrdf_jsonschema::Registry::with_metaschemas(metaschemas());
         registry

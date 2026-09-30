@@ -9,6 +9,10 @@
 //! A relation registered without a declaration declares nothing, and nothing is
 //! what a consumer reads back — no stub, no sentinel on the relation trait.
 
+mod support;
+
+use support::without_panic_output;
+
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
@@ -107,16 +111,6 @@ fn declaration() -> RankedDeclaration {
         exclusion: ExclusionBasis::Unavailable,
         mandatory: true,
     }
-}
-
-/// Run `body` with the default panic hook suppressed, so an *expected*, caught
-/// panic does not dump to stderr.
-fn without_panic_output<R>(body: impl FnOnce() -> R) -> R {
-    let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let out = body();
-    std::panic::set_hook(default_hook);
-    out
 }
 
 /// The panic message `body` raises, as a `String`.

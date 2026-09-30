@@ -30,11 +30,9 @@ path = "src/lib.rs"
 # Native SPARQL parser. Used at shape-load to reject non-SELECT
 # SHACL-SPARQL queries (ASK/CONSTRUCT/DESCRIBE) — they parse but cannot bind ?this
 # and would panic at eval. Use SparqlParser to parse and match Query::Select.
-# Replaces the oxigraph-family SPARQL parser.
 purrdf-sparql-algebra = { workspace = true }
 # Native SPARQL engine (crates/sparql-eval): the single SparqlEngine impl over the
-# frozen IR. Replaces oxigraph's SPARQL 1.1 engine for SHACL-AF sh:sparql /
-# sh:SPARQLTarget evaluation.
+# frozen IR, used for SHACL-AF sh:sparql / sh:SPARQLTarget evaluation.
 purrdf-sparql-eval = { workspace = true }
 # The one rules engine: SHACL rules and SPARQL 1.2 RL lower to this crate's rule-set
 # IR (`srl::ir`), which lowers onto purrdf-datalog's clause IR and is evaluated by its
@@ -49,19 +47,25 @@ regex = { workspace = true }
 # translation a second time (ETHOS §O). Previously reached only transitively
 # via `purrdf-sparql-eval`/`purrdf`; now a direct dependency of this crate.
 purrdf-core = { workspace = true }
+# The workspace root: the class-catalog and schema-compilation-key preimages open
+# under registered `purrdf_hash::Domain` constants.
+purrdf-hash = { workspace = true }
 # XSD value-space machinery: temporal (xsd:dateTime/date/time) value comparison
 # for the sh:minInclusive / sh:maxInclusive / sh:minExclusive / sh:maxExclusive
 # facets (W3C core/node/minInclusive-002/-003 — timezone-aware partial order;
 # indeterminate comparisons are violations).
 purrdf-xsd = { workspace = true }
-# JSON Schema / OpenAPI emitter. NO `preserve_order` feature: we rely on
-# serde_json's default BTreeMap-backed Map so object keys serialize sorted for
-# deterministic, byte-stable output.
-serde_json = { workspace = true }
-# Canonical LinkML 1.11 YAML codec. Both dependencies are always-on: the
-# reader/writer is one production behavior on native and wasm targets.
-serde = { workspace = true }
-serde_yaml = { workspace = true }
+# The one RDF 1.2 term spelling (`term_syntax`) and literal-body escaper
+# (`literal_escape`): the canonical display form of a term, and so the engine's
+# deterministic sort key, is written through them. Also the one JSON reader,
+# value and writer (`json`) every schema emitter builds on, and the one YAML
+# codec (`yaml`) the canonical LinkML 1.11 reader and writer use.
+# Zero-dependency lexical layer.
+purrdf-lex = { workspace = true }
+# The workspace's one first-mismatch index (`common_prefix_len`): the canonical
+# order of two IRIs is decided where their bytes first differ. Already in the
+# graph through `purrdf-core`.
+purrdf-deflate = { workspace = true }
 # Validate caller-supplied schema and prefix IRIs with the workspace's
 # zero-dependency RFC 3987 implementation.
 purrdf-iri = { workspace = true }
@@ -82,6 +86,9 @@ rayon = { workspace = true }
 purrdf-slice = { workspace = true }
 
 [dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
 purrdf-gts = { workspace = true }
 # The workspace's shared counting allocator, for `benches/validate.rs`, which is
 # the one target here needing BOTH measurement modes in one process: per-thread
@@ -121,16 +128,6 @@ purrdf-jsonschema = { workspace = true }
 # Path-only and unpublished, so it is stripped from the packaged manifest;
 # wasm32-clean, so it needs no target gate.
 purrdf-testkit = { workspace = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-# Native-only, because `make wasm-test` builds a test target of this crate for
-# wasm32 (`tests/product_wasm.rs`) and cargo builds every declared dev-dependency
-# of the package for any test target it builds. Criterion reaches for wall-clock
-# timing and processes, and drives benches the wasm lane never runs. Same
-# target-gated shape, and the same reason, as `crates/sparql-eval`.
-#
-# Acceleration-program baselines; light feature set, see crates/logic.
-criterion = { workspace = true }
 
 # The two JSON Schema oracle fixtures carry a test of their `validates` entry
 # point (the draft 2020-12 meta-schemas registered, and not), so `cargo test`

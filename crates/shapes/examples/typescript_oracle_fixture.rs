@@ -5,8 +5,23 @@
 
 use std::collections::BTreeSet;
 use std::error::Error;
-use std::sync::OnceLock;
 
+#[path = "support/holder.rs"]
+mod holder;
+#[allow(
+    dead_code,
+    unused_imports,
+    unused_macros,
+    reason = "each target uses part of the crate's shared JSON model"
+)]
+#[path = "../src/json_model.rs"]
+mod json_model;
+#[path = "support/json_text.rs"]
+mod json_text;
+#[path = "support/metaschemas.rs"]
+mod metaschemas;
+#[path = "support/oracle.rs"]
+mod oracle;
 #[path = "support/shacl_lists.rs"]
 mod shacl_lists;
 #[path = "support/shacl_temporal.rs"]
@@ -14,14 +29,13 @@ mod shacl_temporal;
 #[path = "support/shacl_value_shapes.rs"]
 mod shacl_value_shapes;
 
-use purrdf::loss::{LossLedger, check_ledger_complete, check_ledger_sound};
-use purrdf_shapes::json_schema::{CompiledSchema, Namespaces};
+use json_model::{ToJson, Value, json};
+use json_text::read_sorted;
+use purrdf::loss::{check_ledger_complete, check_ledger_sound};
 use purrdf_shapes::{
-    SchemaDatatypeMap, SchemaImportConfig, TYPESCRIPT_DECLARATION_PATH, TYPESCRIPT_DIALECT,
-    TypeScriptConfig, TypeScriptPackage, emit_typescript, import_typescript_package,
+    SchemaImportConfig, TYPESCRIPT_DECLARATION_PATH, TYPESCRIPT_DIALECT, TypeScriptConfig,
+    TypeScriptPackage, emit_typescript, import_typescript_package,
 };
-use serde::Serialize;
-use serde_json::{Value, json};
 
 const CLOSED_PROFILE: [&str; 16] = [
     "additional-properties-validation-widened",
@@ -41,29 +55,24 @@ const CLOSED_PROFILE: [&str; 16] = [
     "unevaluated-validation-dropped",
     "unique-items-validation-dropped",
 ];
-const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 struct ExpectedLoss {
     code: String,
     location: String,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 struct Probe {
     label: String,
     type_name: String,
     value: Value,
     mode: String,
     source_valid: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
     expected_loss: Option<ExpectedLoss>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 struct CompilerProbe {
     label: String,
     type_name: String,
@@ -73,18 +82,15 @@ struct CompilerProbe {
 
 /// A compiler fact a recorded loss rests on: a whole source file, beside the
 /// declaration, that the compiler must accept or reject (with `code`).
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 struct Proof {
     label: String,
     source: String,
     expected_typescript_valid: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
     expected_code: Option<u32>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 struct Fixture {
     declaration: String,
     type_names: std::collections::BTreeMap<String, String>,
@@ -94,12 +100,64 @@ struct Fixture {
     proofs: Vec<Proof>,
 }
 
-fn compiled(schema: &Value) -> Result<CompiledSchema, serde_json::Error> {
-    Ok(CompiledSchema {
-        schema_json: format!("{}\n", serde_json::to_string_pretty(schema)?),
-        openapi_json: "{}\n".to_owned(),
-        losses: LossLedger::new(),
-    })
+impl ToJson for ExpectedLoss {
+    fn to_json(&self) -> Value {
+        json!({ "code": self.code, "location": self.location })
+    }
+}
+
+impl ToJson for Probe {
+    fn to_json(&self) -> Value {
+        let mut probe = json!({
+            "label": self.label,
+            "typeName": self.type_name,
+            "value": self.value,
+            "mode": self.mode,
+            "sourceValid": self.source_valid,
+        });
+        if let Some(expected_loss) = &self.expected_loss {
+            json_model::set_member(&mut probe, "expectedLoss", expected_loss.to_json());
+        }
+        probe
+    }
+}
+
+impl ToJson for CompilerProbe {
+    fn to_json(&self) -> Value {
+        json!({
+            "label": self.label,
+            "typeName": self.type_name,
+            "expression": self.expression,
+            "expectedTypescriptValid": self.expected_typescript_valid,
+        })
+    }
+}
+
+impl ToJson for Proof {
+    fn to_json(&self) -> Value {
+        let mut proof = json!({
+            "label": self.label,
+            "source": self.source,
+            "expectedTypescriptValid": self.expected_typescript_valid,
+        });
+        if let Some(code) = self.expected_code {
+            json_model::set_member(&mut proof, "expectedCode", code);
+        }
+        proof
+    }
+}
+
+impl ToJson for Fixture {
+    fn to_json(&self) -> Value {
+        json!({
+            "declaration": self.declaration,
+            "typeNames": self.type_names,
+            "losses": self.losses,
+            "probes": self.probes,
+            "compilerProbes": self.compiler_probes,
+            "proofs": self.proofs,
+        })
+    }
 }
 
 fn config() -> Result<TypeScriptConfig, Box<dyn Error>> {
@@ -108,24 +166,6 @@ fn config() -> Result<TypeScriptConfig, Box<dyn Error>> {
         "Caller-owned TypeScript differential-oracle fixture.",
         "Declarations checked against the source JSON Schema acceptance relation.",
     )?)
-}
-
-fn import_config() -> Result<SchemaImportConfig, Box<dyn Error>> {
-    let namespaces = Namespaces::new(
-        "ex",
-        &[("ex".to_owned(), "https://example.org/".to_owned())],
-    )?;
-    let datatypes = SchemaDatatypeMap::new(
-        format!("{XSD}string"),
-        format!("{XSD}boolean"),
-        format!("{XSD}integer"),
-        format!("{XSD}decimal"),
-        format!("{XSD}dateTime"),
-        format!("{XSD}date"),
-        format!("{XSD}time"),
-        format!("{XSD}anyURI"),
-    )?;
-    Ok(SchemaImportConfig::new(namespaces, datatypes))
 }
 
 fn reverse_evidence(
@@ -144,7 +184,7 @@ fn reverse_evidence(
         return Err("TypeScript reverse shapes are not byte-deterministic".into());
     }
     Ok(json!({
-        "losses": serde_json::from_str::<Value>(&imported.losses.render_json())?,
+        "losses": read_sorted(&imported.losses.render_json())?,
         "shapeIds": imported
             .shapes
             .node_shapes
@@ -413,27 +453,6 @@ fn lossy_schema() -> Value {
     })
 }
 
-/// The draft 2020-12 meta-schemas the emitted schemas declare, from the
-/// workspace's test data (`purrdf-jsonschema` carries none).
-fn metaschemas() -> &'static purrdf_jsonschema::Metaschemas {
-    static SET: OnceLock<purrdf_jsonschema::Metaschemas> = OnceLock::new();
-    SET.get_or_init(|| {
-        purrdf_jsonschema::Metaschemas::new(
-            purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
-                .iter()
-                .map(|&(uri, text)| {
-                    let document: Value = serde_json::from_str(text).expect("meta-schema JSON");
-                    (uri, document)
-                }),
-        )
-        .expect("the draft 2020-12 meta-schemas")
-    })
-}
-
-fn validates(schema: &Value, definition: &str, instance: &Value) -> Result<bool, Box<dyn Error>> {
-    validates_in(metaschemas(), schema, definition, instance)
-}
-
 fn validates_in(
     metaschemas: &purrdf_jsonschema::Metaschemas,
     schema: &Value,
@@ -453,17 +472,6 @@ fn validates_in(
     )
 }
 
-fn has_loss(package: &TypeScriptPackage, code: &str, location: &str) -> bool {
-    package.losses.entries().iter().any(|entry| {
-        entry.code == code
-            && entry
-                .location
-                .as_ref()
-                .and_then(|value| value.subject.as_deref())
-                == Some(location)
-    })
-}
-
 // Keep each fixture row explicit: schema, projection, compiler mode, independent
 // source classification, and located-loss expectation are separate oracle inputs.
 #[allow(clippy::too_many_arguments)]
@@ -477,7 +485,7 @@ fn probe(
     expected_source_valid: bool,
     expected_loss: Option<(&str, &str)>,
 ) -> Result<Probe, Box<dyn Error>> {
-    let source_valid = validates(schema, definition, &value)?;
+    let source_valid = validates_in(metaschemas::metaschemas(), schema, definition, &value)?;
     if source_valid != expected_source_valid {
         return Err(format!(
             "source fixture probe {label:?} classified as {source_valid}, expected \
@@ -490,7 +498,7 @@ fn probe(
         location: location.to_owned(),
     });
     if let Some(loss) = &expected_loss
-        && !has_loss(package, &loss.code, &loss.location)
+        && !oracle::has_loss(&package.losses, &loss.code, &loss.location)
     {
         return Err(format!(
             "probe {label:?} names absent loss {} at {}",
@@ -522,7 +530,7 @@ fn declaration(package: &TypeScriptPackage) -> Result<String, Box<dyn Error>> {
 }
 
 fn ledger_json(package: &TypeScriptPackage) -> Result<Value, Box<dyn Error>> {
-    Ok(serde_json::from_str(&package.losses.render_json())?)
+    Ok(read_sorted(&package.losses.render_json())?)
 }
 
 fn exact_fixture(schema: &Value, package: TypeScriptPackage) -> Result<Fixture, Box<dyn Error>> {
@@ -1434,8 +1442,8 @@ fn lossy_fixture(schema: &Value, package: TypeScriptPackage) -> Result<Fixture, 
 /// and an integer minimum have no type (see [`complement_proofs`]), so exactly
 /// those two probes diverge, at their located losses.
 fn lists_fixture() -> Result<Fixture, Box<dyn Error>> {
-    let compiled = shacl_lists::compiled()?;
-    let schema: Value = serde_json::from_str(&compiled.schema_json)?;
+    let compiled = shacl_lists::FIXTURE.compiled()?;
+    let schema: Value = read_sorted(&compiled.schema_json)?;
     let package = emit_typescript(&compiled, &config()?)?;
     check_ledger_sound(&package.losses, "json-schema", "typescript-7.0")?;
     let members = "#/$defs/Holder/properties/ex:members/anyOf/1/properties/@list/items";
@@ -1454,7 +1462,7 @@ fn lists_fixture() -> Result<Fixture, Box<dyn Error>> {
         ),
     ];
     let mut probes = Vec::new();
-    for case in shacl_lists::cases()? {
+    for case in shacl_lists::FIXTURE.cases()? {
         let expected_loss = expected_losses
             .iter()
             .find(|(label, _)| *label == case.label)
@@ -1488,12 +1496,12 @@ fn lists_fixture() -> Result<Fixture, Box<dyn Error>> {
 /// compiler's union limit (this fixture's proof). So every non-conforming probe
 /// diverges at its property's dropped negation.
 fn temporal_fixture() -> Result<Fixture, Box<dyn Error>> {
-    let compiled = shacl_temporal::compiled()?;
-    let schema: Value = serde_json::from_str(&compiled.schema_json)?;
+    let compiled = shacl_temporal::FIXTURE.compiled()?;
+    let schema: Value = read_sorted(&compiled.schema_json)?;
     let package = emit_typescript(&compiled, &config()?)?;
     check_ledger_sound(&package.losses, "json-schema", "typescript-7.0")?;
     let mut probes = Vec::new();
-    for case in shacl_temporal::cases()? {
+    for case in shacl_temporal::FIXTURE.cases()? {
         let property = shacl_temporal::VARIANTS
             .iter()
             .find(|(label, _, _)| *label == case.label)
@@ -1542,8 +1550,8 @@ fn temporal_fixture() -> Result<Fixture, Box<dyn Error>> {
 /// contains a member of a type, so exactly those three probes diverge, at their
 /// located losses.
 fn value_shapes_fixture() -> Result<Fixture, Box<dyn Error>> {
-    let compiled = shacl_value_shapes::compiled()?;
-    let schema: Value = serde_json::from_str(&compiled.schema_json)?;
+    let compiled = shacl_value_shapes::FIXTURE.compiled()?;
+    let schema: Value = read_sorted(&compiled.schema_json)?;
     let package = emit_typescript(&compiled, &config()?)?;
     check_ledger_sound(&package.losses, "json-schema", "typescript-7.0")?;
     let expected_losses = [
@@ -1600,8 +1608,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let config = config()?;
     let exact_schema = exact_schema();
     let lossy_schema = lossy_schema();
-    let exact_package = emit_typescript(&compiled(&exact_schema)?, &config)?;
-    let lossy_package = emit_typescript(&compiled(&lossy_schema)?, &config)?;
+    let exact_package = emit_typescript(&oracle::compiled(&exact_schema)?, &config)?;
+    let lossy_package = emit_typescript(&oracle::compiled(&lossy_schema)?, &config)?;
     let mut reverse_schema = exact_schema.clone();
     let reverse_definitions = reverse_schema["$defs"]
         .as_object_mut()
@@ -1611,8 +1619,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     // They have no caller-supplied RDF property identity, so the verified
     // reverse fixture excludes that definition instead of inventing one.
     reverse_definitions.remove("Tree");
-    let reverse_package = emit_typescript(&compiled(&reverse_schema)?, &config)?;
-    let reverse = reverse_evidence(&reverse_package, &import_config()?)?;
+    let reverse_package = emit_typescript(&oracle::compiled(&reverse_schema)?, &config)?;
+    let reverse = reverse_evidence(&reverse_package, &oracle::import_config()?)?;
     let output = json!({
         "exact": exact_fixture(&exact_schema, exact_package)?,
         "lossy": lossy_fixture(&lossy_schema, lossy_package)?,
@@ -1621,7 +1629,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         "value_shapes": value_shapes_fixture()?,
         "reverse": reverse,
     });
-    println!("{}", serde_json::to_string(&output)?);
+    // Every object is written with its members in name order.
+    let mut output = output;
+    output.sort_keys();
+    println!("{}", json_model::write_compact(&output));
     Ok(())
 }
 
@@ -1635,8 +1646,14 @@ mod tests {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "$defs": {"Name": {"type": "string"}}
         });
-        assert!(validates(&schema, "Name", &json!("Ada")).expect("registered"));
-        assert!(!validates(&schema, "Name", &json!(1)).expect("registered"));
+        assert!(
+            validates_in(metaschemas::metaschemas(), &schema, "Name", &json!("Ada"))
+                .expect("registered")
+        );
+        assert!(
+            !validates_in(metaschemas::metaschemas(), &schema, "Name", &json!(1))
+                .expect("registered")
+        );
         let none = purrdf_jsonschema::Metaschemas::new(Vec::<(&str, Value)>::new())
             .expect("an empty set is a set");
         let error = validates_in(&none, &schema, "Name", &json!("Ada"))

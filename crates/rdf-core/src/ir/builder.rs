@@ -18,11 +18,11 @@
 //! silent default.
 
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::Arc;
 
 use hashbrown::HashTable;
-use purrdf_iri::IriError;
+use purrdf_iri::{IriError, langtag};
 
 use crate::blank_label::LabelAlphabet;
 use crate::{
@@ -31,17 +31,15 @@ use crate::{
 };
 
 use super::dataset::{FastHasher, QuadHandle, QuadIds, QuadRow, RdfDataset, TermRef};
-use super::term::{BlankScope, InternedLiteral, InternedTerm, StrRange, TermId, arena_str};
+use super::term::{
+    BlankScope, InternedLiteral, InternedTerm, StrRange, TermId, arena_str, push_arena_str,
+};
 use crate::RdfLocation;
-
-/// A fixed-key hash of a value, so the store-once tables are deterministic across
-/// runs. The frozen output is sorted by id, not hash-iteration order, so any hash
-/// would do; the fixed-key `FixedHasher` just avoids SipHash on the hot interning path.
-fn hash_of<T: Hash>(value: &T) -> u64 {
-    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    value.hash(&mut hasher);
-    hasher.finish()
-}
+// The store-once tables hash with the fixed-key `hash_of`, so they are
+// deterministic across runs. The frozen output is sorted by id, not
+// hash-iteration order, so any hash would do; the fixed key avoids SipHash on the
+// hot interning path.
+use crate::hash::hash_of;
 
 fn hash_lookup_value(lookup: &TermLookup<'_>) -> u64 {
     match lookup {
@@ -103,6 +101,14 @@ fn store_once<T: Hash + Eq>(vec: &mut Vec<T>, table: &mut HashTable<u32>, value:
     i
 }
 
+/// Reserve room for `additional` more values in a [`store_once`] pair: the table
+/// and its index grow together, the index rehashing through the values it points
+/// into, so a bulk load that states its size rehashes neither mid-way.
+fn reserve_store_once<T: Hash>(vec: &mut Vec<T>, table: &mut HashTable<u32>, additional: usize) {
+    vec.reserve(additional);
+    table.reserve(additional, |&i| hash_of(&vec[i as usize]));
+}
+
 /// A borrowed term lookup key (P3b): carries the string components by reference
 /// so the interner can dedup BY VALUE *before* anything is pushed to the arena.
 /// Mirrors [`InternedTerm`] but with `&str` where the stored form holds a `StrRange`.
@@ -135,19 +141,6 @@ enum OwnedStep<'t> {
     Term(&'t RdfTerm),
     Predicate(&'t str),
     Assemble,
-}
-
-/// Whether `s` is its own lowercase image, tested WITHOUT building that image.
-///
-/// `str::to_lowercase` always allocates, even when it is about to return a copy of
-/// its input. A BCP 47 language tag reaching an interner has normally already been
-/// lowercased at ingress, so the copy is the common case and the comparison is what
-/// the caller actually wanted.
-/// Shared with the LOOKUP path (`RdfDataset::term_id_by_literal`) on purpose: a lookup
-/// that folded tags differently from the interner would report a term absent that this
-/// dataset holds, which is the disagreement the canonicalization exists to prevent.
-pub(crate) fn is_lowercase(s: &str) -> bool {
-    s.chars().flat_map(char::to_lowercase).eq(s.chars())
 }
 
 /// Whether a stored term equals a lookup, resolving the stored ranges through `arena`.
@@ -231,7 +224,7 @@ impl Interner {
             terms: Vec::new(),
             index: HashTable::new(),
             content_scheme: None,
-            content_ids: HashMap::default(),
+            content_ids: crate::FastMap::default(),
             relative_iri: None,
             invalid_literal: None,
         }
@@ -239,16 +232,7 @@ impl Interner {
 
     /// Append a string to the arena, returning its range.
     fn push_str(&mut self, s: &str) -> StrRange {
-        // Validate the range fits u32 BEFORE mutating the arena: a checked overflow
-        // here fails fast and leaves the builder consistent, rather than extending the
-        // arena past u32::MAX and corrupting every subsequent push_str.
-        let offset = u32::try_from(self.arena.len()).expect("term arena exceeds u32::MAX bytes");
-        let len = u32::try_from(s.len()).expect("term string exceeds u32::MAX bytes");
-        offset
-            .checked_add(len)
-            .expect("term arena exceeds u32::MAX bytes");
-        self.arena.extend_from_slice(s.as_bytes());
-        StrRange { offset, len }
+        push_arena_str(&mut self.arena, s)
     }
 
     /// Intern a term BY VALUE: dedups against existing terms (resolving their ranges
@@ -472,11 +456,7 @@ impl ValidatedRdfDatasetBuilder {
     }
 }
 
-impl Default for RdfDatasetBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(RdfDatasetBuilder);
 
 /// Bulk-push already-interned quads. The ids MUST belong to THIS builder's interner
 /// (C0.8 — `TermId`s are dataset-local), so this is the ergonomic bulk form of
@@ -499,9 +479,7 @@ impl Extend<QuadIds> for RdfDatasetBuilder {
                 u32::try_from(self.quads.len() + reserve).is_ok(),
                 "bulk quad push exceeds maximum quad capacity of u32::MAX"
             );
-            self.quads.reserve(reserve);
-            self.quad_index
-                .reserve(reserve, |&i| hash_of(&self.quads[i as usize]));
+            reserve_store_once(&mut self.quads, &mut self.quad_index, reserve);
         }
         for q in iter {
             self.push_quad(q.s, q.p, q.o, q.g);
@@ -582,10 +560,7 @@ impl RdfDatasetBuilder {
         table.reserve(terms);
         index.reserve(terms, |&i| hash_stored_value(arena, &table[i as usize]));
 
-        self.quads.reserve(quads);
-        let rows = &self.quads;
-        self.quad_index
-            .reserve(quads, |&i| hash_of(&rows[i as usize]));
+        reserve_store_once(&mut self.quads, &mut self.quad_index, quads);
     }
 
     /// Explicitly declare that a named graph exists, even if it turns out to own
@@ -714,10 +689,13 @@ impl RdfDatasetBuilder {
     /// the `xsd:string` default are applied here, so both entry points expand the
     /// datatype the same way rather than each spelling the rule.
     ///
-    /// The language tag is lowercased for the key ONLY when it is not already its own
-    /// lowercase image. BCP 47 tags are case-insensitive and ingress normalizes them,
-    /// so the common case is a tag that is already lowercase and a `to_lowercase`
-    /// whose output is a copy of its input.
+    /// The language tag is folded for the key ([`langtag::identity_fold`]) ONLY when
+    /// it is not already its own fold. BCP 47 tags are case-insensitive and ingress
+    /// normalizes them, so the common case is a tag that is already folded and a
+    /// fold whose output is a copy of its input. The LOOKUP path
+    /// (`RdfDataset::term_id_by_literal`) folds with the same function on purpose: a
+    /// lookup that folded tags differently from the interner would report a term
+    /// absent that this dataset holds.
     ///
     /// Crate-internal: the owned form is the published ingress, and a second public
     /// spelling of the same operation would be surface with no caller.
@@ -751,8 +729,8 @@ impl RdfDatasetBuilder {
         }
 
         let lowered = language
-            .filter(|tag| !is_lowercase(tag))
-            .map(str::to_lowercase);
+            .filter(|tag| !langtag::is_identity_folded(tag))
+            .map(langtag::identity_fold);
         self.interner.intern(TermLookup::Literal {
             lexical,
             datatype: datatype_id,
@@ -1103,9 +1081,7 @@ impl RdfDatasetBuilder {
                 u32::try_from(self.quads.len() + reserve).is_ok(),
                 "dataset merge exceeds maximum quad capacity of u32::MAX"
             );
-            self.quads.reserve(reserve);
-            self.quad_index
-                .reserve(reserve, |&i| hash_of(&self.quads[i as usize]));
+            reserve_store_once(&mut self.quads, &mut self.quad_index, reserve);
         }
         for quad in other.owned_quads() {
             self.push_owned_quad_scoped(&quad, scope);
@@ -1392,8 +1368,7 @@ impl RdfDatasetBuilder {
     /// triple)` in two distinct graphs is two bindings.
     pub fn push_reifier_in_graph(&mut self, reifier: TermId, triple: TermId, g: Option<TermId>) {
         if self.reifies_predicate.is_none() {
-            self.reifies_predicate =
-                Some(self.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies"));
+            self.reifies_predicate = Some(self.intern_iri(purrdf_iri::vocab::rdf::REIFIES));
         }
         let binding = (reifier, triple, g);
         store_once(&mut self.reifiers, &mut self.reifier_index, binding);
@@ -1406,20 +1381,14 @@ impl RdfDatasetBuilder {
     /// (a graph with no reifiers at all must reserve nothing for them). A hint, never
     /// a contract. See that method for why this is not public.
     pub(crate) fn reserve_reifiers(&mut self, rows: usize) {
-        self.reifiers.reserve(rows);
-        let existing = &self.reifiers;
-        self.reifier_index
-            .reserve(rows, |&i| hash_of(&existing[i as usize]));
+        reserve_store_once(&mut self.reifiers, &mut self.reifier_index, rows);
     }
 
     /// Reserve room for `rows` more statement annotations, table and dedup index
     /// together. The annotation twin of
     /// [`reserve_reifiers`](Self::reserve_reifiers); the same hint discipline applies.
     pub(crate) fn reserve_annotations(&mut self, rows: usize) {
-        self.annotations.reserve(rows);
-        let existing = &self.annotations;
-        self.annotation_index
-            .reserve(rows, |&i| hash_of(&existing[i as usize]));
+        reserve_store_once(&mut self.annotations, &mut self.annotation_index, rows);
     }
 
     /// The predicate implicitly interned by reifier insertion, if any. Native
@@ -1688,6 +1657,9 @@ mod tests {
     use crate::ir::term::{RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD_STRING};
     use purrdf_testkit::prop::prelude::*;
 
+    /// The content-id recognition prefix these tests configure.
+    const SCHEME: &str = "blake3:";
+
     fn lit_simple(s: &str) -> RdfLiteral {
         RdfLiteral::simple(s)
     }
@@ -1779,7 +1751,7 @@ mod tests {
     /// scheme (and, optionally, the derivation predicate) before any intern.
     #[test]
     fn with_content_addressing_sets_config() {
-        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme");
         let b = RdfDatasetBuilder::with_content_addressing(
             scheme.clone(),
             Some("http://example.org/derivedFrom".to_string()),
@@ -1795,10 +1767,10 @@ mod tests {
     /// decoded bytes.
     #[test]
     fn intern_iri_recognizes_content_id() {
-        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme");
         let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
         let hex = "ab".repeat(32);
-        let id = b.intern_iri(&format!("blake3:{hex}"));
+        let id = b.intern_iri(&format!("{SCHEME}{hex}"));
         let expected = Blake3ContentId::from_hex(&hex).expect("valid hex");
         assert_eq!(b.interner.content_id(id), Some(expected));
     }
@@ -1807,9 +1779,9 @@ mod tests {
     /// exactly one side-table entry (idempotent, no double-insert drift).
     #[test]
     fn intern_iri_content_id_is_idempotent() {
-        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme");
         let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
-        let iri = format!("blake3:{}", "cd".repeat(32));
+        let iri = format!("{SCHEME}{}", "cd".repeat(32));
         let a = b.intern_iri(&iri);
         let c = b.intern_iri(&iri);
         assert_eq!(a, c);
@@ -1820,13 +1792,13 @@ mod tests {
     /// error: no side-table entry, but interning still succeeds.
     #[test]
     fn intern_iri_rejects_malformed_suffix_as_ordinary_iri() {
-        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme");
         let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
 
-        let too_short = format!("blake3:{}", "a".repeat(63));
-        let too_long = format!("blake3:{}", "a".repeat(65));
-        let non_hex = format!("blake3:{}z", "a".repeat(63));
-        let uppercase = format!("blake3:{}", "AB".repeat(32));
+        let too_short = format!("{SCHEME}{}", "a".repeat(63));
+        let too_long = format!("{SCHEME}{}", "a".repeat(65));
+        let non_hex = format!("{SCHEME}{}z", "a".repeat(63));
+        let uppercase = format!("{SCHEME}{}", "AB".repeat(32));
 
         for iri in [&too_short, &too_long, &non_hex, &uppercase] {
             let id = b.intern_iri(iri);
@@ -1842,7 +1814,7 @@ mod tests {
     /// An ordinary IRI with no content-id prefix at all gets no entry.
     #[test]
     fn intern_iri_ordinary_iri_has_no_content_id() {
-        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme");
         let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
         let id = b.intern_iri("http://example.org/x");
         assert_eq!(b.interner.content_id(id), None);
@@ -1853,9 +1825,9 @@ mod tests {
     /// not by a runtime check).
     #[test]
     fn intern_blank_never_recognized_as_content_id() {
-        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme");
         let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
-        let label = format!("blake3:{}", "ef".repeat(32));
+        let label = format!("{SCHEME}{}", "ef".repeat(32));
         let id = b.intern_blank(&label, BlankScope::DEFAULT);
         assert_eq!(b.interner.content_id(id), None);
         assert!(b.interner.content_ids.is_empty());
@@ -1866,7 +1838,7 @@ mod tests {
     #[test]
     fn intern_iri_no_recognition_when_scheme_inactive() {
         let mut b = RdfDatasetBuilder::new();
-        let id = b.intern_iri(&format!("blake3:{}", "12".repeat(32)));
+        let id = b.intern_iri(&format!("{SCHEME}{}", "12".repeat(32)));
         assert_eq!(b.interner.content_id(id), None);
         assert!(b.interner.content_ids.is_empty());
     }
@@ -2290,7 +2262,7 @@ mod tests {
         assert_eq!(subjects.len(), 2);
         // Collect the unique subject labels; standardize-apart gives them distinct
         // qualified labels via BlankScope::qualify_label.
-        let subject_labels: std::collections::HashSet<String> = subjects
+        let subject_labels: crate::FastSet<String> = subjects
             .iter()
             .filter_map(|t| {
                 if let RdfTerm::BlankNode(label) = t {
@@ -2333,14 +2305,12 @@ mod tests {
         /// itself plus its (shared) datatype term to the upper bound.
         #[test]
         fn property_idempotence_and_bounded_count(ops in prop::collection::vec(op_strategy(), 0..64)) {
-            use std::collections::HashSet;
-
             let mut b = RdfDatasetBuilder::new();
             // Map a value-key → the id it first produced, to assert idempotence.
-            let mut seen: HashMap<String, TermId> = HashMap::new();
+            let mut seen: crate::FastMap<String, TermId> = crate::FastMap::default();
             // The set of distinct *terms* (value keys, incl. datatype IRIs) that
             // SHOULD exist after the run — the exact upper bound for term_count.
-            let mut distinct_terms: HashSet<String> = HashSet::new();
+            let mut distinct_terms: crate::FastSet<String> = crate::FastSet::default();
 
             for op in ops {
                 let (call_key, id) = match op {

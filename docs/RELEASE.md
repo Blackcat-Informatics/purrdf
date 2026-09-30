@@ -77,14 +77,16 @@ one in [`scripts/release-crates.sh`](../scripts/release-crates.sh), which the
 workflow, the bootstrap script and the crates.io preflight all source, and which
 `scripts/check-doc-claims.py` checks this list against:
 
+- `purrdf-hash`
+- `purrdf-stack`
+- `purrdf-lex`
 - `purrdf-events`
 - `purrdf-iri`
 - `purrdf-xsd`
 - `purrdf-cdt`
 - `purrdf-jsonschema`
-- `purrdf-hash`
 - `purrdf-deflate`
-- `purrdf-stack`
+- `purrdf-ed25519`
 - `purrdf-gts`
 - `purrdf-core`
 - `purrdf-columnar`
@@ -175,23 +177,25 @@ first tagged run can publish the complete workspace in dependency order.
    records; deleting a crate would undo the setup. Yank can be reversed with
    `cargo yank --undo --version 0.0.0 "$new_crate"`.
 
-### Outstanding bootstrap: `purrdf-jsonschema`, `purrdf-hash`, `purrdf-deflate`, `purrdf-stack`, `purrdf-hnsw` and `purrdf-retrieval`
+### Outstanding bootstrap: `purrdf-hash`, `purrdf-stack`, `purrdf-lex`, `purrdf-jsonschema`, `purrdf-deflate`, `purrdf-ed25519`, `purrdf-hnsw` and `purrdf-retrieval`
 
-Six crates are in the release set above without a crates.io record yet.
-`purrdf-jsonschema` is the **fifth** in publish order, `purrdf-hash` the
-**sixth**, `purrdf-deflate` the **seventh**, `purrdf-stack` the **eighth**, `purrdf-hnsw` the **seventeenth** and
-`purrdf-retrieval` the **nineteenth**. Each record must be
+Eight crates are in the release set above without a crates.io record yet.
+`purrdf-hash` is the **first** in publish order, `purrdf-stack` the **second**,
+`purrdf-lex` the **third**, `purrdf-jsonschema` the **eighth**, `purrdf-deflate`
+the **ninth**, `purrdf-ed25519` the **tenth**, `purrdf-hnsw` the
+**nineteenth** and `purrdf-retrieval` the **twenty-first**. Each record must be
 created by a token publish (a create-new-crate publish is the only thing an API
 token does in this process — every existing record is locked to Trusted
 Publishing) and Trusted Publishing configured on it from the section above,
 before a `rust-v*` tag can publish the set. `PURRDF_UNBOOTSTRAPPED_CRATES` in
-[`scripts/release-crates.sh`](../scripts/release-crates.sh) names all six, and
+[`scripts/release-crates.sh`](../scripts/release-crates.sh) names all eight, and
 the registry preflight verifies the ledger in both directions before packaging.
 An entry leaves once its record exists.
 
-`purrdf-hnsw` and `purrdf-retrieval` are depended on by no other crate in the
-release set, so the lane publishes the crates ahead of each, skips it visibly,
-and continues through every later crate; only the two themselves wait for the
+`purrdf-hnsw` and `purrdf-retrieval` are depended on by no
+other crate in the release set, so the lane publishes the crates ahead of each,
+skips it visibly, and continues through every later crate; only the two
+themselves wait for the
 token step described in
 [New crates: set up publishing before tagging](#new-crates-set-up-publishing-before-tagging).
 `purrdf-jsonschema` is different: `purrdf-rdf` and `purrdf-shapes` take it as a
@@ -199,14 +203,25 @@ dev-dependency, and `cargo publish` resolves dev-dependencies when it verifies a
 package, so neither can be verified until `purrdf-jsonschema` has a record. Its
 token bootstrap therefore comes first, before the tag.
 
-`purrdf-hash` is a normal dependency of `purrdf-deflate`, `purrdf-gts`,
-`purrdf-datalog` and `purrdf-sparql-eval`, and through them of most of the
-release set, so none of those can even be packaged until it has a record. Its
+`purrdf-hash` is a normal dependency of `purrdf-xsd`, `purrdf-jsonschema`,
+`purrdf-deflate`, `purrdf-gts`, `purrdf-datalog`, `purrdf-sparql-algebra` and `purrdf-sparql-eval`
+(and a dev-dependency of `purrdf-iri`), and through them of most of the release
+set, so none of those can even be packaged until it has a record. Its
 token bootstrap comes first as well, before the tag. `purrdf-deflate` is a
 normal dependency of `purrdf-gts` and so blocks the same crates; its token
-bootstrap follows `purrdf-hash`'s, before the tag.
+bootstrap follows `purrdf-hash`'s, before the tag. `purrdf-ed25519` is a normal
+dependency of `purrdf-gts` and `purrdf-rdf` and blocks the same crates for the
+same reason; its token bootstrap also precedes the tag.
 
-`purrdf-stack` is a normal dependency of the SPARQL algebra, evaluator and wasm binding. Its token bootstrap also precedes the tag.
+`purrdf-lex` is a normal dependency of `purrdf-iri`, and through it of every
+crate that parses an IRI, so it blocks nearly the whole release set the same
+way. Its token bootstrap follows `purrdf-hash`'s and `purrdf-stack`'s and
+precedes every other, before the tag.
+
+`purrdf-stack` is a normal dependency of the SPARQL evaluator and the wasm
+binding, and a dev-dependency of most of the release set, `purrdf-lex` among
+them. It depends on no other crate, so it is published second, ahead of every
+crate whose verification resolves it. Its token bootstrap follows `purrdf-hash`'s, before the tag.
 
 Before publishing, every crate in the release set must have the Trusted
 Publisher configuration above and the *Require trusted publishing* lock.
@@ -311,8 +326,8 @@ git push origin rust-v0.1.5
 The workflow first refuses outright if any crate in the release set has no
 crates.io record and is not in the bootstrap ledger, or has a record that is
 not locked to Trusted Publishing (see
-[bootstrap status](#outstanding-bootstrap-purrdf-jsonschema-purrdf-hash-purrdf-deflate-purrdf-stack-purrdf-hnsw-and-purrdf-retrieval)).
-The ledger names `purrdf-jsonschema`, `purrdf-hash`, `purrdf-deflate`, `purrdf-stack`, `purrdf-hnsw` and `purrdf-retrieval`, so
+[bootstrap status](#outstanding-bootstrap-purrdf-hash-purrdf-stack-purrdf-lex-purrdf-jsonschema-purrdf-deflate-purrdf-ed25519-purrdf-hnsw-and-purrdf-retrieval)).
+The ledger names `purrdf-hash`, `purrdf-stack`, `purrdf-lex`, `purrdf-jsonschema`, `purrdf-deflate`, `purrdf-ed25519`, `purrdf-hnsw` and `purrdf-retrieval`, so
 every other release crate must have its record and lock before packaging. The lane publishes crates
 in dependency order and skips any
 crate/version already present on crates.io. A partially completed release

@@ -208,7 +208,11 @@ pub(super) struct Scanner<'a> {
     /// at that character. A single token can span a depth change (a
     /// `\p{…}` name may contain an unprotected `[`), so the stripper cannot
     /// answer from one flag per token.
-    x_inside: Vec<bool>,
+    ///
+    /// `None` when the `x`-flag state machine does not run at all: only the
+    /// stripper ([`Scanner::with_x_state`]) reads it, and translation, which
+    /// scans every compiled pattern, skips its per-character bookkeeping.
+    x_inside: Option<Vec<bool>>,
     /// Character range of the most recently yielded token or error.
     span_chars: Range<usize>,
     /// Emission hint for the class token just yielded: whether a wrapped
@@ -225,6 +229,16 @@ pub(super) struct Scanner<'a> {
 }
 
 impl<'a> Scanner<'a> {
+    /// Begin a scan of `pattern`, with the `x`-flag state machine that
+    /// [`source_chars`](Self::source_chars) and [`in_class`](Self::in_class)
+    /// read.
+    pub(super) fn with_x_state(pattern: &'a str) -> Self {
+        Self {
+            x_inside: Some(Vec::with_capacity(pattern.len())),
+            ..Self::new(pattern)
+        }
+    }
+
     /// Begin a scan of `pattern`.
     pub(super) fn new(pattern: &'a str) -> Self {
         let mut chars = Vec::with_capacity(pattern.len());
@@ -244,7 +258,7 @@ impl<'a> Scanner<'a> {
             span: 0..0,
             x_depth: 0,
             x_escaped: false,
-            x_inside: Vec::with_capacity(pattern.len()),
+            x_inside: None,
             span_chars: 0..0,
             negated_wrap_close: false,
             subtraction_operand: false,
@@ -257,9 +271,11 @@ impl<'a> Scanner<'a> {
     /// removal). This is the token-span round-trip the `x` stripper folds over.
     pub(super) fn source_chars(&self) -> impl Iterator<Item = (char, bool)> + '_ {
         let span = self.span_chars.clone();
-        self.source_text()
-            .chars()
-            .zip(self.x_inside[span].iter().copied())
+        let inside = self
+            .x_inside
+            .as_deref()
+            .expect("source_chars needs Scanner::with_x_state");
+        self.source_text().chars().zip(inside[span].iter().copied())
     }
 
     /// Whether the cursor is currently inside a character class according to
@@ -278,6 +294,10 @@ impl<'a> Scanner<'a> {
                   `source_chars` because one token can span a depth change"
     )]
     pub(super) fn in_class(&self) -> bool {
+        debug_assert!(
+            self.x_inside.is_some(),
+            "in_class needs Scanner::with_x_state"
+        );
         self.x_depth > 0
     }
 
@@ -303,7 +323,10 @@ impl<'a> Scanner<'a> {
     /// `x_escaped` and at depth 0 is REMOVED, so it does not clear the pending
     /// escape (that re-binding is what turns `\ s` into `\s`).
     fn x_feed(&mut self, c: char) {
-        self.x_inside.push(self.x_depth > 0);
+        let inside = self.x_depth > 0;
+        if let Some(x_inside) = &mut self.x_inside {
+            x_inside.push(inside);
+        }
         if self.x_escaped {
             if self.x_depth != 0 || !purrdf_iri::terminals::is_ws_char(c) {
                 self.x_escaped = false;
@@ -353,8 +376,10 @@ impl<'a> Scanner<'a> {
         }
         self.span = self.offsets[start]..self.offsets[self.pos];
         self.span_chars = start..self.pos;
-        for i in start..self.pos {
-            self.x_feed(self.chars[i]);
+        if self.x_inside.is_some() {
+            for i in start..self.pos {
+                self.x_feed(self.chars[i]);
+            }
         }
         Some(result)
     }
@@ -1147,7 +1172,7 @@ mod tests {
 
     #[test]
     fn class_state_and_source_spans_survive_a_walk() {
-        let mut scanner = Scanner::new("[abc]");
+        let mut scanner = Scanner::with_x_state("[abc]");
         assert!(!scanner.in_class());
         assert_eq!(scanner.next(), Some(Ok(class(false))));
         assert!(scanner.in_class());

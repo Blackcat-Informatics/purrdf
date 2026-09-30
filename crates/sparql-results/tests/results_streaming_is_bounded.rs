@@ -281,7 +281,7 @@ fn the_construct_arm_does_not_hold_the_document_it_is_writing() {
         SparqlResultsFormat::Json,
         &provenance,
         None,
-        &mut Discard,
+        &mut std::io::sink(),
     )
     .expect("SRJ streams a CONSTRUCT graph");
     let measured = window.close();
@@ -302,19 +302,6 @@ fn the_construct_arm_does_not_hold_the_document_it_is_writing() {
          holding it whole",
         measured.peak_working_bytes
     );
-}
-
-/// A writer that keeps nothing, so a measured window sees only the serializer.
-struct Discard;
-
-impl Write for Discard {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
 }
 
 /// A write failure reaches the caller CLASSIFIED, not just described.

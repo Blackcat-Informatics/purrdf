@@ -165,7 +165,7 @@ fn file_entry_from_tar(
                     entry.path
                 )));
             }
-            require_link_target(entry)?;
+            require_link_target(&entry.path, entry.link_target.as_deref())?;
         }
         FileEntryKind::Hardlink => {
             if !options.allow_symlinks {
@@ -174,7 +174,7 @@ fn file_entry_from_tar(
                     entry.path
                 )));
             }
-            require_link_target(entry)?;
+            require_link_target(&entry.path, entry.link_target.as_deref())?;
         }
         FileEntryKind::Fifo | FileEntryKind::CharDev | FileEntryKind::BlockDev => {
             if !options.allow_special {
@@ -230,7 +230,7 @@ fn file_entry_from_seek_tar(
                     entry.path
                 )));
             }
-            require_seek_link_target(entry)?;
+            require_link_target(&entry.path, entry.link_target.as_deref())?;
         }
         FileEntryKind::Hardlink => {
             if !options.allow_symlinks {
@@ -239,7 +239,7 @@ fn file_entry_from_seek_tar(
                     entry.path
                 )));
             }
-            require_seek_link_target(entry)?;
+            require_link_target(&entry.path, entry.link_target.as_deref())?;
         }
         FileEntryKind::Fifo | FileEntryKind::CharDev | FileEntryKind::BlockDev => {
             if !options.allow_special {
@@ -279,21 +279,12 @@ fn file_entry_from_seek_tar(
     })
 }
 
-fn require_link_target(entry: &RawTarEntry<'_>) -> Result<(), TarError> {
-    if entry.link_target.as_deref().is_none_or(str::is_empty) {
+/// Refuse a link entry at `path` whose `link_target` is absent or empty: the
+/// one check both the streamed and the seekable tar readers apply to a link.
+fn require_link_target(path: &str, link_target: Option<&str>) -> Result<(), TarError> {
+    if link_target.is_none_or(str::is_empty) {
         return Err(TarError::new(format!(
-            "link entry {} has no link target",
-            entry.path
-        )));
-    }
-    Ok(())
-}
-
-fn require_seek_link_target(entry: &SeekTarEntry) -> Result<(), TarError> {
-    if entry.link_target.as_deref().is_none_or(str::is_empty) {
-        return Err(TarError::new(format!(
-            "link entry {} has no link target",
-            entry.path
+            "link entry {path} has no link target"
         )));
     }
     Ok(())

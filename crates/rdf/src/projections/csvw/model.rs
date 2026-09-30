@@ -5,10 +5,11 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use purrdf_core::RdfTextDirection;
+use purrdf_lex::json::{Object, Value};
 
 use super::super::{ProjectionError, validate_absolute_iri};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
 
 /// Natural-language values keyed by a BCP47 language tag.
 ///
@@ -24,8 +25,7 @@ pub type CsvwNaturalLanguage = BTreeMap<String, Vec<String>>;
 pub type CsvwAnnotations = BTreeMap<String, Value>;
 
 /// CSVW text direction for a column value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CsvwTextDirection {
     /// Direction is inferred from the value.
     Auto,
@@ -38,8 +38,7 @@ pub enum CsvwTextDirection {
 }
 
 /// Direction in which a table is presented.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CsvwTableDirection {
     /// Direction is inferred by the host.
     Auto,
@@ -49,9 +48,26 @@ pub enum CsvwTableDirection {
     Rtl,
 }
 
+impl From<RdfTextDirection> for CsvwTextDirection {
+    fn from(direction: RdfTextDirection) -> Self {
+        match direction {
+            RdfTextDirection::Ltr => Self::Ltr,
+            RdfTextDirection::Rtl => Self::Rtl,
+        }
+    }
+}
+
+impl From<RdfTextDirection> for CsvwTableDirection {
+    fn from(direction: RdfTextDirection) -> Self {
+        match direction {
+            RdfTextDirection::Ltr => Self::Ltr,
+            RdfTextDirection::Rtl => Self::Rtl,
+        }
+    }
+}
+
 /// Whitespace trimming policy from a CSVW dialect description.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CsvwTrim {
     /// Retain leading and trailing whitespace.
     None,
@@ -64,8 +80,7 @@ pub enum CsvwTrim {
 }
 
 /// A normalized CSVW dialect.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwDialect {
     /// Character encoding label. The engine currently accepts UTF-8 labels only.
     pub encoding: String,
@@ -113,8 +128,7 @@ impl Default for CsvwDialect {
 }
 
 /// A CSVW numeric-format object.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwNumericFormat {
     /// UTS 35 number pattern.
     pub pattern: Option<String>,
@@ -125,8 +139,7 @@ pub struct CsvwNumericFormat {
 }
 
 /// String or numeric-object datatype format.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", tag = "kind", content = "value")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CsvwDatatypeFormat {
     /// UTS 35 date/time, boolean, or regular-expression-like format string.
     Pattern(String),
@@ -135,8 +148,7 @@ pub enum CsvwDatatypeFormat {
 }
 
 /// CSVW datatype and its value-space facets.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwDatatype {
     /// Optional custom datatype identity used for emitted literals.
     pub id: Option<String>,
@@ -164,9 +176,55 @@ pub struct CsvwDatatype {
     pub max_exclusive: Option<Value>,
 }
 
+purrdf_lex::json_record!(CsvwNumericFormat as "struct CsvwNumericFormat" {
+    "pattern" => pattern: optional,
+    "decimal_char" => decimal_char: required,
+    "group_char" => group_char: optional,
+});
+
+impl FromJson for CsvwDatatypeFormat {
+    /// `{"kind": "pattern" | "numeric", "value": …}`; other members are ignored.
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "adjacently tagged enum CsvwDatatypeFormat")?;
+        let kind = fields.tag("kind", &["pattern", "numeric"])?;
+        let content = fields
+            .raw("value")?
+            .ok_or_else(|| DecodeError::missing_field("value"))?;
+        Ok(if kind == "pattern" {
+            Self::Pattern(String::from_json(content)?)
+        } else {
+            Self::Numeric(CsvwNumericFormat::from_json(content)?)
+        })
+    }
+}
+
+impl ToJson for CsvwDatatypeFormat {
+    fn to_json(&self) -> Value {
+        let (kind, content) = match self {
+            Self::Pattern(pattern) => ("pattern", pattern.to_json()),
+            Self::Numeric(numeric) => ("numeric", numeric.to_json()),
+        };
+        Value::Object(Object::new().with("kind", kind).with("value", content))
+    }
+}
+
+purrdf_lex::json_record!(CsvwDatatype as "struct CsvwDatatype" {
+    "id" => id: optional,
+    "base" => base: required,
+    "format" => format: optional,
+    "length" => length: optional,
+    "min_length" => min_length: optional,
+    "max_length" => max_length: optional,
+    "minimum" => minimum: optional,
+    "maximum" => maximum: optional,
+    "min_inclusive" => min_inclusive: optional,
+    "max_inclusive" => max_inclusive: optional,
+    "min_exclusive" => min_exclusive: optional,
+    "max_exclusive" => max_exclusive: optional,
+});
+
 /// Properties inherited by table, schema, and column descriptions.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwInheritedProperties {
     /// URI template selecting each described subject.
     pub about_url: Option<String>,
@@ -193,8 +251,7 @@ pub struct CsvwInheritedProperties {
 }
 
 /// A normalized value produced by parsing one CSV cell.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwValue {
     /// Source component after trim/default/separator handling.
     pub source: String,
@@ -209,8 +266,7 @@ pub struct CsvwValue {
 }
 
 /// One annotated table cell.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwCell {
     /// Zero-based column index in the normalized schema.
     pub column: usize,
@@ -223,8 +279,7 @@ pub struct CsvwCell {
 }
 
 /// One annotated table row.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwRow {
     /// One-based row number among data records.
     pub number: usize,
@@ -239,8 +294,7 @@ pub struct CsvwRow {
 }
 
 /// One column description in a CSVW table schema.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwColumn {
     /// Absolute column-description identity, when supplied.
     pub id: Option<String>,
@@ -263,8 +317,7 @@ pub struct CsvwColumn {
 }
 
 /// A foreign-key reference target.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwReference {
     /// Referenced table URL, when targeting another table.
     pub resource: Option<String>,
@@ -275,8 +328,7 @@ pub struct CsvwReference {
 }
 
 /// A table-schema foreign-key constraint.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwForeignKey {
     /// Local column names in tuple order.
     pub column_reference: Vec<String>,
@@ -285,8 +337,7 @@ pub struct CsvwForeignKey {
 }
 
 /// A CSVW transformation description retained by the annotated model.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwTransformation {
     /// Absolute transformation identity, when supplied.
     pub id: Option<String>,
@@ -303,8 +354,7 @@ pub struct CsvwTransformation {
 }
 
 /// A normalized CSVW table schema.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwSchema {
     /// Absolute schema identity, when supplied.
     pub id: Option<String>,
@@ -325,8 +375,7 @@ pub struct CsvwSchema {
 }
 
 /// One annotated CSVW table and its parsed rows.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwTable {
     /// Absolute table-description identity, when supplied.
     pub id: Option<String>,
@@ -351,8 +400,7 @@ pub struct CsvwTable {
 }
 
 /// A normalized CSVW table group.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwTableGroup {
     /// Caller-owned absolute group identity.
     pub id: String,

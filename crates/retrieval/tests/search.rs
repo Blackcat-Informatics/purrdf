@@ -12,26 +12,37 @@
 //! `example.org` throughout.
 
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, DecayRule, ExecutionError, Fixed, FusionError,
-    FusionProfile, Iri, Metric, PlanError, ProducerStatus, ProtocolError, RankFidelity,
-    RankedStreamAdapter, ReadSchedule, RequestTerm, RetrievalRequest, SearchError, SearchResult,
-    Statistics, StratumUnit, Term, TopK, UnservedReason, UnservedTerm, compile, execute_within,
-    fuse, plan, search,
+    FusionProfile, Iri, PlanError, ProducerStatus, ProtocolError, RankedStreamAdapter,
+    ReadSchedule, RetrievalRequest, SearchError, SearchResult, StratumUnit, Term, TopK,
+    UnservedReason, UnservedTerm, compile, execute_within, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, CandidateDomains, DomainTag, DuplicatePolicy, EvalError,
-    ExclusionBasis, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
-    RankArithmetic, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
+    BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor,
+    PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, TermKind, TermPattern,
     Volatility,
 };
 
 mod common;
+
+#[path = "support/lookup.rs"]
+mod lookup;
+
+use lookup::domain_tag;
+
+#[path = "support/registry.rs"]
+mod registry;
+
+use purrdf_retrieval::block_on;
+use purrdf_retrieval::fixture::iri;
+use registry::{
+    MockProducer, MockStatistics, entities, ex, fixture_registry, lexical_request, lexical_term,
+    producer, ranked, seed_term, statistics, vector_term,
+};
 
 const K: u32 = 60;
 
@@ -47,181 +58,12 @@ const TOP_K: TopK = TopK::new(1024);
 // Fixtures
 // ---------------------------------------------------------------------------
 
-fn ex(suffix: &str) -> String {
-    format!("http://example.org/{suffix}")
-}
-
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
-
-fn kernel_iri(text: &str) -> purrdf_core::Iri {
-    purrdf_core::parse_iri(text).expect("fixture IRIs are valid")
-}
-
-/// Each accepted pattern, with the request term's value rendered into the
-/// object-side position. The mocks are arity (1,1) and project `?c0`, so the
-/// candidate is position 0 and a rendered facet binds at position 1.
-///
-/// An unconstrained `TermKind::Any` pattern is the exception: it declares **no**
-/// placement at all, so it is matched by every request term and receives none of
-/// them. Its argument stays free, and the plan reports every term that reached
-/// only this producer — matching a shape is not the same as receiving it.
-fn accepted(patterns: Vec<TermPattern>) -> Vec<AcceptedTerm> {
-    patterns
-        .into_iter()
-        .map(|pattern| {
-            let placements = if pattern == TermPattern::of_kind(TermKind::Any) {
-                Vec::new()
-            } else {
-                vec![TermPlacement {
-                    facet: RequestFacet::Value,
-                    position: 1,
-                    datatype: None,
-                }]
-            };
-            AcceptedTerm {
-                pattern,
-                placements,
-            }
-        })
-        .collect()
-}
-
-/// A ranked declaration, supplied where a producer is registered. `mandatory`
-/// is declared by the host rather than inferred: it states, explicitly, what an
-/// unconstrained `TermKind::Any` pattern used to imply.
-fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedDeclaration {
-    RankedDeclaration {
-        stratum: kernel_iri(stratum),
-        accepted_terms: accepted(patterns),
-        depth_placement: None,
-        candidate_position: 0,
-        duplicates: DuplicatePolicy::Unique,
-        fidelity: RankFidelity::EXACT,
-        arithmetic: RankArithmetic::FloatFree,
-        domains: CandidateDomains::Unrestricted,
-        block_position: None,
-        exclusion: ExclusionBasis::Unavailable,
-        mandatory,
-    }
-}
-
-fn lexical_term() -> RequestTerm {
-    RequestTerm::Lexical {
-        text: "quick brown fox".to_owned(),
-        language: Some("en".to_owned()),
-        predicate: Some(iri(&ex("body"))),
-    }
-}
-
-fn vector_term() -> RequestTerm {
-    RequestTerm::Vector {
-        embedding: vec![0.25, -1.5, 3.0],
-        metric: Metric::Cosine,
-        index_hint: None,
-    }
-}
-
-fn seed_term() -> RequestTerm {
-    RequestTerm::EntitySeed {
-        entity: Term::new(format!("<{}>", ex("seed"))),
-    }
-}
-
-fn mixed_request() -> RetrievalRequest {
-    mixed_request_at(TOP_K)
-}
-
 /// The mixed request, bounded at `top_k`.
 ///
 /// The bound is part of the request rather than an argument of `search`, so a
 /// fixture that varies it varies the request — and, by construction, the plan.
 fn mixed_request_at(top_k: TopK) -> RetrievalRequest {
     RetrievalRequest::bounded(vec![lexical_term(), vector_term(), seed_term()], top_k)
-}
-
-/// A mock ranked producer that declares `rows` and emits `emitted`.
-struct MockProducer {
-    arity: PfArity,
-    mode: BindingPattern,
-    rows: u64,
-    emitted: Vec<Vec<TermValue>>,
-}
-
-impl PropertyFunction for MockProducer {
-    fn volatility(&self) -> Volatility {
-        Volatility::Stable
-    }
-
-    fn arity(&self) -> PfArity {
-        self.arity
-    }
-
-    fn modes(&self) -> &[BindingPattern] {
-        std::slice::from_ref(&self.mode)
-    }
-
-    fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
-        self.rows
-    }
-
-    fn open(
-        &self,
-        args: &PfArgs<'_>,
-        _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
-        // A bound position is an input the call site supplied, and the engine
-        // drops any row that disagrees with it there. Echoing the input back is
-        // the cheapest correct behaviour, and it is what makes these fixtures
-        // sensitive to the constants the compiler renders.
-        let bound: Vec<Option<TermValue>> =
-            args.flattened().map(Option::<&TermValue>::cloned).collect();
-        let mut rows: Vec<Vec<TermValue>> = Vec::with_capacity(self.emitted.len());
-        for row in &self.emitted {
-            let mut echoed = Vec::with_capacity(row.len());
-            for (position, value) in row.iter().enumerate() {
-                echoed.push(
-                    bound
-                        .get(position)
-                        .and_then(Clone::clone)
-                        .unwrap_or_else(|| value.clone()),
-                );
-            }
-            rows.push(echoed);
-        }
-        Ok(Box::new(RowCursor {
-            rows: rows.into_iter(),
-        }))
-    }
-}
-
-struct RowCursor {
-    rows: std::vec::IntoIter<Vec<TermValue>>,
-}
-
-impl PfCursor for RowCursor {
-    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
-        Ok(self.rows.next())
-    }
-}
-
-fn producer(rows: u64, prefix: &str, count: usize) -> Arc<dyn PropertyFunction> {
-    let arity = PfArity::new(1, 1);
-    let emitted = (0..count)
-        .map(|index| {
-            vec![
-                TermValue::iri(format!("{}entity{index}", ex(prefix))),
-                TermValue::iri(format!("{}score{index}", ex(prefix))),
-            ]
-        })
-        .collect();
-    Arc::new(MockProducer {
-        arity,
-        mode: arity.all_free_mode(),
-        rows,
-        emitted,
-    })
 }
 
 /// A mock producer of arity (1,2) that names, in a third argument position, the
@@ -252,82 +94,6 @@ fn producer_naming_blocks(rows: u64, prefix: &str, blocks: &[&str]) -> Arc<dyn P
     })
 }
 
-/// The fixture registry: a catch-all producer the host declares mandatory, a
-/// literal producer, an IRI-seed producer, and one unranked producer.
-fn fixture_registry() -> PropertyFunctionRegistry {
-    let mut registry = PropertyFunctionRegistry::new();
-    let literal_pattern = TermPattern {
-        kind: TermKind::Literal,
-        datatype: None,
-        language: Some("en".to_owned()),
-        predicate: Some(ex("body")),
-    };
-    registry.register_ranked(
-        ex("pf/any"),
-        producer(200, "universal/", 3),
-        ranked(
-            &ex("stratum/universal"),
-            vec![TermPattern::of_kind(TermKind::Any)],
-            true,
-        ),
-    );
-    registry.register_ranked(
-        ex("pf/literal"),
-        producer(100, "text/", 2),
-        ranked(&ex("stratum/text"), vec![literal_pattern], false),
-    );
-    registry.register_ranked(
-        ex("pf/iri"),
-        producer(50, "graph/", 1),
-        ranked(
-            &ex("stratum/graph"),
-            vec![TermPattern::of_kind(TermKind::Iri)],
-            false,
-        ),
-    );
-    // Registered with no declaration at all: that is the whole of "does not
-    // participate in ranked retrieval".
-    registry.register(ex("pf/not-ranked"), producer(0, "unranked/", 0));
-    registry
-}
-
-struct MockStatistics {
-    source: String,
-    revision: String,
-    cardinalities: BTreeMap<Iri, u64>,
-}
-
-impl Statistics for MockStatistics {
-    fn source(&self) -> &str {
-        &self.source
-    }
-
-    fn revision(&self) -> &str {
-        &self.revision
-    }
-
-    fn cardinality(&self, predicate: &Iri) -> Option<u64> {
-        self.cardinalities.get(predicate).copied()
-    }
-
-    fn selectivity_ppm(&self, _subject: &Iri, _term: &RequestTerm) -> Option<u64> {
-        None
-    }
-}
-
-fn statistics(revision: &str) -> MockStatistics {
-    let mut cardinalities = BTreeMap::new();
-    cardinalities.insert(iri(&ex("stratum/universal")), 1000);
-    cardinalities.insert(iri(&ex("stratum/text")), 100);
-    cardinalities.insert(iri(&ex("stratum/graph")), 50);
-    cardinalities.insert(iri(&ex("body")), 500);
-    MockStatistics {
-        source: "example-statistics".to_owned(),
-        revision: revision.to_owned(),
-        cardinalities,
-    }
-}
-
 /// The fixture fusion profile: unit weight for each of the fixture's three
 /// strata and smoothing `K`. Three weights is also what gives a candidate room
 /// to surface in every stratum — the contribution maximum is the stratum count.
@@ -354,25 +120,6 @@ fn fixture_env<'a>(
 // ---------------------------------------------------------------------------
 // A minimal single-threaded executor (the mock never actually pends)
 // ---------------------------------------------------------------------------
-
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // The hand-composed pipeline, assembled from the exported seam
@@ -1310,12 +1057,33 @@ fn literal_only_registry() -> PropertyFunctionRegistry {
     registry
 }
 
-fn text_only_profile() -> FusionProfile {
+fn mixed_request() -> RetrievalRequest {
+    mixed_request_at(TOP_K)
+}
+
+/// A profile fusing the one stratum `ex:{stratum}` at weight one.
+fn one_stratum_profile(stratum: &str) -> FusionProfile {
     FusionProfile::with_decay(
-        BTreeMap::from([(iri(&ex("stratum/text")), Fixed::ONE)]),
+        BTreeMap::from([(iri(&ex(stratum)), Fixed::ONE)]),
         DecayRule::ReciprocalRank { k: K },
     )
     .expect("the fixture profile is valid")
+}
+
+/// Statistics for the one stratum `ex:{stratum}` beside the `body` predicate.
+fn one_stratum_statistics(stratum: &str) -> MockStatistics {
+    let mut cardinalities = BTreeMap::new();
+    cardinalities.insert(iri(&ex(stratum)), 1000);
+    cardinalities.insert(iri(&ex("body")), 500);
+    MockStatistics {
+        source: "example-statistics".to_owned(),
+        revision: "r1".to_owned(),
+        cardinalities,
+    }
+}
+
+fn text_only_profile() -> FusionProfile {
+    one_stratum_profile("stratum/text")
 }
 
 #[test]
@@ -1724,22 +1492,11 @@ fn repeating_registry(duplicates: DuplicatePolicy) -> PropertyFunctionRegistry {
 
 /// The statistics and profile the repeating fixture searches under.
 fn repeating_statistics() -> MockStatistics {
-    let mut cardinalities = BTreeMap::new();
-    cardinalities.insert(iri(&ex("stratum/repeat")), 1000);
-    cardinalities.insert(iri(&ex("body")), 500);
-    MockStatistics {
-        source: "example-statistics".to_owned(),
-        revision: "r1".to_owned(),
-        cardinalities,
-    }
+    one_stratum_statistics("stratum/repeat")
 }
 
 fn repeating_profile() -> FusionProfile {
-    FusionProfile::with_decay(
-        BTreeMap::from([(iri(&ex("stratum/repeat")), Fixed::ONE)]),
-        DecayRule::ReciprocalRank { k: K },
-    )
-    .expect("the fixture profile is valid")
+    one_stratum_profile("stratum/repeat")
 }
 
 #[test]
@@ -1888,12 +1645,6 @@ fn the_same_repeating_relation_declaring_allowed_answers_once_through_search() {
 /// streams had been read rather than about the answer, and a declaration that
 /// licenses an earlier stop certifies the identical row against a higher one.
 type FusedAnswer = (Term, Fixed, Vec<(Iri, u64, Fixed)>);
-
-/// Two caller-named blocks. Nothing here mints them: they are `example.org`
-/// IRIs a host chose for its own partition, exactly as the strata are.
-fn domain_tag(suffix: &str) -> DomainTag {
-    DomainTag::parse(&ex(suffix)).expect("fixture domain tags are valid IRIs")
-}
 
 /// The fixture registry, with each producer declaring where its candidates lie.
 ///
@@ -2112,15 +1863,6 @@ fn protocol_refusal(outcome: Result<SearchResult, SearchError>) -> ProtocolError
         Err(other) => panic!("expected a protocol refusal, got {other:?}"),
         Ok(_) => panic!("expected a refusal, and the search answered"),
     }
-}
-
-/// The entities `result` returned, in order.
-fn entities(result: &SearchResult) -> Vec<String> {
-    result
-        .rows
-        .iter()
-        .map(|row| row.entity.as_str().to_owned())
-        .collect()
 }
 
 /// **Refusal one.** A producer restricted to several blocks, whose rows name
@@ -2470,22 +2212,11 @@ fn docs_registry(
 }
 
 fn docs_statistics() -> MockStatistics {
-    let mut cardinalities = BTreeMap::new();
-    cardinalities.insert(iri(&ex("stratum/docs")), 1000);
-    cardinalities.insert(iri(&ex("body")), 500);
-    MockStatistics {
-        source: "example-statistics".to_owned(),
-        revision: "r1".to_owned(),
-        cardinalities,
-    }
+    one_stratum_statistics("stratum/docs")
 }
 
 fn docs_profile() -> FusionProfile {
-    FusionProfile::with_decay(
-        BTreeMap::from([(iri(&ex("stratum/docs")), Fixed::ONE)]),
-        DecayRule::ReciprocalRank { k: K },
-    )
-    .expect("the fixture profile is valid")
+    one_stratum_profile("stratum/docs")
 }
 
 /// The request both halves of each differential are run under: a top five, which
@@ -2503,20 +2234,10 @@ fn docs_depth(registry: &PropertyFunctionRegistry) -> u32 {
         .expect("the fixture stratum is planned")
 }
 
-/// The same request with no bound on it: everything the stratum holds.
-///
-/// This is the un-narrowed neighbour every differential below is measured against,
-/// and it is the same registry rather than a differently-declared one — a
-/// `ReadBound::Complete` request licenses no prefix whatever the producers declare,
-/// so the only thing that moves between the two runs is the depth.
-fn everything() -> RetrievalRequest {
-    RetrievalRequest::complete(vec![lexical_term()])
-}
-
 /// The depth the planner records for the fixture stratum under `registry` when the
 /// request states no bound.
 fn docs_complete_depth(registry: &PropertyFunctionRegistry) -> u32 {
-    *plan(&everything(), registry, &docs_statistics())
+    *plan(&lexical_request(), registry, &docs_statistics())
         .expect("the fixture request plans")
         .stratum_depths
         .get(&iri(&ex("stratum/docs")))
@@ -2530,7 +2251,7 @@ fn docs_search(registry: &PropertyFunctionRegistry) -> SearchResult {
 
 /// The un-narrowed search: the whole stratum, fused at the bound its depths sum to.
 fn docs_complete_search(registry: &PropertyFunctionRegistry) -> SearchResult {
-    docs_search_for(&everything(), registry)
+    docs_search_for(&lexical_request(), registry)
 }
 
 fn docs_search_for(

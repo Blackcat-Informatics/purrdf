@@ -90,6 +90,8 @@
 
 use std::borrow::Cow;
 
+use purrdf_iri::terminals::{self, expand_uchars};
+
 use purrdf_cdt::{CDT_LIST, CDT_MAP, CdtContents, CdtError, CdtTerm, CdtValue, parse_cdt_by_iri};
 
 use crate::blank_label::{LabelAlphabet, decode_blank_label, encode_blank_label};
@@ -712,7 +714,7 @@ fn push_iri_span(
         start: region.root_of(open),
         end: region.root_of(end),
         kind: TokenKind::Iri {
-            iri: unescape_iri(&region.text[open + 1..close]).into_owned(),
+            iri: expand_uchars(&region.text[open + 1..close]).into_owned(),
             iri_only,
         },
     });
@@ -773,7 +775,9 @@ fn scan_string(
     let Some(close) = close else {
         return iri_end;
     };
-    let datatype = unescape_iri(&region.text[iri_start + 1..close]);
+    // An IRIREF body's `UCHAR` escapes decoded, so a datatype written with them
+    // still compares equal to the composite IRIs.
+    let datatype = expand_uchars(&region.text[iri_start + 1..close]);
     if is_cdt_datatype(&datatype) {
         queue.push(unescaped_region(region, content_start, content_end));
     }
@@ -781,39 +785,6 @@ fn scan_string(
     // blanks from IRIs must refuse here rather than write an invalid literal.
     push_iri_span(region, iri_start, close, iri_end, true, spans);
     iri_end
-}
-
-/// Unescape an `IRIREF` body's `UCHAR` escapes so a datatype written with them
-/// still compares equal to the composite IRIs.
-fn unescape_iri(raw: &str) -> Cow<'_, str> {
-    if !raw.contains('\\') {
-        return Cow::Borrowed(raw);
-    }
-    let mut out = String::with_capacity(raw.len());
-    let bytes = raw.as_bytes();
-    let mut i = 0usize;
-    while i < bytes.len() {
-        if bytes[i] == b'\\' {
-            let width = match bytes.get(i + 1) {
-                Some(b'u') => 4,
-                Some(b'U') => 8,
-                _ => {
-                    i += 2;
-                    continue;
-                }
-            };
-            let hex = raw.get(i + 2..i + 2 + width).unwrap_or("");
-            if let Some(ch) = u32::from_str_radix(hex, 16).ok().and_then(char::from_u32) {
-                out.push(ch);
-            }
-            i += 2 + width;
-        } else {
-            let ch = raw[i..].chars().next().unwrap_or('\u{fffd}');
-            out.push(ch);
-            i += ch.len_utf8();
-        }
-    }
-    Cow::Owned(out)
 }
 
 /// Build the scan region for an embedded composite literal: its content
@@ -854,26 +825,11 @@ fn unescaped_region(region: &Region, content_start: usize, content_end: usize) -
 /// consumed. An unrecognized sequence yields its own backslash so the scan stays
 /// total; the grammar has already refused such a form on the validating path.
 fn decode_escape(raw: &str, at: usize) -> (char, usize) {
-    let bytes = raw.as_bytes();
-    match bytes.get(at + 1) {
-        Some(b't') => ('\t', 2),
-        Some(b'b') => ('\u{8}', 2),
-        Some(b'n') => ('\n', 2),
-        Some(b'r') => ('\r', 2),
-        Some(b'f') => ('\u{c}', 2),
-        Some(b'"') => ('"', 2),
-        Some(b'\'') => ('\'', 2),
-        Some(b'\\') => ('\\', 2),
-        Some(marker @ (b'u' | b'U')) => {
-            let width = if *marker == b'u' { 4 } else { 8 };
-            let hex = raw.get(at + 2..at + 2 + width).unwrap_or("");
-            u32::from_str_radix(hex, 16)
-                .ok()
-                .and_then(char::from_u32)
-                .map_or(('\\', 1), |ch| (ch, 2 + width))
-        }
-        _ => ('\\', 1),
+    let bytes = &raw.as_bytes()[at..];
+    if let Some(decoded) = bytes.get(1).copied().and_then(terminals::echar_value) {
+        return (decoded, 2);
     }
+    terminals::decode_uchar(bytes).unwrap_or(('\\', 1))
 }
 
 #[cfg(test)]

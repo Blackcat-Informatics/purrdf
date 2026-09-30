@@ -124,7 +124,6 @@ pub(crate) mod axioms;
 pub(crate) mod calculus;
 pub mod combined;
 pub(crate) mod datatypes;
-pub(crate) mod digest_hex;
 pub(crate) mod engine;
 pub mod entails;
 pub mod explain;
@@ -175,7 +174,10 @@ pub use report::{
     Boundary, Completeness, Construct, InconsistencyWitness, InconsistentRun, ReasoningReport,
     TerminationCertificate, WitnessTriple,
 };
-pub use rif::{Atom, Fact, RifTerm, Rule, RuleSet, materialize_rif, materialize_rif_until};
+pub use rif::{
+    Atom, Fact, RifTerm, Rule, RuleSet, materialize_rif, materialize_rif_until,
+    materialize_rif_with,
+};
 pub use rif_xml::{ParsedRifDocument, RifImport, parse_rif_xml, resolve_rif_imports};
 pub use rules::{ParseRuleIdError, RuleId, extensions, implemented, rules};
 
@@ -221,6 +223,38 @@ impl Regime {
             _ => None,
         }
     }
+
+    /// The regime's name: the last segment of its entailment-regime IRI
+    /// (`Simple`, `RDF`, `RDFS`, `OWL-RL`, `OWL-Direct`, `RIF`, `D`), which
+    /// [`Self::from_iri`] reads back.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Simple => "Simple",
+            Self::Rdf => "RDF",
+            Self::Rdfs => "RDFS",
+            Self::OwlRl => "OWL-RL",
+            Self::OwlDirect => "OWL-Direct",
+            Self::Rif => "RIF",
+            Self::D => "D",
+        }
+    }
+
+    /// The spelling every host accepts for the regime — the CLI's `--regime`, the
+    /// bindings' `Regime.<NAME>`: `simple`, `rdf`, `rdfs`, `owl-rl`, `owl-direct`,
+    /// `rif`, `d`.
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Simple => "simple",
+            Self::Rdf => "rdf",
+            Self::Rdfs => "rdfs",
+            Self::OwlRl => "owl-rl",
+            Self::OwlDirect => "owl-direct",
+            Self::Rif => "rif",
+            Self::D => "d",
+        }
+    }
 }
 
 /// A regime TOGETHER WITH the input that regime is defined by — the parameter
@@ -245,7 +279,7 @@ impl Regime {
 /// ```
 /// use purrdf_entail::{Materialization, Regime, RuleSet};
 ///
-/// let rules = RuleSet::new();
+/// let rules = RuleSet::default();
 /// assert_eq!(Materialization::Rdfs.regime(), Regime::Rdfs);
 /// // The two query-directed lanes carry their input, so naming them is not enough —
 /// // and once it is supplied there is nothing left to refuse.
@@ -362,12 +396,17 @@ pub enum EntailError {
     /// `owl:distinctMembers`, `owl:propertyChainAxiom` and `owl:hasKey` all REQUIRE their
     /// object to be an RDF collection, and the `OWL-RL` lane walks each one into an
     /// internal relation before evaluating. A cell with no `rdf:first`, with two, with no
-    /// `rdf:rest`, with two, a walk that never reaches `rdf:nil`, or a cycle is a refusal
+    /// `rdf:rest`, with two, a walk that never reaches `rdf:nil`, an `rdf:nil` carrying an
+    /// edge, or a cycle is a refusal
     /// rather than a truncation: reasoning over the well-formed PREFIX of a broken
     /// collection would answer a question the caller did not ask, and it would do so
     /// silently. The message names the collection's head, the cell the walk stopped at,
     /// and the fault.
     MalformedList(String),
+    /// A term id of the input view did not resolve to a value: the view handed back a
+    /// literal whose datatype is not an IRI, so the id is foreign to it. Nothing is
+    /// reasoned over a term the input does not actually hold.
+    ForeignTerm(purrdf_core::TermLookupError),
     /// The knowledge base is inconsistent: every query would be entailed, so no
     /// meaningful answer set exists. A hard failure rather than a silent default.
     ///
@@ -523,6 +562,7 @@ impl std::fmt::Display for EntailError {
             Self::Evaluate(error) => write!(f, "entailment evaluation error: {error}"),
             Self::Chase(error) => write!(f, "entailment chase error: {error}"),
             Self::MalformedList(msg) => write!(f, "entailment collection error: {msg}"),
+            Self::ForeignTerm(error) => write!(f, "entailment input error: {error}"),
             Self::Inconsistent(run) => write!(
                 f,
                 "knowledge base is inconsistent: {} was satisfied by {} asserted {}",
@@ -610,6 +650,12 @@ impl std::fmt::Display for EntailError {
     }
 }
 
+impl From<purrdf_core::TermLookupError> for EntailError {
+    fn from(error: purrdf_core::TermLookupError) -> Self {
+        Self::ForeignTerm(error)
+    }
+}
+
 impl std::error::Error for EntailError {
     /// The wrapped cause, for the variants that carry one.
     ///
@@ -636,6 +682,7 @@ impl std::error::Error for EntailError {
             Self::Evaluate(inner) => Some(inner),
             Self::Chase(inner) => Some(inner),
             Self::Canonicalization(inner) => Some(inner),
+            Self::ForeignTerm(inner) => Some(inner),
             Self::Build(_)
             | Self::Parse(_)
             | Self::MalformedList(_)
@@ -860,7 +907,7 @@ pub fn materialize_with<D: DatasetView>(
                 .map(|(closure, report)| (closure, report.under(options)));
         }
         Materialization::Rif(rules) => {
-            return materialize_rif_until(ds, rules, stop)
+            return materialize_rif_with(ds, rules, options, stop)
                 .map(|(closure, report)| (closure, report.under(options)));
         }
     };
@@ -948,13 +995,13 @@ mod tests {
     const X: &str = "http://example.org/x";
     const Y: &str = "http://example.org/y";
 
-    /// `owl:sameAs` — `eq-diff1`'s first premise.
-    const OWL_SAMEAS: &str = "http://www.w3.org/2002/07/owl#sameAs";
     /// `owl:differentFrom` — what the one extension rule concludes.
-    const OWL_DIFFERENTFROM: &str = "http://www.w3.org/2002/07/owl#differentFrom";
+    use purrdf_iri::vocab::owl::DIFFERENT_FROM as OWL_DIFFERENTFROM;
+    /// `owl:sameAs` — `eq-diff1`'s first premise.
+    use purrdf_iri::vocab::owl::SAME_AS as OWL_SAMEAS;
 
-    const RDFS_DOMAIN: &str = "http://www.w3.org/2000/01/rdf-schema#domain";
-    const RDFS_RANGE: &str = "http://www.w3.org/2000/01/rdf-schema#range";
+    use purrdf_iri::vocab::rdfs::DOMAIN as RDFS_DOMAIN;
+    use purrdf_iri::vocab::rdfs::RANGE as RDFS_RANGE;
 
     #[test]
     fn rdfs_subclass_is_transitive_and_types_instances() {
@@ -1013,7 +1060,7 @@ mod tests {
     #[test]
     fn every_materialization_plan_answers() {
         let ds = dataset(&[(X, RDF_TYPE, A)]);
-        let rules = RuleSet::new();
+        let rules = RuleSet::default();
         for (plan, regime) in [
             (Materialization::Simple, Regime::Simple),
             (Materialization::Rdf, Regime::Rdf),
@@ -2254,8 +2301,8 @@ mod tests {
         assert!(report.inconsistency().is_none());
         assert!(
             closed.quads().any(|q| {
-                closed.term_value(q.s) == TermValue::iri(X)
-                    && closed.term_value(q.o) == TermValue::typed_literal("01", integer)
+                closed.term_value(q.s).unwrap() == TermValue::iri(X)
+                    && closed.term_value(q.o).unwrap() == TermValue::typed_literal("01", integer)
             }),
             "dt-eq and eq-rep-o must keep the equal-valued spelling on the subject"
         );
@@ -2413,10 +2460,10 @@ mod tests {
         let typed: Vec<TermValue> = closed
             .quads()
             .filter(|q| {
-                closed.term_value(q.p) == TermValue::iri(RDF_TYPE)
-                    && closed.term_value(q.o) == TermValue::iri(B)
+                closed.term_value(q.p).unwrap() == TermValue::iri(RDF_TYPE)
+                    && closed.term_value(q.o).unwrap() == TermValue::iri(B)
             })
-            .map(|q| closed.term_value(q.s))
+            .map(|q| closed.term_value(q.s).unwrap())
             .collect();
         assert_eq!(
             typed.len(),
@@ -2431,8 +2478,8 @@ mod tests {
         // The blank OBJECT position round-trips too: `_:class ⊑ B` is still about `_:class`.
         assert!(
             closed.quads().any(|q| {
-                closed.term_value(q.p) == TermValue::iri(RDFS_SUBCLASSOF)
-                    && closed.term_value(q.s).as_blank().map(|(l, _)| l) == Some("class")
+                closed.term_value(q.p).unwrap() == TermValue::iri(RDFS_SUBCLASSOF)
+                    && closed.term_value(q.s).unwrap().as_blank().map(|(l, _)| l) == Some("class")
             }),
             "the blank subject of the schema triple was not carried through"
         );
@@ -2572,11 +2619,11 @@ mod tests {
     const SAYS: &str = "http://example.org/says";
     /// Fixture property `example.org/mentions`, the super-property of `says`.
     const MENTIONS: &str = "http://example.org/mentions";
-    /// `rdfs:subPropertyOf`, the axiom that drives the rewrite.
-    const RDFS_SUBPROPERTYOF: &str = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf";
     /// `rdfs:Resource` — the IRI the old fold substituted for a triple term. Named here
     /// only so its ABSENCE can be asserted.
-    const RDFS_RESOURCE: &str = "http://www.w3.org/2000/01/rdf-schema#Resource";
+    use purrdf_iri::vocab::rdfs::RESOURCE as RDFS_RESOURCE;
+    /// `rdfs:subPropertyOf`, the axiom that drives the rewrite.
+    use purrdf_iri::vocab::rdfs::SUB_PROPERTY_OF as RDFS_SUBPROPERTYOF;
 
     /// `says ⊑ mentions` plus `x says <o>`, where `o` is whatever term `object` interns.
     ///
@@ -2748,7 +2795,7 @@ mod tests {
             assert!(
                 !closed
                     .quads()
-                    .any(|q| matches!(closed.term_value(q.s), TermValue::Triple { .. })),
+                    .any(|q| matches!(closed.term_value(q.s).unwrap(), TermValue::Triple { .. })),
                 "{regime:?}: a triple term reached subject position"
             );
             // …and no stand-in was minted to carry the abandoned conclusion.
@@ -2766,7 +2813,3 @@ mod tests {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;

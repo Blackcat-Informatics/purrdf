@@ -8,6 +8,7 @@
 //! from worker threads and from threads they spawn never block the run. The
 //! command-line parser and the in-process runner are checked directly as well.
 
+use purrdf_testkit::text::stdout_utf8 as stdout_of;
 use std::io::Read as _;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -28,10 +29,6 @@ fn run_fixture(args: &[&str]) -> Output {
         .env_remove("RUST_TEST_NOCAPTURE")
         .output()
         .expect("run the fixture harness")
-}
-
-fn stdout_of(output: &Output) -> String {
-    String::from_utf8(output.stdout.clone()).expect("utf-8 stdout")
 }
 
 /// The output with the run's duration replaced by `S.SS`.

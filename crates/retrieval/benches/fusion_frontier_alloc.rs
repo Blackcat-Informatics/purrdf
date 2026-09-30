@@ -55,13 +55,12 @@
 //! `tests/multimodal_read_bound.rs` and `tests/exclusion_lookup.rs`, which
 //! compare two runs against each other.
 
+use purrdf_alloc_probe::{report_peak, resident_kib as rss_kb};
 use std::collections::BTreeMap;
 use std::env;
-use std::future::Future;
 use std::hint::black_box;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::{Context, Poll, Waker};
 
 use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
 use purrdf_retrieval::{
@@ -71,6 +70,11 @@ use purrdf_retrieval::{
     Term, contribution,
 };
 
+#[path = "../tests/support/streams.rs"]
+mod streams;
+
+use streams::{permuted_index, ready, stratum};
+
 // ---------------------------------------------------------------------------
 // The tracking allocator
 // ---------------------------------------------------------------------------
@@ -78,33 +82,13 @@ use purrdf_retrieval::{
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
-/// The process resident set size in KiB, read from `/proc/self/statm` (field 2
-/// is the resident page count). Linux-only; on any other platform this reports
-/// `0` and only the allocator figures carry the evidence.
-fn rss_kb() -> u64 {
-    #[cfg(target_os = "linux")]
-    {
-        let statm = std::fs::read_to_string("/proc/self/statm").unwrap_or_default();
-        let resident_pages: u64 = statm
-            .split_whitespace()
-            .nth(1)
-            .and_then(|field| field.parse().ok())
-            .unwrap_or(0);
-        // 4 KiB pages on every Linux target this runs on; a report-only figure.
-        resident_pages * 4
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        0
-    }
-}
-
 fn report(label: &str, peak_allocated_bytes: i64, rss_before_kb: u64, rss_after_kb: u64) {
-    println!(
-        "[fusion_frontier_alloc] {label}: peak_allocated_bytes={peak_allocated_bytes} \
-         rss_delta_kb={}",
-        i64::try_from(rss_after_kb).unwrap_or(i64::MAX)
-            - i64::try_from(rss_before_kb).unwrap_or(i64::MAX),
+    report_peak(
+        "fusion_frontier_alloc",
+        label,
+        peak_allocated_bytes,
+        rss_before_kb,
+        rss_after_kb,
     );
 }
 
@@ -112,27 +96,12 @@ fn report(label: &str, peak_allocated_bytes: i64, rss_before_kb: u64, rss_after_
 // A single-threaded executor (the fixture streams never actually pend)
 // ---------------------------------------------------------------------------
 
-fn block_on<F: Future>(future: F) -> F::Output {
-    // `Waker::noop()` needs no thread and no allocation, so this drives a
-    // future on any target, `wasm32-unknown-unknown` included.
-    let mut context = Context::from_waker(Waker::noop());
-    let mut future = Box::pin(future);
-    match future.as_mut().poll(&mut context) {
-        Poll::Ready(output) => output,
-        Poll::Pending => panic!("the fixture streams are synchronous and never pend"),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // The multi-stratum fixture
 // ---------------------------------------------------------------------------
 
 /// The reciprocal-rank smoothing constant every phase fuses under.
 const K: u32 = 60;
-
-/// How many candidates the strata disagree about at once: each stratum emits the
-/// same universe permuted within blocks of this size.
-const DISAGREEMENT_BLOCK: u64 = 4;
 
 /// The three strata every phase fuses, in their permutation order.
 ///
@@ -161,10 +130,10 @@ const PULL_BUDGET: usize = 1 << 16;
 
 /// The stream length and row count `--test` mode runs every case shape at.
 ///
-/// This file has no `criterion` harness, so nothing in it already knows how to
-/// answer cargo's `--test` the way the crate's criterion-driven benches do
+/// This file has no `purrdf_testkit::bench` harness, so nothing in it already knows how to
+/// answer cargo's `--test` the way the crate's harness-driven benches do
 /// (`benches/on_demand_read.rs` gets that for free from
-/// `Criterion::default().configure_from_args()`, which is what makes `--test`
+/// `bench_group!`'s `Bench::configure_from_args`, which is what makes `--test`
 /// run one fast pass there). A smoke run has to shrink the *inputs*, not skip
 /// the measurement, and it has to shrink them past every phase's worst case,
 /// not just its typical one: [`shared_block_phase`] under
@@ -190,28 +159,6 @@ const SMOKE_ROWS: usize = 8;
 /// because the one flag this file honours is the one cargo itself defines.
 fn smoke_requested() -> bool {
     env::args().any(|arg| arg == "--test")
-}
-
-fn stratum(suffix: &str) -> Iri {
-    Iri::parse(&format!("http://example.org/stratum/{suffix}")).expect("fixture IRIs are valid")
-}
-
-/// The candidate index stream `stream` emits at 1-based `rank`.
-///
-/// Stratum 0 emits the universe in order, stratum 1 reverses each block and
-/// stratum 2 rotates each block by half its width. Each is a permutation, so
-/// every stream emits distinct items and every candidate is eventually confirmed
-/// by every stratum.
-fn permuted_index(stream: usize, rank: u64) -> u64 {
-    let index = rank - 1;
-    let block = index / DISAGREEMENT_BLOCK;
-    let offset = index % DISAGREEMENT_BLOCK;
-    let permuted = match stream {
-        0 => offset,
-        1 => DISAGREEMENT_BLOCK - 1 - offset,
-        _ => (offset + DISAGREEMENT_BLOCK / 2) % DISAGREEMENT_BLOCK,
-    };
-    block * DISAGREEMENT_BLOCK + permuted
 }
 
 /// A producer that mints its rows lazily, so nothing is materialized up front.
@@ -467,7 +414,7 @@ fn phase_at_weight(label: &str, total: u64, rows: usize, weight: Fixed) -> usize
     let mut fused = 0usize;
     let mut contributions = 0usize;
     while fused < rows && pulls.load(Ordering::Relaxed) < PULL_BUDGET {
-        let Some(row) = block_on(fusion.next()).expect("the fixture obeys the protocol") else {
+        let Some(row) = ready(fusion.next()).expect("the fixture obeys the protocol") else {
             break;
         };
         contributions += row.contributions.len();
@@ -559,7 +506,7 @@ fn degraded_phase(label: &str, total: u64, rows: usize, fidelity: &RankFidelity)
     let mut bounded = 0usize;
     let mut unbounded = 0usize;
     while fused < rows && pulls.load(Ordering::Relaxed) < PULL_BUDGET {
-        let Some(row) = block_on(fusion.next()).expect("the fixture obeys the protocol") else {
+        let Some(row) = ready(fusion.next()).expect("the fixture obeys the protocol") else {
             break;
         };
         contributions += row.contributions.len();
@@ -649,7 +596,7 @@ fn disjoint_phase(label: &str, total: u64, rows: usize) -> usize {
     let mut fused = 0usize;
     let mut contributions = 0usize;
     while fused < rows && pulls.load(Ordering::Relaxed) < PULL_BUDGET {
-        let Some(row) = block_on(fusion.next()).expect("the fixture obeys the protocol") else {
+        let Some(row) = ready(fusion.next()).expect("the fixture obeys the protocol") else {
             break;
         };
         contributions += row.contributions.len();
@@ -735,7 +682,7 @@ fn shared_block_phase(label: &str, total: u64, rows: usize, basis: ExclusionBasi
     let mut fused = 0usize;
     let mut contributions = 0usize;
     while fused < rows && pulls.load(Ordering::Relaxed) < PULL_BUDGET {
-        let Some(row) = block_on(fusion.next()).expect("the fixture obeys the protocol") else {
+        let Some(row) = ready(fusion.next()).expect("the fixture obeys the protocol") else {
             break;
         };
         contributions += row.contributions.len();
@@ -747,7 +694,7 @@ fn shared_block_phase(label: &str, total: u64, rows: usize, basis: ExclusionBasi
 
     // Read after the window closes: the trailer allocates a map per stratum and
     // that is reporting rather than fusing.
-    let trailer = block_on(fusion.trailer()).expect("the fixture obeys the protocol");
+    let trailer = ready(fusion.trailer()).expect("the fixture obeys the protocol");
     let counted: u64 = trailer
         .resolution
         .values()

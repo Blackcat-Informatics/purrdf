@@ -11,13 +11,6 @@ use purrdf_rdf::{
 
 const TYPE: &str = "http://example.org/type";
 
-fn artifacts_equal(
-    left: &purrdf_rdf::ProjectionPackage,
-    right: &purrdf_rdf::ProjectionPackage,
-) -> bool {
-    left.artifacts().eq(right.artifacts())
-}
-
 #[test]
 fn public_csv_surfaces_round_trip_without_hidden_vocabulary() {
     let mut builder = RdfDatasetBuilder::new();
@@ -45,10 +38,14 @@ fn public_csv_surfaces_round_trip_without_hidden_vocabulary() {
     let generic = project_lpg_csv(dataset.as_ref(), &config).expect("generic projection");
     assert!(!generic.loss_ledger.is_empty());
     let generic_graph = read_lpg_csv(&generic.package, &config).expect("generic read");
-    assert!(artifacts_equal(
-        &generic.package,
-        &write_lpg_csv(&generic_graph, &config).expect("generic rewrite")
-    ));
+    assert!(
+        generic
+            .package
+            .artifacts()
+            .eq(write_lpg_csv(&generic_graph, &config)
+                .expect("generic rewrite")
+                .artifacts())
+    );
     assert!(datasets_isomorphic(
         &dataset,
         &lift_lpg(&generic_graph, &config)
@@ -59,10 +56,14 @@ fn public_csv_surfaces_round_trip_without_hidden_vocabulary() {
     let neo4j = project_neo4j_csv(dataset.as_ref(), &config).expect("Neo4j projection");
     assert!(!neo4j.loss_ledger.is_empty());
     let neo4j_graph = read_neo4j_csv(&neo4j.package, &config).expect("Neo4j read");
-    assert!(artifacts_equal(
-        &neo4j.package,
-        &write_neo4j_csv(&neo4j_graph, &config).expect("Neo4j rewrite")
-    ));
+    assert!(
+        neo4j
+            .package
+            .artifacts()
+            .eq(write_neo4j_csv(&neo4j_graph, &config)
+                .expect("Neo4j rewrite")
+                .artifacts())
+    );
     assert!(datasets_isomorphic(
         &dataset,
         &lift_lpg(&neo4j_graph, &config).expect("Neo4j lift").dataset

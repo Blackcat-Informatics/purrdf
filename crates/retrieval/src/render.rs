@@ -14,8 +14,8 @@
 //!
 //! The kernel's canonical N-Quads writer owns the authoritative escape set, and
 //! this layer reproduces none of it: literals are written by
-//! [`purrdf_core::ir::canon::write_literal_escaped`] and IRIs by
-//! [`purrdf_core::iri_escape::push_escaped`], the same functions the canonical
+//! [`purrdf_lex::term_syntax::write_literal`] and IRIs by
+//! [`purrdf_lex::term_syntax::write_iri`], the same functions the canonical
 //! writer calls. That is what makes an emitted constant and a canonicalized
 //! dataset agree character for character: `"a\nb"` written here is
 //! byte-identical to `"a\nb"` written there, so a needle that matches in one
@@ -51,22 +51,19 @@ use core::fmt::Write as _;
 use purrdf_core::TermBox;
 use std::collections::BTreeMap;
 
+use purrdf_core::terminals;
 use purrdf_core::{RdfTextDirection, TermValue};
+use purrdf_lex::term_syntax;
 
 use crate::fusion_stream::{CounterReading, StratumResolution};
 use crate::iri::Iri;
 
-/// `xsd:string`, the datatype a plain literal carries in the kernel's term
-/// model. Spelled here because the kernel's own constant is crate-private; it is
-/// the RDF specification's IRI, not vocabulary this layer mints.
-pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-
-/// `rdf:langString`, the datatype a language-tagged literal carries.
-pub(crate) const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-
-/// `rdf:dirLangString`, the datatype a directional language-tagged literal
-/// carries (RDF 1.2).
-const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+// `xsd:string` is the datatype a plain literal carries in the kernel's term
+// model, and `rdf:langString` the datatype of a language-tagged one.
+pub(crate) use purrdf_core::datatype::XSD_STRING;
+#[cfg(test)]
+use purrdf_core::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
+pub(crate) use purrdf_core::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
 
 /// A term value that has no SPARQL constant form.
 ///
@@ -288,7 +285,7 @@ fn write_term(value: &TermValue, out: &mut String) -> Result<(), RenderError> {
 fn write_leaf(out: &mut String, value: &TermValue) -> Result<(), RenderError> {
     match value {
         TermValue::Iri(iri) => {
-            write_iri(iri, out);
+            term_syntax::write_iri(iri, out);
             Ok(())
         }
         TermValue::Blank { label, .. } => Err(RenderError::BlankNotGround {
@@ -304,15 +301,9 @@ fn write_leaf(out: &mut String, value: &TermValue) -> Result<(), RenderError> {
     }
 }
 
-/// Append `iri`'s `<…>` form, escaping exactly what the `IRIREF` production
-/// forbids.
-fn write_iri(iri: &str, out: &mut String) {
-    out.push('<');
-    purrdf_core::iri_escape::push_escaped(iri, out);
-    out.push('>');
-}
-
-/// Append a literal's `"…"` form with its tag, direction or datatype.
+/// Append a literal's `"…"` form with its tag, direction or datatype, in
+/// [`term_syntax::write_literal`]'s canonical spelling, after refusing what no
+/// SPARQL constant can carry.
 fn write_literal(
     lexical_form: &str,
     datatype: &str,
@@ -325,28 +316,20 @@ fn write_literal(
             lexical_form: lexical_form.to_owned(),
         });
     }
-    out.push('"');
-    purrdf_core::ir::canon::write_literal_escaped(lexical_form, out);
-    out.push('"');
-    if let Some(tag) = language {
-        if !is_langtag(tag) {
-            return Err(RenderError::MalformedLanguageTag {
-                tag: tag.to_owned(),
-            });
-        }
-        out.push('@');
-        out.push_str(tag);
-        if let Some(direction) = direction {
-            out.push_str("--");
-            out.push_str(direction.as_str());
-        }
-        return Ok(());
+    if let Some(tag) = language
+        && !is_langtag(tag)
+    {
+        return Err(RenderError::MalformedLanguageTag {
+            tag: tag.to_owned(),
+        });
     }
-    // The short form for a plain string; every other datatype is written out.
-    if datatype != XSD_STRING {
-        out.push_str("^^");
-        write_iri(datatype, out);
-    }
+    term_syntax::write_literal(
+        lexical_form,
+        datatype,
+        language,
+        direction.map(RdfTextDirection::as_str),
+        out,
+    );
     Ok(())
 }
 
@@ -422,15 +405,17 @@ impl<'a> Cursor<'a> {
         self.position >= self.text.len()
     }
 
-    /// Advance past ASCII whitespace.
+    /// Advance past `WS ::= #x20 | #x9 | #xD | #xA`.
     ///
-    /// ASCII only, deliberately. The lexicals this scanner reads are the ones
-    /// [`candidate_lexical`] writes, whose separators are all ASCII, so treating
-    /// a Unicode space as a separator would accept a spelling this layer never
-    /// emits and cannot round-trip.
+    /// Exactly those four, deliberately. The lexicals this scanner reads are the
+    /// ones [`candidate_lexical`] writes, whose separators are single spaces, and
+    /// the N-Triples term grammar they follow separates tokens by `WS`; FORM FEED
+    /// (which `is_ascii_whitespace` admits) and every Unicode space are spellings
+    /// this layer never emits and cannot round-trip, so they are refused rather
+    /// than skipped.
     fn skip_whitespace(&mut self) {
         while let Some(ch) = self.rest().chars().next() {
-            if ch.is_ascii_whitespace() {
+            if terminals::is_ws_char(ch) {
                 self.position += ch.len_utf8();
             } else {
                 break;
@@ -507,7 +492,7 @@ impl<'a> Cursor<'a> {
             return self.iri().map(TermValue::Iri);
         }
         if self.eat("_:") {
-            return Ok(TermValue::blank(self.blank_label()));
+            return self.blank_label().map(TermValue::blank);
         }
         if self.rest().starts_with('"') {
             return self.literal();
@@ -550,17 +535,29 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    /// Read a blank-node label: everything up to whitespace or a closing
-    /// delimiter.
-    fn blank_label(&mut self) -> String {
+    /// Read a blank-node label: everything up to `WS` or a closing delimiter.
+    ///
+    /// The label is read back verbatim, because the writer spells a blank node's
+    /// label as it is; but no control character is ever part of one (the
+    /// N-Triples `BLANK_NODE_LABEL` admits none), so one that is not `WS` — FORM
+    /// FEED, VERTICAL TAB — is refused rather than absorbed into the label or
+    /// taken as a separator.
+    fn blank_label(&mut self) -> Result<String, String> {
         let start = self.position;
         while let Some(ch) = self.rest().chars().next() {
-            if ch.is_ascii_whitespace() || ch == ')' || ch == '>' {
+            if terminals::is_ws_char(ch) || ch == ')' || ch == '>' {
                 break;
+            }
+            if ch.is_ascii_control() {
+                return Err(format!(
+                    "control character U+{:04X} in a blank-node label at byte {}",
+                    u32::from(ch),
+                    self.position
+                ));
             }
             self.position += ch.len_utf8();
         }
-        self.text[start..self.position].to_owned()
+        Ok(self.text[start..self.position].to_owned())
     }
 
     /// Decode `"…"` with its optional tag, direction or datatype.
@@ -593,14 +590,9 @@ impl<'a> Cursor<'a> {
         }
         if self.eat("@") {
             let (language, direction) = self.language_tag()?;
-            let datatype = if direction.is_some() {
-                RDF_DIR_LANG_STRING
-            } else {
-                RDF_LANG_STRING
-            };
             return Ok(TermValue::Literal {
                 lexical_form,
-                datatype: datatype.to_owned(),
+                datatype: purrdf_core::vocab::language_datatype_iri(direction.is_some()).to_owned(),
                 language: Some(language),
                 direction,
             });
@@ -625,13 +617,14 @@ impl<'a> Cursor<'a> {
         }
         let raw = &self.text[start..self.position];
         let (tag, direction) = match raw.rsplit_once("--") {
-            Some((tag, "ltr")) => (tag, Some(RdfTextDirection::Ltr)),
-            Some((tag, "rtl")) => (tag, Some(RdfTextDirection::Rtl)),
-            Some((_, other)) => {
-                return Err(format!(
-                    "invalid base direction `--{other}`: it must be exactly `ltr` or `rtl`"
-                ));
-            }
+            Some((tag, token)) => match RdfTextDirection::from_str_token(token) {
+                Some(direction) => (tag, Some(direction)),
+                None => {
+                    return Err(format!(
+                        "invalid base direction `--{token}`: it must be exactly `ltr` or `rtl`"
+                    ));
+                }
+            },
             None => (raw, None),
         };
         if !is_langtag(tag) {
@@ -640,21 +633,10 @@ impl<'a> Cursor<'a> {
         Ok((tag.to_owned(), direction))
     }
 
-    /// Resolve one `\…` escape inside a literal.
+    /// Resolve one `\…` escape inside a literal: an `ECHAR` or a `UCHAR`.
     fn echar(&mut self) -> Result<char, String> {
         let escape = self.rest().as_bytes().get(1).copied();
-        let simple = match escape {
-            Some(b't') => Some('\t'),
-            Some(b'b') => Some('\u{08}'),
-            Some(b'n') => Some('\n'),
-            Some(b'r') => Some('\r'),
-            Some(b'f') => Some('\u{0c}'),
-            Some(b'"') => Some('"'),
-            Some(b'\'') => Some('\''),
-            Some(b'\\') => Some('\\'),
-            _ => None,
-        };
-        if let Some(resolved) = simple {
+        if let Some(resolved) = escape.and_then(terminals::echar_value) {
             self.position += 2;
             return Ok(resolved);
         }
@@ -663,26 +645,27 @@ impl<'a> Cursor<'a> {
 
     /// Resolve one `\uXXXX` / `\UXXXXXXXX` escape.
     fn uchar(&mut self) -> Result<char, String> {
-        let width = match self.rest().as_bytes().get(1).copied() {
-            Some(b'u') => 4,
-            Some(b'U') => 8,
-            _ => {
-                return Err(format!(
+        let (resolved, width) =
+            terminals::decode_uchar(self.rest().as_bytes()).map_err(|defect| match defect {
+                terminals::UcharError::NotAnEscape => format!(
                     "unrecognized escape at byte {}: only \\t \\b \\n \\r \\f \\\" \\' \
                      \\\\ \\uXXXX and \\UXXXXXXXX are canonical",
                     self.position
-                ));
-            }
-        };
-        let digits = self
-            .rest()
-            .get(2..2 + width)
-            .ok_or_else(|| format!("truncated escape at byte {}", self.position))?;
-        let code_point = u32::from_str_radix(digits, 16)
-            .map_err(|_| format!("`{digits}` is not hexadecimal at byte {}", self.position))?;
-        let resolved = char::from_u32(code_point)
-            .ok_or_else(|| format!("`{digits}` is not a Unicode scalar value"))?;
-        self.position += 2 + width;
+                ),
+                terminals::UcharError::BadHex => {
+                    format!(
+                        "truncated or non-hexadecimal escape at byte {}",
+                        self.position
+                    )
+                }
+                terminals::UcharError::NotAScalar => {
+                    format!(
+                        "the escape at byte {} is not a Unicode scalar value",
+                        self.position
+                    )
+                }
+            })?;
+        self.position += width;
         Ok(resolved)
     }
 }
@@ -747,6 +730,52 @@ mod tests {
 
     fn rendered(value: &TermValue) -> String {
         sparql_term(value).expect("the fixture value renders")
+    }
+
+    #[test]
+    fn form_feed_does_not_separate_terms() {
+        for text in [
+            "<urn:ex:a>\u{c}",
+            "\u{c}<urn:ex:a>",
+            "<<(\u{c}<urn:ex:s> <urn:ex:p> <urn:ex:o> )>>",
+            "<<( <urn:ex:s>\u{c}<urn:ex:p> <urn:ex:o> )>>",
+            "_:b0\u{c}",
+            "<<( _:b0\u{c}<urn:ex:p> <urn:ex:o> )>>",
+            "<urn:ex:a>\u{b}",
+            "<urn:ex:a>\u{a0}",
+        ] {
+            assert!(decode_term(text).is_err(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn space_tab_carriage_return_and_line_feed_still_separate_terms() {
+        for separator in [" ", "\t", "\r", "\n", " \t\r\n"] {
+            let text = format!(
+                "{separator}<<({separator}_:b0{separator}<urn:ex:p>{separator}<urn:ex:o>{separator})>>{separator}"
+            );
+            assert!(decode_term(&text).is_ok(), "{text:?}");
+            let blank = format!("_:b0{separator}");
+            assert_eq!(decode_term(&blank), Ok(TermValue::blank("b0")), "{blank:?}");
+        }
+    }
+
+    #[test]
+    fn a_signed_uchar_is_refused() {
+        for text in ["\"\\u+041\"", "\"\\U+0000041\""] {
+            assert!(decode_term(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn an_unsigned_uchar_still_decodes() {
+        for text in ["\"\\u0041\"", "\"\\U00000041\""] {
+            assert_eq!(
+                decode_term(text).expect("a lawful UCHAR"),
+                TermValue::simple_literal("A"),
+                "{text}"
+            );
+        }
     }
 
     #[test]
@@ -1014,7 +1043,7 @@ mod term_walk_tests {
     //! The term writers, the size hint and the canonical-lexical decoder against their
     //! recursive references, and at a hundred thousand levels on a 128 KiB thread.
 
-    use crate::test_terms::TermShape;
+    use purrdf_core::term_fixture::TermShape;
     use purrdf_core::{TermBox, TermValue};
 
     use super::{
@@ -1083,7 +1112,12 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(&mut state, &mut budget, TermShape::Any);
+            let value = purrdf_core::term_fixture::term_value(
+                &mut state,
+                purrdf_testkit::rng::splitmix64_next,
+                &mut budget,
+                TermShape::Any,
+            );
             assert_eq!(
                 lexical_size_hint(&value),
                 reference_hint(&value),
@@ -1129,19 +1163,15 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_round_trips_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = crate::test_terms::triple_chain(LEVELS);
-                let text = candidate_lexical(&value).expect("a chain of IRIs is spelled");
-                assert_eq!(lexical_size_hint(&value), text.len());
-                let mut written = String::new();
-                write_term(&value, &mut written).expect("a chain of IRIs is ground");
-                assert_eq!(written, text);
-                assert_eq!(decode_term(&text), Ok(value));
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no walk overflowed the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            let text = candidate_lexical(&value).expect("a chain of IRIs is spelled");
+            assert_eq!(lexical_size_hint(&value), text.len());
+            let mut written = String::new();
+            write_term(&value, &mut written).expect("a chain of IRIs is ground");
+            assert_eq!(written, text);
+            assert_eq!(decode_term(&text), Ok(value));
+        })
+        .expect("the thread starts");
     }
 }

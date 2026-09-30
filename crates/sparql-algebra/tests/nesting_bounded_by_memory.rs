@@ -15,6 +15,7 @@
 //! its `Debug` form holds once per written level (or a fixed number of times, where a
 //! level builds no node of its own), so a truncated or dropped level fails the count.
 
+use purrdf_testkit::text::nested as wrapped;
 use std::fmt::Write as _;
 
 use purrdf_sparql_algebra::{
@@ -31,22 +32,6 @@ const EX_P: &str = "<http://example.org/p>";
 
 /// The property-function namespace the argument-list family declares.
 const PF_NS: &str = "http://example.org/pf/";
-
-/// Run `body` on a thread spawned with a [`SMALL_STACK`] stack, and hand back what it
-/// returned.
-fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-    std::thread::Builder::new()
-        .stack_size(SMALL_STACK)
-        .spawn(body)
-        .expect("spawn a small-stack thread")
-        .join()
-        .expect("the small-stack thread returned rather than aborting")
-}
-
-/// `open`, repeated `levels` times, around `core`, closed by `close` as often.
-fn wrapped(open: &str, core: &str, close: &str, levels: usize) -> String {
-    format!("{}{core}{}", open.repeat(levels), close.repeat(levels))
-}
 
 /// What a family's text is parsed as.
 #[derive(Clone, Copy)]
@@ -613,7 +598,7 @@ fn families() -> Vec<Family> {
 /// dropped on that stack too.
 #[test]
 fn every_construct_parses_a_hundred_thousand_levels_deep_on_a_small_stack() {
-    on_small_stack(|| {
+    purrdf_stack::on_stack(SMALL_STACK, || {
         for family in families() {
             let algebra = family.parse(LEVELS).unwrap_or_else(|error| {
                 panic!("{} written {LEVELS} deep must parse: {error}", family.name)
@@ -625,7 +610,8 @@ fn every_construct_parses_a_hundred_thousand_levels_deep_on_a_small_stack() {
                 family.name
             );
         }
-    });
+    })
+    .expect("spawn a small-stack thread");
 }
 
 /// The same families, one level deep, on the same small stack: nothing about the stack
@@ -636,12 +622,13 @@ fn every_construct_one_level_deep_parses_to_the_same_algebra_on_any_stack() {
         .iter()
         .map(|family| family.parse(1).expect("one level parses"))
         .collect();
-    let small = on_small_stack(|| {
+    let small = purrdf_stack::on_stack(SMALL_STACK, || {
         families()
             .iter()
             .map(|family| family.parse(1).expect("one level parses"))
             .collect::<Vec<_>>()
-    });
+    })
+    .expect("spawn a small-stack thread");
     assert_eq!(here, small);
 }
 
@@ -695,7 +682,7 @@ fn a_hundred_thousand_sibling_elements_parse_on_a_small_stack() {
             body
         }),
     ];
-    on_small_stack(move || {
+    purrdf_stack::on_stack(SMALL_STACK, move || {
         for (name, spine) in spines {
             let parsed = SparqlParser::new()
                 .parse_query(&spine(LEVELS))
@@ -705,7 +692,8 @@ fn a_hundred_thousand_sibling_elements_parse_on_a_small_stack() {
             drop(copy);
             drop(parsed);
         }
-    });
+    })
+    .expect("spawn a small-stack thread");
 }
 
 /// Aggregates do not nest in SPARQL, and a hundred thousand nested aggregate calls are
@@ -714,7 +702,7 @@ fn a_hundred_thousand_sibling_elements_parse_on_a_small_stack() {
 /// thousand nested calls parses (see the families above).
 #[test]
 fn nested_aggregates_are_refused_as_nested_aggregates_at_any_depth() {
-    on_small_stack(|| {
+    purrdf_stack::on_stack(SMALL_STACK, || {
         for (open, close) in [("SUM(", ")"), ("AGG(<http://example.org/agg>, ", ")")] {
             let text = format!(
                 "SELECT ({} AS ?total) WHERE {{ ?s ?p ?x }}",
@@ -734,14 +722,15 @@ fn nested_aggregates_are_refused_as_nested_aggregates_at_any_depth() {
             .parse_query("SELECT (SUM(?x) AS ?total) WHERE { ?s ?p ?x }")
             .expect("one aggregate parses");
         assert!(format!("{flat:?}").contains("Sum"));
-    });
+    })
+    .expect("spawn a small-stack thread");
 }
 
 /// The deepest `FILTER` expression of a hundred thousand nested brackets is the
 /// innermost operand, reached without any bracket building a node.
 #[test]
 fn brackets_a_hundred_thousand_deep_build_no_node() {
-    on_small_stack(|| {
+    purrdf_stack::on_stack(SMALL_STACK, || {
         let text = format!(
             "SELECT * WHERE {{ FILTER({}) }}",
             wrapped("(", "?innermost", ")", LEVELS)
@@ -759,5 +748,6 @@ fn brackets_a_hundred_thousand_deep_build_no_node() {
             panic!("the FILTER");
         };
         assert!(matches!(expr, Expression::Variable(v) if v.as_str() == "innermost"));
-    });
+    })
+    .expect("spawn a small-stack thread");
 }

@@ -36,7 +36,7 @@
 //!   [`purrdf_sparql_results`].
 //! - CONSTRUCT / DESCRIBE → **Turtle**, or **TriG** when the result carries a named
 //!   graph, via the `native_codecs` serializer (the one serialization seam; never
-//!   `oxigraph::io`, never the `purrdf-gts` crate). See [`default_graph_format`]: a
+//!   the `purrdf-gts` crate). See [`default_graph_format`]: a
 //!   quad-template CONSTRUCT would serialize to an EMPTY Turtle document, so the
 //!   no-format default widens to Turtle's dataset superset rather than answering with
 //!   nothing. An EXPLICIT single-graph format for such a result throws instead — see
@@ -64,8 +64,9 @@
 //! executes a real deadline trip against the optimized module so that split is *observed*
 //! rather than merely compiled.
 
+use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use purrdf::{GovernedEntailment, JsonLdSerializeOptions, SerializeGraph, serialize_dataset};
@@ -74,18 +75,21 @@ use purrdf_core::{SparqlRequest, SparqlResult};
 use purrdf_sparql_eval::protocol::FailureCode;
 use purrdf_sparql_eval::{
     AggregateRegistry, BudgetExhausted, CancellationFlag, GovernedOutcome, GovernedUpdateOutcome,
-    GovernorEvidence as EvidenceValue, NativeSparqlEngine, PartialAnswers as PartialValue,
-    QueryGovernors, ResourceDimension, StopCause, StopSignal, TrippedGovernor as TrippedValue,
-    WallDeadline,
+    GovernorEvidence as EvidenceValue, HostStopWatch, NativeSparqlEngine,
+    PartialAnswers as PartialValue, QueryGovernors, ResourceDimension, StopSignal,
+    TrippedGovernor as TrippedValue, WallDeadline,
 };
 use purrdf_sparql_results::{
     ResultProvenance, SparqlResultsFormat, serialize as serialize_results,
+};
+use purrdf_validate::governors::{
+    GovernorParts, GovernorPartsError, from_parts, from_update_parts,
 };
 use wasm_bindgen::prelude::*;
 
 use crate::async_query::AsyncOperationKind;
 use crate::codec::resolve_format;
-use crate::convert::term_value_into_rdf_term;
+use crate::convert::{BlankScopeMode, term_value_into_rdf_term};
 use crate::dataset::{Dataset, serialize_frozen_with_options};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::operation::{
@@ -271,8 +275,8 @@ impl QueryResult {
 /// document carried no member under `prefix`, or the member omitted that field.
 ///
 /// Per-solution source provenance (`ResultProvenance::solutions`) is not exposed here:
-/// no writer on this surface (or the CLI's/C ABI's matching `build_query_provenance`)
-/// populates it today — it is the evaluator/S11 derivation graph's progressive fill
+/// no writer on this surface (nor `purrdf_validate::query::provenance`, which every host
+/// emits through) populates it — it is the evaluator/S11 derivation graph's progressive fill
 /// (see `purrdf_sparql_results::ResultProvenance`'s module docs) — so there is nothing
 /// yet for this binding to round-trip beyond `queryHash`/`engine`.
 #[wasm_bindgen]
@@ -433,66 +437,6 @@ impl CancellationToken {
     }
 }
 
-/// The composed [`StopSignal`] every governed wasm call runs under.
-///
-/// Two sources, one signal, because `QueryGovernors::with_stop_signal` takes one and
-/// composing them is the host's job: the caller's [`CancellationToken`], when one was
-/// supplied, and the caller's wall deadline, when one was.
-///
-/// # Latching
-///
-/// The trait's contract is that a fired signal stays fired, so the resolved cause is
-/// written once into a `OnceLock` and every later poll returns it without consulting a
-/// source again. A simultaneous fire resolves the way the kernel ranks it — a cancellation
-/// (an explicit decision) ahead of a deadline (an elapsed measurement).
-#[derive(Debug)]
-struct WasmStopWatch {
-    /// The resolved cause, written once. See the latching note above.
-    latched: OnceLock<StopCause>,
-    /// The caller's cancellation bit, when one was supplied.
-    cancel: Option<CancellationFlag>,
-    /// The caller's wall deadline, when one was supplied. This is the wasm clock read.
-    deadline: Option<WallDeadline>,
-}
-
-impl WasmStopWatch {
-    /// A watch over the caller's `deadline_ms` budget and `cancel` token, if any.
-    fn new(deadline_ms: Option<u64>, cancel: Option<&CancellationToken>) -> Self {
-        Self {
-            latched: OnceLock::new(),
-            cancel: cancel.map(|token| token.flag.clone()),
-            deadline: deadline_ms.map(|ms| WallDeadline::after(Duration::from_millis(ms))),
-        }
-    }
-
-    /// Whether this watch has anything at all to watch.
-    const fn is_armed(&self) -> bool {
-        self.cancel.is_some() || self.deadline.is_some()
-    }
-
-    /// Poll every source once and resolve a simultaneous fire by the kernel's precedence.
-    fn observe(&self) -> Option<StopCause> {
-        if self
-            .cancel
-            .as_ref()
-            .is_some_and(CancellationFlag::is_cancelled)
-        {
-            return Some(StopCause::Cancelled);
-        }
-        self.deadline.as_ref().and_then(StopSignal::poll)
-    }
-}
-
-impl StopSignal for WasmStopWatch {
-    fn poll(&self) -> Option<StopCause> {
-        if let Some(&cause) = self.latched.get() {
-            return Some(cause);
-        }
-        let cause = self.observe()?;
-        Some(*self.latched.get_or_init(|| cause))
-    }
-}
-
 /// The ceilings one governed call carries, after decoding and before they are engaged.
 ///
 /// `None` in a slot means the caller declined that ceiling — never zero, which is a
@@ -544,39 +488,51 @@ impl GovernorArgs {
         })
     }
 
-    /// The caller's wall-clock budget, for a stop signal that is not a [`WasmStopWatch`]
+    /// The caller's wall-clock budget, for a stop signal that is not a [`HostStopWatch`]
     /// to arm itself from.
     pub(crate) const fn deadline_ms(&self) -> Option<u64> {
         self.deadline_ms
     }
 
-    /// These ceilings over the `METERED` base, with no stop signal attached yet.
+    /// These ceilings as the shared decoder's [`GovernorParts`]: a governed call from this
+    /// package never asks for no ceiling.
+    const fn parts(self) -> GovernorParts {
+        GovernorParts {
+            fuel: self.fuel,
+            max_answers: self.max_answers,
+            max_intermediate_cells: self.max_intermediate_cells,
+            max_scratch_bytes: self.max_scratch_bytes,
+            max_remote_requests: self.max_remote_requests,
+            no_ceiling: false,
+        }
+    }
+
+    /// These ceilings over the `METERED` base, with no stop signal attached yet, through
+    /// [`purrdf_validate::governors::from_parts`].
     ///
-    /// The one construction path for a call's ceilings: [`Self::engage`] attaches the
-    /// synchronous lane's [`WasmStopWatch`] to it, and the asynchronous lane attaches its
-    /// own watch instead. See [`Self::engage`] for why the base is `METERED`.
-    pub(crate) fn ceilings(self) -> QueryGovernors {
-        let mut governors = QueryGovernors::METERED;
-        if let Some(fuel) = self.fuel {
-            governors = governors.with_fuel(fuel);
-        }
-        if let Some(rows) = self.max_answers {
-            governors = governors.with_max_answers(rows);
-        }
-        if let Some(cells) = self.max_intermediate_cells {
-            governors = governors.with_max_intermediate_cells(cells);
-        }
-        if let Some(bytes) = self.max_scratch_bytes {
-            governors = governors.with_max_scratch_bytes(bytes);
-        }
-        if let Some(requests) = self.max_remote_requests {
-            governors = governors.with_max_remote_requests(requests);
-        }
-        governors
+    /// The one construction path for a query's ceilings: the synchronous lane attaches its
+    /// [`HostStopWatch`] to it, and the asynchronous lane attaches its own watch instead.
+    /// See [`Self::stop_watch`] for why the base is `METERED`.
+    ///
+    /// # Errors
+    ///
+    /// The parts' refusal, in [`governor_parts_message`]'s words.
+    pub(crate) fn ceilings(self) -> Result<QueryGovernors, String> {
+        from_parts(&self.parts(), None).map_err(governor_parts_message)
+    }
+
+    /// [`Self::ceilings`] for a governed UPDATE, through
+    /// [`purrdf_validate::governors::from_update_parts`], which refuses `maxAnswers`.
+    ///
+    /// # Errors
+    ///
+    /// [`UPDATE_REFUSES_MAX_ANSWERS`] for an answer cap.
+    pub(crate) fn update_ceilings(self) -> Result<QueryGovernors, String> {
+        from_update_parts(&self.parts(), None).map_err(governor_parts_message)
     }
 
     /// The stop signal a synchronous governed call runs under: the caller's wall deadline
-    /// and cancellation token composed into one [`WasmStopWatch`], or `None` when the
+    /// and cancellation token composed into one [`HostStopWatch`], or `None` when the
     /// caller supplied neither.
     ///
     /// # Why a governed call's base is `METERED` rather than `UNBOUNDED`
@@ -596,10 +552,12 @@ impl GovernorArgs {
         self,
         cancel: Option<&CancellationToken>,
     ) -> Option<Arc<dyn StopSignal>> {
-        let watch = WasmStopWatch::new(self.deadline_ms, cancel);
-        watch
-            .is_armed()
-            .then(|| Arc::new(watch) as Arc<dyn StopSignal>)
+        HostStopWatch::new(
+            cancel.map(|token| token.flag.clone()),
+            self.deadline_ms
+                .map(|ms| WallDeadline::after(Duration::from_millis(ms))),
+        )
+        .into_signal()
     }
 }
 
@@ -608,6 +566,14 @@ impl GovernorArgs {
 pub(crate) const UPDATE_REFUSES_MAX_ANSWERS: &str = "maxAnswers is not accepted by updateGoverned: an UPDATE has no answer \
      sequence to bound. Bound the work that computes the request with fuel, \
      maxIntermediateCells, or maxScratchBytes instead";
+
+/// This package's wording of a [`GovernorPartsError`], in its option spelling.
+fn governor_parts_message(error: GovernorPartsError) -> String {
+    match error {
+        GovernorPartsError::AnswerCapOnUpdate => UPDATE_REFUSES_MAX_ANSWERS.to_owned(),
+        other => other.to_string(),
+    }
+}
 
 /// Decode one ceiling from the JavaScript boundary.
 ///
@@ -1117,6 +1083,7 @@ pub(crate) enum NegotiatedValue {
 /// Convert a [`NegotiatedValue`] into the JS-facing [`NegotiatedOutcome`].
 pub(crate) fn negotiated_outcome_from_value(
     value: NegotiatedValue,
+    blank_scope: BlankScopeMode,
 ) -> Result<NegotiatedOutcome, JsError> {
     match value {
         NegotiatedValue::Complete {
@@ -1139,7 +1106,7 @@ pub(crate) fn negotiated_outcome_from_value(
         }) => Ok(NegotiatedOutcome {
             body: None,
             format: None,
-            partial: Some(partial_answers_from_native(partial)?),
+            partial: Some(partial_answers_from_native(partial, blank_scope)?),
             tripped: Some(TrippedGovernor { inner: tripped }),
             evidence: Some(GovernorEvidence { inner: evidence }),
             complete: false,
@@ -1260,8 +1227,12 @@ impl UpdateOutcome {
 /// after the JavaScript handle that started the job has been freed, and so the
 /// synchronous methods can run on it while a job is suspended.
 #[wasm_bindgen]
+#[derive(Default)]
 pub struct QueryEngine {
     inner: Rc<NativeSparqlEngine>,
+    /// How a blank node's scope crosses to JS in the typed results this engine returns
+    /// (`blankScope`). An asynchronous job takes the mode in force when it begins.
+    blank_scope: Cell<BlankScopeMode>,
 }
 
 impl std::fmt::Debug for QueryEngine {
@@ -1272,12 +1243,40 @@ impl std::fmt::Debug for QueryEngine {
 
 #[wasm_bindgen]
 impl QueryEngine {
+    /// How a blank node's scope crosses to JS in the typed results this engine returns:
+    /// `"keep"` (the default) or `"merge"`.
+    ///
+    /// The engine holds a blank node as a label and a scope, so two nodes that share a
+    /// label in different scopes are two nodes. Under `"keep"` a scoped blank crosses as
+    /// its scope envelope and they stay two nodes in JS; an unscoped blank keeps its bare
+    /// label. Under `"merge"` the scope is dropped and every blank crosses as its bare
+    /// label, so nodes that share a label in different scopes are ONE node in JS. Set it
+    /// before running a query: it applies to `query`, `select`, `queryGoverned` and
+    /// `queryEntailmentGoverned`, and an asynchronous job takes the value in force when
+    /// it begins. The serialized (`queryRaw`) results are unaffected.
+    #[wasm_bindgen(getter = blankScope)]
+    pub fn blank_scope_name(&self) -> String {
+        self.blank_scope.get().name().to_owned()
+    }
+
+    /// Set [`Self::blank_scope_name`]. Throws on any value but `"keep"` or `"merge"`.
+    ///
+    /// # Errors
+    ///
+    /// A value that is neither `"keep"` nor `"merge"`; the mode is left as it was.
+    #[wasm_bindgen(setter = blankScope)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn set_blank_scope(&self, mode: String) -> Result<(), JsValue> {
+        let parsed =
+            BlankScopeMode::parse(&mode).map_err(|message| coded_error(&message, OPTIONS_CODE))?;
+        self.blank_scope.set(parsed);
+        Ok(())
+    }
+
     /// Create a reusable offline SPARQL engine.
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
-        Self {
-            inner: Rc::new(NativeSparqlEngine::new()),
-        }
+        Self::default()
     }
 
     /// Run any SPARQL query and return a typed raw wasm result wrapper.
@@ -1290,7 +1289,7 @@ impl QueryEngine {
         base: Option<String>,
     ) -> Result<QueryResult, JsValue> {
         let result = self.run_query(dataset, sparql, base.as_deref())?;
-        Ok(query_result_from_sparql(result)?)
+        Ok(query_result_from_sparql(result, self.blank_scope())?)
     }
 
     /// Run a SELECT query and return typed rows.
@@ -1303,7 +1302,7 @@ impl QueryEngine {
         base: Option<String>,
     ) -> Result<SelectResult, JsValue> {
         let result = self.run_query(dataset, sparql, base.as_deref())?;
-        Ok(select_result_from_sparql(result)?)
+        Ok(select_result_from_sparql(result, self.blank_scope())?)
     }
 
     /// Run an ASK query and return the boolean result.
@@ -1450,10 +1449,10 @@ impl QueryEngine {
     ///
     /// **A tripped governor is an outcome, not a thrown error** — see the module header.
     ///
-    /// `aggregate_namespace` registers purrdf's first-party statistical aggregate set
+    /// `aggregate_namespace` registers PurRDF's first-party statistical aggregate set
     /// (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
     /// `FIRST`, `LAST`, `TOPK`) under that IRI namespace, so the query text can call
-    /// `AGG(<{NAMESPACE}NAME>, args…)` (see `build_aggregates`). `None` (the default)
+    /// `AGG(<{NAMESPACE}NAME>, args…)` (see `purrdf_validate::query::statistical_aggregates`). `None` (the default)
     /// leaves every one of the ten names an ordinary unregistered custom-aggregate IRI.
     ///
     /// # Errors
@@ -1498,7 +1497,9 @@ impl QueryEngine {
         input.aggregate_namespace = aggregate_namespace;
         input.ceilings = args;
         match input.run_offline(args.stop_watch(cancel.as_ref()))? {
-            JobOutcome::Governed(outcome) => Ok(query_outcome_from_governed(*outcome)?),
+            JobOutcome::Governed(outcome) => {
+                Ok(query_outcome_from_governed(*outcome, self.blank_scope())?)
+            }
             other => Err(unexpected_outcome("queryGoverned", &other)),
         }
     }
@@ -1507,7 +1508,7 @@ impl QueryEngine {
     /// closure report and query outcome together.
     ///
     /// `aggregate_namespace` behaves exactly as on [`Self::query_governed`]: it registers
-    /// purrdf's first-party statistical aggregate set under that IRI namespace for the
+    /// PurRDF's first-party statistical aggregate set under that IRI namespace for the
     /// closure query's PARSE and its evaluation, so `AGG(<{NAMESPACE}NAME>, args…)` reaches
     /// the entailment-aware lane exactly as it reaches the ordinary one. `undefined` (the
     /// default) leaves every one of the ten names an ordinary unregistered custom-aggregate
@@ -1587,7 +1588,10 @@ impl QueryEngine {
         input.aggregate_namespace = aggregate_namespace;
         input.ceilings = args;
         match input.run_offline(args.stop_watch(cancel.as_ref()))? {
-            JobOutcome::Entailment(outcome) => Ok(entailment_query_outcome_from_native(*outcome)?),
+            JobOutcome::Entailment(outcome) => Ok(entailment_query_outcome_from_native(
+                *outcome,
+                self.blank_scope(),
+            )?),
             other => Err(unexpected_outcome("queryEntailmentGoverned", &other)),
         }
     }
@@ -1635,17 +1639,16 @@ impl QueryEngine {
         max_remote_requests: Option<i64>,
         cancel: Option<CancellationToken>,
     ) -> Result<UpdateOutcome, JsValue> {
-        if max_answers.is_some() {
-            return Err(coded_error(UPDATE_REFUSES_MAX_ANSWERS, OPTIONS_CODE));
-        }
         let args = decode_governor_args(
             fuel,
             deadline_ms,
-            None,
+            max_answers,
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
         )?;
+        args.update_ceilings()
+            .map_err(|message| coded_error(&message, OPTIONS_CODE))?;
         let mut input = self.input(
             dataset,
             AsyncOperationKind::UpdateGoverned,
@@ -1723,13 +1726,12 @@ impl QueryEngine {
     }
 }
 
-impl Default for QueryEngine {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl QueryEngine {
+    /// The blank-scope mode a typed result of this engine is converted under.
+    pub(crate) fn blank_scope(&self) -> BlankScopeMode {
+        self.blank_scope.get()
+    }
+
     /// The shared engine, for an asynchronous job to hold for its own lifetime.
     pub(crate) const fn engine(&self) -> &Rc<NativeSparqlEngine> {
         &self.inner
@@ -1852,19 +1854,6 @@ pub(crate) fn sparql_request<'a>(sparql: &'a str, base: Option<&'a str>) -> Spar
     }
 }
 
-/// Build the statistical-aggregate registry `aggregateNamespace` requests, or `None`
-/// when the JS caller supplied none.
-///
-/// This is the ENTIRE wasm surface for purrdf's first-party statistical aggregate set
-/// (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
-/// `FIRST`, `LAST`, `TOPK` — see `purrdf_sparql_eval::stat_agg`):
-/// `AggregateRegistry::register_statistical_aggregates` takes only an IRI namespace
-/// string, so it crosses the wasm boundary with no callback and no per-aggregate
-/// marshaling. The GENERAL custom-aggregate seam
-/// (`purrdf_sparql_eval::agg_fn::AggregateRegistry::register`, an arbitrary
-/// `init`/`step`/`combine`/`finish` closure) is Rust-host-only and has no string-shaped
-/// surface at all — it cannot cross into JavaScript — and this crate does not attempt to
-/// expose it.
 /// The extension environment a query carrying `aggregates` is interpreted in.
 ///
 /// One value rather than a loose registry, because whether a predicate IRI in a
@@ -1885,20 +1874,20 @@ pub(crate) fn aggregate_env_message(
     .map_err(|e| format!("extension environment: {e}"))
 }
 
-pub(crate) fn build_aggregates(namespace: Option<String>) -> Option<AggregateRegistry> {
-    let namespace = namespace?;
-    let mut registry = AggregateRegistry::new();
-    registry.register_statistical_aggregates(&namespace);
-    Some(registry)
-}
-
-pub(crate) fn query_result_from_sparql(result: SparqlResult) -> Result<QueryResult, JsError> {
+pub(crate) fn query_result_from_sparql(
+    result: SparqlResult,
+    blank_scope: BlankScopeMode,
+) -> Result<QueryResult, JsError> {
     Ok(match result {
         SparqlResult::Solutions {
             variables, rows, ..
         } => QueryResult {
             kind: QueryResultKind::Select,
-            value: Some(QueryResultValue::Select(select_result(variables, rows)?)),
+            value: Some(QueryResultValue::Select(select_result(
+                variables,
+                rows,
+                blank_scope,
+            )?)),
         },
         SparqlResult::Boolean(value) => QueryResult {
             kind: QueryResultKind::Ask,
@@ -1913,11 +1902,14 @@ pub(crate) fn query_result_from_sparql(result: SparqlResult) -> Result<QueryResu
     })
 }
 
-fn select_result_from_sparql(result: SparqlResult) -> Result<SelectResult, JsError> {
+fn select_result_from_sparql(
+    result: SparqlResult,
+    blank_scope: BlankScopeMode,
+) -> Result<SelectResult, JsError> {
     match result {
         SparqlResult::Solutions {
             variables, rows, ..
-        } => select_result(variables, rows),
+        } => select_result(variables, rows, blank_scope),
         other => Err(kind_mismatch("SELECT solutions", &other)),
     }
 }
@@ -1935,12 +1927,13 @@ fn graph_result_from_sparql(result: SparqlResult) -> Result<Dataset, JsError> {
 /// `Result` is the whole point of the type.
 pub(crate) fn query_outcome_from_governed(
     outcome: GovernedOutcome,
+    blank_scope: BlankScopeMode,
 ) -> Result<QueryOutcome, JsError> {
     match outcome {
         GovernedOutcome::Complete {
             result, evidence, ..
         } => Ok(QueryOutcome {
-            result: Some(query_result_from_sparql(result)?),
+            result: Some(query_result_from_sparql(result, blank_scope)?),
             partial: None,
             tripped: None,
             evidence: Some(GovernorEvidence { inner: evidence }),
@@ -1953,7 +1946,7 @@ pub(crate) fn query_outcome_from_governed(
             ..
         }) => Ok(QueryOutcome {
             result: None,
-            partial: Some(partial_answers_from_native(partial)?),
+            partial: Some(partial_answers_from_native(partial, blank_scope)?),
             tripped: Some(TrippedGovernor { inner: tripped }),
             evidence: Some(GovernorEvidence { inner: evidence }),
             complete: false,
@@ -1963,13 +1956,14 @@ pub(crate) fn query_outcome_from_governed(
 
 pub(crate) fn entailment_query_outcome_from_native(
     outcome: GovernedEntailment,
+    blank_scope: BlankScopeMode,
 ) -> Result<EntailmentQueryOutcome, JsError> {
     match outcome {
         GovernedEntailment::Answered { outcome, report } => {
             let tripped = outcome.tripped().map(|inner| TrippedGovernor { inner });
             Ok(EntailmentQueryOutcome {
                 complete: tripped.is_none(),
-                outcome: Some(query_outcome_from_governed(outcome)?),
+                outcome: Some(query_outcome_from_governed(outcome, blank_scope)?),
                 report: Some(purrdf_validate::render_reasoning_report(&report)),
                 tripped,
                 closure_stopped: false,
@@ -1998,7 +1992,10 @@ pub(crate) fn update_outcome_from_governed(outcome: &GovernedUpdateOutcome) -> U
 }
 
 /// Convert the evaluator's certificate into the JS-facing [`PartialAnswers`] object.
-fn partial_answers_from_native(partial: PartialValue) -> Result<PartialAnswers, JsError> {
+fn partial_answers_from_native(
+    partial: PartialValue,
+    blank_scope: BlankScopeMode,
+) -> Result<PartialAnswers, JsError> {
     let certainty = match partial {
         PartialValue::Certain(_) => "certain",
         PartialValue::AtMost(_) => "at-most",
@@ -2011,7 +2008,7 @@ fn partial_answers_from_native(partial: PartialValue) -> Result<PartialAnswers, 
         Some(rows) => {
             let positional_prefix = rows.is_positional_prefix();
             (
-                Some(query_result_from_sparql(rows.into_result())?),
+                Some(query_result_from_sparql(rows.into_result(), blank_scope)?),
                 Some(positional_prefix),
             )
         }
@@ -2028,11 +2025,12 @@ fn partial_answers_from_native(partial: PartialValue) -> Result<PartialAnswers, 
 fn select_result(
     variables: Vec<String>,
     rows: Vec<Vec<Option<purrdf::TermValue>>>,
+    blank_scope: BlankScopeMode,
 ) -> Result<SelectResult, JsError> {
     let variables: Rc<[String]> = Rc::from(variables.into_boxed_slice());
     let rows: Vec<Option<SelectRow>> = rows
         .into_iter()
-        .map(|row| select_row(Rc::clone(&variables), row).map(Some))
+        .map(|row| select_row(Rc::clone(&variables), row, blank_scope).map(Some))
         .collect::<Result<Vec<_>, _>>()?;
     let remaining = rows.len();
     Ok(SelectResult {
@@ -2046,12 +2044,13 @@ fn select_result(
 fn select_row(
     variables: Rc<[String]>,
     row: Vec<Option<purrdf::TermValue>>,
+    blank_scope: BlankScopeMode,
 ) -> Result<SelectRow, JsError> {
     let values = row
         .into_iter()
         .map(|value| {
             value
-                .map(term_from_value)
+                .map(|value| term_from_value(value, blank_scope))
                 .transpose()
                 .map_err(|e| JsError::new(&e))
         })
@@ -2059,8 +2058,8 @@ fn select_row(
     Ok(SelectRow { variables, values })
 }
 
-fn term_from_value(value: purrdf::TermValue) -> Result<Term, String> {
-    let term = term_value_into_rdf_term(value)?;
+fn term_from_value(value: purrdf::TermValue, blank_scope: BlankScopeMode) -> Result<Term, String> {
+    let term = term_value_into_rdf_term(value, blank_scope)?;
     Ok(Term::from_canonical_rdf_term(term))
 }
 
@@ -2085,29 +2084,6 @@ pub(crate) fn build_provenance_namespace(
     }
 }
 
-/// Build the [`ResultProvenance`] a tabular emission carries: empty when no namespace
-/// was supplied (pure-W3C output), or populated with a content hash of the query text
-/// plus this engine's label when one was. Mirrors the CLI's and C ABI's
-/// `build_query_provenance`. `solutions` stays empty: per-solution source provenance is
-/// the evaluator/S11 derivation graph's progressive fill, not something this binding can
-/// populate on its own.
-fn build_query_provenance(
-    namespace: Option<&purrdf_sparql_results::ProvenanceNamespace>,
-    query: &str,
-) -> ResultProvenance {
-    use sha2::{Digest as _, Sha256};
-
-    if namespace.is_none() {
-        return ResultProvenance::default();
-    }
-    let digest = Sha256::digest(query.as_bytes());
-    ResultProvenance {
-        query_hash: Some(format!("sha256:{}", purrdf_hash::hex::Lower(&digest))),
-        engine: Some("purrdf-sparql-eval".to_owned()),
-        solutions: Vec::new(),
-    }
-}
-
 /// Serialize a query result to text in `format`, or the kind's default when `None`.
 ///
 /// Returns a plain `String` error so the asynchronous lane can record it on a job and
@@ -2125,26 +2101,16 @@ pub(crate) fn serialize_query_result(
         SparqlResult::Solutions { .. } | SparqlResult::Boolean(_) => {
             let results_format = match format {
                 None => SparqlResultsFormat::Json,
-                Some(format) => resolve_results_format(format)?,
+                Some(format) => SparqlResultsFormat::from_name(format).ok_or_else(|| {
+                    format!(
+                        "unsupported SPARQL results format {:?} \
+                         (use json/xml/csv/tsv or graph formats for CONSTRUCT/DESCRIBE)",
+                        format.trim()
+                    )
+                })?,
             };
             serialize_tabular_result(result, results_format, provenance_namespace, query)
         }
-    }
-}
-
-fn resolve_results_format(format: &str) -> Result<SparqlResultsFormat, String> {
-    let normalized = format.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "json" | "srj" | "sparql-json" | "application/sparql-results+json" => {
-            Ok(SparqlResultsFormat::Json)
-        }
-        "xml" | "sparql-xml" | "application/sparql-results+xml" => Ok(SparqlResultsFormat::Xml),
-        "csv" | "text/csv" => Ok(SparqlResultsFormat::Csv),
-        "tsv" | "text/tab-separated-values" => Ok(SparqlResultsFormat::Tsv),
-        other => Err(format!(
-            "unsupported SPARQL results format {other:?} \
-             (use json/xml/csv/tsv or graph formats for CONSTRUCT/DESCRIBE)"
-        )),
     }
 }
 
@@ -2154,7 +2120,7 @@ fn serialize_tabular_result(
     provenance_namespace: Option<&purrdf_sparql_results::ProvenanceNamespace>,
     query: &str,
 ) -> Result<String, String> {
-    let provenance = build_query_provenance(provenance_namespace, query);
+    let provenance = purrdf_validate::query::provenance(provenance_namespace, query);
     let outcome = serialize_results(result, format, &provenance, provenance_namespace)
         .map_err(|e| e.to_string())?;
     String::from_utf8(outcome.bytes).map_err(|e| format!("SPARQL result is not valid UTF-8: {e}"))
@@ -2293,7 +2259,8 @@ mod tests {
             vec![Some(purrdf::TermValue::Iri("https://e/a".to_owned()))],
             vec![Some(purrdf::TermValue::Iri("https://e/b".to_owned()))],
         ];
-        let mut result = select_result(vec!["value".to_owned()], rows).expect("select result");
+        let mut result = select_result(vec!["value".to_owned()], rows, BlankScopeMode::Keep)
+            .expect("select result");
 
         assert_eq!(result.row_count(), 2);
         assert_eq!(result.remaining(), 2);
@@ -2311,6 +2278,84 @@ mod tests {
         assert!(Rc::ptr_eq(&result.variables, &first.variables));
         assert_eq!(result.remaining(), 0);
         assert!(result.next_row().is_none());
+    }
+
+    /// Two blank nodes that share the label `b` in different scopes: the engine's
+    /// values, as one row of a SELECT.
+    fn scoped_blank_row() -> Vec<Vec<Option<purrdf::TermValue>>> {
+        let blank = |scope| purrdf::TermValue::Blank {
+            label: "b".to_owned(),
+            scope: purrdf::BlankScope(scope),
+        };
+        vec![vec![Some(blank(1)), Some(blank(2)), Some(blank(0))]]
+    }
+
+    #[test]
+    fn blank_scope_keep_leaves_two_scoped_blanks_two_nodes_in_a_select_row() {
+        let mut result = select_result(
+            vec!["x".to_owned(), "y".to_owned(), "z".to_owned()],
+            scoped_blank_row(),
+            BlankScopeMode::Keep,
+        )
+        .expect("select result");
+        let row = result.take_row(0).expect("the row");
+        let (x, y, z) = (
+            row.get("x").expect("x"),
+            row.get("y").expect("y"),
+            row.get("z").expect("z"),
+        );
+        assert_ne!(x.value(), y.value(), "two scopes collapsed under keep");
+        assert!(!x.equals(&y));
+        // The unscoped blank keeps its bare label, distinct from both scoped ones.
+        assert_eq!(z.value(), "b");
+        assert_ne!(x.value(), z.value());
+    }
+
+    #[test]
+    fn blank_scope_merge_makes_them_one_node_and_a_neighbour_is_unchanged() {
+        let mut result = select_result(
+            vec!["x".to_owned(), "y".to_owned(), "z".to_owned()],
+            scoped_blank_row(),
+            BlankScopeMode::Merge,
+        )
+        .expect("select result");
+        let row = result.take_row(0).expect("the row");
+        let (x, y, z) = (
+            row.get("x").expect("x"),
+            row.get("y").expect("y"),
+            row.get("z").expect("z"),
+        );
+        assert_eq!(x.value(), "b");
+        assert!(x.equals(&y), "merge keeps the scopes apart");
+        assert!(x.equals(&z));
+        // A term that is not a blank node is unchanged by the mode.
+        let iri = select_result(
+            vec!["s".to_owned()],
+            vec![vec![Some(purrdf::TermValue::iri("https://e/s"))]],
+            BlankScopeMode::Merge,
+        )
+        .expect("select result")
+        .take_row(0)
+        .expect("the row")
+        .get("s")
+        .expect("s");
+        assert_eq!(iri.value(), "https://e/s");
+    }
+
+    #[test]
+    fn an_engine_holds_keep_until_told_otherwise() {
+        let engine = QueryEngine::new();
+        assert_eq!(engine.blank_scope(), BlankScopeMode::Keep);
+        assert_eq!(engine.blank_scope_name(), "keep");
+        engine
+            .set_blank_scope("merge".to_owned())
+            .expect("merge is a mode");
+        assert_eq!(engine.blank_scope(), BlankScopeMode::Merge);
+        assert_eq!(engine.blank_scope_name(), "merge");
+        engine
+            .set_blank_scope("keep".to_owned())
+            .expect("keep is a mode");
+        assert_eq!(engine.blank_scope(), BlankScopeMode::Keep);
     }
 
     /// A quad-template `CONSTRUCT` hands JS the graph names, and they survive

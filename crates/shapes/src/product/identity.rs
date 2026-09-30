@@ -231,6 +231,7 @@ use ::purrdf::PackDigest;
 use purrdf_core::ContentDigest;
 use purrdf_core::artifact::identity::{Identity, IdentityMismatch};
 use purrdf_core::ir::pack::bits::write_varint;
+use purrdf_hash::Domain;
 use purrdf_sparql_algebra::ParserOptions;
 use purrdf_sparql_eval::user_fn::FnPopulation;
 use purrdf_sparql_eval::{
@@ -535,7 +536,7 @@ fn encode_included_graphs(iris: &[String]) -> Vec<u8> {
 
 /// The domain separator the class-catalog digest opens with, so its preimage can
 /// never coincide with another content fingerprint's.
-const CLASS_CATALOG_DOMAIN: &str = "purrdf-shapes/product/class-catalog";
+const CLASS_CATALOG_DOMAIN: Domain = Domain::new(b"purrdf-shapes/product/class-catalog");
 
 /// A content digest over `catalog`'s key-sorted entries: every planned class IRI and
 /// the position it was assigned.
@@ -1072,8 +1073,6 @@ mod tests {
 
     use purrdf_core::artifact::identity::{Identity, IdentityComponent};
 
-    use std::fmt::Write as _;
-
     use super::{COMPONENTS, PROFILE_ID, build_identity, check_identity, class_catalog_digest};
     use crate::engine::{PreparedShapes, parse_shapes};
     use crate::model::BoxRoleVocab;
@@ -1282,7 +1281,7 @@ mod tests {
     /// A registry carrying one expression-bodied function — the DECLARED population,
     /// which a restore rebuilds by re-parsing the shapes graph.
     fn declared_functions() -> UserFunctionRegistry {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_expr(EX_FN, Arity::Exact(1), Arc::new(|_call| Ok(None)));
         registry
     }
@@ -1290,7 +1289,7 @@ mod tests {
     /// A registry carrying one native function — the INJECTED population, which only
     /// a host can wire.
     fn injected_functions() -> UserFunctionRegistry {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_native(
             EX_FN,
             Arity::Exact(1),
@@ -1350,7 +1349,7 @@ mod tests {
 
     /// A FRESH registry instance carrying [`NullAggregate`] under [`EX_AGG`].
     fn aggregate_registry() -> AggregateRegistry {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register(EX_AGG, Arc::new(NullAggregate));
         registry
     }
@@ -1948,14 +1947,7 @@ mod tests {
     #[test]
     fn class_catalog_digest_matches_committed_constant() {
         let digest = class_catalog_digest(&catalog_of(&shapes_of(PLAIN_SHAPES)));
-        let hex: String =
-            digest
-                .as_bytes()
-                .iter()
-                .fold(String::with_capacity(64), |mut out, byte| {
-                    let _ = write!(out, "{byte:02x}");
-                    out
-                });
+        let hex = purrdf_hash::hex::encode(digest.as_bytes());
         assert_eq!(
             hex, PLAIN_SHAPES_CLASS_CATALOG_DIGEST,
             "the class-catalog digest moved, so the class walk now reaches a different set of \

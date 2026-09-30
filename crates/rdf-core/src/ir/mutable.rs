@@ -44,10 +44,10 @@ use std::sync::Arc;
 
 use purrdf_iri::IriError;
 
+use crate::backend::TermFactory as _;
 use crate::dataset_view::{DatasetMut, GraphMatch, GraphMatchValue};
 use crate::hash::{FastMap, FastSet};
 use crate::ir::{RdfDataset, RdfDatasetBuilder, TermValue};
-use crate::model::RdfLiteral;
 
 use super::dataset::{QuadHandle, TermRef};
 use super::term::TermId;
@@ -61,7 +61,7 @@ pub use delta_view::{DeltaDatasetView, DeltaViewId};
 /// value/id they already hold). A delta-added row shaped `_ rdf:reifies <<( … )>>`
 /// is the RDF 1.2 reifier declaration `freeze` folds out of the flat quad delta (see
 /// [`MutableDataset::freeze`]).
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// A dense index into a [`MutableDataset`]'s OWN delta term interner. Newtype (not a
 /// bare `u32`) so it can never be confused with a base [`TermId`]; only ever wrapped
@@ -109,23 +109,15 @@ pub(crate) struct QuadKey {
 struct DeltaBuilder {
     /// The sole owner of each delta term value, in mint order.
     values: Vec<TermValue>,
-    /// Reverse hash→id index, mirroring the base's `value_index` in `dataset.rs`:
-    /// keyed by a canonical hash of the term VALUE with `Vec<DeltaTermId>` collision
-    /// buckets, so interning and lookup are O(1) expected instead of a linear scan.
-    /// The hash is in-memory only (never persisted), so a fixed-seed `DefaultHasher`
-    /// is fine and matches the `dataset.rs` precedent.
-    index: std::collections::HashMap<u64, Vec<DeltaTermId>>,
+    /// Reverse hash→id index: keyed by a hash of the term VALUE with
+    /// `Vec<DeltaTermId>` collision buckets, so interning and lookup are O(1) expected
+    /// instead of a linear scan. The hash only chooses a bucket and is never
+    /// persisted; equal values always meet in one bucket and are then compared by
+    /// `==`, so the hasher's choice affects speed, never results.
+    index: FastMap<u64, Vec<DeltaTermId>>,
 }
 
 impl DeltaBuilder {
-    /// Canonical hash of a [`TermValue`], matching the base's `value_index` keying.
-    fn hash_of(value: &TermValue) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        value.hash(&mut hasher);
-        hasher.finish()
-    }
-
     /// Intern a delta term BY VALUE, returning its [`DeltaTermId`]. Idempotent: equal
     /// values dedup to one id (probe the hash bucket, compare candidates by `==`).
     ///
@@ -141,7 +133,7 @@ impl DeltaBuilder {
     /// [`IriError`] when the value carries a non-absolute IRI — its own, a literal's
     /// datatype, or one nested in a triple term.
     fn intern(&mut self, value: TermValue) -> Result<DeltaTermId, IriError> {
-        let h = Self::hash_of(&value);
+        let h = crate::hash::hash_of(&value);
         // Probe read-only (as `find` does): a hash miss must not mint an empty
         // bucket — least of all for a value that then fails the check below.
         if let Some(bucket) = self.index.get(&h) {
@@ -164,7 +156,7 @@ impl DeltaBuilder {
 
     /// Find an already-interned [`TermValue`] WITHOUT minting; `None` if absent.
     fn find(&self, value: &TermValue) -> Option<DeltaTermId> {
-        let bucket = self.index.get(&Self::hash_of(value))?;
+        let bucket = self.index.get(&crate::hash::hash_of(value))?;
         bucket
             .iter()
             .copied()
@@ -396,7 +388,7 @@ impl MutableDataset {
         }
         // Hash-indexed delta lookup (O(1) expected) — no linear scan, no per-term
         // value rebuild: the delta stores `TermValue`s by value and indexes them by
-        // their canonical hash, just like the base's `value_index`.
+        // their hash, as the base's store-once table indexes its terms.
         self.delta.find(value).map(MutTermId::Delta)
     }
 
@@ -717,22 +709,22 @@ impl MutableDataset {
             let TermValue::Triple { s, p, o } = &q.o else {
                 unreachable!("is_decl implies a triple-term object");
             };
-            let reifier = intern_value(builder, &q.s);
-            let s = intern_value(builder, s);
-            let p = intern_value(builder, p);
-            let o = intern_value(builder, o);
+            let reifier = builder.intern_value(&q.s);
+            let s = builder.intern_value(s);
+            let p = builder.intern_value(p);
+            let o = builder.intern_value(o);
             let triple = builder.intern_triple(s, p, o);
-            let g = q.g.as_ref().map(|g| intern_value(builder, g));
+            let g = q.g.as_ref().map(|g| builder.intern_value(g));
             builder.push_reifier_in_graph(reifier, triple, g);
         }
         for (q, &is_decl) in added_values.iter().zip(&reifier_decl) {
             if is_decl {
                 continue;
             }
-            let s = intern_value(builder, &q.s);
-            let p = intern_value(builder, &q.p);
-            let o = intern_value(builder, &q.o);
-            let g = q.g.as_ref().map(|g| intern_value(builder, g));
+            let s = builder.intern_value(&q.s);
+            let p = builder.intern_value(&q.p);
+            let o = builder.intern_value(&q.o);
+            let g = q.g.as_ref().map(|g| builder.intern_value(g));
             // A quad whose subject is a reifier is that reifier's annotation, in its
             // own graph — mirroring `fold_statement_layer`'s pass 2 so an UPDATE freeze
             // and a parse of the same statement agree.
@@ -796,48 +788,6 @@ fn check_value_absolute(value: &TermValue) -> Result<(), IriError> {
     }
 }
 
-/// Re-intern a dataset-independent [`TermValue`] into a fresh builder, triple terms
-/// included, and return the builder's dense [`TermId`]. The single remap primitive
-/// `freeze` drives every table through.
-///
-/// A triple term is interned over [`try_fold_nested`]'s work list: its subject,
-/// predicate and object, each fully before the next, then the triple itself.
-fn intern_value(builder: &mut RdfDatasetBuilder, value: &TermValue) -> TermId {
-    let interned = try_fold_nested(
-        value,
-        builder,
-        |builder, value| {
-            Ok::<_, Infallible>(Nested::Leaf(match value {
-                TermValue::Iri(iri) => builder.intern_iri(iri),
-                TermValue::Blank { label, scope } => builder.intern_blank(label, *scope),
-                TermValue::Literal {
-                    lexical_form,
-                    datatype,
-                    language,
-                    direction,
-                } => {
-                    // Rebuild the owned literal. The C0.1 policy was already applied
-                    // when the value was produced (datatype expanded, language
-                    // lowercased), and the builder re-applies it idempotently, so
-                    // this round-trips to the same id.
-                    let lit = RdfLiteral {
-                        lexical_form: lexical_form.clone(),
-                        datatype: Some(datatype.clone()),
-                        language: language.clone(),
-                        direction: *direction,
-                    };
-                    builder.intern_literal(lit)
-                }
-                TermValue::Triple { s, p, o } => return Ok(Nested::Triple(&**s, &**p, &**o)),
-            }))
-        },
-        |builder, _, s, p, o| Ok(builder.intern_triple(s, p, o)),
-    );
-    match interned {
-        Ok(id) => id,
-    }
-}
-
 /// An owned, dataset-independent quad value — the argument type of
 /// [`DatasetMut::insert`]/[`remove`](DatasetMut::remove)/[`contains`](DatasetMut::contains).
 ///
@@ -860,6 +810,24 @@ pub struct QuadValues {
 }
 
 impl QuadValues {
+    /// Every row of `dataset`'s RDF surface — the plain quads and BOTH statement
+    /// tables (reifier and annotation rows) — as owned value-quads, in table order:
+    /// what a copy of the dataset through [`DatasetMut`] is seeded with.
+    #[must_use]
+    pub fn surface_of(dataset: &RdfDataset) -> Vec<Self> {
+        dataset
+            .quads()
+            .chain(dataset.reifier_quads())
+            .chain(dataset.annotation_quads())
+            .map(|quad| Self {
+                s: dataset.term_value(quad.s),
+                p: dataset.term_value(quad.p),
+                o: dataset.term_value(quad.o),
+                g: quad.g.map(|graph| dataset.term_value(graph)),
+            })
+            .collect()
+    }
+
     /// A convenience constructor for a default-graph quad.
     #[must_use]
     pub fn triple(s: TermValue, p: TermValue, o: TermValue) -> Self {
@@ -958,11 +926,11 @@ impl DatasetMut for MutableDataset {
         // graph are expressible. A `Named` value interned nowhere — in neither base
         // nor delta — names no graph at all, so the whole pattern yields empty
         // (mirroring a bound `s`/`p`/`o` miss above).
-        let gb: GraphMatchMut = match g {
-            GraphMatchValue::Any => GraphMatchMut::Any,
-            GraphMatchValue::Default => GraphMatchMut::Default,
+        let gb: GraphMatch<MutTermId> = match g {
+            GraphMatchValue::Any => GraphMatch::Any,
+            GraphMatchValue::Default => GraphMatch::Default,
             GraphMatchValue::Named(value) => match self.find_value(value) {
-                Some(id) => GraphMatchMut::Named(id),
+                Some(id) => GraphMatch::Named(id),
                 None => return Vec::new(),
             },
         };
@@ -976,26 +944,6 @@ impl DatasetMut for MutableDataset {
             })
             .map(|k| self.quad_values_of(&k))
             .collect()
-    }
-}
-
-/// The [`GraphMatch`] equivalent in [`MutTermId`] space (the mutable view's named
-/// graph can be a base OR delta id).
-#[derive(Clone, Copy)]
-enum GraphMatchMut {
-    Any,
-    Default,
-    Named(MutTermId),
-}
-
-impl GraphMatchMut {
-    #[inline]
-    fn matches(self, g: Option<MutTermId>) -> bool {
-        match self {
-            Self::Any => true,
-            Self::Default => g.is_none(),
-            Self::Named(id) => g == Some(id),
-        }
     }
 }
 
@@ -1057,6 +1005,7 @@ const _: fn() = || {
 mod tests {
     use super::*;
     use crate::ir::RdfDatasetBuilder;
+    use crate::model::RdfLiteral;
     use purrdf_testkit::prop::prelude::*;
     use std::collections::HashSet;
 
@@ -1399,7 +1348,7 @@ mod tests {
     /// Regression pin for the process-nondeterministic scan order defect: `freeze()`
     /// must replay delta-added quads in CALL order, never `added`'s hash-iteration
     /// order — because a bare `std::collections::HashSet<QuadKey>` (the pre-fix
-    /// `added`/`suppressed` type) draws a fresh, process-random `RandomState` key
+    /// `added`/`suppressed` type) draws a fresh, process-random hasher key
     /// EVERY time `HashSet::new()` runs (a per-call counter seeded once per thread
     /// from OS randomness), so two `MutableDataset`s built from the identical
     /// insertion sequence — even in the SAME process — could iterate `added` in
@@ -1668,9 +1617,9 @@ mod term_walk_tests {
 
     use purrdf_iri::IriError;
 
-    use super::{MutableDataset, check_value_absolute, intern_value};
+    use super::{MutableDataset, check_value_absolute};
     use crate::backend::TermFactory as _;
-    use crate::test_terms::TermShape;
+    use crate::term_fixture::TermShape;
     use crate::{RdfDataset, RdfDatasetBuilder, TermBox, TermId, TermRef, TermValue};
 
     fn reference_base(base: &RdfDataset, id: TermId) -> TermValue {
@@ -1703,7 +1652,7 @@ mod term_walk_tests {
                 let o = reference_intern(builder, o);
                 builder.intern_triple(s, p, o)
             }
-            leaf => intern_value(builder, leaf),
+            leaf => builder.intern_value(leaf),
         }
     }
 
@@ -1731,8 +1680,12 @@ mod term_walk_tests {
         for seed in 0..300_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value =
-                crate::test_terms::term_value(&mut state, &mut budget, TermShape::WellFormed);
+            let value = crate::term_fixture::term_value(
+                &mut state,
+                purrdf_testkit::rng::splitmix64_next,
+                &mut budget,
+                TermShape::WellFormed,
+            );
             let mut builder = RdfDatasetBuilder::new();
             let object = builder.intern_value(&value);
             let holder = builder.intern_iri("http://example.org/holder");
@@ -1755,7 +1708,7 @@ mod term_walk_tests {
             }
             let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
             assert_eq!(
-                intern_value(&mut found, &value),
+                found.intern_value(&value),
                 reference_intern(&mut expected, &value),
                 "seed {seed}"
             );
@@ -1774,25 +1727,21 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_checked_and_interned_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = crate::test_terms::triple_chain(LEVELS);
-                assert!(check_value_absolute(&value).is_ok());
-                let mut builder = RdfDatasetBuilder::new();
-                assert_eq!(intern_value(&mut builder, &value).index(), LEVELS + 2);
-                let mut relative = TermValue::iri("o");
-                for _ in 0..LEVELS {
-                    relative = TermValue::Triple {
-                        s: TermBox::new(TermValue::iri("http://example.org/s")),
-                        p: TermBox::new(TermValue::iri("http://example.org/p")),
-                        o: TermBox::new(relative),
-                    };
-                }
-                assert!(check_value_absolute(&relative).is_err());
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no walk overflowed the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = crate::term_fixture::triple_chain(LEVELS);
+            assert!(check_value_absolute(&value).is_ok());
+            let mut builder = RdfDatasetBuilder::new();
+            assert_eq!(builder.intern_value(&value).index(), LEVELS + 2);
+            let mut relative = TermValue::iri("o");
+            for _ in 0..LEVELS {
+                relative = TermValue::Triple {
+                    s: TermBox::new(TermValue::iri("http://example.org/s")),
+                    p: TermBox::new(TermValue::iri("http://example.org/p")),
+                    o: TermBox::new(relative),
+                };
+            }
+            assert!(check_value_absolute(&relative).is_err());
+        })
+        .expect("the thread starts");
     }
 }

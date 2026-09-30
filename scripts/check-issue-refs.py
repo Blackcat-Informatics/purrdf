@@ -278,7 +278,9 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 
-ISSUE_PATTERN = r"#\d{1,5}(?![\dA-Fa-f-])(?!\.\d)"
+# ``&#NN;`` is an XML/HTML numeric character reference, never a tracker shorthand,
+# and so is one behind an escaped ampersand (``&#38;#NN;``, ``&amp;#NN;``).
+ISSUE_PATTERN = r"(?<!&)(?<!&#38;)(?<!&amp;)#\d{1,5}(?![\dA-Fa-f-])(?!\.\d)"
 
 # A tracker reference spelled as a URL. ``#NNN`` is the SHORTHAND for this, and a
 # lint that saw only the shorthand had a hole exactly one paste wide: a doc
@@ -450,7 +452,6 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
         ("crates/gts/src/compact.rs", "Task 6"),
         ("crates/gts/tests/compaction_signatures.rs", "Task 4"),
         ("crates/rdf-core/benches/ir_layout.rs", "Task 7"),
-        ("crates/rdf-core/src/diagnostic.rs", "Task 12"),
         ("crates/rdf-core/src/ir/global.rs", "Task 4"),
         ("crates/rdf-core/src/sssom.rs", "Task 7"),
         ("crates/rdf-core/tests/paged_backend.rs", "(F1)"),
@@ -459,7 +460,6 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
         ("crates/rdf/src/gts.rs", "Task 4"),
         ("crates/rdf/src/gts_certify.rs", "Task 5"),
         ("crates/rdf/src/native_codecs/mod.rs", "EPIC"),
-        ("crates/rdf/src/native_codecs/mod.rs", "Task 1"),
         ("crates/rdf/src/turtle_normalize.rs", "Task 5"),
         ("crates/rdf/tests/gts_certify.rs", "Task 5"),
         ("crates/rdf/tests/gts_certify.rs", "Task 6"),
@@ -497,7 +497,6 @@ AMBIGUOUS_BRANCH_PHRASES: frozenset[str] = frozenset(
         "bindings/python/python/src/purrdf/compat/rdflib/term.py",
         "bindings/python/tests/test_entail_reasoning.py",
         "crates/gts/tests/replication_diff.rs",
-        "crates/rdf-core/src/dataset_view.rs",
         "crates/rdf-core/src/turtle_render.rs",
         "crates/validate/src/regime.rs",
     }
@@ -1778,6 +1777,18 @@ _DETECTION_CASES: tuple[tuple[str, str, str, str | None], ...] = (
         ".rs",
         f'const NOTE: &str = "see {_SHIPPED_URL}";\n',
         _SHIPPED_URL_TOKEN,
+    ),
+    (
+        "an XML numeric character reference in a Rust string (spared)",
+        ".rs",
+        'const DOC: &str = "<r a=\'&#13;&#10;\'>&#38;#60;</r>";\n',
+        None,
+    ),
+    (
+        "an issue shorthand beside a character reference (fires)",
+        ".rs",
+        'const DOC: &str = "&#13; see #38";\n',
+        "#38",
     ),
     (
         "a pull-request URL in Markdown prose",

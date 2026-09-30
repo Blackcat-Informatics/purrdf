@@ -22,6 +22,7 @@ use crate::arch::Sha1Blocks;
 use crate::backend::Sha1Backend;
 use crate::block::BlockBuffer;
 use crate::digest::Digest;
+use crate::dispatch::Backend as _;
 
 /// The digest length in bytes.
 pub const OUTPUT_LEN: usize = 20;
@@ -155,11 +156,7 @@ impl Sha1 {
     }
 }
 
-impl Default for Sha1 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::default_from_new!(Sha1);
 
 impl fmt::Debug for Sha1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

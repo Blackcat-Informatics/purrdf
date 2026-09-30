@@ -6,9 +6,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use ciborium::Value;
 use purrdf_gts::model::ByteRange;
 use purrdf_gts::reader::{BlobPayload, BlobRefusal, FrameContext};
+use purrdf_lex::cbor::Value;
 
 use crate::{GtsBundle, RdfDiagnostic};
 
@@ -212,7 +212,7 @@ pub fn import_gts_events_with_blobs(
     // fails should surface as a diagnostic on a Result-returning API, not abort
     // the caller's process.
     let Some(collector) = collector else {
-        return Err(fail(
+        return Err(RdfDiagnostic::error(
             "rdf-ir-gts-import-internal",
             "the selected importer did not retain its blob collector",
         ));
@@ -270,10 +270,6 @@ pub(crate) struct BlobCollector<'a> {
     total: usize,
 }
 
-fn fail(code: &str, message: impl Into<String>) -> RdfDiagnostic {
-    RdfDiagnostic::error(code, message)
-}
-
 fn metadata_field<'a>(
     meta: Option<&'a Value>,
     key: &str,
@@ -287,7 +283,7 @@ fn metadata_field<'a>(
         .map(|(_, value)| value);
     let value = values.next();
     if values.next().is_some() {
-        return Err(fail(
+        return Err(RdfDiagnostic::error(
             "rdf-ir-gts-blob-metadata",
             format!("selected blob repeats metadata key {key}"),
         ));
@@ -375,7 +371,7 @@ impl<'a> BlobCollector<'a> {
                     || selectors[..index].contains(selector)
             })
         {
-            return Err(fail(
+            return Err(RdfDiagnostic::error(
                 "rdf-ir-gts-blob-selection",
                 "selectors must be distinct, nonempty, bounded exact identities",
             ));
@@ -529,7 +525,7 @@ impl<'a> BlobCollector<'a> {
             return Ok(());
         }
         if payload.payload_present && payload.bytes.is_none() {
-            return Err(fail(
+            return Err(RdfDiagnostic::error(
                 "rdf-ir-gts-blob-payload",
                 "selected blob payload field is not a byte string",
             ));
@@ -546,7 +542,7 @@ impl<'a> BlobCollector<'a> {
             .as_ref()
             .filter(|frame| frame.segment_index == payload.segment_index)
             .ok_or_else(|| {
-                fail(
+                RdfDiagnostic::error(
                     "rdf-ir-gts-blob-provenance",
                     "selected blob has no matching source frame",
                 )
@@ -580,7 +576,7 @@ impl<'a> BlobCollector<'a> {
             return Ok(());
         };
         if payload.encoded_len > self.limits.max_encoded_bytes {
-            return Err(fail(
+            return Err(RdfDiagnostic::error(
                 "rdf-ir-gts-blob-limit",
                 "selected encoded blob exceeds its byte budget",
             ));
@@ -588,7 +584,7 @@ impl<'a> BlobCollector<'a> {
         // A representation can temporarily match many different digests before
         // later metadata updates. Bound that transient retention as well.
         if previous.is_none() && self.selected.len() >= 1024 {
-            return Err(fail(
+            return Err(RdfDiagnostic::error(
                 "rdf-ir-gts-blob-limit",
                 "more than 1024 selected unique blob digests",
             ));
@@ -602,10 +598,10 @@ impl<'a> BlobCollector<'a> {
             .saturating_sub(other_bytes);
         let limit = self.limits.max_decoded_bytes.min(remaining);
         let bytes = purrdf_gts::codec::decode_chain_bounded(payload.codecs, wire_bytes, limit)
-            .map_err(|error| fail("rdf-ir-gts-blob-decode", error.to_string()))?;
+            .map_err(|error| RdfDiagnostic::error("rdf-ir-gts-blob-decode", error.to_string()))?;
         let digest = purrdf_gts::wire::digest_str(&bytes);
         if digest != payload.digest {
-            return Err(fail(
+            return Err(RdfDiagnostic::error(
                 "rdf-ir-gts-blob-digest",
                 format!(
                     "selected blob digest {digest} differs from declared {}",
@@ -666,7 +662,7 @@ impl<'a> BlobCollector<'a> {
             check_metadata_bound(Some(meta), self.limits.max_metadata_bytes).is_ok()
         });
         let retained_len = if per_blob_ok {
-            refusal.metadata.map_or(0, encoded_metadata_len)
+            refusal.metadata.map_or(0, purrdf_lex::cbor::encoded_len)
         } else {
             0
         };
@@ -754,7 +750,7 @@ impl<'a> BlobCollector<'a> {
                 } else {
                     "is declared by this container, though its identity was not verified before refusal,"
                 };
-                return Err(fail(
+                return Err(RdfDiagnostic::error(
                     "rdf-ir-gts-blob-limit",
                     format!(
                         "blob {digest} {identity} and its {} encoded bytes exceeded this import's budget: {}",
@@ -763,7 +759,7 @@ impl<'a> BlobCollector<'a> {
                 ));
             }
             if self.inlined.contains(digest) {
-                return Err(fail(
+                return Err(RdfDiagnostic::error(
                     "rdf-ir-gts-blob-selection-order",
                     format!(
                         "blob {digest} became selected without a payload; earlier unselected bytes are not retained"
@@ -780,14 +776,14 @@ impl<'a> BlobCollector<'a> {
                 .filter(|refused| !refused.blob.digest_computed)
                 .count();
             if unidentified > 0 {
-                return Err(fail(
+                return Err(RdfDiagnostic::error(
                     "rdf-ir-gts-blob-limit",
                     format!(
                         "blob {digest} was selected but never retained, and {unidentified} payload(s) were refused before identification, so whether it is inline cannot be determined; raise the budgets or supply the payload"
                     ),
                 ));
             }
-            return Err(fail(
+            return Err(RdfDiagnostic::error(
                 "rdf-ir-gts-blob-external",
                 format!(
                     "blob {digest} is external to this container; its bytes are held elsewhere and this importer returns only inline payloads"
@@ -864,7 +860,7 @@ impl<'a> BlobCollector<'a> {
                         "; {unidentified} further payload(s) were refused by this import's budget before a digest could be computed, so they could not be matched"
                     )
                 };
-                return Err(fail(
+                return Err(RdfDiagnostic::error(
                     "rdf-ir-gts-blob-selection",
                     format!(
                         "required selector {selector:?} resolves to {count} blobs; expected exactly one{note}"
@@ -875,7 +871,7 @@ impl<'a> BlobCollector<'a> {
             // precisely: reporting "resolves to 0 blobs" would be a false claim
             // about an archive that does contain the payload.
             if let [blob] = refused.as_slice() {
-                return Err(fail(
+                return Err(RdfDiagnostic::error(
                     "rdf-ir-gts-blob-limit",
                     format!(
                         "required selector {selector:?} matches a payload of {} encoded bytes that this import's budget refused: {}",
@@ -908,7 +904,7 @@ impl<'a> BlobCollector<'a> {
 fn validate_metadata(meta: Option<&Value>, digest: &str) -> Result<(), RdfDiagnostic> {
     if let Some(meta) = meta {
         if !matches!(meta, Value::Map(_)) {
-            return Err(fail(
+            return Err(RdfDiagnostic::error(
                 "rdf-ir-gts-blob-metadata",
                 "selected blob public metadata must be a map",
             ));
@@ -916,7 +912,7 @@ fn validate_metadata(meta: Option<&Value>, digest: &str) -> Result<(), RdfDiagno
         if metadata_field(Some(meta), "digest")?.is_some()
             && purrdf_gts::reader::public_blob_digest(meta).as_deref() != Some(digest)
         {
-            return Err(fail(
+            return Err(RdfDiagnostic::error(
                 "rdf-ir-gts-blob-digest",
                 "selected blob metadata digest differs from its identity",
             ));
@@ -925,7 +921,7 @@ fn validate_metadata(meta: Option<&Value>, digest: &str) -> Result<(), RdfDiagno
     for key in ["rep", "mt"] {
         if let Some(value) = metadata_field(meta, key)? {
             value.as_text().ok_or_else(|| {
-                fail(
+                RdfDiagnostic::error(
                     "rdf-ir-gts-blob-metadata",
                     format!("selected blob metadata {key} must be text"),
                 )
@@ -933,25 +929,6 @@ fn validate_metadata(meta: Option<&Value>, digest: &str) -> Result<(), RdfDiagno
         }
     }
     Ok(())
-}
-
-/// Exact CBOR-encoded size of a metadata map, without materializing the bytes.
-fn encoded_metadata_len(meta: &Value) -> usize {
-    struct Counter(usize);
-    impl std::io::Write for Counter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0 += bytes.len();
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut counter = Counter(0);
-    // Counting cannot fail; a serialization error simply under-counts, and the
-    // per-blob bound has already accepted this value.
-    let _ = ciborium::ser::into_writer(meta, &mut counter);
-    counter.0
 }
 
 fn bounded_metadata(meta: Option<&Value>, limit: usize) -> Result<Option<Value>, RdfDiagnostic> {
@@ -975,8 +952,8 @@ fn check_metadata_bound(meta: Option<&Value>, limit: usize) -> Result<(), RdfDia
         }
     }
     if let Some(meta) = meta {
-        ciborium::ser::into_writer(meta, Counter { remaining: limit })
-            .map_err(|error| fail("rdf-ir-gts-blob-limit", error.to_string()))?;
+        purrdf_lex::cbor::write(meta, &mut Counter { remaining: limit })
+            .map_err(|error| RdfDiagnostic::error("rdf-ir-gts-blob-limit", error.to_string()))?;
     }
     Ok(())
 }

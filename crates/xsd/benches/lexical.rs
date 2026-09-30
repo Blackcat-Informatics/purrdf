@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! XSD lexical hot-path benchmark: the per-literal operations every codec and
@@ -22,7 +22,7 @@
 //! - `double_canonical` — [`canonical_double`] over a spread of magnitudes (the
 //!   `mantissa E exponent` assembly in one buffer).
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 use purrdf_xsd::{
     XSD_NS, XsdDatatype, normalize_whitespace_collapse, normalize_whitespace_replace,
     numeric::{canonical_double, parse_decimal},
@@ -108,7 +108,7 @@ const DOUBLE_CORPUS: &[f64] = &[
     f64::NAN,
 ];
 
-fn bench_datatype_from_iri(c: &mut Criterion) {
+fn bench_datatype_from_iri(c: &mut Bench) {
     let mut group = c.benchmark_group("xsd_datatype_from_iri");
     group.throughput(Throughput::Elements(DATATYPE_CORPUS.len() as u64));
     group.bench_function("mixed_corpus", |b| {
@@ -131,7 +131,7 @@ fn bench_datatype_from_iri(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_whitespace_facets(c: &mut Criterion) {
+fn bench_whitespace_facets(c: &mut Bench) {
     let total_bytes: usize = WHITESPACE_CORPUS.iter().map(|s| s.len()).sum();
     let mut group = c.benchmark_group("xsd_whitespace_facets");
     group.throughput(Throughput::Bytes(total_bytes as u64));
@@ -156,7 +156,7 @@ fn bench_whitespace_facets(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_decimal(c: &mut Criterion) {
+fn bench_decimal(c: &mut Bench) {
     let corpus = decimal_corpus();
     let mut group = c.benchmark_group("xsd_decimal");
     group.throughput(Throughput::Elements(corpus.len() as u64));
@@ -173,7 +173,7 @@ fn bench_decimal(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_double_canonical(c: &mut Criterion) {
+fn bench_double_canonical(c: &mut Bench) {
     let mut group = c.benchmark_group("xsd_double");
     group.throughput(Throughput::Elements(DOUBLE_CORPUS.len() as u64));
     group.bench_function("canonical", |b| {
@@ -188,11 +188,11 @@ fn bench_double_canonical(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
+bench_group!(
     benches,
     bench_datatype_from_iri,
     bench_whitespace_facets,
     bench_decimal,
     bench_double_canonical
 );
-criterion_main!(benches);
+bench_main!(benches);

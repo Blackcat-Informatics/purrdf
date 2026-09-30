@@ -85,12 +85,14 @@
 //! Case 3 never pins an error arm. Which tokens result is the property; which
 //! diagnostic fires is an accident of where the split happened to land.
 //!
-//! # Why the corpus derivation is spelled here as well as in the query front end
+//! # Where the sweep machinery lives
 //!
 //! `purrdf-shex` and `purrdf-sparql-algebra` are independent wasm-clean leaves —
 //! neither depends on the other, and neither should start to for a test's sake.
-//! The derivation is ~40 lines over `purrdf_iri::terminals`, which both already
-//! carry, so each crate sweeps its own scanners from its own copy.
+//! The grammar-free parts both sweeps run on — the scalar enumeration, the corpus
+//! derivation, the `IRIREF` content oracle and the three-valued driver — are
+//! `purrdf_testkit::scalars`, which both take as a dev-dependency; the
+//! predicates and the probes stay here.
 //!
 //! # This does not replace the named vectors
 //!
@@ -105,31 +107,11 @@ use purrdf_core::TermValue;
 use purrdf_iri::terminals;
 use purrdf_shex::lexer::tokenize;
 use purrdf_shex::{NodeSelector, ShapeMap, ShapeSelector, parse_shape_map};
+use purrdf_testkit::scalars::{
+    IRIREF_DELIMITERS, Sweep, all_scalars, derived_ranges, iriref_content, run,
+};
 
 // ── The scalar corpus, derived ────────────────────────────────────────────────
-
-/// Every Unicode scalar value, in order.
-fn all_scalars() -> impl Iterator<Item = char> {
-    (0..=0x0010_FFFF_u32).filter_map(char::from_u32)
-}
-
-/// `WS ::= #x20 | #x9 | #xD | #xA` as a scalar test — the four scalars both
-/// ShExC's `@pass` and ShapeMap's `PASSED TOKENS` name.
-///
-/// The shared production is byte-shaped because every member is ASCII and a byte
-/// test is therefore exact over UTF-8; this file holds decoded scalars, so it
-/// narrows first. `u8::try_from` fails above U+00FF and every Latin-1 scalar it
-/// does yield is outside `WS`, so nothing non-ASCII can alias a member.
-fn is_ws(c: char) -> bool {
-    u8::try_from(c).is_ok_and(terminals::is_ws)
-}
-
-/// `[18t] IRIREF`'s content class: everything above `#x20` that is not one of the
-/// nine delimiters the production excludes by name. Non-ASCII is never forbidden
-/// raw, U+00A0 and U+007F included.
-fn iriref_content(c: char) -> bool {
-    u32::from(c) > 0x20 && !IRIREF_DELIMITERS.contains(&c)
-}
 
 /// `[14t] STRING_LITERAL2`'s content class:
 /// `'"' ([^#x22#x5C#xA#xD] | ECHAR | UCHAR)* '"'`. Only four scalars leave it —
@@ -147,7 +129,7 @@ type Production = (&'static str, fn(char) -> bool);
 /// that decides membership. The corpus is read off these, so adding a production
 /// here widens the sweep automatically.
 const PRODUCTIONS: [Production; 8] = [
-    ("WS", is_ws),
+    ("WS", terminals::is_ws_char),
     ("PN_CHARS_BASE", terminals::is_pn_chars_base),
     ("PN_CHARS_U", terminals::is_pn_chars_u),
     ("PN_CHARS", terminals::is_pn_chars),
@@ -181,29 +163,6 @@ const NAME_PRODUCTIONS: [Production; 5] = [
     ("VARNAME later scalar", terminals::is_varname_continue),
 ];
 
-/// The contiguous scalar ranges a predicate admits, read off the **predicate**
-/// rather than off any table it happens to be implemented with.
-///
-/// The surrogate gap is treated as a non-member run, so a class that spans it
-/// shows here as two ranges.
-fn derived_ranges(admits: fn(char) -> bool) -> Vec<(u32, u32)> {
-    let mut ranges: Vec<(u32, u32)> = Vec::new();
-    for cp in 0..=0x0010_FFFF_u32 {
-        if !char::from_u32(cp).is_some_and(admits) {
-            continue;
-        }
-        match ranges.pop() {
-            Some((lo, hi)) if hi + 1 == cp => ranges.push((lo, cp)),
-            Some(previous) => {
-                ranges.push(previous);
-                ranges.push((cp, cp));
-            }
-            None => ranges.push((cp, cp)),
-        }
-    }
-    ranges
-}
-
 /// The invisible format characters. None is `White_Space`, so a whitespace audit
 /// never looks at them, and three of the six sit inside a name class while three
 /// sit in the holes beside it — which is the whole point.
@@ -215,9 +174,6 @@ const INVISIBLES: [char; 6] = [
     '\u{2060}', // WORD JOINER
     '\u{feff}', // ZERO WIDTH NO-BREAK SPACE (byte-order mark)
 ];
-
-/// The nine scalars `[18t] IRIREF` excludes by name, beyond its `#x00-#x20` range.
-const IRIREF_DELIMITERS: [char; 9] = ['<', '>', '"', '{', '}', '|', '^', '`', '\\'];
 
 /// The gated corpus: boundaries, all of Unicode `White_Space`, the invisibles and
 /// the `IRIREF` delimiters.
@@ -324,60 +280,6 @@ fn split(parts: &[String]) -> Reading {
 
 // ── The sweep table ───────────────────────────────────────────────────────────
 
-/// One production, swept at one position.
-struct Sweep {
-    /// The production and position, cited by grammar number.
-    cited: &'static str,
-    /// The probe text a candidate scalar is dropped into.
-    probe: Box<dyn Fn(char) -> String>,
-    /// Whether the production admits the candidate **at that position**.
-    admits: Box<dyn Fn(char) -> bool>,
-    /// The joined reading an admitted candidate must produce.
-    joined: Box<dyn Fn(char) -> Reading>,
-    /// The reading a `WS` candidate must produce, where the position has one.
-    /// `None` where `WS` is what the production itself admits.
-    separated: Option<Box<dyn Fn(char) -> Reading>>,
-}
-
-/// Drive every sweep over every candidate, returning the number of probes run.
-fn run(scan: fn(&str) -> Reading, sweeps: &[Sweep], scalars: &[char]) -> usize {
-    let mut cases = 0;
-    for sweep in sweeps {
-        let cited = sweep.cited;
-        for &c in scalars {
-            let probe = (sweep.probe)(c);
-            let observed = scan(&probe);
-            let joined = (sweep.joined)(c);
-            if (sweep.admits)(c) {
-                assert_eq!(
-                    observed,
-                    joined,
-                    "U+{:04X} is admitted by {cited}, so {probe:?} reads as one",
-                    u32::from(c)
-                );
-            } else if is_ws(c)
-                && let Some(separated) = sweep.separated.as_ref()
-            {
-                assert_eq!(
-                    observed,
-                    separated(c),
-                    "U+{:04X} is `WS`, so it separates in {probe:?}",
-                    u32::from(c)
-                );
-            } else {
-                assert_ne!(
-                    observed,
-                    joined,
-                    "U+{:04X} is not admitted by {cited}, so {probe:?} must not absorb it",
-                    u32::from(c)
-                );
-            }
-            cases += 1;
-        }
-    }
-    cases
-}
-
 // ── The ShExC lexer ───────────────────────────────────────────────────────────
 
 /// Every ShExC lexer sweep.
@@ -386,7 +288,7 @@ fn run(scan: fn(&str) -> Reading, sweeps: &[Sweep], scalars: &[char]) -> usize {
 /// position-dependent and both directions of getting that wrong are silent: a
 /// head-only class refuses the lawful `_:cafe\u{301}`, a tail-only class accepts
 /// the unlawful `_:\u{301}x`.
-fn shexc_sweeps() -> Vec<Sweep> {
+fn shexc_sweeps() -> Vec<Sweep<Reading>> {
     vec![
         Sweep {
             cited: "[168s] PN_PREFIX continuation, under maximal munch",
@@ -479,19 +381,19 @@ fn sole_subject() -> Reading {
 /// positive result would be measuring the resolver, not the boundary. What the
 /// scanner does decide is pinned by name in
 /// [`the_shape_map_iriref_body_stops_at_the_scalars_the_production_excludes`].
-fn shape_map_sweeps() -> Vec<Sweep> {
+fn shape_map_sweeps() -> Vec<Sweep<Reading>> {
     vec![
         Sweep {
             cited: "PASSED TOKENS between a term and the '@'",
             probe: Box::new(|c| format!("<http://a.example/s>{c}@START")),
-            admits: Box::new(is_ws),
+            admits: Box::new(terminals::is_ws_char),
             joined: Box::new(|_| sole_subject()),
             separated: None,
         },
         Sweep {
             cited: "PASSED TOKENS between the '@' and the shape label",
             probe: Box::new(|c| format!("<http://a.example/s>@{c}START")),
-            admits: Box::new(is_ws),
+            admits: Box::new(terminals::is_ws_char),
             joined: Box::new(|_| sole_subject()),
             separated: None,
         },
@@ -500,7 +402,7 @@ fn shape_map_sweeps() -> Vec<Sweep> {
             probe: Box::new(|c| {
                 format!("<http://a.example/s>@START{c},<http://a.example/t>@START")
             }),
-            admits: Box::new(is_ws),
+            admits: Box::new(terminals::is_ws_char),
             joined: Box::new(|_| {
                 associations(vec![
                     (
@@ -606,7 +508,7 @@ fn the_ogham_space_mark_is_the_only_whitespace_name_character() {
     }
     // And the converse, which is what makes the four-member `WS` skip safe: no
     // member of `WS` is a name character in any position.
-    for c in all_scalars().filter(|c| is_ws(*c)) {
+    for c in all_scalars().filter(|c| terminals::is_ws_char(*c)) {
         assert!(
             !terminals::is_pn_chars(c),
             "U+{:04X} is `WS` and must not also be a name character",
@@ -725,7 +627,7 @@ fn the_corpus_covers_every_boundary_and_all_of_unicode_whitespace() {
 fn the_shexc_scanner_splits_where_the_productions_say() {
     let scalars = probe_scalars();
     let sweeps = shexc_sweeps();
-    let cases = run(shexc, &sweeps, &scalars);
+    let cases = run(shexc, &sweeps, &scalars, terminals::is_ws_char);
     println!(
         "ShExC: {} scalars x {} sweeps = {cases} probes",
         scalars.len(),
@@ -739,7 +641,7 @@ fn the_shexc_scanner_splits_where_the_productions_say() {
 fn the_shape_map_scanner_reads_where_the_productions_say() {
     let scalars = probe_scalars();
     let sweeps = shape_map_sweeps();
-    let cases = run(shape_map, &sweeps, &scalars);
+    let cases = run(shape_map, &sweeps, &scalars, terminals::is_ws_char);
     println!(
         "ShapeMap: {} scalars x {} sweeps = {cases} probes",
         scalars.len(),
@@ -910,7 +812,7 @@ fn an_internal_dot_stays_in_the_name_and_a_trailing_run_does_not() {
 #[ignore = "the whole 1,114,112-scalar space; the boundary corpus is the gated lane"]
 fn the_full_shexc_scanner_sweep() {
     let scalars: Vec<char> = all_scalars().collect();
-    run(shexc, &shexc_sweeps(), &scalars);
+    run(shexc, &shexc_sweeps(), &scalars, terminals::is_ws_char);
 }
 
 /// Every sweep over every Unicode scalar, ShapeMap.
@@ -918,5 +820,10 @@ fn the_full_shexc_scanner_sweep() {
 #[ignore = "the whole 1,114,112-scalar space; the boundary corpus is the gated lane"]
 fn the_full_shape_map_scanner_sweep() {
     let scalars: Vec<char> = all_scalars().collect();
-    run(shape_map, &shape_map_sweeps(), &scalars);
+    run(
+        shape_map,
+        &shape_map_sweeps(),
+        &scalars,
+        terminals::is_ws_char,
+    );
 }

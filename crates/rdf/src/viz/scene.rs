@@ -5,15 +5,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Serialize};
-
 use super::*;
 
 /// Version of the renderer-neutral semantic scene contract.
 pub const VIZ_SCENE_SCHEMA_VERSION: &str = "purrdf-viz-scene-1";
 
 /// Renderer-neutral semantic scene.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizScene {
     /// Scene schema version.
     pub schema_version: String,
@@ -32,8 +30,7 @@ pub struct VizScene {
 }
 
 /// Typed semantic identity bound to scene elements.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "id", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VizSemanticRef {
     /// RDF term.
     Term(VizTermId),
@@ -52,7 +49,7 @@ pub enum VizSemanticRef {
 }
 
 /// Renderer-neutral node.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizSceneNode {
     /// Stable scene id.
     pub id: String,
@@ -71,8 +68,7 @@ pub struct VizSceneNode {
 }
 
 /// Node grammar independent of renderer styling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VizSceneNodeKind {
     /// IRI resource.
     Iri,
@@ -85,7 +81,7 @@ pub enum VizSceneNodeKind {
 }
 
 /// Renderer-neutral edge.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizSceneEdge {
     /// Stable scene id.
     pub id: String,
@@ -108,8 +104,7 @@ pub struct VizSceneEdge {
 }
 
 /// Edge grammar independent of renderer styling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VizSceneEdgeKind {
     /// Asserted predicate edge.
     Assertion,
@@ -130,7 +125,7 @@ pub enum VizSceneEdgeKind {
 }
 
 /// Typed port on a scene node.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizPort {
     /// Stable port id, local to the node.
     pub id: String,
@@ -139,8 +134,7 @@ pub struct VizPort {
 }
 
 /// Port role used by layout and emitters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VizPortKind {
     /// General incoming edge port.
     In,
@@ -159,8 +153,7 @@ pub enum VizPortKind {
 }
 
 /// Endpoint on a node port or on an addressable assertion edge.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum VizEndpoint {
     /// Endpoint on a node port.
     NodePort {
@@ -179,7 +172,7 @@ pub enum VizEndpoint {
 }
 
 /// Addressable structural-statement identity carried by an assertion edge.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizEdgeAnchor {
     /// Stable edge-local anchor id.
     pub id: String,
@@ -194,7 +187,7 @@ pub struct VizEdgeAnchor {
 }
 
 /// Display label with full RDF text and language direction.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizSceneLabel {
     /// Compact display text.
     pub text: String,
@@ -206,8 +199,21 @@ pub struct VizSceneLabel {
     pub direction: Option<VizTextDirection>,
 }
 
+impl VizSceneLabel {
+    /// A label whose compact and full text are both `value`, with no language
+    /// or direction.
+    pub fn plain(value: &str) -> Self {
+        Self {
+            text: value.to_owned(),
+            full_text: value.to_owned(),
+            language: None,
+            direction: None,
+        }
+    }
+}
+
 /// Semantic badge attached to a node, edge, or edge anchor.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizBadge {
     /// Badge grammar.
     pub kind: VizBadgeKind,
@@ -218,8 +224,7 @@ pub struct VizBadge {
 }
 
 /// Badge grammar independent of renderer styling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VizBadgeKind {
     /// Assertion state.
     Asserted,
@@ -248,7 +253,7 @@ pub enum VizBadgeKind {
 }
 
 /// Accessible text carried independently of concrete SVG elements.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizAccessibility {
     /// Concise accessible name.
     pub title: String,
@@ -257,7 +262,7 @@ pub struct VizAccessibility {
 }
 
 /// Scene group that does not impose geometry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizSceneGroup {
     /// Stable group id.
     pub id: String,
@@ -270,15 +275,14 @@ pub struct VizSceneGroup {
 }
 
 /// Scene group grammar.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VizSceneGroupKind {
     /// Visual grammar legend.
     Legend,
 }
 
 /// One legend entry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizLegendEntry {
     /// Stable legend entry id.
     pub id: String,
@@ -289,7 +293,7 @@ pub struct VizLegendEntry {
 }
 
 /// Renderer-neutral statement table.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizSceneTable {
     /// Ordered columns.
     pub fields: Vec<VizTableField>,
@@ -298,7 +302,7 @@ pub struct VizSceneTable {
 }
 
 /// Renderer-neutral statement table row.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizSceneTableRow {
     /// Stable row id.
     pub id: String,
@@ -309,7 +313,7 @@ pub struct VizSceneTableRow {
 }
 
 /// Renderer-neutral statement table cell.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizSceneTableCell {
     /// Column represented by the cell.
     pub field: VizTableField,
@@ -385,7 +389,7 @@ fn build_compact_scene(projection: &VizProjection) -> VizScene {
                 kind: VizSceneEdgeKind::QuoteSubject,
                 source: compact_value_endpoint(&statement.subject, &statements, true),
                 target: node_endpoint(&statement_node_id, "subject"),
-                label: plain_label("subject"),
+                label: VizSceneLabel::plain("subject"),
                 badges: Vec::new(),
                 anchor: None,
                 accessibility: VizAccessibility {
@@ -403,7 +407,7 @@ fn build_compact_scene(projection: &VizProjection) -> VizScene {
                 kind: VizSceneEdgeKind::QuoteObject,
                 source: node_endpoint(&statement_node_id, "object"),
                 target: compact_value_endpoint(&statement.object, &statements, false),
-                label: plain_label("object"),
+                label: VizSceneLabel::plain("object"),
                 badges: Vec::new(),
                 anchor: None,
                 accessibility: VizAccessibility {
@@ -495,7 +499,7 @@ fn build_incidence_scene(projection: &VizProjection) -> VizScene {
                 kind,
                 source: incidence_value_endpoint(value),
                 target: node_endpoint(&target_node, port),
-                label: plain_label(role),
+                label: VizSceneLabel::plain(role),
                 badges: Vec::new(),
                 anchor: None,
                 accessibility: VizAccessibility {
@@ -731,7 +735,7 @@ fn assertion_edge(
         kind: VizSceneEdgeKind::Assertion,
         source: compact_value_endpoint(&statement.subject, statements, true),
         target: compact_value_endpoint(&statement.object, statements, false),
-        label: plain_label(predicate),
+        label: VizSceneLabel::plain(predicate),
         badges: graph_ids
             .into_iter()
             .map(|graph| graph_badge(graph, projection))
@@ -802,7 +806,7 @@ fn statement_anchor(
     if statement.dialect != VizDialect::Rdf12 {
         badges.push(VizBadge {
             kind: VizBadgeKind::Dialect,
-            label: dialect_label(&statement.dialect).to_owned(),
+            label: dialect_label(statement.dialect).to_owned(),
             binding: projection
                 .diagnostics
                 .iter()
@@ -820,7 +824,7 @@ fn statement_anchor(
     VizEdgeAnchor {
         id: scene_statement_anchor_id(&statement.id),
         bindings,
-        label: plain_label(&format!("S:{}", short_suffix(&statement.id.0))),
+        label: VizSceneLabel::plain(&format!("S:{}", short_suffix(&statement.id.0))),
         badges,
         accessibility: VizAccessibility {
             title: "addressable asserted statement".to_owned(),
@@ -863,7 +867,7 @@ fn statement_node(
         id: scene_statement_node_id(&statement.id),
         bindings: vec![VizSemanticRef::Statement(statement.id.clone())],
         kind: VizSceneNodeKind::Statement,
-        label: plain_label(&display_label),
+        label: VizSceneLabel::plain(&display_label),
         ports: vec![
             port("subject", VizPortKind::Subject),
             port("predicate", VizPortKind::Predicate),
@@ -975,7 +979,7 @@ fn add_relation_edges(
                     kind: VizSceneEdgeKind::Reifies,
                     source: node_endpoint(&scene_term_node_id(reifier), "out"),
                     target,
-                    label: plain_label("reifies"),
+                    label: VizSceneLabel::plain("reifies"),
                     badges: vec![graph_badge(graph.clone(), projection)],
                     anchor: None,
                     accessibility: VizAccessibility {
@@ -1012,7 +1016,7 @@ fn add_relation_edges(
                     kind: VizSceneEdgeKind::Annotation,
                     source: node_endpoint(&scene_term_node_id(reifier), "out"),
                     target,
-                    label: plain_label(predicate_label),
+                    label: VizSceneLabel::plain(predicate_label),
                     badges: vec![graph_badge(graph.clone(), projection)],
                     anchor: None,
                     accessibility: VizAccessibility {
@@ -1083,7 +1087,7 @@ fn statement_badges(
     if statement.dialect != VizDialect::Rdf12 {
         badges.push(VizBadge {
             kind: VizBadgeKind::Dialect,
-            label: dialect_label(&statement.dialect).to_owned(),
+            label: dialect_label(statement.dialect).to_owned(),
             binding: projection
                 .diagnostics
                 .iter()
@@ -1250,7 +1254,7 @@ fn statement_accessible_description(
         summary.reifiers.len(),
         summary.annotation_relations.len(),
         statement.incoming_references,
-        dialect_label(&statement.dialect)
+        dialect_label(statement.dialect)
     )
 }
 
@@ -1296,20 +1300,11 @@ fn graph_badge(graph: VizGraphId, projection: &VizProjection) -> VizBadge {
     }
 }
 
-fn dialect_label(dialect: &VizDialect) -> &'static str {
+fn dialect_label(dialect: VizDialect) -> &'static str {
     match dialect {
         VizDialect::Rdf12 => "RDF 1.2",
         VizDialect::SymmetricRdf12 => "symmetric RDF 1.2",
         VizDialect::GeneralizedRdf => "generalized RDF",
-    }
-}
-
-fn plain_label(value: &str) -> VizSceneLabel {
-    VizSceneLabel {
-        text: value.to_owned(),
-        full_text: value.to_owned(),
-        language: None,
-        direction: None,
     }
 }
 

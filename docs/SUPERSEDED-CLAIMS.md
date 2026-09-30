@@ -801,3 +801,231 @@ nothing reaches stays inert, and a SHACL-JS construct a shape reaches stays refu
 `declared_shacl_js_no_shape_reaches_is_inert_and_ordinary_constraints_fire` and
 `every_shacl_js_construct_a_shape_reaches_is_a_typed_refusal`
 (`crates/shapes/tests/shapes_graph_wellformedness.rs`).
+
+### `purrdf-jsonschema` depends on `serde_json`, `regex` and `purrdf-iri` only
+
+**Was stated in** `crates/jsonschema/README.md`:
+
+> It depends on `serde_json`, `regex` and `purrdf-iri` only, forbids `unsafe`, and
+> builds for `wasm32-unknown-unknown` like every other release crate in the workspace.
+
+**Why it was believed.** Schemas and instances were `serde_json::Value`s, and the
+evaluator's own number, date and Unicode code needed nothing else.
+
+**What changed.** Schemas and instances are `purrdf_lex::json::Value`s, whose numbers
+keep their lexemes. Exact number order, equality and `multipleOf` are
+`purrdf_xsd::json_number::JsonNumber`, the `date-time`, `date` and `time` formats read
+through `purrdf_xsd::rfc3339`, `\s` and the line terminators are `purrdf_lex::terminals`,
+and every map is keyed by `purrdf_hash::fixed::FixedState`.
+
+**The rule now.** `purrdf-jsonschema` depends on `regex`, `purrdf-iri`, `purrdf-xsd`,
+`purrdf-lex` and `purrdf-hash` only (`crates/jsonschema/Cargo.toml`, and its row in
+`layers.toml`), and `serde_json` is banned on every edge.
+
+### The core Turtle writer's literal escaper mirrors the canonical one exactly
+
+**Was stated in** `crates/rdf-core/src/turtle.rs`, on its private `escape_literal`:
+
+> Mirrors [`crate::ir::canon::write_literal_escaped`] exactly.
+
+**Why it was believed.** Both were written from the same N-Triples literal grammar: the
+readable `ECHAR`s, `UCHAR` for the rest of C0 and DEL, and C1 raw.
+
+**What changed.** They were two bodies, and they differed: the Turtle copy spelt
+BACKSPACE and FORM FEED as `\u0008` and `\u000C` where the canonical form writes `\b`
+and `\f`. A claim that two bodies agree is a claim nothing checked.
+
+**The rule now.** There is one escaper, `purrdf_lex::literal_escape`, with the carrier
+(`Canonical`, `Xml`, `TurtleLong`) as its only parameter. The Turtle writers spell every
+term through `purrdf_lex::term_syntax`, and the canonical N-Quads writer composes the
+same pieces. The `literal-and-iri-escape` and `term-syntax` jobs of
+`helpers-ledger.toml` refuse a second body.
+
+### The GTS fold view compacts IRIs under a built-in W3C/schema.org table
+
+**Was stated in** `crates/rdf/src/gts_view.rs`, on `GtsFoldViewConfig`:
+
+> any extra CURIE prefix entries consulted (in order, before the built-in
+> W3C/schema.org table) when compacting IRIs
+
+**Why it was believed.** `schema:` is a common prefix in the data the fold view
+renders, so a built-in entry looked like convenience.
+
+**What changed.** schema.org is not a W3C Recommendation's vocabulary, so a built-in
+`schema:` prefix was a fabricated default vocabulary, which PurRDF does not supply.
+
+**The rule now.** The fold view builds in the W3C prefixes `rdf`, `rdfs`, `owl`, `xsd`
+and `skos`, read from `purrdf_iri::vocab` and `purrdf_xsd::datatype`, and compacts under
+any other namespace only when the caller supplies it in
+`GtsFoldViewConfig::curie_prefixes`, under the longest matching namespace
+(`purrdf_iri::contract`). Pinned by
+`a_schema_org_iri_stays_a_full_iri_without_a_caller_prefix` and
+`a_schema_org_iri_compacts_under_a_caller_supplied_prefix`
+(`crates/rdf/src/gts_view.rs`).
+
+### A governed CLI run starts from `QueryGovernors::UNBOUNDED`
+
+**Was stated in** `crates/cli/src/governors.rs`, the module documentation:
+
+> [`GovernorFlags::to_governors`] starts from [`QueryGovernors::UNBOUNDED`] and adds
+> only the ceilings the operator actually named.
+
+**Why it was believed.** A dimension no flag named was taken to need no accounting at
+all, and `UNBOUNDED` is the configuration that declines every ceiling.
+
+**What changed.** `UNBOUNDED` also declines the accounting, so a `--deadline` was polled
+only between operators and a long-running operator never saw it. The C ABI, the wasm
+package and the Python binding decoded their governors from `METERED`, so the CLI
+disagreed with every other host.
+
+**The rule now.** Every host decodes through `purrdf_validate::governors::from_parts`,
+which starts from `QueryGovernors::METERED`: a dimension no flag names is charged
+against a ceiling no run can reach, and the trip report prints it as `limit …
+unbounded`. `--no-ceiling` asks for `UNBOUNDED`; it combines with `--deadline` and is
+refused beside a numeric ceiling or `--explain`. Pinned by
+`the_metered_default_refuses_an_over_cap_query_and_no_ceiling_answers_it` and
+`no_ceiling_beside_a_ceiling_is_refused_by_name` (`crates/cli/tests/governors_cli.rs`)
+and `naming_nothing_is_metered` (`crates/validate/src/governors.rs`).
+
+### Base16 has a kernel home in `purrdf-core`, with sanctioned renderers elsewhere
+
+**Was stated in** `crates/rdf-core/src/hex.rs`, the module documentation of
+`purrdf_core::hex`:
+
+> There is therefore **one** transcription of it, here, in the crate that is a common
+> ancestor of those consumers.
+
+followed by a list of call sites that "correctly do something else" — hot-path label
+renderers, allocation-free renderers into a caller's buffer, `purrdf-gts`'s own renderer
+in `wire` because it could not reach the kernel, and renderers that append into a
+caller's accumulator. `crates/rdf-core/src/content_id.rs` likewise stated that its
+64-digit decoder was shared with `ContentDigest::from_hex` through
+`content_store::decode_hex_32` / `decode_hex_32_lower`.
+
+**Why it was believed.** `purrdf-core` was the lowest crate most renderers reached, and
+each exemption needed a shape (`Display`, append, fixed buffer) the one `lower`
+function did not offer.
+
+**What changed.** The exemptions were missing entry points, not different operations.
+`purrdf-hash` is the root every crate reaches, including `purrdf-gts`.
+
+**The rule now.** `purrdf_hash::hex` is the one base16 codec, with an entry point for
+each of those shapes: `Lower`/`Upper` (`Display`), `encode`, `encode_into` (append),
+`encode_to_slice` (a caller's buffer), `decode`, `decode_canonical`, `decode_32` and
+`decode_32_canonical` (the content-address form), and `Digest32`, the 32-byte value
+every content identity wraps. The `hex` job of `helpers-ledger.toml` is enforced, with
+no variants.
+
+### `purrdf-testkit` depends on no `purrdf-*` crate
+
+**Was stated in** the root `Cargo.toml`, on the `purrdf-testkit` workspace entry:
+
+> It depends on no `purrdf-*` crate, so any member's tests may use it without closing
+> a cycle.
+
+**Why it was believed.** Test support needed no workspace code, and `purrdf-hash` ran
+its frozen-vector suites on testkit's runner, so testkit could not depend on it.
+
+**What changed.** Testkit's seeded draws are the SplitMix64 and LCG streams
+`purrdf_hash::mix` holds, so testkit depends on the root.
+
+**The rule now.** `purrdf-testkit`'s one first-party dependency is `purrdf-hash`, the
+zero-dependency root. `purrdf-hash` has no dev-dependency on testkit: its frozen-vector
+suites, differentials and benches live in the unpublished `purrdf-hash-conformance`,
+natively and on wasm32. `layers.toml` holds the edge, and no member's tests close a
+cycle through testkit.
+
+### The removed external packages are the workspace's codecs, signatures, byte search and bench harness
+
+**Was stated in** `dependency-ledger.toml`, as retained dependencies:
+
+> `ciborium` — CBOR (RFC 8949) encode/decode for GTS packs and envelopes
+> `ed25519-dalek` — Ed25519 (RFC 8032) signatures for GTS COSE_Sign1 and RDF signing
+> `roxmltree` — XML 1.0 parsing for RDF/XML, OWL/XML and SPARQL XML results
+> `serde_json` — JSON (RFC 8259) encode/decode for JSON-LD, SPARQL JSON results and
+> bindings
+> `serde_yaml_ng` — YAML parsing for YAML-LD, SSSOM headers and shape configs
+> `serde` — serialization framework behind the JSON, YAML and CBOR codecs
+> `memchr` — SIMD byte search for parser line splitting and escape scanning
+> `criterion` — statistical benchmark harness for every crate bench …
+
+**Why it was believed.** Each was the codec or harness its format needed, and nothing
+first-party did the same job.
+
+**What changed.** Each job now has a first-party home, and each package was a second
+implementation beside it.
+
+**The rule now.** JSON is `purrdf_lex::json` (with `json::record` in place of serde
+derives), YAML is `purrdf_lex::yaml`, CBOR is `purrdf_lex::cbor`, XML is
+`purrdf_lex::xml`, Ed25519 is `purrdf-ed25519`, byte search is
+`purrdf_lex::scan::find_byte`/`find_byte2`, and benchmarks run on
+`purrdf_testkit::bench`. `scripts/check-banned-deps.py` refuses every one of these
+packages and their closures on any edge (`memchr` as a direct dependency; `regex` is
+built without the prefilter that used it). `sha2` stays: it is the workspace's one SHA-2
+implementation. `dependency-ledger.toml` gives every remaining package a census verdict.
+
+### RDF/XML documents are refused for their DTD
+
+**Was stated in** `crates/rdf/src/nesting.rs`, in the XML nesting guard:
+
+> those documents are refused for their DTD anyway, and this keeps THIS guard from
+> pre-empting that refusal with a wrong one.
+
+**Why it was believed.** The XML reader refused every document type declaration, and a
+refused DTD cannot cause an entity fetch or an expansion bomb.
+
+**What changed.** RDF/XML documents routinely declare internal entities for namespace
+IRIs (`<!ENTITY xsd "http://www.w3.org/2001/XMLSchema#">` used as `&xsd;integer`), and
+XML 1.0 §4.4 requires a non-validating processor to expand an internal entity it has
+read. Refusing the DTD refused well-formed RDF/XML.
+
+**The rule now.** The RDF/XML, TriX and RIF-XML readers read through `purrdf_lex::xml`
+with the internal subset enabled: internal general and parameter entities expand under
+the reader's expansion budget, and an external subset, an external entity or an external
+parameter entity is never fetched (a reference to an external entity is refused, and a
+document naming an external subset or external parameter entity is refused too, since its
+declarations would go unapplied), so no document causes a fetch. GraphML, DataCite and SPARQL Results XML still refuse any
+DTD. Pinned by `internal_entities_expand_in_rdfxml_and_external_ones_are_refused`
+(`crates/rdf/src/native_codecs/rdfxml.rs`),
+`an_internal_entity_expands_and_an_external_one_is_refused`
+(`crates/rdf/src/nesting.rs`) and
+`an_external_entity_reference_is_refused_and_an_internal_one_is_read`
+(`crates/lex/src/xml/tests.rs`).
+
+### `purrdf-xsd`'s one runtime dependency is `purrdf-hash`
+
+**Was stated in** `crates/xsd/README.md`, the root `README.md` crate table and
+`AGENTS.md` (`purrdf-xsd` | Foundation over `purrdf-hash` alone):
+
+> its one runtime dependency is the zero-dependency root `purrdf-hash`
+
+**Why it was believed.** The XSD value space needed only the hex-digit reader of the
+root; its lexical checks were written in the crate.
+
+**What changed.** The whitespace facets' chunked prechecks classify each byte with
+`purrdf_lex::scan::in_runs`, the one byte-run membership test, so `purrdf-xsd`
+depends on `purrdf-lex`.
+
+**The rule now.** `purrdf-xsd`'s runtime dependencies are `purrdf-lex` and
+`purrdf-hash`, both first-party and with no third-party dependency; `layers.toml`
+holds the edge.
+
+### `purrdf_cdt::TextDirection` is the one RDF 1.2 base-direction type
+
+**Was stated in** `helpers-ledger.toml` (`home = "purrdf_cdt::TextDirection"` for the
+`text-direction` job) and the `AGENTS.md` crate map:
+
+> `purrdf-cdt` … and `TextDirection`, the one RDF 1.2 base-direction type
+
+**Why it was believed.** `purrdf-cdt` was the lowest crate every direction-carrying
+layer (the IR, the query algebra, the composite datatypes) reached.
+
+**What changed.** The event protocol carries a directional literal's direction too,
+and `purrdf-events` sits below `purrdf-cdt`. It held an enum of its own, agreeing with
+the `purrdf-cdt` one variant for variant, and `purrdf-core`'s ingest mapped between
+the two. One type in the lowest layer that carries a direction needs no mapping.
+
+**The rule now.** `purrdf_events::TextDirection` is the one type (`as_str`,
+`from_str_token`); `purrdf_cdt::TextDirection`, `purrdf_core::RdfTextDirection` and
+`purrdf_sparql_algebra::ast::BaseDirection` re-export it, and `helpers-ledger.toml`
+names it as the job's home.

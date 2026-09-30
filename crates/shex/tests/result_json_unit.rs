@@ -8,7 +8,7 @@
 use purrdf_core::TermBox;
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
+use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfTextDirection, TermValue};
 use purrdf_shex::{
     ConformanceStatus, NodeSelector, ResultEntry, ResultShapeMap, ShapeSelector, parse_shape_map,
     parse_shexc, validate,
@@ -45,8 +45,7 @@ fn array_fields_and_status() {
         ),
     ];
     let result = validate(&schema, &data, &map);
-    let json: serde_json::Value =
-        serde_json::from_str(&result.to_result_json()).expect("valid JSON");
+    let json = purrdf_lex::json::read(&result.to_result_json()).expect("valid JSON");
     let rows = json.as_array().expect("array");
     assert_eq!(rows.len(), 2);
 
@@ -59,7 +58,7 @@ fn array_fields_and_status() {
     // s2 fails (literal object where IRI required); reason present.
     assert_eq!(rows[1]["node"], "<http://a.example/s2>");
     assert_eq!(rows[1]["status"], "nonconformant");
-    assert!(rows[1]["reason"].is_string());
+    assert!(rows[1]["reason"].as_str().is_some());
 }
 
 #[test]
@@ -92,8 +91,7 @@ fn literal_and_start_term_syntax() {
         (TermValue::simple_literal("a\"b"), ShapeSelector::Start),
     ];
     let result = validate(&schema, &data, &map);
-    let json: serde_json::Value =
-        serde_json::from_str(&result.to_result_json()).expect("valid JSON");
+    let json = purrdf_lex::json::read(&result.to_result_json()).expect("valid JSON");
     let rows = json.as_array().expect("array");
     assert_eq!(rows[0]["node"], "\"hi\"@en");
     assert_eq!(rows[0]["shape"], "START");
@@ -118,8 +116,7 @@ fn emitted_node_term(node: &TermValue) -> String {
             reason: None,
         }],
     };
-    let json: serde_json::Value =
-        serde_json::from_str(&result.to_result_json()).expect("valid JSON");
+    let json = purrdf_lex::json::read(&result.to_result_json()).expect("valid JSON");
     json[0]["node"]
         .as_str()
         .expect("node is a string")
@@ -163,7 +160,7 @@ fn round_trips_literal_forms() {
 #[test]
 fn round_trips_literal_escapes_including_backspace_and_form_feed() {
     // Quote, backslash, newline, carriage return, tab, backspace (U+0008),
-    // form feed (U+000C) — every escape `turtle_escape` must emit and
+    // form feed (U+000C) — every escape the canonical literal form emits and
     // `parse_shape_map` must parse back.
     let lexical = "a\"b\\c\nd\re\tf\u{8}g\u{c}h";
     let literal = TermValue::simple_literal(lexical);
@@ -220,7 +217,7 @@ fn reason_strings_with_quotes_and_newlines_stay_valid_json() {
     )];
     let result = validate(&schema, &data, &map);
     let rendered = result.to_result_json();
-    let json: serde_json::Value = serde_json::from_str(&rendered).expect("valid JSON");
+    let json = purrdf_lex::json::read(&rendered).expect("valid JSON");
     let reason = json[0]["reason"].as_str().expect("reason present");
     assert_ne!(reason, "");
 
@@ -235,6 +232,90 @@ fn reason_strings_with_quotes_and_newlines_stay_valid_json() {
         }],
     };
     let rendered = result.to_result_json();
-    let json: serde_json::Value = serde_json::from_str(&rendered).expect("valid JSON");
+    let json = purrdf_lex::json::read(&rendered).expect("valid JSON");
     assert_eq!(json[0]["reason"], "bad \"value\"\nline two");
+}
+
+/// A directional literal, `"lex"@tag--dir`, with a language tag the writer folds.
+fn directional(lexical: &str, tag: &str, direction: RdfTextDirection) -> TermValue {
+    TermValue::Literal {
+        lexical_form: lexical.to_owned(),
+        datatype: purrdf_core::RdfLiteral::language_datatype_iri(Some(direction)).to_owned(),
+        language: Some(tag.to_owned()),
+        direction: Some(direction),
+    }
+}
+
+#[test]
+fn a_triple_term_report_spells_the_rdf12_triple_term_and_keeps_direction() {
+    let triple = TermValue::Triple {
+        s: TermBox::new(TermValue::iri("http://a.example/s")),
+        p: TermBox::new(TermValue::iri("http://a.example/p")),
+        o: TermBox::new(directional("x \"y\"", "ar", RdfTextDirection::Rtl)),
+    };
+    let spelled = emitted_node_term(&triple);
+    assert_eq!(
+        spelled,
+        "<<( <http://a.example/s> <http://a.example/p> \"x \\\"y\\\"\"@ar--rtl )>>"
+    );
+    assert_eq!(round_trip(&triple), triple);
+}
+
+#[test]
+fn a_directional_literal_round_trips_with_its_direction() {
+    let ltr = directional("hello", "en", RdfTextDirection::Ltr);
+    assert_eq!(emitted_node_term(&ltr), "\"hello\"@en--ltr");
+    assert_eq!(round_trip(&ltr), ltr);
+    // The neighbour without a direction still round-trips as a plain tagged literal.
+    let tagged = TermValue::lang_literal("hello", "en-us");
+    assert_eq!(round_trip(&tagged), tagged);
+}
+
+#[test]
+fn an_iri_only_report_is_byte_identical() {
+    let result = ResultShapeMap {
+        entries: vec![
+            ResultEntry {
+                node: TermValue::iri("http://a.example/s1"),
+                shape: ShapeSelector::Label(S.to_owned()),
+                status: ConformanceStatus::Conformant,
+                reason: None,
+            },
+            ResultEntry {
+                node: TermValue::iri("http://a.example/s2"),
+                shape: ShapeSelector::Start,
+                status: ConformanceStatus::Nonconformant,
+                reason: Some("why".to_owned()),
+            },
+        ],
+    };
+    assert_eq!(
+        result.to_result_json(),
+        "[{\"node\":\"<http://a.example/s1>\",\"shape\":\"<http://a.example/S>\",\
+         \"status\":\"conformant\"},{\"node\":\"<http://a.example/s2>\",\
+         \"shape\":\"START\",\"status\":\"nonconformant\",\"reason\":\"why\"}]"
+    );
+}
+
+#[test]
+fn a_triple_term_must_close_with_its_own_delimiter() {
+    let s = "<http://a.example/s> <http://a.example/p> <http://a.example/o>";
+    // Mismatched delimiters are refused.
+    assert!(parse_shape_map(&format!("<<( {s} >> @START"), None).is_err());
+    assert!(parse_shape_map(&format!("<< {s} )>> @START"), None).is_err());
+    // `<< s p o >>` is reifier syntax, not a triple term: refused.
+    assert!(parse_shape_map(&format!("<< {s} >> @START"), None).is_err());
+    // The RDF 1.2 spelling parses.
+    parse_shape_map(&format!("<<( {s} )>> @START"), None).expect("<<( )>> parses");
+}
+
+#[test]
+fn only_ltr_and_rtl_after_a_double_hyphen_are_a_direction() {
+    let parse = |text: &str| parse_shape_map(&format!("{text} @START"), None);
+    // An unknown direction token stays in the tag, where the tag grammar refuses it.
+    assert!(parse("\"x\"@en--up").is_err());
+    assert!(parse("\"x\"@en--RTL").is_err());
+    // The two directions parse.
+    assert!(parse("\"x\"@en--ltr").is_ok());
+    assert!(parse("\"x\"@en--rtl").is_ok());
 }

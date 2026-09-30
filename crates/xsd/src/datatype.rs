@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The XSD datatype vocabulary this crate's value space covers.
+//! The XSD datatype vocabulary: the datatype and constraining-facet IRIs of
+//! XML Schema 1.1 Part 2 that the workspace names, and the value-space datatypes
+//! this crate models.
 //!
-//! The IRI string constants are **value-identical** to the ones used elsewhere in
-//! the workspace (e.g. `XSD_STRING` in `purrdf-core`'s `ir/term.rs`). They are
-//! copied here deliberately: `purrdf-xsd` is a leaf crate and does not (yet) share a
-//! symbol with `purrdf-core` (whose copies are `pub(crate)` and which does not
-//! depend on this crate). The crate tests pin the exact strings so the copies
-//! cannot silently drift; de-duplicating into a single source is a later slice.
+//! These constants are the workspace's one spelling of each XSD IRI; code names
+//! an XSD datatype or facet through them and never types the IRI a second time.
+//! The other W3C vocabularies live in `purrdf_iri::vocab`; the XSD ones live here,
+//! beside the value space they name.
 
 /// The XML Schema datatype namespace.
 pub const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
@@ -75,6 +75,64 @@ pub const XSD_G_MONTH_DAY: &str = "http://www.w3.org/2001/XMLSchema#gMonthDay";
 pub const XSD_HEX_BINARY: &str = "http://www.w3.org/2001/XMLSchema#hexBinary";
 /// `xsd:base64Binary` — a Base64-encoded byte sequence.
 pub const XSD_BASE64_BINARY: &str = "http://www.w3.org/2001/XMLSchema#base64Binary";
+
+/// `xsd:anyURI` — an IRI reference.
+pub const XSD_ANY_URI: &str = "http://www.w3.org/2001/XMLSchema#anyURI";
+/// `xsd:normalizedString` — a string with no carriage return, line feed or tab.
+pub const XSD_NORMALIZED_STRING: &str = "http://www.w3.org/2001/XMLSchema#normalizedString";
+/// `xsd:token` — a normalized string with no leading, trailing or doubled space.
+pub const XSD_TOKEN: &str = "http://www.w3.org/2001/XMLSchema#token";
+/// `xsd:language` — a BCP 47 language tag.
+pub const XSD_LANGUAGE: &str = "http://www.w3.org/2001/XMLSchema#language";
+/// `xsd:Name` — an XML `Name`.
+pub const XSD_NAME: &str = "http://www.w3.org/2001/XMLSchema#Name";
+/// `xsd:NCName` — an XML non-colonized name.
+pub const XSD_NCNAME: &str = "http://www.w3.org/2001/XMLSchema#NCName";
+/// `xsd:NMTOKEN` — an XML name token.
+pub const XSD_NMTOKEN: &str = "http://www.w3.org/2001/XMLSchema#NMTOKEN";
+/// `xsd:dateTimeStamp` — an `xsd:dateTime` whose timezone is required.
+pub const XSD_DATE_TIME_STAMP: &str = "http://www.w3.org/2001/XMLSchema#dateTimeStamp";
+
+// The constraining facets of XML Schema 1.1 Part 2 §4.3, which OWL 2 datatype
+// restrictions and SHACL name as predicates.
+
+/// `xsd:length` — the exact length facet.
+pub const XSD_LENGTH: &str = "http://www.w3.org/2001/XMLSchema#length";
+/// `xsd:minLength` — the minimum length facet.
+pub const XSD_MIN_LENGTH: &str = "http://www.w3.org/2001/XMLSchema#minLength";
+/// `xsd:maxLength` — the maximum length facet.
+pub const XSD_MAX_LENGTH: &str = "http://www.w3.org/2001/XMLSchema#maxLength";
+/// `xsd:pattern` — the regular-expression facet.
+pub const XSD_PATTERN: &str = "http://www.w3.org/2001/XMLSchema#pattern";
+/// `xsd:enumeration` — the enumerated-values facet.
+pub const XSD_ENUMERATION: &str = "http://www.w3.org/2001/XMLSchema#enumeration";
+/// `xsd:whiteSpace` — the whitespace-normalization facet.
+pub const XSD_WHITE_SPACE: &str = "http://www.w3.org/2001/XMLSchema#whiteSpace";
+/// `xsd:maxInclusive` — the inclusive upper bound facet.
+pub const XSD_MAX_INCLUSIVE: &str = "http://www.w3.org/2001/XMLSchema#maxInclusive";
+/// `xsd:maxExclusive` — the exclusive upper bound facet.
+pub const XSD_MAX_EXCLUSIVE: &str = "http://www.w3.org/2001/XMLSchema#maxExclusive";
+/// `xsd:minInclusive` — the inclusive lower bound facet.
+pub const XSD_MIN_INCLUSIVE: &str = "http://www.w3.org/2001/XMLSchema#minInclusive";
+/// `xsd:minExclusive` — the exclusive lower bound facet.
+pub const XSD_MIN_EXCLUSIVE: &str = "http://www.w3.org/2001/XMLSchema#minExclusive";
+/// `xsd:totalDigits` — the total-digits facet.
+pub const XSD_TOTAL_DIGITS: &str = "http://www.w3.org/2001/XMLSchema#totalDigits";
+/// `xsd:fractionDigits` — the fraction-digits facet.
+pub const XSD_FRACTION_DIGITS: &str = "http://www.w3.org/2001/XMLSchema#fractionDigits";
+/// `xsd:assertions` — the assertions facet.
+pub const XSD_ASSERTIONS: &str = "http://www.w3.org/2001/XMLSchema#assertions";
+/// `xsd:explicitTimezone` — the explicit-timezone facet.
+pub const XSD_EXPLICIT_TIMEZONE: &str = "http://www.w3.org/2001/XMLSchema#explicitTimezone";
+
+// The two numeric datatypes the OWL 2 datatype map adds to XSD's (OWL 2
+// Structural Specification §4.1). They sit here, with the value space this
+// crate models for them, rather than in `purrdf_iri::vocab::owl`.
+
+/// `owl:real` — the real numbers (OWL 2 Structural Specification §4.1).
+pub const OWL_REAL: &str = "http://www.w3.org/2002/07/owl#real";
+/// `owl:rational` — the rational numbers (OWL 2 Structural Specification §4.1).
+pub const OWL_RATIONAL: &str = "http://www.w3.org/2002/07/owl#rational";
 
 /// The XSD datatypes whose **value space** `purrdf-xsd` models.
 ///
@@ -176,7 +234,14 @@ impl XsdDatatype {
         // `XSD_*` constant is literally `XSD_NS ++ local`, so this is the same
         // predicate as 31 full-IRI compares without re-scanning the 33-byte
         // namespace per arm (a non-XSD IRI now fails on the first compare).
-        let local = iri.strip_prefix(XSD_NS)?;
+        Self::from_local(iri.strip_prefix(XSD_NS)?)
+    }
+
+    /// Resolve an XSD local name (`"integer"`, `"dateTime"`, …) to its
+    /// [`XsdDatatype`] — [`Self::from_iri`] after the namespace. `None` when the
+    /// name is not one of the value-space datatypes this crate models.
+    #[must_use]
+    pub fn from_local(local: &str) -> Option<Self> {
         Some(match local {
             "integer" => Self::Integer,
             "long" => Self::Long,
@@ -249,6 +314,22 @@ impl XsdDatatype {
             Self::HexBinary => XSD_HEX_BINARY,
             Self::Base64Binary => XSD_BASE64_BINARY,
         }
+    }
+
+    /// Whether this is `xsd:integer` or one of the twelve datatypes derived from
+    /// it (XSD 1.1 Part 2 §3.4.13–§3.4.25): the datatypes whose values are
+    /// integers.
+    #[must_use]
+    pub const fn is_integer_family(self) -> bool {
+        self.integer_range().is_some()
+    }
+
+    /// Whether this datatype is in the SPARQL numeric tower (SPARQL 1.1 §17.1,
+    /// "numeric"): the integer family, `xsd:decimal`, `xsd:float` and
+    /// `xsd:double`.
+    #[must_use]
+    pub const fn is_numeric(self) -> bool {
+        self.is_integer_family() || matches!(self, Self::Decimal | Self::Float | Self::Double)
     }
 
     /// The inclusive `(min, max)` integer bounds for this datatype, or `None` if it is
@@ -331,8 +412,42 @@ mod tests {
         assert_eq!(XsdDatatype::from_iri("https://example.org/custom"), None);
     }
 
-    /// Pins the exact IRI strings byte-for-byte (the value-equality guard described
-    /// in the module docs — these must match `purrdf-core`'s `pub(crate)` copies).
+    /// The lexical-space datatypes and the constraining facets are XSD terms,
+    /// and `owl:real`/`owl:rational` are OWL's: each is its namespace plus the
+    /// local name the specification gives it.
+    #[test]
+    fn vocabulary_constants_are_namespace_plus_local_name() {
+        for (constant, local) in [
+            (XSD_ANY_URI, "anyURI"),
+            (XSD_NORMALIZED_STRING, "normalizedString"),
+            (XSD_TOKEN, "token"),
+            (XSD_LANGUAGE, "language"),
+            (XSD_NAME, "Name"),
+            (XSD_NCNAME, "NCName"),
+            (XSD_NMTOKEN, "NMTOKEN"),
+            (XSD_DATE_TIME_STAMP, "dateTimeStamp"),
+            (XSD_LENGTH, "length"),
+            (XSD_MIN_LENGTH, "minLength"),
+            (XSD_MAX_LENGTH, "maxLength"),
+            (XSD_PATTERN, "pattern"),
+            (XSD_ENUMERATION, "enumeration"),
+            (XSD_WHITE_SPACE, "whiteSpace"),
+            (XSD_MAX_INCLUSIVE, "maxInclusive"),
+            (XSD_MAX_EXCLUSIVE, "maxExclusive"),
+            (XSD_MIN_INCLUSIVE, "minInclusive"),
+            (XSD_MIN_EXCLUSIVE, "minExclusive"),
+            (XSD_TOTAL_DIGITS, "totalDigits"),
+            (XSD_FRACTION_DIGITS, "fractionDigits"),
+            (XSD_ASSERTIONS, "assertions"),
+            (XSD_EXPLICIT_TIMEZONE, "explicitTimezone"),
+        ] {
+            assert_eq!(constant.strip_prefix(XSD_NS), Some(local));
+        }
+        assert_eq!(OWL_REAL, "http://www.w3.org/2002/07/owl#real");
+        assert_eq!(OWL_RATIONAL, "http://www.w3.org/2002/07/owl#rational");
+    }
+
+    /// Pins the exact IRI strings byte-for-byte.
     #[test]
     fn iri_constants_are_byte_exact() {
         assert_eq!(XSD_STRING, "http://www.w3.org/2001/XMLSchema#string");

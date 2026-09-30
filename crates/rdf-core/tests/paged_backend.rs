@@ -16,126 +16,28 @@
 //! 3. **Cross-page cost model (F1)** — `cardinality_estimate` on a skewed page
 //!    distribution equals the independently-computed per-page sum.
 
+#[path = "support/values.rs"]
+mod values;
 use purrdf_core::TermBox;
+use purrdf_core::term_fixture::iri;
+use purrdf_core::term_fixture::one_quad;
+use purrdf_core::term_fixture::{Triple, build_page, intern_value, split_pages};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use values::{collect_rows, to_value};
 
 use purrdf_core::{
     CountingDemandProvider, DatasetView, FallibleDatasetView, GraphMatch, InMemoryPageProvider,
     PageFault, PageFaultKind, PageGeneration, PageId, PageMaterialization, PageProvider,
     PagedDataset, PagedFreezeError, PagedQuadTable, PagedQueryError, PagedQueryLimits, RdfDataset,
-    RdfDatasetBuilder, RdfLiteral, StopCause, TermId, TermRef, TermValue, ViewOperationStatus,
-    render_canonical_turtle,
+    RdfDatasetBuilder, StopCause, TermId, TermValue, ViewOperationStatus, render_canonical_turtle,
 };
 
 // The standard RDF Collection vocabulary (crate-internal constants are not public;
 // these are the well-known IRIs).
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-
-/// An `example.org` IRI value.
-fn iri(name: &str) -> TermValue {
-    TermValue::iri(format!("http://example.org/{name}"))
-}
-
-/// Intern one dataset-independent value into a builder, recursing for triple terms
-/// (this is the by-value inverse the fixtures need).
-fn intern_value(b: &mut RdfDatasetBuilder, v: &TermValue) -> TermId {
-    match v {
-        TermValue::Iri(s) => b.intern_iri(s),
-        TermValue::Blank { label, scope } => b.intern_blank(label, *scope),
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => b.intern_literal(RdfLiteral {
-            lexical_form: lexical_form.clone(),
-            datatype: Some(datatype.clone()),
-            language: language.clone(),
-            direction: *direction,
-        }),
-        TermValue::Triple { s, p, o } => {
-            let s = intern_value(b, s);
-            let p = intern_value(b, p);
-            let o = intern_value(b, o);
-            b.intern_triple(s, p, o)
-        }
-    }
-}
-
-type Triple = (TermValue, TermValue, TermValue);
-
-/// Freeze one page from a list of `(s, p, o)` triples in the default graph.
-fn build_page(triples: &[Triple]) -> Arc<RdfDataset> {
-    let mut b = RdfDatasetBuilder::new();
-    for (s, p, o) in triples {
-        let s = intern_value(&mut b, s);
-        let p = intern_value(&mut b, p);
-        let o = intern_value(&mut b, o);
-        b.push_quad(s, p, o, None);
-    }
-    b.freeze().expect("page freeze")
-}
-
-/// Resolve a view id to its dataset-INDEPENDENT `TermValue`, recursing through the
-/// literal datatype and triple components. Generic over any `DatasetView`, so the
-/// same routine reads a single `RdfDataset` and a multi-page `PagedDataset` and lets
-/// their rows be compared by value.
-fn to_value<V: DatasetView>(v: &V, id: V::Id) -> TermValue {
-    match v.resolve(id) {
-        TermRef::Iri(s) => TermValue::iri(s),
-        TermRef::Blank { label, scope } => TermValue::Blank {
-            label: label.to_owned(),
-            scope,
-        },
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let datatype = match v.resolve(datatype) {
-                TermRef::Iri(s) => s.to_owned(),
-                _ => panic!("literal datatype must resolve to an IRI"),
-            };
-            TermValue::Literal {
-                lexical_form: lexical.to_owned(),
-                datatype,
-                language: language.map(str::to_owned),
-                direction,
-            }
-        }
-        TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: TermBox::new(to_value(v, s)),
-            p: TermBox::new(to_value(v, p)),
-            o: TermBox::new(to_value(v, o)),
-        },
-    }
-}
-
-/// A deterministic sort key for a value row (`TermValue` is not `Ord`; its `Debug`
-/// form is total and dataset-independent).
-fn row_key(row: &[TermValue]) -> String {
-    format!("{row:?}")
-}
-
-/// Collect every quad of the view as sorted `[s, p, o, g?]` value rows, via the
-/// generic trait surface only. `g` is rendered as an extra element (a sentinel for
-/// the default graph) so named-graph quads stay distinguishable.
-fn collect_rows<V: DatasetView>(v: &V) -> Vec<Vec<TermValue>> {
-    let mut rows: Vec<Vec<TermValue>> = v
-        .quads_for_pattern(None, None, None, GraphMatch::Any)
-        .map(|q| {
-            let mut row = vec![to_value(v, q.s), to_value(v, q.p), to_value(v, q.o)];
-            row.push(q.g.map_or_else(|| TermValue::iri("urn:default-graph"), |g| to_value(v, g)));
-            row
-        })
-        .collect();
-    rows.sort_by_key(|r| row_key(r));
-    rows
-}
+use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+use purrdf_iri::vocab::rdf::REST as RDF_REST;
 
 /// A generic two-pattern join `(a_s a_p ?x)(?x b_p ?y)` returning the sorted
 /// `(?x, ?y)` value pairs. `?x` is threaded as a NATIVE view id from the first
@@ -195,15 +97,6 @@ fn parity_corpus() -> Vec<Triple> {
     ]
 }
 
-/// Split a corpus round-robin across `page_count` quad-disjoint pages.
-fn split_pages(triples: &[Triple], page_count: usize) -> Vec<Arc<RdfDataset>> {
-    let mut buckets: Vec<Vec<Triple>> = vec![Vec::new(); page_count];
-    for (i, t) in triples.iter().enumerate() {
-        buckets[i % page_count].push(t.clone());
-    }
-    buckets.iter().map(|b| build_page(b)).collect()
-}
-
 #[test]
 fn cross_page_parity_via_trait_surface() {
     let corpus = parity_corpus();
@@ -260,22 +153,20 @@ fn lazy_page0() -> Arc<RdfDataset> {
 /// Page 1: `o_shared` interned LAST (local index 2). `s1` present only here — so its
 /// distinct local index vs page 0 proves the id spaces are independent.
 fn lazy_page1() -> Arc<RdfDataset> {
-    let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s1");
-    let p = b.intern_iri("http://example.org/p");
-    let o = b.intern_iri("http://example.org/o_shared");
-    b.push_quad(s, p, o, None);
-    b.freeze().expect("page1")
+    one_quad(
+        "http://example.org/s1",
+        "http://example.org/p",
+        "http://example.org/o_shared",
+    )
 }
 
 /// Page 2: `s2` present only here.
 fn lazy_page2() -> Arc<RdfDataset> {
-    let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s2");
-    let p = b.intern_iri("http://example.org/p");
-    let o = b.intern_iri("http://example.org/o_shared");
-    b.push_quad(s, p, o, None);
-    b.freeze().expect("page2")
+    one_quad(
+        "http://example.org/s2",
+        "http://example.org/p",
+        "http://example.org/o_shared",
+    )
 }
 
 #[test]

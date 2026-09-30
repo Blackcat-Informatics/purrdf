@@ -148,49 +148,11 @@ impl fmt::Display for DrainError {
     }
 }
 
-/// An infallible append target for text fragments.
-///
-/// Implemented by [`String`] and by [`TextSink`]. Emitters take this as a GENERIC
-/// bound and monomorphize, so shared writer code costs no indirect call and a
-/// caller that already holds a whole document — a sort comparator rendering a key
-/// into reusable scratch, say — keeps using a plain `String` at full speed.
-///
-/// That is the division of labour that makes one emitter serve both spellings. The
-/// object-safe boundary sits ABOVE these writers, at the codec seam, where dispatch
-/// happens once per document rather than once per fragment; below it, everything is
-/// generic. Neither mechanism is right at both altitudes.
-///
-/// Note the absence of any read-back, rewind, or length accessor. An emitter
-/// written against this trait cannot inspect or retract what it has emitted, which
-/// is what makes it safe to point at a sink that has already drained.
-pub trait TextOut: fmt::Write {
-    /// Append `text`.
-    fn push_str(&mut self, text: &str);
-
-    /// Append one character.
-    fn push(&mut self, ch: char);
-
-    /// Whether the destination has failed and is discarding further fragments.
-    ///
-    /// Emitters poll this at their innermost loop so a dead drain costs one
-    /// fragment of formatting rather than a whole document. Always `false` for an
-    /// in-memory target, which cannot fail.
-    fn failed(&self) -> bool {
-        false
-    }
-}
-
-impl TextOut for String {
-    #[inline]
-    fn push_str(&mut self, text: &str) {
-        Self::push_str(self, text);
-    }
-
-    #[inline]
-    fn push(&mut self, ch: char) {
-        Self::push(self, ch);
-    }
-}
+/// The infallible append target every text writer emits into, defined in the
+/// lexical layer beside the term-spelling writers ([`purrdf_lex::iri_escape`],
+/// [`purrdf_lex::literal_escape`], [`purrdf_lex::term_syntax`]) and implemented
+/// here for [`TextSink`]. See [`purrdf_lex::text_out::TextOut`].
+pub use purrdf_lex::text_out::TextOut;
 
 impl TextOut for TextSink<'_> {
     #[inline]
@@ -319,11 +281,7 @@ impl Digest {
     }
 }
 
-impl Default for Digest {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(Digest);
 
 impl fmt::Debug for Digest {
     /// Deliberately opaque: a hasher's interior state is not meaningful to a

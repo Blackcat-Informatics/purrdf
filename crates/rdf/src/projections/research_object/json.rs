@@ -1,14 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use std::borrow::Cow;
+pub(super) use crate::projections::loss::ensure_sound;
+use crate::projections::loss::record_contract_loss;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use purrdf_core::loss::{LossEntry, check_ledger_sound};
 use purrdf_core::{LossLedger, RdfDataset, RdfLocation};
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
+use purrdf_lex::json::{Object, Value};
 
 use crate::native_codecs::jsonld::{
     CompiledJsonLdContext, parse_jsonld, serialize_dataset_to_jsonld,
@@ -16,17 +15,18 @@ use crate::native_codecs::jsonld::{
 
 use super::super::{ProjectionError, ProjectionLimits, ProjectionPackage, validate_absolute_iri};
 use super::{ResearchObjectConfig, ResearchObjectModel};
+use purrdf_lex::json::record::sorted_last_wins;
 
 /// Caller-owned, locally interpreted JSON-LD context.
 ///
-/// `value` is carried byte-semantically into emitted documents. `definitions`
-/// is the complete offline expansion table used by profile adapters; PurRDF
-/// never dereferences a context IRI.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// `value` is carried byte-semantically into emitted documents, with every
+/// object's members in name order (a repeated name keeps its last value).
+/// `definitions` is the complete offline expansion table used by profile
+/// adapters; PurRDF never dereferences a context IRI.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OfflineJsonLdContext {
     value: Value,
     definitions: BTreeMap<String, String>,
-    #[serde(skip)]
     compiled: Arc<CompiledJsonLdContext>,
 }
 
@@ -39,9 +39,10 @@ impl OfflineJsonLdContext {
     /// keyword-like compact term, a non-absolute expansion, or ambiguous IRI
     /// aliases.
     pub fn new(
-        value: Value,
+        mut value: Value,
         definitions: BTreeMap<String, String>,
     ) -> Result<Self, ProjectionError> {
+        sorted_last_wins(&mut value);
         validate_context_value(&value)?;
         if definitions.is_empty() {
             return Err(ProjectionError::configuration(
@@ -73,10 +74,14 @@ impl OfflineJsonLdContext {
                 // whose expansion is not CURIE concatenation. Those remain explicit
                 // profile rules; plain JSON-LD terms use the shared context engine.
                 .filter(|(term, _)| !term.contains(':'))
-                .map(|(term, iri)| (term.clone(), Value::String(iri.clone())))
-                .collect(),
+                .map(|(term, iri)| (term.as_str(), iri.as_str()))
+                .collect::<Object>(),
         );
-        let compiled = CompiledJsonLdContext::compile(&compiled_value, None).map_err(|error| {
+        let compiled = CompiledJsonLdContext::compile_json(
+            purrdf_lex::json::write_compact(&compiled_value).as_bytes(),
+            None,
+        )
+        .map_err(|error| {
             ProjectionError::configuration(format!(
                 "compile offline JSON-LD term definitions: {error}"
             ))
@@ -120,22 +125,15 @@ impl OfflineJsonLdContext {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawOfflineJsonLdContext {
-    value: Value,
-    definitions: BTreeMap<String, String>,
-}
+purrdf_lex::json_record!(impl FromJson for OfflineJsonLdContext as "struct OfflineJsonLdContext" {
+    "value" => context: required::<Value>,
+    "definitions" => definitions: required,
+} => OfflineJsonLdContext::new);
 
-impl<'de> Deserialize<'de> for OfflineJsonLdContext {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawOfflineJsonLdContext::deserialize(deserializer)?;
-        Self::new(raw.value, raw.definitions).map_err(serde::de::Error::custom)
-    }
-}
+purrdf_lex::json_record!(impl ToJson for OfflineJsonLdContext {
+    "value" => value,
+    "definitions" => definitions,
+});
 
 fn validate_context_value(value: &Value) -> Result<(), ProjectionError> {
     match value {
@@ -189,12 +187,19 @@ pub struct ResearchObjectReadOutcome {
     pub loss_ledger: LossLedger,
 }
 
+/// A profile document as its canonical bytes: compact JSON with every object's
+/// members in name order, and a trailing newline.
+///
+/// Profile writers build documents member by member; ordering here makes the
+/// bytes a function of the document's content rather than of build order.
 pub(super) fn canonical_json(
     value: &Value,
     limits: ProjectionLimits,
     description: &str,
 ) -> Result<Vec<u8>, ProjectionError> {
-    let mut bytes = super::super::util::canonical_json_bounded(value, limits, description)?;
+    let mut sorted = value.clone();
+    sorted.sort_keys();
+    let mut bytes = super::super::util::canonical_json_bounded(&sorted, limits, description)?;
     if bytes.len() == limits.max_artifact_bytes() {
         return Err(ProjectionError::limit(format!(
             "{description} plus its canonical newline exceeds the {}-byte artifact limit",
@@ -217,14 +222,18 @@ pub(super) fn parse_strict_json(
         ))
         .at_path(path));
     }
-    crate::json_number::read_json(|| {
-        crate::json_number::parse_strict(
-            bytes,
-            config.policy().max_records(),
-            config.policy().max_json_depth(),
-        )
-    })
-    .map_err(|error| ProjectionError::syntax(format!("parse {description}: {error}")).at_path(path))
+    let mut value = crate::json_number::parse_strict(
+        bytes,
+        config.policy().max_records(),
+        config.policy().max_json_depth(),
+    )
+    .map_err(|error| {
+        ProjectionError::syntax(format!("parse {description}: {error}")).at_path(path)
+    })?;
+    // Duplicate members are refused above, so this only orders members by
+    // name: every profile decoder walks a document in that one order.
+    value.sort_keys();
+    Ok(value)
 }
 
 pub(super) fn require_artifact<'a>(
@@ -268,6 +277,7 @@ fn validate_package_bounds(
     Ok(())
 }
 
+/// Record the contract entry `code` in the artifact at `path`, on `subject`.
 pub(super) fn record_loss(
     ledger: &mut LossLedger,
     contract: &LossLedger,
@@ -275,28 +285,12 @@ pub(super) fn record_loss(
     path: &str,
     subject: &str,
 ) {
-    let template = contract
-        .entries()
-        .iter()
-        .find(|entry| entry.code == code)
-        .expect("native research-object loss must exist in closed contract");
-    ledger.record(LossEntry {
-        code: Cow::Borrowed(code),
-        from: template.from.clone(),
-        to: template.to.clone(),
-        note: template.note.clone(),
-        location: Some(Box::new(
-            RdfLocation::file(path).with_subject(subject.to_owned()),
-        )),
-    });
-}
-
-pub(super) fn ensure_sound(
-    ledger: &LossLedger,
-    from: &str,
-    to: &str,
-) -> Result<(), ProjectionError> {
-    check_ledger_sound(ledger, from, to).map_err(ProjectionError::integrity)
+    record_contract_loss(
+        ledger,
+        contract,
+        code,
+        RdfLocation::file(path).with_subject(subject),
+    );
 }
 
 /// Re-parse a lifted dataset's own JSON-LD serialization, so every profile adapter hands
@@ -335,32 +329,10 @@ pub(super) fn normalize_lifted_jsonld(
 }
 
 pub(super) fn json_pointer(parent: &str, member: &str) -> String {
-    let escaped = escape_json_pointer_member(member);
-    if parent.is_empty() {
-        format!("/{escaped}")
-    } else {
-        format!("{parent}/{escaped}")
-    }
-}
-
-fn escape_json_pointer_member(member: &str) -> Cow<'_, str> {
-    let escape_count = member
-        .bytes()
-        .filter(|byte| matches!(byte, b'~' | b'/'))
-        .count();
-    if escape_count == 0 {
-        return Cow::Borrowed(member);
-    }
-
-    let mut escaped = String::with_capacity(member.len() + escape_count);
-    for character in member.chars() {
-        match character {
-            '~' => escaped.push_str("~0"),
-            '/' => escaped.push_str("~1"),
-            _ => escaped.push(character),
-        }
-    }
-    Cow::Owned(escaped)
+    let mut pointer = String::with_capacity(parent.len() + 1 + member.len());
+    pointer.push_str(parent);
+    purrdf_iri::json_pointer::push_token(&mut pointer, member);
+    pointer
 }
 
 #[cfg(test)]
@@ -426,6 +398,11 @@ mod tests {
                 Some(correct.to_bits()),
                 "{lexical}"
             );
+            assert_eq!(
+                read.as_number().map(purrdf_lex::json::Number::lexeme),
+                Some(lexical.as_str()),
+                "the strict reader keeps the lexeme"
+            );
         }
     }
 
@@ -448,7 +425,7 @@ mod tests {
 
         assert!(
             OfflineJsonLdContext::new(
-                serde_json::json!({"@import": "https://example.org/base"}),
+                Value::from(Object::new().with("@import", "https://example.org/base")),
                 valid.definitions,
             )
             .is_err()
@@ -463,7 +440,7 @@ mod tests {
         let dataset = lifted_fixture();
         let json = serialize_dataset_to_jsonld(&dataset)
             .expect("the lifted dataset serializes to JSON-LD");
-        let value: Value = serde_json::from_str(&json).expect("serializer emits JSON");
+        let value = purrdf_lex::json::read(&json).expect("serializer emits JSON");
 
         let mut ids = Vec::new();
         collect_ids(&value, &mut ids);
@@ -527,12 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn json_pointer_borrows_clean_members_and_escapes_rfc6901_tokens() {
-        assert!(matches!(
-            escape_json_pointer_member("plain"),
-            Cow::Borrowed("plain")
-        ));
-        assert_eq!(escape_json_pointer_member("a~/b"), "a~0~1b");
+    fn json_pointer_escapes_rfc6901_tokens() {
         assert_eq!(json_pointer("", "plain"), "/plain");
         assert_eq!(json_pointer("/items/0", "a~/b"), "/items/0/a~0~1b");
     }

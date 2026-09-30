@@ -5,7 +5,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 # purrdf (wasm) — RDF 1.2 in the browser & Node, the RDF/JS way
 
-`purrdf` is a `wasm32`, **in-memory** RDF 1.2 engine compiled from the oxigraph-free
+`purrdf` is a `wasm32`, **in-memory** RDF 1.2 engine compiled from the
 [`purrdf`](../purrdf) umbrella crate and surfaced to JavaScript/TypeScript through the
 [RDF/JS](https://rdf.js.org/) community spec (`DataFactory`, `DatasetCore`,
 `Stream`/`Sink`).
@@ -221,7 +221,7 @@ denial, an endpoint's failure, and a request served while a long query runs.
 
 ## Scope
 
-- **In-memory only** — the oxigraph `Store` (RocksDB) and the logic engine do not
+- **In-memory only** — a persistent (RocksDB) store and the logic engine do not
   compile to wasm and are excluded by design. SPARQL runs over the in-memory
   dataset. The synchronous methods install no `SERVICE` or `LOAD` source, so there a
   remote `SERVICE` or `LOAD` fails explicitly unless written `SILENT`; the

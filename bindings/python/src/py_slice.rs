@@ -26,12 +26,12 @@
 //!   plain error strings, the same diagnostics the retired lint produced (but
 //!   physical-origin based, not directory-name derived).
 
-use std::collections::HashMap;
 use std::path::Path;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+use purrdf_core::FastMap;
 use purrdf_slice::analysis::emit_analysis_graph;
 use purrdf_slice::artifact::{ArtifactRecord, ArtifactRole};
 use purrdf_slice::cache::ToolchainContext;
@@ -39,19 +39,9 @@ use purrdf_slice::catalog::{ManifestView, SliceCatalog, SliceRecord, SliceTier};
 use purrdf_slice::fix_deps::{ManifestPatch, compute_fix_deps};
 use purrdf_slice::ownership::{
     DependencyEdge, OwnershipAnalyzer, OwnershipDiagnostic, OwnershipReport, OwnershipStatus,
-    ReconciliationStatus, SliceIri,
+    SliceIri,
 };
 use purrdf_slice::vocab::SliceVocab;
-
-/// The stable lowercase token a [`ReconciliationStatus`] is exposed as.
-fn reconciliation_token(status: ReconciliationStatus) -> &'static str {
-    match status {
-        ReconciliationStatus::Matched => "matched",
-        ReconciliationStatus::Undeclared => "undeclared",
-        ReconciliationStatus::Stale => "stale",
-        ReconciliationStatus::Forbidden => "forbidden",
-    }
-}
 
 /// The stable string name an [`ArtifactRole`] is exposed as (matches the Rust
 /// variant name so Python can compare against `"Manifest"`, `"Module"`, …).
@@ -370,7 +360,7 @@ impl PyDependencyEdge {
         Self {
             from_slice: edge.from_slice.clone(),
             to_slice: edge.to_slice.clone(),
-            reconciliation: reconciliation_token(edge.reconciliation),
+            reconciliation: edge.reconciliation.token(),
             is_semantic: edge.edge_kind.is_semantic(),
         }
     }
@@ -512,7 +502,7 @@ pub struct PyOwnershipAnalyzer {
     /// Per-slice numeric tier, resolved once from the catalog manifests, so the
     /// analysis-graph emitter's `tier_of` closure is a pure lookup (the emitter
     /// module stays PyO3-free; tier resolution happens here).
-    tier_of: HashMap<SliceIri, u8>,
+    tier_of: FastMap<SliceIri, u8>,
     /// The slice vocabulary inherited from the catalog at construction.
     vocab: SliceVocab,
     /// Every authored artifact raw digest in the catalog (drives the analysis
@@ -534,7 +524,7 @@ impl PyOwnershipAnalyzer {
             let report = OwnershipAnalyzer::new(&catalog.inner)
                 .analyze()
                 .map_err(|e| PyValueError::new_err(format!("ownership analysis failed: {e}")))?;
-            let mut tier_of: HashMap<SliceIri, u8> = HashMap::new();
+            let mut tier_of: FastMap<SliceIri, u8> = FastMap::default();
             let mut raw_digests: Vec<String> = Vec::new();
             for record in catalog.inner.records() {
                 tier_of.insert(

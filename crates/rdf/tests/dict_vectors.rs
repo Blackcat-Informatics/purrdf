@@ -25,39 +25,26 @@
 //! serializer, while this test always derives the comparison from the frozen
 //! `.gts` bytes themselves.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use purrdf_core::FastMap;
 
-use ciborium::value::Value;
 use purrdf_gts::compact::{DEFAULT_DICT_NAME, DictPlan, DictStrategy};
 use purrdf_gts::model::Graph;
 use purrdf_gts::reader::read;
 use purrdf_gts::wire::{iter_items, map_get};
+use purrdf_lex::cbor::Value;
 use purrdf_rdf::gts_certify::{compact_and_certify, refold_digest, verify_compaction};
 use purrdf_rdf::gts_dict_vectors::{
-    MULTI_DICT_NAMES, TIMESTAMP, VECTOR_ZSTD_LEVEL, authorship_key, expected_fold_json,
-    fixed_source, multi_dict_pack, packaging_key, render_expected_json, rsyncable_plan,
-    size_comparison_source,
+    MULTI_DICT_NAMES, TIMESTAMP, VECTOR_ZSTD_LEVEL, expected_fold_json, fixed_source, keyring,
+    multi_dict_pack, packaging_key, render_expected_json, rsyncable_plan, size_comparison_source,
 };
 
-fn vectors_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors")
-}
-
-fn read_vector(name: &str) -> Vec<u8> {
-    std::fs::read(vectors_dir().join(name)).unwrap_or_else(|err| panic!("read {name}: {err}"))
-}
+#[path = "support/vectors.rs"]
+mod vectors;
+use vectors::{header_carries_dct_entry, read_vector, vectors_dir};
 
 fn read_expected(name: &str) -> String {
     std::fs::read_to_string(vectors_dir().join(name))
         .unwrap_or_else(|err| panic!("read {name}: {err}"))
-}
-
-fn keyring() -> HashMap<String, ed25519_dalek::VerifyingKey> {
-    HashMap::from([
-        ("authorA".to_string(), authorship_key().verifying_key()),
-        ("pack".to_string(), packaging_key().verifying_key()),
-    ])
 }
 
 #[test]
@@ -96,24 +83,6 @@ fn decoded_blobs(g: &Graph) -> Vec<(String, Vec<u8>)> {
         .collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
-}
-
-/// Whether the file's header item (the first CBOR item, §3.1) carries a
-/// non-empty `"dct"` map (§5) — the functional signal that a pack dictionary
-/// was actually pinned in-band, not merely that some codec ran.
-fn header_carries_dct_entry(bytes: &[u8]) -> bool {
-    let (items, _torn) = iter_items(bytes);
-    let Some((_, first)) = items.first() else {
-        return false;
-    };
-    let inner = match first {
-        Value::Tag(_, inner) => inner.as_ref(),
-        other => other,
-    };
-    let Value::Map(entries) = inner else {
-        return false;
-    };
-    matches!(map_get(entries, "dct"), Some(Value::Map(dct)) if !dct.is_empty())
 }
 
 /// The 4-byte zstd frame magic number (`28 B5 2F FD`, little-endian
@@ -487,7 +456,7 @@ fn the_only_untransformed_frames_in_a_compacted_pack_are_the_deliberate_exclusio
 
 /// Each transformed frame's resolved codec chain as `(name, dict-name)` rows.
 fn frame_codec_chains(bytes: &[u8]) -> Vec<Vec<(String, Option<String>)>> {
-    let by_id: HashMap<i64, (String, Option<String>)> = catalog_rows(bytes)
+    let by_id: FastMap<i64, (String, Option<String>)> = catalog_rows(bytes)
         .into_iter()
         .map(|row| (row.id, (row.name, row.dct)))
         .collect();
@@ -611,7 +580,7 @@ fn multi_dict_vector_pins_two_distinct_dictionaries_and_selects_per_frame() {
 /// The set of dictionary names actually referenced by frames' `"x"` chains.
 fn used_dict_names(bytes: &[u8]) -> std::collections::BTreeSet<String> {
     let rows = catalog_rows(bytes);
-    let by_id: HashMap<i64, Option<String>> =
+    let by_id: FastMap<i64, Option<String>> =
         rows.into_iter().map(|row| (row.id, row.dct)).collect();
     let (items, _torn) = iter_items(bytes);
     let mut out = std::collections::BTreeSet::new();

@@ -406,6 +406,8 @@ impl<D: DatasetView + Sync> PathCtx<'_, D> {
 /// A property path has no sub-pattern, so there is no child truncation to compose: like a
 /// basic graph pattern, it is where a truncation ORIGINATES rather than somewhere one
 /// passes through, and the dispatch in [`crate::eval::eval`] wraps its result directly.
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_path<D: DatasetView + Sync>(
     subject: &TermPattern,
     path: &PropertyPathExpression,
@@ -701,7 +703,7 @@ fn resolve_end<D: DatasetView + Sync>(
 /// The output schema: the visible variable endpoints in subject-then-object order,
 /// deduplicated (a repeated variable is one column).
 fn path_schema(subject: &TermPattern, object: &TermPattern) -> VarSchema {
-    let mut schema = VarSchema::new();
+    let mut schema = VarSchema::default();
     if let Some(v) = visible_var(subject) {
         schema.push(v);
     }
@@ -3154,7 +3156,7 @@ mod recursion_free_tests {
     use crate::governor::{GovernorState, QueryGovernors};
     use purrdf_core::{GraphMatch, RdfDataset, RdfDatasetBuilder, TrippedGovernor};
     use purrdf_sparql_algebra::{Chain, Child};
-    use purrdf_testkit::rng::splitmix64_next;
+    use purrdf_testkit::rng::SplitMix64;
 
     const EX: &str = "http://example.org/";
 
@@ -3665,11 +3667,6 @@ mod recursion_free_tests {
 
     // ── Generated shapes ─────────────────────────────────────────────────────────────
 
-    /// One draw in `0..bound` from the deterministic stream.
-    fn draw(state: &mut u64, bound: u64) -> u64 {
-        splitmix64_next(state) % bound
-    }
-
     /// One generated case: a small graph, a path over it, a start node and a direction.
     struct Case {
         dataset: Arc<RdfDataset>,
@@ -3680,35 +3677,35 @@ mod recursion_free_tests {
 
     /// A graph of two to six nodes over one to three predicates with one to eight edges,
     /// self-loops and cycles included.
-    fn generate_dataset(state: &mut u64) -> Arc<RdfDataset> {
-        let nodes = 2 + draw(state, 5);
-        let predicates = 1 + draw(state, 3);
-        let edges = 1 + draw(state, 8);
+    fn generate_dataset(state: &mut SplitMix64) -> Arc<RdfDataset> {
+        let nodes = 2 + state.below(5);
+        let predicates = 1 + state.below(3);
+        let edges = 1 + state.below(8);
         let mut builder = RdfDatasetBuilder::new();
         for _ in 0..edges {
-            let s = builder.intern_iri(&iri(&format!("n{}", draw(state, nodes))));
-            let p = builder.intern_iri(&iri(&format!("p{}", draw(state, predicates))));
-            let o = builder.intern_iri(&iri(&format!("n{}", draw(state, nodes))));
+            let s = builder.intern_iri(&iri(&format!("n{}", state.below(nodes))));
+            let p = builder.intern_iri(&iri(&format!("p{}", state.below(predicates))));
+            let o = builder.intern_iri(&iri(&format!("n{}", state.below(nodes))));
             builder.push_quad(s, p, o, None);
         }
         builder.freeze().expect("the generated dataset freezes")
     }
 
-    fn generate_leaf(state: &mut u64) -> PropertyPathExpression {
+    fn generate_leaf(state: &mut SplitMix64) -> PropertyPathExpression {
         use PropertyPathExpression as P;
-        match draw(state, 6) {
-            0..=2 => P::NamedNode(predicate(draw(state, 4))),
+        match state.below(6) {
+            0..=2 => P::NamedNode(predicate(state.below(4))),
             3 => P::NegatedPropertySet(
-                (0..=draw(state, 2))
+                (0..=state.below(2))
                     .map(|_| NegatedPathElement {
-                        predicate: predicate(draw(state, 4)),
-                        inverse: draw(state, 2) == 1,
+                        predicate: predicate(state.below(4)),
+                        inverse: state.below(2) == 1,
                     })
                     .collect(),
             ),
             4 => P::Wildcard { namespace: None },
             _ => P::Wildcard {
-                namespace: Some(NamedNode::new_unchecked(if draw(state, 2) == 0 {
+                namespace: Some(NamedNode::new_unchecked(if state.below(2) == 0 {
                     EX.to_owned()
                 } else {
                     "http://other.example.org/".to_owned()
@@ -3718,10 +3715,10 @@ mod recursion_free_tests {
     }
 
     /// A chain of two or three generated elements.
-    fn generate_chain(state: &mut u64, budget: &mut u32) -> Chain<PropertyPathExpression> {
+    fn generate_chain(state: &mut SplitMix64, budget: &mut u32) -> Chain<PropertyPathExpression> {
         let first = generate_path(state, budget);
         let second = generate_path(state, budget);
-        let rest: Vec<PropertyPathExpression> = (0..draw(state, 2))
+        let rest: Vec<PropertyPathExpression> = (0..state.below(2))
             .map(|_| generate_path(state, budget))
             .collect();
         Chain::new(first, second, rest)
@@ -3731,13 +3728,13 @@ mod recursion_free_tests {
     /// its `min` from both lanes of the prefix walk — at most three levels, and past the
     /// linear prefix where the binary relation powers compose it — and its `max` from an
     /// open tail, an exact count, a window, and (when `min > 0`) an empty window.
-    fn generate_path(state: &mut u64, budget: &mut u32) -> PropertyPathExpression {
+    fn generate_path(state: &mut SplitMix64, budget: &mut u32) -> PropertyPathExpression {
         use PropertyPathExpression as P;
         if *budget == 0 {
             return generate_leaf(state);
         }
         *budget -= 1;
-        match draw(state, 12) {
+        match state.below(12) {
             0..=2 => generate_leaf(state),
             3 => P::Reverse(Child::new(generate_path(state, budget))),
             4 => P::ZeroOrOne(Child::new(generate_path(state, budget))),
@@ -3745,11 +3742,11 @@ mod recursion_free_tests {
             6 => P::OneOrMore(Child::new(generate_path(state, budget))),
             7 | 8 => {
                 const MINS: [u32; 7] = [0, 1, 2, 3, 65, 66, 70];
-                let min = MINS[draw(state, MINS.len() as u64) as usize];
-                let max = match draw(state, 4) {
+                let min = MINS[state.below(MINS.len() as u64) as usize];
+                let max = match state.below(4) {
                     0 => None,
                     1 => Some(min),
-                    2 => Some(min + 1 + draw(state, 3) as u32),
+                    2 => Some(min + 1 + state.below(3) as u32),
                     _ => min.checked_sub(1),
                 };
                 P::Range {
@@ -3765,11 +3762,11 @@ mod recursion_free_tests {
 
     /// `count` cases from `seed`.
     fn cases(count: usize, seed: u64) -> Vec<Case> {
-        let mut state = seed;
+        let mut state = SplitMix64::new(seed);
         (0..count)
             .map(|_| {
                 let dataset = generate_dataset(&mut state);
-                let mut budget = 1 + draw(&mut state, 5) as u32;
+                let mut budget = 1 + state.below(5) as u32;
                 let path = generate_path(&mut state, &mut budget);
                 let universe: Vec<TermId> = node_universe(&PathCtx {
                     dataset: &*dataset,
@@ -3781,8 +3778,8 @@ mod recursion_free_tests {
                 })
                 .into_iter()
                 .collect();
-                let start = universe[draw(&mut state, universe.len() as u64) as usize];
-                let forward = draw(&mut state, 2) == 0;
+                let start = universe[state.below(universe.len() as u64) as usize];
+                let forward = state.below(2) == 0;
                 Case {
                     dataset,
                     path,
@@ -3930,16 +3927,6 @@ mod recursion_free_tests {
 
     // ── A hundred thousand levels on a 128 KiB thread ────────────────────────────────
 
-    /// Run `body` on a fresh thread with 128 KiB of stack.
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
-    }
-
     /// `:a :p :b . :b :p :c`.
     fn two_hop_dataset() -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
@@ -3989,7 +3976,7 @@ mod recursion_free_tests {
     /// resolved by the request frame's loop.
     #[test]
     fn a_hundred_thousand_reverses_evaluate_on_a_128_kib_thread() {
-        let objects = on_small_stack(|| {
+        let objects = purrdf_stack::on_stack(128 * 1024, || {
             let dataset = two_hop_dataset();
             let path = nested(
                 PropertyPathExpression::NamedNode(node("p")),
@@ -3997,14 +3984,15 @@ mod recursion_free_tests {
                 PropertyPathExpression::Reverse,
             );
             objects_from_a(&dataset, &path)
-        });
+        })
+        .expect("spawn");
         assert_eq!(objects, vec!["b".to_owned()]);
     }
 
     /// `((:p?)?)…?` is `:p?`: the set lane, one request frame per level on the heap.
     #[test]
     fn a_hundred_thousand_zero_or_ones_evaluate_on_a_128_kib_thread() {
-        let objects = on_small_stack(|| {
+        let objects = purrdf_stack::on_stack(128 * 1024, || {
             let dataset = two_hop_dataset();
             let path = nested(
                 PropertyPathExpression::NamedNode(node("p")),
@@ -4012,7 +4000,8 @@ mod recursion_free_tests {
                 PropertyPathExpression::ZeroOrOne,
             );
             objects_from_a(&dataset, &path)
-        });
+        })
+        .expect("spawn");
         assert_eq!(objects, vec!["a".to_owned(), "b".to_owned()]);
     }
 }

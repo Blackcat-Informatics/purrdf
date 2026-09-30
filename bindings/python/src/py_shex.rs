@@ -58,8 +58,10 @@ fn parse_schema(schema: &str, format: &str, base: Option<&str>) -> Result<Schema
     }
 }
 
-/// Map the Python-surface data format name onto the native codec's media type.
-fn data_media_type(format: &str) -> Result<&'static str, String> {
+/// Map the Python-surface data format name (`turtle`, `ntriples`, `nquads`) onto
+/// the native codec's media type, refusing any other name. The one mapping every
+/// binding that accepts a data-graph `format` string uses.
+pub(crate) fn data_media_type(format: &str) -> Result<&'static str, String> {
     match format {
         "turtle" => Ok(NativeRdfFormat::Turtle.media_type()),
         "ntriples" => Ok(NativeRdfFormat::NTriples.media_type()),
@@ -101,7 +103,9 @@ fn literal_term_value(node: &str) -> Result<TermValue, String> {
     let (Some(quad), None) = (quads.next(), quads.next()) else {
         return Err(format!("invalid literal node `{node}`"));
     };
-    Ok(dataset.term_value(quad.o))
+    dataset
+        .term_value(quad.o)
+        .map_err(|e| format!("invalid literal node `{node}`: {e}"))
 }
 
 /// Decode a shape-map shape string: the literal `"START"` selects the schema's

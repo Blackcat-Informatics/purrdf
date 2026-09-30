@@ -85,11 +85,11 @@ use std::ops::ControlFlow;
 
 /// The `xsd:string` IRI; a literal carrying it (with no language) serializes
 /// bare (no `datatype` attribute), matching the JSON/Turtle abbreviation.
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_core::datatype::XSD_STRING;
 
 /// The ITS (Internationalization Tag Set) namespace IRI the SPARQL 1.2 Query
 /// Results specification uses for the `dir` attribute — see the module docs.
-const ITS_NS: &str = "http://www.w3.org/2005/11/its";
+use purrdf_core::vocab::its::NS as ITS_NS;
 
 /// Whether `result` carries at least one directional literal anywhere in its
 /// bound terms (recursing into triple-term components). Determines whether
@@ -374,7 +374,7 @@ fn write_provenance<W: TextOut + ?Sized>(
     out.push_str("    <");
     out.push_str(prefix);
     out.push_str(":queryForm>");
-    out.push_str(query_form(result));
+    out.push_str(result.query_form());
     out.push_str("</");
     out.push_str(prefix);
     out.push_str(":queryForm>\n");
@@ -438,16 +438,6 @@ fn output_size_hint(result: &SparqlResult) -> usize {
     }
 }
 
-/// The `queryForm` discriminator emitted in provenance. The `Graph` arm is
-/// unreachable here (CONSTRUCT hard-fails earlier) but is named exhaustively.
-fn query_form(result: &SparqlResult) -> &'static str {
-    match result {
-        SparqlResult::Solutions { .. } => "select",
-        SparqlResult::Boolean(_) => "ask",
-        SparqlResult::Graph(_) => "construct",
-    }
-}
-
 /// Append lossless XML 1.0 character data, refusing unrepresentable scalars.
 fn xml_escape_text<W: TextOut + ?Sized>(value: &str, out: &mut W) -> Result<(), Error> {
     purrdf_core::xml_escape::push_into(value, purrdf_core::xml_escape::Context::Text, out)
@@ -467,8 +457,8 @@ mod tests {
     use purrdf_core::TermBox;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm, RdfTextDirection};
 
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+    use purrdf_core::datatype::XSD_INTEGER;
+    use purrdf_core::vocab::rdf::LANG_STRING as RDF_LANGSTRING;
 
     /// A namespace used by the populated-provenance tests below — caller-chosen,
     /// `example.org`-scoped per repository convention (never a fabricated
@@ -1110,10 +1100,11 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = purrdf_core::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::Any,
+                purrdf_core::term_fixture::TermShape::Any,
             );
             let (mut written, mut expected) = (String::new(), String::new());
             let result = write_term(&value, &mut written);
@@ -1140,18 +1131,14 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_written_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = crate::test_terms::triple_chain(LEVELS);
-                assert!(!term_has_directional_literal(&value));
-                let mut written = String::new();
-                write_term(&value, &mut written).expect("every predicate is an IRI");
-                assert_eq!(written.matches("<triple>").count(), LEVELS);
-                assert!(written.ends_with("</object></triple>"));
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no walk overflowed the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            assert!(!term_has_directional_literal(&value));
+            let mut written = String::new();
+            write_term(&value, &mut written).expect("every predicate is an IRI");
+            assert_eq!(written.matches("<triple>").count(), LEVELS);
+            assert!(written.ends_with("</object></triple>"));
+        })
+        .expect("the thread starts");
     }
 }

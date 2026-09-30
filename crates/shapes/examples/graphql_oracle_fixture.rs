@@ -6,8 +6,23 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::error::Error;
-use std::sync::OnceLock;
 
+#[path = "support/holder.rs"]
+mod holder;
+#[allow(
+    dead_code,
+    unused_imports,
+    unused_macros,
+    reason = "each target uses part of the crate's shared JSON model"
+)]
+#[path = "../src/json_model.rs"]
+mod json_model;
+#[path = "support/json_text.rs"]
+mod json_text;
+#[path = "support/metaschemas.rs"]
+mod metaschemas;
+#[path = "support/oracle.rs"]
+mod oracle;
 #[path = "support/shacl_lists.rs"]
 mod shacl_lists;
 #[path = "support/shacl_temporal.rs"]
@@ -15,14 +30,13 @@ mod shacl_temporal;
 #[path = "support/shacl_value_shapes.rs"]
 mod shacl_value_shapes;
 
-use purrdf::loss::{LossLedger, check_ledger_complete, check_ledger_sound};
-use purrdf_shapes::json_schema::{CompiledSchema, Namespaces};
+use json_model::{ToJson, Value, json};
+use json_text::read_sorted;
+use purrdf::loss::{check_ledger_complete, check_ledger_sound};
 use purrdf_shapes::{
     GRAPHQL_DIALECT, GRAPHQL_NAME_MAP_PATH, GRAPHQL_SCHEMA_PATH, GraphqlConfig, GraphqlPackage,
-    SchemaDatatypeMap, SchemaImportConfig, emit_graphql, import_graphql_package,
+    SchemaImportConfig, emit_graphql, import_graphql_package,
 };
-use serde::Serialize;
-use serde_json::{Value, json};
 
 const CLOSED_PROFILE: [&str; 23] = [
     "additional-properties-validation-narrowed",
@@ -49,17 +63,14 @@ const CLOSED_PROFILE: [&str; 23] = [
     "union-validation-delegated",
     "unique-items-validation-dropped",
 ];
-const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 struct ExpectedLoss {
     code: String,
     location: String,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 struct Probe {
     label: String,
     definition: String,
@@ -68,23 +79,19 @@ struct Probe {
     graphql_value: Value,
     source_valid: bool,
     used_codec: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
     expected_loss: Option<ExpectedLoss>,
     /// For a valid source value, the output type and the value a resolver
     /// returns for it, which GraphQL.js must serialize unchanged.
-    #[serde(skip_serializing_if = "Option::is_none")]
     output: Option<OutputProbe>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 struct OutputProbe {
     graphql_type: String,
     graphql_value: Value,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 struct Fixture {
     sdl: String,
     fallback_scalar: String,
@@ -94,12 +101,50 @@ struct Fixture {
     probes: Vec<Probe>,
 }
 
-fn compiled(schema: &Value) -> Result<CompiledSchema, serde_json::Error> {
-    Ok(CompiledSchema {
-        schema_json: format!("{}\n", serde_json::to_string_pretty(schema)?),
-        openapi_json: "{}\n".to_owned(),
-        losses: LossLedger::new(),
-    })
+impl ToJson for ExpectedLoss {
+    fn to_json(&self) -> Value {
+        json!({ "code": self.code, "location": self.location })
+    }
+}
+
+impl ToJson for Probe {
+    fn to_json(&self) -> Value {
+        let mut probe = json!({
+            "label": self.label,
+            "definition": self.definition,
+            "graphqlType": self.graphql_type,
+            "sourceValue": self.source_value,
+            "graphqlValue": self.graphql_value,
+            "sourceValid": self.source_valid,
+            "usedCodec": self.used_codec,
+        });
+        if let Some(expected_loss) = &self.expected_loss {
+            json_model::set_member(&mut probe, "expectedLoss", expected_loss.to_json());
+        }
+        if let Some(output) = &self.output {
+            json_model::set_member(&mut probe, "output", output.to_json());
+        }
+        probe
+    }
+}
+
+impl ToJson for OutputProbe {
+    fn to_json(&self) -> Value {
+        json!({ "graphqlType": self.graphql_type, "graphqlValue": self.graphql_value })
+    }
+}
+
+impl ToJson for Fixture {
+    fn to_json(&self) -> Value {
+        json!({
+            "sdl": self.sdl,
+            "fallbackScalar": self.fallback_scalar,
+            "nameMap": self.name_map,
+            "nameMapArtifact": self.name_map_artifact,
+            "losses": self.losses,
+            "probes": self.probes,
+        })
+    }
 }
 
 fn config() -> Result<GraphqlConfig, Box<dyn Error>> {
@@ -109,24 +154,6 @@ fn config() -> Result<GraphqlConfig, Box<dyn Error>> {
         "Type-system definitions checked against source JSON Schema acceptance.",
         "JsonCarrier",
     )?)
-}
-
-fn import_config() -> Result<SchemaImportConfig, Box<dyn Error>> {
-    let namespaces = Namespaces::new(
-        "ex",
-        &[("ex".to_owned(), "https://example.org/".to_owned())],
-    )?;
-    let datatypes = SchemaDatatypeMap::new(
-        format!("{XSD}string"),
-        format!("{XSD}boolean"),
-        format!("{XSD}integer"),
-        format!("{XSD}decimal"),
-        format!("{XSD}dateTime"),
-        format!("{XSD}date"),
-        format!("{XSD}time"),
-        format!("{XSD}anyURI"),
-    )?;
-    Ok(SchemaImportConfig::new(namespaces, datatypes))
 }
 
 fn reverse_evidence(
@@ -145,7 +172,7 @@ fn reverse_evidence(
         return Err("GraphQL reverse shapes are not byte-deterministic".into());
     }
     Ok(json!({
-        "losses": serde_json::from_str::<Value>(&imported.losses.render_json())?,
+        "losses": read_sorted(&imported.losses.render_json())?,
         "shapeIds": imported
             .shapes
             .node_shapes
@@ -298,27 +325,6 @@ fn lossy_schema() -> Value {
     })
 }
 
-/// The draft 2020-12 meta-schemas the emitted schemas declare, from the
-/// workspace's test data (`purrdf-jsonschema` carries none).
-fn metaschemas() -> &'static purrdf_jsonschema::Metaschemas {
-    static SET: OnceLock<purrdf_jsonschema::Metaschemas> = OnceLock::new();
-    SET.get_or_init(|| {
-        purrdf_jsonschema::Metaschemas::new(
-            purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
-                .iter()
-                .map(|&(uri, text)| {
-                    let document: Value = serde_json::from_str(text).expect("meta-schema JSON");
-                    (uri, document)
-                }),
-        )
-        .expect("the draft 2020-12 meta-schemas")
-    })
-}
-
-fn validates(schema: &Value, definition: &str, instance: &Value) -> Result<bool, Box<dyn Error>> {
-    validates_in(metaschemas(), schema, definition, instance)
-}
-
 fn validates_in(
     metaschemas: &purrdf_jsonschema::Metaschemas,
     schema: &Value,
@@ -342,17 +348,6 @@ fn validates_in(
     )
 }
 
-fn has_loss(package: &GraphqlPackage, code: &str, location: &str) -> bool {
-    package.losses.entries().iter().any(|entry| {
-        entry.code == code
-            && entry
-                .location
-                .as_ref()
-                .and_then(|value| value.subject.as_deref())
-                == Some(location)
-    })
-}
-
 #[allow(clippy::too_many_arguments)]
 fn probe(
     schema: &Value,
@@ -364,7 +359,12 @@ fn probe(
     graphql_override: Option<Value>,
     expected_loss: Option<(&str, &str)>,
 ) -> Result<Probe, Box<dyn Error>> {
-    let source_valid = validates(schema, definition, &source_value)?;
+    let source_valid = validates_in(
+        metaschemas::metaschemas(),
+        schema,
+        definition,
+        &source_value,
+    )?;
     if source_valid != expected_source_valid {
         return Err(format!(
             "source fixture probe {label:?} classified as {source_valid}, expected \
@@ -377,7 +377,7 @@ fn probe(
         location: location.to_owned(),
     });
     if let Some(loss) = &expected_loss
-        && !has_loss(package, &loss.code, &loss.location)
+        && !oracle::has_loss(&package.losses, &loss.code, &loss.location)
     {
         return Err(format!(
             "probe {label:?} names absent loss {} at {}",
@@ -439,9 +439,13 @@ fn fixture(package: &GraphqlPackage, probes: Vec<Probe>) -> Result<Fixture, Box<
     Ok(Fixture {
         sdl: artifact(package, GRAPHQL_SCHEMA_PATH)?,
         fallback_scalar: "JsonCarrier".to_owned(),
-        name_map: serde_json::to_value(&package.names)?,
+        name_map: {
+            let mut names = package.names.to_json();
+            names.sort_keys();
+            names
+        },
         name_map_artifact: artifact(package, GRAPHQL_NAME_MAP_PATH)?,
-        losses: serde_json::from_str(&package.losses.render_json())?,
+        losses: read_sorted(&package.losses.render_json())?,
         probes,
     })
 }
@@ -846,22 +850,21 @@ const LIST_DIVERGENCES: [(&str, &str, &str); 4] = [
 /// GraphQL, with the projected instances of real data and their SHACL
 /// verdicts; a probe diverges only where [`LIST_DIVERGENCES`] locates it.
 fn lists_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error>> {
-    let compiled = shacl_lists::compiled()?;
-    let schema: Value = serde_json::from_str(&compiled.schema_json)?;
+    let compiled = shacl_lists::FIXTURE.compiled()?;
+    let schema: Value = read_sorted(&compiled.schema_json)?;
     let package = emit_graphql(&compiled, config)?;
     check_ledger_sound(&package.losses, "json-schema", GRAPHQL_DIALECT)?;
     // The verified reverse import restores the list components exactly: the
     // imported shapes compile back to the same Holder definition.
-    let imported = import_graphql_package(&package, &import_config()?)?;
-    let restored: Value = serde_json::from_str(
-        &purrdf_shapes::json_schema::compile(&imported.shapes, &shacl_lists::namespaces()?)?
-            .schema_json,
+    let imported = import_graphql_package(&package, &oracle::import_config()?)?;
+    let restored: Value = read_sorted(
+        &purrdf_shapes::json_schema::compile(&imported.shapes, &holder::namespaces()?)?.schema_json,
     )?;
     if restored["$defs"]["Holder"] != schema["$defs"]["Holder"] {
         return Err("GraphQL reverse import does not restore the SHACL list components".into());
     }
     let mut probes = Vec::new();
-    for case in shacl_lists::cases()? {
+    for case in shacl_lists::FIXTURE.cases()? {
         let divergence = LIST_DIVERGENCES
             .iter()
             .find(|(label, _, _)| *label == case.label)
@@ -891,12 +894,12 @@ fn lists_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error>> {
 /// complement, so each bounded property is the custom scalar and every
 /// non-conforming probe diverges at its property's delegated negation.
 fn temporal_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error>> {
-    let compiled = shacl_temporal::compiled()?;
-    let schema: Value = serde_json::from_str(&compiled.schema_json)?;
+    let compiled = shacl_temporal::FIXTURE.compiled()?;
+    let schema: Value = read_sorted(&compiled.schema_json)?;
     let package = emit_graphql(&compiled, config)?;
     check_ledger_sound(&package.losses, "json-schema", GRAPHQL_DIALECT)?;
     let mut probes = Vec::new();
-    for case in shacl_temporal::cases()? {
+    for case in shacl_temporal::FIXTURE.cases()? {
         let property = shacl_temporal::VARIANTS
             .iter()
             .find(|(label, _, _)| *label == case.label)
@@ -926,8 +929,8 @@ fn temporal_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error>> {
 /// types — so every non-conforming probe diverges at its property's delegated
 /// scalar, and every conforming one is accepted.
 fn value_shapes_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error>> {
-    let compiled = shacl_value_shapes::compiled()?;
-    let schema: Value = serde_json::from_str(&compiled.schema_json)?;
+    let compiled = shacl_value_shapes::FIXTURE.compiled()?;
+    let schema: Value = read_sorted(&compiled.schema_json)?;
     let package = emit_graphql(&compiled, config)?;
     check_ledger_sound(&package.losses, "json-schema", GRAPHQL_DIALECT)?;
     let mut probes = Vec::new();
@@ -958,8 +961,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let config = config()?;
     let exact_schema = exact_schema();
     let lossy_schema = lossy_schema();
-    let exact_package = emit_graphql(&compiled(&exact_schema)?, &config)?;
-    let lossy_package = emit_graphql(&compiled(&lossy_schema)?, &config)?;
+    let exact_package = emit_graphql(&oracle::compiled(&exact_schema)?, &config)?;
+    let lossy_package = emit_graphql(&oracle::compiled(&lossy_schema)?, &config)?;
     let observed: BTreeSet<&str> = lossy_package
         .losses
         .entries()
@@ -978,9 +981,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         "lists": lists_fixture(&config)?,
         "temporal": temporal_fixture(&config)?,
         "value_shapes": value_shapes_fixture(&config)?,
-        "reverse": reverse_evidence(&exact_package, &import_config()?)?,
+        "reverse": reverse_evidence(&exact_package, &oracle::import_config()?)?,
     });
-    println!("{}", serde_json::to_string(&output)?);
+    // Every object is written with its members in name order.
+    let mut output = output;
+    output.sort_keys();
+    println!("{}", json_model::write_compact(&output));
     Ok(())
 }
 
@@ -994,8 +1000,14 @@ mod tests {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "$defs": {"Name": {"type": "string"}}
         });
-        assert!(validates(&schema, "Name", &json!("Ada")).expect("registered"));
-        assert!(!validates(&schema, "Name", &json!(1)).expect("registered"));
+        assert!(
+            validates_in(metaschemas::metaschemas(), &schema, "Name", &json!("Ada"))
+                .expect("registered")
+        );
+        assert!(
+            !validates_in(metaschemas::metaschemas(), &schema, "Name", &json!(1))
+                .expect("registered")
+        );
         let none = purrdf_jsonschema::Metaschemas::new(Vec::<(&str, Value)>::new())
             .expect("an empty set is a set");
         let error = validates_in(&none, &schema, "Name", &json!("Ada"))

@@ -1,0 +1,424 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+# The crate layering: which first-party crate may depend on which, read by
+# scripts/check-layers.py (in `make check`).
+#
+# Only NORMAL dependency edges between workspace members are governed here;
+# dev- and build-dependencies are not layering (a test may reach any crate).
+#
+# root = the zero-dependency crate every crate may depend on. An edge to it is
+#     never a layering breach and needs no planned entry, but a present one is
+#     listed like any other so the table records the graph exactly.
+#
+# [[crate]] — one row per workspace member, and per planned member.
+#   name    = the package name.
+#   pending = true marks a crate that is planned but not yet a member. It is
+#             allowed to be absent; once the member exists the key must go.
+#   deps    = every first-party crate it may depend on. An entry is the package
+#             name, or `{ name = "…", pending = true }` for a planned edge that
+#             is allowed but not yet present.
+#   external = present on a ring-fenced crate (the kernel ring-fence, checked
+#             by `make rdf-core-hygiene` through `check-layers.py --ring-fence`):
+#             every external package it may depend on, on any target. A
+#             ring-fenced crate's runtime dependencies are exactly its `deps`
+#             and its `external`; an empty `external` allows none. The root is
+#             always ring-fenced to nothing and takes no `external`.
+#
+# The gate fails on:
+#   * a first-party normal edge that no row allows, or an unlisted root edge;
+#   * a member with no row, or a row (not pending) naming no member;
+#   * a listed edge (not pending) the resolved graph no longer has, and a
+#     pending edge or crate that now exists — flip it to present;
+#   * a cycle in the declared graph, pending edges included.
+#
+# `python3 scripts/check-layers.py --home-for A B …` prints the crate closest to
+# A, B, … that every one of them reaches over the declared graph (pending edges
+# included): the lowest place one implementation shared by all of them can live.
+
+root = "purrdf-hash"
+
+[[crate]]
+name = "purrdf-alloc-probe"
+deps = []
+
+[[crate]]
+name = "purrdf-bench"
+deps = ["purrdf-hash", "purrdf-iri", "purrdf-xsd"]
+
+[[crate]]
+name = "purrdf-hash"
+deps = []
+
+[[crate]]
+name = "purrdf-stack"
+deps = []
+
+[[crate]]
+name = "wasm-link"
+deps = []
+
+[[crate]]
+name = "helper-census"
+deps = ["purrdf-hash", "purrdf-lex", "purrdf-testkit"]
+
+[[crate]]
+name = "purrdf-deflate"
+deps = ["purrdf-hash"]
+external = []
+
+[[crate]]
+name = "purrdf-events"
+deps = []
+external = []
+
+[[crate]]
+name = "purrdf-ed25519"
+deps = ["purrdf-hash"]
+# SHA-512 is Ed25519's hash (RFC 8032), from the single SHA-2 implementation.
+external = ["sha2"]
+
+[[crate]]
+name = "purrdf-lex"
+deps = ["purrdf-hash"]
+external = []
+
+[[crate]]
+name = "purrdf-iri"
+deps = [
+    "purrdf-lex",
+    "purrdf-hash",
+]
+external = []
+
+[[crate]]
+name = "purrdf-testkit"
+deps = ["purrdf-hash"]
+# The string generators walk regex-syntax's IR; SHA-256 seals frozen vectors;
+# wasm-bindgen reaches Node's argv, env, console and clock on wasm32.
+external = ["regex-syntax", "sha2", "wasm-bindgen"]
+
+[[crate]]
+name = "purrdf-xsd"
+deps = [
+    "purrdf-lex",
+    "purrdf-hash",
+]
+external = []
+
+[[crate]]
+name = "purrdf-cdt"
+deps = [
+    "purrdf-events",
+    "purrdf-hash",
+    "purrdf-iri",
+    "purrdf-xsd",
+    "purrdf-lex",
+]
+
+[[crate]]
+name = "purrdf-gts"
+deps = [
+    "purrdf-deflate",
+    "purrdf-ed25519",
+    "purrdf-events",
+    "purrdf-hash",
+    "purrdf-iri",
+    "purrdf-xsd",
+    "purrdf-lex",
+]
+
+[[crate]]
+name = "purrdf-hash-conformance"
+deps = ["purrdf-hash", "purrdf-testkit"]
+
+[[crate]]
+name = "purrdf-jsonschema"
+deps = [
+    "purrdf-hash",
+    "purrdf-iri",
+    "purrdf-xsd",
+    "purrdf-lex",
+]
+
+[[crate]]
+name = "purrdf-core"
+deps = [
+    "purrdf-cdt",
+    "purrdf-deflate",
+    "purrdf-events",
+    "purrdf-hash",
+    "purrdf-iri",
+    "purrdf-xsd",
+    "purrdf-lex",
+]
+
+[[crate]]
+name = "purrdf-sparql-algebra"
+deps = [
+    "purrdf-cdt",
+    "purrdf-hash",
+    "purrdf-iri",
+    "purrdf-xsd",
+    "purrdf-lex",
+]
+
+[[crate]]
+name = "purrdf-columnar"
+deps = ["purrdf-core"]
+
+[[crate]]
+name = "purrdf-datalog"
+deps = ["purrdf-core", "purrdf-hash", "purrdf-lex"]
+
+[[crate]]
+name = "purrdf-json"
+deps = ["purrdf-core", "purrdf-hash", "purrdf-lex"]
+
+[[crate]]
+name = "purrdf-markdown"
+deps = ["purrdf-core", "purrdf-hash"]
+
+[[crate]]
+name = "purrdf-shex"
+deps = [
+    "purrdf-core",
+    "purrdf-iri",
+    "purrdf-lex",
+    "purrdf-xsd",
+]
+
+[[crate]]
+name = "purrdf-sparql-results"
+deps = ["purrdf-core", "purrdf-iri", "purrdf-lex"]
+
+[[crate]]
+name = "purrdf-entail"
+deps = [
+    "purrdf-core",
+    "purrdf-datalog",
+    "purrdf-hash",
+    "purrdf-iri",
+    "purrdf-lex",
+    "purrdf-xsd",
+]
+
+[[crate]]
+name = "purrdf-sparql-eval"
+deps = [
+    "purrdf-cdt",
+    "purrdf-core",
+    "purrdf-hash",
+    "purrdf-iri",
+    "purrdf-lex",
+    "purrdf-sparql-algebra",
+    "purrdf-sparql-results",
+    "purrdf-stack",
+    "purrdf-xsd",
+]
+
+[[crate]]
+name = "purrdf-geo"
+deps = [
+    "purrdf-core",
+    "purrdf-hash",
+    "purrdf-iri",
+    "purrdf-lex",
+    "purrdf-sparql-eval",
+    "purrdf-xsd",
+]
+
+[[crate]]
+name = "purrdf-hnsw"
+deps = [
+    "purrdf-core",
+    "purrdf-hash",
+    "purrdf-lex",
+    "purrdf-sparql-eval",
+    "purrdf-xsd",
+]
+
+[[crate]]
+name = "purrdf-rdf"
+deps = [
+    "purrdf-core",
+    "purrdf-ed25519",
+    "purrdf-events",
+    "purrdf-gts",
+    "purrdf-hash",
+    "purrdf-iri",
+    "purrdf-lex",
+    "purrdf-sparql-algebra",
+    "purrdf-sparql-eval",
+    "purrdf-xsd",
+]
+
+[[crate]]
+name = "purrdf-text"
+deps = [
+    "purrdf-core",
+    "purrdf-hash",
+    "purrdf-lex",
+    "purrdf-sparql-eval",
+    "purrdf-xsd",
+]
+
+[[crate]]
+name = "purrdf-retrieval"
+deps = [
+    "purrdf-core",
+    "purrdf-hash",
+    "purrdf-lex",
+    "purrdf-sparql-algebra",
+    "purrdf-sparql-eval",
+    "purrdf-text",
+]
+
+[[crate]]
+name = "purrdf-slice"
+deps = [
+    "purrdf-core",
+    "purrdf-gts",
+    "purrdf-hash",
+    "purrdf-iri",
+    "purrdf-lex",
+    "purrdf-rdf",
+    "purrdf-sparql-algebra",
+]
+
+[[crate]]
+name = "purrdf-shapes"
+deps = [
+    "purrdf-core",
+    "purrdf-datalog",
+    "purrdf-deflate",
+    "purrdf-hash",
+    "purrdf-iri",
+    "purrdf-lex",
+    "purrdf-rdf",
+    "purrdf-slice",
+    "purrdf-sparql-algebra",
+    "purrdf-sparql-eval",
+    "purrdf-xsd",
+]
+
+[[crate]]
+name = "purrdf-envelope-probe"
+deps = [
+    "purrdf-alloc-probe",
+    "purrdf-core",
+    "purrdf-iri",
+    "purrdf-rdf",
+    "purrdf-shapes",
+    "purrdf-sparql-eval",
+]
+
+[[crate]]
+name = "purrdf-validate"
+deps = [
+    "purrdf-core",
+    "purrdf-datalog",
+    "purrdf-entail",
+    "purrdf-hash",
+    "purrdf-iri",
+    "purrdf-lex",
+    "purrdf-rdf",
+    "purrdf-shapes",
+    "purrdf-sparql-eval",
+    "purrdf-sparql-results",
+]
+
+[[crate]]
+name = "purrdf"
+deps = [
+    "purrdf-columnar",
+    "purrdf-datalog",
+    "purrdf-entail",
+    "purrdf-events",
+    "purrdf-geo",
+    "purrdf-gts",
+    "purrdf-hnsw",
+    "purrdf-iri",
+    "purrdf-json",
+    "purrdf-lex",
+    "purrdf-markdown",
+    "purrdf-rdf",
+    "purrdf-retrieval",
+    "purrdf-shapes",
+    "purrdf-shex",
+    "purrdf-slice",
+    "purrdf-sparql-algebra",
+    "purrdf-sparql-eval",
+    "purrdf-sparql-results",
+    "purrdf-text",
+    "purrdf-validate",
+    "purrdf-xsd",
+]
+
+[[crate]]
+name = "purrdf-capi"
+deps = [
+    "purrdf",
+    "purrdf-core",
+    "purrdf-sparql-eval",
+    "purrdf-sparql-results",
+    "purrdf-validate",
+]
+
+[[crate]]
+name = "purrdf-cli"
+deps = [
+    "purrdf",
+    "purrdf-core",
+    "purrdf-entail",
+    "purrdf-iri",
+    "purrdf-lex",
+    "purrdf-rdf",
+    "purrdf-sparql-eval",
+    "purrdf-sparql-results",
+    "purrdf-validate",
+]
+
+[[crate]]
+name = "purrdf-python"
+deps = [
+    "purrdf",
+    "purrdf-core",
+    "purrdf-gts",
+    "purrdf-shapes",
+    "purrdf-shex",
+    "purrdf-slice",
+    "purrdf-sparql-eval",
+    "purrdf-validate",
+    "purrdf-xsd",
+]
+
+[[crate]]
+name = "purrdf-sparql-conformance"
+deps = [
+    "purrdf",
+    "purrdf-cdt",
+    "purrdf-core",
+    "purrdf-entail",
+    "purrdf-gts",
+    "purrdf-iri",
+    "purrdf-sparql-algebra",
+    "purrdf-sparql-eval",
+    "purrdf-sparql-results",
+    "purrdf-testkit",
+]
+
+[[crate]]
+name = "purrdf-wasm"
+deps = [
+    "purrdf",
+    "purrdf-core",
+    "purrdf-events",
+    "purrdf-lex",
+    "purrdf-shapes",
+    "purrdf-sparql-algebra",
+    "purrdf-sparql-eval",
+    "purrdf-sparql-results",
+    "purrdf-stack",
+    "purrdf-validate",
+]

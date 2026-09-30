@@ -25,10 +25,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 path = "src/lib.rs"
 
 [dependencies]
-# `gts` provides the oxigraph-free GTS read/write core (gts_write +
+# `gts` provides the GTS read/write core (gts_write +
 # import_gts_events) — the spec's "libpurrdf statically reuses purrdf-gts so a
 # language shim links one .so" clause. SPARQL is served by the native engine
-# (`purrdf-sparql-eval`, below), so NO `oxigraph` feature is pulled.
+# (`purrdf-sparql-eval`, below).
 # The `python` feature stays OFF: this is a C-ABI, not a PyO3 extension.
 # NOT workspace-inherited: renamed deps (`package = ...`) cannot be expressed
 # at an inheriting use site, and the workspace key `purrdf` is the umbrella.
@@ -48,17 +48,17 @@ purrdf-validate = { workspace = true }
 purrdf-sparql-results = { workspace = true }
 # The native SPARQL engine: the single `SparqlEngine` impl
 # (`NativeSparqlEngine`) evaluates `purrdf_query` over the frozen `Arc<RdfDataset>`
-# directly — the oxigraph-free query path. Path-depends on the SAME
+# directly. Path-depends on the SAME
 # ../rdf-core so `SparqlRequest`/`SparqlResult` unify.
 purrdf-sparql-eval = { workspace = true }
-# `purrdf_query_json`'s `provenance_prefix`/`provenance_iri`: a content hash of the
-# query text for `ResultProvenance::query_hash` (see `query::build_query_provenance`).
-sha2 = { workspace = true }
-# Lowercase hex rendering of those SHA-256 digests.
-purrdf-hash = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }
+# The tests read the SARIF and SPARQL-results JSON the ABI returns.
+purrdf-lex = { workspace = true }
+# The ABI tests recompute the SHA-256 identities the library returns, in lowercase
+# hex.
+sha2 = { workspace = true }
+purrdf-hash = { workspace = true }
 
 # The lone feature the whole workspace is permitted to declare. `cargo capi`
 # (cargo-c >= 0.10) unconditionally enables a feature literally named `capi`

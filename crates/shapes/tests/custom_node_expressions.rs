@@ -22,16 +22,21 @@
 //! Test IRIs live under `example.org`; every `sh:` / `shnex:` / `sparql:` term
 //! used here is defined by the specification named beside it.
 
+#[path = "support/turtle.rs"]
+mod turtle;
+
+#[path = "support/terms.rs"]
+mod terms;
+
 use std::sync::Arc;
+use terms::ex_ns as ex_term;
 
 use purrdf::{RdfDataset, SparqlRequest, SparqlResult};
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine::{parse_shapes, validate_with};
-use purrdf_shapes::expression::{NodeExpr, RecursionGuard, eval_node_expr};
+use purrdf_shapes::expression::{RecursionGuard, eval_node_expr};
 use purrdf_shapes::report::ValidationReport;
 use purrdf_shapes::rules::entail_dataset;
-use purrdf_shapes::shapes::Constraint;
-use purrdf_shapes::term::{NamedNode, Term};
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 
@@ -64,31 +69,11 @@ ex:alice ex:income 10, 20 .
 ex:bob   ex:income 5 .
 ";
 
-/// The single `sh:expression` node expression a fixture declares.
-fn expression_of(shapes_ttl: &str) -> NodeExpr {
-    let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).expect("shapes parse");
-    let mut found: Vec<NodeExpr> = shapes
-        .node_shapes
-        .iter()
-        .flat_map(|shape| &shape.constraints)
-        .filter_map(|c| match c {
-            Constraint::Expression { expr, .. } => Some(expr.clone()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        found.len(),
-        1,
-        "the fixture must declare exactly one sh:expression"
-    );
-    found.remove(0)
-}
-
 /// Evaluate the fixture's `sh:expression` over `data_ttl` from `ex:<focus>`.
 fn outputs(data_ttl: &str, shapes_ttl: &str, focus: &str) -> Vec<String> {
-    let expr = expression_of(shapes_ttl);
+    let expr = turtle::expression_of(PREFIXES, shapes_ttl);
     let store = store_of(data_ttl);
-    let mut guard = RecursionGuard::new();
+    let mut guard = RecursionGuard::default();
     eval_node_expr(&store, &ex_term(focus), &expr, &mut guard)
         .expect("node expression evaluates")
         .iter()
@@ -98,9 +83,9 @@ fn outputs(data_ttl: &str, shapes_ttl: &str, focus: &str) -> Vec<String> {
 
 /// The evaluation error the fixture's `sh:expression` produces.
 fn eval_error(data_ttl: &str, shapes_ttl: &str, focus: &str) -> String {
-    let expr = expression_of(shapes_ttl);
+    let expr = turtle::expression_of(PREFIXES, shapes_ttl);
     let store = store_of(data_ttl);
-    let mut guard = RecursionGuard::new();
+    let mut guard = RecursionGuard::default();
     eval_node_expr(&store, &ex_term(focus), &expr, &mut guard)
         .expect_err("the expression must be refused")
 }
@@ -120,20 +105,6 @@ fn data_of(data_ttl: &str) -> Arc<RdfDataset> {
 fn validate(data_ttl: &str, shapes_ttl: &str) -> Result<ValidationReport, String> {
     let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None)?;
     validate_with(&store_of(data_ttl), &shapes).map_err(Into::into)
-}
-
-/// The shapes-load error a malformed fixture produces.
-fn load_error(shapes_ttl: &str) -> String {
-    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None)
-        .expect_err("the fixture must be refused at shapes-load")
-        .to_string()
-}
-
-/// The `ex:<local>` term.
-fn ex_term(local: &str) -> Term {
-    Term::NamedNode(NamedNode::new_unchecked(format!(
-        "http://example.org/ns#{local}"
-    )))
 }
 
 /// The canonical rendering of an `xsd:integer` literal.
@@ -201,7 +172,8 @@ fn list_parameter_function_drives_a_validation_verdict() {
 /// works.
 #[test]
 fn body_reading_an_undeclared_argument_is_a_load_error() {
-    let err = load_error(
+    let err = turtle::load_error(
+        PREFIXES,
         r"
         ex:f a sh:ListParameterExpressionFunction ;
           sh:bodyExpression [ shnex:sum [ shnex:arg 3 ] ] ;
@@ -217,7 +189,8 @@ fn body_reading_an_undeclared_argument_is_a_load_error() {
 /// shapes-load rather than quietly binding nothing.
 #[test]
 fn arity_mismatch_at_the_call_site_is_a_load_error() {
-    let err = load_error(
+    let err = turtle::load_error(
+        PREFIXES,
         r"
         ex:pair a sh:ListParameterExpressionFunction ;
           sh:bodyExpression [ sparql:add ( [ shnex:arg 0 ] [ shnex:arg 1 ] ) ] ;
@@ -237,7 +210,8 @@ fn arity_mismatch_at_the_call_site_is_a_load_error() {
 /// shapes-LOAD failure rather than a function that answers nothing.
 #[test]
 fn a_declaration_without_a_body_is_a_load_error() {
-    let err = load_error(
+    let err = turtle::load_error(
+        PREFIXES,
         r"
         ex:f a sh:ListParameterExpressionFunction ;
           sh:parameter [ sh:path shnex:arg0 ] .
@@ -258,7 +232,8 @@ fn a_declaration_without_a_body_is_a_load_error() {
 /// expression — see `a_one_argument_call_may_omit_the_argument_list`.)
 #[test]
 fn an_unparsable_body_is_a_load_error() {
-    let err = load_error(
+    let err = turtle::load_error(
+        PREFIXES,
         r"
         ex:f a sh:ListParameterExpressionFunction ;
           sh:bodyExpression [ sh:then true ] ;
@@ -277,7 +252,8 @@ fn an_unparsable_body_is_a_load_error() {
 /// file).
 #[test]
 fn body_expression_without_a_declaring_class_is_a_load_error() {
-    let err = load_error(
+    let err = turtle::load_error(
+        PREFIXES,
         r"
         ex:f a sh:SPARQLFunction ;
           sh:bodyExpression [ shnex:arg 0 ] ;
@@ -375,7 +351,8 @@ fn named_parameter_function_evaluates_its_body_under_the_argument_scope() {
 /// ever be recognised, so the declaration is refused at load.
 #[test]
 fn named_parameter_function_without_a_key_parameter_is_a_load_error() {
-    let err = load_error(
+    let err = turtle::load_error(
+        PREFIXES,
         r"
         ex:f a sh:NamedParameterExpressionFunction ;
           sh:bodyExpression [ shnex:arg ex:v ] ;
@@ -390,7 +367,8 @@ fn named_parameter_function_without_a_key_parameter_is_a_load_error() {
 /// failure.
 #[test]
 fn colliding_key_parameters_are_a_load_error() {
-    let err = load_error(
+    let err = turtle::load_error(
+        PREFIXES,
         r"
         ex:f a sh:NamedParameterExpressionFunction ;
           sh:bodyExpression [ shnex:arg ex:v ] ;
@@ -409,7 +387,8 @@ fn colliding_key_parameters_are_a_load_error() {
 /// silently read as a builtin call.
 #[test]
 fn a_named_parameter_function_has_no_positional_call_form() {
-    let err = load_error(
+    let err = turtle::load_error(
+        PREFIXES,
         r"
         ex:f a sh:NamedParameterExpressionFunction ;
           sh:bodyExpression [ shnex:arg ex:v ] ;
@@ -757,11 +736,14 @@ fn an_optional_parameter_widens_the_arity_range_without_removing_its_bounds() {
           sh:parameter [ sh:path shnex:arg1 ; sh:optional true ] .
         ";
     for call in ["( )", "( 1 2 3 )"] {
-        let err = load_error(&format!(
-            "{FN}
+        let err = turtle::load_error(
+            PREFIXES,
+            &format!(
+                "{FN}
              ex:S a sh:NodeShape ; sh:targetNode ex:alice ;
                  sh:expression [ ex:sumOrPlusOne {call} ] ."
-        ));
+            ),
+        );
         assert!(
             err.contains("but it declares 1..=2"),
             "the call {call} must be refused against the declared range, got: {err}"
@@ -774,7 +756,8 @@ fn an_optional_parameter_widens_the_arity_range_without_removing_its_bounds() {
 /// because no fixture declared `sh:optional` at all.
 #[test]
 fn a_required_parameter_after_an_optional_one_is_a_load_error() {
-    let err = load_error(
+    let err = turtle::load_error(
+        PREFIXES,
         r"
         ex:f a sh:ListParameterExpressionFunction ;
           sh:bodyExpression [ shnex:arg 0 ] ;

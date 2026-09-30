@@ -37,7 +37,7 @@ use crate::dataset_view::ViewTermId;
 use crate::hash::FastHasher;
 
 use super::dataset::TermRef;
-use super::term::{BlankScope, StrRange, TermId, TermValue, arena_str};
+use super::term::{BlankScope, StrRange, TermId, TermValue, arena_str, push_arena_str};
 use super::term_walk::{Nested, try_fold_nested, visit_nested};
 
 /// Opaque **global** term identity — the id space a paged / cross-segment backend
@@ -311,11 +311,7 @@ pub struct GlobalDictionary {
     value_index: OnceLock<GlobalValueIndex>,
 }
 
-impl Default for GlobalDictionary {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(GlobalDictionary);
 
 impl GlobalDictionary {
     /// A fresh, empty dictionary.
@@ -345,13 +341,7 @@ impl GlobalDictionary {
     /// `u32` BEFORE mutating the arena, so a checked overflow fails fast and leaves
     /// the dictionary consistent.
     fn push_str(&mut self, s: &str) -> StrRange {
-        let offset = u32::try_from(self.arena.len()).expect("term arena exceeds u32::MAX bytes");
-        let len = u32::try_from(s.len()).expect("term string exceeds u32::MAX bytes");
-        offset
-            .checked_add(len)
-            .expect("term arena exceeds u32::MAX bytes");
-        self.arena.extend_from_slice(s.as_bytes());
-        StrRange { offset, len }
+        push_arena_str(&mut self.arena, s)
     }
 
     /// Intern a borrowed lookup BY VALUE: dedups against existing terms (resolving
@@ -804,22 +794,13 @@ impl GlobalDictionary {
     /// `TermRef`'s ids are local to whichever dictionary/dataset minted them.
     #[must_use]
     pub fn term_id_by_value(&self, value: &TermValue) -> Option<GlobalTermId> {
-        let hash = hash_value(value);
+        let hash = crate::hash::hash_of(value);
         self.value_index()
             .get(&hash)?
             .iter()
             .copied()
             .find(|&id| self.term_matches_value(id, value))
     }
-}
-
-/// Fixed-key `FixedHasher` hash of a dataset-independent [`TermValue`] (value-based path). Uses
-/// [`TermValue`]'s hand-written `Hash`, so it matches
-/// [`GlobalDictionary::hash_term_value`] for equal values.
-fn hash_value(value: &TermValue) -> u64 {
-    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    value.hash(&mut hasher);
-    hasher.finish()
 }
 
 #[cfg(test)]
@@ -1201,22 +1182,28 @@ mod tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = crate::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::Any,
+                crate::term_fixture::TermShape::Any,
             );
-            let other = crate::test_terms::term_value(
+            let other = crate::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::Any,
+                crate::term_fixture::TermShape::Any,
             );
             nested += usize::from(budget < 7);
             let mut dict = GlobalDictionary::new();
             let id = intern(&mut dict, &value);
             assert_eq!(dict.term_value(id), value, "seed {seed}");
             assert_eq!(reference_value(&dict, id), value, "seed {seed}");
-            assert_eq!(stored_hash(&dict, id), hash_value(&value), "seed {seed}");
+            assert_eq!(
+                stored_hash(&dict, id),
+                crate::hash::hash_of(&value),
+                "seed {seed}"
+            );
             assert!(dict.term_matches_value(id, &value), "seed {seed}");
             assert_eq!(
                 dict.term_matches_value(id, &other),
@@ -1236,23 +1223,19 @@ mod tests {
     #[test]
     fn a_hundred_thousand_level_term_round_trips_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = crate::test_terms::triple_chain(LEVELS);
-                let mut dict = GlobalDictionary::new();
-                let id = intern(&mut dict, &value);
-                assert_eq!(dict.reintern_validated(&value), id);
-                assert!(dict.term_matches_value(id, &value));
-                assert_eq!(stored_hash(&dict, id), hash_value(&value));
-                let resolved = dict.term_value(id);
-                assert!(
-                    resolved == value,
-                    "the resolved chain equals the interned one"
-                );
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no walk overflowed the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = crate::term_fixture::triple_chain(LEVELS);
+            let mut dict = GlobalDictionary::new();
+            let id = intern(&mut dict, &value);
+            assert_eq!(dict.reintern_validated(&value), id);
+            assert!(dict.term_matches_value(id, &value));
+            assert_eq!(stored_hash(&dict, id), crate::hash::hash_of(&value));
+            let resolved = dict.term_value(id);
+            assert!(
+                resolved == value,
+                "the resolved chain equals the interned one"
+            );
+        })
+        .expect("the thread starts");
     }
 }

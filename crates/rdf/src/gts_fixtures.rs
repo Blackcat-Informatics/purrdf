@@ -36,9 +36,8 @@ use std::sync::Arc;
 
 use crate::gts_compose::{DEFAULT_RSYNCABLE_THRESHOLD, MediumPlan, SnapshotBuilder, emit_gts};
 use crate::{
-    BlankScope, ContentStore, DatasetMut, DatasetProvenance, DeltaDatasetView, MutableDataset,
-    QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfLookaside, RdfTextDirection,
-    TermValue,
+    BlankScope, ContentStore, DatasetProvenance, DeltaDatasetView, RdfDataset, RdfDatasetBuilder,
+    RdfLiteral, RdfLookaside, RdfTextDirection,
 };
 
 /// The named graph every relocated default-graph row lands in.
@@ -133,19 +132,7 @@ pub fn keystone_contribution(graph: &str, space: usize, rows: usize) -> Arc<RdfD
 /// real mutation round trip rather than an untouched passthrough — so the delta
 /// machinery (suppression rows, delta-only ids) is genuinely in the read path.
 pub fn keystone_delta(base: &Arc<RdfDataset>) -> Arc<DeltaDatasetView> {
-    let mut mutable = MutableDataset::new(Arc::clone(base));
-    let scratch = QuadValues::triple(
-        TermValue::iri("https://example.org/scratch"),
-        TermValue::iri("https://example.org/p"),
-        TermValue::iri("https://example.org/o"),
-    );
-    assert!(
-        mutable
-            .insert(scratch.clone())
-            .expect("the scratch row inserts")
-    );
-    assert!(mutable.remove(&scratch), "and is taken back out again");
-    Arc::new(mutable.snapshot_view().expect("the delta publishes"))
+    purrdf_core::view_fixture::round_trip_delta(base, "https://example.org/")
 }
 
 /// The sidecars every keystone carrier travels with. Identical on every carrier

@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use super::carrier::{Document, Node, Term, Value};
+use super::carrier::{Document, Node, Part, Term};
 use super::{CompiledJsonLdContext, RdfDiagnostic};
 
 const MAX_DISTINCT_IRIS: usize = 65_536;
@@ -65,7 +65,7 @@ impl CandidateStats {
         let compacted_bytes = self
             .compacted_bytes(alias.len())
             .ok_or_else(|| derived_limit("derived namespace compacted-byte count overflow"))?;
-        let context_cost = prefix_definition_cost(alias, namespace)?;
+        let context_cost = prefix_definition_cost(alias, namespace);
         Ok(self
             .expanded_bytes
             .checked_sub(compacted_bytes)
@@ -236,47 +236,39 @@ fn collect_document(document: &Document, collector: &mut Collector) -> Result<()
 }
 
 fn collect_node(node: &Node, collector: &mut Collector) -> Result<(), RdfDiagnostic> {
+    collect_node_header(node, collector)?;
+    for part in node.parts() {
+        match part {
+            Part::Term(term) => collect_term(term, collector)?,
+            Part::Annotation(annotation) => collect_node_header(annotation, collector)?,
+        }
+    }
+    Ok(())
+}
+
+/// A node's own IRI slots: its identifier, its types and its predicates.
+fn collect_node_header(node: &Node, collector: &mut Collector) -> Result<(), RdfDiagnostic> {
     collector.record(&node.id)?;
     for rdf_type in &node.types {
         collector.record(rdf_type)?;
     }
-    for (predicate, values) in node.properties.iter().chain(node.reverse_properties.iter()) {
+    for predicate in node.properties.keys().chain(node.reverse_properties.keys()) {
         collector.record(predicate)?;
-        for value in values {
-            collect_value(value, collector)?;
-        }
     }
     Ok(())
 }
 
-fn collect_value(value: &Value, collector: &mut Collector) -> Result<(), RdfDiagnostic> {
-    collect_term(&value.term, collector)?;
-    for annotation in &value.annotations {
-        collect_node(annotation, collector)?;
-    }
-    Ok(())
-}
-
+/// A term's own IRI slots; the terms inside a triple term or a list are
+/// parts of their own.
 fn collect_term(term: &Term, collector: &mut Collector) -> Result<(), RdfDiagnostic> {
     match term {
         Term::Id(iri) => collector.record(iri),
-        Term::Literal(literal) => {
-            if let Some(datatype) = &literal.datatype {
-                collector.record(datatype)?;
-            }
-            Ok(())
-        }
-        Term::Triple(triple) => {
-            collect_term(&triple.subject, collector)?;
-            collector.record(&triple.predicate)?;
-            collect_term(&triple.object, collector)
-        }
-        Term::List(values) => {
-            for value in values {
-                collect_value(value, collector)?;
-            }
-            Ok(())
-        }
+        Term::Literal(literal) => literal
+            .datatype
+            .as_ref()
+            .map_or(Ok(()), |datatype| collector.record(datatype)),
+        Term::Triple(triple) => collector.record(&triple.predicate),
+        Term::List(_) => Ok(()),
     }
 }
 
@@ -286,27 +278,25 @@ fn namespace_boundary(iri: &str) -> Option<&str> {
         return None;
     }
     let scheme_end = parsed.scheme()?.len().checked_add(1)?;
-    let boundary = iri
-        .rfind('#')
-        .filter(|index| *index >= scheme_end)
-        .or_else(|| iri.rfind('/').filter(|index| *index >= scheme_end))
-        .or_else(|| iri.rfind(':').filter(|index| *index >= scheme_end))?;
-    let split = boundary.checked_add(1)?;
-    let suffix = iri.get(split..)?;
-    if suffix.is_empty() || suffix.starts_with("//") || suffix.chars().any(char::is_whitespace) {
+    let (namespace, suffix) = purrdf_iri::split_local_name(iri);
+    // The namespace must end past the scheme's own `:`, so the split names a
+    // namespace rather than just the scheme.
+    if namespace.len() <= scheme_end || suffix.is_empty() || suffix.chars().any(char::is_whitespace)
+    {
         return None;
     }
-    let namespace = iri.get(..split)?;
     purrdf_iri::parse(namespace)
         .is_ok_and(|parsed| parsed.has_scheme())
         .then_some(namespace)
 }
 
-fn prefix_definition_cost(alias: &str, namespace: &str) -> Result<usize, RdfDiagnostic> {
-    let value = serde_json::json!({alias: {"@id": namespace, "@prefix": true}});
-    serde_json::to_vec(&value)
-        .map(|bytes| bytes.len())
-        .map_err(|source| derived_invalid(format!("encode derived prefix definition: {source}")))
+fn prefix_definition_cost(alias: &str, namespace: &str) -> usize {
+    use purrdf_lex::json::{self, Object};
+    let value = Object::new().with(
+        alias,
+        Object::new().with("@id", namespace).with("@prefix", true),
+    );
+    json::write_compact(&value.into()).len()
 }
 
 fn derived_limit(message: impl Into<String>) -> RdfDiagnostic {
@@ -393,7 +383,10 @@ mod tests {
     fn unprofitable_candidates_are_discarded_stably() {
         let context = derive_from(["https://example.org/only"], DerivationLimits::default())
             .expect("derive empty context");
-        assert_eq!(context.canonical_context(), &serde_json::json!({}));
+        assert_eq!(
+            context.canonical_context(),
+            &purrdf_lex::json::Value::from(purrdf_lex::json::Object::new())
+        );
     }
 
     #[test]

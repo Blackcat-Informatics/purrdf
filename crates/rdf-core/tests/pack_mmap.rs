@@ -25,79 +25,17 @@
 //! the wasm32 target, which has no filesystem.
 #![cfg(not(target_arch = "wasm32"))]
 
-use purrdf_core::TermBox;
+#[path = "support/values.rs"]
+mod values;
+use purrdf_core::term_fixture::iri;
 use std::io::Write as _;
 use std::sync::Arc;
+use values::{collect_rows, row_key, to_value};
 
 use purrdf_core::{
     BlankScope, DatasetView, GraphMatch, PackBuilder, PackView, RdfDataset, RdfDatasetBuilder,
-    RdfLiteral, RdfTextDirection, TermRef, TermValue, verify_pack,
+    RdfLiteral, RdfTextDirection, TermValue, verify_pack,
 };
-
-/// An `example.org` IRI value.
-fn iri(name: &str) -> TermValue {
-    TermValue::iri(format!("http://example.org/{name}"))
-}
-
-/// Resolve a view id to its dataset-INDEPENDENT `TermValue`, recursing through
-/// a literal's datatype and a triple term's components. Generic over any
-/// `DatasetView`, mirroring the by-value resolution pattern shared by
-/// `tests/pack_dataset_view.rs` and `tests/paged_backend.rs` — the SAME
-/// routine reads the reference `RdfDataset`, the heap-backed `PackView`, and
-/// the file-backed `PackView` under test, so their rows can be compared by
-/// value (each view mints its own unrelated id space).
-fn to_value<V: DatasetView>(v: &V, id: V::Id) -> TermValue {
-    match v.resolve(id) {
-        TermRef::Iri(s) => TermValue::iri(s),
-        TermRef::Blank { label, scope } => TermValue::Blank {
-            label: label.to_owned(),
-            scope,
-        },
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let datatype = match v.resolve(datatype) {
-                TermRef::Iri(s) => s.to_owned(),
-                other => panic!("literal datatype must resolve to an IRI, got {other:?}"),
-            };
-            TermValue::Literal {
-                lexical_form: lexical.to_owned(),
-                datatype,
-                language: language.map(str::to_owned),
-                direction,
-            }
-        }
-        TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: TermBox::new(to_value(v, s)),
-            p: TermBox::new(to_value(v, p)),
-            o: TermBox::new(to_value(v, o)),
-        },
-    }
-}
-
-/// A deterministic sort key for a value row (`TermValue` is not `Ord`; its
-/// `Debug` form is total and dataset-independent).
-fn row_key(row: &[TermValue]) -> String {
-    format!("{row:?}")
-}
-
-/// Collect every quad of the view as sorted `[s, p, o, g?]` value rows via the
-/// generic trait surface only.
-fn collect_rows<V: DatasetView>(v: &V) -> Vec<Vec<TermValue>> {
-    let mut rows: Vec<Vec<TermValue>> = v
-        .quads_for_pattern(None, None, None, GraphMatch::Any)
-        .map(|q| {
-            let mut row = vec![to_value(v, q.s), to_value(v, q.p), to_value(v, q.o)];
-            row.push(q.g.map_or_else(|| TermValue::iri("urn:default-graph"), |g| to_value(v, g)));
-            row
-        })
-        .collect();
-    rows.sort_by_key(|r| row_key(r));
-    rows
-}
 
 /// Look up a bound `TermValue`'s id in `v` via `term_id_by_value` — exactly
 /// how the evaluator resolves a pattern's bound constants before probing

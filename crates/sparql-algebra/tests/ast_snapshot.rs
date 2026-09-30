@@ -41,6 +41,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use purrdf_sparql_algebra::{ParseError, ParserOptions, SparqlParser};
+use purrdf_testkit::paths::workspace_root;
 
 /// Every directory walked, relative to the repository root.
 const CORPORA: &[&str] = &[
@@ -65,10 +66,6 @@ const REL_NS: &str = "https://example.org/rel/";
 /// A floor on the number of files walked, so a corpus that moved away cannot leave the
 /// snapshot passing over nothing.
 const MIN_FILES: usize = 1500;
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
 
 fn golden_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/goldens/ast_snapshot.golden")
@@ -113,7 +110,7 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// Every corpus file, as `(relative path with '/' separators, absolute path)`, sorted.
 fn corpus_files() -> Vec<(String, PathBuf)> {
-    let root = repo_root();
+    let root = workspace_root();
     let mut files = Vec::new();
     for corpus in CORPORA {
         let mut found = Vec::new();
@@ -204,11 +201,7 @@ fn entries(snapshot: &str) -> Vec<(&str, &str)> {
 
 /// A bounded prefix of a possibly very long line, for a failure message.
 fn clip(line: &str) -> &str {
-    let mut end = line.len().min(600);
-    while !line.is_char_boundary(end) {
-        end -= 1;
-    }
-    &line[..end]
+    &line[..line.floor_char_boundary(600)]
 }
 
 #[test]

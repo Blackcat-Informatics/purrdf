@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Tokenizer hot-path benchmark.
@@ -18,8 +18,8 @@
 //! continuation lists (the keyword-terminator peeks), decimal/exponent numbers,
 //! long and short string literals, prefixed names, and `@en--ltr` literals.
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_sparql_algebra::lexer::{tokenize, tokenize_turtle};
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 
 const ROWS: usize = 4_000;
 const MODIFIER_BLOCKS: usize = 500;
@@ -62,7 +62,7 @@ fn modifier_query_fixture(blocks: usize) -> String {
     out
 }
 
-fn bench_tokenize(c: &mut Criterion) {
+fn bench_tokenize(c: &mut Bench) {
     let text = turtle_fixture(ROWS);
     let mut group = c.benchmark_group("tokenize");
     group.throughput(Throughput::Bytes(text.len() as u64));
@@ -84,7 +84,7 @@ fn bench_tokenize(c: &mut Criterion) {
 }
 
 /// Solution-modifier lists, numeric lookahead, quoted forms, `@lang--dir`.
-fn bench_tokenize_modifiers(c: &mut Criterion) {
+fn bench_tokenize_modifiers(c: &mut Bench) {
     let query = modifier_query_fixture(MODIFIER_BLOCKS);
     let mut group = c.benchmark_group("tokenize");
     group.throughput(Throughput::Bytes(query.len() as u64));
@@ -97,5 +97,5 @@ fn bench_tokenize_modifiers(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_tokenize, bench_tokenize_modifiers);
-criterion_main!(benches);
+bench_group!(benches, bench_tokenize, bench_tokenize_modifiers);
+bench_main!(benches);

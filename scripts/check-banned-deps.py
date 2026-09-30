@@ -31,7 +31,7 @@ blocks and ``replace = "name:version"`` lines in ``Cargo.lock`` are matched
 against ``BANNED_ANY_EDGE`` the same as a normally resolved package.
 
 What this CANNOT see: a fork published under a DIFFERENT package name (for
-example a ``[patch]`` table remapping ``package = "my-oxigraph-fork"``).
+example a ``[patch]`` table remapping ``package = "my-petgraph-fork"``).
 Cargo.lock would then record that fork under its own name, indistinguishable
 from any other unrelated crate to a name-based scan. Catching that requires a
 source-URL allowlist or a checksum/provenance check, neither of which this
@@ -69,17 +69,45 @@ dependency does not reach the package, and on metrics drift.
 ``--update-metrics`` rewrites the ``[packages]`` section deterministically
 (adding flagged skeletons for new packages and reporting, never dropping,
 entries whose package vanished); ``--report`` prints the graph counts.
+
+**The census verdict.** Every ``[packages]`` row also says whether PurRDF
+already does, or is to do, the package's job natively:
+
+* ``distinct = "<reason>"`` (DISTINCT) — no first-party code does this job, and
+  the reason says why the package stays;
+* ``duplicates_native = "<crate::path>"`` (DUPLICATE) — the first-party home
+  that does this package's job. The home must exist, and a DUPLICATE may not be
+  a direct dependency of any workspace member: the home replaced it;
+* ``pending_native = true`` on a DUPLICATE — the named home does not exist yet,
+  so first-party edges may remain until it does. The gate accepts the flag only
+  while the home is absent; once the home exists the flag is STALE and fails.
+* ``holder = "<package>"`` — required on a row no workspace member depends on
+  directly, refused on a row one does: the direct dependency whose closure keeps
+  the package in the graph.
+
+A home resolves by module path, not by a census: the first segment is a
+workspace library's crate name (``purrdf_lex``), each further segment is a
+``mod`` its parent declares (``scan`` in ``src/scan.rs`` or
+``src/scan/mod.rs``), and the last may instead be an item the module defines,
+re-exports or generates through an item-position macro (``find_byte``), a
+``#[macro_export]`` macro at the crate root, or an associated item of such a
+type (``Iri::resolve``). Every home and entry point in ``helpers-ledger.toml``
+must resolve this way, which the self-test checks. ``--ledger-complete``
+checks only that every resolved external package has a row carrying a valid
+verdict.
 """
 
 from __future__ import annotations
 
+import functools
 import json
 import posixpath
 import re
 import subprocess
 import sys
+import tempfile
 import tomllib
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -89,11 +117,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # dev/test, transitive) because a first-party replacement exists for every
 # edge kind; reintroduction anywhere in the resolved Cargo.lock closure fails.
 BANNED_ANY_EDGE: dict[str, str] = {
-    "oxilangtag": "purrdf_iri::langtag (RFC 5646 well-formedness)",
-    "oxiri": "purrdf-iri",
-    "oxsdatatypes": "purrdf-xsd",
-    "oxrdf": "purrdf-core",
-    "oxigraph": "the native purrdf engine",
     "petgraph": "purrdf_core::graph::tarjan_scc (the first-party iterative Tarjan SCC)",
     "thiserror": "plain error types and std::error::Error implementations",
     "thiserror-impl": "plain error types and std::error::Error implementations (thiserror macro backend)",
@@ -197,7 +220,7 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "find-msvc-tools": "native Rust hashing kernels",
     "shlex": "native Rust hashing kernels (old cc build closure)",
     "md-5": "purrdf_hash::md5 (RFC 1321)",
-    "hex": 'core::fmt::LowerHex formatting (`format!("{digest:x}")`)',
+    "hex": "purrdf_hash::hex (base16 in either case, rendering and reading, and the Digest32 value)",
     "sha1": "purrdf_hash::sha1 (FIPS 180-4)",
     "sha3": "purrdf_hash::sha3 (FIPS 202)",
     # sha3's permutation crate; nothing else in the graph pulled it in.
@@ -209,14 +232,29 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "allocator-api2": "current hashbrown resolution (no allocator-api2 edge)",
     "foldhash": "purrdf_hash::fixed::FixedHasher (old hashbrown 0.15 closure)",
     "version_check": "const and build-time declarations (old ahash/generic-array version probe)",
-    # RustCrypto 0.11 and ed25519-dalek 3 removed the older 0.10/0.7 crypto
-    # trait and key-encoding closure from the published graph.
+    # RustCrypto 0.11 removed the older 0.10/0.7 crypto trait closure, and
+    # Ed25519 keys are raw 32-byte values with no key-encoding closure.
     "generic-array": "RustCrypto 0.11 hybrid-array-backed traits",
     "opaque-debug": "current RustCrypto GHash/POLYVAL implementation",
-    "pkcs8": "ed25519-dalek 3 native key handling (no PKCS#8 import path)",
-    "spki": "ed25519-dalek 3 native key handling (no SPKI import path)",
-    "der": "ed25519-dalek 3 native key handling (no DER import path)",
-    "base64ct": "ed25519-dalek 3 native key handling (old SPKI closure)",
+    "pkcs8": "purrdf-ed25519 raw 32-byte keys (no PKCS#8 import path)",
+    "spki": "purrdf-ed25519 raw 32-byte keys (no SPKI import path)",
+    "der": "purrdf-ed25519 raw 32-byte keys (no DER import path)",
+    "base64ct": "purrdf-ed25519 raw 32-byte keys (no SPKI closure)",
+    "ed25519-dalek": "purrdf-ed25519 (RFC 8032 signing and strict cofactorless verification)",
+    # ed25519-dalek's own closure: its curve arithmetic and that crate's
+    # derive macros and field backend, the signature-type and trait crates,
+    # its constant-time and zeroizing helpers, and the compiler-version probe
+    # its build script ran. The committed Cargo.lock listed ed25519-dalek (or
+    # one of these) as the only dependent of each before they left.
+    "curve25519-dalek": "purrdf-ed25519 (radix-2^51 field and Edwards point arithmetic)",
+    "curve25519-dalek-derive": "purrdf-ed25519 (no SIMD backend macros)",
+    "fiat-crypto": "purrdf-ed25519 (radix-2^51 field arithmetic)",
+    "ed25519": "purrdf_ed25519::Signature",
+    "signature": "purrdf_ed25519 inherent sign and verify_strict (no signer/verifier traits)",
+    "subtle": "purrdf-ed25519 masked selection (no constant-time helper crate)",
+    "zeroize": "purrdf_ed25519::SigningKey overwrites its secrets on drop",
+    "rustc_version": "purrdf-ed25519 (no build script)",
+    "semver": "purrdf-ed25519 (no build script; old rustc_version closure)",
     # These old optional resolutions vanished along with the replaced test
     # and RNG stacks. They remain forbidden even on target-specific edges.
     "libm": "current num-traits configuration and purrdf_testkit wasm harness",
@@ -242,28 +280,78 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "csv": "purrdf_core::csv (the W3C CSVW dialect reader/writer)",
     # csv's own field-scanning engine; nothing else in the graph pulled it in.
     "csv-core": "purrdf_core::csv (the W3C CSVW dialect reader/writer)",
-    "time": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
+    "time": "purrdf_xsd::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
     # time's own closure: its internal core types, its compile-time format-description
     # macros, and the ranged-integer/formatting crates its date validation used.
     # Nothing else in the graph pulled any of them in.
-    "time-core": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
-    "time-macros": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
-    "deranged": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
-    "num-conv": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
-    "powerfmt": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
-    # The analyzer's Unicode layer, generated from the vendored database in
+    "time-core": "purrdf_xsd::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
+    "time-macros": "purrdf_xsd::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
+    "deranged": "purrdf_xsd::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
+    "num-conv": "purrdf_xsd::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
+    "powerfmt": "purrdf_xsd::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
+    # The Unicode layer (normalization in purrdf-lex, folding and word
+    # boundaries in purrdf-text), generated from the vendored database in
     # crates/iri/unicode/; `cargo tree --locked --target all -i` showed each
     # held only by purrdf-text (tinyvec through unicode-normalization alone).
     "caseless": "purrdf_text::unicode::case_fold (CaseFolding.txt C + F)",
-    "unicode-normalization": "purrdf_text::unicode::{nfd, nfc, nfkd, nfkc} (UAX 15)",
+    "unicode-normalization": "purrdf_lex::unicode::{nfd, nfc, nfkd, nfkc} (UAX 15)",
     "unicode-segmentation": "purrdf_text::unicode::{word_bounds, word_indices} (UAX 29)",
-    "tinyvec": "purrdf_text::unicode (no inline-buffer crate is needed)",
-    "tinyvec_macros": "purrdf_text::unicode (no inline-buffer crate is needed)",
+    "tinyvec": "purrdf_lex::unicode (no inline-buffer crate is needed)",
+    "tinyvec_macros": "purrdf_lex::unicode (no inline-buffer crate is needed)",
+    "criterion": "purrdf_testkit::bench (warm-up, flat sampling, median/MAD with a seeded bootstrap interval, baselines, estimates.json)",
+    # criterion's own closure: its plotting backend, terminal and statistics
+    # helpers, its report templating and its baseline-directory walker. The
+    # committed Cargo.lock listed criterion (or one of these) as the only
+    # dependent of each before they left.
+    "criterion-plot": "purrdf_testkit::bench (no plots are drawn)",
+    "anes": "purrdf_testkit::bench (plain console lines, no terminal control sequences)",
+    "is-terminal": "std::io::IsTerminal",
+    "hermit-abi": "std::io::IsTerminal (old is-terminal closure)",
+    "cast": "purrdf_testkit::bench::stats (plain numeric conversions)",
+    "num-traits": "purrdf_testkit::bench::stats (f64 statistics without numeric traits)",
+    "autocfg": "purrdf_testkit::bench::stats (old num-traits build probe)",
+    "itertools": "purrdf_testkit::bench (std iterators)",
+    "oorandom": "purrdf_testkit::bench::stats (the bootstrap draws from purrdf_testkit::rng, seeded through purrdf_hash::mix)",
+    "tinytemplate": "purrdf_testkit::bench (no HTML report)",
+    "walkdir": "purrdf_testkit::bench::store (one fixed path per record)",
+    "same-file": "purrdf_testkit::bench::store (one fixed path per record)",
+    "winapi-util": "purrdf_testkit::bench::store (old walkdir closure)",
+    "ciborium": "purrdf_lex::cbor (RFC 8949 encode, canonical encode and bounded decode)",
+    # ciborium's own closure: its I/O traits and low-level codec, the binary16
+    # float crate and that crate's closure (its build-time helper and its
+    # byte-reinterpretation crate with derive macros). The committed Cargo.lock
+    # listed ciborium (or one of these) as the only dependent of each before
+    # they left.
+    "ciborium-io": "purrdf_lex::cbor (std::io::Read and Write directly)",
+    "ciborium-ll": "purrdf_lex::cbor::head (the data-item head reader and writer)",
+    "half": "purrdf_lex::cbor (binary16 encode and decode by bit pattern)",
+    "crunchy": "purrdf_lex::cbor (no unrolled float conversion helper)",
+    "zerocopy": "purrdf_lex::cbor (f16/f32/f64 bit conversions through std to_bits/from_bits)",
+    "zerocopy-derive": "purrdf_lex::cbor (no byte-reinterpretation derives)",
+    "serde_json": "purrdf_lex::json (the RFC 8259 reader, lexeme-keeping value and deterministic writer)",
+    "serde_yaml_ng": "purrdf_lex::yaml (the YAML 1.2 core-schema reader and writer)",
+    "roxmltree": "purrdf_lex::xml (the XML 1.0 reader)",
+    # serde's own closure and the closures of the JSON and YAML crates above:
+    # the data-model traits and their derive macros, the number formatters, the
+    # libyaml port and the ordered map behind YAML mappings. The committed
+    # Cargo.lock listed serde, serde_json or serde_yaml_ng as the only dependent
+    # of each before they left.
+    "serde": "hand-written to_json/from_json over purrdf_lex::json::Value",
+    "serde_core": "hand-written to_json/from_json over purrdf_lex::json::Value",
+    "serde_derive": "hand-written to_json/from_json over purrdf_lex::json::Value",
+    "itoa": "purrdf_lex::json::Number (integers keep their decimal lexeme)",
+    "ryu": "purrdf_lex::json::Number::from_f64 (shortest round-trip binary64 lexeme)",
+    "zmij": "purrdf_lex::json::Number::from_f64 (shortest round-trip binary64 lexeme)",
+    "unsafe-libyaml": "purrdf_lex::yaml (the YAML 1.2 core-schema reader and writer)",
+    "indexmap": "purrdf_lex::json::Object (members in document order)",
+    "equivalent": "purrdf_lex::json::Object (members in document order)",
 }
 
-# Reserved for a future direct-only removal, if one is ever authorized.
-# Every current removal is an any-edge ban, including hex and rand_core.
+# Removed as a direct dependency of every workspace member, while a direct
+# dependency's own closure still reaches it: no member may name it again.
 BANNED_DIRECT_ONLY: dict[str, str] = {
+    # regex keeps it in the graph through its own closure.
+    "memchr": "purrdf_lex::scan::find_byte / find_byte2 (and a purrdf_lex::scan::ByteClass for a fixed class)",
 }
 
 DEP_TABLE_KEYS = ("dependencies", "dev-dependencies", "build-dependencies")
@@ -591,7 +679,21 @@ PACKAGES_PREAMBLE = """\
 #
 # category: spec-codec | crypto | runtime | oracle | bench | binding for a
 # direct dependency of a workspace member, transitive:<direct> for a package
-# only reached through that direct dependency."""
+# only reached through that direct dependency.
+#
+# Every row carries exactly one verdict on whether PurRDF does its job natively:
+#   distinct          = DISTINCT: why no first-party code does this job.
+#   duplicates_native = DUPLICATE: the first-party home, `crate::path`, that does
+#                       this package's job. The home must resolve (a workspace
+#                       library, then each `mod` down to a module or an item it
+#                       declares), and the package may not be a direct
+#                       dependency of any workspace member.
+#   pending_native    = true on a DUPLICATE whose home does not exist yet; its
+#                       first-party edges may stay until the home lands. Once
+#                       the home resolves the flag is STALE and fails.
+#   holder            = the direct dependency whose closure keeps the package in
+#                       the graph; required when no workspace member depends on
+#                       it directly, refused when one does."""
 
 DIRECT_CATEGORIES = ("spec-codec", "crypto", "runtime", "oracle", "bench", "binding")
 TRANSITIVE_PREFIX = "transitive:"
@@ -605,6 +707,10 @@ METRIC_KEYS = (
     "proc_macro",
 )
 WASM_TARGET = "wasm32-unknown-unknown"
+
+# One package's computed metrics: `exclusive_closure` is a count, every other
+# key a flag (`bool` is an `int`, so one value type covers both).
+MetricValues = dict[str, int]
 
 
 class MetadataError(RuntimeError):
@@ -709,12 +815,15 @@ class LedgerFacts:
     # of one name inside ONE lock, never across locks).
     versions: dict[str, set[str]] = field(default_factory=dict)
     duplicated: set[str] = field(default_factory=set)
-    metrics: dict[str, dict[str, object]] = field(default_factory=dict)
+    metrics: dict[str, MetricValues] = field(default_factory=dict)
     # direct name -> external names its closure reaches (any edge kind).
     closure_of_direct: dict[str, set[str]] = field(default_factory=dict)
     reachable_ids: set[str] = field(default_factory=set)
     release_ids: set[str] = field(default_factory=set)
     wasm_ids: set[str] = field(default_factory=set)
+    # workspace library crate name -> its `src/lib.rs` paths (two members may
+    # share a library name, so each name may have several roots).
+    lib_roots: dict[str, set[Path]] = field(default_factory=dict)
 
     @property
     def reachable(self) -> int:
@@ -787,7 +896,7 @@ def merge_facts(
             facts.closure_of_direct.setdefault(name, set()).update(
                 full.names[pid] for pid in own
             )
-        computed = {
+        computed: MetricValues = {
             "direct": name in direct,
             "exclusive_closure": closure,
             "release": bool(ids & release),
@@ -834,19 +943,237 @@ def cargo_metadata(manifest: Path, platform: str | None = None) -> dict:
     return json.loads(completed.stdout)
 
 
+def lib_roots_from_metadata(meta: dict) -> dict[str, set[Path]]:
+    """Workspace library crate name -> the source root of that library.
+
+    The crate name is the library target's name (``purrdf_core`` for the
+    ``purrdf-core`` package), which is the first segment of a Rust path.
+    """
+    workspace = set(meta["workspace_members"])
+    roots: dict[str, set[Path]] = {}
+    for package in meta["packages"]:
+        if package["id"] not in workspace:
+            continue
+        for target in package["targets"]:
+            if {"lib", "rlib", "proc-macro"} & set(target["kind"]):
+                roots.setdefault(target["name"], set()).add(Path(target["src_path"]))
+    return roots
+
+
 def collect_facts(root: Path) -> LedgerFacts:
     """Facts for every committed lockfile under ``root``."""
     facts = LedgerFacts()
     for lockfile in committed_lockfiles(root):
         manifest = lockfile.parent / "Cargo.toml"
-        full = graph_from_metadata(cargo_metadata(manifest))
+        meta = cargo_metadata(manifest)
+        full = graph_from_metadata(meta)
         wasm = graph_from_metadata(cargo_metadata(manifest, WASM_TARGET))
         merge_facts(facts, lockfile.read_text(encoding="utf-8"), full, wasm)
+        for name, paths in lib_roots_from_metadata(meta).items():
+            facts.lib_roots.setdefault(name, set()).update(paths)
     return facts
 
 
-def ledger_failures(packages: dict[str, dict], facts: LedgerFacts) -> list[str]:
-    """Every way the ``[packages]`` table disagrees with the resolved graph."""
+# ---------------------------------------------------------------------------
+# The census verdict: does PurRDF already do, or is it to do, a package's job?
+# ---------------------------------------------------------------------------
+
+RUST_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+LINE_COMMENT_RE = re.compile(r"//.*$", re.MULTILINE)
+BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+MODULE_FILES = {"lib.rs", "main.rs", "mod.rs"}
+
+
+def rust_code(text: str) -> str:
+    """``text`` with its comments (and so its doc comments) removed, so a
+    name mentioned only in prose never counts as declared."""
+    return LINE_COMMENT_RE.sub("", BLOCK_COMMENT_RE.sub("", text))
+
+
+def declares_module(code: str, name: str) -> bool:
+    """``code`` declares an out-of-line ``mod name;`` at any visibility."""
+    return re.search(
+        rf"^\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+{name}\s*;", code, re.MULTILINE
+    ) is not None
+
+
+def declares_item(code: str, name: str) -> bool:
+    """``code`` defines or re-exports an item called ``name``."""
+    definition = re.compile(
+        rf"\b(?:fn|struct|enum|union|trait|type|const|static|mod)\s+{name}\b"
+        rf"|\bmacro_rules!\s*{name}\b"
+    )
+    reexport = re.compile(rf"\buse\s[^;]*\b{name}\b[^;]*;")
+    return definition.search(code) is not None or reexport.search(code) is not None
+
+
+def item_macro_generates(code: str, name: str) -> bool:
+    """A column-0 (item-position) macro invocation in ``code`` names ``name``,
+    as ``hasher!(FixedHasher, …)`` generates ``FixedHasher``. A macro called
+    inside a function body is indented, so its arguments never count."""
+    for invocation in re.finditer(r"^[A-Za-z_][A-Za-z0-9_]*!\s*([({\[])", code, re.MULTILINE):
+        opener = invocation.group(1)
+        closer = {"(": ")", "{": "}", "[": "]"}[opener]
+        depth = 0
+        for index in range(invocation.end() - 1, len(code)):
+            if code[index] == opener:
+                depth += 1
+            elif code[index] == closer:
+                depth -= 1
+                if depth == 0:
+                    if re.search(rf"\b{name}\b", code[invocation.end() : index]):
+                        return True
+                    break
+    return False
+
+
+def crate_sources(crate_dir: Path) -> list[str]:
+    """The comment-free source of every ``.rs`` file under ``crate_dir``."""
+    return [
+        rust_code(path.read_text(encoding="utf-8"))
+        for path in sorted(crate_dir.rglob("*.rs"))
+        if path.is_file()
+    ]
+
+
+def exported_macro(crate_dir: Path, name: str) -> bool:
+    """A ``#[macro_export]`` macro ``name`` anywhere in the crate: exported
+    macros live at the crate root whichever module defines them."""
+    pattern = re.compile(rf"#\[macro_export\][^!]*?\bmacro_rules!\s*{name}\b", re.DOTALL)
+    return any(pattern.search(code) for code in crate_sources(crate_dir))
+
+
+def associated_item(crate_dir: Path, owner: str, name: str) -> bool:
+    """Some file of the crate implements ``owner`` and declares ``name`` in it
+    (``Iri::resolve``: an ``impl Iri`` block beside a ``fn resolve``)."""
+    implementation = re.compile(rf"\bimpl\b[^{{;]*\b{owner}\b[^{{;]*\{{")
+    member = re.compile(rf"\b(?:fn|const|type)\s+{name}\b")
+    return any(
+        implementation.search(code) and member.search(code) for code in crate_sources(crate_dir)
+    )
+
+
+def module_resolves(file: Path, rest: list[str], crate_dir: Path, at_root: bool = True) -> bool:
+    """``rest`` resolves inside the module whose source is ``file``."""
+    if not file.is_file():
+        return False
+    if not rest:
+        return True
+    code = rust_code(file.read_text(encoding="utf-8"))
+    head, tail = rest[0], rest[1:]
+    if declares_module(code, head):
+        directory = file.parent if file.name in MODULE_FILES else file.parent / file.stem
+        for candidate in (directory / f"{head}.rs", directory / head / "mod.rs"):
+            if candidate.is_file():
+                return module_resolves(candidate, tail, crate_dir, at_root=False)
+        return False
+    declared = (
+        declares_item(code, head)
+        or item_macro_generates(code, head)
+        or (at_root and exported_macro(crate_dir, head))
+    )
+    if not tail:
+        return declared
+    return declared and len(tail) == 1 and associated_item(crate_dir, head, tail[0])
+
+
+def native_home_resolves(path: str, lib_roots: dict[str, set[Path]]) -> bool:
+    """Whether ``path`` (``crate::module::item``) names first-party code."""
+    segments = path.split("::")
+    if not all(RUST_IDENT_RE.fullmatch(segment) for segment in segments):
+        return False
+    return any(
+        module_resolves(root, segments[1:], root.parent)
+        for root in sorted(lib_roots.get(segments[0], ()))
+    )
+
+
+def verdict_failures(
+    packages: dict[str, dict],
+    facts: LedgerFacts,
+    home_exists: Callable[[str], bool] | None = None,
+) -> list[str]:
+    """Every resolved row's census verdict that is missing, malformed or false."""
+    resolves = (
+        home_exists
+        if home_exists is not None
+        else functools.partial(native_home_resolves, lib_roots=facts.lib_roots)
+    )
+    failures: list[str] = []
+    for name in sorted(set(packages) & set(facts.versions)):
+        entry = packages[name]
+        direct = bool(facts.metrics[name]["direct"])
+        home = entry.get("duplicates_native")
+        distinct = entry.get("distinct")
+        pending = entry.get("pending_native")
+        holder = entry.get("holder")
+        if home is None and distinct is None:
+            failures.append(
+                f"FAIL: `{name}` has no census verdict in dependency-ledger.toml; "
+                "set `distinct = \"<reason>\"` or `duplicates_native = \"<crate::path>\"`"
+            )
+        elif home is not None and distinct is not None:
+            failures.append(
+                f"FAIL: `{name}` is both DISTINCT and a DUPLICATE of `{home}`; "
+                "keep the one verdict that is true"
+            )
+        if distinct is not None and not (isinstance(distinct, str) and distinct.strip()):
+            failures.append(f"FAIL: `{name}` is DISTINCT with no reason")
+        if pending is not None and not isinstance(pending, bool):
+            failures.append(f"FAIL: `{name}` has a non-boolean pending_native ({pending!r})")
+        if pending is not None and home is None:
+            failures.append(
+                f"FAIL: `{name}` sets pending_native without duplicates_native; "
+                "only a DUPLICATE can wait for its native home"
+            )
+        if home is not None:
+            if not (isinstance(home, str) and all(
+                RUST_IDENT_RE.fullmatch(segment) for segment in home.split("::")
+            )):
+                failures.append(
+                    f"FAIL: `{name}` duplicates_native {home!r} is not a Rust path "
+                    "`crate::module::item`"
+                )
+            elif pending is True:
+                if resolves(home):
+                    failures.append(
+                        f"FAIL: `{name}` is pending_native, but its home `{home}` "
+                        "exists (STALE); drop pending_native and remove the "
+                        "package's first-party edges"
+                    )
+            elif not resolves(home):
+                failures.append(
+                    f"FAIL: `{name}` is a DUPLICATE of `{home}`, which does not "
+                    "resolve to first-party code; name the real home, or set "
+                    "pending_native = true while it is still to be written"
+                )
+            elif direct:
+                failures.append(
+                    f"FAIL: `{name}` is a DUPLICATE of `{home}`, which exists, but a "
+                    "workspace member still depends on it directly; re-point "
+                    "those callers at the native home and remove the edge"
+                )
+        if holder is None and not direct:
+            failures.append(
+                f"FAIL: `{name}` is reached only transitively, so its row must "
+                "name the direct dependency that keeps it: `holder = \"<package>\"`"
+            )
+        elif holder is not None and direct:
+            failures.append(
+                f"FAIL: `{name}` names holder `{holder}`, but a workspace member "
+                "depends on it directly; a holder is only recorded once no "
+                "first-party crate does"
+            )
+        elif holder is not None and name not in facts.closure_of_direct.get(holder, set()):
+            failures.append(
+                f"FAIL: `{name}` names holder `{holder}`, which is not a direct "
+                "dependency whose closure reaches it"
+            )
+    return failures
+
+
+def presence_failures(packages: dict[str, dict], facts: LedgerFacts) -> list[str]:
+    """Resolved packages with no row, and rows no lock resolves."""
     failures: list[str] = []
     resolved = set(facts.versions)
     listed = set(packages)
@@ -855,13 +1182,34 @@ def ledger_failures(packages: dict[str, dict], facts: LedgerFacts) -> list[str]:
             f"FAIL: `{name}` {sorted(facts.versions[name])} is resolved by a "
             "committed Cargo.lock but has no dependency-ledger.toml entry; run "
             "`python3 scripts/check-banned-deps.py --update-metrics` and fill "
-            "in its category and reason (or remove the dependency)"
+            "in its category, reason and verdict (or remove the dependency)"
         )
     for name in sorted(listed - resolved):
         failures.append(
             f"FAIL: dependency-ledger.toml lists `{name}`, which no committed "
             "Cargo.lock resolves any more; delete its entry"
         )
+    return failures
+
+
+def verdict_counts(packages: dict[str, dict], facts: LedgerFacts) -> tuple[int, int, int]:
+    """(DISTINCT, DUPLICATE, pending DUPLICATE) over the resolved rows."""
+    rows = [packages[name] for name in set(packages) & set(facts.versions)]
+    duplicate = [row for row in rows if "duplicates_native" in row]
+    pending = [row for row in duplicate if row.get("pending_native") is True]
+    distinct = [row for row in rows if "distinct" in row and "duplicates_native" not in row]
+    return len(distinct), len(duplicate), len(pending)
+
+
+def ledger_failures(
+    packages: dict[str, dict],
+    facts: LedgerFacts,
+    home_exists: Callable[[str], bool] | None = None,
+) -> list[str]:
+    """Every way the ``[packages]`` table disagrees with the resolved graph."""
+    failures = presence_failures(packages, facts)
+    resolved = set(facts.versions)
+    listed = set(packages)
     for name in sorted(listed & resolved):
         entry = packages[name]
         category = entry.get("category", "")
@@ -918,10 +1266,13 @@ def ledger_failures(packages: dict[str, dict], facts: LedgerFacts) -> list[str]:
                 f"says {recorded}, the graph says {metrics}; run "
                 "`python3 scripts/check-banned-deps.py --update-metrics`"
             )
+    failures.extend(verdict_failures(packages, facts, home_exists))
     return failures
 
 
 BARE_KEY_RE = re.compile(r"[A-Za-z0-9_-]+")
+# The census verdict keys, in the order a row renders them.
+VERDICT_KEYS = ("distinct", "duplicates_native", "pending_native", "holder")
 
 
 def toml_string(value: str) -> str:
@@ -956,6 +1307,9 @@ def render_packages(packages: dict[str, dict]) -> str:
             lines.append(
                 f"duplicate_reason = {toml_string(entry['duplicate_reason'])}"
             )
+        for key in VERDICT_KEYS:
+            if key in entry:
+                lines.append(f"{key} = {toml_value(entry[key])}")
         metrics = entry.get("metrics", {})
         rendered = ", ".join(
             f"{key} = {toml_value(metrics[key])}" for key in METRIC_KEYS if key in metrics
@@ -988,7 +1342,7 @@ def updated_packages(
             result[name] = packages[name]
             stale.append(name)
             continue
-        entry = dict(packages.get(name, {}))
+        entry: dict[str, object] = dict(packages.get(name, {}))
         if name not in packages:
             entry = {"category": UNCATEGORIZED, "reason": ""}
             skeletons.append(name)
@@ -1123,12 +1477,201 @@ def fixture_facts(lock_text: str) -> LedgerFacts:
     return facts
 
 
+# One verdict per fixture row: `d` is a DUPLICATE whose home is still to be
+# written, which is what lets a direct dependency carry that verdict.
+FIXTURE_VERDICTS = {
+    "x": {"distinct": "no first-party code does x's job"},
+    "y": {"distinct": "internal to x", "holder": "x"},
+    "d": {"duplicates_native": "fixture_lex::oracle", "pending_native": True},
+    "m": {"distinct": "no first-party code does m's job"},
+}
+
+# The native homes the verdict self-test treats as present.
+FIXTURE_HOMES = {"fixture_lex::scan::find_byte", "fixture_lex::scan"}
+
+
+def fixture_home_exists(path: str) -> bool:
+    return path in FIXTURE_HOMES
+
+
 def fixture_ledger(facts: LedgerFacts) -> dict[str, dict]:
     packages, _, _ = updated_packages({}, facts)
     for name, (category, reason) in FIXTURE_CATEGORIES.items():
         packages[name]["category"] = category
         packages[name]["reason"] = reason
+        packages[name].update(FIXTURE_VERDICTS[name])
     return packages
+
+
+def home_resolution_self_test() -> list[str]:
+    """A fixture crate tree: every home that resolves, beside the nearest
+    one that must not."""
+    failures: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="check-banned-deps-") as directory:
+        src = Path(directory) / "lex" / "src"
+        (src / "nested").mkdir(parents=True)
+        (src / "lib.rs").write_text(
+            "//! Mentions `mod json;` and `fn ghost` only in prose.\n"
+            "pub mod scan;\n"
+            "pub(crate) mod nested;\n"
+            "mod json_escape;\n"
+            "pub mod bench;\n"
+            "pub use scan::find_byte as first_byte;\n"
+            "/* fn commented_out() {} */\n"
+            "hasher!(\n    /// A generated hasher.\n    FixedHasher,\n    Selected\n);\n"
+            "fn body() {\n    println!(\"{}\", Phantom);\n}\n",
+            encoding="utf-8",
+        )
+        (src / "bench.rs").write_text(
+            "#[macro_export]\nmacro_rules! bench_group { () => {}; }\n"
+            "macro_rules! local_only { () => {}; }\n",
+            encoding="utf-8",
+        )
+        (src / "scan.rs").write_text(
+            "/// `fn find_bytes` is not declared here.\n"
+            "pub fn find_byte(haystack: &[u8], needle: u8) -> Option<usize> { None }\n",
+            encoding="utf-8",
+        )
+        (src / "nested" / "mod.rs").write_text("pub mod deeper;\n", encoding="utf-8")
+        (src / "nested" / "deeper.rs").write_text(
+            "pub struct Leaf;\nimpl Leaf {\n    pub fn grow(&self) {}\n}\n", encoding="utf-8"
+        )
+        (src / "json_escape.rs").write_text("pub fn escape() {}\n", encoding="utf-8")
+        roots = {"fixture_lex": {src / "lib.rs"}}
+        cases = (
+            # (home, resolves)
+            ("fixture_lex", True),
+            ("fixture_lex::scan", True),
+            ("fixture_lex::scan::find_byte", True),
+            ("fixture_lex::first_byte", True),
+            ("fixture_lex::nested::deeper::Leaf", True),
+            ("fixture_lex::json_escape", True),
+            ("fixture_lex::FixedHasher", True),
+            ("fixture_lex::bench_group", True),
+            ("fixture_lex::bench::local_only", True),
+            ("fixture_lex::nested::deeper::Leaf::grow", True),
+            # The refused neighbours: a sibling module's prefix, an undeclared
+            # item beside a declared one, a name only prose or a comment
+            # mentions, a missing crate, and a path that is not Rust.
+            ("fixture_lex::json", False),
+            ("fixture_lex::scan::find_bytes", False),
+            ("fixture_lex::ghost", False),
+            ("fixture_lex::commented_out", False),
+            ("fixture_lex::nested::Leaf", False),
+            # A name a macro inside a function body mentions, a macro that is
+            # not exported asked for at the crate root, and a method the
+            # type's impl does not declare.
+            ("fixture_lex::Phantom", False),
+            ("fixture_lex::local_only", False),
+            ("fixture_lex::nested::deeper::Leaf::shrink", False),
+            ("fixture_missing", False),
+            ("fixture lex::scan", False),
+        )
+        for home, expected in cases:
+            if native_home_resolves(home, roots) != expected:
+                failures.append(
+                    f"native home `{home}` resolved {not expected}, expected {expected}"
+                )
+
+        # The gate's own resolver (no injected one): verdicts read the homes
+        # through the facts' library roots. A pending home that exists in the
+        # tree is STALE; its neighbour, a pending home still absent, passes.
+        facts = fixture_facts(fixture_lock())
+        facts.lib_roots = roots
+        packages = fixture_ledger(facts)
+        packages["d"]["duplicates_native"] = "fixture_lex::scan::find_byte"
+        if not any("STALE" in message for message in verdict_failures(packages, facts)):
+            failures.append("the gate's resolver did not find an existing pending home (STALE)")
+        packages["d"]["duplicates_native"] = "fixture_lex::scan::find_bytes"
+        if verdict_failures(packages, facts):
+            failures.append(
+                "the gate's resolver refused a pending home that is still absent: "
+                f"{verdict_failures(packages, facts)}"
+            )
+    return failures
+
+
+def verdict_self_test(packages: dict[str, dict], facts: LedgerFacts) -> list[str]:
+    """Each verdict refusal, beside the valid neighbour that must pass."""
+    failures: list[str] = []
+
+    def check(label: str, edits: dict[str, dict], needle: str | None) -> None:
+        edited = {name: dict(entry) for name, entry in packages.items()}
+        for name, fields in edits.items():
+            for key, value in fields.items():
+                if value is None:
+                    edited[name].pop(key, None)
+                else:
+                    edited[name][key] = value
+        found = verdict_failures(edited, facts, fixture_home_exists)
+        if needle is None and found:
+            failures.append(f"verdict neighbour refused ({label}): {found}")
+        if needle is not None and not any(needle in message for message in found):
+            failures.append(f"verdict refusal not raised ({label}): {found}")
+
+    check("the complete fixture ledger", {}, None)
+    # No verdict, and the same row with one.
+    check("no verdict", {"x": {"distinct": None}}, "no census verdict")
+    check("a DISTINCT reason", {"x": {"distinct": "a reason"}}, None)
+    # Two verdicts.
+    check(
+        "two verdicts",
+        {"x": {"duplicates_native": "fixture_lex::oracle", "pending_native": True}},
+        "both DISTINCT",
+    )
+    # An empty DISTINCT reason.
+    check("an empty DISTINCT reason", {"x": {"distinct": "  "}}, "DISTINCT with no reason")
+    # A settled DUPLICATE naming a home that does not exist, and the same row
+    # waiting for it.
+    check(
+        "a settled DUPLICATE with no home",
+        {"d": {"pending_native": None}},
+        "does not resolve",
+    )
+    check(
+        "a settled DUPLICATE with no home, pending_native = false",
+        {"d": {"pending_native": False}},
+        "does not resolve",
+    )
+    check("a pending DUPLICATE with no home", {"d": {"pending_native": True}}, None)
+    # A settled DUPLICATE whose home exists but which is still a direct
+    # dependency, and the same verdict on a package only a holder keeps.
+    check(
+        "a settled DUPLICATE still depended on directly",
+        {"x": {"distinct": None, "duplicates_native": "fixture_lex::scan::find_byte"}},
+        "still depends on it directly",
+    )
+    check(
+        "a settled DUPLICATE only a holder keeps",
+        {"y": {"distinct": None, "duplicates_native": "fixture_lex::scan::find_byte"}},
+        None,
+    )
+    # pending_native once the home exists (STALE), and while it does not.
+    check(
+        "pending_native with an existing home",
+        {"d": {"duplicates_native": "fixture_lex::scan"}},
+        "STALE",
+    )
+    check(
+        "pending_native with a home still to be written",
+        {"d": {"duplicates_native": "fixture_lex::json"}},
+        None,
+    )
+    # pending_native without a DUPLICATE verdict, and a non-boolean flag.
+    check("pending_native on a DISTINCT row", {"x": {"pending_native": True}}, "without duplicates_native")
+    check("a non-boolean pending_native", {"d": {"pending_native": "yes"}}, "non-boolean")
+    # A home that is not a Rust path.
+    check(
+        "a home that is not a Rust path",
+        {"d": {"duplicates_native": "fixture lex::json"}},
+        "is not a Rust path",
+    )
+    # A transitive row with no holder, a direct row with one, and a holder
+    # whose closure does not reach the package.
+    check("a transitive row with no holder", {"y": {"holder": None}}, "must name the direct dependency")
+    check("a holder on a direct row", {"x": {"holder": "d"}}, "depends on it directly")
+    check("a holder that does not reach", {"y": {"holder": "d"}}, "not a direct dependency whose closure")
+    return failures
 
 
 def ledger_self_test() -> list[str]:
@@ -1165,6 +1708,10 @@ def ledger_self_test() -> list[str]:
     merged_counts = (merged.lock_package_count, merged.reachable, merged.release, merged.wasm)
     if merged_counts != (12, 4, 2, 2):
         failures.append(f"two-lock union report counts {merged_counts}, expected (12, 4, 2, 2)")
+
+    # --- the census verdicts and native-home resolution.
+    failures.extend(verdict_self_test(packages, facts))
+    failures.extend(home_resolution_self_test())
 
     # --- the complete, categorized fixture ledger passes (the valid neighbour
     #     of every refusal below).
@@ -1241,6 +1788,13 @@ def ledger_self_test() -> list[str]:
         real = ledger_failures(real_packages, real_facts)
         if real:
             failures.append(f"the real tree fails the ledger: {real[:3]}")
+        # Every home and entry point helpers-ledger.toml names is first-party
+        # code by that gate's own census, so each must resolve here too.
+        helpers = tomllib.loads((REPO_ROOT / "helpers-ledger.toml").read_text(encoding="utf-8"))
+        for job in helpers.get("job", []):
+            for home in [job["home"], *job["entry_points"]]:
+                if not native_home_resolves(home, real_facts.lib_roots):
+                    failures.append(f"the helpers-ledger home `{home}` does not resolve")
     return failures
 
 
@@ -1248,15 +1802,15 @@ def self_test() -> int:
     failures: list[str] = []
 
     # --- pre-existing real behavior: exact-name tier-1 match in a plain lock.
-    dirty = 'name = "serde"\nname = "oxilangtag"\nversion = "0.1.6"\n'
-    clean = 'name = "serde"\nname = "purrdf-iri"\n'
-    if any_edge_offenders(dirty) != ["oxilangtag"]:
+    dirty = 'name = "regex"\nname = "thiserror"\nversion = "2.0.12"\n'
+    clean = 'name = "regex"\nname = "purrdf-iri"\n'
+    if any_edge_offenders(dirty) != ["thiserror"]:
         failures.append("a banned package in the lock was not flagged")
     if any_edge_offenders(clean):
         failures.append("a clean lock was flagged")
 
     # --- (A) tier-1 any-edge ban still fails on a lock containing petgraph.
-    petgraph_lock = 'name = "serde"\nname = "petgraph"\nversion = "0.6.5"\n'
+    petgraph_lock = 'name = "regex"\nname = "petgraph"\nversion = "0.6.5"\n'
     if any_edge_offenders(petgraph_lock) != ["petgraph"]:
         failures.append("petgraph in the lock was not flagged (tier-1 regression)")
 
@@ -1298,7 +1852,7 @@ def self_test() -> int:
     # A transitive hex is now forbidden too: the root and fixture locks have
     # no such package, so the removal applies to the complete closure.
     transitive_only_lock = (
-        'name = "serde"\n'
+        'name = "regex"\n'
         'name = "some-third-party-crate"\n'
         "dependencies = [\n"
         ' "hex",\n'
@@ -1306,7 +1860,7 @@ def self_test() -> int:
         'name = "hex"\n'
         'version = "0.4.3"\n'
     )
-    clean_member_manifest = {"dependencies": {"serde": {"workspace": True}}}
+    clean_member_manifest = {"dependencies": {"regex": {"workspace": True}}}
     if direct_dependency_names(clean_member_manifest) & BANNED_ANY_EDGE.keys():
         failures.append("a clean member manifest was flagged")
     if any_edge_offenders(transitive_only_lock) != ["hex"]:
@@ -1324,7 +1878,7 @@ def self_test() -> int:
 
     # --- (B) substitution: a [[patch.unused]] block naming a banned package.
     patch_unused_lock = (
-        'name = "serde"\n\n'
+        'name = "regex"\n\n'
         "[[patch.unused]]\n"
         'name = "petgraph"\n'
         'version = "0.6.5"\n'
@@ -1339,18 +1893,18 @@ def self_test() -> int:
     #     since the name sits inside a value string, not a `name = "..."`
     #     line).
     replace_lock = (
-        'name = "oxigraph"\n'
-        'version = "0.3.0"\n'
+        'name = "petgraph"\n'
+        'version = "0.6.4"\n'
         'source = "registry+https://github.com/rust-lang/crates.io-index"\n'
-        'replace = "oxigraph:0.4.0"\n'
+        'replace = "petgraph:0.6.5"\n'
     )
-    if substitution_offenders(replace_lock) != ["oxigraph"]:
+    if substitution_offenders(replace_lock) != ["petgraph"]:
         failures.append("a replace= override of a banned package was not flagged")
 
     # --- (B) substitution scan stays quiet on an unrelated patch/replace.
     benign_lock = (
         "[[patch.unused]]\n"
-        'name = "serde"\n'
+        'name = "regex"\n'
         'version = "1.0.0"\n'
         'source = "registry+https://github.com/rust-lang/crates.io-index"\n'
     )
@@ -1388,11 +1942,10 @@ def self_test() -> int:
 
     # --- (C) THE OVER-REFUSAL CHECK for the widened scan: matching on the
     #     basename means the wider scan reads lockfiles and ONLY lockfiles. The
-    #     repository legitimately names `oxilangtag` in prose and in a frozen
-    #     differential-vector corpus (`crates/iri/tests/PROVENANCE.md`,
-    #     `crates/iri/tests/langtag_differential_vectors.txt`), which record
-    #     which engine a vector came from. Those are not `Cargo.lock`, so
-    #     scanning every committed lock must never reach them.
+    #     repository legitimately names banned crates in prose and in frozen
+    #     test corpora (for example `crates/iri/tests/PROVENANCE.md` and
+    #     `crates/iri/tests/langtag_differential_vectors.txt`). Those are not
+    #     `Cargo.lock`, so scanning every committed lock must never reach them.
     prose_paths = "\0".join(
         [
             "crates/iri/tests/PROVENANCE.md",
@@ -1409,7 +1962,7 @@ def self_test() -> int:
     #     in a non-root lock points at the right file.
     nested_failures = lock_failures(
         "crates/excluded-root/Cargo.lock",
-        'name = "oxilangtag"\nversion = "0.1.6"\n',
+        'name = "thiserror"\nversion = "2.0.12"\n',
     )
     if len(nested_failures) != 1 or "crates/excluded-root/Cargo.lock" not in (
         nested_failures[0]
@@ -1417,7 +1970,7 @@ def self_test() -> int:
         failures.append(
             f"a non-root lock violation did not name its file: {nested_failures}"
         )
-    if lock_failures("Cargo.lock", 'name = "serde"\n'):
+    if lock_failures("Cargo.lock", 'name = "regex"\n'):
         failures.append("a clean lock produced a failure message")
 
     # --- (C) discovery works on THIS repository and finds more than the root
@@ -1564,6 +2117,24 @@ def self_test() -> int:
     return 0
 
 
+def ledger_complete() -> int:
+    """Every resolved external package has a row with a valid census verdict."""
+    facts = collect_facts(REPO_ROOT)
+    _, packages = load_ledger(LEDGER_PATH)
+    failures = presence_failures(packages, facts) + verdict_failures(packages, facts)
+    if failures:
+        for message in failures:
+            print(message)
+        return 1
+    distinct, duplicate, pending = verdict_counts(packages, facts)
+    print(
+        f"OK: all {len(facts.versions)} external packages carry a census verdict: "
+        f"{distinct} DISTINCT, {duplicate} DUPLICATE ({pending} awaiting their "
+        "native home)"
+    )
+    return 0
+
+
 def main() -> int:
     arguments = sys.argv[1:]
     if "--self-test" in arguments:
@@ -1575,6 +2146,8 @@ def main() -> int:
             for line in report_lines(collect_facts(REPO_ROOT)):
                 print(line)
             return 0
+        if "--ledger-complete" in arguments:
+            return ledger_complete()
     except (TrackedFileDiscoveryError, MetadataError) as exc:
         print(f"FAIL: {exc}")
         return 1

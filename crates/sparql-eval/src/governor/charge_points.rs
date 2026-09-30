@@ -1302,7 +1302,7 @@ fn a_zero_fuel_ceiling_never_enters_the_relation_at_all() {
 /// An integer literal, typed exactly as `RdfDatasetBuilder` mints one from a bare Turtle
 /// integer — the shape [`agg_group_dataset`]'s `ex:val` and `SUM`'s numeric fold both
 /// expect.
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 /// `groups × rows_per_group` rows, `ex:catN` grouping `ex:s{i}` into `groups` equal-sized
 /// buckets via `ex:cat`, each row also carrying its own value on `ex:val` — the same shape
@@ -1524,7 +1524,7 @@ impl CustomAggregate for SumAggregate {
 const CUSTOM_SUM_IRI: &str = "http://example.org/agg/customSum";
 
 fn custom_sum_registry() -> AggregateRegistry {
-    let mut registry = AggregateRegistry::new();
+    let mut registry = AggregateRegistry::default();
     registry.register(CUSTOM_SUM_IRI, Arc::new(SumAggregate));
     registry
 }
@@ -1932,7 +1932,7 @@ fn within_group_chunk_plan_and_governed_outcome_are_invariant_under_worker_count
     const STATE_BOUND: u64 = 64;
     let dataset = ungrouped_val_dataset(ROWS);
     let pattern = partial_counter_pattern();
-    let mut registry = AggregateRegistry::new();
+    let mut registry = AggregateRegistry::default();
     registry.register(
         PARTIAL_COUNTER_IRI,
         Arc::new(PartialCounterAggregate {
@@ -2033,7 +2033,7 @@ fn order_dependent_custom_aggregate_is_byte_identical_under_worker_count() {
     const ROWS: i64 = 4096;
     const NS: &str = "http://example.org/agg/";
     let dataset = ungrouped_val_dataset(ROWS);
-    let mut registry = AggregateRegistry::new();
+    let mut registry = AggregateRegistry::default();
     registry.register_statistical_aggregates(NS);
 
     let pattern = GraphPattern::Group {

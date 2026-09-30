@@ -65,13 +65,14 @@
 //! also report a failure after a pre-configured maximum iteration count has been
 //! exceeded").
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use crate::cache::{self, ContractHash};
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
 use crate::guard::{GuardEvaluator, Negation};
 use crate::id::RowId;
+use crate::paths::{relax_strata, shortest_path};
 use crate::plan::RulePlan;
 use crate::seminaive::{
     Delta, EvalError, EvalOptions, Evaluation, FixpointState, JoinStrategy, RoundExecution,
@@ -746,7 +747,7 @@ pub fn stratify_dependency_graph(
         if !closed {
             continue;
         }
-        if let Some(path) = shortest_rule_path(&depends, r2, r1) {
+        if let Some(path) = shortest_path(&depends, &r2, &r1) {
             let mut cycle = vec![r1];
             cycle.extend(path);
             cycle.pop();
@@ -760,17 +761,13 @@ pub fn stratify_dependency_graph(
 
     // The specification's relaxation; it terminates because the condition holds.
     let mut stratum = vec![0usize; rule_count];
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for (&(p, q), &closed) in edges {
-            let need = if closed { stratum[q] + 1 } else { stratum[q] };
-            if stratum[p] < need {
-                stratum[p] = need;
-                changed = true;
-            }
-        }
-    }
+    relax_strata(
+        &mut stratum,
+        || edges.iter().map(|(&(p, q), &closed)| (p, q, closed)),
+        |levels, &rule| levels[rule],
+        |levels, &rule, level| levels[rule] = level,
+        None,
+    );
     let top = stratum.iter().copied().max().unwrap_or(0);
     let layers = (0..=top)
         .filter(|level| stratum.contains(level))
@@ -789,37 +786,6 @@ pub fn stratify_dependency_graph(
         })
         .collect();
     Ok(Schedule::new(layers))
-}
-
-/// The shortest `from -> … -> to` path through `depends`, inclusive of both ends, over
-/// lexically ordered adjacency — a pure function of the rule set.
-fn shortest_rule_path(
-    depends: &BTreeMap<usize, BTreeSet<usize>>,
-    from: usize,
-    to: usize,
-) -> Option<Vec<usize>> {
-    let mut parent: BTreeMap<usize, usize> = BTreeMap::new();
-    let mut queue: VecDeque<usize> = VecDeque::from([from]);
-    let mut seen: BTreeSet<usize> = BTreeSet::from([from]);
-    while let Some(node) = queue.pop_front() {
-        if node == to {
-            let mut path = vec![node];
-            let mut cursor = node;
-            while cursor != from {
-                cursor = parent[&cursor];
-                path.push(cursor);
-            }
-            path.reverse();
-            return Some(path);
-        }
-        for &next in depends.get(&node).into_iter().flatten() {
-            if seen.insert(next) {
-                parent.insert(next, node);
-                queue.push_back(next);
-            }
-        }
-    }
-    None
 }
 
 #[cfg(test)]
@@ -1754,7 +1720,7 @@ mod tests {
         )
         .expect_err("refused");
         assert!(refusal.is_guarded());
-        let mut arena = crate::proof::ProofArena::new();
+        let mut arena = crate::proof::ProofArena::default();
         let premise = arena.axiom(Fact {
             subject: surface("a"),
             predicate: surface("p"),

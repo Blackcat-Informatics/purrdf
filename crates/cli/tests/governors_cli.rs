@@ -30,11 +30,10 @@
 //! is pinned, over an annotation-syntax template; [`a_reifier_query_certifies_its_partial_rows`]
 //! governs a SELECT whose pattern matches through a triple term.
 
-use std::fmt::Write as _;
-use std::process::{Command, Output};
+mod support;
+use support::{code, run, stderr_utf8 as stderr, stdout_utf8 as stdout, write_file};
 
-/// The path to the built `purrdf` binary this integration test target links against.
-const PURRDF: &str = env!("CARGO_BIN_EXE_purrdf");
+use std::fmt::Write as _;
 
 /// Three `ex:knows` edges and one name, so an answer cap has something to cut.
 const DATA_TTL: &str = concat!(
@@ -63,36 +62,6 @@ const REIFIER_QUERY: &str = concat!(
     "<<( ?s <http://example.org/knows> ?o )>> . ",
     "?r <http://example.org/certainty> ?c }",
 );
-
-/// Run `purrdf` with `args`, returning the captured [`Output`].
-fn run(args: &[&str]) -> Output {
-    Command::new(PURRDF)
-        .args(args)
-        .output()
-        .expect("spawn purrdf")
-}
-
-/// stdout of an [`Output`] as a `String`.
-fn stdout(out: &Output) -> String {
-    String::from_utf8(out.stdout.clone()).expect("utf-8 stdout")
-}
-
-/// stderr of an [`Output`] as a `String`.
-fn stderr(out: &Output) -> String {
-    String::from_utf8(out.stderr.clone()).expect("utf-8 stderr")
-}
-
-/// The exit code of an [`Output`].
-fn code(out: &Output) -> i32 {
-    out.status.code().expect("the process exited normally")
-}
-
-/// Write `contents` to `dir/name` and return the path as an owned string.
-fn write_file(dir: &std::path::Path, name: &str, contents: &str) -> String {
-    let path = dir.join(name);
-    std::fs::write(&path, contents).expect("write fixture");
-    path.to_str().expect("utf-8 path").to_owned()
-}
 
 /// EVERY CEILING REACHES THE ENGINE'S LIMIT VECTOR, including the one nothing can charge.
 ///
@@ -352,8 +321,8 @@ fn a_partial_answer_does_not_corrupt_the_machine_readable_stream() {
     let json = capped("json");
     assert_eq!(code(&json), 3, "stderr:\n{}", stderr(&json));
     let body = stdout(&json);
-    let parsed: serde_json::Value =
-        serde_json::from_str(&body).expect("the truncated stream is still valid JSON");
+    let parsed: purrdf_lex::json::Value =
+        purrdf_lex::json::read(&body).expect("the truncated stream is still valid JSON");
     assert_eq!(
         parsed["results"]["bindings"]
             .as_array()
@@ -491,6 +460,154 @@ fn an_ungoverned_invocation_is_unchanged() {
         assert!(body.contains(row), "{body}");
     }
     assert!(!body.contains("governor"), "{body}");
+}
+
+/// THE METERED DEFAULT REFUSES AN OVER-CAP QUERY, AND `--no-ceiling` ANSWERS IT.
+///
+/// A governed run starts from the metered base: a ceiling one below the answer count trips
+/// (exit 3) and reports every dimension no flag named as unbounded, while the neighbour at
+/// the cap completes. `--no-ceiling` declines every ceiling, alone or beside a deadline,
+/// and answers the whole query byte for byte as an ungoverned run does.
+#[test]
+fn the_metered_default_refuses_an_over_cap_query_and_no_ceiling_answers_it() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
+    let whole = run(&["query", "--data", &ttl, "--results-format", "tsv", KNOWS]);
+    assert_eq!(code(&whole), 0, "stderr:\n{}", stderr(&whole));
+
+    let over_cap = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "tsv",
+        "--max-answers",
+        "2",
+        KNOWS,
+    ]);
+    assert_eq!(code(&over_cap), 3, "stderr:\n{}", stderr(&over_cap));
+    let report = stderr(&over_cap);
+    assert!(report.contains("\nlimit answer-rows 2\n"), "{report}");
+    for dimension in [
+        "fuel",
+        "intermediate-cells",
+        "scratch-bytes",
+        "remote-requests",
+    ] {
+        assert!(
+            report.contains(&format!("\nlimit {dimension} unbounded\n")),
+            "a metered dimension no flag named reads unbounded; got:\n{report}"
+        );
+    }
+
+    let at_cap = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "tsv",
+        "--max-answers",
+        "3",
+        KNOWS,
+    ]);
+    assert_eq!(code(&at_cap), 0, "stderr:\n{}", stderr(&at_cap));
+    assert_eq!(at_cap.stdout, whole.stdout);
+
+    for extra in [
+        &["--no-ceiling"][..],
+        &["--no-ceiling", "--deadline", "2h"][..],
+    ] {
+        let mut args = vec!["query", "--data", &ttl, "--results-format", "tsv"];
+        args.extend_from_slice(extra);
+        args.push(KNOWS);
+        let unbounded = run(&args);
+        assert_eq!(
+            code(&unbounded),
+            0,
+            "{extra:?}: stderr:\n{}",
+            stderr(&unbounded)
+        );
+        assert_eq!(unbounded.stdout, whole.stdout, "{extra:?}");
+        assert!(
+            stderr(&unbounded).is_empty(),
+            "{extra:?}: {}",
+            stderr(&unbounded)
+        );
+    }
+}
+
+/// `--no-ceiling` BESIDE A CEILING IS REFUSED BY NAME, on `query` and on `update`, while
+/// either flag alone runs; beside `--explain`, which meters by definition, it is refused
+/// too.
+#[test]
+fn no_ceiling_beside_a_ceiling_is_refused_by_name() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
+
+    let both = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--no-ceiling",
+        "--max-answers",
+        "2",
+        KNOWS,
+    ]);
+    assert_eq!(code(&both), 2, "stderr:\n{}", stderr(&both));
+    let message = stderr(&both);
+    assert!(
+        message.contains("--no-ceiling") && message.contains("--max-answers"),
+        "{message}"
+    );
+    assert!(stdout(&both).is_empty(), "a refused run answers nothing");
+    let cap_alone = run(&["query", "--data", &ttl, "--max-answers", "2", KNOWS]);
+    assert_eq!(code(&cap_alone), 3, "stderr:\n{}", stderr(&cap_alone));
+
+    let explain = run(&["query", "--data", &ttl, "--explain", "--no-ceiling", KNOWS]);
+    assert_eq!(code(&explain), 2, "stderr:\n{}", stderr(&explain));
+    assert!(
+        stderr(&explain).contains("--no-ceiling"),
+        "{}",
+        stderr(&explain)
+    );
+
+    let insert =
+        "INSERT DATA { <http://example.org/a> <http://example.org/b> <http://example.org/c> }";
+    let out = dir.path().join("out.nt");
+    let out = out.to_str().expect("utf-8 path");
+    let update_both = run(&[
+        "update",
+        "--data",
+        &ttl,
+        "--output",
+        out,
+        "--to",
+        "ntriples",
+        "--no-ceiling",
+        "--fuel",
+        "100",
+        insert,
+    ]);
+    assert_eq!(code(&update_both), 2, "stderr:\n{}", stderr(&update_both));
+    assert!(
+        stderr(&update_both).contains("--no-ceiling") && stderr(&update_both).contains("--fuel"),
+        "{}",
+        stderr(&update_both)
+    );
+    let update_alone = run(&[
+        "update",
+        "--data",
+        &ttl,
+        "--output",
+        out,
+        "--to",
+        "ntriples",
+        "--no-ceiling",
+        "--deadline",
+        "2h",
+        insert,
+    ]);
+    assert_eq!(code(&update_alone), 0, "stderr:\n{}", stderr(&update_alone));
 }
 
 /// `--explain` RENDERS THE CHARGE LEDGER, and it is byte-identical across two runs.

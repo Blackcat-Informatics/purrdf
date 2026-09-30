@@ -4,8 +4,11 @@
 //! The plan value's contract: equality, serialization, canonical stability,
 //! digest sensitivity, decode round-trip and loud version refusal.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
+
+use purrdf_core::FastMap;
+use purrdf_lex::json::Value;
 
 use purrdf_retrieval::{
     CanonicalSection, DepthInputs, Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, PlanOrigin,
@@ -18,9 +21,7 @@ use purrdf_sparql_eval::{
     PropertyFunctionRegistry, RankArithmetic, RankedDeclaration,
 };
 
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
+use purrdf_retrieval::fixture::iri;
 
 /// Rewrite a plan's snapshot rows through the entries' own construction law.
 ///
@@ -115,7 +116,7 @@ fn stratum() -> Iri {
 }
 
 fn baseline() -> Plan {
-    let mut stratum_depths = HashMap::new();
+    let mut stratum_depths = FastMap::default();
     stratum_depths.insert(stratum(), 10);
 
     // The inputs derive the depth beside them, so the baseline is a plan that
@@ -239,12 +240,12 @@ fn every_decode_path_records_a_deserialized_origin() {
         "the canonical decoder records that the instance id it read is foreign"
     );
 
-    let json = serde_json::to_string(&plan).expect("plan serializes");
-    let round_tripped: Plan = serde_json::from_str(&json).expect("plan deserializes");
+    let json = plan.to_json_string();
+    let round_tripped = Plan::from_json_str(&json).expect("a plan reads its JSON");
     assert_eq!(
         round_tripped.origin,
         PlanOrigin::Deserialized,
-        "serde skips origin, so a decoded plan gets the default, which is the decoded case"
+        "the JSON form carries no origin, so a decoded plan gets the default, which is the decoded case"
     );
     assert!(
         !json.contains("origin"),
@@ -295,12 +296,49 @@ fn plans_differing_only_in_map_insertion_order_are_equal() {
 }
 
 #[test]
-fn serde_round_trip_preserves_the_plan() {
+fn json_round_trip_preserves_the_plan() {
     let plan = baseline();
-    let json = serde_json::to_string(&plan).expect("plan serializes");
-    let decoded: Plan = serde_json::from_str(&json).expect("plan deserializes");
+    let json = plan.to_json_string();
+    let decoded = Plan::from_json_str(&json).expect("a plan reads its JSON");
     assert_eq!(decoded, plan);
     assert_eq!(decoded.id(), plan.id());
+}
+
+/// The serialized stratum depths come out in ascending stratum order whatever
+/// order they were inserted in, so two equal plans serialize to equal text.
+#[test]
+fn serialized_stratum_depths_are_in_stratum_order() {
+    let labels: Vec<String> = (0..24_u32)
+        .map(|index| format!("http://example.org/stratum/{index:02}"))
+        .collect();
+    let json_for = |order: &mut dyn Iterator<Item = &String>| {
+        let mut plan = baseline();
+        plan.stratum_depths.clear();
+        for label in order {
+            plan.stratum_depths.insert(iri(label), 1);
+        }
+        plan.to_json_string()
+    };
+    let forward = json_for(&mut labels.iter());
+    let backward = json_for(&mut labels.iter().rev());
+    assert_eq!(forward, backward, "insertion order must not reach the text");
+    let positions: Vec<usize> = labels
+        .iter()
+        .map(|label| {
+            forward
+                .find(label.as_str())
+                .expect("every stratum is serialized")
+        })
+        .collect();
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "strata serialize in ascending order: {positions:?}"
+    );
+    // The valid neighbour: a single-stratum plan still round-trips.
+    let plan = baseline();
+    let json = plan.to_json_string();
+    let decoded = Plan::from_json_str(&json).expect("a plan reads its JSON");
+    assert_eq!(decoded, plan);
 }
 
 #[test]
@@ -468,11 +506,11 @@ fn interval_terms_round_trip_through_the_canonical_encoding() {
 }
 
 #[test]
-fn interval_terms_round_trip_through_serde() {
+fn interval_terms_round_trip_through_json() {
     let mut plan = baseline();
     plan.request_terms.extend(interval_terms());
-    let json = serde_json::to_string(&plan).expect("a plan serializes");
-    let decoded: Plan = serde_json::from_str(&json).expect("a plan deserializes");
+    let json = plan.to_json_string();
+    let decoded = Plan::from_json_str(&json).expect("a plan reads its JSON");
     assert_eq!(decoded.request_terms, plan.request_terms);
     assert_eq!(decoded.id(), plan.id());
 }
@@ -1677,20 +1715,19 @@ fn certify_refuses_a_selectivity_term_that_addresses_no_request_term() {
         .expect("a request with no terms records empty runs, which address nothing");
 }
 
-/// A hand-written serde document is held to the entries' construction law: a
+/// A hand-written JSON document is held to the entries' construction law: a
 /// repeated subject is refused, and an unordered one is ordered.
 ///
 /// The two halves are the law's two clauses. Order carries no information the
 /// snapshot did not already have, so an unordered document is admitted and
 /// canonicalised — and it must land on the *same identity* as the ordered one,
-/// or serde would be a way to mint a second id for one plan. A duplicate is
+/// or JSON would be a way to mint a second id for one plan. A duplicate is
 /// information the value cannot hold at all, so it is refused wherever it
 /// arrives.
 #[test]
-fn serde_holds_a_hand_written_snapshot_to_the_entries_law() {
+fn json_holds_a_hand_written_snapshot_to_the_entries_law() {
     let plan = baseline();
-    let mut document: serde_json::Value =
-        serde_json::to_value(&plan).expect("a plan serializes to a document");
+    let mut document = plan.to_json();
 
     let entries = document["statistics_snapshot"]["entries"]
         .as_array()
@@ -1700,9 +1737,8 @@ fn serde_holds_a_hand_written_snapshot_to_the_entries_law() {
 
     let mut reversed = entries.clone();
     reversed.reverse();
-    document["statistics_snapshot"]["entries"] = serde_json::Value::Array(reversed.clone());
-    let decoded: Plan =
-        serde_json::from_value(document.clone()).expect("an unordered document is ordered");
+    document["statistics_snapshot"]["entries"] = Value::Array(reversed);
+    let decoded = Plan::from_json(&document).expect("an unordered document is ordered");
     assert_eq!(
         decoded.statistics_snapshot.entries,
         plan.statistics_snapshot.entries
@@ -1710,17 +1746,21 @@ fn serde_holds_a_hand_written_snapshot_to_the_entries_law() {
     assert_eq!(
         decoded.id(),
         plan.id(),
-        "serde is not a second way to mint an identity for one plan"
+        "JSON is not a second way to mint an identity for one plan"
     );
 
     let mut duplicated = entries.clone();
     duplicated.push(entries[0].clone());
-    document["statistics_snapshot"]["entries"] = serde_json::Value::Array(duplicated);
-    let error = serde_json::from_value::<Plan>(document)
-        .expect_err("a document naming one subject twice is refused");
+    document["statistics_snapshot"]["entries"] = Value::Array(duplicated);
+    let error =
+        Plan::from_json(&document).expect_err("a document naming one subject twice is refused");
+    assert!(
+        matches!(error, PlanError::DuplicateStatisticsSubject { .. }),
+        "the JSON reader refuses with the construction law's own variant: {error:?}"
+    );
     assert!(
         error.to_string().contains("more than once"),
-        "the serde failure carries the construction law's own refusal: {error}"
+        "the refusal carries the construction law's own message: {error}"
     );
 }
 
@@ -2011,33 +2051,36 @@ fn certify_refuses_a_snapshot_row_for_a_subject_nothing_consulted() {
 
 /// Which stratum a refusal names is a function of the plan, never of hash order.
 ///
-/// `stratum_depths` is a `HashMap`, so a checker walking it in its own iteration
+/// `stratum_depths` is a hash map, so a checker walking it in its own iteration
 /// order picks an arbitrary one of a plan's several disagreements, and two
-/// processes refusing one forged plan could name two different strata. Thirty-two
+/// builds refusing one forged plan could name two different strata. Thirty-two
 /// strata all disagree here and the refusal must name the lexicographically first.
 ///
-/// # Why the plan is rebuilt every round
+/// # Why every round uses its own strata
 ///
-/// One `HashMap` walked once proves nothing: a single map's order is fixed, and
-/// it can perfectly well begin at the key the assertion expects — asserting over
-/// one is a test that passes against the very bug it names, which is exactly how
-/// a laundered oracle looks. The standard library seeds each `HashMap` from a
-/// per-thread counter, so a fresh map of the same thirty-two keys is a fresh
-/// order. Sixty-four rounds of an order-dependent walk agreeing on one key out of
-/// thirty-two is a coincidence of about one in `32^64`; the sorted walk agrees
-/// every time by construction.
+/// One map walked once proves nothing: a single map's order is fixed, and it can
+/// perfectly well begin at the key the assertion expects — asserting over one is
+/// a test that passes against the very bug it names, which is exactly how a
+/// laundered oracle looks. The map's hasher is fixed-key, so a fresh map of the
+/// SAME thirty-two keys repeats the same order; each round therefore names its
+/// strata under its own path segment, which moves every key's hash while keeping
+/// the lexicographic first at index `00`. Sixty-four rounds of an order-dependent
+/// walk agreeing on that key out of thirty-two is a coincidence of about one in
+/// `32^64`; the sorted walk agrees every time by construction.
 ///
 /// The valid neighbour is the same thirty-two-stratum plan with honest depths,
 /// which certifies: the ordering fix must not turn a wide plan into a refusal.
 #[test]
 fn certify_names_the_first_disagreement_in_stratum_order() {
-    let wide = |honest: bool| {
+    let wide = |honest: bool, round: u32| {
         let mut plan = baseline();
         plan.stratum_depths.clear();
         plan.stratum_derivations.clear();
         let mut rows: Vec<StatisticsEntry> = Vec::new();
         for index in 0..32_u32 {
-            let stratum = iri(&format!("http://example.org/stratum/{index:02}"));
+            let stratum = iri(&format!(
+                "http://example.org/round/{round:02}/stratum/{index:02}"
+            ));
             // Distinct declarations, so each stratum's honest depth is its own
             // number and a record read off the wrong stratum fails on the value.
             let declared = u64::from(index) + 1;
@@ -2066,7 +2109,7 @@ fn certify_names_the_first_disagreement_in_stratum_order() {
     };
 
     for round in 0..64 {
-        match wide(false)
+        match wide(false, round)
             .certify()
             .expect_err("every one of the thirty-two depths is wrong")
         {
@@ -2076,7 +2119,8 @@ fn certify_names_the_first_disagreement_in_stratum_order() {
                 derived,
             } => {
                 assert_eq!(
-                    stratum, "http://example.org/stratum/00",
+                    stratum,
+                    format!("http://example.org/round/{round:02}/stratum/00"),
                     "round {round} named another stratum, so which disagreement is \
                      reported depends on hash order rather than on the plan"
                 );
@@ -2090,7 +2134,7 @@ fn certify_names_the_first_disagreement_in_stratum_order() {
         }
     }
 
-    wide(true)
+    wide(true, 0)
         .certify()
         .expect("thirty-two honest strata certify; the ordering rule refuses nothing");
 }
@@ -2250,7 +2294,7 @@ fn every_plan_refusal_has_its_own_pinned_name() {
 /// snapshot row is the projection of that derivation.
 fn pinned_plan() -> Plan {
     let subject = iri("http://example.org/s");
-    let mut stratum_depths = HashMap::new();
+    let mut stratum_depths = FastMap::default();
     stratum_depths.insert(subject.clone(), 2);
     let mut stratum_derivations = BTreeMap::new();
     stratum_derivations.insert(
@@ -2526,7 +2570,7 @@ fn statistics_only_plan(measured: Option<u64>) -> Plan {
         producer_bindings: Vec::new(),
         producer_decisions: Vec::new(),
         unserved_terms: Vec::new(),
-        stratum_depths: HashMap::new(),
+        stratum_depths: FastMap::default(),
         stratum_derivations: BTreeMap::new(),
         statistics_snapshot: StatisticsSnapshot {
             source: "host".to_owned(),
@@ -2825,19 +2869,18 @@ fn plan_filled_in(order: &[usize]) -> Plan {
 ///
 /// # Why one construction would prove nothing
 ///
-/// The sibling section next door is a `HashMap`, and the argument that its
+/// The sibling section next door is a hash map, and the argument that its
 /// encoding is order-independent is a sort the encoder performs; the argument
 /// here is that a [`BTreeMap`](std::collections::BTreeMap) has no insertion
 /// order to leak. Both are arguments from the type, and this test exists
 /// because an argument from the type is not an executed case — the section was
 /// added with that reasoning and no adversarial run behind it.
 ///
-/// A single pair of constructions could not close that. Rust seeds each
-/// `HashMap` from a per-thread counter, so iteration order varies between maps
-/// but is FIXED within one: two plans built once might happen to agree, and the
-/// test would be green on a coincidence it could not detect. So every order is
+/// A single pair of constructions could not close that. A map's iteration
+/// order is FIXED within one: two plans built once might happen to agree, and
+/// the test would be green on a coincidence it could not detect. So every order is
 /// enumerated — all one hundred and twenty of them — and the whole enumeration
-/// is repeated fifty times, which is six thousand freshly seeded structures
+/// is repeated fifty times, which is six thousand freshly built structures
 /// rather than two.
 ///
 /// The oracle is the bytes, the identity and the value, all three. Bytes alone
@@ -2879,7 +2922,7 @@ fn plans_differing_only_in_derivation_insertion_order_are_one_plan() {
     }
     assert_eq!(
         rebuilds, 6_000,
-        "six thousand freshly seeded structures, not two"
+        "six thousand freshly built structures, not two"
     );
 
     // The control: the section is not order-independent because it is constant.

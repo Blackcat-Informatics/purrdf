@@ -20,8 +20,20 @@
 
 use purrdf_core::ContentDigest;
 use purrdf_core::embedding::ChunkingContractId;
+use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_le;
 
 use crate::profile::Vocabulary;
+
+/// The node kind of a unit: the hash domain of its identity preimage (its
+/// first field) and the kind segment of its IRI.
+pub(crate) const UNIT_KIND: Domain = Domain::new(b"unit");
+/// The node kind of a section. See [`UNIT_KIND`].
+pub(crate) const SECTION_KIND: Domain = Domain::new(b"section");
+/// The node kind of a citation edge. See [`UNIT_KIND`].
+pub(crate) const CITATION_KIND: Domain = Domain::new(b"citation");
+/// The node kind of a structure node. See [`UNIT_KIND`].
+pub(crate) const STRUCTURE_KIND: Domain = Domain::new(b"structure");
 
 /// The identity of a unit, with the digest algorithm inside both the
 /// preimage and the IRI. A consumer re-derives it from the bytes at a
@@ -43,7 +55,7 @@ pub fn unit_iri(
     span: &[u8],
 ) -> String {
     node_iri(
-        vocabulary, "unit", source_id, contract, byte_start, byte_end, span,
+        vocabulary, UNIT_KIND, source_id, contract, byte_start, byte_end, span,
     )
 }
 
@@ -77,7 +89,7 @@ pub fn section_iri(
 ) -> String {
     node_iri(
         vocabulary,
-        "section",
+        SECTION_KIND,
         source_id,
         contract,
         byte_start,
@@ -150,14 +162,14 @@ pub fn citation_iri(
     reified: &[String],
 ) -> String {
     let mut content = Vec::new();
-    push_field(&mut content, row_line);
-    push_field(&mut content, unit_node.as_bytes());
+    frame_le(&mut content, row_line);
+    frame_le(&mut content, unit_node.as_bytes());
     for term in reified {
-        push_field(&mut content, term.as_bytes());
+        frame_le(&mut content, term.as_bytes());
     }
     node_iri_of_digest(
         vocabulary,
-        "citation",
+        CITATION_KIND,
         source_id,
         contract,
         row_start,
@@ -188,7 +200,7 @@ pub fn structure_iri(
 ) -> String {
     node_iri(
         vocabulary,
-        "structure",
+        STRUCTURE_KIND,
         source_id,
         contract,
         byte_start,
@@ -199,7 +211,7 @@ pub fn structure_iri(
 
 fn node_iri(
     vocabulary: &Vocabulary,
-    kind: &str,
+    kind: Domain,
     source_id: &str,
     contract: &ChunkingContractId,
     byte_start: u64,
@@ -225,7 +237,7 @@ fn node_iri(
 /// the one [`unit_iri`] builds, byte for byte.
 pub(crate) fn node_iri_of_digest(
     vocabulary: &Vocabulary,
-    kind: &str,
+    kind: Domain,
     source_id: &str,
     contract: &ChunkingContractId,
     byte_start: u64,
@@ -233,25 +245,20 @@ pub(crate) fn node_iri_of_digest(
     digest: &ContentDigest,
 ) -> String {
     let mut preimage = Vec::new();
-    push_field(&mut preimage, kind.as_bytes());
-    push_field(&mut preimage, source_id.as_bytes());
-    push_field(&mut preimage, contract.as_bytes());
-    push_field(&mut preimage, &byte_start.to_le_bytes());
-    push_field(&mut preimage, &byte_end.to_le_bytes());
-    push_field(&mut preimage, crate::DIGEST_ALGORITHM.as_bytes());
-    push_field(&mut preimage, digest.as_bytes());
+    frame_le(&mut preimage, kind.as_bytes());
+    frame_le(&mut preimage, source_id.as_bytes());
+    frame_le(&mut preimage, contract.as_bytes());
+    frame_le(&mut preimage, &byte_start.to_le_bytes());
+    frame_le(&mut preimage, &byte_end.to_le_bytes());
+    frame_le(&mut preimage, crate::DIGEST_ALGORITHM.as_bytes());
+    frame_le(&mut preimage, digest.as_bytes());
     format!(
-        "{}{kind}:{}:{}",
+        "{}{}:{}:{}",
         vocabulary.node_base,
+        kind.as_str(),
         crate::DIGEST_ALGORITHM,
         ContentDigest::of(&preimage).to_hex()
     )
-}
-
-/// Length-prefixed field: no two field sequences share a preimage.
-fn push_field(out: &mut Vec<u8>, field: &[u8]) {
-    out.extend_from_slice(&(field.len() as u64).to_le_bytes());
-    out.extend_from_slice(field);
 }
 
 #[cfg(test)]
@@ -270,7 +277,7 @@ mod tests {
     /// digest algorithm tag, and the digest of the content — digested,
     /// and written `<node base><kind>:<alg>:<hex>`.
     ///
-    /// Nothing under test is called. [`push_field`] could lose its
+    /// Nothing under test is called. [`frame_le`] could lose its
     /// prefix, [`node_iri_of_digest`] could reorder its fields or drop
     /// the algorithm tag, and these vectors would fail — which is the
     /// whole reason to write the preimage out twice. Holding
@@ -360,7 +367,7 @@ mod tests {
         assert_eq!(
             node_iri_of_digest(
                 &v,
-                "unit",
+                UNIT_KIND,
                 SOURCE,
                 &contract,
                 3,

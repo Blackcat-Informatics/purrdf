@@ -27,7 +27,9 @@
 //! [`crate::ast::Annotation`].)
 //!
 //! Node and predicate IRIs are written `<iri>` (resolved against an optional
-//! base); blank nodes `_:label`; literals `"lex"`, `"lex"^^<dt>`, `"lex"@tag`.
+//! base); blank nodes `_:label`; literals `"lex"`, `"lex"^^<dt>`, `"lex"@tag`,
+//! `"lex"@tag--ltr`; triple terms `<<( s p o )>>`. The RDF 1.2 reifier
+//! spelling `<< s p o >>` is refused, not read as a triple term.
 //! The shape label is `@START` or `@<label>`.
 //!
 //! # No prefixed names, because the grammar has none and the spec declines to
@@ -103,17 +105,19 @@
 //! erroring; see [`terminals`] for the worked counterexample.
 
 use purrdf_core::TermBox;
-use purrdf_core::{DatasetView, GraphMatch, RdfDataset, TermId, TermValue};
+use purrdf_core::{
+    DatasetView, GraphMatch, RdfDataset, RdfLiteral, RdfTextDirection, TermId, TermValue,
+};
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, langtag, terminals};
 
 use crate::ast::Schema;
 use crate::error::{Result, ShexError};
-use crate::lexer::{LANGTAG_PROFILE, UcharDefect, decode_uchar};
+use crate::lexer::{LANGTAG_PROFILE, uchar_byte};
 use crate::statement;
 use crate::validate::{ResultShapeMap, ShapeSelector, ValidationOptions, validate_with};
 
 /// `rdf:type`, the expansion of the `a` predicate keyword.
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
 /// A shape-map node selector: a concrete node or a triple-pattern query.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -344,27 +348,10 @@ fn select_terms(
     ids.sort_unstable();
     ids.dedup();
     let mut values: Vec<TermValue> = ids.into_iter().map(|id| data.term_value(id)).collect();
-    values.sort_by_cached_key(term_key);
+    // A stable, dataset-independent order: the total order `TermValue` defines, in which
+    // base direction and blank-node scope distinguish terms.
+    values.sort();
     values
-}
-
-/// A stable, dataset-independent sort key for a term, each triple term keyed from its
-/// components' keys over [`TermValue::fold`]'s work list.
-fn term_key(value: &TermValue) -> String {
-    value.fold(
-        |leaf| match leaf {
-            TermValue::Iri(iri) => format!("0<{iri}>"),
-            TermValue::Blank { label, .. } => format!("1_:{label}"),
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                ..
-            } => format!("2{lexical_form}\u{1}{datatype}\u{1}{language:?}"),
-            TermValue::Triple { .. } => unreachable!("a triple term is folded from its parts"),
-        },
-        |s, p, o| format!("3{s}\u{1}{p}\u{1}{o}"),
-    )
 }
 
 // ── the parser ────────────────────────────────────────────────────────────────
@@ -518,21 +505,32 @@ impl MapParser {
         }
     }
 
-    /// A term: an IRI, a blank node, a literal, or an RDF-1.2 quoted-triple term
-    /// `<< subject predicate object >>`, tolerating arbitrary whitespace between the
-    /// tokens. The three inner positions accept any node the emitter can produce,
-    /// including nested `<< >>` terms.
+    /// A term: an IRI, a blank node, a literal, or an RDF 1.2 triple term, tolerating
+    /// arbitrary whitespace between the tokens. A triple term is spelled as the
+    /// RDF 1.2 `tripleTerm` production `<<( subject predicate object )>>` (N-Triples
+    /// 1.2 `[6]`, the form the result writer emits). The three inner positions accept
+    /// any node the emitter can produce, nested triple terms included.
     ///
-    /// Nested quoted triples are parsed by a loop over the triples opened and not yet
-    /// closed, each holding the components parsed so far: `<<` opens one, a finished
+    /// `<< s p o >>` is RDF 1.2 *reifier* syntax, not a triple term, and a shape-map
+    /// node selector has no reifier form; it is refused with an error naming the
+    /// `<<( … )>>` spelling rather than silently read as a triple term.
+    ///
+    /// Nested triple terms are parsed by a loop over the triples opened and not yet
+    /// closed, each holding the components parsed so far: `<<(` opens one, a finished
     /// term becomes the next component of the innermost open one, and its third
-    /// component is followed by the `>>` that closes it.
+    /// component is followed by the `)>>` that closes it.
     fn parse_term(&mut self) -> Result<TermValue> {
         let mut open: Vec<Vec<TermValue>> = Vec::new();
         loop {
             let mut term = match self.peek() {
                 Some('<') if self.peek_at(1) == Some('<') => {
-                    self.pos += 2; // '<<'
+                    if self.peek_at(2) != Some('(') {
+                        return Err(self.err(
+                            "`<< s p o >>` is RDF 1.2 reifier syntax, not a triple term; \
+                             write a triple term as `<<( s p o )>>`",
+                        ));
+                    }
+                    self.pos += 3;
                     self.skip_ws();
                     open.push(Vec::with_capacity(3));
                     continue;
@@ -545,10 +543,8 @@ impl MapParser {
                 _ => {
                     return match self.peek_prefixed_name() {
                         Some(name) => Err(self.prefixed_name_err(&name, "a node must be an IRI")),
-                        None => {
-                            Err(self
-                                .err("expected a term (<iri>, _:blank, \"literal\" or <<triple>>)"))
-                        }
+                        None => Err(self
+                            .err("expected a term (<iri>, _:blank, \"literal\" or <<( s p o )>>)")),
                     };
                 }
             };
@@ -561,14 +557,11 @@ impl MapParser {
                 if components.len() < 3 {
                     break;
                 }
-                if self.peek() != Some('>') || self.peek_at(1) != Some('>') {
-                    return Err(self.err("expected '>>' to close a quoted-triple term"));
-                }
-                self.pos += 2;
+                self.close_triple_term()?;
                 let [s, p, o] = <[TermValue; 3]>::try_from(
-                    open.pop().expect("the innermost quoted triple is open"),
+                    open.pop().expect("the innermost triple term is open"),
                 )
-                .unwrap_or_else(|_| unreachable!("a quoted triple closes after three components"));
+                .unwrap_or_else(|_| unreachable!("a triple term closes after three components"));
                 term = TermValue::Triple {
                     s: TermBox::new(s),
                     p: TermBox::new(p),
@@ -576,6 +569,16 @@ impl MapParser {
                 };
             }
         }
+    }
+
+    /// Consume the `)>>` closing a triple term opened with `<<(`.
+    fn close_triple_term(&mut self) -> Result<()> {
+        if self.peek() != Some(')') || self.peek_at(1) != Some('>') || self.peek_at(2) != Some('>')
+        {
+            return Err(self.err("expected ')>>' to close a triple term opened with '<<('"));
+        }
+        self.pos += 3;
+        Ok(())
     }
 
     fn parse_predicate(&mut self) -> Result<String> {
@@ -770,16 +773,26 @@ impl MapParser {
     /// Every failure is a hard error rather than a fallback to the raw backslash,
     /// because no production reachable from here gives `'\'` any other reading.
     fn read_uchar(&mut self) -> Result<char> {
+        self.uchar("IRI")
+    }
+
+    /// Decode the `UCHAR` whose backslash is the current scalar, naming `what`
+    /// (an IRI or a string) in the error, and advance past it.
+    fn uchar(&mut self, what: &str) -> Result<char> {
         let (decoded, consumed) =
-            decode_uchar(|ahead| self.peek_at(ahead)).map_err(|defect| match defect {
-                UcharDefect::NotAnEscape => {
-                    self.err("a backslash in an IRI must open a \\u/\\U escape")
-                }
-                UcharDefect::BadHex => self.err("bad \\u/\\U escape in IRI (expected hex digits)"),
-                UcharDefect::NotAScalar => {
-                    self.err("\\u/\\U escape in IRI is not a Unicode scalar value")
-                }
-            })?;
+            terminals::decode_uchar_at(|ahead| self.peek_at(ahead).map(uchar_byte)).map_err(
+                |defect| match defect {
+                    terminals::UcharError::NotAnEscape => self.err(&format!(
+                        "a backslash in an {what} must open a \\u/\\U escape"
+                    )),
+                    terminals::UcharError::BadHex => self.err(&format!(
+                        "bad \\u/\\U escape in {what} (expected hex digits)"
+                    )),
+                    terminals::UcharError::NotAScalar => self.err(&format!(
+                        "\\u/\\U escape in {what} is not a Unicode scalar value"
+                    )),
+                },
+            )?;
         self.pos += consumed;
         Ok(decoded)
     }
@@ -889,47 +902,48 @@ impl MapParser {
                     break;
                 }
             }
-            if let Err(error) = langtag::parse_with(&tag, LANGTAG_PROFILE) {
+            // RDF 1.2 `LANG_DIR` (Turtle 1.2 `[144s]`): a trailing `--ltr` or `--rtl`
+            // is the literal's base direction, not part of its language tag. Any
+            // other `--` suffix stays in the tag, where the tag grammar refuses it.
+            let (tag, direction) = match tag.rsplit_once("--") {
+                Some((head, token)) => match RdfTextDirection::from_str_token(token) {
+                    Some(direction) => (head, Some(direction)),
+                    None => (tag.as_str(), None),
+                },
+                None => (tag.as_str(), None),
+            };
+            if let Err(error) = langtag::parse_with(tag, LANGTAG_PROFILE) {
                 return Err(self.err(&format!(
                     "expected a language tag: {error} [{code}]",
                     code = error.diagnostic_code()
                 )));
             }
-            Ok(TermValue::lang_literal(lexical, &tag))
+            Ok(match direction {
+                None => TermValue::lang_literal(lexical, tag),
+                Some(direction) => TermValue::Literal {
+                    lexical_form: lexical,
+                    datatype: RdfLiteral::language_datatype_iri(Some(direction)).to_owned(),
+                    language: Some(langtag::identity_fold(tag)),
+                    direction: Some(direction),
+                },
+            })
         } else {
             Ok(TermValue::simple_literal(lexical))
         }
     }
 
+    /// `ECHAR` or `UCHAR`, the backslash already consumed.
     fn parse_escape(&mut self) -> Result<char> {
         let escaped = self.peek().ok_or_else(|| self.err("dangling escape"))?;
-        self.pos += 1;
-        match escaped {
-            't' => Ok('\t'),
-            'b' => Ok('\u{8}'),
-            'n' => Ok('\n'),
-            'r' => Ok('\r'),
-            'f' => Ok('\u{c}'),
-            '"' => Ok('"'),
-            '\'' => Ok('\''),
-            '\\' => Ok('\\'),
-            'u' => self.parse_hex(4),
-            'U' => self.parse_hex(8),
-            _ => Err(self.err("invalid string escape")),
-        }
-    }
-
-    fn parse_hex(&mut self, digits: usize) -> Result<char> {
-        let mut value: u32 = 0;
-        for _ in 0..digits {
-            let c = self
-                .peek()
-                .ok_or_else(|| self.err("short unicode escape"))?;
-            let d = c.to_digit(16).ok_or_else(|| self.err("bad hex digit"))?;
-            value = value * 16 + d;
+        if let Some(decoded) = u8::try_from(escaped).ok().and_then(terminals::echar_value) {
             self.pos += 1;
+            return Ok(decoded);
         }
-        char::from_u32(value).ok_or_else(|| self.err("escape is not a scalar value"))
+        if matches!(escaped, 'u' | 'U') {
+            self.pos -= 1;
+            return self.uchar("string");
+        }
+        Err(self.err("invalid string escape"))
     }
 
     /// Resolve an `<iri>` against the base the map was parsed with.
@@ -940,10 +954,7 @@ impl MapParser {
     /// here was worse than in a schema: an unresolvable node selector matches
     /// nothing in the data and reports a clean, empty result map.
     fn resolve(&self, reference: &str) -> Result<String> {
-        self.base
-            .resolve(reference)
-            .map(|iri| iri.as_str().to_owned())
-            .map_err(|e| ShexError::iri(reference, &e))
+        crate::parser::resolve_iri(&self.base, reference)
     }
 
     // ── scanning primitives ──────────────────────────────────────────────────
@@ -1159,13 +1170,13 @@ mod langtag_tests {
 
 #[cfg(test)]
 mod term_walk_tests {
-    //! The term parser and the sort key against their recursive references, and at a
-    //! hundred thousand levels on a 128 KiB thread.
+    //! The term parser against its recursive reference, and at a hundred thousand
+    //! levels on a 128 KiB thread.
 
     use purrdf_core::{TermBox, TermValue};
     use purrdf_iri::BaseScope;
 
-    use super::{MapParser, Result, term_key};
+    use super::{MapParser, Result};
 
     fn parser(text: &str) -> MapParser {
         MapParser {
@@ -1175,14 +1186,15 @@ mod term_walk_tests {
         }
     }
 
-    /// The recursive reference of [`MapParser::parse_term`]: a `<<` opens a triple
-    /// term whose three positions it parses in turn; anything else is one term, which
-    /// the parser under test reads without nesting.
+    /// The recursive reference of [`MapParser::parse_term`]: a `<<(` opens a
+    /// triple term whose three positions it parses in turn, closed by `)>>`;
+    /// anything else (a `<<` without the parenthesis included) is one term, which the
+    /// parser under test reads without nesting.
     fn reference_parse(p: &mut MapParser) -> Result<TermValue> {
-        if p.peek() != Some('<') || p.peek_at(1) != Some('<') {
+        if p.peek() != Some('<') || p.peek_at(1) != Some('<') || p.peek_at(2) != Some('(') {
             return p.parse_term();
         }
-        p.pos += 2;
+        p.pos += 3;
         p.skip_ws();
         let s = reference_parse(p)?;
         p.skip_ws();
@@ -1190,10 +1202,7 @@ mod term_walk_tests {
         p.skip_ws();
         let o = reference_parse(p)?;
         p.skip_ws();
-        if p.peek() != Some('>') || p.peek_at(1) != Some('>') {
-            return Err(p.err("expected '>>' to close a quoted-triple term"));
-        }
-        p.pos += 2;
+        p.close_triple_term()?;
         Ok(TermValue::Triple {
             s: TermBox::new(s),
             p: TermBox::new(pr),
@@ -1201,46 +1210,33 @@ mod term_walk_tests {
         })
     }
 
-    fn reference_key(value: &TermValue) -> String {
-        match value {
-            TermValue::Triple { s, p, o } => format!(
-                "3{}\u{1}{}\u{1}{}",
-                reference_key(s),
-                reference_key(p),
-                reference_key(o)
-            ),
-            leaf => term_key(leaf),
-        }
-    }
-
-    /// The shape-map spelling of a generated term, `<< s p o >>` for a triple term: the
-    /// recursive reference of `validate::node_term_string`.
+    /// The shape-map spelling of a generated term, `<<( s p o )>>` for a triple term:
+    /// the recursive reference of `validate::node_term_string`.
     fn spelled(value: &TermValue) -> String {
         match value {
             TermValue::Triple { s, p, o } => {
-                format!("<< {} {} {} >>", spelled(s), spelled(p), spelled(o))
+                format!("<<( {} {} {} )>>", spelled(s), spelled(p), spelled(o))
             }
             leaf => crate::validate::node_term_string(leaf),
         }
     }
 
-    /// Every generated term's spelling — whole, cut short, and with its last `>>`
-    /// broken — parses to exactly the term, the refusal and the cursor the recursive
-    /// reference reaches; and every term keys and is spelled as the references key and
-    /// spell it.
+    /// Every generated term's spelling — whole, cut short, with its first `)>>`
+    /// broken, and in the refused `<< s p o >>` spelling — parses to exactly the term, the refusal and the cursor the recursive
+    /// reference reaches; and every term is spelled as the reference spells it.
     #[test]
-    fn the_parser_and_the_key_agree_with_their_recursive_references() {
+    fn the_parser_agrees_with_its_recursive_reference() {
         let mut nested = 0;
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = purrdf_core::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::IriPredicates,
+                purrdf_core::term_fixture::TermShape::IriPredicates,
             );
             nested += usize::from(budget < 7);
-            assert_eq!(term_key(&value), reference_key(&value), "seed {seed}");
             let text = spelled(&value);
             assert_eq!(
                 crate::validate::node_term_string(&value),
@@ -1251,8 +1247,20 @@ mod term_walk_tests {
                 .chars()
                 .take(text.chars().count() / 2)
                 .collect::<String>();
-            let broken = text.replacen(">>", "> >", 1);
-            for input in [text.as_str(), cut.as_str(), broken.as_str()] {
+            let broken = text.replacen(")>>", ")> >", 1);
+            let legacy = text.replace("<<(", "<<").replace(")>>", ">>");
+            if text.starts_with("<<(") {
+                assert!(
+                    parser(&legacy).parse_term().is_err(),
+                    "seed {seed}: the reifier spelling is refused: {legacy}"
+                );
+            }
+            for input in [
+                text.as_str(),
+                cut.as_str(),
+                broken.as_str(),
+                legacy.as_str(),
+            ] {
                 let (mut found, mut expected) = (parser(input), parser(input));
                 let parsed = found.parse_term();
                 let reference = reference_parse(&mut expected);
@@ -1272,20 +1280,16 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_parses_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let open = "<< <http://example.org/s> <http://example.org/p> ";
-                let text = format!(
-                    "{}<http://example.org/o>{}",
-                    open.repeat(LEVELS),
-                    " >>".repeat(LEVELS)
-                );
-                let parsed = parser(&text).parse_term().expect("the spelling parses");
-                assert_eq!(parsed, crate::test_terms::triple_chain(LEVELS));
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the parser did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let open = "<<( <http://example.org/s> <http://example.org/p> ";
+            let text = format!(
+                "{}<http://example.org/o>{}",
+                open.repeat(LEVELS),
+                " )>>".repeat(LEVELS)
+            );
+            let parsed = parser(&text).parse_term().expect("the spelling parses");
+            assert_eq!(parsed, purrdf_core::term_fixture::triple_chain(LEVELS));
+        })
+        .expect("the thread starts");
     }
 }

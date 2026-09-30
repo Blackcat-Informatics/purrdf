@@ -11,6 +11,10 @@
 //! `query_with_options_view`, `update_with_options` — because a channel that only lines
 //! up when the evaluator is called from inside the crate is a channel no host can read.
 
+mod support;
+
+use support::{row_count, with_env, without_panic_output};
+
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -21,7 +25,7 @@ use purrdf_sparql_eval::{
     BindingPattern, EvalError, EvalOptions, ExtensionEnv, GovernedOutcome, GovernorState,
     IndexGeneration, InternedGoverned, InternedOutcome, InternedRequest, NativeSparqlEngine,
     PfArgs, PfArity, PfAttestation, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
-    QueryGovernors, QueryOptions, RelationAttestations, RelationWitness, ServiceLevel, Volatility,
+    QueryGovernors, RelationAttestations, RelationWitness, ServiceLevel, Volatility,
 };
 
 /// The relation IRI every query below calls. PurRDF mints no vocabulary: without this
@@ -196,23 +200,19 @@ fn request(query: &str) -> SparqlRequest<'_> {
     }
 }
 
-fn with_relations(env: &ExtensionEnv) -> QueryOptions<'_> {
-    QueryOptions::new().with_env(env)
-}
-
 /// Drive `query` through the governed entry `query_prepared_governed_view` under
 /// `QueryGovernors::UNBOUNDED` — the lane whose outcome carries a witness.
 fn governed(engine: &NativeSparqlEngine, env: &ExtensionEnv, query: &str) -> GovernedOutcome {
     let dataset = dataset();
     let prepared = engine
-        .prepare_query_with_options(query, None, with_relations(env))
+        .prepare_query_with_options(query, None, with_env(env))
         .expect("the query prepares against the registry");
     engine
         .query_prepared_governed_view(
             &*dataset,
             &prepared,
             &[],
-            with_relations(env),
+            with_env(env),
             &QueryGovernors::UNBOUNDED,
         )
         .expect("a governed run of a valid query is an outcome, never an error")
@@ -225,27 +225,11 @@ fn ungoverned(
     query: &str,
 ) -> Result<SparqlResult, purrdf_core::RdfDiagnostic> {
     let dataset = dataset();
-    engine.query_with_options_view(&*dataset, request(query), with_relations(env))
-}
-
-/// Suppress the default panic-hook stderr dump for an EXPECTED, caught panic.
-fn without_panic_output<R>(body: impl FnOnce() -> R) -> R {
-    let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let out = body();
-    std::panic::set_hook(default_hook);
-    out
+    engine.query_with_options_view(&*dataset, request(query), with_env(env))
 }
 
 fn declared(value: &str) -> BTreeSet<IndexGeneration> {
     BTreeSet::from([IndexGeneration::declared(value)])
-}
-
-fn row_count(result: &SparqlResult) -> usize {
-    match result {
-        SparqlResult::Solutions { rows, .. } => rows.len(),
-        other => panic!("a SELECT returns solutions, got {other:?}"),
-    }
 }
 
 /// A lone call, driven by the identity table: exactly one invocation.
@@ -311,7 +295,7 @@ fn a_declared_generation_and_incompleteness_reach_the_interned_governed_receipt(
         .query_governed_interned_in_operation(
             &*dataset,
             request,
-            with_relations(&relations),
+            with_env(&relations),
             &state,
             |interned| match interned {
                 InternedOutcome::Solutions(solutions) => solutions.rows().len(),
@@ -467,11 +451,11 @@ fn the_witnessed_prepared_door_reports_what_the_unwitnessed_one_must_refuse() {
     ] {
         let relations = registry("ff", declares);
         let mut execution = engine
-            .prepare_execution(ONE_CALL, None, &[], with_relations(&relations))
+            .prepare_execution(ONE_CALL, None, &[], with_env(&relations))
             .expect("the query prepares against the registry");
 
         let (rows, witness) = engine
-            .execute_witnessed(&mut execution, &*dataset, with_relations(&relations), count)
+            .execute_witnessed(&mut execution, &*dataset, with_env(&relations), count)
             .expect("the witnessed door answers, whole or short");
         assert_eq!(rows, 1, "the rows the relation served cross");
         let attested = witness.get(REL_IRI).expect("the relation attested");
@@ -484,8 +468,7 @@ fn the_witnessed_prepared_door_reports_what_the_unwitnessed_one_must_refuse() {
         };
         assert_eq!(attested.incompleteness, expected);
 
-        let unwitnessed =
-            engine.execute(&mut execution, &*dataset, with_relations(&relations), count);
+        let unwitnessed = engine.execute(&mut execution, &*dataset, with_env(&relations), count);
         if short {
             let diagnostic = unwitnessed.expect_err("the unwitnessed door cannot label it");
             assert_eq!(diagnostic.code, EvalError::RELATION_INCOMPLETE_CODE);
@@ -575,7 +558,7 @@ fn a_panicking_generation_is_contained_payload_free() {
     let engine = NativeSparqlEngine::new();
     let relations = registry("ff", Declares::PanicOnGeneration);
     let prepared = engine
-        .prepare_query_with_options(ONE_CALL, None, with_relations(&relations))
+        .prepare_query_with_options(ONE_CALL, None, with_env(&relations))
         .expect("the query prepares against the registry");
     let dataset = dataset();
     let diagnostic = without_panic_output(|| {
@@ -584,7 +567,7 @@ fn a_panicking_generation_is_contained_payload_free() {
                 &*dataset,
                 &prepared,
                 &[],
-                with_relations(&relations),
+                with_env(&relations),
                 &QueryGovernors::UNBOUNDED,
             )
             .expect_err("a panicking read must not escape")
@@ -860,7 +843,7 @@ fn an_update_over_an_incomplete_relation_refuses_and_writes_nothing() {
         .update_with_options(
             &mut dataset,
             request(INSERT_FROM_RELATION),
-            with_relations(&relations),
+            with_env(&relations),
         )
         .expect_err("an UPDATE has nowhere to carry the declaration, so it refuses");
     assert_eq!(diagnostic.code, EvalError::RELATION_INCOMPLETE_CODE);
@@ -889,7 +872,7 @@ fn the_same_update_over_a_relation_declaring_nothing_short_commits() {
         .update_with_options(
             &mut dataset,
             request(INSERT_FROM_RELATION),
-            with_relations(&relations),
+            with_env(&relations),
         )
         .expect("a relation that declared no shortfall must let the mutation through");
     assert_eq!(
@@ -958,14 +941,14 @@ fn an_attestation_collected_on_a_row_loop_worker_reaches_the_receipt() {
     ) -> RelationAttestations {
         let dataset = wide_dataset();
         let prepared = engine
-            .prepare_query_with_options(FILTER_EXISTS_CALL, None, with_relations(env))
+            .prepare_query_with_options(FILTER_EXISTS_CALL, None, with_env(env))
             .expect("the query prepares against the registry");
         let outcome = engine
             .query_prepared_governed_view(
                 &*dataset,
                 &prepared,
                 &[],
-                with_relations(env),
+                with_env(env),
                 &QueryGovernors::UNBOUNDED,
             )
             .expect("a governed run of a valid query is an outcome, never an error");

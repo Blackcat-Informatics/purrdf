@@ -33,14 +33,20 @@
 //! * **F — page touches.** Over a counting page provider, `GRAPH ?g { ... }` pulls
 //!   exactly the pages that own a named graph, and no others.
 
+mod support;
+
+use purrdf_core::term_fixture::intern_value;
+use support::iri;
+use support::solutions;
+
 use purrdf_core::TermBox;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use purrdf_core::{
     CountingDemandProvider, DatasetView, GraphMatch, InMemoryPageProvider, PageProvider,
-    PagedDataset, QuadIds, QuadProbePlan, QuadRef, RdfDataset, RdfDatasetBuilder, RdfLiteral,
-    RdfStoreCapabilities, SparqlResult, TermId, TermRef, TermValue,
+    PagedDataset, QuadIds, QuadProbePlan, QuadRef, RdfDataset, RdfDatasetBuilder,
+    RdfStoreCapabilities, TermId, TermRef, TermValue,
 };
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 
@@ -48,36 +54,6 @@ use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 
 const EX: &str = "http://example.org/";
 const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
-
-/// An `example.org` IRI value.
-fn iri(name: &str) -> TermValue {
-    TermValue::iri(format!("{EX}{name}"))
-}
-
-/// Intern one dataset-independent value into a builder, recursing for triple terms.
-fn intern_value(b: &mut RdfDatasetBuilder, v: &TermValue) -> TermId {
-    match v {
-        TermValue::Iri(s) => b.intern_iri(s),
-        TermValue::Blank { label, scope } => b.intern_blank(label, *scope),
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => b.intern_literal(RdfLiteral {
-            lexical_form: lexical_form.clone(),
-            datatype: Some(datatype.clone()),
-            language: language.clone(),
-            direction: *direction,
-        }),
-        TermValue::Triple { s, p, o } => {
-            let s = intern_value(b, s);
-            let p = intern_value(b, p);
-            let o = intern_value(b, o);
-            b.intern_triple(s, p, o)
-        }
-    }
-}
 
 /// A quad in a named graph (`None` graph ⇒ the default graph).
 type Quad = (TermValue, TermValue, TermValue, Option<TermValue>);
@@ -146,16 +122,6 @@ fn build(fixture: &Fixture) -> Arc<RdfDataset> {
 fn paged(pages: &[Fixture]) -> PagedDataset {
     let frozen: Vec<Arc<RdfDataset>> = pages.iter().map(build).collect();
     PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(frozen))).expect("seal pages")
-}
-
-/// Destructure a `SparqlResult` into `(variables, rows)`, panicking on any other shape.
-fn solutions(result: SparqlResult) -> (Vec<String>, Vec<Vec<Option<TermValue>>>) {
-    match result {
-        SparqlResult::Solutions {
-            variables, rows, ..
-        } => (variables, rows),
-        other => panic!("expected solutions, got {other:?}"),
-    }
 }
 
 /// Run `query` over a single frozen dataset holding every page's content AND over the

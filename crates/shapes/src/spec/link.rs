@@ -10,7 +10,7 @@
 use ::purrdf::RdfDataset;
 
 use super::{ComponentRow, FunctionClass, NativeFunction, census};
-use crate::data::{GraphFilter, native_quads};
+use crate::data::{GraphFilter, native_quads, objects_of as objects};
 use crate::model::sh;
 use crate::term::{NamedNode, Term};
 
@@ -71,20 +71,6 @@ const BUILTIN_COMPONENT_ANNOTATIONS: [&str; 2] = [sh::LABEL_TEMPLATE, sh::MESSAG
 struct StatedParam {
     path: String,
     keys: Vec<bool>,
-}
-
-fn objects(data: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
-    let predicate = Term::NamedNode(NamedNode::from(predicate));
-    native_quads(
-        data,
-        Some(subject),
-        Some(&predicate),
-        None,
-        GraphFilter::AnyGraph,
-    )
-    .into_iter()
-    .map(|(_, _, object)| object)
-    .collect()
 }
 
 /// Refuse a declaration of a built-in that carries implementation material.

@@ -37,6 +37,7 @@
 use purrdf_cdt::CdtFn;
 use purrdf_core::ContentDigest;
 use purrdf_core::binding_pattern::BindingPattern;
+use purrdf_hash::Domain;
 use purrdf_sparql_algebra::Child;
 use purrdf_sparql_algebra::{
     AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, Literal,
@@ -50,7 +51,6 @@ use crate::convert::literal_to_value;
 use crate::engine::ShaclPrebinding;
 use crate::error::EvalError;
 use crate::expr::xsd_of;
-use crate::modifier::is_numeric_xsd;
 use crate::property_fn::{NOT_RANKED_CANONICAL, PfArity, PropertyFunctionRegistry};
 use crate::registry_id::append_framed_part;
 
@@ -560,16 +560,11 @@ fn collect_chain<'a>(pattern: &'a GraphPattern, atoms: &mut Vec<Atom<'a>>) -> bo
 fn planned_lateral_call(right: &GraphPattern) -> Option<(&GraphPattern, &PropertyFunctionCall)> {
     let mut operand = right;
     while let GraphPattern::Lateral { left, right } = operand
-        && is_identity(left)
+        && left.is_empty_bgp()
     {
         operand = right;
     }
     crate::substitute::lateral_call(operand).map(|call| (operand, call))
-}
-
-/// Whether `pattern` is the identity table `Z` — the empty `Bgp`.
-const fn is_identity(pattern: &GraphPattern) -> bool {
-    matches!(pattern, GraphPattern::Bgp { patterns } if patterns.is_empty())
 }
 
 /// Push one chain member, dropping the EMPTY `Bgp` the parser leaves where a call opens
@@ -580,7 +575,7 @@ fn push_atom<'a>(
     call: Option<&'a PropertyFunctionCall>,
     atoms: &mut Vec<Atom<'a>>,
 ) {
-    if is_identity(pattern) {
+    if pattern.is_empty_bgp() {
         return;
     }
     let position = atoms.len();
@@ -1932,7 +1927,7 @@ fn validate_scalarvals(
 
 /// Whether `value`'s datatype matches `kind` — the per-literal check
 /// [`validate_scalarvals`] applies to each supplied scalarval. Goes through the
-/// SAME [`purrdf_xsd`] numeric-tower classification (`xsd_of` + `is_numeric_xsd`)
+/// SAME [`purrdf_xsd`] numeric-tower classification (`xsd_of` + `XsdValue::is_numeric`)
 /// the evaluator itself uses to classify a runtime `TermValue`, rather than a
 /// hand-rolled datatype-IRI string comparison, so a numeric scalarval's
 /// admission rule can never drift from what the numeric tower actually accepts
@@ -1941,7 +1936,7 @@ fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
     match kind {
         ScalarvalKind::Numeric => xsd_of(&literal_to_value(value))
             .as_ref()
-            .is_some_and(is_numeric_xsd),
+            .is_some_and(purrdf_xsd::XsdValue::is_numeric),
         ScalarvalKind::String => {
             value.language().is_none()
                 && value.datatype().as_str() == purrdf_sparql_algebra::ast::XSD_STRING
@@ -3249,7 +3244,7 @@ pub(crate) fn registry_fingerprint(
 /// happens to fold a structurally identical field sequence (an empty
 /// property-function registry and an empty aggregate registry would otherwise
 /// collide, and a caller binding both would be unable to tell which it had).
-const CONTENT_DOMAIN: &str = "purrdf-sparql-eval/property-function-registry";
+const CONTENT_DOMAIN: Domain = Domain::new(b"purrdf-sparql-eval/property-function-registry");
 
 /// The schema version of the field sequence this fingerprint folds.
 ///
@@ -4382,7 +4377,6 @@ mod iterative_walk_tests {
     use crate::agg_fn::{AggregateAccumulator, AlgebraicClass, CustomAggregate};
     use crate::property_fn::{PfArgs, PfCursor, PfRow, PropertyFunction};
     use crate::user_fn::{Arity, Volatility};
-    use purrdf_testkit::rng::splitmix64_next;
 
     // ── The recursive references ───────────────────────────────────────────────────
 
@@ -4486,7 +4480,7 @@ mod iterative_walk_tests {
         right: &GraphPattern,
     ) -> Option<(&GraphPattern, &PropertyFunctionCall)> {
         match right {
-            GraphPattern::Lateral { left, right } if is_identity(left) => {
+            GraphPattern::Lateral { left, right } if left.is_empty_bgp() => {
                 reference_planned_lateral_call(right)
             }
             other => crate::substitute::lateral_call(other).map(|call| (other, call)),
@@ -5502,8 +5496,8 @@ mod iterative_walk_tests {
 
     // ── Fixtures ───────────────────────────────────────────────────────────────────
 
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+    use purrdf_xsd::datatype::XSD_BOOLEAN;
+    use purrdf_xsd::datatype::XSD_INTEGER;
     /// A `(1, 1)` relation computable only with its subject bound.
     const REL_BOUND: &str = "http://example.org/rel/bound";
     /// A `(1, 1)` relation computable in every access pattern.
@@ -5649,19 +5643,9 @@ mod iterative_walk_tests {
     }
 
     fn aggregates() -> AggregateRegistry {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register(AGG_SUMMARY, Arc::new(Summary));
         registry
-    }
-
-    /// Run `body` on a fresh thread with 128 KiB of stack.
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
     }
 
     fn variable(name: &str) -> Variable {
@@ -5688,11 +5672,11 @@ mod iterative_walk_tests {
 
     /// A deterministic choice sequence: every shape drawn from it is a pure function of
     /// the seed, so a disagreement names the seed that reproduces it.
-    struct Choices(u64);
+    struct Choices(purrdf_testkit::rng::SplitMix64);
 
     impl Choices {
         fn below(&mut self, bound: usize) -> usize {
-            (splitmix64_next(&mut self.0) % bound as u64) as usize
+            self.0.below_usize(bound)
         }
 
         fn one_in(&mut self, bound: usize) -> bool {
@@ -6139,7 +6123,7 @@ mod iterative_walk_tests {
     #[test]
     fn generated_patterns_plan_as_the_recursive_reference_plans_them() {
         for seed in 0..200 {
-            let mut choices = Choices(seed);
+            let mut choices = Choices(purrdf_testkit::rng::SplitMix64::new(seed));
             let mut budget = 10;
             let pattern = choices.pattern(&mut budget);
             let outer = choices.set(2);
@@ -6154,7 +6138,7 @@ mod iterative_walk_tests {
     #[test]
     fn generated_patterns_bind_what_the_recursive_reference_says_they_bind() {
         for seed in 0..200 {
-            let mut choices = Choices(seed);
+            let mut choices = Choices(purrdf_testkit::rng::SplitMix64::new(seed));
             let mut budget = 10;
             let pattern = choices.pattern(&mut budget);
             let context = choices.set(2);
@@ -6190,7 +6174,7 @@ mod iterative_walk_tests {
     #[test]
     fn generated_expressions_require_what_the_recursive_reference_says_they_require() {
         for seed in 0..300 {
-            let mut choices = Choices(seed);
+            let mut choices = Choices(purrdf_testkit::rng::SplitMix64::new(seed));
             let mut budget = 8;
             let expression = choices.expression(&mut budget);
             let bound = choices.set(3);
@@ -6221,7 +6205,7 @@ mod iterative_walk_tests {
     #[test]
     fn generated_spines_peel_into_the_atoms_the_recursive_reference_peels() {
         for seed in 0..200 {
-            let mut choices = Choices(seed);
+            let mut choices = Choices(purrdf_testkit::rng::SplitMix64::new(seed));
             let mut budget = 10;
             let pattern = choices.pattern(&mut budget);
             let mut atoms = Vec::new();
@@ -6252,7 +6236,7 @@ mod iterative_walk_tests {
     #[test]
     fn generated_terms_are_bound_and_collected_as_the_recursive_reference_says() {
         for seed in 0..300 {
-            let mut choices = Choices(seed);
+            let mut choices = Choices(purrdf_testkit::rng::SplitMix64::new(seed));
             let term = choices.term(3);
             let bound = choices.set(4);
             assert_eq!(
@@ -6275,7 +6259,7 @@ mod iterative_walk_tests {
     /// to the call's arguments.
     #[test]
     fn a_hundred_thousand_wrappers_are_planned_and_bound_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(128 * 1024, || {
             let mut pattern = call_of(REL_ANY, "a", "b");
             for _ in 0..DEPTH {
                 pattern = GraphPattern::Distinct {
@@ -6306,14 +6290,15 @@ mod iterative_walk_tests {
             let mut bound = DetHashSet::default();
             collect_certainly_bound(&pattern, &mut bound);
             assert_eq!(bound, set(&["a", "b"]));
-        });
+        })
+        .expect("spawn");
     }
 
     /// A hundred thousand `FILTER(BOUND(?a))` wrappers over one triple: bound, on a
     /// 128 KiB stack, to the triple's variables.
     #[test]
     fn a_hundred_thousand_filters_are_bound_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(128 * 1024, || {
             let mut pattern = GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(variable("a")),
@@ -6346,14 +6331,15 @@ mod iterative_walk_tests {
                 set(&["a", "b", "q"]),
                 "the seed reaches the core beneath every wrapper"
             );
-        });
+        })
+        .expect("spawn");
     }
 
     /// A hundred thousand operators over one variable: what the expression needs for
     /// each outcome, and whether it reads only bound variables, on a 128 KiB stack.
     #[test]
     fn a_hundred_thousand_operators_are_required_and_read_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(128 * 1024, || {
             let mut negated = Expression::Bound(variable("a"));
             for _ in 0..DEPTH {
                 negated = Expression::Not(Child::new(negated));
@@ -6370,14 +6356,15 @@ mod iterative_walk_tests {
             let a = variable("a");
             assert!(expression_reads_only_bound(&signed, &|read| *read == a));
             assert!(!expression_reads_only_bound(&signed, &|_| false));
-        });
+        })
+        .expect("spawn");
     }
 
     /// A hundred thousand joins peel into one chain, and a hundred thousand identity
     /// `LATERAL` wrappers peel down to the call they hold, on a 128 KiB stack.
     #[test]
     fn a_hundred_thousand_joins_peel_into_one_chain_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(128 * 1024, || {
             let leaf = || GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(variable("a")),
@@ -6413,14 +6400,15 @@ mod iterative_walk_tests {
             let (node, call) = planned_lateral_call(&wrapped).expect("the call at the bottom");
             assert_eq!(call.iri, REL_ANY);
             assert!(matches!(node, GraphPattern::PropertyFunction(_)));
-        });
+        })
+        .expect("spawn");
     }
 
     /// A quoted triple nested a hundred thousand levels deep: whether it is bound, and
     /// which variables it holds, on a 128 KiB stack.
     #[test]
     fn a_hundred_thousand_quoted_triples_are_bound_and_collected_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(128 * 1024, || {
             let mut term = TermPattern::Variable(variable("a"));
             for _ in 0..DEPTH {
                 term = TermPattern::Triple(Child::new(TriplePattern {
@@ -6434,6 +6422,7 @@ mod iterative_walk_tests {
             let mut collected = DetHashSet::default();
             collect_term_vars(&term, &mut collected);
             assert_eq!(collected, set(&["a"]));
-        });
+        })
+        .expect("spawn");
     }
 }

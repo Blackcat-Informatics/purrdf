@@ -28,10 +28,12 @@
 //! first hard error ends the run), `IF` runs one branch, `COALESCE` stops at its first
 //! bound item, `IN` stops at its first match and runs no candidate after an unbound
 //! needle. The helpers that compute each operator's value are the tree walk's own,
-//! taking already-evaluated operands, so every value interned, every charge, every
-//! draw of the query's random state and every `BNODE` memo lookup happens exactly as
-//! it did. See [`compile`](self::compile) for how the compiler keeps the set of
-//! interned values identical.
+//! taking already-evaluated operands, so every charge, every draw of the query's random
+//! state and every `BNODE` memo lookup happens exactly as it did, and every value is
+//! interned where the tree walk interned it — but for a triple term constructor nested in
+//! another's object, whose term is built into the enclosing one rather than interned
+//! level by level. See [`compile`](self::compile) for how the compiler keeps the set of
+//! interned values.
 //!
 //! # Suspension points
 //!
@@ -104,6 +106,9 @@ enum Val<I: Copy> {
     Str(Option<(String, Option<String>)>),
     /// The program's string constant at this index, read in place rather than copied.
     StrConst(u32),
+    /// A triple term a constructor built for the constructor it is the object of, not
+    /// interned, or unbound.
+    Value(Option<TermValue>),
     /// An `IN` in progress: the needle, its value, and whether a candidate raised.
     In {
         target: SolutionTerm<I>,
@@ -325,7 +330,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                 }
                 Op::Bound(slot) => {
                     let bound = slots[slot as usize].and_then(|c| row[c]).is_some();
-                    stack.push(Val::Term(Some(helpers::bool_term(ctx, bound))));
+                    stack.push(Val::Term(Some(helpers::intern_boolean(ctx, bound))));
                 }
                 Op::EbvOf => {
                     let term = pop_term(stack)?;
@@ -344,11 +349,11 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                             helpers::kleene_and(value, operand)
                         };
                     }
-                    stack.push(Val::Term(value.map(|b| helpers::bool_term(ctx, b))));
+                    stack.push(Val::Term(value.map(|b| helpers::intern_boolean(ctx, b))));
                 }
                 Op::Not => {
                     let value = pop_ebv(stack)?;
-                    stack.push(Val::Term(value.map(|b| helpers::bool_term(ctx, !b))));
+                    stack.push(Val::Term(value.map(|b| helpers::intern_boolean(ctx, !b))));
                 }
                 Op::Equal => {
                     let b = pop_term(stack)?;
@@ -359,7 +364,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     let b = pop_term(stack)?;
                     let a = pop_term(stack)?;
                     stack.push(Val::Term(match (a, b) {
-                        (Some(x), Some(y)) => Some(helpers::bool_term(ctx, x == y)),
+                        (Some(x), Some(y)) => Some(helpers::intern_boolean(ctx, x == y)),
                         _ => None,
                     }));
                 }
@@ -427,7 +432,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     };
                     if matched {
                         stack.pop();
-                        stack.push(Val::Term(Some(helpers::bool_term(ctx, true))));
+                        stack.push(Val::Term(Some(helpers::intern_boolean(ctx, true))));
                         pc = end as usize;
                     }
                 }
@@ -438,7 +443,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     stack.push(Val::Term(if saw_error {
                         None
                     } else {
-                        Some(helpers::bool_term(ctx, false))
+                        Some(helpers::intern_boolean(ctx, false))
                     }));
                 }
                 Op::Arith(operator) => {
@@ -494,6 +499,22 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     };
                     stack.push(Val::Term(value));
                 }
+                Op::Triple { intern } => {
+                    let object = match stack.pop() {
+                        Some(Val::Term(term)) => term.map(|t| helpers::value_of(ctx, t)),
+                        Some(Val::Value(value)) => value,
+                        Some(_) => return Err(mistyped("a term or a triple term value")),
+                        None => return Err(underflow()),
+                    };
+                    let predicate = pop_term(stack)?.map(|t| helpers::value_of(ctx, t));
+                    let subject = pop_term(stack)?.map(|t| helpers::value_of(ctx, t));
+                    let value = helpers::triple_value(subject, predicate, object);
+                    stack.push(if intern {
+                        Val::Term(value.and_then(|value| helpers::intern(ctx, value)))
+                    } else {
+                        Val::Value(value)
+                    });
+                }
                 Op::StrConst(k) => {
                     stack.push(Val::StrConst(k));
                 }
@@ -529,7 +550,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                                 StrPred::StrStarts => h.starts_with(n),
                                 StrPred::StrEnds => h.ends_with(n),
                             };
-                            Some(helpers::bool_term(ctx, holds))
+                            Some(helpers::intern_boolean(ctx, holds))
                         }
                         _ => None,
                     };
@@ -546,8 +567,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                                 RegexSlot::Linked(compiled) => compiled.clone(),
                                 RegexSlot::PerRow => helpers::cached_regex(ctx, &pattern.0, flags),
                             };
-                            compiled
-                                .map(|re| helpers::bool_term(ctx, re.as_regex().is_match(&text.0)))
+                            compiled.map(|re| helpers::intern_boolean(ctx, re.is_match(&text.0)))
                         }
                         _ => None,
                     };
@@ -557,7 +577,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     let range = pop_str(stack, &program.strs)?;
                     let tag = pop_str(stack, &program.strs)?;
                     let value = match (tag, range) {
-                        (Some(tag), Some(range)) => Some(helpers::bool_term(
+                        (Some(tag), Some(range)) => Some(helpers::intern_boolean(
                             ctx,
                             helpers::lang_matches(&tag.0, &range.0),
                         )),
@@ -639,7 +659,7 @@ fn resolve<D: DatasetView + Sync>(
     match suspend {
         Suspend::Exists(pattern) => {
             let found = helpers::exists(pattern, row, schema, ctx)?;
-            Ok(Some(helpers::bool_term(ctx, found)))
+            Ok(Some(helpers::intern_boolean(ctx, found)))
         }
         Suspend::SparqlUdf {
             func,

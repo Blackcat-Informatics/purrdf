@@ -1485,12 +1485,12 @@ mod tests {
     /// states the distinctness the tableau is meant to act on, not the syntax the
     /// parser is meant to recognize.)
     fn one_of_kb(apart_from: &[&str]) -> Kb {
-        const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-        const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-        const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-        const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-        const OWL_ONEOF: &str = "http://www.w3.org/2002/07/owl#oneOf";
-        const OWL_COMPLEMENTOF: &str = "http://www.w3.org/2002/07/owl#complementOf";
+        use purrdf_iri::vocab::owl::COMPLEMENT_OF as OWL_COMPLEMENTOF;
+        use purrdf_iri::vocab::owl::ONE_OF as OWL_ONEOF;
+        use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+        use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+        use purrdf_iri::vocab::rdf::REST as RDF_REST;
+        use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
         let mut b = RdfDatasetBuilder::new();
         let ty = b.intern_iri(RDF_TYPE);

@@ -14,11 +14,8 @@
 //! succeed. Fixtures are `example.org` throughout.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
-use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock};
-use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, ResourceDimension, SparqlRequest, SparqlResult, TermValue,
@@ -37,6 +34,13 @@ use purrdf_sparql_eval::{
     RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
+#[path = "support/registry.rs"]
+mod registry;
+
+use purrdf_retrieval::block_on;
+use purrdf_retrieval::fixture::iri;
+use registry::kernel_iri;
+
 const K: u32 = 60;
 
 /// The row bound these fixtures search under. Fused enumeration is top-k by
@@ -53,14 +57,6 @@ const STRATA: [&str; 2] = ["stratum/alpha", "stratum/beta"];
 
 fn ex(suffix: &str) -> String {
     format!("http://example.org/{suffix}")
-}
-
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
-
-fn kernel_iri(text: &str) -> purrdf_core::Iri {
-    purrdf_core::parse_iri(text).expect("fixture IRIs are valid")
 }
 
 /// A dataset holding exactly `triples`, in the default graph.
@@ -425,25 +421,6 @@ fn compiled(registry: &PropertyFunctionRegistry, stats: &MockStatistics) -> Comp
     bundle
 }
 
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
-}
-
 /// Every candidate the named stratum streamed, in rank order.
 fn candidates(execution: &mut purrdf_retrieval::ExecutionResult<'_>, stratum: &Iri) -> Vec<String> {
     let stream = execution
@@ -598,13 +575,7 @@ fn candidates_are_the_canonical_lexical_and_not_an_opaque_blob() {
     );
 
     // The negative, stated exactly: not the hex of the value's canonical bytes.
-    let hexed = TermValue::iri(ex("alpha/entity0"))
-        .to_canonical_bytes()
-        .iter()
-        .fold(String::new(), |mut out, byte| {
-            let _ = write!(out, "{byte:02x}");
-            out
-        });
+    let hexed = purrdf_hash::hex::encode(&TermValue::iri(ex("alpha/entity0")).to_canonical_bytes());
     assert_ne!(alpha[0], hexed, "a candidate is not a hex blob");
 }
 

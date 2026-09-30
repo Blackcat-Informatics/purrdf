@@ -32,6 +32,8 @@ name = "purrdf_retrieval"
 # The RDF 1.2 IR: caller-supplied IRIs are validated with the kernel's parser,
 # and terms are carried without ever naming a dataset-local `TermId`.
 purrdf-core.workspace = true
+# The plan's JSON form: `purrdf_lex::json` reads and writes it.
+purrdf-lex.workspace = true
 # The property-function seam: `RegistryId` is the instance identity a plan
 # records, and the producer-capability declarations are consumed from here.
 purrdf-sparql-eval.workspace = true
@@ -50,18 +52,15 @@ purrdf-text.workspace = true
 # Fixed-output-length hashing for the plan identity. Deterministic and keyless,
 # so the same canonical bytes yield the same digest on every target.
 purrdf-hash.workspace = true
-# Serialization of the plan as a plain document. `derive` builds the impls.
-serde.workspace = true
 
 [dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
 # The workspace's shared counting allocator, for `tests/fusion_frontier_alloc.rs`.
 # Path-only and unpublished, so it is stripped from the packaged manifest;
 # std-only and dependency-free, so it is wasm32-clean and needs no target gate.
 purrdf-alloc-probe = { workspace = true }
-# A document format for the serde round-trip test.
-serde_json.workspace = true
-# The timed benches (`benches/on_demand_read.rs`). Report-only.
-criterion = { workspace = true }
 # The `harness = false` runner `tests/wasm_determinism.rs` runs on, natively and on
 # wasm32-unknown-unknown alike. Path-only and unpublished, so it is stripped from
 # the packaged manifest; wasm32-clean, so it needs no target gate.

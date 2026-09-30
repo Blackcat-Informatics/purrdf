@@ -9,9 +9,11 @@
 //! Header is hashed the same way, excluding only `"id"` (§5). `"prev"` names
 //! the previous item's `"id"`; the first frame's `"prev"` is the Header's.
 
-use ciborium::value::Value;
-use serde::Serialize;
-use serde::ser::{SerializeMap, SerializeSeq, SerializeTupleVariant, Serializer};
+use purrdf_lex::cbor::{Limits, Value};
+
+pub use purrdf_lex::cbor::{
+    canonical, canonical_into as append_canonical, encode, encode_into, map_get,
+};
 
 /// CBOR self-describe tag (RFC 8949 §3.4.6); MAY prefix the Header item (§3).
 pub const SELF_DESCRIBE_TAG: u64 = 55799;
@@ -21,112 +23,13 @@ pub const MAGIC: &str = "GTS1";
 /// Wire-format major version, encoded in the header `"v"` field (§5).
 pub const VERSION: u8 = 1;
 
-/// Encode a CBOR value as-is (definite lengths, shortest-form integers;
-/// map entries in their current order).
-pub fn encode(v: &Value) -> Vec<u8> {
-    let mut out = Vec::new();
-    ciborium::ser::into_writer(v, &mut out).expect("CBOR encoding to a Vec cannot fail");
-    out
-}
-
-/// Append a CBOR value as-is to an existing buffer.
-pub fn encode_into(v: &Value, out: &mut Vec<u8>) {
-    ciborium::ser::into_writer(v, out).expect("CBOR encoding to a Vec cannot fail");
-}
-
-/// Recursively order map keys per RFC 8949 §4.2 (bytewise on encoded keys).
-///
-/// The spec mandates 8949 deterministic encoding, NOT a CBOR library's legacy
-/// "canonical" (RFC 7049 length-first) mode — the two orderings diverge on
-/// keys like `"x"` vs `"id"` (§4). Tags recurse into their value.
+/// A copy of `v` with every map ordered per RFC 8949 §4.2.1 (bytewise on
+/// encoded keys), as [`Value::canonicalize`] orders it in place; [`encode`] of
+/// the copy is [`canonical`] of `v`.
 pub fn deterministic(v: &Value) -> Value {
-    match v {
-        Value::Tag(tag, inner) => Value::Tag(*tag, Box::new(deterministic(inner))),
-        Value::Array(items) => Value::Array(items.iter().map(deterministic).collect()),
-        Value::Map(entries) => {
-            let mut keyed: Vec<(Vec<u8>, Value, Value)> = entries
-                .iter()
-                .map(|(k, val)| (encode(k), k.clone(), deterministic(val)))
-                .collect();
-            keyed.sort_by(|a, b| a.0.cmp(&b.0));
-            Value::Map(keyed.into_iter().map(|(_, k, val)| (k, val)).collect())
-        }
-        other => other.clone(),
-    }
-}
-
-struct Canonical<'a>(&'a Value);
-
-struct CanonicalMap<'a> {
-    entries: &'a [(Value, Value)],
-    excluded: &'a [&'a str],
-}
-
-fn sorted_entries<'a>(
-    entries: &'a [(Value, Value)],
-    excluded: &[&str],
-) -> Vec<(Vec<u8>, &'a Value, &'a Value)> {
-    let mut keyed: Vec<_> = entries
-        .iter()
-        .filter(|(key, _)| !matches!(key, Value::Text(text) if excluded.contains(&text.as_str())))
-        .map(|(key, value)| (canonical(key), key, value))
-        .collect();
-    keyed.sort_by(|a, b| a.0.cmp(&b.0));
-    keyed
-}
-
-impl Serialize for Canonical<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self.0 {
-            Value::Tag(tag, inner) => {
-                let mut tagged =
-                    serializer.serialize_tuple_variant("@@TAG@@", 0, "@@TAGGED@@", 2)?;
-                tagged.serialize_field(tag)?;
-                tagged.serialize_field(&Self(inner))?;
-                tagged.end()
-            }
-            Value::Array(items) => {
-                let mut sequence = serializer.serialize_seq(Some(items.len()))?;
-                for item in items {
-                    sequence.serialize_element(&Self(item))?;
-                }
-                sequence.end()
-            }
-            Value::Map(entries) => CanonicalMap {
-                entries,
-                excluded: &[],
-            }
-            .serialize(serializer),
-            // Delegate scalar spelling to ciborium so shortest integers/floats and
-            // future scalar variants stay byte-identical to the library encoder.
-            scalar => scalar.serialize(serializer),
-        }
-    }
-}
-
-impl Serialize for CanonicalMap<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let entries = sorted_entries(self.entries, self.excluded);
-        let mut map = serializer.serialize_map(Some(entries.len()))?;
-        for (_, key, value) in entries {
-            map.serialize_entry(&Canonical(key), &Canonical(value))?;
-        }
-        map.end()
-    }
-}
-
-/// Encode an object as deterministic CBOR (RFC 8949 §4.2).
-pub fn canonical(v: &Value) -> Vec<u8> {
-    let mut out = Vec::new();
-    ciborium::ser::into_writer(&Canonical(v), &mut out)
-        .expect("CBOR encoding to a Vec cannot fail");
-    out
-}
-
-/// Append deterministic CBOR to an existing buffer without allocating a
-/// temporary encoded byte vector.
-pub fn append_canonical(v: &Value, out: &mut Vec<u8>) {
-    ciborium::ser::into_writer(&Canonical(v), out).expect("CBOR encoding to a Vec cannot fail");
+    let mut ordered = v.clone();
+    ordered.canonicalize();
+    ordered
 }
 
 /// Input size at which native BLAKE3 subtrees use the shared Rayon pool.
@@ -166,31 +69,22 @@ pub fn blake3_256(data: &[u8]) -> [u8; 32] {
     *purrdf_hash::blake3::hash_with_join(data, grain, &RayonJoin).as_bytes()
 }
 
-/// Lowercase hex of a byte string.
-pub fn hex(data: &[u8]) -> String {
-    use std::fmt::Write as _;
-    data.iter().fold(String::new(), |mut out, b| {
-        let _ = write!(out, "{b:02x}");
-        out
-    })
-}
-
-/// A `blake3:<hex>` content digest for inline blob addressing (§12).
+/// A `blake3:<hex>` content digest for inline blob addressing (§12): the
+/// BLAKE3-256 of `data`, as [`digest_label`] spells it.
 pub fn digest_str(data: &[u8]) -> String {
-    format!("blake3:{}", purrdf_hash::hex::Lower(&blake3_256(data)))
+    digest_label(&blake3_256(data))
 }
 
-/// Get a map entry by text key (first match, like Python `dict.get`).
-pub fn map_get<'a>(entries: &'a [(Value, Value)], key: &str) -> Option<&'a Value> {
-    entries
-        .iter()
-        .find(|(k, _)| matches!(k, Value::Text(t) if t == key))
-        .map(|(_, v)| v)
+/// The `blake3:<hex>` spelling of a BLAKE3 digest already computed: the
+/// scheme, then the digest's lowercase base16. The one place a GTS content
+/// identifier is spelt.
+pub fn digest_label(digest: &[u8]) -> String {
+    format!("blake3:{}", purrdf_hash::hex::Lower(digest))
 }
 
 fn hash_excluding(entries: &[(Value, Value)], excluded: &[&str]) -> Vec<u8> {
     let mut writer = purrdf_hash::blake3::Hasher::new();
-    ciborium::ser::into_writer(&CanonicalMap { entries, excluded }, &mut writer)
+    purrdf_lex::cbor::write_canonical_map(entries, excluded, &mut writer)
         .expect("hash writer cannot fail");
     writer.finalize().as_bytes().to_vec()
 }
@@ -205,20 +99,6 @@ pub fn header_id(header: &[(Value, Value)]) -> Vec<u8> {
     hash_excluding(header, &["id"])
 }
 
-struct Counting<'a> {
-    data: &'a [u8],
-    pos: usize,
-}
-
-impl std::io::Read for Counting<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let n = buf.len().min(self.data.len() - self.pos);
-        buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
-        self.pos += n;
-        Ok(n)
-    }
-}
-
 /// Decode a CBOR Sequence into `(byte_offset, item)` pairs plus a torn marker.
 ///
 /// Detects a torn append (a partial trailing item) by position: at an item
@@ -228,24 +108,7 @@ impl std::io::Read for Counting<'_> {
 /// element is `None` for a clean end, or the byte offset of the incomplete
 /// trailing item.
 pub fn iter_items(data: &[u8]) -> (Vec<(usize, Value)>, Option<usize>) {
-    let mut reader = Counting { data, pos: 0 };
-    let mut out = Vec::new();
-    let mut torn = None;
-    loop {
-        let start = reader.pos;
-        if start == data.len() {
-            break;
-        }
-        match ciborium::de::from_reader::<Value, _>(&mut reader) {
-            Ok(item) => out.push((start, item)),
-            Err(_) => {
-                // partial (EOF) or corrupt trailing item
-                torn = Some(start);
-                break;
-            }
-        }
-    }
-    (out, torn)
+    purrdf_lex::cbor::decode_sequence(data, Limits::DEFAULT)
 }
 
 /// Return the Header map, unwrapping the optional self-describe tag (§3).
@@ -335,17 +198,6 @@ mod tests {
                 ),
             ])),
         )
-    }
-
-    #[test]
-    fn borrowed_canonical_encoder_is_byte_identical_to_recursive_oracle() {
-        let value = nested_value();
-        let expected = encode(&deterministic(&value));
-        assert_eq!(canonical(&value), expected);
-
-        let mut appended = vec![0xaa];
-        append_canonical(&value, &mut appended);
-        assert_eq!(&appended[1..], expected);
     }
 
     #[test]

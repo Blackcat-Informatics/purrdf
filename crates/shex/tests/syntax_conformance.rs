@@ -26,6 +26,10 @@
 //! is why the two syntaxes reach identical ASTs from one base rather than needing
 //! the ground truth patched up after the fact.
 
+#[path = "support/corpus.rs"]
+mod corpus;
+
+use corpus::shex_files;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -57,22 +61,6 @@ const XFAIL_CROSS: &[(&str, &str)] = &[(
      <http://a.example/p1>",
 )];
 
-fn corpus() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors/shexTest")
-}
-
-fn shex_files(dir: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = fs::read_dir(dir)
-        .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
-        .filter_map(|entry| {
-            let path = entry.ok()?.path();
-            (path.extension().is_some_and(|x| x == "shex")).then_some(path)
-        })
-        .collect();
-    files.sort();
-    files
-}
-
 fn stem(path: &Path) -> &str {
     path.file_stem()
         .and_then(|s| s.to_str())
@@ -96,7 +84,7 @@ fn document_url(path: &Path) -> String {
 
 #[test]
 fn negative_syntax_all_rejected() {
-    let dir = corpus().join("negativeSyntax");
+    let dir = corpus::shex_test().join("negativeSyntax");
     let files = shex_files(&dir);
     assert_eq!(
         files.len(),
@@ -118,7 +106,7 @@ fn negative_syntax_all_rejected() {
 
 #[test]
 fn negative_structure_all_parse_then_fail_structure() {
-    let dir = corpus().join("negativeStructure");
+    let dir = corpus::shex_test().join("negativeStructure");
     let files = shex_files(&dir);
     assert_eq!(
         files.len(),
@@ -150,7 +138,7 @@ fn negative_structure_all_parse_then_fail_structure() {
 
 #[test]
 fn schemas_shexc_all_parse() {
-    let dir = corpus().join("schemas");
+    let dir = corpus::shex_test().join("schemas");
     let files = shex_files(&dir);
     assert_eq!(files.len(), SCHEMAS_SHEXC_COUNT, "corpus drift in {dir:?}");
     let xfail: BTreeSet<&str> = XFAIL_SHEXC.iter().map(|(name, _)| *name).collect();
@@ -187,7 +175,7 @@ fn schemas_shexc_all_parse() {
 
 #[test]
 fn schemas_shexj_all_parse() {
-    let dir = corpus().join("schemas");
+    let dir = corpus::shex_test().join("schemas");
     // Paired ground truth only: every .shex stem with a .json sibling. The two
     // non-schema JSON files (coverage.json, representationTests.json) have no
     // .shex pair and are excluded by construction.
@@ -235,7 +223,7 @@ fn schemas_shexj_all_parse() {
 /// upstream "representation" tests assert).
 #[test]
 fn schemas_shexc_matches_shexj_ground_truth() {
-    let dir = corpus().join("schemas");
+    let dir = corpus::shex_test().join("schemas");
     let xfail: BTreeSet<&str> = XFAIL_CROSS.iter().map(|(name, _)| *name).collect();
     let mut mismatches = Vec::new();
     let mut stale_xfails = Vec::new();
@@ -301,7 +289,7 @@ fn schemas_shexc_matches_shexj_ground_truth() {
 /// untested.
 #[test]
 fn the_corpus_relative_shexj_document_resolves_exactly_as_its_shexc_twin() {
-    let dir = corpus().join("validation");
+    let dir = corpus::shex_test().join("validation");
     let shex_path = dir.join("1dot-relative.shex");
     let json_path = dir.join("1dot-relative.json");
     let url = document_url(&shex_path);

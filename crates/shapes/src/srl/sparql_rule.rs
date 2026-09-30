@@ -52,8 +52,8 @@ use purrdf_sparql_algebra::{
 use super::ir::{Element, ElementRule, PatternTerm, TriplePattern, visit_expression};
 use crate::term::{Literal, NamedNode, Term};
 
-/// The XSD namespace, whose datatype IRIs are the built-in casts.
-const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+// The XSD namespace, whose datatype IRIs are the built-in casts.
+use purrdf_xsd::datatype::XSD_NS as XSD;
 
 /// The element rule a global SPARQL rule's `construct` query is exactly, or `None` when
 /// it is not one (see the [module docs](self)).

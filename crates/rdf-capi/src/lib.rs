@@ -147,3 +147,82 @@ pub(crate) unsafe fn opt_cstr_to_str<'a>(
         }
     }
 }
+
+/// Borrow the `count` C strings at `array`. `count == 0` is accepted with a null
+/// `array`, since there is nothing to dereference. A null `array` with a non-zero
+/// count is refused as `NullPointer`, naming the `param` and the `entry` point, and
+/// each element goes through [`cstr_to_str`], so a null or non-UTF-8 element is
+/// refused before it is read.
+///
+/// The one reader of a C `(const char *const *, size_t)` string-array argument:
+/// every entry point taking such a pair shares this refusal contract.
+///
+/// # Safety
+/// When `count` is non-zero, `array` must address at least `count` readable
+/// `*const c_char`, each null (refused here) or a NUL-terminated C string that
+/// outlives the returned borrows.
+pub(crate) unsafe fn cstr_array<'a>(
+    array: *const *const c_char,
+    count: usize,
+    param: &str,
+    entry: &str,
+) -> Result<Vec<&'a str>, PurrdfError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if array.is_null() {
+        return Err(PurrdfError::new(
+            PurrdfStatus::NullPointer,
+            format!("null {param} array with a non-zero count ({count}) passed to {entry}"),
+        ));
+    }
+    let mut out = Vec::with_capacity(count);
+    for index in 0..count {
+        // SAFETY: the caller's contract above: the array is non-null (checked) and
+        // holds at least `count` readable elements, so `index < count` is in bounds.
+        // `cstr_to_str` refuses a null element rather than dereferencing it.
+        out.push(unsafe { cstr_to_str(*array.add(index))? });
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::CString;
+
+    use super::*;
+
+    #[test]
+    fn an_empty_string_array_may_be_null() {
+        let strings = unsafe { cstr_array(std::ptr::null(), 0, "names", "entry") };
+        let strings = strings.expect("a null array of zero strings is empty");
+        assert_eq!(strings, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn a_null_string_array_with_a_count_is_refused_by_name() {
+        let error = unsafe { cstr_array(std::ptr::null(), 2, "names", "entry") }
+            .expect_err("a null array cannot hold two strings");
+        assert_eq!(error.code, PurrdfStatus::NullPointer);
+        assert_eq!(
+            error.message.to_str().expect("UTF-8"),
+            "null names array with a non-zero count (2) passed to entry"
+        );
+    }
+
+    #[test]
+    fn a_null_element_is_refused_and_a_full_array_is_borrowed() {
+        let first = CString::new("alpha").expect("no NUL");
+        let second = CString::new("beta").expect("no NUL");
+        let full = [first.as_ptr(), second.as_ptr()];
+        let strings = unsafe { cstr_array(full.as_ptr(), 2, "names", "entry") };
+        assert_eq!(
+            strings.expect("both elements are strings"),
+            ["alpha", "beta"]
+        );
+        let holed = [first.as_ptr(), std::ptr::null()];
+        let error = unsafe { cstr_array(holed.as_ptr(), 2, "names", "entry") }
+            .expect_err("a null element is refused");
+        assert_eq!(error.code, PurrdfStatus::NullPointer);
+    }
+}

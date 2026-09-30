@@ -59,12 +59,9 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use purrdf_iri::langtag;
+use purrdf_iri::{langtag, terminals};
 
-use crate::datatype::{
-    CdtDatatype, RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD_BOOLEAN, XSD_DECIMAL, XSD_DOUBLE,
-    XSD_INTEGER,
-};
+use crate::datatype::{CdtDatatype, XSD_BOOLEAN, XSD_DECIMAL, XSD_DOUBLE, XSD_INTEGER};
 use crate::error::CdtError;
 use crate::limits::{MAX_ELEMENTS, MAX_LEXICAL_BYTES, list_extent, map_extent};
 use crate::render::canonical_key_lexical;
@@ -602,7 +599,7 @@ impl<'a> Scanner<'a> {
     /// `BLANK_NODE_LABEL ::= '_:' (PN_CHARS_U | [0-9]) ((PN_CHARS | '.')* PN_CHARS)?`
     ///
     /// The label body is scanned with
-    /// [`purrdf_iri::terminals::is_pn_chars`], the workspace's single
+    /// [`terminals::is_pn_chars`], the workspace's single
     /// transcription of
     ///
     /// > `PN_CHARS ::= PN_CHARS_U | '-' | [0-9] | #xB7 | [#x300-#x36F] |`
@@ -620,7 +617,7 @@ impl<'a> Scanner<'a> {
     /// # The head is a different class from the tail
     ///
     /// The first scalar after `_:` is `( PN_CHARS_U | [0-9] )` —
-    /// [`purrdf_iri::terminals::is_blank_node_label_start`] — which is strictly
+    /// [`terminals::is_blank_node_label_start`] — which is strictly
     /// narrower than the `PN_CHARS` the rest of the label is made of. `'-'`,
     /// U+00B7 MIDDLE DOT, the combining marks `[#x300-#x36F]` and the ties
     /// `[#x203F-#x2040]` may continue a label and may not open one, and `'.'`
@@ -639,7 +636,7 @@ impl<'a> Scanner<'a> {
         self.expect(b':', "`_:` opening a blank node label")?;
         let body_start = self.position;
         match self.input[self.position..].chars().next() {
-            Some(ch) if purrdf_iri::terminals::is_blank_node_label_start(ch) => {
+            Some(ch) if terminals::is_blank_node_label_start(ch) => {
                 self.position += ch.len_utf8();
             }
             _ => {
@@ -650,7 +647,7 @@ impl<'a> Scanner<'a> {
             }
         }
         while let Some(ch) = self.input[self.position..].chars().next() {
-            if purrdf_iri::terminals::is_pn_chars(ch) || ch == '.' {
+            if terminals::is_pn_chars(ch) || ch == '.' {
                 self.position += ch.len_utf8();
             } else {
                 break;
@@ -671,11 +668,7 @@ impl<'a> Scanner<'a> {
         let lexical = self.parse_string()?;
         if self.peek() == Some(b'@') {
             let (language, direction) = self.parse_langtag()?;
-            let datatype = if direction.is_some() {
-                RDF_DIR_LANG_STRING
-            } else {
-                RDF_LANG_STRING
-            };
+            let datatype = purrdf_iri::vocab::language_datatype_iri(direction.is_some());
             return Ok(CdtLiteral {
                 lexical,
                 datatype: datatype.to_string(),
@@ -755,42 +748,14 @@ impl<'a> Scanner<'a> {
         let start = self.position;
         match self.bytes.get(self.position + 1) {
             Some(b'u' | b'U') => self.parse_uchar(),
-            Some(b't') => {
+            Some(&letter) => {
+                let decoded = terminals::echar_value(letter).ok_or(CdtError::BadEscape {
+                    offset: start,
+                    reason: "only \\t \\b \\n \\r \\f \\\" \\' \\\\ \\uXXXX and \\UXXXXXXXX are escapes",
+                })?;
                 self.position += 2;
-                Ok('\t')
+                Ok(decoded)
             }
-            Some(b'b') => {
-                self.position += 2;
-                Ok('\u{8}')
-            }
-            Some(b'n') => {
-                self.position += 2;
-                Ok('\n')
-            }
-            Some(b'r') => {
-                self.position += 2;
-                Ok('\r')
-            }
-            Some(b'f') => {
-                self.position += 2;
-                Ok('\u{c}')
-            }
-            Some(b'"') => {
-                self.position += 2;
-                Ok('"')
-            }
-            Some(b'\'') => {
-                self.position += 2;
-                Ok('\'')
-            }
-            Some(b'\\') => {
-                self.position += 2;
-                Ok('\\')
-            }
-            Some(_) => Err(CdtError::BadEscape {
-                offset: start,
-                reason: "only \\t \\b \\n \\r \\f \\\" \\' \\\\ \\uXXXX and \\UXXXXXXXX are escapes",
-            }),
             None => Err(CdtError::BadEscape {
                 offset: start,
                 reason: "the lexical form ends inside an escape sequence",
@@ -801,47 +766,32 @@ impl<'a> Scanner<'a> {
     /// `UCHAR ::= '\\u' HEX HEX HEX HEX | '\\U' HEX HEX HEX HEX HEX HEX HEX HEX`
     fn parse_uchar(&mut self) -> Result<char, CdtError> {
         let start = self.position;
-        let digits = match self.bytes.get(self.position + 1) {
-            Some(b'u') => 4usize,
-            Some(b'U') => 8usize,
-            _ => {
-                return Err(CdtError::BadEscape {
+        let (decoded, consumed) =
+            terminals::decode_uchar(&self.bytes[start..]).map_err(|defect| {
+                CdtError::BadEscape {
                     offset: start,
-                    reason: "expected \\uXXXX or \\UXXXXXXXX",
-                });
-            }
-        };
-        let from = self.position + 2;
-        let to = from + digits;
-        let Some(hex) = self.input.get(from..to) else {
-            return Err(CdtError::BadEscape {
-                offset: start,
-                reason: "the lexical form ends inside a \\u escape",
-            });
-        };
-        let mut value: u32 = 0;
-        for byte in hex.bytes() {
-            let nibble = match byte {
-                b'0'..=b'9' => u32::from(byte - b'0'),
-                b'a'..=b'f' => u32::from(byte - b'a') + 10,
-                b'A'..=b'F' => u32::from(byte - b'A') + 10,
-                _ => {
-                    return Err(CdtError::BadEscape {
-                        offset: start,
-                        reason: "a \\u escape takes hexadecimal digits only",
-                    });
+                    reason: match defect {
+                        terminals::UcharError::NotAnEscape => "expected \\uXXXX or \\UXXXXXXXX",
+                        terminals::UcharError::BadHex => {
+                            if self.bytes.len() - start
+                                < match self.bytes.get(start + 1) {
+                                    Some(b'U') => 10,
+                                    _ => 6,
+                                }
+                            {
+                                "the lexical form ends inside a \\u escape"
+                            } else {
+                                "a \\u escape takes hexadecimal digits only"
+                            }
+                        }
+                        terminals::UcharError::NotAScalar => {
+                            "the escape does not name a Unicode scalar value"
+                        }
+                    },
                 }
-            };
-            value = value * 16 + nibble;
-        }
-        let Some(ch) = char::from_u32(value) else {
-            return Err(CdtError::BadEscape {
-                offset: start,
-                reason: "the escape does not name a Unicode scalar value",
-            });
-        };
-        self.position = to;
-        Ok(ch)
+            })?;
+        self.position = start + consumed;
+        Ok(decoded)
     }
 
     /// `LANGTAG ::= '@' [a-zA-Z]+ ('-' [a-zA-Z0-9]+)*`, plus RDF 1.2's `'--' [a-zA-Z]+`

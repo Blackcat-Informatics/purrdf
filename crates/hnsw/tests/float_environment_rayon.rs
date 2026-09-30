@@ -30,55 +30,19 @@
     all(target_arch = "x86", target_feature = "sse2")
 ))]
 
+#[path = "support/fixture.rs"]
+mod fixture;
+use fixture::{bits, params, seeded_matrix};
 use purrdf_core::DistanceMetric;
+use purrdf_core::distance::Reassociated;
+use purrdf_core::distance::control;
 use purrdf_core::distance::{FloatEnvironmentError, FloatEnvironmentEvidence};
-use purrdf_hnsw::{HnswError, HnswIndex, Params, Ranked, VectorMatrix, level::splitmix64};
-
-/// MXCSR flush-to-zero.
-const FTZ: u32 = 1 << 15;
-
-fn read_mxcsr() -> u32 {
-    let mut value: u32 = 0;
-    // SAFETY: `stmxcsr` stores the 32-bit MXCSR to a live, aligned, writable `u32`.
-    unsafe {
-        core::arch::asm!(
-            "stmxcsr [{ptr}]",
-            ptr = in(reg) &raw mut value,
-            options(nostack, preserves_flags),
-        );
-    }
-    value
-}
+use purrdf_hnsw::{HnswError, HnswIndex, Ranked};
 
 /// Set FTZ on the calling thread for the rest of its life: called only from the global
 /// pool's start handler, on threads this binary's pool owns and no other test shares.
 fn flush_this_thread() {
-    let value = read_mxcsr() | FTZ;
-    // SAFETY: `ldmxcsr` loads MXCSR from a live, aligned `u32`, the register as read with
-    // FTZ added, which is a valid MXCSR value.
-    unsafe {
-        core::arch::asm!(
-            "ldmxcsr [{ptr}]",
-            ptr = in(reg) &raw const value,
-            options(nostack, preserves_flags, readonly),
-        );
-    }
-}
-
-fn params() -> Params {
-    Params::new(4, 8, 16, 8).expect("valid")
-}
-
-/// A deterministic fixture matrix. Nothing here reads a clock or an RNG.
-fn matrix(rows: usize, dims: usize) -> VectorMatrix {
-    let mut state = 0xF7A3_0000_5EED_0001_u64;
-    let mut data = Vec::with_capacity(rows * dims);
-    for _ in 0..rows * dims {
-        state = splitmix64(state);
-        let unit = (state >> 11) as f64 / (1_u64 << 53) as f64;
-        data.push(unit.mul_add(2.0, -1.0));
-    }
-    VectorMatrix::new(rows, dims, data).expect("the fixture matrix is valid")
+    control::set_mxcsr(control::mxcsr() | control::MXCSR_FTZ);
 }
 
 /// Whether `error` is the flush-to-zero refusal this target reports: the MXCSR by name
@@ -105,19 +69,6 @@ fn is_ftz(error: &HnswError) -> bool {
     }
 }
 
-/// A batch answer as its rows and distance bits, so equality is bit-identity.
-fn bits(batch: &[Vec<Ranked>]) -> Vec<Vec<(usize, u64)>> {
-    batch
-        .iter()
-        .map(|ranked| {
-            ranked
-                .iter()
-                .map(|scored| (scored.row, scored.distance.to_bits()))
-                .collect()
-        })
-        .collect()
-}
-
 #[test]
 fn a_flushing_rayon_worker_refuses_its_share_and_a_clean_one_answers_the_single_thread_bits() {
     // The global pool flushes; nothing in this binary has touched rayon before, so this is
@@ -133,12 +84,12 @@ fn a_flushing_rayon_worker_refuses_its_share_and_a_clean_one_answers_the_single_
         .expect("a clean pool");
 
     // Everything is built on the clean pool, whose workers run the build's proposals.
-    let data = matrix(48, 70);
+    let data = seeded_matrix(48, 70, 0xF7A3_0000_5EED_0001, None);
     let metric = DistanceMetric::SquaredEuclidean;
     let (exact, fast) = clean.install(|| {
         (
             HnswIndex::build(data.clone(), &metric, params()).expect("builds on clean workers"),
-            HnswIndex::build_reassociated(data.clone(), &metric, params())
+            purrdf_hnsw::build::<Reassociated>(data.clone(), &metric, params())
                 .expect("builds on clean workers"),
         )
     });

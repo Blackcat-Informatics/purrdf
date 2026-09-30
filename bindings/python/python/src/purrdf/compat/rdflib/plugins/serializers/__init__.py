@@ -48,7 +48,7 @@ _HEXT = purrdf.RdfFormat.HEXTUPLES
 
 
 class _NativeStoreSerializer(Serializer):
-    """Serialize the whole store via a native oxigraph writer (deterministic)."""
+    """Serialize the whole store via the native store writer (deterministic)."""
 
     rdf_format: purrdf.RdfFormat = _NT
 

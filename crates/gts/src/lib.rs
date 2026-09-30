@@ -63,6 +63,7 @@
 #![doc(
     html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
+#![forbid(unsafe_code)]
 
 pub mod codec;
 pub mod compact;
@@ -74,6 +75,8 @@ pub mod event_stream;
 pub use visual_hashing as emojihash;
 pub mod examples;
 pub mod files;
+#[doc(hidden)]
+pub mod fixture;
 pub mod from_tar;
 pub mod mmr;
 pub mod model;
@@ -98,3 +101,13 @@ pub mod ulid;
 pub mod verify;
 pub mod wire;
 pub mod writer;
+
+/// A [`std::collections::HashMap`] keyed by the workspace's fixed-key
+/// [`purrdf_hash::fixed::FixedHasher`]: no per-process seed, so the same inserts
+/// iterate in the same order on every run of a build, and no runtime RNG, so it
+/// stays wasm-clean. Hash order is still not a specified order: anything that
+/// reaches emitted bytes sorts first.
+pub(crate) type FastMap<K, V> = std::collections::HashMap<K, V, purrdf_hash::fixed::FixedState>;
+
+/// A [`std::collections::HashSet`] hashed like [`FastMap`].
+pub(crate) type FastSet<T> = std::collections::HashSet<T, purrdf_hash::fixed::FixedState>;

@@ -37,8 +37,6 @@ purrdf-hash = { workspace = true }
 # the packaged manifest.
 purrdf-testkit = { workspace = true }
 purrdf-alloc-probe = { workspace = true }
-# Encode/decode throughput baselines. DEV-DEPENDENCY ONLY.
-criterion = { workspace = true }
 
 [[bench]]
 name = "gzip"

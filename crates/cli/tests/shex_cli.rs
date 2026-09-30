@@ -20,49 +20,9 @@
 //! * `--loss-ledger`/`--jsonld-options` are refused rather than silently ignored.
 
 use std::path::Path;
-use std::process::{Command, Output};
 
 mod support;
-
-/// A `Command` for the built `purrdf` binary.
-fn purrdf() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_purrdf"))
-}
-
-/// Run `purrdf` with `args`, returning the captured [`Output`].
-fn run(args: &[&str]) -> Output {
-    purrdf()
-        .args(args)
-        .output()
-        .expect("spawn the built purrdf binary")
-}
-
-/// Run `purrdf` with `args`, writing `stdin_bytes` to its standard input.
-fn pipe(args: &[&str], stdin_bytes: &str) -> Output {
-    support::run_with_stdin(purrdf().args(args), stdin_bytes.as_bytes())
-}
-
-/// stdout of an [`Output`] as a `String`.
-fn stdout(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
-/// stderr of an [`Output`] as a `String`.
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
-}
-
-/// The exit code of an [`Output`].
-fn code(out: &Output) -> i32 {
-    out.status.code().expect("the process exited normally")
-}
-
-/// Write `contents` to `dir/name`, returning the path as a `String`.
-fn write_file(dir: &Path, name: &str, contents: &str) -> String {
-    let p = dir.join(name);
-    std::fs::write(&p, contents).expect("write fixture file");
-    p.to_str().expect("temp path is valid UTF-8").to_owned()
-}
+use support::{code, pipe, run, stderr, stdout, write_file};
 
 /// A schema whose `ex:age` must be an `xsd:integer` when present.
 const SCHEMA: &str = concat!(
@@ -307,8 +267,8 @@ fn rdf12_triple_terms_are_ordinary_nodes() {
         stdout(&as_object)
     );
 
-    // The triple term itself selected as a FOCUS node, and written back in the `<< … >>` term
-    // syntax the shape-map grammar uses.
+    // The triple term itself selected as a FOCUS node, and written back in the RDF 1.2
+    // `<<( … )>>` triple-term syntax, which the shape-map grammar reads back.
     let as_focus = run(&[
         "shex",
         "--schema",
@@ -321,8 +281,8 @@ fn rdf12_triple_terms_are_ordinary_nodes() {
     let body = stdout(&as_focus);
     assert!(
         body.contains(
-            "<< <http://example.org/alice> <http://example.org/knows> \
-                       <http://example.org/bob> >>"
+            "<<( <http://example.org/alice> <http://example.org/knows> \
+                       <http://example.org/bob> )>>"
         ),
         "the triple term is the reported focus node:\n{body}"
     );
@@ -330,6 +290,53 @@ fn rdf12_triple_terms_are_ordinary_nodes() {
         stderr(&as_focus).contains("shex entries 1\n"),
         "{}",
         stderr(&as_focus)
+    );
+}
+
+/// A shape-map focus node spelled `<< s p o >>` is RDF 1.2 reifier syntax, not a triple
+/// term: the CLI refuses it (naming `<<( s p o )>>`), while the `<<( s p o )>>` neighbour
+/// validates end to end.
+#[test]
+fn reifier_syntax_is_refused_as_a_focus_node_but_a_triple_term_validates() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let schema = write_file(
+        dir.path(),
+        "claim.shex",
+        "PREFIX ex: <http://example.org/>\nex:Claim { ex:states NONLITERAL }\n",
+    );
+    let data = write_file(
+        dir.path(),
+        "claim.ttl",
+        "@prefix ex: <http://example.org/> .\nex:claim ex:states <<( ex:alice ex:knows ex:bob )>> .\n",
+    );
+    let triple = "<http://example.org/alice> <http://example.org/knows> <http://example.org/bob>";
+    let refused = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--data",
+        &data,
+        &format!("<< {triple} >>@<http://example.org/Claim>"),
+    ]);
+    assert_ne!(code(&refused), 0, "{}", stdout(&refused));
+    assert!(
+        stderr(&refused).contains("<<( s p o )>>"),
+        "{}",
+        stderr(&refused)
+    );
+    let accepted = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--data",
+        &data,
+        &format!("<<( {triple} )>>@<http://example.org/Claim>"),
+    ]);
+    assert_eq!(code(&accepted), 0, "{}", stderr(&accepted));
+    assert!(
+        stdout(&accepted).contains(&format!("\"node\":\"<<( {triple} )>>\"")),
+        "{}",
+        stdout(&accepted)
     );
 }
 
@@ -1042,7 +1049,7 @@ fn an_import_iri_half_must_be_absolute_and_is_blamed_on_the_argument() {
         "the refusal names the flag and quotes the pair: {why}"
     );
     assert!(
-        why.contains("iri-non-absolute-base") && why.contains("the ontology-IRI half `ages`"),
+        why.contains("iri-relative-no-base") && why.contains("the ontology-IRI half `ages`"),
         "…the shared code and the specific malformed part: {why}"
     );
     assert!(stdout(&relative).is_empty(), "no verdict is invented");
@@ -1592,7 +1599,7 @@ fn the_result_map_can_be_written_to_a_file() {
     assert!(stderr(&out).contains("shex conformant false\n"));
 
     let written = std::fs::read_to_string(&out_path).expect("result written");
-    let parsed: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
+    let parsed: purrdf_lex::json::Value = purrdf_lex::json::read(&written).expect("valid JSON");
     assert_eq!(parsed[0]["status"], "nonconformant", "{written}");
 }
 

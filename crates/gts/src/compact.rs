@@ -20,19 +20,18 @@
 
 use std::borrow::Cow;
 
-use ciborium::value::Value;
+use purrdf_lex::cbor::Value;
 
 use crate::dict;
 use crate::mmr;
 use crate::model::{Graph, Quad, ReifierRow, Suppression, Term, TermKind};
 use crate::reader::{read, read_file_segments};
 use crate::stream;
-use crate::wire::{blake3_256, digest_str, hex, map_get};
+use crate::wire::{blake3_256, digest_label, digest_str, map_get};
 use crate::writer::{self, FrameOptions, Writer, WriterOptions};
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_DATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_xsd::datatype::{XSD_DATE_TIME as XSD_DATETIME, XSD_INTEGER};
 
 /// The conventional in-band pack dictionary name for a single-dictionary plan.
 pub const DEFAULT_DICT_NAME: &str = "pack";
@@ -379,10 +378,8 @@ fn blob_decode_refused(digest: &str, err: impl std::fmt::Debug) -> CompactRefuse
 
 /// Look up a blob's decoded length in the insertion-ordered table.
 fn blob_decoded_len(g: &Graph, digest: &str) -> Result<Option<usize>, CompactRefusedError> {
-    g.blobs
-        .iter()
-        .find(|(d, _)| d == digest)
-        .map(|(_, entry)| {
+    purrdf_lex::assoc::get(&g.blobs, digest)
+        .map(|entry| {
             entry
                 .decoded_len()
                 .map_err(|err| blob_decode_refused(digest, err))
@@ -395,10 +392,8 @@ fn blob_bytes<'a>(
     g: &'a Graph,
     digest: &str,
 ) -> Result<Option<Cow<'a, [u8]>>, CompactRefusedError> {
-    g.blobs
-        .iter()
-        .find(|(d, _)| d == digest)
-        .map(|(_, entry)| {
+    purrdf_lex::assoc::get(&g.blobs, digest)
+        .map(|entry| {
             entry
                 .decoded_bytes()
                 .map_err(|err| blob_decode_refused(digest, err))
@@ -408,17 +403,14 @@ fn blob_bytes<'a>(
 
 /// A declared text field (`mt`/`rep`) from a blob's `pub` metadata (§12).
 fn blob_meta_text(g: &Graph, digest: &str, key: &str) -> Option<String> {
-    g.blob_meta
-        .iter()
-        .find(|(d, _)| d == digest)
-        .and_then(|(_, meta)| {
-            if let Value::Map(entries) = meta
-                && let Some(Value::Text(t)) = map_get(entries, key)
-            {
-                return Some(t.clone());
-            }
-            None
-        })
+    purrdf_lex::assoc::get(&g.blob_meta, digest).and_then(|meta| {
+        if let Value::Map(entries) = meta
+            && let Some(Value::Text(t)) = map_get(entries, key)
+        {
+            return Some(t.clone());
+        }
+        None
+    })
 }
 
 /// Base64url WITHOUT padding (RFC 4648 §5) — the `stream:cose` literal form.
@@ -752,7 +744,7 @@ fn streaming_index(
     let o = b.literal(timestamp, Some(t_dt));
     b.quad(c, t_timestamp, o);
     for head in &g.segment_heads {
-        let o = b.literal(&format!("blake3:{}", hex(head)), None);
+        let o = b.literal(&digest_label(head), None);
         b.quad(c, t_source_head, o);
     }
     if let Some(sealed) = sealed_digest {
@@ -775,7 +767,7 @@ fn streaming_index(
         let node = b.add(TermKind::Bnode, &format!("s{j}"));
         let cose_b64 = base64url_unpadded(cose);
         b.quad(node, t_type, t_detached_sig);
-        let o = b.literal(&format!("blake3:{}", hex(frame_id)), None);
+        let o = b.literal(&digest_label(frame_id), None);
         b.quad(node, t_source_frame, o);
         let o = b.literal(&cose_b64, None);
         b.quad(node, t_cose, o);
@@ -790,7 +782,7 @@ fn streaming_index(
             .map(|(frame_id, cose)| detached_signature_leaf(frame_id, cose))
             .collect();
         let root = mmr::root(&leaves);
-        let o = b.literal(&format!("blake3:{}", hex(&root)), None);
+        let o = b.literal(&digest_label(&root), None);
         b.quad(c, t_root, o);
     }
     Ok(b)
@@ -831,7 +823,7 @@ fn shifted_suppressions(g: &Graph, base: usize) -> Vec<Suppression> {
                         ""
                     };
                     if (kind == "term" || kind == "reifier") && key == "id" {
-                        if let Some(tid) = value_idx(v) {
+                        if let Some(tid) = crate::reader::as_idx(v) {
                             return (k.clone(), Value::from((tid + base) as u64));
                         }
                     } else if kind == "quad"
@@ -840,7 +832,7 @@ fn shifted_suppressions(g: &Graph, base: usize) -> Vec<Suppression> {
                     {
                         let remapped: Vec<Value> = ids
                             .iter()
-                            .map(|x| match value_idx(x) {
+                            .map(|x| match crate::reader::as_idx(x) {
                                 Some(tid) => Value::from((tid + base) as u64),
                                 None => x.clone(),
                             })
@@ -859,14 +851,6 @@ fn shifted_suppressions(g: &Graph, base: usize) -> Vec<Suppression> {
         });
     }
     out
-}
-
-fn value_idx(v: &Value) -> Option<usize> {
-    if let Value::Integer(i) = v {
-        usize::try_from(i128::from(*i)).ok()
-    } else {
-        None
-    }
 }
 
 /// Obtain every in-band pack dictionary the plan names: derived entries over the
@@ -974,7 +958,7 @@ pub struct CompactionParams<'a> {
     /// unrepresentable through this API rather than merely discouraged — the
     /// field is a plain tuple, not an `Option`, precisely so an unsigned pack
     /// cannot be constructed by a caller that forgets to supply a signer.
-    pub packaging_signer: (ed25519_dalek::SigningKey, String),
+    pub packaging_signer: (purrdf_ed25519::SigningKey, String),
 }
 
 /// Rewrite a GTS file into one streamable segment (§10.1).
@@ -1174,7 +1158,7 @@ pub fn compact_streamable(
 
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::SigningKey;
+    use purrdf_ed25519::SigningKey;
 
     use super::*;
     use crate::reader::read;
@@ -1331,7 +1315,7 @@ mod tests {
             &source,
             params(
                 DictPlan::single(DictStrategy::Trained),
-                Some("blake3:0123456789abcdef"),
+                Some("blake3:fedcba9876543210"),
             ),
         )
         .expect("compaction");
@@ -1390,7 +1374,7 @@ mod tests {
 
     fn target_id(t: &Value) -> Option<usize> {
         let Value::Map(entries) = t else { return None };
-        value_idx(map_get(entries, "id")?)
+        crate::reader::as_idx(map_get(entries, "id")?)
     }
 
     fn target_q(t: &Value) -> Option<Vec<Value>> {
@@ -1533,7 +1517,7 @@ mod tests {
         let q = target_q(t).expect("quad target carries a \"q\" array");
         let ids: Vec<usize> = q
             .iter()
-            .map(|v| value_idx(v).expect("q element is an id"))
+            .map(|v| crate::reader::as_idx(v).expect("q element is an id"))
             .collect();
         assert_eq!(
             ids,

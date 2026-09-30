@@ -366,6 +366,35 @@ pub enum EvalError {
     },
 }
 
+purrdf_lex::constructors! {
+    impl EvalError {
+        /// Construct an [`EvalError::Internal`] from any displayable message.
+        pub fn internal(what) -> Self::Internal;
+
+        /// Construct an [`EvalError::Remote`] from any displayable message.
+        pub fn remote(what) -> Self::Remote;
+
+        /// Construct an [`EvalError::Data`] from any displayable message.
+        pub fn data(what) -> Self::Data;
+
+        /// Construct an [`EvalError::Function`] from any displayable message.
+        pub fn function(what) -> Self::Function;
+
+        /// Construct an [`EvalError::Config`] from any displayable message.
+        pub fn config(what) -> Self::Config;
+
+        /// Construct an [`EvalError::CompositeBound`] from a `purrdf-cdt` bound
+        /// diagnostic.
+        pub(crate) fn composite_bound(what) -> Self::CompositeBound;
+
+        /// Construct an [`EvalError::ExistsScopeCollision`] naming the colliding
+        /// variable (no leading `?`) and which construct introduced it (`"BIND
+        /// target"` or `"VALUES variable"` — pass
+        /// `crate::governor::soundness::RowCollisionIntro::as_str`'s result).
+        pub(crate) fn exists_scope_collision(variable, intro: &'static str) -> Self::ExistsScopeCollision { .. };
+    }
+}
+
 impl EvalError {
     /// Construct an unclassified [`EvalError::Unsupported`] from any displayable
     /// construct name — a genuine gap, not one of the narrow classified residue.
@@ -504,48 +533,6 @@ impl EvalError {
         Self::RelationIncomplete {
             iri: iri.into(),
             reason: reason.into(),
-        }
-    }
-
-    /// Construct an [`EvalError::Internal`] from any displayable message.
-    pub fn internal(what: impl Into<String>) -> Self {
-        Self::Internal(what.into())
-    }
-
-    /// Construct an [`EvalError::Remote`] from any displayable message.
-    pub fn remote(what: impl Into<String>) -> Self {
-        Self::Remote(what.into())
-    }
-
-    /// Construct an [`EvalError::Data`] from any displayable message.
-    pub fn data(what: impl Into<String>) -> Self {
-        Self::Data(what.into())
-    }
-
-    /// Construct an [`EvalError::Function`] from any displayable message.
-    pub fn function(what: impl Into<String>) -> Self {
-        Self::Function(what.into())
-    }
-
-    /// Construct an [`EvalError::Config`] from any displayable message.
-    pub fn config(what: impl Into<String>) -> Self {
-        Self::Config(what.into())
-    }
-
-    /// Construct an [`EvalError::CompositeBound`] from a `purrdf-cdt` bound
-    /// diagnostic.
-    pub(crate) fn composite_bound(what: impl Into<String>) -> Self {
-        Self::CompositeBound(what.into())
-    }
-
-    /// Construct an [`EvalError::ExistsScopeCollision`] naming the colliding
-    /// variable (no leading `?`) and which construct introduced it (`"BIND
-    /// target"` or `"VALUES variable"` — pass
-    /// `crate::governor::soundness::RowCollisionIntro::as_str`'s result).
-    pub(crate) fn exists_scope_collision(variable: impl Into<String>, intro: &'static str) -> Self {
-        Self::ExistsScopeCollision {
-            variable: variable.into(),
-            intro,
         }
     }
 }

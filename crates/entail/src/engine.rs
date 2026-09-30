@@ -85,15 +85,12 @@
 //! [`surface_of`] order — a total order over term VALUES, not over interned ids — so the
 //! emission sequence is a function of the dataset's content alone.
 
-use purrdf_core::TermBox;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use purrdf_core::{
-    DatasetView, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue, fold_term,
-};
+use purrdf_core::{DatasetView, RdfDataset, RdfDatasetBuilder, TermId, TermValue};
 use purrdf_datalog::cache::PlanCache;
 use purrdf_datalog::chase::{ChaseError, chase_with};
 use purrdf_datalog::clause::{ClauseTerm, DlClause, HeadForm};
@@ -110,8 +107,9 @@ use crate::lists::{CLASH_RELATION, ListIndex, is_internal};
 use crate::report::{InconsistencyWitness, InconsistentRun, ReasoningReport, WitnessTriple};
 use crate::report::{RunStats, TerminationCertificate};
 use crate::surrogates::SurrogateIndex;
-use crate::vocab::{XSD_NONNEGATIVEINTEGER, XSD_STRING};
+use crate::vocab::XSD_NONNEGATIVEINTEGER;
 use crate::{EntailError, Regime};
+use purrdf_lex::term_syntax::{write_iri, write_literal};
 
 /// Every LITERAL constant the declared calculus names, as `(lexical form, datatype IRI)`.
 ///
@@ -133,67 +131,10 @@ pub(crate) fn literal_surface(lexical: &str, datatype: &str) -> String {
     surface_of(&TermValue::typed_literal(lexical, datatype))
 }
 
-/// Resolve a [`DatasetView`] id to its dataset-INDEPENDENT [`TermValue`], through a
-/// literal's datatype and a triple term's `(s, p, o)` components.
-///
-/// This is the view-generic replacement for `RdfDataset::term_value`: the seeding layer
-/// reasons over id-agnostic [`TermValue`]s, so it reads a view's terms through this one
-/// bridge whatever backend minted the id. Byte-identical to `RdfDataset::term_value` for the
-/// production view — the blank label is scope-qualified by the value model, the literal
-/// datatype is expanded to its IRI, and triple terms are carried by value (C0.1/C0.2/C0.3).
-///
-/// A triple term is assembled bottom-up over [`fold_term`]'s work list: its subject,
-/// predicate and object are resolved in that order, each fully before the next.
-pub(crate) fn resolve_value<D: DatasetView>(ds: &D, id: D::Id) -> TermValue {
-    let value = fold_term(
-        ds,
-        id,
-        |_, term| {
-            Ok::<_, Infallible>(match term {
-                TermRef::Iri(iri) => TermValue::iri(iri),
-                TermRef::Blank { label, scope } => TermValue::Blank {
-                    label: label.to_owned(),
-                    scope,
-                },
-                TermRef::Literal {
-                    lexical,
-                    datatype,
-                    language,
-                    direction,
-                } => {
-                    let datatype = match ds.resolve(datatype) {
-                        TermRef::Iri(dt) => dt.to_owned(),
-                        other => unreachable!(
-                            "a literal's datatype always resolves to an IRI, got {other:?}"
-                        ),
-                    };
-                    TermValue::Literal {
-                        lexical_form: lexical.to_owned(),
-                        datatype,
-                        language: language.map(str::to_owned),
-                        direction,
-                    }
-                }
-                TermRef::Triple { .. } => unreachable!("a triple term is folded from its parts"),
-            })
-        },
-        |_, s, p, o| {
-            Ok(TermValue::Triple {
-                s: TermBox::new(s),
-                p: TermBox::new(p),
-                o: TermBox::new(o),
-            })
-        },
-    );
-    match value {
-        Ok(value) => value,
-    }
-}
-
 /// A faithful copy of `ds` (the identity closure for `Simple`).
 pub(crate) fn copy_of<D: DatasetView>(ds: &D) -> Result<Arc<RdfDataset>, EntailError> {
     let mut b = RdfDatasetBuilder::new();
-    copy_into(&mut b, ds);
+    copy_into(&mut b, ds)?;
     b.freeze().map_err(|e| EntailError::Build(e.to_string()))
 }
 
@@ -220,37 +161,50 @@ pub(crate) fn copy_of<D: DatasetView>(ds: &D) -> Result<Arc<RdfDataset>, EntailE
 /// The reifier and annotation SIDE TABLES ride along, because a closure that silently
 /// dropped them would delete every reifier in a caller's data the moment they asked for
 /// entailment, and no assertion about the quads would notice.
-pub(crate) fn copy_into<D: DatasetView>(b: &mut RdfDatasetBuilder, ds: &D) {
+pub(crate) fn copy_into<D: DatasetView>(
+    b: &mut RdfDatasetBuilder,
+    ds: &D,
+) -> Result<(), EntailError> {
     for quad in ds.quads() {
-        let s = intern_into(b, &resolve_value(ds, quad.s));
-        let p = intern_into(b, &resolve_value(ds, quad.p));
-        let o = intern_into(b, &resolve_value(ds, quad.o));
-        let g = quad.g.map(|g| intern_into(b, &resolve_value(ds, g)));
+        let s = intern_into(b, &ds.term_value(quad.s)?);
+        let p = intern_into(b, &ds.term_value(quad.p)?);
+        let o = intern_into(b, &ds.term_value(quad.o)?);
+        let g = quad
+            .g
+            .map(|g| ds.term_value(g).map(|g| intern_into(b, &g)))
+            .transpose()?;
         b.push_quad(s, p, o, g);
     }
     // Each reifier row projects as `(s = reifier, p = rdf:reifies, o = triple-term, g)`, so
     // the reifier is the quad's subject and the reified triple term its object.
     for quad in ds.reifier_quads() {
-        let reifier = intern_into(b, &resolve_value(ds, quad.s));
-        let triple = intern_into(b, &resolve_value(ds, quad.o));
-        let graph = quad.g.map(|g| intern_into(b, &resolve_value(ds, g)));
+        let reifier = intern_into(b, &ds.term_value(quad.s)?);
+        let triple = intern_into(b, &ds.term_value(quad.o)?);
+        let graph = quad
+            .g
+            .map(|g| ds.term_value(g).map(|g| intern_into(b, &g)))
+            .transpose()?;
         b.push_reifier_in_graph(reifier, triple, graph);
     }
     // Each annotation row projects as `(s = reifier, p = predicate, o = object, g)`.
     for quad in ds.annotation_quads() {
-        let reifier = intern_into(b, &resolve_value(ds, quad.s));
-        let predicate = intern_into(b, &resolve_value(ds, quad.p));
-        let object = intern_into(b, &resolve_value(ds, quad.o));
-        let graph = quad.g.map(|g| intern_into(b, &resolve_value(ds, g)));
+        let reifier = intern_into(b, &ds.term_value(quad.s)?);
+        let predicate = intern_into(b, &ds.term_value(quad.p)?);
+        let object = intern_into(b, &ds.term_value(quad.o)?);
+        let graph = quad
+            .g
+            .map(|g| ds.term_value(g).map(|g| intern_into(b, &g)))
+            .transpose()?;
         b.push_annotation_in_graph(reifier, predicate, object, graph);
     }
     // A named graph a dataset DECLARES but puts no quad in is part of its content, and a
     // closure that dropped the declaration would answer a different question about which
     // graphs exist.
     for graph in ds.named_graphs() {
-        let graph = intern_into(b, &resolve_value(ds, graph));
+        let graph = intern_into(b, &ds.term_value(graph)?);
         b.declare_named_graph(graph);
     }
+    Ok(())
 }
 
 /// Every term id `ds` holds, in EVERY position [`copy_into`] writes.
@@ -356,7 +310,7 @@ pub(crate) fn close<D: DatasetView>(
     let mut named: BTreeMap<String, TermValue> = BTreeMap::new();
     for quad in ds.quads() {
         if let Some(graph) = quad.g {
-            let value = resolve_value(ds, graph);
+            let value = ds.term_value(graph)?;
             named.entry(surface_of(&value)).or_insert(value);
         }
     }
@@ -389,7 +343,7 @@ pub(crate) fn close<D: DatasetView>(
     }
 
     let mut b = RdfDatasetBuilder::new();
-    copy_into(&mut b, ds);
+    copy_into(&mut b, ds)?;
     // What the DEFAULT graph draws on its own. A named-graph run re-derives every one of
     // these — the default graph is in its seed — and restating them inside the named graph
     // would put a conclusion in a graph that did not produce it.
@@ -434,7 +388,7 @@ pub(crate) fn close<D: DatasetView>(
 /// ended the run, which is a fact about the caller rather than about the program or the
 /// data, so it keeps its own variant all the way out. Every other refusal is what
 /// [`EntailError::Evaluate`] has always meant.
-fn evaluate_error(error: EvalError) -> EntailError {
+pub(crate) fn evaluate_error(error: EvalError) -> EntailError {
     match error {
         EvalError::Stopped { .. } => EntailError::Stopped,
         other => EntailError::Evaluate(other),
@@ -717,7 +671,7 @@ pub(crate) fn seed<D: DatasetView>(
         // a cross-graph join impossible rather than merely unobserved.
         let in_seed = match (quad.g, graph) {
             (None, _) => true,
-            (Some(g), Some(target)) => resolve_value(ds, g) == *target,
+            (Some(g), Some(target)) => ds.term_value(g)? == *target,
             (Some(_), None) => false,
         };
         if !in_seed {
@@ -727,9 +681,9 @@ pub(crate) fn seed<D: DatasetView>(
         // datatype/surrogate observers below read the very same value. Resolving again
         // per observer would re-walk the view and re-allocate the term for every quad on
         // the seeding hot path.
-        let s_val = resolve_value(ds, quad.s);
-        let p_val = resolve_value(ds, quad.p);
-        let o_val = resolve_value(ds, quad.o);
+        let s_val = ds.term_value(quad.s)?;
+        let p_val = ds.term_value(quad.p)?;
+        let o_val = ds.term_value(quad.o)?;
         let subject = terms.record(&s_val);
         let predicate = terms.record(&p_val);
         let object = terms.record(&o_val);
@@ -1280,7 +1234,7 @@ fn admits_subject(value: &TermValue) -> bool {
 /// `p rdfs:subPropertyOf "cat"` licenses a conclusion the IR cannot hold, in exactly the
 /// way a literal subject does.
 fn admits_predicate(value: &TermValue) -> bool {
-    matches!(value, TermValue::Iri(_))
+    value.is_iri()
 }
 
 /// The surface → value dictionary that lets an answer be read back as RDF 1.2 terms.
@@ -1373,7 +1327,7 @@ impl Terms {
 ///
 /// * the four kinds are told apart by their first byte — `<` for an IRI, `_` for a blank
 ///   node, `"` for a literal, and `<<(` for a triple term, whose second byte is a `<` no
-///   IRI surface can carry because [`write_iri_escaped`] escapes `<` and `>`;
+///   IRI surface can carry because [`write_iri`] escapes `<` and `>`;
 /// * an IRI's surface is its escaped text bracketed once, and the escape is injective;
 /// * a blank node's scope is decimal digits terminated by the `.` that no digit can be,
 ///   and the label is the verbatim remainder;
@@ -1412,16 +1366,12 @@ fn write_surface(value: &TermValue, out: &mut String) {
 
 /// Append the surface of a term that is not a triple term to `out`.
 ///
-/// Out of line, so the IRI and literal escape calls are one compiled function
-/// rather than a fragment of [`write_surface`]'s work list.
+/// An IRI and a literal are [`purrdf_lex::term_syntax`]'s canonical spelling, the
+/// bytes canonical N-Quads writes; only a blank node differs (see [`surface_of`]).
 #[inline(never)]
 fn write_leaf_surface(value: &TermValue, out: &mut String) {
     match value {
-        TermValue::Iri(iri) => {
-            out.push('<');
-            write_iri_escaped(iri, out);
-            out.push('>');
-        }
+        TermValue::Iri(iri) => write_iri(iri, out),
         TermValue::Blank { label, scope } => {
             // Internal store-surface identity key (scope-first form; injective
             // because the digit-only scope ends at the first dot) plus the
@@ -1434,149 +1384,14 @@ fn write_leaf_surface(value: &TermValue, out: &mut String) {
             datatype,
             language,
             direction,
-        } => {
-            out.push('"');
-            write_literal_escaped(lexical_form, out);
-            out.push('"');
-            if let Some(language) = language {
-                // Language and direction determine the datatype by C0.1 — the
-                // builder re-derives it — so spelling it out
-                // would add bytes that carry no identity.
-                out.push('@');
-                out.push_str(language);
-                if let Some(direction) = direction {
-                    out.push_str("--");
-                    out.push_str(direction.as_str());
-                }
-            } else if datatype != XSD_STRING {
-                out.push_str("^^<");
-                write_iri_escaped(datatype, out);
-                out.push('>');
-            }
-        }
+        } => write_literal(
+            lexical_form,
+            datatype,
+            language.as_deref(),
+            direction.map(purrdf_core::RdfTextDirection::as_str),
+            out,
+        ),
         TermValue::Triple { .. } => unreachable!("a triple term is written from its parts"),
-    }
-}
-
-/// Escape an IRI for a `<…>` surface, matching canonical N-Quads.
-///
-/// Every character the IRIREF grammar forbids becomes a `\uXXXX` escape, so no IRI's
-/// surface can carry a bare `<` or `>` — which is what keeps a bracketed IRI and a
-/// `<<( … )>>` triple term apart. A spec `rdf:`/`rdfs:`/`owl:` IRI contains none of them,
-/// so a clause constant's surface is its plain bracketed text.
-///
-/// Both the membership question and the emission are
-/// [`purrdf_core::iri_escape::push_escaped`], the one place this workspace answers
-/// them and the writer canonical N-Quads uses. This function once spelled the set out
-/// for itself as `is_control() || ' '` plus the nine delimiters, and then its own
-/// per-`char` emission loop — the same law, reached independently. Agreeing copies are
-/// not confirmations; they are chances to disagree later.
-fn write_iri_escaped(iri: &str, out: &mut String) {
-    purrdf_core::iri_escape::push_escaped(iri, out);
-}
-
-/// Escape a literal's lexical form for a `"…"` surface, matching canonical N-Quads.
-///
-/// The canonical N-Quads literal law is
-/// [`purrdf_core::ir::canon::write_literal_escaped`], and this surface is defined
-/// to match it, so it delegates rather than transcribing the `ECHAR` table again.
-fn write_literal_escaped(value: &str, out: &mut String) {
-    purrdf_core::ir::canon::write_literal_escaped(value, out);
-}
-
-#[cfg(test)]
-mod escape_tests {
-    use super::{write_iri_escaped, write_literal_escaped};
-    use std::fmt::Write as _;
-
-    /// The per-`char` writers this module carried before it delegated, kept
-    /// verbatim as the oracle: every surface key is whatever these produced.
-    fn reference_iri(iri: &str, out: &mut String) {
-        for ch in iri.chars() {
-            if purrdf_core::iri_escape::is_iriref_escape_required(ch) {
-                reference_u_escape(ch, out);
-            } else {
-                out.push(ch);
-            }
-        }
-    }
-
-    fn reference_literal(value: &str, out: &mut String) {
-        for ch in value.chars() {
-            match ch {
-                '\\' => out.push_str("\\\\"),
-                '"' => out.push_str("\\\""),
-                '\n' => out.push_str("\\n"),
-                '\r' => out.push_str("\\r"),
-                '\t' => out.push_str("\\t"),
-                '\u{08}' => out.push_str("\\b"),
-                '\u{0c}' => out.push_str("\\f"),
-                c if (c as u32) < 0x20 || c as u32 == 0x7f => reference_u_escape(c, out),
-                c => out.push(c),
-            }
-        }
-    }
-
-    fn reference_u_escape(ch: char, out: &mut String) {
-        let cp = ch as u32;
-        if cp <= 0xFFFF {
-            let _ = write!(out, "\\u{cp:04X}");
-        } else {
-            let _ = write!(out, "\\U{cp:08X}");
-        }
-    }
-
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        const fn next(&mut self) -> u64 {
-            purrdf_testkit::rng::splitmix64_next(&mut self.0)
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            usize::try_from(self.next() % n as u64).expect("below n")
-        }
-    }
-
-    #[test]
-    fn delegated_writers_agree_with_the_per_char_writers() {
-        // Every ASCII scalar (every special byte), the whole block led by 0xC2
-        // (the C1 controls), and non-ASCII in every UTF-8 width.
-        let mut alphabet: Vec<char> = (0_u8..0x80).map(char::from).collect();
-        alphabet.extend(('\u{80}'..='\u{BF}').chain([
-            '\u{E9}',
-            '\u{2028}',
-            '\u{FFFD}',
-            '\u{FFFF}',
-            '\u{1F408}',
-            '\u{10FFFF}',
-        ]));
-        let mut rng = SplitMix(0x00E7_7A11_E5CA_9E00);
-        let mut changed = 0_usize;
-        for len in (0..=70).chain([127, 128, 129, 1000]) {
-            for _ in 0..40 {
-                let value: String = (0..len)
-                    .map(|_| {
-                        if rng.below(5) == 0 {
-                            alphabet[rng.below(alphabet.len())]
-                        } else {
-                            'q'
-                        }
-                    })
-                    .collect();
-                let (mut got, mut expected) = (String::new(), String::new());
-                write_iri_escaped(&value, &mut got);
-                reference_iri(&value, &mut expected);
-                assert_eq!(got, expected, "iri {value:?}");
-                changed += usize::from(got != value);
-                let (mut got, mut expected) = (String::new(), String::new());
-                write_literal_escaped(&value, &mut got);
-                reference_literal(&value, &mut expected);
-                assert_eq!(got, expected, "literal {value:?}");
-            }
-        }
-        assert!(changed > 0, "escapes were exercised");
     }
 }
 
@@ -1980,7 +1795,7 @@ mod tests {
         let error = close(&ds, Regime::OwlRl, &EvalOptions::default(), None)
             .expect_err("a malformed collection is refused");
         let rendered = error.to_string();
-        assert!(rendered.contains("carries no rdf:rest"), "{rendered}");
+        assert!(rendered.contains("has no rdf:rest"), "{rendered}");
         assert!(rendered.contains(EX_L0), "{rendered}");
         // The RDFS lane says nothing about `owl:intersectionOf`, so the same graph is
         // ordinary data there and closes without complaint.
@@ -1999,7 +1814,10 @@ mod tests {
         ]);
         let error = close(&ds, Regime::OwlRl, &EvalOptions::default(), None)
             .expect_err("a cycle is refused");
-        assert!(error.to_string().contains("cyclic"), "{error}");
+        assert!(
+            error.to_string().contains("rdf:rest chain returns"),
+            "{error}"
+        );
     }
 
     /// A BLANK NODE IN THE INPUT IS ONE BLANK NODE IN THE CLOSURE, in every position —
@@ -2211,7 +2029,7 @@ mod term_walk_tests {
     use purrdf_core::backend::TermFactory as _;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermBox, TermId, TermRef, TermValue};
 
-    use super::{resolve_value, surface_of, write_iri_escaped};
+    use super::surface_of;
 
     fn reference_value(ds: &RdfDataset, id: TermId) -> TermValue {
         match ds.resolve(id) {
@@ -2233,9 +2051,8 @@ mod term_walk_tests {
                 reference_surface(o)
             ),
             TermValue::Iri(iri) => {
-                let mut out = String::from("<");
-                write_iri_escaped(iri, &mut out);
-                out.push('>');
+                let mut out = String::new();
+                purrdf_lex::term_syntax::write_iri(iri, &mut out);
                 out
             }
             leaf => surface_of(leaf),
@@ -2250,10 +2067,11 @@ mod term_walk_tests {
         for seed in 0..300_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = purrdf_core::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::WellFormed,
+                purrdf_core::term_fixture::TermShape::WellFormed,
             );
             nested += usize::from(budget < 7);
             assert_eq!(surface_of(&value), reference_surface(&value), "seed {seed}");
@@ -2264,7 +2082,7 @@ mod term_walk_tests {
             let ds = builder.freeze().expect("a generated term freezes");
             let object = ds.quads().next().expect("one quad").o;
             assert_eq!(
-                resolve_value(&*ds, object),
+                purrdf_core::DatasetView::term_value(&*ds, object).unwrap(),
                 reference_value(&ds, object),
                 "seed {seed}"
             );
@@ -2277,19 +2095,14 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_spelled_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = crate::test_terms::triple_chain(LEVELS);
-                let level =
-                    "<<( <http://example.org/s> <http://example.org/p> ".len() + " )>>".len();
-                assert_eq!(
-                    surface_of(&value).len(),
-                    LEVELS * level + "<http://example.org/o>".len()
-                );
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the surface did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            let level = "<<( <http://example.org/s> <http://example.org/p> ".len() + " )>>".len();
+            assert_eq!(
+                surface_of(&value).len(),
+                LEVELS * level + "<http://example.org/o>".len()
+            );
+        })
+        .expect("the thread starts");
     }
 }

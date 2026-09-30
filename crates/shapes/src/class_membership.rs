@@ -19,12 +19,13 @@
 //! exactly the data graph.
 
 use crate::data_view::{ShaclDatasetView, ShaclRead};
+use std::hash::Hasher as _;
 use std::sync::{Arc, OnceLock};
 
 use ::purrdf::ir::QuadProbePlan;
 use ::purrdf::{
-    DatasetView, FastMap, FastSet, GraphMatch, QuadIds, QuadRef, RdfDataset, RdfStoreCapabilities,
-    SmallVec, TermId, TermRef, TermValue,
+    DatasetView, FastMap, FastSet, GraphMatch, QuadIds, RdfDataset, RdfStoreCapabilities, SmallVec,
+    TermId, TermRef, TermValue,
 };
 
 use crate::model::{rdf, rdfs};
@@ -483,37 +484,62 @@ pub(crate) fn thread_index_builds() -> usize {
     THREAD_INDEX_BUILDS.with(std::cell::Cell::get)
 }
 
-/// A cursor into one canonically sorted subject slice.
+/// A cursor into one canonically sorted `TermId` slice.
 #[derive(Debug, Clone, Copy)]
-struct SubjectCursor<'a> {
+struct SortedCursor<'a> {
     values: &'a [TermId],
     position: usize,
 }
 
-/// Merge the asserted subjects of every exact type below one superclass.
-#[derive(Debug)]
-struct MergedSubjects<'a> {
-    cursors: SmallVec<[SubjectCursor<'a>; 4]>,
-    directly_asserted: &'a [TermId],
+impl<'a> SortedCursor<'a> {
+    const fn new(values: &'a [TermId]) -> Self {
+        Self {
+            values,
+            position: 0,
+        }
+    }
 }
 
-impl<'a> MergedSubjects<'a> {
+/// The ascending, duplicate-free union of several sorted `TermId` slices, minus
+/// the sorted `directly_asserted` set.
+///
+/// The one k-way merge behind both derived views: the subjects entailed for a
+/// class (the asserted subjects of every exact type below it) and the types
+/// entailed for a subject (the proper ancestors of every type asserted for it).
+/// Both are "union the sorted slices, drop what is asserted directly", so the
+/// merge exists once and each view names only where its slices and its
+/// exclusions come from.
+#[derive(Debug)]
+struct MergedExcept<'a, D> {
+    cursors: SmallVec<[SortedCursor<'a>; 4]>,
+    directly_asserted: D,
+}
+
+/// Merge the asserted subjects of every exact type below one superclass.
+type MergedSubjects<'a> = MergedExcept<'a, &'a [TermId]>;
+
+/// Merge the proper ancestors of every exact type asserted for one subject.
+type MergedTypes<'a> = MergedExcept<'a, SmallVec<[TermId; 4]>>;
+
+impl<D: Default> MergedExcept<'_, D> {
     fn empty() -> Self {
         Self {
             cursors: SmallVec::new(),
-            directly_asserted: &[],
+            directly_asserted: D::default(),
         }
     }
+}
 
+impl<'a> MergedSubjects<'a> {
     fn new(index: &'a ClassMembershipIndex, class: TermId) -> Self {
-        let mut cursors = SmallVec::new();
-        for &source in index.source_class_indexes(class) {
-            let source = usize::try_from(source).expect("u32 class index fits usize");
-            cursors.push(SubjectCursor {
-                values: index.subjects(&index.typed_classes[source]),
-                position: 0,
-            });
-        }
+        let cursors = index
+            .source_class_indexes(class)
+            .iter()
+            .map(|&source| {
+                let source = usize::try_from(source).expect("u32 class index fits usize");
+                SortedCursor::new(index.subjects(&index.typed_classes[source]))
+            })
+            .collect();
         Self {
             cursors,
             directly_asserted: index.direct_subjects(class),
@@ -521,57 +547,11 @@ impl<'a> MergedSubjects<'a> {
     }
 }
 
-impl Iterator for MergedSubjects<'_> {
-    type Item = TermId;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let next = self
-                .cursors
-                .iter()
-                .filter_map(|cursor| cursor.values.get(cursor.position).copied())
-                .min()?;
-            for cursor in &mut self.cursors {
-                while cursor.values.get(cursor.position) == Some(&next) {
-                    cursor.position += 1;
-                }
-            }
-            if self.directly_asserted.binary_search(&next).is_err() {
-                return Some(next);
-            }
-        }
-    }
-}
-
-/// A cursor into one exact type's proper-ancestor slice.
-#[derive(Debug, Clone, Copy)]
-struct TypeCursor<'a> {
-    values: &'a [TermId],
-    position: usize,
-}
-
-/// Merge the proper ancestors of every exact type asserted for one subject.
-#[derive(Debug)]
-struct MergedTypes<'a> {
-    cursors: SmallVec<[TypeCursor<'a>; 4]>,
-    directly_asserted: SmallVec<[TermId; 4]>,
-}
-
 impl<'a> MergedTypes<'a> {
-    fn empty() -> Self {
-        Self {
-            cursors: SmallVec::new(),
-            directly_asserted: SmallVec::new(),
-        }
-    }
-
     fn new(index: &'a ClassMembershipIndex, directly_asserted: SmallVec<[TermId; 4]>) -> Self {
         let cursors = directly_asserted
             .iter()
-            .map(|&class| TypeCursor {
-                values: index.proper_ancestors(class),
-                position: 0,
-            })
+            .map(|&class| SortedCursor::new(index.proper_ancestors(class)))
             .collect();
         Self {
             cursors,
@@ -580,7 +560,7 @@ impl<'a> MergedTypes<'a> {
     }
 }
 
-impl Iterator for MergedTypes<'_> {
+impl<D: AsRef<[TermId]>> Iterator for MergedExcept<'_, D> {
     type Item = TermId;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -595,7 +575,12 @@ impl Iterator for MergedTypes<'_> {
                     cursor.position += 1;
                 }
             }
-            if self.directly_asserted.binary_search(&next).is_err() {
+            if self
+                .directly_asserted
+                .as_ref()
+                .binary_search(&next)
+                .is_err()
+            {
                 return Some(next);
             }
         }
@@ -717,15 +702,6 @@ impl DatasetView for ClassMembershipView {
         self.base
             .quads()
             .chain(self.derived_for_pattern(None, None, None, GraphMatch::Any))
-    }
-
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
-        self.quads().map(|quad| QuadRef {
-            s: self.base.resolve(quad.s),
-            p: self.base.resolve(quad.p),
-            o: self.base.resolve(quad.o),
-            g: quad.g.map(|graph| self.base.resolve(graph)),
-        })
     }
 
     #[inline]
@@ -957,15 +933,18 @@ fn build_index(
     let mut typed_classes = Vec::new();
     let mut position = 0usize;
     let mut virtual_upper_bound = 0usize;
-    let mut fingerprint = 0xcbf2_9ce4_8422_2325u64;
+    // The index's contribution to `stats_fingerprint`, a cache discriminator: every
+    // class, subject and ancestor id in build order, through the fixed-key table
+    // hasher (one fold per id, never persisted).
+    let mut fingerprint = purrdf_hash::fixed::FixedHasher::default();
 
     while position < rows.len() {
         let class = rows[position].class;
-        fingerprint = fingerprint_mix(fingerprint, class.index());
+        fingerprint.write_usize(class.index());
         let subject_start = subjects.len();
         while position < rows.len() && rows[position].class == class {
             subjects.push(rows[position].subject);
-            fingerprint = fingerprint_mix(fingerprint, rows[position].subject.index());
+            fingerprint.write_usize(rows[position].subject.index());
             position += 1;
         }
         let subject_end = subjects.len();
@@ -976,7 +955,7 @@ fn build_index(
         }
         let ancestor_end = ancestors.len();
         for &ancestor in &ancestors[ancestor_start..ancestor_end] {
-            fingerprint = fingerprint_mix(fingerprint, ancestor.index());
+            fingerprint.write_usize(ancestor.index());
         }
         virtual_upper_bound = virtual_upper_bound.saturating_add(
             (subject_end - subject_start).saturating_mul(ancestor_end - ancestor_start),
@@ -1028,15 +1007,8 @@ fn build_index(
         superclasses: superclasses.into_boxed_slice(),
         source_classes: source_classes.into_boxed_slice(),
         virtual_upper_bound,
-        fingerprint,
+        fingerprint: fingerprint.finish(),
     })
-}
-
-#[inline]
-fn fingerprint_mix(state: u64, value: usize) -> u64 {
-    state
-        .wrapping_mul(0x0000_0100_0000_01b3)
-        .wrapping_add(value as u64)
 }
 
 #[cfg(test)]

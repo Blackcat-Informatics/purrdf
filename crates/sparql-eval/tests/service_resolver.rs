@@ -11,6 +11,10 @@
 //! neighbouring case that drives the same counter above zero, so the zero cannot be
 //! satisfied vacuously.
 
+mod support;
+
+use support::row_count;
+
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -172,14 +176,6 @@ fn names(result: &SparqlResult) -> Vec<Option<String>> {
     }
 }
 
-/// The solution rows of `result`.
-fn rows(result: &SparqlResult) -> usize {
-    match result {
-        SparqlResult::Solutions { rows, .. } => rows.len(),
-        other => panic!("expected solutions, got {other:?}"),
-    }
-}
-
 /// A `SELECT` whose `SERVICE` clause targets `endpoint`.
 fn service_query(endpoint: &str, silent: bool) -> String {
     let silent = if silent { "SILENT " } else { "" };
@@ -210,7 +206,7 @@ fn an_in_process_service_is_answered_without_the_network_transport_being_touched
     let result =
         run(&router, &service_query(LOCAL_EP, false)).expect("the in-process service answers");
     assert_eq!(
-        rows(&result),
+        row_count(&result),
         1,
         "the answer came from the in-memory dataset"
     );
@@ -225,7 +221,7 @@ fn an_in_process_service_is_answered_without_the_network_transport_being_touched
     // counter moves. Without this, `posts() == 0` would also pass for a router that
     // never resolved anything.
     let result = run(&router, &service_query(NET_EP, false)).expect("the fallback answers");
-    assert_eq!(rows(&result), 1);
+    assert_eq!(row_count(&result), 1);
     assert_eq!(
         spy.posts(),
         1,
@@ -237,7 +233,7 @@ fn an_in_process_service_is_answered_without_the_network_transport_being_touched
 fn withholding_the_network_capability_prevents_the_exchange_rather_than_discarding_it() {
     let spy = SpyTransport::default();
     let denied = HttpRemoteQuerySource::new(&spy).with_catalog(
-        ServiceCatalog::new().with_service(NET_EP, profile(&[ServiceCapability::Query])),
+        ServiceCatalog::default().with_service(NET_EP, profile(&[ServiceCapability::Query])),
     );
     let err = run(&denied, &service_query(NET_EP, false))
         .expect_err("a service denied the network capability cannot be resolved");
@@ -255,13 +251,13 @@ fn withholding_the_network_capability_prevents_the_exchange_rather_than_discardi
     // The neighbouring VALID case: the same catalog with `Network` granted resolves, and
     // the transport is reached exactly once.
     let allowed =
-        HttpRemoteQuerySource::new(&spy).with_catalog(ServiceCatalog::new().with_service(
+        HttpRemoteQuerySource::new(&spy).with_catalog(ServiceCatalog::default().with_service(
             NET_EP,
             profile(&[ServiceCapability::Query, ServiceCapability::Network]),
         ));
     let result = run(&allowed, &service_query(NET_EP, false))
         .expect("granting Network must let the very same query through");
-    assert_eq!(rows(&result), 1);
+    assert_eq!(row_count(&result), 1);
     assert_eq!(spy.posts(), 1);
 }
 
@@ -277,7 +273,7 @@ fn a_catalog_gates_a_service_nested_inside_a_forwarded_body_too() {
         .with_endpoint(inner_ep, service_dataset())
         // Only the OUTER service is listed. The inner one has a dataset but no profile.
         .with_catalog(
-            ServiceCatalog::new().with_service(LOCAL_EP, profile(&[ServiceCapability::Query])),
+            ServiceCatalog::default().with_service(LOCAL_EP, profile(&[ServiceCapability::Query])),
         );
 
     let err = run(
@@ -301,7 +297,7 @@ fn a_catalog_gates_a_service_nested_inside_a_forwarded_body_too() {
         .with_endpoint(LOCAL_EP, service_dataset())
         .with_endpoint(inner_ep, service_dataset())
         .with_catalog(
-            ServiceCatalog::new()
+            ServiceCatalog::default()
                 .with_service(LOCAL_EP, profile(&[ServiceCapability::Query]))
                 .with_service(inner_ep, profile(&[ServiceCapability::Query])),
         );
@@ -313,7 +309,7 @@ fn a_catalog_gates_a_service_nested_inside_a_forwarded_body_too() {
         ),
     )
     .expect("a nested service that IS catalogued must resolve normally");
-    assert_eq!(rows(&result), 1);
+    assert_eq!(row_count(&result), 1);
 }
 
 // ── The SILENT contract ──────────────────────────────────────────────────────────
@@ -328,7 +324,7 @@ fn silent_swallows_an_unreachable_endpoint_through_both_resolvers() {
     let result = run(&unreachable, &service_query(NET_EP, true))
         .expect("SILENT swallows an unreachable endpoint");
     assert_eq!(
-        rows(&result),
+        row_count(&result),
         1,
         "the join identity leaves the surrounding query unchanged"
     );
@@ -340,7 +336,7 @@ fn silent_swallows_an_unreachable_endpoint_through_both_resolvers() {
     let empty = InProcessServiceResolver::new();
     let result =
         run(&empty, &service_query(LOCAL_EP, true)).expect("SILENT swallows a missing endpoint");
-    assert_eq!(rows(&result), 1);
+    assert_eq!(row_count(&result), 1);
     run(&empty, &service_query(LOCAL_EP, false))
         .expect_err("without SILENT the same failure aborts the query");
 }
@@ -353,7 +349,7 @@ fn silent_answers_a_capability_denial_with_the_join_identity_through_either_reso
     // naming the withheld capability. Either way the network is never touched.
     let spy = SpyTransport::default();
     let network = HttpRemoteQuerySource::new(&spy).with_catalog(
-        ServiceCatalog::new().with_service(NET_EP, profile(&[ServiceCapability::Query])),
+        ServiceCatalog::default().with_service(NET_EP, profile(&[ServiceCapability::Query])),
     );
     let (result, silenced) =
         run_recorded(&network, &service_query(NET_EP, true)).expect("SILENT answers Ω0");
@@ -369,7 +365,7 @@ fn silent_answers_a_capability_denial_with_the_join_identity_through_either_reso
 
     let in_process = InProcessServiceResolver::new()
         .with_endpoint(LOCAL_EP, service_dataset())
-        .with_catalog(ServiceCatalog::new());
+        .with_catalog(ServiceCatalog::default());
     let (result, silenced) =
         run_recorded(&in_process, &service_query(LOCAL_EP, true)).expect("SILENT answers Ω0");
     assert_eq!(names(&result), [None]);
@@ -386,7 +382,7 @@ fn silent_answers_a_capability_denial_with_the_join_identity_through_either_reso
     let in_process = InProcessServiceResolver::new()
         .with_endpoint(LOCAL_EP, service_dataset())
         .with_catalog(
-            ServiceCatalog::new().with_service(LOCAL_EP, profile(&[ServiceCapability::Query])),
+            ServiceCatalog::default().with_service(LOCAL_EP, profile(&[ServiceCapability::Query])),
         );
     let (result, silenced) = run_recorded(&in_process, &service_query(LOCAL_EP, true))
         .expect("a granted SILENT service resolves normally");
@@ -394,7 +390,7 @@ fn silent_answers_a_capability_denial_with_the_join_identity_through_either_reso
     assert_eq!(silenced, Vec::<(String, &str)>::new());
 
     let network =
-        HttpRemoteQuerySource::new(&spy).with_catalog(ServiceCatalog::new().with_service(
+        HttpRemoteQuerySource::new(&spy).with_catalog(ServiceCatalog::default().with_service(
             NET_EP,
             profile(&[ServiceCapability::Query, ServiceCapability::Network]),
         ));
@@ -440,7 +436,7 @@ fn a_profiles_headers_and_credential_reach_the_transport_in_order() {
     let source = HttpRemoteQuerySource::new(&spy)
         .with_timeout(Duration::from_secs(11))
         .with_catalog(
-            ServiceCatalog::new().with_service(
+            ServiceCatalog::default().with_service(
                 NET_EP,
                 profile(&[
                     ServiceCapability::Query,
@@ -511,10 +507,11 @@ fn a_catalogued_profile_that_adds_nothing_also_sends_nothing_extra() {
     // The other half of the compatibility guard: gating a service is not, by itself, a
     // change to the request. Only what a profile actually carries is added.
     let spy = SpyTransport::default();
-    let source = HttpRemoteQuerySource::new(&spy).with_catalog(ServiceCatalog::new().with_service(
-        NET_EP,
-        profile(&[ServiceCapability::Query, ServiceCapability::Network]),
-    ));
+    let source =
+        HttpRemoteQuerySource::new(&spy).with_catalog(ServiceCatalog::default().with_service(
+            NET_EP,
+            profile(&[ServiceCapability::Query, ServiceCapability::Network]),
+        ));
     run(&source, &service_query(NET_EP, false)).expect("the granted service resolves");
     assert!(spy.headers().is_empty(), "got {:?}", spy.headers());
 }
@@ -531,7 +528,7 @@ fn a_nested_capability_denial_reaches_the_outer_clause_as_a_denial() {
         .with_endpoint(inner_ep, service_dataset())
         // Only the OUTER service is listed; the inner one has a dataset but no profile.
         .with_catalog(
-            ServiceCatalog::new().with_service(LOCAL_EP, profile(&[ServiceCapability::Query])),
+            ServiceCatalog::default().with_service(LOCAL_EP, profile(&[ServiceCapability::Query])),
         );
     let nested = |silent: &str| {
         format!(
@@ -557,7 +554,7 @@ fn a_nested_capability_denial_reaches_the_outer_clause_as_a_denial() {
         .with_endpoint(LOCAL_EP, service_dataset())
         .with_endpoint(inner_ep, service_dataset())
         .with_catalog(
-            ServiceCatalog::new()
+            ServiceCatalog::default()
                 .with_service(LOCAL_EP, profile(&[ServiceCapability::Query]))
                 .with_service(inner_ep, profile(&[ServiceCapability::Query])),
         );
@@ -571,7 +568,7 @@ fn a_nested_capability_denial_reaches_the_outer_clause_as_a_denial() {
     let in_process = InProcessServiceResolver::new()
         .with_endpoint(LOCAL_EP, service_dataset())
         .with_catalog(
-            ServiceCatalog::new()
+            ServiceCatalog::default()
                 .with_service(LOCAL_EP, profile(&[ServiceCapability::Query]))
                 .with_service(inner_ep, profile(&[ServiceCapability::Query])),
         );

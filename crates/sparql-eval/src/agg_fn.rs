@@ -122,6 +122,7 @@
 //! through a typed `Err`, not a panic, it degrades cleanly on every target
 //! regardless of panic strategy.
 
+use purrdf_hash::Domain;
 use std::sync::Arc;
 
 use purrdf_core::{ContentDigest, TermValue};
@@ -645,7 +646,7 @@ pub struct AggDescriptor {
 /// # Instance identity, not just declared contents
 ///
 /// `id` is a `RegistryId` (`crate::registry_id::RegistryId`) minted fresh by
-/// `Default`/[`new`](Self::new) — see that type's docs for why a counter, why a
+/// [`Default`] — see that type's docs for why a counter, why a
 /// counter is enough, and why [`Clone`] inherits rather than re-mints it. It
 /// exists because DECLARED metadata (arity, volatility, algebraic class, state
 /// bound) cannot distinguish two independently built registries that happen to
@@ -675,12 +676,6 @@ impl core::fmt::Debug for AggregateRegistry {
 }
 
 impl AggregateRegistry {
-    /// An empty registry.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// The canonical empty registry — the non-optional "no aggregates
     /// registered" value every registry-carrying seam
     /// ([`crate::engine::QueryOptions::aggregates`],
@@ -689,7 +684,7 @@ impl AggregateRegistry {
     /// old `Option::None` spelling, so "no registry" and "an empty registry" are
     /// the same value rather than two spellings of one state.
     ///
-    /// A `const`, not merely a fresh [`Self::new`] call per use: every one of
+    /// A `const`, not merely a fresh `Self::default()` call per use: every one of
     /// those seams can borrow the SAME `'static` value, and — see
     /// `RegistryId::EMPTY`'s (`crate::registry_id::RegistryId::EMPTY`) docs —
     /// sharing one fixed instance id across every `EMPTY` reference is the
@@ -786,7 +781,7 @@ impl AggregateRegistry {
     ///     }
     /// }
     ///
-    /// let mut registry = AggregateRegistry::new();
+    /// let mut registry = AggregateRegistry::default();
     /// registry.register("https://example.org/agg#total", Arc::new(TotalAggregate));
     ///
     /// let mut b = RdfDatasetBuilder::new();
@@ -952,7 +947,7 @@ pub(crate) fn registry_fingerprint(aggregates: &AggregateRegistry) -> Result<Str
 /// The domain separator every custom-aggregate content fingerprint opens with — see
 /// `crate::property_fn_plan`'s constant of the same name for why each registry kind
 /// needs its own.
-const CONTENT_DOMAIN: &str = "purrdf-sparql-eval/aggregate-registry";
+const CONTENT_DOMAIN: Domain = Domain::new(b"purrdf-sparql-eval/aggregate-registry");
 
 /// A **content-only** fingerprint of `aggregates`: the identical declared descriptor
 /// fields `registry_fingerprint` folds — every registered IRI's declared arity,
@@ -1097,7 +1092,7 @@ mod tests {
 
     #[test]
     fn register_and_resolve() {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         assert!(registry.is_empty());
         registry.register(EX_SUM, Arc::new(SumAggregate));
         assert_eq!(registry.len(), 1);
@@ -1109,14 +1104,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "already registered as a custom aggregate")]
     fn duplicate_registration_panics() {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register(EX_SUM, Arc::new(SumAggregate));
         registry.register(EX_SUM, Arc::new(SumAggregate));
     }
 
     #[test]
     fn describe_is_sorted_by_iri_and_reports_declarations() {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register(EX_SUM, Arc::new(SumAggregate));
         registry.register(EX_OTHER, Arc::new(SumAggregate));
         let described = registry.describe().expect("no aggregate panics");
@@ -1134,7 +1129,7 @@ mod tests {
 
     #[test]
     fn debug_lists_iris_sorted() {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register(EX_SUM, Arc::new(SumAggregate));
         registry.register(EX_OTHER, Arc::new(SumAggregate));
         let rendered = format!("{registry:?}");
@@ -1145,11 +1140,11 @@ mod tests {
 
     /// [`AggregateRegistry::EMPTY`] (the canonical "no registry" value every
     /// registry-carrying seam now uses) and a freshly constructed, still-empty
-    /// [`AggregateRegistry::new`] must produce the IDENTICAL "" fingerprint —
+    /// [`AggregateRegistry::default`] must produce the IDENTICAL "" fingerprint —
     /// they are two different registry INSTANCES (different underlying maps),
     /// yet both resolve every IRI to `None`, so a plan's admitted behavior can
     /// never depend on which one it was prepared against. This makes a
-    /// `None`-shaped call and a `Some(&AggregateRegistry::new())`-shaped call
+    /// `None`-shaped call and a `Some(&AggregateRegistry::default())`-shaped call
     /// disagreeing about behavior structurally impossible rather than merely
     /// tested: there is no `Option` left to spell two ways in the first place —
     /// see [`RegistryId::EMPTY`](crate::registry_id::RegistryId::EMPTY)'s
@@ -1161,10 +1156,10 @@ mod tests {
             registry_fingerprint(&AggregateRegistry::EMPTY).expect("ok"),
             ""
         );
-        let empty = AggregateRegistry::new();
+        let empty = AggregateRegistry::default();
         assert_eq!(registry_fingerprint(&empty).expect("ok"), "");
 
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register(EX_SUM, Arc::new(SumAggregate));
         let first = registry_fingerprint(&registry).expect("ok");
         let second = registry_fingerprint(&registry).expect("ok");
@@ -1185,9 +1180,9 @@ mod tests {
     /// silently be accepted for evaluation under the other.
     #[test]
     fn two_independently_built_registries_with_identical_declarations_still_differ() {
-        let mut a = AggregateRegistry::new();
+        let mut a = AggregateRegistry::default();
         a.register(EX_SUM, Arc::new(SumAggregate));
-        let mut b = AggregateRegistry::new();
+        let mut b = AggregateRegistry::default();
         b.register(EX_SUM, Arc::new(SumAggregate));
 
         // The declared content is byte-identical...
@@ -1210,7 +1205,7 @@ mod tests {
     /// invalidated.
     #[test]
     fn a_clone_shares_its_source_registrys_fingerprint() {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register(EX_SUM, Arc::new(SumAggregate));
         let cloned = registry.clone();
         assert_eq!(
@@ -1501,7 +1496,7 @@ mod tests {
 
     #[test]
     fn describe_contains_a_panicking_aggregates_declaration() {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register(
             EX_PANIC,
             Arc::new(PanickingAggregate {
@@ -1586,7 +1581,7 @@ mod content_fingerprint_tests {
 
     /// A registry holding one [`DeclaredAggregate`] under `iri`.
     fn one(iri: &str, arity: Arity, volatility: Volatility) -> AggregateRegistry {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register(iri, Arc::new(DeclaredAggregate { arity, volatility }));
         registry
     }
@@ -1656,7 +1651,7 @@ mod content_fingerprint_tests {
     fn content_fingerprint_empty_registry_is_pinned() {
         let empty = content_fingerprint(&AggregateRegistry::EMPTY).expect("ok");
         assert_eq!(
-            content_fingerprint(&AggregateRegistry::new()).expect("ok"),
+            content_fingerprint(&AggregateRegistry::default()).expect("ok"),
             empty
         );
         assert_eq!(

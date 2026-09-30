@@ -5,11 +5,11 @@
 
 use std::fmt::Write as _;
 
-use criterion::{Criterion, black_box, criterion_main};
 use purrdf_shapes::json_schema::{
     Namespaces, SchemaCompileRequest, SchemaSurfaceMode, compile_schema,
 };
 use purrdf_shapes::shapes::{Shapes, from_dataset};
+use purrdf_testkit::bench::{Bench, bench_main, black_box};
 
 const PREFIXES: &str = r"
 @prefix ex: <https://example.org/schema-bench/> .
@@ -89,7 +89,7 @@ fn fixture(
     }
 }
 
-fn bench_schema_surface(c: &mut Criterion) {
+fn bench_schema_surface(c: &mut Bench) {
     let shaped = fixture(128, 128, Density::Sparse, true);
     let sparse = fixture(256, 256, Density::Sparse, false);
     let dense = fixture(128, 256, Density::Dense, false);
@@ -134,8 +134,8 @@ fn bench_schema_surface(c: &mut Criterion) {
 
 /// Run the schema-surface benchmark group.
 pub fn benches() {
-    let mut criterion = Criterion::default().configure_from_args();
+    let mut criterion = Bench::default().configure_from_args();
     bench_schema_surface(&mut criterion);
 }
 
-criterion_main!(benches);
+bench_main!(benches);

@@ -17,25 +17,23 @@
 //! So the depth is REFUSED, with an ordinary located diagnostic, like any other malformed
 //! input — and the refusal happens where the recursion starts rather than after it.
 //!
-//! # Two enforcement points, because there are two recursions
+//! # Two enforcement points, because there are two readers
 //!
 //! * The first-party text parsers (N-Triples, N-Quads, Turtle, TriG) count their own
 //!   descent. See `native_codecs::text_parse`.
-//! * The XML front end cannot: `roxmltree`'s tokenizer recurses `parse_content` ⇄
-//!   `parse_element`, one frame pair per element, and it overflows before any first-party
-//!   code sees a tree. It exposes a node-COUNT ceiling and no depth one, and a node count is
-//!   not a substitute (it would refuse a wide document to bound a deep one). The only place
-//!   left to stand is in front of it, so [`guard_xml_nesting`] measures the element nesting
-//!   of the source text and every `Document::parse` in this crate is preceded by it.
+//! * Every XML document (RDF/XML, TriX, GraphML, DataCite) is read by [`parse_xml`], which
+//!   hands [`MAX_PARSE_NESTING_DEPTH`] to the workspace's one XML reader as its
+//!   [`Options::max_depth`]. That reader keeps its open elements on a heap stack, so no
+//!   input can exhaust the machine stack while it reads; the cap exists for the walks over
+//!   the tree it returns, which recurse once per element. Those walks therefore need no
+//!   depth counter of their own: the tree they descend is bounded by the call that built
+//!   it.
 //!
-//! [`guard_xml_nesting`] is what bounds the first-party XML walks too. `roxmltree` builds a
-//! flat arena, so the only thing that can make an XML walk deep is element nesting, and the
-//! guard sits immediately before the `Document::parse` whose tree that walk consumes. There
-//! is deliberately no second, unreachable depth counter inside those walks: a guard that
-//! cannot fire tells a reader the opposite of the truth about where the bound lives.
-//!
-//! JSON-LD needs neither: `serde_json` enforces its own 128-deep recursion limit and returns
-//! it as an error. TriX, HexTuples and the OKF binary reader do not nest.
+//! JSON-LD needs neither: the workspace's one JSON reader (`purrdf_lex::json`) is handed
+//! the same 128 as its depth limit and returns an excess as an error. TriX, HexTuples and
+//! the OKF binary reader do not nest.
+
+use purrdf_lex::xml::{Document, Dtd, Options, XmlError, XmlErrorKind};
 
 use crate::RdfDiagnostic;
 
@@ -63,114 +61,62 @@ use crate::RdfDiagnostic;
 /// these levels per syntactic one, so it stops at 64 real levels — 7.4× below its own cliff.
 ///
 /// 128 is also the envelope this crate's structured lanes already publish: a JSON-LD
-/// document is refused past `serde_json`'s 128-deep recursion limit and a JSON-LD context
-/// document past `MAX_JSON_LD_DOCUMENT_DEPTH`, both 128. One number for the whole surface.
+/// document is refused past `MAX_JSON_LD_DOCUMENT_DEPTH` open containers and every strict
+/// JSON read is capped at the same 128. One number for the whole surface.
 pub(crate) const MAX_PARSE_NESTING_DEPTH: usize = 128;
 
-/// Refuse `text` if its XML element nesting is deeper than [`MAX_PARSE_NESTING_DEPTH`],
-/// reporting the depth at which it first exceeded the limit.
-///
-/// The error type is the depth rather than a diagnostic because the four callers report in
-/// three different error vocabularies (`RdfDiagnostic` for the RDF/XML and TriX codecs, a
-/// `ProjectionError` for the GraphML and DataCite projections); each keeps its own.
-///
-/// # What is counted
-///
-/// One level per element that is not self-closing — exactly the nesting `roxmltree`'s
-/// `parse_element` ⇄ `parse_content` pair recurses on, and exactly the nesting a first-party
-/// walk over the resulting tree descends. Comments, CDATA sections, processing instructions
-/// and `<!…>` declarations are skipped, and a start tag's attribute VALUES are skipped as
-/// quoted runs so that a `>` or `/>` written inside one is not mistaken for markup.
-///
-/// A malformed document (an unterminated tag, more end tags than start tags) is not this
-/// function's business: the count saturates rather than panicking and the XML parser behind
-/// it reports the real syntax error.
-pub(crate) fn guard_xml_nesting(text: &str) -> Result<(), usize> {
-    let bytes = text.as_bytes();
-    let mut at = 0usize;
-    let mut depth = 0usize;
-    while at < bytes.len() {
-        let Some(offset) = memchr::memchr(b'<', &bytes[at..]) else {
-            break;
-        };
-        at += offset;
-        match bytes.get(at + 1) {
-            // A lone trailing `<`: malformed, and the XML parser will say so.
-            None => break,
-            Some(b'/') => {
-                depth = depth.saturating_sub(1);
-                at = end_of_markup(bytes, at + 2).0;
-            }
-            Some(b'?') => at = skip_past(bytes, at + 2, b"?>"),
-            Some(b'!') => {
-                if bytes[at..].starts_with(b"<!--") {
-                    at = skip_past(bytes, at + 4, b"-->");
-                } else if bytes[at..].starts_with(b"<![CDATA[") {
-                    at = skip_past(bytes, at + 9, b"]]>");
-                } else {
-                    // A declaration (`<!DOCTYPE`, `<!ENTITY`, …). Scanned quote-aware so a
-                    // `<a>` written inside a quoted entity value adds no depth — those
-                    // documents are refused for their DTD anyway, and this keeps THIS guard
-                    // from pre-empting that refusal with a wrong one.
-                    at = end_of_markup(bytes, at + 2).0;
-                }
-            }
-            Some(_) => {
-                let (next, self_closing) = end_of_markup(bytes, at + 1);
-                if !self_closing {
-                    depth += 1;
-                    if depth > MAX_PARSE_NESTING_DEPTH {
-                        return Err(depth);
-                    }
-                }
-                at = next;
-            }
-        }
-    }
-    Ok(())
+/// Why [`parse_xml`] refused a document.
+#[derive(Debug)]
+pub(crate) enum XmlReadError {
+    /// An element nests past [`MAX_PARSE_NESTING_DEPTH`]; the payload is the depth of the
+    /// first element too deep (the limit plus one).
+    TooDeep(usize),
+    /// The document type declaration names an external subset or references an external
+    /// parameter entity. Neither is fetched, so entity declarations and default attributes
+    /// may be missing from what was read; a document is refused rather than read with
+    /// declarations silently unapplied.
+    DeclarationsUnread,
+    /// Any other refusal of the XML reader.
+    Malformed(XmlError),
 }
 
-/// Scan from `at` to the `>` that closes the markup it is inside, skipping quoted attribute
-/// values whole. Returns the offset just past the `>` (or the end of input) and whether the
-/// markup was self-closing (`… />`).
-fn end_of_markup(bytes: &[u8], mut at: usize) -> (usize, bool) {
-    // The byte before the `>`, which decides `/>` — never a quote, because a quoted run is
-    // consumed as a unit and cannot end a tag.
-    let mut previous = 0u8;
-    while at < bytes.len() {
-        let byte = bytes[at];
-        match byte {
-            b'"' | b'\'' => {
-                at += 1;
-                while at < bytes.len() && bytes[at] != byte {
-                    at += 1;
-                }
-                at = at.saturating_add(1).min(bytes.len());
-                previous = byte;
-            }
-            b'>' => return (at + 1, previous == b'/'),
-            _ => {
-                previous = byte;
-                at += 1;
-            }
-        }
-    }
-    (bytes.len(), false)
+impl XmlReadError {
+    /// The message for [`XmlReadError::DeclarationsUnread`], one spelling for every reader.
+    pub(crate) const UNREAD_MESSAGE: &'static str = "the document type declaration names an external DTD subset or references an external parameter entity, which is never fetched, so default attributes and entity declarations may be missing";
 }
 
-/// The offset just past the first occurrence of `needle` at or after `at`, or the end of
-/// input when there is none.
-fn skip_past(bytes: &[u8], at: usize, needle: &[u8]) -> usize {
-    if at >= bytes.len() {
-        return bytes.len();
+/// Read `text` as an XML document the way every XML codec in this crate does: element
+/// nesting past [`MAX_PARSE_NESTING_DEPTH`] refused as [`XmlReadError::TooDeep`], and a
+/// document type declaration read as XML 1.0 §5.1 requires of a non-validating processor
+/// ([`Dtd::internal_subset`]). RDF/XML documents routinely declare internal entities such
+/// as `&xsd;` for datatype IRIs, so those are declared and expanded under the reader's
+/// expansion budget; internal parameter entities are read too. Nothing is ever fetched: a
+/// reference to an external entity is refused, and so is a document whose external subset or
+/// external parameter entity would have to be read for its default attributes and entity
+/// declarations ([`XmlReadError::DeclarationsUnread`], from
+/// [`Document::declarations_unread`]), so no document is read with declarations silently
+/// unapplied. The GraphML and DataCite projections
+/// refuse any DTD before calling this.
+///
+/// The error is not a diagnostic because the four callers report in three different error
+/// vocabularies (`RdfDiagnostic` for the RDF/XML and TriX codecs, a `ProjectionError` for
+/// the GraphML and DataCite projections); each keeps its own.
+pub(crate) fn parse_xml(text: &str) -> Result<Document<'_>, XmlReadError> {
+    let document = Document::parse_with_options(
+        text,
+        Options {
+            max_depth: MAX_PARSE_NESTING_DEPTH,
+            dtd: Dtd::internal_subset(),
+        },
+    )
+    .map_err(|error| match error.kind() {
+        XmlErrorKind::DepthLimit { limit } => XmlReadError::TooDeep(limit + 1),
+        _ => XmlReadError::Malformed(error),
+    })?;
+    if document.declarations_unread() {
+        return Err(XmlReadError::DeclarationsUnread);
     }
-    match bytes[at..]
-        .windows(needle.len())
-        .position(|window| window == needle)
-    {
-        Some(offset) => at + offset + needle.len(),
-        None => bytes.len(),
-    }
+    Ok(document)
 }
 
 /// The diagnostic every first-party text codec returns for an input nested past
@@ -190,7 +136,7 @@ pub(crate) fn nesting_too_deep(line: u32, column: u32) -> RdfDiagnostic {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_PARSE_NESTING_DEPTH, guard_xml_nesting};
+    use super::{MAX_PARSE_NESTING_DEPTH, XmlReadError, parse_xml};
 
     /// `depth` nested `<a>` elements around a leaf.
     fn nested(depth: usize) -> String {
@@ -201,91 +147,62 @@ mod tests {
         )
     }
 
-    /// The limit is a limit ON the depth: one under passes, one over is refused. The `<r>`
-    /// wrapper is itself a level, so `MAX - 1` inner elements is exactly at the limit.
+    /// The limit is a limit ON the depth: at the limit reads, one over is refused. The `<r>`
+    /// wrapper is itself a level and so is the self-closing `<leaf/>`, so `MAX - 2` inner
+    /// elements put the leaf exactly at the limit.
     #[test]
     fn the_limit_is_exact() {
-        assert!(guard_xml_nesting(&nested(MAX_PARSE_NESTING_DEPTH - 1)).is_ok());
-        assert_eq!(
-            guard_xml_nesting(&nested(MAX_PARSE_NESTING_DEPTH)),
-            Err(MAX_PARSE_NESTING_DEPTH + 1)
-        );
+        assert!(parse_xml(&nested(MAX_PARSE_NESTING_DEPTH - 2)).is_ok());
+        assert!(matches!(
+            parse_xml(&nested(MAX_PARSE_NESTING_DEPTH - 1)),
+            Err(XmlReadError::TooDeep(depth)) if depth == MAX_PARSE_NESTING_DEPTH + 1
+        ));
     }
 
-    /// SIBLINGS ARE NOT NESTING. A count that added a level per start tag without
-    /// subtracting one per end tag would refuse a perfectly flat document of a few hundred
-    /// elements — the exact "bound that rejects what the stack round-trips" this guard must
-    /// not be.
+    /// SIBLINGS ARE NOT NESTING: a flat document of ten thousand elements reads.
     #[test]
     fn a_wide_document_is_not_a_deep_one() {
         let wide = format!("<r>{}</r>", "<a>x</a>".repeat(10_000));
-        assert!(guard_xml_nesting(&wide).is_ok());
+        assert!(parse_xml(&wide).is_ok());
     }
 
-    /// A self-closing element opens no level, so a document of them nests one deep.
+    /// Any other refusal is the reader's own error, not a depth.
     #[test]
-    fn a_self_closing_element_is_not_a_level() {
-        let flat = format!("<r>{}</r>", "<a/>".repeat(10_000));
-        assert!(guard_xml_nesting(&flat).is_ok());
+    fn a_malformed_document_is_not_a_depth_refusal() {
+        assert!(matches!(parse_xml("<a>"), Err(XmlReadError::Malformed(_))));
     }
 
-    /// `>` and `/>` inside an attribute VALUE are text, not markup. Reading them as markup
-    /// would mis-close the tag and mis-count every level after it.
+    /// An internal entity is declared and expanded; a reference to an external one is
+    /// refused, so no document can make the reader fetch.
     #[test]
-    fn markup_inside_an_attribute_value_is_not_markup() {
-        let value = format!(
-            "<r>{}<leaf/>{}</r>",
-            "<a b=\"/&gt;&gt;\" c='&gt;'>".repeat(MAX_PARSE_NESTING_DEPTH - 1),
-            "</a>".repeat(MAX_PARSE_NESTING_DEPTH - 1)
+    fn an_internal_entity_expands_and_an_external_one_is_refused() {
+        let internal =
+            parse_xml(r#"<!DOCTYPE r [<!ENTITY e "http://example.org/">]><r a="&e;x"/>"#)
+                .expect("an internal entity is read");
+        assert_eq!(
+            internal.root_element().attribute("a"),
+            Some("http://example.org/x")
         );
-        // The escaped forms above are what an XML author writes; the raw ones are legal in
-        // an attribute value too, and are what actually exercises the scanner.
-        let raw = format!(
-            "<r>{}<leaf/>{}</r>",
-            "<a b=\"/>>\" c='>'>".repeat(MAX_PARSE_NESTING_DEPTH - 1),
-            "</a>".repeat(MAX_PARSE_NESTING_DEPTH - 1)
+        assert!(matches!(
+            parse_xml(r#"<!DOCTYPE r [<!ENTITY e SYSTEM "http://example.org/e">]><r>&e;</r>"#),
+            Err(XmlReadError::Malformed(_))
+        ));
+        // An external subset is named, never fetched: the document is refused rather than
+        // read with its declarations unapplied. The internal-only neighbour is read.
+        assert!(matches!(
+            parse_xml(r#"<!DOCTYPE r SYSTEM "http://example.org/r.dtd"><r/>"#),
+            Err(XmlReadError::DeclarationsUnread)
+        ));
+        assert!(matches!(
+            parse_xml(r#"<!DOCTYPE r [<!ENTITY % x SYSTEM "x.ent">%x;]><r/>"#),
+            Err(XmlReadError::DeclarationsUnread)
+        ));
+        assert!(
+            parse_xml(r#"<!DOCTYPE r [<!ENTITY % p "<!ENTITY e 'v'>">%p;]><r>&e;</r>"#).is_ok()
         );
-        assert!(guard_xml_nesting(&value).is_ok());
-        assert!(guard_xml_nesting(&raw).is_ok());
-    }
-
-    /// Comments, CDATA and processing instructions carry no depth, whatever they contain.
-    #[test]
-    fn comments_cdata_and_processing_instructions_carry_no_depth() {
-        let noisy = format!(
-            "<?xml version=\"1.0\"?><r><!-- {} --><![CDATA[{}]]><?pi {}?></r>",
-            "<a>".repeat(10_000),
-            "<a>".repeat(10_000),
-            "<a>".repeat(10_000),
-        );
-        assert!(guard_xml_nesting(&noisy).is_ok());
-    }
-
-    /// A declaration's quoted value is skipped whole, so a DTD-bearing document is refused
-    /// for its DTD by the XML parser rather than pre-empted by a bogus depth here.
-    #[test]
-    fn a_declaration_carries_no_depth() {
-        let dtd = format!(
-            "<!DOCTYPE r [<!ENTITY e \"{}\">]><r/>",
-            "<a>".repeat(10_000)
-        );
-        assert!(guard_xml_nesting(&dtd).is_ok());
-    }
-
-    /// Unterminated markup and unbalanced end tags terminate the scan instead of panicking
-    /// or underflowing; the XML parser behind the guard reports the syntax error.
-    #[test]
-    fn malformed_input_neither_panics_nor_underflows() {
-        for malformed in [
-            "<",
-            "<a",
-            "<a b=\"",
-            "</a></a></a>",
-            "<!--",
-            "<![CDATA[",
-            "<?",
-        ] {
-            assert!(guard_xml_nesting(malformed).is_ok(), "{malformed:?}");
-        }
+        assert!(matches!(
+            parse_xml(r#"<!DOCTYPE r SYSTEM "http://example.org/r.dtd"><r>&e;</r>"#),
+            Err(XmlReadError::Malformed(_))
+        ));
     }
 }

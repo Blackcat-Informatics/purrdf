@@ -14,15 +14,15 @@ use purrdf_sparql_eval::{
     AggregateRegistry, BudgetExhausted, GovernedOutcome, GovernedUpdateOutcome, NativeSparqlEngine,
     PartialAnswers, QueryOptions,
 };
-use sha2::{Digest as _, Sha256};
 
 use crate::buffer::PurrdfBuffer;
 use crate::error::PurrdfError;
 use crate::governor::{
     PurrdfGovernorEvidence, PurrdfGovernorTrip, PurrdfQueryGovernors, decode_governors,
-    encode_evidence, encode_trip, validate_update_governors,
+    decode_update_governors, encode_evidence, encode_trip,
 };
 use crate::handles::PurrdfDataset;
+use crate::handles::into_handle;
 use crate::rowcursor::PurrdfRowCursor;
 use crate::status::PurrdfStatus;
 use crate::term::PurrdfStr;
@@ -155,12 +155,9 @@ unsafe fn decode_aggregate_namespace(
     aggregate_namespace: *const c_char,
 ) -> Result<Option<AggregateRegistry>, PurrdfError> {
     unsafe {
-        let Some(namespace) = opt_cstr_to_str(aggregate_namespace)? else {
-            return Ok(None);
-        };
-        let mut registry = AggregateRegistry::new();
-        registry.register_statistical_aggregates(namespace);
-        Ok(Some(registry))
+        Ok(purrdf_validate::query::statistical_aggregates(
+            opt_cstr_to_str(aggregate_namespace)?,
+        ))
     }
 }
 
@@ -174,7 +171,7 @@ unsafe fn run_query(
         let query = cstr_to_str(query)?;
         let base_iri = opt_cstr_to_str(base_iri)?;
         // Evaluate over the frozen `Arc<RdfDataset>` directly via the native engine —
-        // no oxigraph `Store` round-trip. `NativeSparqlEngine::query` is the single
+        // no store round-trip. `NativeSparqlEngine::query` is the single
         // `SparqlEngine` impl; its `Dataset` IS the `Arc<RdfDataset>` the
         // handle already owns.
         engine()
@@ -234,7 +231,7 @@ unsafe fn store_result(
                     ));
                 }
                 *out_kind = KIND_SOLUTIONS;
-                *out_rows = PurrdfRowCursor::new(variables, rows).into_raw();
+                *out_rows = into_handle(PurrdfRowCursor::new(variables, rows));
             }
             SparqlResult::Graph(graph) => {
                 if out_graph.is_null() {
@@ -244,7 +241,7 @@ unsafe fn store_result(
                     ));
                 }
                 *out_kind = KIND_GRAPH;
-                *out_graph = PurrdfDataset::into_raw(graph);
+                *out_graph = into_handle(PurrdfDataset(graph));
             }
             SparqlResult::Boolean(value) => {
                 *out_kind = KIND_BOOLEAN;
@@ -362,7 +359,7 @@ pub unsafe extern "C" fn purrdf_query(
                         ));
                     }
                     *out_kind = KIND_SOLUTIONS;
-                    *out_rows = PurrdfRowCursor::new(variables, rows).into_raw();
+                    *out_rows = into_handle(PurrdfRowCursor::new(variables, rows));
                 }
                 SparqlResult::Graph(graph) => {
                     if out_graph.is_null() {
@@ -372,7 +369,7 @@ pub unsafe extern "C" fn purrdf_query(
                         ));
                     }
                     *out_kind = KIND_GRAPH;
-                    *out_graph = PurrdfDataset::into_raw(graph);
+                    *out_graph = into_handle(PurrdfDataset(graph));
                 }
                 SparqlResult::Boolean(value) => {
                     *out_kind = KIND_BOOLEAN;
@@ -414,28 +411,6 @@ unsafe fn decode_provenance_namespace(
                 "provenance_prefix and provenance_iri must be both null or both non-null",
             )),
         }
-    }
-}
-
-/// Build the [`purrdf_sparql_results::ResultProvenance`] a JSON emission carries: empty
-/// when no namespace was supplied (pure-W3C output), or populated with a content hash of
-/// the query text plus this engine's label when one was. Mirrors
-/// `crate::query::build_query_provenance` in the CLI. `solutions` stays empty:
-/// per-solution source provenance is the evaluator/S11 derivation graph's progressive
-/// fill (see `purrdf_sparql_results::ResultProvenance`'s module docs), not something
-/// this ABI entry point can populate on its own.
-fn build_query_provenance(
-    namespace: Option<&purrdf_sparql_results::ProvenanceNamespace>,
-    query: &str,
-) -> purrdf_sparql_results::ResultProvenance {
-    if namespace.is_none() {
-        return purrdf_sparql_results::ResultProvenance::default();
-    }
-    let digest = Sha256::digest(query.as_bytes());
-    purrdf_sparql_results::ResultProvenance {
-        query_hash: Some(format!("sha256:{}", purrdf_hash::hex::Lower(&digest))),
-        engine: Some("purrdf-sparql-eval".to_owned()),
-        solutions: Vec::new(),
     }
 }
 
@@ -521,7 +496,7 @@ pub unsafe extern "C" fn purrdf_query_json(
             // statement layer included — and never carries the extension (`to_json`
             // only appends it for `Solutions`/`Boolean`; a `Graph` result serializes
             // as `{"graph": "..."}` regardless).
-            let provenance = build_query_provenance(namespace.as_ref(), query_text);
+            let provenance = purrdf_validate::query::provenance(namespace.as_ref(), query_text);
             let outcome = purrdf_sparql_results::to_json(&result, &provenance, namespace.as_ref())
                 .map_err(|e| {
                     PurrdfError::new(
@@ -529,7 +504,7 @@ pub unsafe extern "C" fn purrdf_query_json(
                         format!("SPARQL results JSON serialization failed: {e}"),
                     )
                 })?;
-            *out_buffer = PurrdfBuffer::into_raw(outcome.bytes);
+            *out_buffer = into_handle(PurrdfBuffer(outcome.bytes));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -725,9 +700,10 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
                 import_count,
                 "purrdf_query_entailment_governed",
             )?;
-            let premise_iris = crate::entail::premise_iri_list(
+            let premise_iris = crate::cstr_array(
                 premise_iris,
                 premise_iri_count,
+                "premise_iris",
                 "purrdf_query_entailment_governed",
             )?;
             let imports = purrdf_validate::premise_import_map(&imports, &premise_iris)
@@ -799,9 +775,9 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
                         query: query_evidence,
                         closure_trip: PurrdfGovernorTrip::NONE,
                     };
-                    *out_report = PurrdfBuffer::into_raw(
+                    *out_report = into_handle(PurrdfBuffer(
                         purrdf_validate::render_reasoning_report(&report).into_bytes(),
-                    );
+                    ));
                 }
                 GovernedEntailment::ClosureStopped { tripped } => {
                     *out_outcome = PurrdfEntailmentQueryOutcomeKind::ClosureStopped as i32;
@@ -864,10 +840,9 @@ pub unsafe extern "C" fn purrdf_update_governed(
                     "null required pointer argument to purrdf_update_governed",
                 ));
             }
-            validate_update_governors(governors)?;
+            let governors = decode_update_governors(governors)?;
             let request = cstr_to_str(request)?;
             let base_iri = opt_cstr_to_str(base_iri)?;
-            let governors = decode_governors(governors)?;
             let aggregates = decode_aggregate_namespace(aggregate_namespace)?;
             let outcome = engine()
                 .update_governed(
@@ -989,7 +964,7 @@ mod tests {
             let object = builder.intern_iri(&format!("http://example.org/o{index}"));
             builder.push_quad(subject, predicate, object, None);
         }
-        PurrdfDataset::into_raw(builder.freeze().expect("freeze"))
+        into_handle(PurrdfDataset(builder.freeze().expect("freeze")))
     }
 
     fn entailment_dataset() -> *mut PurrdfDataset {
@@ -1001,7 +976,7 @@ mod tests {
         let tom = builder.intern_iri("http://example.org/tom");
         builder.push_quad(cat, subclass, animal, None);
         builder.push_quad(tom, rdf_type, cat, None);
-        PurrdfDataset::into_raw(builder.freeze().expect("freeze"))
+        into_handle(PurrdfDataset(builder.freeze().expect("freeze")))
     }
 
     #[test]
@@ -1160,7 +1135,7 @@ mod tests {
         builder.push_quad(ontology, rdf_type, owl_ontology, None);
         builder.push_quad(ontology, imports, schema, None);
         builder.push_quad(tom, rdf_type, cat, None);
-        PurrdfDataset::into_raw(builder.freeze().expect("freeze"))
+        into_handle(PurrdfDataset(builder.freeze().expect("freeze")))
     }
 
     /// Run `ASK { ex:tom a ex:Animal }` under `rdfs` over `dataset` with a one-entry import
@@ -1406,7 +1381,7 @@ mod tests {
             ));
             builder.push_quad(subject, weight, literal, None);
         }
-        PurrdfDataset::into_raw(builder.freeze().expect("freeze"))
+        into_handle(PurrdfDataset(builder.freeze().expect("freeze")))
     }
 
     /// End-to-end: `purrdf_query_entailment_governed`'s `aggregate_namespace` parameter
@@ -1594,7 +1569,7 @@ mod tests {
             ));
             builder.push_quad(subject, predicate, object, None);
         }
-        PurrdfDataset::into_raw(builder.freeze().expect("freeze"))
+        into_handle(PurrdfDataset(builder.freeze().expect("freeze")))
     }
 
     /// End-to-end: `purrdf_query_governed`'s `aggregate_namespace` parameter actually

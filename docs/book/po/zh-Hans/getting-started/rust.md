@@ -70,7 +70,7 @@ assert_eq!(dataset.quad_count(), 1);
 
 ## 访问其他引擎
 
-每个引擎都挂在同一个门面之下。例如，零依赖的 IRI 叶 crate 与 ShEx 模式层：
+每个引擎都挂在同一个门面之下。例如，没有任何第三方依赖的 IRI 层与 ShEx 模式层：
 
 ```rust,ignore
 let iri = purrdf::iri::parse("https://example.org/cat").expect("valid IRI");
@@ -87,10 +87,11 @@ let schema = purrdf::shex::parse_shexc(
 大多数应用止步于 `purrdf` 即可。各子 crate
 （`purrdf-core`、`purrdf-rdf`、`purrdf-columnar`、`purrdf-sparql-algebra`、
 `purrdf-sparql-eval`、`purrdf-sparql-results`、`purrdf-cdt`、`purrdf-shapes`、
-`purrdf-shex`、`purrdf-gts`、`purrdf-datalog`、`purrdf-entail`、`purrdf-geo`、
-`purrdf-text`、`purrdf-validate`、`purrdf-slice`、`purrdf-iri`、`purrdf-xsd`、
-`purrdf-events`、`purrdf-wasm`）是为只想要恰好一个引擎的消费者准备的——例如，
-一个只需要解析 IRI 的工具可以单独依赖零依赖的 `purrdf-iri`。crate 一览见
+`purrdf-jsonschema`、`purrdf-shex`、`purrdf-gts`、`purrdf-datalog`、`purrdf-entail`、
+`purrdf-geo`、`purrdf-text`、`purrdf-validate`、`purrdf-slice`、`purrdf-iri`、
+`purrdf-lex`、`purrdf-xsd`、`purrdf-events`、`purrdf-hash`、`purrdf-wasm`）是为只想要恰好一个引擎的消费者准备的——例如，
+一个只需要解析 IRI 的工具可以单独依赖 `purrdf-iri`，它的依赖是第一方词法层 `purrdf-lex`
+与零依赖的 `purrdf-hash`。crate 一览见
 [仓库 README](https://github.com/Blackcat-Informatics/purrdf#crate-map)。
 
 每个发布 crate 都能干净地构建到 `wasm32-unknown-unknown`，因此同一条 Rust 代码路径

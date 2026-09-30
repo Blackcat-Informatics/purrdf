@@ -58,12 +58,6 @@ pub struct RuleSet {
 }
 
 impl RuleSet {
-    /// An empty rule set.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Append a ground fact.
     pub fn push_fact(&mut self, fact: Fact) {
         self.facts.push(fact);

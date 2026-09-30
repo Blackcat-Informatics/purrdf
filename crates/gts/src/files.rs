@@ -3,20 +3,18 @@
 
 //! Files-profile pack/unpack/diff logic for GTS archives (§13.2, §14.2).
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
+
+use crate::{FastMap, FastSet};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use ciborium::value::Value;
+use purrdf_lex::cbor::Value;
+use purrdf_lex::cbor::head::{BYTES, MAP, write_bytes, write_head, write_text};
 
 use crate::model::{Graph, Quad, Term, TermKind};
-// This crate's one lowercase-hex renderer, shared with `compact`, `openpgp`,
-// `reader` and the rest of the container. It is deliberately NOT
-// `purrdf_core::hex::lower` (the renderer the IR-side crates share): the GTS
-// container engine does not depend on the IR kernel, and inverting that layering
-// to save four lines would make every GTS consumer pull `purrdf-core` in.
-use crate::wire::hex;
+use crate::wire::digest_label;
 use crate::writer::{Writer, WriterOptions, digest_string};
 
 const FILES_NS: &str = "https://w3id.org/gts/files#";
@@ -41,9 +39,8 @@ const FILES_XATTR_VALUE: &str = "https://w3id.org/gts/files#xattrValue";
 const FILES_PAX_RECORD: &str = "https://w3id.org/gts/files#paxRecord";
 const FILES_PAX_KEY: &str = "https://w3id.org/gts/files#paxKey";
 const FILES_PAX_VALUE: &str = "https://w3id.org/gts/files#paxValue";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_DATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_xsd::datatype::{XSD_DATE_TIME as XSD_DATETIME, XSD_INTEGER};
 const STREAM_CHUNK_SIZE: usize = 128 * 1024;
 
 type InlineBlobMap<'a> = BTreeMap<String, (&'a [u8], Option<&'a str>)>;
@@ -227,7 +224,7 @@ struct TermKey {
 
 #[derive(Default)]
 struct TermBuilder {
-    ids: HashMap<TermKey, usize>,
+    ids: FastMap<TermKey, usize>,
     terms: Vec<Term>,
     quads: Vec<Quad>,
 }
@@ -277,42 +274,6 @@ impl TermBuilder {
         let p = self.iri(predicate);
         let o = self.literal(value, datatype);
         self.quads.push((subject, p, o, None));
-    }
-}
-
-fn iri_term(value: &str) -> Term {
-    Term {
-        kind: TermKind::Iri,
-        value: Some(value.to_string()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
-fn literal_term(value: &str, datatype: Option<usize>) -> Term {
-    Term {
-        kind: TermKind::Literal,
-        value: Some(value.to_string()),
-        datatype,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
-fn bnode_term(label: &str) -> Term {
-    Term {
-        kind: TermKind::Bnode,
-        value: Some(label.to_string()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
     }
 }
 
@@ -387,7 +348,7 @@ fn walk_dir_sorted(dir: &Path) -> Result<Vec<PathBuf>, String> {
 
 fn resolve_sources(sources: &[&Path]) -> Result<Vec<(PathBuf, String)>, String> {
     let mut entries: Vec<(PathBuf, String)> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: FastSet<String> = FastSet::default();
     for src in sources {
         let meta = fs::symlink_metadata(src).map_err(|e| format!("{src:?}: {e}"))?;
         if meta.file_type().is_symlink() {
@@ -426,73 +387,68 @@ fn resolve_sources(sources: &[&Path]) -> Result<Vec<(PathBuf, String)>, String> 
     Ok(entries)
 }
 
-fn guess_media_type(path: &Path) -> String {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("txt") => "text/plain".to_string(),
-        Some("html" | "htm") => "text/html".to_string(),
-        Some("json") => "application/json".to_string(),
-        Some("xml") => "application/xml".to_string(),
-        Some("png") => "image/png".to_string(),
-        Some("jpg" | "jpeg") => "image/jpeg".to_string(),
-        Some("gif") => "image/gif".to_string(),
-        Some("webp") => "image/webp".to_string(),
-        Some("pdf") => "application/pdf".to_string(),
-        Some("zip") => "application/zip".to_string(),
-        Some("gz") => "application/gzip".to_string(),
-        Some("tar") => "application/x-tar".to_string(),
-        _ => "application/octet-stream".to_string(),
+/// Media type for a file extension (without its dot), matched case-insensitively.
+///
+/// The workspace's one extension-to-media-type table: GTS file and tar ingest, the
+/// slice catalog, the slice-artifact blob rows of the Python binding and the
+/// slice RDF query loader all call it. The RDF entries name the media types the
+/// native codecs register (`text/turtle`, `application/n-triples`,
+/// `application/n-quads`, `application/trig`, `application/rdf+xml`); an extension it does not know
+/// maps to `application/octet-stream`.
+#[must_use]
+pub fn media_type_for_extension(extension: &str) -> &'static str {
+    match extension.to_ascii_lowercase().as_str() {
+        "txt" => "text/plain",
+        "html" | "htm" => "text/html",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "gz" => "application/gzip",
+        "tar" => "application/x-tar",
+        "ttl" => "text/turtle",
+        "nt" => "application/n-triples",
+        "nq" => "application/n-quads",
+        "trig" => "application/trig",
+        "rdf" => "application/rdf+xml",
+        "sparql" | "rq" => "application/sparql-query",
+        "md" => "text/markdown",
+        "yaml" | "yml" | "cff" => "application/yaml",
+        _ => "application/octet-stream",
     }
 }
 
-struct HashingWriter<'a> {
-    hasher: &'a mut purrdf_hash::blake3::Hasher,
+/// Media type for a path, from its final extension; see [`media_type_for_extension`].
+/// A path with no extension maps to `application/octet-stream`.
+#[must_use]
+pub fn media_type_for_path(path: &Path) -> &'static str {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map_or("application/octet-stream", media_type_for_extension)
 }
 
-impl Write for HashingWriter<'_> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.hasher.update(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-fn write_cbor_type_len<W: Write>(writer: &mut W, major: u8, len: u64) -> std::io::Result<()> {
-    let prefix = major << 5;
-    if len < 24 {
-        writer.write_all(&[prefix | len as u8])
-    } else if u8::try_from(len).is_ok() {
-        writer.write_all(&[prefix | 0x18, len as u8])
-    } else if u16::try_from(len).is_ok() {
-        writer.write_all(&[prefix | 0x19])?;
-        writer.write_all(&(len as u16).to_be_bytes())
-    } else if u32::try_from(len).is_ok() {
-        writer.write_all(&[prefix | 0x1a])?;
-        writer.write_all(&(len as u32).to_be_bytes())
-    } else {
-        writer.write_all(&[prefix | 0x1b])?;
-        writer.write_all(&len.to_be_bytes())
-    }
-}
-
-fn write_cbor_map_len<W: Write>(writer: &mut W, len: u64) -> std::io::Result<()> {
-    write_cbor_type_len(writer, 5, len)
-}
-
-fn write_cbor_text<W: Write>(writer: &mut W, text: &str) -> std::io::Result<()> {
-    write_cbor_type_len(writer, 3, text.len() as u64)?;
-    writer.write_all(text.as_bytes())
-}
-
-fn write_cbor_bytes_header<W: Write>(writer: &mut W, len: u64) -> std::io::Result<()> {
-    write_cbor_type_len(writer, 2, len)
-}
-
-fn write_cbor_bytes<W: Write>(writer: &mut W, bytes: &[u8]) -> std::io::Result<()> {
-    write_cbor_bytes_header(writer, bytes.len() as u64)?;
-    writer.write_all(bytes)
+/// [`media_type_for_path`] restricted to an accepted list: the guessed media type where
+/// `accepted` names it, `fallback` for every other path.
+///
+/// A loader that feeds one family of codecs (the native RDF syntaxes) keeps the shared
+/// table's answer where it names a syntax the loader can read and routes the rest to the
+/// fallback, so the loader holds its list and never a second extension table.
+#[must_use]
+pub fn media_type_for_path_among(
+    path: &Path,
+    accepted: &[&'static str],
+    fallback: &'static str,
+) -> &'static str {
+    let guessed = media_type_for_path(path);
+    accepted
+        .iter()
+        .copied()
+        .find(|media_type| *media_type == guessed)
+        .unwrap_or(fallback)
 }
 
 fn write_blob_pub_map<W: Write>(
@@ -502,17 +458,17 @@ fn write_blob_pub_map<W: Write>(
     representation: Option<&str>,
 ) -> std::io::Result<()> {
     let len = 1 + u64::from(media_type.is_some()) + u64::from(representation.is_some());
-    write_cbor_map_len(writer, len)?;
+    write_head(writer, MAP, len)?;
     if let Some(media_type) = media_type {
-        write_cbor_text(writer, "mt")?;
-        write_cbor_text(writer, media_type)?;
+        write_text(writer, "mt")?;
+        write_text(writer, media_type)?;
     }
     if let Some(representation) = representation {
-        write_cbor_text(writer, "rep")?;
-        write_cbor_text(writer, representation)?;
+        write_text(writer, "rep")?;
+        write_text(writer, representation)?;
     }
-    write_cbor_text(writer, "digest")?;
-    write_cbor_text(writer, digest)
+    write_text(writer, "digest")?;
+    write_text(writer, digest)
 }
 
 fn copy_counted_and_hash<R: Read, W: Write>(
@@ -538,10 +494,7 @@ fn copy_counted_and_hash<R: Read, W: Write>(
             format!("blob source changed size: expected {expected_size}, read {written}"),
         ));
     }
-    Ok((
-        format!("blake3:{}", hex(digest.finalize().as_bytes())),
-        written,
-    ))
+    Ok((digest_label(digest.finalize().as_bytes()), written))
 }
 
 fn write_blob_preimage<R: Read, W: Write>(
@@ -552,16 +505,16 @@ fn write_blob_preimage<R: Read, W: Write>(
     representation: Option<&str>,
     prev: &[u8],
 ) -> std::io::Result<String> {
-    write_cbor_map_len(writer, 4)?;
-    write_cbor_text(writer, "d")?;
-    write_cbor_bytes_header(writer, size)?;
+    write_head(writer, MAP, 4)?;
+    write_text(writer, "d")?;
+    write_head(writer, BYTES, size)?;
     let (digest, _) = copy_counted_and_hash(reader, writer, size)?;
-    write_cbor_text(writer, "t")?;
-    write_cbor_text(writer, "blob")?;
-    write_cbor_text(writer, "pub")?;
+    write_text(writer, "t")?;
+    write_text(writer, "blob")?;
+    write_text(writer, "pub")?;
     write_blob_pub_map(writer, &digest, media_type, representation)?;
-    write_cbor_text(writer, "prev")?;
-    write_cbor_bytes(writer, prev)?;
+    write_text(writer, "prev")?;
+    write_bytes(writer, prev)?;
     Ok(digest)
 }
 
@@ -579,9 +532,9 @@ fn write_blob_frame<R: Read, W: Write>(
     reader: R,
     meta: &BlobFrameMeta<'_>,
 ) -> std::io::Result<()> {
-    write_cbor_map_len(writer, 5)?;
-    write_cbor_text(writer, "d")?;
-    write_cbor_bytes_header(writer, meta.size)?;
+    write_head(writer, MAP, 5)?;
+    write_text(writer, "d")?;
+    write_head(writer, BYTES, meta.size)?;
     let (observed_digest, _) = copy_counted_and_hash(reader, writer, meta.size)?;
     if observed_digest != meta.digest {
         return Err(std::io::Error::new(
@@ -592,14 +545,14 @@ fn write_blob_frame<R: Read, W: Write>(
             ),
         ));
     }
-    write_cbor_text(writer, "t")?;
-    write_cbor_text(writer, "blob")?;
-    write_cbor_text(writer, "id")?;
-    write_cbor_bytes(writer, meta.id)?;
-    write_cbor_text(writer, "pub")?;
+    write_text(writer, "t")?;
+    write_text(writer, "blob")?;
+    write_text(writer, "id")?;
+    write_bytes(writer, meta.id)?;
+    write_text(writer, "pub")?;
     write_blob_pub_map(writer, meta.digest, meta.media_type, meta.representation)?;
-    write_cbor_text(writer, "prev")?;
-    write_cbor_bytes(writer, meta.prev)
+    write_text(writer, "prev")?;
+    write_bytes(writer, meta.prev)
 }
 
 fn append_blob_path<W: Write>(
@@ -614,11 +567,8 @@ fn append_blob_path<W: Write>(
         fs::File::open(&source.path).map_err(|e| format!("read {:?}: {e}", source.path))?;
     let mut hasher = purrdf_hash::blake3::Hasher::new();
     let digest = {
-        let mut sink = HashingWriter {
-            hasher: &mut hasher,
-        };
         write_blob_preimage(
-            &mut sink,
+            &mut hasher,
             &mut file,
             source.size,
             media_type,
@@ -658,11 +608,8 @@ fn append_blob_bytes<W: Write>(
 ) -> Result<(), String> {
     let mut hasher = purrdf_hash::blake3::Hasher::new();
     let digest = {
-        let mut sink = HashingWriter {
-            hasher: &mut hasher,
-        };
         write_blob_preimage(
-            &mut sink,
+            &mut hasher,
             source.data,
             source.data.len() as u64,
             source.media_type,
@@ -702,11 +649,8 @@ fn append_blob_range<R: Read + Seek, W: Write>(
         reader
             .seek(SeekFrom::Start(source.offset))
             .map_err(|e| format!("seek inline blob: {e}"))?;
-        let mut sink = HashingWriter {
-            hasher: &mut hasher,
-        };
         write_blob_preimage(
-            &mut sink,
+            &mut hasher,
             reader.take(source.size),
             source.size,
             source.media_type,
@@ -781,7 +725,7 @@ fn resolved_files_with_metadata(sources: &[&Path]) -> Result<Vec<ResolvedFile>, 
             .modified()
             .map_err(|e| format!("mtime {fspath:?}: {e}"))?;
         let modified = format_datetime(&mtime).map_err(|e| format!("datetime {fspath:?}: {e}"))?;
-        let media_type = guess_media_type(&fspath);
+        let media_type = media_type_for_path(&fspath).to_string();
         let digest = digest_file(&fspath, size)?;
         out.push(ResolvedFile {
             fspath,
@@ -809,16 +753,16 @@ pub fn pack_to_writer<W: Write>(sources: &[&Path], mut output: W) -> Result<(), 
     let mut w = Writer::new("files");
 
     let shared = vec![
-        iri_term(&(FILES_NS.to_string() + "FileEntry")),
-        iri_term(&(FILES_NS.to_string() + "path")),
-        iri_term(&(FILES_NS.to_string() + "digest")),
-        iri_term(&(FILES_NS.to_string() + "size")),
-        iri_term(&(FILES_NS.to_string() + "mode")),
-        iri_term(&(FILES_NS.to_string() + "modified")),
-        iri_term(&(FILES_NS.to_string() + "mediaType")),
-        iri_term(RDF_TYPE),
-        iri_term(XSD_INTEGER),
-        iri_term(XSD_DATETIME),
+        Term::iri(FILES_NS.to_string() + "FileEntry"),
+        Term::iri(FILES_NS.to_string() + "path"),
+        Term::iri(FILES_NS.to_string() + "digest"),
+        Term::iri(FILES_NS.to_string() + "size"),
+        Term::iri(FILES_NS.to_string() + "mode"),
+        Term::iri(FILES_NS.to_string() + "modified"),
+        Term::iri(FILES_NS.to_string() + "mediaType"),
+        Term::iri(RDF_TYPE),
+        Term::iri(XSD_INTEGER),
+        Term::iri(XSD_DATETIME),
     ];
     w.add_terms(&shared);
     let file_entry_id: usize = 0;
@@ -839,13 +783,13 @@ pub fn pack_to_writer<W: Write>(sources: &[&Path], mut output: W) -> Result<(), 
 
     for (idx, entry) in entries.iter().enumerate() {
         let entry_label = format!("f{idx}");
-        let entry_term = bnode_term(&entry_label);
-        let path_term = literal_term(&entry.relpath, None);
-        let digest_term = literal_term(&entry.digest, None);
-        let size_term = literal_term(&entry.size.to_string(), Some(xsd_integer_id));
-        let mode_term = literal_term(&entry.mode.to_string(), Some(xsd_integer_id));
-        let modified_term = literal_term(&entry.modified, Some(xsd_datetime_id));
-        let media_term = literal_term(&entry.media_type, None);
+        let entry_term = Term::blank(&entry_label);
+        let path_term = Term::literal(&entry.relpath, None);
+        let digest_term = Term::literal(&entry.digest, None);
+        let size_term = Term::literal(entry.size.to_string(), Some(xsd_integer_id));
+        let mode_term = Term::literal(entry.mode.to_string(), Some(xsd_integer_id));
+        let modified_term = Term::literal(&entry.modified, Some(xsd_datetime_id));
+        let media_term = Term::literal(&entry.media_type, None);
 
         let base = shared.len() + file_terms.len();
         file_terms.extend(vec![
@@ -878,7 +822,7 @@ pub fn pack_to_writer<W: Write>(sources: &[&Path], mut output: W) -> Result<(), 
     output
         .write_all(&w.into_bytes())
         .map_err(|e| format!("write files-profile metadata: {e}"))?;
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: FastSet<String> = FastSet::default();
     for entry in &entries {
         if !seen.insert(entry.digest.clone()) {
             continue;
@@ -992,7 +936,7 @@ fn build_entries_v2_prefix(entries: &[FileEntry]) -> Result<(Writer, InlineBlobM
 
     let mut entries: Vec<&FileEntry> = entries.iter().collect();
     entries.sort_by(|a, b| a.path.cmp(&b.path));
-    let mut seen_paths = HashSet::new();
+    let mut seen_paths = FastSet::default();
     let mut builder = TermBuilder::default();
     let rdf_type = builder.iri(RDF_TYPE);
     let file_entry = builder.iri(FILE_ENTRY);
@@ -1204,9 +1148,9 @@ fn format_datetime(time: &std::time::SystemTime) -> Result<String, String> {
 /// Returns an error when the graph is not a files-profile archive, an entry
 /// carries an invalid field value, or two entries share the same path.
 pub fn read_entries(graph: &Graph) -> Result<BTreeMap<String, FileEntry>, String> {
-    let mut type_ids: HashSet<usize> = HashSet::new();
-    let mut file_entry_ids: HashSet<usize> = HashSet::new();
-    let mut field_name_by_id: HashMap<usize, String> = HashMap::new();
+    let mut type_ids: FastSet<usize> = FastSet::default();
+    let mut file_entry_ids: FastSet<usize> = FastSet::default();
+    let mut field_name_by_id: FastMap<usize, String> = FastMap::default();
     for (idx, term) in graph.terms.iter().enumerate() {
         if term.kind != TermKind::Iri {
             continue;
@@ -1232,7 +1176,7 @@ pub fn read_entries(graph: &Graph) -> Result<BTreeMap<String, FileEntry>, String
     let mut direct: BTreeMap<usize, BTreeMap<String, String>> = BTreeMap::new();
     let mut xattr_links: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     let mut pax_links: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-    let mut file_entry_subjects: HashSet<usize> = HashSet::new();
+    let mut file_entry_subjects: FastSet<usize> = FastSet::default();
     for &(s, p, o, _g) in &graph.quads {
         if type_ids.contains(&p) && file_entry_ids.contains(&o) {
             file_entry_subjects.insert(s);
@@ -1270,17 +1214,17 @@ pub fn read_entries(graph: &Graph) -> Result<BTreeMap<String, FileEntry>, String
             path: path.clone(),
             kind,
             digest: fields.get("digest").cloned(),
-            size: parse_optional_u64(fields, "size")?,
-            mode: parse_optional_u32(fields, "mode")?,
+            size: parse_optional_integer(fields, "size")?,
+            mode: parse_optional_integer(fields, "mode")?,
             modified: fields.get("modified").cloned(),
             media_type: fields.get("mediaType").cloned(),
             link_target: fields.get("linkTarget").cloned(),
-            uid: parse_optional_u64(fields, "uid")?,
-            gid: parse_optional_u64(fields, "gid")?,
+            uid: parse_optional_integer(fields, "uid")?,
+            gid: parse_optional_integer(fields, "gid")?,
             user_name: fields.get("userName").cloned(),
             group_name: fields.get("groupName").cloned(),
-            dev_major: parse_optional_u64(fields, "devMajor")?,
-            dev_minor: parse_optional_u64(fields, "devMinor")?,
+            dev_major: parse_optional_integer(fields, "devMajor")?,
+            dev_minor: parse_optional_integer(fields, "devMinor")?,
             xattrs: read_xattrs(*s, &direct, &xattr_links)?,
             pax_records: read_pax_records(*s, &direct, &pax_links)?,
             data: None,
@@ -1359,23 +1303,21 @@ fn read_pax_records(
     Ok(out)
 }
 
-fn parse_optional_u64(fields: &BTreeMap<String, String>, key: &str) -> Result<Option<u64>, String> {
+/// The integer at `key`, when present: `size`, `uid` and the device numbers
+/// are `u64`, `mode` is `u32`.
+fn parse_optional_integer<T>(
+    fields: &BTreeMap<String, String>,
+    key: &str,
+) -> Result<Option<T>, String>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
     fields
         .get(key)
         .map(|value| {
             value
-                .parse::<u64>()
-                .map_err(|err| format!("invalid files:{key} integer {value:?}: {err}"))
-        })
-        .transpose()
-}
-
-fn parse_optional_u32(fields: &BTreeMap<String, String>, key: &str) -> Result<Option<u32>, String> {
-    fields
-        .get(key)
-        .map(|value| {
-            value
-                .parse::<u32>()
+                .parse::<T>()
                 .map_err(|err| format!("invalid files:{key} integer {value:?}: {err}"))
         })
         .transpose()
@@ -1453,8 +1395,8 @@ fn dest_path(dest: &Path, archive_path: &str) -> Result<PathBuf, String> {
     Ok(target)
 }
 
-fn suppressed_blob_digests(graph: &Graph) -> HashSet<String> {
-    let mut out: HashSet<String> = HashSet::new();
+fn suppressed_blob_digests(graph: &Graph) -> FastSet<String> {
+    let mut out: FastSet<String> = FastSet::default();
     for sup in &graph.suppressions {
         for target in &sup.targets {
             let Value::Map(entries) = target else {
@@ -1471,7 +1413,7 @@ fn suppressed_blob_digests(graph: &Graph) -> HashSet<String> {
                     } else if key == "digest" {
                         digest = Some(match v {
                             Value::Text(t) => t.clone(),
-                            Value::Bytes(b) => format!("blake3:{}", hex(b)),
+                            Value::Bytes(b) => digest_label(b),
                             _ => continue,
                         });
                     }
@@ -1507,7 +1449,7 @@ pub fn unpack_with_options(
 ) -> Result<(), String> {
     let entries = read_entries(graph)?;
     let suppressed = if options.include_suppressed {
-        HashSet::new()
+        FastSet::default()
     } else {
         suppressed_blob_digests(graph)
     };
@@ -1688,6 +1630,15 @@ fn prepare_create_node_target(target: &Path, archive_path: &str) -> Result<(), S
     }
 }
 
+/// Refuse a symlink whose target, read relative to the link's own directory,
+/// leaves the extraction root.
+///
+/// Targets are archive member paths, not IRI references, so this is not RFC 3986
+/// reference resolution: dot-segment removal there clamps `..` at the root, which
+/// would silently rewrite an escaping target into one inside the tree. Here a `..`
+/// that would climb above the root is refused, together with absolute,
+/// drive-relative and backslash-separated targets, so a hostile archive cannot
+/// plant a link that points outside the destination.
 fn validate_symlink_target(archive_path: &str, link_target: &str) -> Result<(), String> {
     if link_target.is_empty() {
         return Err(format!("symlink entry {archive_path} needs linkTarget"));
@@ -1781,7 +1732,7 @@ fn restore_path_metadata(
     // one before metadata is restored, so the only targets here are regular files,
     // hardlinks (which name a regular file) and directories.
     if let Some(modified) = &entry.modified {
-        let (seconds, nanos) = parse_datetime(modified)?;
+        let (seconds, nanos) = parse_modified(modified)?;
         let instant = system_time_from_unix(seconds, nanos)
             .ok_or_else(|| format!("mtime {modified} is not representable on this host"))?;
         set_modified_time(target, instant).map_err(|e| format!("set mtime for {target:?}: {e}"))?;
@@ -1852,7 +1803,7 @@ fn restore_owner(_target: &Path, entry: &FileEntry, options: &UnpackOptions) -> 
     Ok(())
 }
 
-fn parse_datetime(text: &str) -> Result<(i64, u32), String> {
+fn parse_modified(text: &str) -> Result<(i64, u32), String> {
     crate::rfc3339::parse(text).map_err(|e| format!("parse datetime {text}: {e}"))
 }
 
@@ -1881,8 +1832,8 @@ pub fn diff(graph: &Graph, directory: &Path) -> Result<Vec<String>, String> {
         disk_digests.insert(relpath, digest_string(&data));
     }
 
-    let archive_paths: HashSet<&String> = archive_digests.keys().collect();
-    let disk_paths: HashSet<&String> = disk_digests.keys().collect();
+    let archive_paths: FastSet<&String> = archive_digests.keys().collect();
+    let disk_paths: FastSet<&String> = disk_digests.keys().collect();
 
     let mut lines: Vec<String> = Vec::new();
     for path in archive_paths.difference(&disk_paths) {
@@ -1898,4 +1849,80 @@ pub fn diff(graph: &Graph, directory: &Path) -> Result<Vec<String>, String> {
     }
     lines.sort();
     Ok(lines)
+}
+
+#[cfg(test)]
+mod media_type_tests {
+    use super::{media_type_for_extension, media_type_for_path};
+    use std::path::Path;
+
+    #[test]
+    fn every_extension_maps_to_its_media_type() {
+        let table = [
+            ("txt", "text/plain"),
+            ("html", "text/html"),
+            ("htm", "text/html"),
+            ("json", "application/json"),
+            ("xml", "application/xml"),
+            ("png", "image/png"),
+            ("jpg", "image/jpeg"),
+            ("jpeg", "image/jpeg"),
+            ("gif", "image/gif"),
+            ("webp", "image/webp"),
+            ("pdf", "application/pdf"),
+            ("zip", "application/zip"),
+            ("gz", "application/gzip"),
+            ("tar", "application/x-tar"),
+            ("ttl", "text/turtle"),
+            ("nt", "application/n-triples"),
+            ("nq", "application/n-quads"),
+            ("trig", "application/trig"),
+            ("rdf", "application/rdf+xml"),
+            ("sparql", "application/sparql-query"),
+            ("rq", "application/sparql-query"),
+            ("md", "text/markdown"),
+            ("yaml", "application/yaml"),
+            ("yml", "application/yaml"),
+            ("cff", "application/yaml"),
+        ];
+        for (extension, media_type) in table {
+            assert_eq!(
+                media_type_for_extension(extension),
+                media_type,
+                "{extension}"
+            );
+            assert_eq!(
+                media_type_for_extension(&extension.to_ascii_uppercase()),
+                media_type,
+                "{extension} upper-cased"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_or_missing_extension_is_octet_stream() {
+        assert_eq!(media_type_for_extension("bin"), "application/octet-stream");
+        assert_eq!(media_type_for_extension(""), "application/octet-stream");
+        assert_eq!(
+            media_type_for_path(Path::new("LICENSE")),
+            "application/octet-stream"
+        );
+        // A bare file name that merely equals an extension has no extension.
+        assert_eq!(
+            media_type_for_path(Path::new("ttl")),
+            "application/octet-stream"
+        );
+    }
+
+    #[test]
+    fn a_path_uses_its_final_extension() {
+        assert_eq!(
+            media_type_for_path(Path::new("a/b.tar.gz")),
+            "application/gzip"
+        );
+        assert_eq!(
+            media_type_for_path(Path::new("dir.ttl/readme.md")),
+            "text/markdown"
+        );
+    }
 }

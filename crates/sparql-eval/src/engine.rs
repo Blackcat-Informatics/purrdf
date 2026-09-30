@@ -4,8 +4,7 @@
 //! The native [`SparqlEngine`] implementation and its parse-memoizing plan cache.
 //!
 //! [`NativeSparqlEngine`] is the single required impl of the `purrdf-core`
-//! `SparqlEngine` seam — the native replacement for the oxigraph-family
-//! `spareval` on the query path. Ordinary query entry points accept operationally
+//! `SparqlEngine` seam on the query path. Ordinary query entry points accept operationally
 //! infallible [`DatasetView`] backends such as [`RdfDataset`] and validated pack
 //! views. Lazy backends that can fail during execution use the distinct
 //! [`FallibleDatasetView`] entry points, which return a completeness certificate or
@@ -336,13 +335,15 @@ impl Drop for PlanCache {
     }
 }
 
-impl Default for PlanCache {
-    fn default() -> Self {
-        Self::with_limits(CacheLimits::default())
-    }
-}
+purrdf_hash::default_from_new!(PlanCache);
 
 impl PlanCache {
+    /// A fresh, empty cache under the default [`CacheLimits`]; [`Default`] delegates here.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::with_limits(CacheLimits::default())
+    }
+
     /// The number of memoized plans held.
     ///
     /// Retention is bounded by both entry and byte ceilings. Pass changing data
@@ -356,11 +357,6 @@ impl PlanCache {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
-    }
-
-    /// A fresh, empty cache.
-    pub fn new() -> Self {
-        Self::default()
     }
 
     /// An empty cache with explicit retention ceilings. A miss always prepares
@@ -649,8 +645,7 @@ impl PlanCacheKey<'_> {
             out.extend_from_slice(&(value as u64).to_le_bytes());
         }
         fn field(out: &mut Vec<u8>, value: &str) {
-            length(out, value.len());
-            out.extend_from_slice(value.as_bytes());
+            purrdf_hash::frame::frame_le(out, value.as_bytes());
         }
         let Self {
             query,
@@ -725,7 +720,6 @@ impl PlanCacheKey<'_> {
 /// - [`Self::with_loss_vocabulary`] supplies the `ProjectionLoss` vocabulary IRIs
 ///   emitted by loss-aware `CONSTRUCT` when a reifier is dropped. Without it,
 ///   loss declarations stay inactive.
-#[derive(Default)]
 pub struct NativeSparqlEngine {
     cache: RefCell<PlanCache>,
     /// The dataset-aware BGP join-order cache, shared across this engine's queries so
@@ -767,7 +761,23 @@ impl std::fmt::Debug for NativeSparqlEngine {
     }
 }
 
+purrdf_hash::default_from_new!(NativeSparqlEngine);
+
 impl NativeSparqlEngine {
+    /// A fresh engine with an empty plan cache and no `LOAD` resolver; [`Default`]
+    /// delegates here.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            cache: RefCell::new(PlanCache::new()),
+            order_cache: BoundedOrderCache::default(),
+            resolver: None,
+            standpoint_predicates: None,
+            loss_vocabulary: None,
+            eval_options: EvalOptions::default(),
+        }
+    }
+
     /// Configure prepared-plan retention on a new engine. Existing plans held by
     /// callers remain valid; replacing cache policy drops only cache ownership.
     #[must_use]
@@ -1765,11 +1775,6 @@ impl NativeSparqlEngine {
             Some(load) => Some(load),
             None => self.resolver.as_deref(),
         }
-    }
-
-    /// A fresh engine with an empty plan cache and no `LOAD` resolver.
-    pub fn new() -> Self {
-        Self::default()
     }
 
     /// Install a host `GraphResolver` so SPARQL `LOAD <iri>` can fetch its source.
@@ -4161,6 +4166,58 @@ mod tests {
     use purrdf_sparql_algebra::Child;
     use purrdf_sparql_algebra::GraphPattern;
 
+    /// A plan-cache key's bytes, written out by hand: the base-IRI presence
+    /// byte, every text field as its length in eight little-endian bytes then
+    /// its UTF-8, each option list and the parameter list as their counts in
+    /// eight little-endian bytes then their members framed the same way, and
+    /// the rewrite byte. Two keys can only compare equal when every field
+    /// does, whatever separators a caller's configuration holds.
+    #[test]
+    fn a_plan_cache_key_is_every_field_length_framed() {
+        fn framed(out: &mut Vec<u8>, text: &str) {
+            out.extend_from_slice(&(text.len() as u64).to_le_bytes());
+            out.extend_from_slice(text.as_bytes());
+        }
+        let options = ParserOptions {
+            extension_fn_namespaces: vec!["http://example.org/fn#".to_owned()],
+            property_fn_namespaces: Vec::new(),
+            property_fn_iris: vec!["http://example.org/p".to_owned(), "\u{0}".to_owned()],
+        };
+        let parameters = ["?a", "?b"];
+        let mut key = Vec::new();
+        PlanCacheKey {
+            query: "SELECT * WHERE { ?s ?p ?o }",
+            base_iri: Some("http://example.org/base/"),
+            options: &options,
+            relations: "relations",
+            aggregates: "",
+            parameters: &parameters,
+            reach: ShaclPrebinding::Applied,
+        }
+        .write_into(&mut key);
+
+        let mut expected = vec![1];
+        framed(&mut expected, "http://example.org/base/");
+        for list in [
+            &options.extension_fn_namespaces,
+            &options.property_fn_namespaces,
+            &options.property_fn_iris,
+        ] {
+            expected.extend_from_slice(&(list.len() as u64).to_le_bytes());
+            for member in list {
+                framed(&mut expected, member);
+            }
+        }
+        expected.extend_from_slice(&2u64.to_le_bytes());
+        framed(&mut expected, "?a");
+        framed(&mut expected, "?b");
+        expected.push(1);
+        for field in ["relations", "", "SELECT * WHERE { ?s ?p ?o }"] {
+            framed(&mut expected, field);
+        }
+        assert_eq!(key, expected);
+    }
+
     /// Regression: `=` is RDFterm-equality, so `?a != ?b` over two *distinct IRIs*
     /// must be `true` (the row survives), NOT a type error. Routing `=` through the
     /// ordering comparator made every distinct-IRI `!=` evaluate to an error and drop
@@ -5402,7 +5459,7 @@ mod tests {
 
         // Registered in the reverse of their sorted order, so a receipt that echoed
         // registration order would disagree with one that sorted.
-        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
         registry.register(
             "http://example.org/agg/second",
             Arc::new(ExplainTestSumAggregate),
@@ -5489,7 +5546,7 @@ mod tests {
                 .expect("a one-row two-column table"),
             ),
         );
-        let mut aggregates = crate::agg_fn::AggregateRegistry::new();
+        let mut aggregates = crate::agg_fn::AggregateRegistry::default();
         aggregates.register(
             "http://example.org/agg/dual",
             Arc::new(ExplainTestSumAggregate),
@@ -6779,7 +6836,7 @@ mod tests {
         );
 
         let fresh_relations = crate::property_fn::PropertyFunctionRegistry::new();
-        let fresh_aggregates = crate::agg_fn::AggregateRegistry::new();
+        let fresh_aggregates = crate::agg_fn::AggregateRegistry::default();
         assert!(
             check_plan_matches_relations(
                 &prepared,
@@ -6968,58 +7025,43 @@ mod tests {
             }
         }
 
-        std::thread::Builder::new()
-            .stack_size(256 * 1024 * 1024)
-            .spawn(|| {
-                let engine = NativeSparqlEngine::new();
-                // A thousand levels, eight times the count the evaluator used to
-                // refuse past, prepare and ANSWER where the stack holds them.
-                let admitted = PreparedQuery::rewritten(nested(1_000), QueryOptions::EMPTY)
-                    .expect("a thousand nested levels prepare");
-                let answer = engine
-                    .query_prepared(&social(), &admitted, &[], QueryOptions::EMPTY)
-                    .expect("a thousand nested levels evaluate");
-                let SparqlResult::Solutions { rows, .. } = answer else {
-                    panic!("a SELECT answers with solutions, got {answer:?}");
-                };
-                assert_eq!(
-                    rows.len(),
-                    1,
-                    "the admitted plan produces its real `:a :knows :b` row: {rows:?}"
-                );
+        purrdf_stack::on_stack(256 * 1024 * 1024, || {
+            let engine = NativeSparqlEngine::new();
+            // A thousand levels, eight times the count the evaluator used to
+            // refuse past, prepare and ANSWER where the stack holds them.
+            let admitted = PreparedQuery::rewritten(nested(1_000), QueryOptions::EMPTY)
+                .expect("a thousand nested levels prepare");
+            let answer = engine
+                .query_prepared(&social(), &admitted, &[], QueryOptions::EMPTY)
+                .expect("a thousand nested levels evaluate");
+            let SparqlResult::Solutions { rows, .. } = answer else {
+                panic!("a SELECT answers with solutions, got {answer:?}");
+            };
+            assert_eq!(
+                rows.len(),
+                1,
+                "the admitted plan produces its real `:a :knows :b` row: {rows:?}"
+            );
 
-                // Ten thousand levels prepare here too — admission is this thread's
-                // measure — but their walks need 5 MB at the admission's 512-byte charge,
-                // more than the C library hands a 256 KiB request, so the same plan
-                // evaluated there is the evaluation's own typed stack refusal. The
-                // plan is built and dropped here, where its drop fits.
-                let tall = PreparedQuery::rewritten(nested(10_000), QueryOptions::EMPTY)
-                    .expect("ten thousand nested levels prepare on a large stack");
-                let refused = std::thread::scope(|scope| {
-                    std::thread::Builder::new()
-                        .stack_size(256 * 1024)
-                        .spawn_scoped(scope, || {
-                            NativeSparqlEngine::new().query_prepared(
-                                &social(),
-                                &tall,
-                                &[],
-                                QueryOptions::EMPTY,
-                            )
-                        })
-                        .expect("spawn")
-                        .join()
-                        .expect("the small thread returned rather than aborting")
-                })
-                .expect_err("a plan too tall for the evaluating thread's stack is refused");
-                assert_eq!(
-                    refused.code,
-                    crate::EvalError::STACK_EXHAUSTED_CODE,
-                    "the refusal is the evaluation's stack refusal: {refused}"
-                );
+            // Ten thousand levels prepare here too — admission is this thread's
+            // measure — but their walks need 5 MB at the admission's 512-byte charge,
+            // more than the C library hands a 256 KiB request, so the same plan
+            // evaluated there is the evaluation's own typed stack refusal. The
+            // plan is built and dropped here, where its drop fits.
+            let tall = PreparedQuery::rewritten(nested(10_000), QueryOptions::EMPTY)
+                .expect("ten thousand nested levels prepare on a large stack");
+            let refused = purrdf_stack::on_stack_scoped(256 * 1024, || {
+                NativeSparqlEngine::new().query_prepared(&social(), &tall, &[], QueryOptions::EMPTY)
             })
-            .expect("spawn")
-            .join()
-            .expect("the large thread returned");
+            .expect("the small stack runs the evaluation")
+            .expect_err("a plan too tall for the evaluating thread's stack is refused");
+            assert_eq!(
+                refused.code,
+                crate::EvalError::STACK_EXHAUSTED_CODE,
+                "the refusal is the evaluation's stack refusal: {refused}"
+            );
+        })
+        .expect("spawn");
     }
 
     /// A one-in-one-out relation whose declared [`Volatility`](crate::Volatility) is the
@@ -7218,7 +7260,7 @@ mod tests {
 
     // ── exotic aggregation ────────────────────────────────────────────────────
 
-    const XSD_INT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    use purrdf_xsd::datatype::XSD_INTEGER as XSD_INT;
 
     /// A dataset for grouping/aggregation:
     /// `:r1 :a 1 ; :b 2`, `:r2 :a 1 ; :b 2`, `:r3 :a 2 ; :b 3`.

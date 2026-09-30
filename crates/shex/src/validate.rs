@@ -37,10 +37,15 @@ mod matcher;
 mod node;
 mod pattern;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, GraphMatch, RdfDataset, TermId, TermRef, TermValue};
+use purrdf_core::{
+    DatasetView, FastMap, FastSet, GraphMatch, RdfDataset, RdfTextDirection, TermId, TermRef,
+    TermValue,
+};
+use purrdf_lex::json_escape::{JsonEscapes, push_string};
+use purrdf_lex::term_syntax;
 
 use crate::ast::{Schema, SemAct, Shape, ShapeExpr, TripleExpr};
 use crate::semact::{SemActContext, SemActRegistry};
@@ -113,28 +118,28 @@ impl ResultShapeMap {
                 out.push(',');
             }
             out.push_str("{\"node\":");
-            push_json_string(&mut out, &node_term_string(&entry.node));
+            push_string(
+                &mut out,
+                &node_term_string(&entry.node),
+                JsonEscapes::ShortForms,
+            );
             out.push_str(",\"shape\":");
-            push_json_string(&mut out, &shape_term_string(&entry.shape));
+            push_string(
+                &mut out,
+                &shape_term_string(&entry.shape),
+                JsonEscapes::ShortForms,
+            );
             out.push_str(",\"status\":");
-            push_json_string(&mut out, status_str(entry.status));
+            push_string(&mut out, status_str(entry.status), JsonEscapes::ShortForms);
             if let Some(reason) = &entry.reason {
                 out.push_str(",\"reason\":");
-                push_json_string(&mut out, reason);
+                push_string(&mut out, reason, JsonEscapes::ShortForms);
             }
             out.push('}');
         }
         out.push(']');
         out
     }
-}
-
-/// `xsd:string`, the implicit datatype omitted from a literal's term syntax.
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-
-/// Append `s` as a JSON string literal (serde_json handles escaping).
-fn push_json_string(out: &mut String, s: &str) {
-    out.push_str(&serde_json::to_string(s).expect("a &str always serializes"));
 }
 
 /// The result-map spelling of a conformance status.
@@ -145,17 +150,22 @@ fn status_str(status: ConformanceStatus) -> &'static str {
     }
 }
 
-/// A term in the shape-map term syntax (`<iri>` / `_:label` / Turtle literal), each
-/// triple term spelled `<< s p o >>` over [`TermValue::try_write_nested`]'s work list.
+/// A term in the shape-map term syntax: the RDF 1.2 canonical term form of
+/// [`purrdf_lex::term_syntax`] (`<iri>`, `_:label`, a literal with its language
+/// tag and base direction), each triple term spelled `<<( s p o )>>` over
+/// [`TermValue::try_write_nested`]'s work list. [`crate::shapemap::parse_shape_map`]
+/// reads every spelling this writes back to the same term.
 pub(crate) fn node_term_string(value: &TermValue) -> String {
     let mut out = String::new();
+    let open = format!("{} ", term_syntax::TRIPLE_TERM_OPEN);
+    let close = format!(" {}", term_syntax::TRIPLE_TERM_CLOSE);
     let written = value.try_write_nested(
         &mut out,
-        "<< ",
+        &open,
         " ",
-        " >>",
+        &close,
         |out, leaf| {
-            out.push_str(&leaf_term_string(leaf));
+            write_leaf_term(leaf, out);
             Ok::<(), std::convert::Infallible>(())
         },
         |out, text| {
@@ -169,27 +179,22 @@ pub(crate) fn node_term_string(value: &TermValue) -> String {
 }
 
 /// [`node_term_string`] for a term that is not a triple term.
-fn leaf_term_string(value: &TermValue) -> String {
+fn write_leaf_term(value: &TermValue, out: &mut String) {
     match value {
-        TermValue::Iri(iri) => format!("<{iri}>"),
-        TermValue::Blank { label, .. } => format!("_:{label}"),
+        TermValue::Iri(iri) => term_syntax::write_iri(iri, out),
+        TermValue::Blank { label, .. } => term_syntax::write_blank(label, out),
         TermValue::Literal {
             lexical_form,
             datatype,
             language,
-            ..
-        } => {
-            let mut lit = format!("\"{}\"", turtle_escape(lexical_form));
-            if let Some(language) = language {
-                lit.push('@');
-                lit.push_str(language);
-            } else if datatype != XSD_STRING {
-                lit.push_str("^^<");
-                lit.push_str(datatype);
-                lit.push('>');
-            }
-            lit
-        }
+            direction,
+        } => term_syntax::write_literal(
+            lexical_form,
+            datatype,
+            language.as_deref(),
+            direction.map(RdfTextDirection::as_str),
+            out,
+        ),
         TermValue::Triple { .. } => unreachable!("a triple term is written from its parts"),
     }
 }
@@ -199,26 +204,12 @@ pub(crate) fn shape_term_string(shape: &ShapeSelector) -> String {
     match shape {
         ShapeSelector::Start => "START".to_owned(),
         ShapeSelector::Label(label) if label.starts_with("_:") => label.clone(),
-        ShapeSelector::Label(label) => format!("<{label}>"),
-    }
-}
-
-/// Escape a literal's lexical form for a double-quoted Turtle string.
-fn turtle_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            _ => out.push(c),
+        ShapeSelector::Label(label) => {
+            let mut out = String::new();
+            term_syntax::write_iri(label, &mut out);
+            out
         }
     }
-    out
 }
 
 /// A hook resolving an `EXTERNAL` shape declaration's label to its
@@ -371,17 +362,17 @@ struct Engine<'a> {
     data: &'a RdfDataset,
     sem_acts: &'a SemActRegistry<'a>,
     start: Option<&'a ShapeExpr>,
-    shape_map: HashMap<&'a str, &'a ShapeExpr>,
-    prepared_shapes: HashMap<*const Shape, Result<Arc<PreparedShape<'a>>, String>>,
-    label_ids: HashMap<&'a str, u32>,
+    shape_map: FastMap<&'a str, &'a ShapeExpr>,
+    prepared_shapes: FastMap<*const Shape, Result<Arc<PreparedShape<'a>>, String>>,
+    label_ids: FastMap<&'a str, u32>,
     /// Settled `(node, shape)` verdicts for this validation call.
-    memo: HashMap<Pair, Result<(), String>>,
+    memo: FastMap<Pair, Result<(), String>>,
     /// Pairs currently being proven (the coinductive assumption set).
-    in_progress: HashSet<Pair>,
+    in_progress: FastSet<Pair>,
     /// In-progress pairs whose assumption the current proof relied on.
-    used_assumptions: HashSet<Pair>,
+    used_assumptions: FastSet<Pair>,
     /// Labels being proven for a detached focus (cycle guard).
-    detached_in_progress: HashSet<u32>,
+    detached_in_progress: FastSet<u32>,
     /// Compiled `PATTERN` facets for this validation call. The facet is
     /// checked per value node, so without the memo a `PATTERN` over a large
     /// neighbourhood recompiles the same regex once per value.
@@ -397,7 +388,7 @@ struct PreparedShape<'a> {
 
 fn prepare_shape<'a>(
     shape: &'a Shape,
-    te_map: &HashMap<&'a str, &'a TripleExpr>,
+    te_map: &FastMap<&'a str, &'a TripleExpr>,
 ) -> Result<PreparedShape<'a>, String> {
     let compiled = match &shape.expression {
         Some(expr) => matcher::compile(expr, te_map)?,
@@ -479,7 +470,7 @@ impl<'a> Engine<'a> {
         externals: &'a [(String, ShapeExpr)],
         sem_acts: &'a SemActRegistry<'a>,
     ) -> Self {
-        let mut shape_map: HashMap<&'a str, &'a ShapeExpr> = schema
+        let mut shape_map: FastMap<&'a str, &'a ShapeExpr> = schema
             .shapes
             .iter()
             .map(|decl| (decl.id.as_str(), &decl.expr))
@@ -494,7 +485,7 @@ impl<'a> Engine<'a> {
         if let Some(start) = &schema.start {
             crate::structure::collect_triple_labels_shape_expr(start, &mut te_labels);
         }
-        let te_map: HashMap<&'a str, &'a TripleExpr> = te_labels.into_iter().collect();
+        let te_map: FastMap<&'a str, &'a TripleExpr> = te_labels.into_iter().collect();
         let mut shapes = Vec::new();
         for expr in shape_map.values() {
             collect_shapes(expr, &mut shapes);
@@ -505,7 +496,7 @@ impl<'a> Engine<'a> {
         if let Some(start) = schema.start.as_deref() {
             collect_shapes(start, &mut shapes);
         }
-        let mut prepared_shapes = HashMap::new();
+        let mut prepared_shapes = FastMap::default();
         for shape in shapes {
             prepared_shapes
                 .entry(std::ptr::from_ref(shape))
@@ -517,11 +508,11 @@ impl<'a> Engine<'a> {
             start: schema.start.as_deref(),
             shape_map,
             prepared_shapes,
-            label_ids: HashMap::new(),
-            memo: HashMap::new(),
-            in_progress: HashSet::new(),
-            used_assumptions: HashSet::new(),
-            detached_in_progress: HashSet::new(),
+            label_ids: FastMap::default(),
+            memo: FastMap::default(),
+            in_progress: FastSet::default(),
+            used_assumptions: FastSet::default(),
+            detached_in_progress: FastSet::default(),
             patterns: pattern::PatternCache::default(),
         }
     }

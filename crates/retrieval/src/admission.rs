@@ -13,7 +13,7 @@
 //! # Admission is semantic, not syntactic
 //!
 //! Nothing here checks that a plan is *decodable* — [`Plan::from_canonical_bytes`]
-//! and serde already own that — or that the emitted text parses. Admission checks
+//! and [`Plan::from_json`](crate::Plan::from_json) already own that — or that the emitted text parses. Admission checks
 //! the plan against what the registry **declared**:
 //!
 //! * every producer the registry declares **mandatory** is present, is bound to
@@ -1113,8 +1113,8 @@ pub(crate) fn admit_plan<'a>(
     plan: &'a Plan,
     env: &AdmissionEnvironment<'_>,
 ) -> Result<AdmittedRegistry<'a>, AdmissionError> {
-    // 1. The plan's layout version must be one this build writes. A plan decoded
-    //    through serde bypasses `from_canonical_bytes`'s own gate, so it is
+    // 1. The plan's layout version must be one this build writes. A plan read
+    //    from JSON bypasses `from_canonical_bytes`'s own gate, so it is
     //    re-checked here rather than assumed.
     if plan.version != PLAN_VERSION {
         return Err(AdmissionError::InvalidPlanVersion {

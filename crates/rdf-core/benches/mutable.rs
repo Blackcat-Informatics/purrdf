@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! The copy-on-write `MutableDataset` measured hypothesis.
@@ -21,14 +21,13 @@
 //! It reports build / mutate / query time for both. It deliberately asserts NO winner
 //! — it just measures the two side-by-side so the COW choice is data, not assertion.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
-use criterion::{Criterion, criterion_group, criterion_main};
 use purrdf_core::{
-    DatasetMut, GraphMatchValue, MutableDataset, QuadValues, RdfDataset, RdfDatasetBuilder,
-    TermValue,
+    DatasetMut, FastHasher, FastSet, GraphMatchValue, MutableDataset, QuadValues, RdfDataset,
+    RdfDatasetBuilder, TermValue,
 };
+use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
 /// Number of base quads the COW base / simple store start from.
 const BASE_QUADS: u32 = 2000;
@@ -75,14 +74,14 @@ type QuadTuple = (TermValue, TermValue, TermValue, Option<TermValue>);
 /// delta, no base sharing — the simplest thing that could possibly work, and the
 /// thing COW must beat to earn its complexity.
 struct SimpleStore {
-    quads: HashSet<QuadTuple>,
+    quads: FastSet<QuadTuple>,
 }
 
 impl SimpleStore {
     /// Materialize the whole base into the set (the simple store has no sharing, so a
     /// branch is a full copy — the cost COW avoids).
     fn from_base(base: &RdfDataset) -> Self {
-        let mut quads = HashSet::with_capacity(base.quad_count());
+        let mut quads = FastSet::with_capacity_and_hasher(base.quad_count(), FastHasher::default());
         for q in base.quads() {
             quads.insert((
                 resolve(base, q.s),
@@ -120,10 +119,10 @@ fn resolve(base: &RdfDataset, id: purrdf_core::TermId) -> TermValue {
 }
 
 // --------------------------------------------------------------------------------
-// Criterion groups: build / mutate / query, COW vs simple, head-to-head.
+// Bench groups: build / mutate / query, COW vs simple, head-to-head.
 // --------------------------------------------------------------------------------
 
-fn bench_build(c: &mut Criterion) {
+fn bench_build(c: &mut Bench) {
     let base = build_base();
     let mut group = c.benchmark_group("mut_build");
     // COW branch = clone the Arc + empty delta (O(1)).
@@ -137,7 +136,7 @@ fn bench_build(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_mutate(c: &mut Criterion) {
+fn bench_mutate(c: &mut Bench) {
     let base = build_base();
     let (inserts, removes) = workload();
 
@@ -169,7 +168,7 @@ fn bench_mutate(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_query(c: &mut Criterion) {
+fn bench_query(c: &mut Bench) {
     let base = build_base();
     let (inserts, removes) = workload();
 
@@ -211,7 +210,7 @@ fn bench_query(c: &mut Criterion) {
 /// predicate across all quads and every subject/object recurs, so the per-base-id
 /// memo (one slot read per repeat, no owned `TermValue` rebuild) is what this
 /// measures. Report-only.
-fn bench_freeze(c: &mut Criterion) {
+fn bench_freeze(c: &mut Bench) {
     let base = build_base();
     let (inserts, removes) = workload();
     let mut cow = MutableDataset::new(Arc::clone(&base));
@@ -237,7 +236,7 @@ fn bench_freeze(c: &mut Criterion) {
 
 /// Print the relative head-to-head context once: how many quads each store holds, so
 /// the timed numbers are read against the same effective set. No winner asserted.
-fn bench_context(_c: &mut Criterion) {
+fn bench_context(_c: &mut Bench) {
     let base = build_base();
     let (inserts, removes) = workload();
     let mut cow = MutableDataset::new(Arc::clone(&base));
@@ -263,7 +262,7 @@ fn bench_context(_c: &mut Criterion) {
     );
 }
 
-criterion_group!(
+bench_group!(
     benches,
     bench_context,
     bench_build,
@@ -271,4 +270,4 @@ criterion_group!(
     bench_query,
     bench_freeze
 );
-criterion_main!(benches);
+bench_main!(benches);

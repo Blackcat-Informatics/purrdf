@@ -9,31 +9,23 @@
 //! reordering BGP patterns never changes semantics across quoted triples,
 //! reifiers, and GRAPH scopes.
 
-use std::path::{Path, PathBuf};
+mod support;
+
+use purrdf_sparql_conformance::run::query_eval_parser_options;
+use support::suite_manifests;
+
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, SparqlRequest, SparqlResult};
 use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
 use purrdf_sparql_conformance::manifest::{ExpectedResult, SparqlTestCase, TestKind};
 use purrdf_sparql_eval::{
-    AggregateRegistry, EvalOptions, InProcessServiceResolver, NativeSparqlEngine, ParserOptions,
-    QueryOptions, StandpointPredicates,
+    AggregateRegistry, EvalOptions, InProcessServiceResolver, NativeSparqlEngine, QueryOptions,
+    StandpointPredicates,
 };
 
 const BASE: &str = "http://purrdf.test/manifest/";
 const EXT_NS: &str = "https://example.org/ext/";
-
-/// The parse-time namespace declarations both planner engines' queries are read
-/// under, shared with [`eval_case`]'s [`purrdf_sparql_eval::ExtensionEnv`] so the
-/// engine-level and per-call halves of the seam can never disagree about which
-/// predicates are calls.
-fn parser_options() -> ParserOptions {
-    ParserOptions {
-        extension_fn_namespaces: vec![EXT_NS.to_owned()],
-        property_fn_namespaces: vec![purrdf_sparql_conformance::run::REL_NS.to_owned()],
-        property_fn_iris: Vec::new(),
-    }
-}
 
 /// Build an engine with the requested planner mode. Both engines share the same
 /// parse-time configuration the conformance harness uses.
@@ -75,14 +67,14 @@ fn eval_case(
         substitutions: &[],
     };
     let aggregates = case.aggregate_namespace.as_ref().map(|namespace| {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register_statistical_aggregates(namespace);
         registry
     });
     // The declared parser options AND both registries together, as the one
     // environment the query text is read against.
     let env = purrdf_sparql_eval::ExtensionEnv::new(
-        parser_options(),
+        query_eval_parser_options(),
         purrdf_sparql_conformance::run::harness_relations().clone(),
         aggregates
             .as_ref()
@@ -114,26 +106,9 @@ fn query_is_top_level_ordered(query_text: &str) -> bool {
     }
 }
 
-/// Recursively list every `manifest.ttl` under `suite/`.
-fn discover_manifests(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                out.extend(discover_manifests(&path));
-            } else if path.file_name().and_then(|n| n.to_str()) == Some("manifest.ttl") {
-                out.push(path);
-            }
-        }
-    }
-    out
-}
-
 #[test]
 fn cost_and_structural_planner_produce_identical_results() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("suite");
-    let manifests = discover_manifests(&root);
+    let manifests = suite_manifests();
     assert!(
         manifests.len() >= 10,
         "suite inventory shrank: found only {} manifests",

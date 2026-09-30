@@ -29,19 +29,17 @@
 //! ranking, and inventing a stratum for it would be inventing a ranking it never
 //! claimed.
 
+use purrdf_core::purremb_fixture::Identities;
 use std::collections::{BTreeMap, BTreeSet};
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_core::distance::Arithmetic;
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, DimensionalityPolicy, DistanceMetric, EmbeddingBuilder,
-    EmbeddingFamilyContract, MatrixInput, MatrixRow, PrefixPostprocessing, ProjectionSpec,
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTermTarget, StageImplementation, TargetId,
-    TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
+    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
+    DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract, MatrixInput, MatrixRow,
+    PrefixPostprocessing, ProjectionSpec, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTermTarget,
+    TargetId, TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
 };
 use purrdf_retrieval::{
     AdmissionEnvironment, Completeness, DecayRule, Fixed, FusionError, FusionProfile, Iri,
@@ -70,8 +68,15 @@ const KNN_PF: &str = "https://example.org/pf/neighbours";
 const TEXT_STRATUM: &str = "https://example.org/stratum/lexical";
 /// The stratum this host ranks nearest-neighbour rows within.
 const KNN_STRATUM: &str = "https://example.org/stratum/neighbour";
-/// The datatype this host renders a neighbour count with.
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+// The datatype this host renders a neighbour count with.
+use purrdf_core::datatype::XSD_INTEGER;
+
+#[path = "support/registry.rs"]
+mod registry;
+
+use purrdf_retrieval::block_on;
+use purrdf_retrieval::fixture::iri;
+use registry::{entities, kernel_iri};
 /// The reciprocal-rank smoothing constant this host fuses under.
 const K: u32 = 60;
 /// The row bound this host asks for. Fused enumeration is top-k by
@@ -82,14 +87,6 @@ const TOP_K: TopK = TopK::new(16);
 
 fn ex(local: &str) -> String {
     format!("https://example.org/{local}")
-}
-
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
-
-fn kernel_iri(text: &str) -> purrdf_core::Iri {
-    purrdf_core::parse_iri(text).expect("fixture IRIs are valid")
 }
 
 // ---------------------------------------------------------------------------
@@ -165,30 +162,7 @@ fn text_index() -> TextIndex {
 // The PURREMB artifact, encoded and sealed by the kernel's own writer
 // ---------------------------------------------------------------------------
 
-/// A fixture artifact identity, distinct per `name`.
-fn identity(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        ex(name),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("the fixture artifact identity is well formed")
-}
-
-/// A fixture applied stage, distinct per `name`.
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            ex(name),
-            ContentDigest::of(name.as_bytes()),
-            "application/octet-stream",
-            vec![1],
-        )
-        .expect("the fixture stage is well formed"),
-    )
-}
+const FX: Identities = Identities::at("https://example.org/");
 
 /// The corpus's vector half alone, as `(subject local name, vector)`.
 fn vector_rows() -> Vec<(&'static str, Vec<f64>)> {
@@ -235,14 +209,14 @@ fn artifact_over(
     declared.sort_unstable_by_key(|target| target.id);
 
     let contract = EmbeddingFamilyContract {
-        model: identity("model"),
-        engine: identity("engine"),
-        tokenizer: identity("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F64,
@@ -414,25 +388,6 @@ fn profile() -> FusionProfile {
 // ---------------------------------------------------------------------------
 // A minimal single-threaded executor
 // ---------------------------------------------------------------------------
-
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Reading the answer
@@ -997,8 +952,8 @@ fn both_real_producers_attest_the_generation_of_the_index_that_answered() {
         assert_eq!(generation.len(), 64, "{stratum}: a 32-byte digest in hex");
         assert!(
             generation
-                .chars()
-                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+                .bytes()
+                .all(|b| purrdf_hash::hex::nibble_canonical(b).is_some()),
             "{stratum}: rendered in lowercase hex, got {generation}"
         );
     }
@@ -1013,7 +968,7 @@ fn both_real_producers_attest_the_generation_of_the_index_that_answered() {
     // the wrong thing would pass every assertion above and fail these two.
     assert_eq!(
         lexical,
-        purrdf_core::hex::lower(&text_index().fingerprint()),
+        purrdf_hash::hex::encode(&text_index().fingerprint()),
         "the lexical stratum attests the text index's own content fingerprint"
     );
     assert_eq!(
@@ -1169,19 +1124,10 @@ fn answer_under_the_declared_contract(
     }
 }
 
-/// The candidates of an answer, in final order.
-fn candidates(result: &SearchResult) -> Vec<String> {
-    result
-        .rows
-        .iter()
-        .map(|row| row.entity.as_str().to_owned())
-        .collect()
-}
-
 /// Every candidate of `result` is distinct, compared against a set rather than
 /// by eye.
 fn assert_candidates_are_distinct(result: &SearchResult) {
-    let emitted = candidates(result);
+    let emitted = entities(result);
     let distinct: BTreeSet<&str> = emitted.iter().map(String::as_str).collect();
     assert_eq!(
         distinct.len(),
@@ -1293,12 +1239,12 @@ fn the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat
     );
     assert_candidates_are_distinct(&result);
     assert_eq!(
-        candidates(&result).len(),
+        entities(&result).len(),
         4,
         "four documents, four candidates"
     );
     assert_eq!(
-        candidates(&result)
+        entities(&result)
             .iter()
             .filter(|candidate| *candidate == &format!("<{}>", ex("hub")))
             .count(),
@@ -1313,7 +1259,7 @@ fn the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat
         let single =
             answer_under_the_declared_contract(&lexical_request(term), &registry, &data, &profile);
         assert!(
-            candidates(&single).contains(&format!("<{}>", ex("hub"))),
+            entities(&single).contains(&format!("<{}>", ex("hub"))),
             "{term} alone reaches ex:hub, so the full needle matched it through {term} too"
         );
         assert_candidates_are_distinct(&single);
@@ -1744,7 +1690,7 @@ fn the_sole_text_producer_over_one_document_still_returns_that_document() {
         "one document is one row of declared depth"
     );
     assert_eq!(
-        candidates(&result),
+        entities(&result),
         vec![format!("<{}>", ex("only"))],
         "the document the index holds is the answer"
     );
@@ -1863,9 +1809,9 @@ fn a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness() {
     // truncated one — so it reaches the answer through no stratum at all,
     // because the needle does not match its text either.
     assert!(
-        !candidates(&declared).contains(&format!("<{}>", ex("d"))),
+        !entities(&declared).contains(&format!("<{}>", ex("d"))),
         "the fixture is genuinely short: {:?}",
-        candidates(&declared)
+        entities(&declared)
     );
 
     // And the answer says so, where a consumer looks.
@@ -1937,7 +1883,7 @@ fn a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores() {
         "every stratum was exhaustive and whole, and the answer may say so"
     );
     assert!(
-        candidates(&whole).contains(&format!("<{}>", ex("d"))),
+        entities(&whole).contains(&format!("<{}>", ex("d"))),
         "including the document the truncated space above could not name"
     );
     for stratum in [TEXT_STRATUM, KNN_STRATUM] {

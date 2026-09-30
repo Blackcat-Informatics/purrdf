@@ -6,14 +6,9 @@
 use std::sync::{Arc, OnceLock};
 
 use purrdf::{SerializeGraph, serialize_dataset};
-use purrdf_core::{
-    GraphMatch, RdfDataset, RdfTextDirection, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
-};
-use purrdf_entail::{QNode, QTriple};
-use purrdf_sparql_algebra::{
-    BaseDirection, GraphPattern, Literal, NamedNodePattern, Query, SparqlParser, TermPattern,
-    TriplePattern,
-};
+use purrdf_core::{GraphMatch, RdfDataset, SparqlEngine, SparqlRequest, SparqlResult, TermValue};
+use purrdf_entail::QTriple;
+use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
 use purrdf_sparql_eval::{
     LossVocabulary, MemoryRelation, NativeSparqlEngine, ParserOptions, PropertyFunctionRegistry,
     QueryOptions, ServiceResolver, StandpointPredicates,
@@ -226,19 +221,22 @@ pub fn load_dataset(case: &SparqlTestCase) -> Result<Arc<RdfDataset>, String> {
 /// The native media type for a data file, by extension. Most fixtures are Turtle,
 /// but the RDF-1.2 eval-triple-term tests carry `.trig` quad data (GRAPH blocks),
 /// which the Turtle codec rejects.
-fn data_media_type(path: &std::path::Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("trig") => "application/trig",
-        Some("nq") => "application/n-quads",
-        Some("nt") => "application/n-triples",
-        Some("rdf") => "application/rdf+xml",
-        _ => "text/turtle",
-    }
+///
+/// The extension table is `purrdf_gts::files::media_type_for_path`; this keeps
+/// its answer where it names a native RDF syntax the harness feeds to
+/// `purrdf::parse_dataset` (TriG, N-Quads, N-Triples, RDF/XML) and routes
+/// everything else to Turtle.
+pub(crate) fn data_media_type(path: &std::path::Path) -> &'static str {
+    purrdf_gts::files::media_type_for_path_among(
+        path,
+        &[
+            purrdf::NativeRdfFormat::TriG.media_type(),
+            purrdf::NativeRdfFormat::NQuads.media_type(),
+            purrdf::NativeRdfFormat::NTriples.media_type(),
+            purrdf::NativeRdfFormat::RdfXml.media_type(),
+        ],
+        purrdf::NativeRdfFormat::Turtle.media_type(),
+    )
 }
 
 /// The per-file base IRI a `qt:data`/`qt:graphData` Turtle file is parsed
@@ -683,7 +681,7 @@ pub fn query_eval_engine() -> NativeSparqlEngine {
 /// Returns a message if the declarations do not read as one environment.
 pub fn query_eval_env(case: &SparqlTestCase) -> Result<purrdf_sparql_eval::ExtensionEnv, String> {
     let aggregates = case.aggregate_namespace.as_ref().map(|namespace| {
-        let mut registry = purrdf_sparql_eval::AggregateRegistry::new();
+        let mut registry = purrdf_sparql_eval::AggregateRegistry::default();
         registry.register_statistical_aggregates(namespace);
         registry
     });
@@ -784,7 +782,7 @@ fn query_is_top_level_ordered(query_text: &str, options: &ParserOptions) -> bool
 
 /// The RIF vocabulary predicate a `qt:data` graph uses to reference the `.rif`
 /// document(s) whose rules govern the case.
-const RIF_USED_WITH_PROFILE: &str = "http://www.w3.org/2007/rif#usedWithProfile";
+use purrdf_iri::vocab::rif::USED_WITH_PROFILE as RIF_USED_WITH_PROFILE;
 
 /// Build the combined RIF [`RuleSet`](purrdf_entail::RuleSet) for a `Rif`-regime
 /// case by scanning `dataset` for `?doc rif:usedWithProfile ?profile` triples,
@@ -831,12 +829,56 @@ fn build_rif_ruleset(
         ));
     }
 
-    let mut ruleset = purrdf_entail::RuleSet::new();
+    let mut ruleset = purrdf_entail::RuleSet::default();
     for name in basenames {
         let rif_path = dir.join(&name);
-        ruleset.extend(crate::rif_xml::load_ruleset(&rif_path)?);
+        ruleset.extend(load_rif_ruleset(&rif_path)?);
     }
     Ok(ruleset)
+}
+
+/// Load the `.rif` document at `rif_path` into a [`RuleSet`](purrdf_entail::RuleSet)
+/// through the entailment crate's RIF-in-XML reader, every `Import` it names resolved
+/// to the vendored fixture of the same basename beside it (never over the network).
+///
+/// # Errors
+///
+/// A message on any read, parse or import-resolution failure.
+fn load_rif_ruleset(rif_path: &std::path::Path) -> Result<purrdf_entail::RuleSet, String> {
+    let text = std::fs::read_to_string(rif_path)
+        .map_err(|e| format!("read rif {}: {e}", rif_path.display()))?;
+    let parsed = purrdf_entail::parse_rif_xml(&text, None)
+        .map_err(|e| format!("parse rif {}: {e}", rif_path.display()))?;
+    let dir = rif_path
+        .parent()
+        .ok_or_else(|| format!("rif {} has no directory", rif_path.display()))?;
+    purrdf_entail::resolve_rif_imports(parsed, |import| load_rif_import(dir, import))
+        .map_err(|e| format!("resolve rif {} imports: {e}", rif_path.display()))
+}
+
+/// The dataset an `Import` names: the vendored fixture whose file name is the location's
+/// last path segment. A `.rdf` fixture is RDF/XML; anything else is N-Triples. A missing
+/// fixture is a hard error.
+fn load_rif_import(
+    dir: &std::path::Path,
+    import: &purrdf_entail::RifImport,
+) -> Result<Arc<RdfDataset>, purrdf_entail::EntailError> {
+    let location = &import.location;
+    let fail = |why: String| purrdf_entail::EntailError::Parse(format!("import {location}: {why}"));
+    let basename = location
+        .rsplit(['/', '#'])
+        .next()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| fail("the location has no basename".to_owned()))?;
+    let path = dir.join(basename);
+    let bytes = std::fs::read(&path).map_err(|e| fail(format!("read {}: {e}", path.display())))?;
+    let media_type = if path.extension().and_then(|e| e.to_str()) == Some("rdf") {
+        "application/rdf+xml"
+    } else {
+        "application/n-triples"
+    };
+    purrdf::parse_dataset(&bytes, media_type, Some(location))
+        .map_err(|e| fail(format!("parse {}: {e}", path.display())))
 }
 
 /// Parse `query_text` and collect every basic-graph-pattern triple, translated into
@@ -847,102 +889,8 @@ fn build_rif_ruleset(
 /// error. RDF-1.2 quoted-triple term positions (absent from the entailment fixtures)
 /// are skipped — they are never a class-expression scaffold.
 fn collect_query_bgp(base: &str, query_text: &str) -> Vec<QTriple> {
-    let Ok(query) = SparqlParser::new()
+    SparqlParser::new()
         .with_base_iri(base)
         .parse_query(query_text)
-    else {
-        return Vec::new();
-    };
-    let pattern = match &query {
-        Query::Select { pattern, .. }
-        | Query::Construct { pattern, .. }
-        | Query::Describe { pattern, .. }
-        | Query::Ask { pattern, .. } => pattern,
-    };
-    let mut triples: Vec<&TriplePattern> = Vec::new();
-    collect_bgp(pattern, &mut triples);
-    triples
-        .into_iter()
-        .filter_map(|tp| {
-            Some(QTriple {
-                s: term_to_qnode(&tp.subject)?,
-                p: named_node_pattern_to_qnode(&tp.predicate),
-                o: term_to_qnode(&tp.object)?,
-            })
-        })
-        .collect()
-}
-
-/// Gather every [`TriplePattern`] out of `p`, in written order over a work list (from `Bgp` nodes, descending
-/// through every join / filter / graph / optional / union / modifier wrapper).
-fn collect_bgp<'a>(p: &'a GraphPattern, out: &mut Vec<&'a TriplePattern>) {
-    let mut pending = vec![p];
-    while let Some(p) = pending.pop() {
-        match p {
-            GraphPattern::Bgp { patterns } => out.extend(patterns.iter()),
-            GraphPattern::Join { left, right }
-            | GraphPattern::Minus { left, right }
-            | GraphPattern::Lateral { left, right }
-            | GraphPattern::LeftJoin { left, right, .. } => {
-                pending.extend([&**right, &**left]);
-            }
-            GraphPattern::Union { arms } => pending.extend(arms.iter().rev()),
-            GraphPattern::Filter { inner, .. }
-            | GraphPattern::Graph { inner, .. }
-            | GraphPattern::Extend { inner, .. }
-            // `UNFOLD` expands a composite value the solution already carries and
-            // matches no triple in any graph, so it is transparent to this walk.
-            | GraphPattern::Unfold { inner, .. }
-            | GraphPattern::Service { inner, .. }
-            | GraphPattern::OrderBy { inner, .. }
-            | GraphPattern::Project { inner, .. }
-            | GraphPattern::Distinct { inner }
-            | GraphPattern::Reduced { inner }
-            | GraphPattern::Slice { inner, .. }
-            | GraphPattern::Group { inner, .. } => pending.push(inner),
-            // Leaves that hold no triple pattern. A property-function call matches no
-            // triple in any graph — its rows come from the injected relation table — so
-            // it scaffolds no class expression for the OWL-Direct augmentation, exactly
-            // as a path or an inline `VALUES` scaffolds none.
-            GraphPattern::Path { .. }
-            | GraphPattern::Values { .. }
-            | GraphPattern::PropertyFunction(_) => {}
-        }
-    }
-}
-
-/// Translate a subject/object [`TermPattern`] into a [`QNode`] (`None` for an RDF-1.2
-/// quoted-triple term, which cannot scaffold a class expression).
-fn term_to_qnode(t: &TermPattern) -> Option<QNode> {
-    Some(match t {
-        TermPattern::Variable(v) => QNode::Var(v.as_str().to_owned()),
-        TermPattern::NamedNode(n) => QNode::Term(TermValue::iri(n.as_str())),
-        TermPattern::BlankNode(b) => QNode::Term(TermValue::blank(b.as_str())),
-        TermPattern::Literal(l) => QNode::Term(literal_to_term_value(l)),
-        TermPattern::Triple(_) => return None,
-    })
-}
-
-/// Translate a predicate [`NamedNodePattern`] into a [`QNode`].
-fn named_node_pattern_to_qnode(p: &NamedNodePattern) -> QNode {
-    match p {
-        NamedNodePattern::NamedNode(n) => QNode::Term(TermValue::iri(n.as_str())),
-        NamedNodePattern::Variable(v) => QNode::Var(v.as_str().to_owned()),
-    }
-}
-
-/// Translate an algebra [`Literal`] into a [`TermValue`] (language lowercased per C0.1).
-fn literal_to_term_value(l: &Literal) -> TermValue {
-    match l.language() {
-        Some(lang) => TermValue::Literal {
-            lexical_form: l.value().to_owned(),
-            datatype: l.datatype().as_str().to_owned(),
-            language: Some(lang.to_ascii_lowercase()),
-            direction: l.direction().map(|d| match d {
-                BaseDirection::Ltr => RdfTextDirection::Ltr,
-                BaseDirection::Rtl => RdfTextDirection::Rtl,
-            }),
-        },
-        None => TermValue::typed_literal(l.value(), l.datatype().as_str()),
-    }
+        .map_or_else(|_| Vec::new(), |query| purrdf::reasoning::query_bgp(&query))
 }

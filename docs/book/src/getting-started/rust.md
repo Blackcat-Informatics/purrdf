@@ -67,8 +67,8 @@ codec can provide one — never a silent partial parse.
 
 ## Reaching the other engines
 
-Every engine hangs off the same facade. For example, the zero-dependency IRI
-leaf and the ShEx schema layer:
+Every engine hangs off the same facade. For example, the IRI layer, which has
+no third-party dependency, and the ShEx schema layer:
 
 ```rust,ignore
 let iri = purrdf::iri::parse("https://example.org/cat").expect("valid IRI");
@@ -87,9 +87,10 @@ Most applications should stop at `purrdf`. The sub-crates
 `purrdf-sparql-eval`, `purrdf-sparql-results`, `purrdf-cdt`, `purrdf-shapes`,
 `purrdf-jsonschema`, `purrdf-shex`, `purrdf-gts`, `purrdf-datalog`,
 `purrdf-entail`, `purrdf-geo`, `purrdf-text`, `purrdf-validate`, `purrdf-slice`,
-`purrdf-iri`, `purrdf-xsd`, `purrdf-events`, `purrdf-hash`, `purrdf-wasm`) exist for
+`purrdf-iri`, `purrdf-lex`, `purrdf-xsd`, `purrdf-events`, `purrdf-hash`, `purrdf-wasm`) exist for
 consumers that want exactly one engine — for example, a tool that only needs
-IRI parsing can depend on the zero-dependency `purrdf-iri` alone. The crate
+IRI parsing can depend on `purrdf-iri` alone, whose dependencies are the
+first-party lexical layer `purrdf-lex` and the zero-dependency `purrdf-hash`. The crate
 map is in the
 [repository README](https://github.com/Blackcat-Informatics/purrdf#crate-map).
 

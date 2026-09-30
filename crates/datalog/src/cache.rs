@@ -49,6 +49,9 @@
 //! unique and is a pure function of the call sequence. No map iteration order reaches an
 //! output.
 
+use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_le_into;
+use purrdf_hash::hex::Digest32;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
@@ -56,7 +59,6 @@ use std::sync::Arc;
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause};
 use crate::guard::{Guard, GuardReads};
 use crate::plan::Executable;
-use crate::resolve_fol::hex_lower;
 use crate::schedule::Schedule;
 use crate::seminaive::{EvalError, EvalOptions, MAX_TERM_ARENA_BYTES, compile};
 
@@ -75,7 +77,7 @@ pub const PLAN_SOLVER_VERSION: &str = "purrdf-datalog-plan-v1";
 /// atom became an arity-4 quad — the predicate is now a TERM (so a variable predicate and
 /// a constant one hash under different variant tags, where before every predicate was one
 /// length-prefixed string) and the graph position joined the encoding.
-const CLAUSE_IR_DIGEST_TAG: &str = "purrdf-datalog-dl-clause-ir-v3";
+const CLAUSE_IR_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-dl-clause-ir-v3");
 
 /// Domain-separation tag for [`canonical_rule_hash`] over a GUARDED program — one in
 /// which some clause carries a guard literal or a negated conjunction
@@ -87,42 +89,30 @@ const CLAUSE_IR_DIGEST_TAG: &str = "purrdf-datalog-dl-clause-ir-v3";
 /// name, inputs, outputs and read kind, then a negation count, then per negated
 /// conjunction its atoms and guards — framed unconditionally, so within this domain the
 /// encoding is injective too.
-const GUARDED_CLAUSE_IR_DIGEST_TAG: &str = "purrdf-datalog-guarded-dl-clause-ir-v1";
+const GUARDED_CLAUSE_IR_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-guarded-dl-clause-ir-v1");
 
 /// Domain-separation tag for [`scheduled_contract_hash`].
-const SCHEDULED_CONTRACT_DIGEST_TAG: &str = "purrdf-datalog-scheduled-contract-v1";
+const SCHEDULED_CONTRACT_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-scheduled-contract-v1");
 
 /// Domain-separation tag for [`PlanIdentity`].
-const PLAN_IDENTITY_TAG: &str = "purrdf-datalog-plan-identity-v1";
+const PLAN_IDENTITY_TAG: Domain = Domain::new(b"purrdf-datalog-plan-identity-v1");
 
-/// Length-prefix `bytes` into `hasher`.
-///
-/// Every variable-length field is framed, so no concatenation of two fields can be
-/// confused with a different split of the same bytes.
-fn frame(hasher: &mut purrdf_hash::blake3::Hasher, bytes: &[u8]) {
-    hasher.update(&(bytes.len() as u64).to_le_bytes());
-    hasher.update(bytes);
-}
-
-/// Length-prefix `value`'s UTF-8 bytes into `hasher`.
-fn frame_str(hasher: &mut purrdf_hash::blake3::Hasher, value: &str) {
-    frame(hasher, value.as_bytes());
-}
-
-/// Hash one clause term under an explicit variant tag.
+/// Hash one clause term under an explicit variant tag, its text framed by
+/// [`frame_le_into`]: every variable-length field is length-prefixed, so no
+/// concatenation of two fields can be confused with a different split of the same bytes.
 fn hash_term(hasher: &mut purrdf_hash::blake3::Hasher, term: &ClauseTerm) {
     match term {
         ClauseTerm::Var(name) => {
             hasher.update(&[0]);
-            frame_str(hasher, name);
+            frame_le_into(hasher, name.as_bytes());
         }
         ClauseTerm::Iri(iri) => {
             hasher.update(&[1]);
-            frame_str(hasher, iri);
+            frame_le_into(hasher, iri.as_bytes());
         }
         ClauseTerm::Literal(surface) => {
             hasher.update(&[2]);
-            frame_str(hasher, surface);
+            frame_le_into(hasher, surface.as_bytes());
         }
         ClauseTerm::DefaultGraph => {
             hasher.update(&[3]);
@@ -189,14 +179,12 @@ fn hash_atom(hasher: &mut purrdf_hash::blake3::Hasher, atom: &ClauseAtom) {
 pub fn canonical_rule_hash(rules: &[DlClause]) -> [u8; 32] {
     let guarded = rules.iter().any(DlClause::is_guarded);
     let mut hasher = purrdf_hash::blake3::Hasher::new();
-    frame_str(
-        &mut hasher,
-        if guarded {
-            GUARDED_CLAUSE_IR_DIGEST_TAG
-        } else {
-            CLAUSE_IR_DIGEST_TAG
-        },
-    );
+    let domain = if guarded {
+        GUARDED_CLAUSE_IR_DIGEST_TAG
+    } else {
+        CLAUSE_IR_DIGEST_TAG
+    };
+    frame_le_into(&mut hasher, domain.as_bytes());
     hasher.update(&(rules.len() as u64).to_le_bytes());
     for rule in rules {
         hasher.update(&(rule.body().len() as u64).to_le_bytes());
@@ -205,7 +193,7 @@ pub fn canonical_rule_hash(rules: &[DlClause]) -> [u8; 32] {
         }
         hasher.update(&(rule.existentials().len() as u64).to_le_bytes());
         for name in rule.existentials() {
-            frame_str(&mut hasher, name);
+            frame_le_into(&mut hasher, name.as_bytes());
         }
         hasher.update(&(rule.head_disjuncts().len() as u64).to_le_bytes());
         for disjunct in rule.head_disjuncts() {
@@ -233,14 +221,14 @@ pub fn canonical_rule_hash(rules: &[DlClause]) -> [u8; 32] {
 fn hash_guards(hasher: &mut purrdf_hash::blake3::Hasher, guards: &[Guard]) {
     hasher.update(&(guards.len() as u64).to_le_bytes());
     for guard in guards {
-        frame_str(hasher, guard.name());
+        frame_le_into(hasher, guard.name().as_bytes());
         hasher.update(&(guard.inputs().len() as u64).to_le_bytes());
         for input in guard.inputs() {
-            frame_str(hasher, input);
+            frame_le_into(hasher, input.as_bytes());
         }
         hasher.update(&(guard.outputs().len() as u64).to_le_bytes());
         for output in guard.outputs() {
-            frame_str(hasher, output);
+            frame_le_into(hasher, output.as_bytes());
         }
         hasher.update(&[match guard.reads() {
             GuardReads::Bindings => 0,
@@ -294,7 +282,16 @@ fn hash_guards(hasher: &mut purrdf_hash::blake3::Hasher, guards: &[Guard]) {
 pub const CALCULUS_VERSION: &str = "purrdf-datalog-calculus-v1";
 
 /// Domain-separation tag for [`contract_hash`].
-const CONTRACT_DIGEST_TAG: &str = "purrdf-datalog-contract-v1";
+///
+/// It opens two preimage layouts, both yielding a [`ContractHash`]: `contract_digest`
+/// frames the calculus version after it, and the guarded re-fold in [`contract_hash_with`]
+/// hashes a prior contract digest — a 32-byte BLAKE3 output — in that position instead.
+/// The tag therefore names one identity kind at two refinement levels. A preimage of one
+/// layout can equal a preimage of the other only if a BLAKE3 digest's leading bytes spell
+/// the framed calculus version, which is computationally infeasible. The tag is a
+/// published identity: giving the re-fold its own domain would move every guarded
+/// program's published contract hash, so the shared tag stays.
+const CONTRACT_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-contract-v1");
 
 /// The identity of the calculus that produced a result.
 ///
@@ -303,24 +300,24 @@ const CONTRACT_DIGEST_TAG: &str = "purrdf-datalog-contract-v1";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ContractHash {
     /// The folded digest.
-    digest: [u8; 32],
+    digest: Digest32,
 }
 
 impl ContractHash {
     /// The 32-byte digest.
     pub fn digest(&self) -> &[u8; 32] {
-        &self.digest
+        self.digest.as_bytes()
     }
 
     /// The digest as 64 lowercase hex characters.
     pub fn to_hex(&self) -> String {
-        hex_lower(&self.digest)
+        self.digest.to_hex()
     }
 }
 
 impl fmt::Display for ContractHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.to_hex())
+        fmt::Display::fmt(&self.digest, f)
     }
 }
 
@@ -392,11 +389,11 @@ pub fn contract_hash_with(rules: &[DlClause], options: &EvalOptions) -> Contract
         return digest;
     }
     let mut hasher = purrdf_hash::blake3::Hasher::new();
-    frame_str(&mut hasher, CONTRACT_DIGEST_TAG);
+    frame_le_into(&mut hasher, CONTRACT_DIGEST_TAG.as_bytes());
     hasher.update(digest.digest());
     fold_term_generating_limit(&mut hasher, options);
     ContractHash {
-        digest: *hasher.finalize().as_bytes(),
+        digest: Digest32::new(*hasher.finalize().as_bytes()),
     }
 }
 
@@ -442,8 +439,8 @@ pub fn scheduled_contract_hash(
     options: &EvalOptions,
 ) -> ContractHash {
     let mut hasher = purrdf_hash::blake3::Hasher::new();
-    frame_str(&mut hasher, SCHEDULED_CONTRACT_DIGEST_TAG);
-    frame_str(&mut hasher, CALCULUS_VERSION);
+    frame_le_into(&mut hasher, SCHEDULED_CONTRACT_DIGEST_TAG.as_bytes());
+    frame_le_into(&mut hasher, CALCULUS_VERSION.as_bytes());
     hasher.update(&options.max_join_steps().to_le_bytes());
     hasher.update(&options.max_stored_facts().to_le_bytes());
     hasher.update(&(MAX_TERM_ARENA_BYTES as u64).to_le_bytes());
@@ -462,7 +459,7 @@ pub fn scheduled_contract_hash(
         }
     }
     ContractHash {
-        digest: *hasher.finalize().as_bytes(),
+        digest: Digest32::new(*hasher.finalize().as_bytes()),
     }
 }
 
@@ -481,14 +478,14 @@ fn contract_digest(
     max_term_arena_bytes: u64,
 ) -> ContractHash {
     let mut hasher = purrdf_hash::blake3::Hasher::new();
-    frame_str(&mut hasher, CONTRACT_DIGEST_TAG);
-    frame_str(&mut hasher, calculus_version);
+    frame_le_into(&mut hasher, CONTRACT_DIGEST_TAG.as_bytes());
+    frame_le_into(&mut hasher, calculus_version.as_bytes());
     hasher.update(&max_join_steps.to_le_bytes());
     hasher.update(&max_stored_facts.to_le_bytes());
     hasher.update(&max_term_arena_bytes.to_le_bytes());
     hasher.update(&canonical_rule_hash(rules));
     ContractHash {
-        digest: *hasher.finalize().as_bytes(),
+        digest: Digest32::new(*hasher.finalize().as_bytes()),
     }
 }
 
@@ -501,7 +498,7 @@ fn contract_digest(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PlanIdentity {
     /// The folded content address — the cache key.
-    digest: [u8; 32],
+    digest: Digest32,
 }
 
 impl PlanIdentity {
@@ -512,18 +509,18 @@ impl PlanIdentity {
     /// hashed, never interpreted: this crate mints no vocabulary of its own.
     pub fn new(contract_hash: &str, rules: &[DlClause]) -> Self {
         let mut hasher = purrdf_hash::blake3::Hasher::new();
-        frame_str(&mut hasher, PLAN_IDENTITY_TAG);
-        frame_str(&mut hasher, PLAN_SOLVER_VERSION);
-        frame_str(&mut hasher, contract_hash);
+        frame_le_into(&mut hasher, PLAN_IDENTITY_TAG.as_bytes());
+        frame_le_into(&mut hasher, PLAN_SOLVER_VERSION.as_bytes());
+        frame_le_into(&mut hasher, contract_hash.as_bytes());
         hasher.update(&canonical_rule_hash(rules));
         Self {
-            digest: *hasher.finalize().as_bytes(),
+            digest: Digest32::new(*hasher.finalize().as_bytes()),
         }
     }
 
     /// The 32-byte content address.
     pub fn digest(&self) -> &[u8; 32] {
-        &self.digest
+        self.digest.as_bytes()
     }
 }
 
@@ -1391,6 +1388,59 @@ mod tests {
         assert_eq!(hash.to_hex().len(), 64);
         assert!(hash.to_hex().chars().all(|c| c.is_ascii_hexdigit()));
         assert_eq!(hash.digest(), contract_hash(&transitive_step(Q)).digest());
+    }
+
+    /// Options stating every limit a contract hash folds, so a pinned digest is the same
+    /// on every target.
+    fn stated_options() -> EvalOptions {
+        EvalOptions::default()
+            .with_max_join_steps(1_000)
+            .with_max_stored_facts(2_000)
+            .with_max_term_generating_rounds(3)
+            .with_max_generated_terms(4_000)
+    }
+
+    /// `transitive_step`, guarded by a filter on its subject: a GUARDED program.
+    fn guarded_step(predicate: &str) -> Vec<DlClause> {
+        transitive_step(predicate)
+            .into_iter()
+            .map(|clause| clause.with_guards(vec![Guard::filter("even", vec!["?s".to_owned()])]))
+            .collect()
+    }
+
+    /// Every digest this module computes, frozen over fixed inputs: the clause digest of
+    /// a guard-free and of a guarded program (the two clause-IR domains), the guarded
+    /// contract re-fold, the scheduled contract, and the plan identity. A moved value is
+    /// a changed published identity.
+    #[test]
+    fn every_cache_digest_is_frozen() {
+        let hex = |digest: &[u8; 32]| purrdf_hash::hex::Lower(digest).to_string();
+        assert_eq!(
+            hex(&canonical_rule_hash(&transitive_step(Q))),
+            "a8d8438226d780583249aa985250add53f899547c92240a145c97c3de0f0d0a0",
+            "the guard-free clause digest moved"
+        );
+        assert_eq!(
+            hex(&canonical_rule_hash(&guarded_step(Q))),
+            "5eed3a4ad1b38cefe47fc830509b70ed0f5fe5bc2735e9911bbb1acd76b152f6",
+            "the guarded clause digest moved"
+        );
+        assert_eq!(
+            contract_hash_with(&guarded_step(Q), &stated_options()).to_hex(),
+            "73a8d071a93e87e3e8511e3884c7cc6b36d22762d156f554853eb623db655213",
+            "the guarded contract re-fold moved"
+        );
+        let schedule = Schedule::new(vec![crate::schedule::Layer::new(vec![vec![0]], Vec::new())]);
+        assert_eq!(
+            scheduled_contract_hash(&transitive_step(Q), &schedule, &stated_options()).to_hex(),
+            "22c7486553c1e727e8543fc7d9b412296c2e2e986d35edba6aeb949c72962ede",
+            "the scheduled contract hash moved"
+        );
+        assert_eq!(
+            hex(PlanIdentity::new(CONTRACT, &transitive_step(Q)).digest()),
+            "784ad1f59daf308d0ddb5b3f6e3b0187c77b61ee6810692b7804ebf9e4db18e4",
+            "the plan identity moved"
+        );
     }
 
     /// The contract hash is not the clause digest and not the plan address: it is a third,

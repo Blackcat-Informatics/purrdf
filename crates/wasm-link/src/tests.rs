@@ -810,18 +810,8 @@ fn frozen_instruction_spans_match_the_independent_decoder() {
     {
         let fields: Vec<_> = line.split('\t').collect();
         assert_eq!(fields.len(), 3, "invalid frozen fixture row: {line}");
-        let encoded = fields[0].as_bytes();
-        assert_eq!(encoded.len() % 2, 0, "odd-length hex: {line}");
-        let bytes: Vec<_> = encoded
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|pair| {
-                let high = char::from(pair[0]).to_digit(16).expect("hex digit");
-                let low = char::from(pair[1]).to_digit(16).expect("hex digit");
-                ((high << 4) | low) as u8
-            })
-            .collect();
+        let bytes = purrdf_hash::hex::decode(fields[0])
+            .unwrap_or_else(|error| panic!("invalid hex {error}: {line}"));
         let expected_span: usize = fields[1].parse().expect("frozen instruction span");
         let expected_reference: Option<u32> = if fields[2] == "-" {
             None

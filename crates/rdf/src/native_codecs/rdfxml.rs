@@ -6,7 +6,7 @@
 //! This module REPLACES the external purrdf-gts `rdf_codecs::{from_rdf_xml,
 //! to_rdf_xml}` codecs (the first-party mandate: RDF/XML must NOT be parsed or
 //! serialized via the external crate). It implements the RDF/XML production rules
-//! in-repo on top of a pure-Rust XML DOM (`roxmltree`), parsing straight into the
+//! in-repo on top of the workspace's one XML reader ([`purrdf_lex::xml`]), parsing straight into the
 //! frozen [`RdfDataset`](crate::RdfDataset) IR (via the shared
 //! [`fold_statement_layer`](super::parse::fold_statement_layer)) and serializing from
 //! the first-party [`SerGraph`](super::ser_model::SerGraph). It is fully purrdf-gts
@@ -35,24 +35,27 @@
 //! expansion, node/property striping, base-IRI resolution, and `xmlns` prefix
 //! scoping.
 
+use super::syntax::{CodecName, check_language_tag, element_text};
 use purrdf_core::sink::{TextOut, TextSink};
+use purrdf_core::xml_escape::Context;
+use purrdf_iri::terminals;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use roxmltree::{Document, Node};
+use purrdf_core::collections::{ListVocab, build_rdf_list};
+use purrdf_lex::xml::{Attribute, Node};
 
 use super::codec::RdfCodec;
 use super::parse::{FoldNode, FoldRow, RDF_REIFIES as RDF_REIFIES_IRI, fold_statement_layer};
 use super::ser_model::{
-    ReifierIndex, SerGraph, SerTerm, SerTermKind, deterministic_blank_label_with_prefix,
+    ReifierIndex, SerGraph, SerTermKind, deterministic_blank_label_with_prefix,
 };
 use super::text_parse::LineParseMode;
-use crate::nesting::guard_xml_nesting;
+use crate::nesting::{XmlReadError, parse_xml};
 use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId};
 use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
 use purrdf_core::cdt_blank::BlankBinding;
-use purrdf_iri::langtag;
 
 /// The RDF/XML codec: a standalone (non-line-family) [`RdfCodec`] over the in-repo W3C
 /// RDF/XML grammar. RDF/XML is treated as star-INcapable under the transcode loss
@@ -84,10 +87,13 @@ impl RdfCodec for RdfXmlCodec {
     }
 }
 
-const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
-const ITS_NS: &str = "http://www.w3.org/2005/11/its";
-const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
+use purrdf_iri::vocab::its::NS as ITS_NS;
+use purrdf_iri::vocab::rdf::NS as RDF_NS;
+use purrdf_iri::vocab::xml::NS as XML_NS;
+use purrdf_xsd::datatype::XSD_NS;
+
+/// This codec's name, which its diagnostics lead with.
+const RDF_XML: CodecName = CodecName("RDF/XML");
 
 const RDF_DESCRIPTION: &str = "Description";
 const RDF_ABOUT: &str = "about";
@@ -113,28 +119,9 @@ const XML_LANG: &str = "lang";
 const ITS_DIR: &str = "dir";
 const ITS_VERSION: &str = "version";
 
-fn parse_err(detail: impl Into<String>) -> RdfDiagnostic {
-    RdfDiagnostic::error("native-codec-parse", format!("RDF/XML: {}", detail.into()))
-}
-
-fn serialize_err(detail: impl Into<String>) -> RdfDiagnostic {
-    RdfDiagnostic::error(
-        "native-codec-serialize",
-        format!("RDF/XML: {}", detail.into()),
-    )
-}
-
 // ───────────────────────────────────────────────────────────────────────────────
 // First-party RDF/XML term + row model (the parser's in-memory accumulation)
 // ───────────────────────────────────────────────────────────────────────────────
-
-/// RDF 1.2 base direction, parsed off `its:dir`. Mapped to the IR's
-/// [`RdfTextDirection`] when a row interns.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BaseDirection {
-    Ltr,
-    Rtl,
-}
 
 /// A first-party RDF term the parser accumulates before interning into the IR.
 #[derive(Clone, Debug)]
@@ -195,16 +182,16 @@ pub(super) fn parse_rdfxml_document(
     base: &mut purrdf_iri::BaseScope,
     namespaces: Option<&mut Vec<(String, String)>>,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    // `roxmltree`'s tokenizer recurses once per element and aborts the process on a deeply
-    // nested document, so the nesting is measured on the SOURCE and refused here. This is
-    // also what bounds the walk below: the tree it descends came from this very call, so its
-    // element nesting is bounded and it needs no depth counter of its own.
-    guard_xml_nesting(text).map_err(|depth| {
-        parse_err(format!(
+    // The reader refuses element nesting past the parser limit, and that is also what
+    // bounds the walk below: the tree it descends came from this very call, so its element
+    // nesting is bounded and it needs no depth counter of its own.
+    let document = parse_xml(text).map_err(|error| match error {
+        XmlReadError::TooDeep(depth) => RDF_XML.parse_err(format!(
             "element nesting reaches {depth} levels, past the parser limit"
-        ))
+        )),
+        XmlReadError::DeclarationsUnread => RDF_XML.parse_err(XmlReadError::UNREAD_MESSAGE),
+        XmlReadError::Malformed(error) => RDF_XML.parse_err(error.to_string()),
     })?;
-    let document = Document::parse(text).map_err(|e| parse_err(e.to_string()))?;
     let mut parser = RdfXmlParser {
         rows: Vec::new(),
         bnode_counter: 0,
@@ -275,7 +262,7 @@ struct ParseContext {
     /// for that element's subtree only, which falls out of the per-child clone.
     base: purrdf_iri::BaseScope,
     language: Option<String>,
-    direction: Option<BaseDirection>,
+    direction: Option<RdfTextDirection>,
     /// `rdf:version="1.2"` declared on this element or an ancestor: gates the RDF 1.2
     /// features (triple terms via `parseType="Triple"`, ITS base direction).
     rdf_version_12: bool,
@@ -306,11 +293,8 @@ impl ParseContext {
             next.language = (!language.is_empty()).then(|| language.to_string());
         }
         if let Some(direction) = attr_its(element, ITS_DIR) {
-            let parsed = match direction {
-                "ltr" => BaseDirection::Ltr,
-                "rtl" => BaseDirection::Rtl,
-                other => return Err(parse_err(format!("invalid ITS direction {other:?}"))),
-            };
+            let parsed = RdfTextDirection::from_str_token(direction)
+                .ok_or_else(|| RDF_XML.parse_err(format!("invalid ITS direction {direction:?}")))?;
             // RDF 1.2 base direction is suppressed in ITS 2.0 mode (`its:version`)
             // unless the document explicitly opts into RDF 1.2 via `rdf:version="1.2"`.
             next.direction = if next.its_version && !next.rdf_version_12 {
@@ -363,7 +347,7 @@ impl RdfXmlParser {
     ) -> Result<purrdf_iri::BaseScope, RdfDiagnostic> {
         let context = context.for_child(root)?;
         if is_rdf(root, "RDF") {
-            for child in element_children(root) {
+            for child in root.element_children() {
                 self.parse_node_element(child, &context)?;
             }
         } else {
@@ -411,7 +395,7 @@ impl RdfXmlParser {
             )?;
         }
 
-        for child in element_children(element) {
+        for child in element.element_children() {
             self.parse_property_element(&subject, child, &context)?;
         }
         Ok(subject)
@@ -474,7 +458,7 @@ impl RdfXmlParser {
                     annotation,
                 )?;
                 self.insert_property_attribute_statements(&object, element, &context)?;
-                for child in element_children(element) {
+                for child in element.element_children() {
                     self.parse_property_element(&object, child, &context)?;
                 }
                 return Ok(());
@@ -516,17 +500,15 @@ impl RdfXmlParser {
                 );
             }
             Some(other) => {
-                return Err(parse_err(format!("unsupported rdf:parseType {other:?}")));
+                return Err(RDF_XML.parse_err(format!("unsupported rdf:parseType {other:?}")));
             }
             None => {}
         }
 
-        let element_children: Vec<Node<'_, '_>> = element_children(element).collect();
+        let element_children: Vec<Node<'_, '_>> = element.element_children().collect();
         if let Some(datatype) = attr_rdf(element, RDF_DATATYPE) {
             if !element_children.is_empty() {
-                return Err(parse_err(
-                    "rdf:datatype property cannot contain node elements",
-                ));
+                return Err(RDF_XML.parse_err("rdf:datatype property cannot contain node elements"));
             }
             let literal =
                 RdfLiteral::typed(element_text(element), self.iri_ref(datatype, &context)?);
@@ -550,9 +532,7 @@ impl RdfXmlParser {
             );
         }
         if element_children.len() > 1 {
-            return Err(parse_err(
-                "property element contains more than one node element",
-            ));
+            return Err(RDF_XML.parse_err("property element contains more than one node element"));
         }
 
         if property_attrs(element).next().is_some() {
@@ -602,45 +582,39 @@ impl RdfXmlParser {
         element: Node<'_, '_>,
         context: &ParseContext,
     ) -> Result<XmlTerm, RdfDiagnostic> {
-        let items: Vec<Node<'_, '_>> = element_children(element).collect();
-        if items.is_empty() {
-            return Ok(XmlTerm::Iri(rdf_iri(RDF_NIL)?));
-        }
-        let nodes = (0..items.len())
+        let items: Vec<Node<'_, '_>> = element.element_children().collect();
+        // Every cell is minted before any member is parsed, so the cells are labelled in
+        // list order whatever the members nest.
+        let cells = (0..items.len())
             .map(|_| self.fresh_collection_bnode())
             .collect::<Result<Vec<_>, _>>()?;
+        let members = items
+            .iter()
+            .map(|item| self.parse_node_element(*item, context).map(XmlTerm::from))
+            .collect::<Result<Vec<_>, _>>()?;
         // The three RDF vocabulary IRIs are constants: build (format + validate) each
-        // once here rather than once per collection item, and clone the string below.
-        let rdf_first = rdf_iri(RDF_FIRST)?;
-        let rdf_rest = rdf_iri(RDF_REST)?;
-        let rdf_nil = rdf_iri(RDF_NIL)?;
-        for (index, item) in items.iter().enumerate() {
-            let object = self.parse_node_element(*item, context)?;
-            self.insert_statement(
-                nodes[index].clone().into(),
-                rdf_first.clone(),
-                object.into(),
-                None,
-                None,
-            )?;
-            let rest: XmlTerm = if let Some(next) = nodes.get(index + 1) {
-                next.clone().into()
-            } else {
-                XmlTerm::Iri(rdf_nil.clone())
-            };
-            self.insert_statement(
-                nodes[index].clone().into(),
-                rdf_rest.clone(),
-                rest,
-                None,
-                None,
-            )?;
-        }
-        Ok(nodes
-            .first()
-            .expect("non-empty collection has a head node")
-            .clone()
-            .into())
+        // once here rather than once per collection item.
+        let vocab = ListVocab {
+            first: XmlTerm::Iri(rdf_iri(RDF_FIRST)?),
+            rest: XmlTerm::Iri(rdf_iri(RDF_REST)?),
+            nil: XmlTerm::Iri(rdf_iri(RDF_NIL)?),
+        };
+        let rows = &mut self.rows;
+        Ok(build_rdf_list(
+            members,
+            &vocab,
+            |index| cells[index].clone().into(),
+            |subject, predicate, object| {
+                let XmlTerm::Iri(predicate) = predicate else {
+                    unreachable!("the list vocabulary is rdf:first and rdf:rest, both IRIs")
+                };
+                rows.push(XmlRow {
+                    subject,
+                    predicate,
+                    object,
+                });
+            },
+        ))
     }
 
     fn parse_triple_element(
@@ -648,11 +622,9 @@ impl RdfXmlParser {
         element: Node<'_, '_>,
         context: &ParseContext,
     ) -> Result<(XmlTerm, XmlTerm, XmlTerm), RdfDiagnostic> {
-        let nodes: Vec<Node<'_, '_>> = element_children(element).collect();
+        let nodes: Vec<Node<'_, '_>> = element.element_children().collect();
         if nodes.len() != 1 {
-            return Err(parse_err(
-                "rdf:parseType=\"Triple\" requires one node element",
-            ));
+            return Err(RDF_XML.parse_err("rdf:parseType=\"Triple\" requires one node element"));
         }
         let node = nodes[0];
         let triple_subject = self.subject_for_node(node, context)?;
@@ -661,12 +633,12 @@ impl RdfXmlParser {
         // The single predicate/object may come from a child property element, a
         // `rdf:type` attribute, or another property attribute (literal-valued).
         let type_attr = attr_rdf(node, RDF_TYPE);
-        let prop_attrs: Vec<roxmltree::Attribute<'_, '_>> = property_attrs(node).collect();
-        let child_props: Vec<Node<'_, '_>> = element_children(node).collect();
+        let prop_attrs: Vec<&Attribute<'_>> = property_attrs(node).collect();
+        let child_props: Vec<Node<'_, '_>> = node.element_children().collect();
         if usize::from(type_attr.is_some()) + prop_attrs.len() + child_props.len() != 1 {
-            return Err(parse_err(
-                "rdf:parseType=\"Triple\" requires exactly one predicate/object",
-            ));
+            return Err(
+                RDF_XML.parse_err("rdf:parseType=\"Triple\" requires exactly one predicate/object")
+            );
         }
         let (predicate, object): (String, XmlTerm) = if let Some(type_iri) = type_attr {
             (
@@ -704,15 +676,15 @@ impl RdfXmlParser {
                 self.parse_triple_element(property, &context)?,
             )));
         }
-        let nodes: Vec<Node<'_, '_>> = element_children(property).collect();
+        let nodes: Vec<Node<'_, '_>> = property.element_children().collect();
         if nodes.len() == 1 {
             let object = self.subject_for_node(nodes[0], &context)?;
             return Ok(object.into());
         }
         if nodes.len() > 1 {
-            return Err(parse_err(
-                "rdf:parseType=\"Triple\" object has multiple node elements",
-            ));
+            return Err(
+                RDF_XML.parse_err("rdf:parseType=\"Triple\" object has multiple node elements")
+            );
         }
         Ok(XmlTerm::Literal(self.context_literal(
             &element_text(property),
@@ -828,15 +800,11 @@ impl RdfXmlParser {
             validate_language_tag(language)?;
             // A directional language-tagged literal carries the RDF 1.2 base direction;
             // the IR expands the datatype to rdf:langString on intern (C0.1).
-            let direction = context.direction.map(|d| match d {
-                BaseDirection::Ltr => RdfTextDirection::Ltr,
-                BaseDirection::Rtl => RdfTextDirection::Rtl,
-            });
             return Ok(RdfLiteral {
                 lexical_form: lexical.to_owned(),
                 datatype: None,
                 language: Some(language.clone()),
-                direction,
+                direction: context.direction,
             });
         }
         Ok(RdfLiteral::simple(lexical))
@@ -857,7 +825,7 @@ impl RdfXmlParser {
 
     fn rdf_id_iri(&self, value: &str, context: &ParseContext) -> Result<String, RdfDiagnostic> {
         if value.is_empty() {
-            return Err(parse_err("empty rdf:ID"));
+            return Err(RDF_XML.parse_err("empty rdf:ID"));
         }
         // `rdf:ID="x"` denotes the same-document reference `#x`, which RFC-3986 5.2
         // resolves against the base (dropping the base's own fragment). With no base in
@@ -871,20 +839,21 @@ impl RdfXmlParser {
     }
 
     fn fresh_bnode(&mut self) -> Result<XmlNode, RdfDiagnostic> {
-        let id = self.bnode_counter;
-        self.bnode_counter += 1;
-        let label = deterministic_blank_label_with_prefix("rdfxml_", id);
-        validate_blank_label(&label)?;
-        Ok(XmlNode::Blank(label))
+        fresh_labelled_bnode(&mut self.bnode_counter, "rdfxml_")
     }
 
     fn fresh_collection_bnode(&mut self) -> Result<XmlNode, RdfDiagnostic> {
-        let id = self.collection_counter;
-        self.collection_counter += 1;
-        let label = deterministic_blank_label_with_prefix("rdfxml_list_", id);
-        validate_blank_label(&label)?;
-        Ok(XmlNode::Blank(label))
+        fresh_labelled_bnode(&mut self.collection_counter, "rdfxml_list_")
     }
+}
+
+/// The next deterministic blank node of the sequence `counter` numbers under
+/// `prefix`, advancing the counter.
+fn fresh_labelled_bnode(counter: &mut usize, prefix: &str) -> Result<XmlNode, RdfDiagnostic> {
+    let label = deterministic_blank_label_with_prefix(prefix, *counter);
+    *counter += 1;
+    validate_blank_label(&label)?;
+    Ok(XmlNode::Blank(label))
 }
 
 /// Intern an [`XmlTerm`] subject position into the builder, returning its [`TermId`].
@@ -926,7 +895,7 @@ fn intern_node(builder: &mut RdfDatasetBuilder, term: &XmlTerm) -> Result<FoldNo
     }
 }
 
-// ── roxmltree element/attribute helpers (RDF/XML name matching) ─────────────────
+// ── XML tree element/attribute helpers (RDF/XML name matching) ─────────────────
 
 fn is_rdf(element: Node<'_, '_>, local: &str) -> bool {
     element.tag_name().namespace() == Some(RDF_NS) && element.tag_name().name() == local
@@ -955,22 +924,15 @@ fn name_iri(
 }
 
 fn attr_rdf<'a>(element: Node<'a, '_>, local: &str) -> Option<&'a str> {
-    attr_in_ns(element, RDF_NS, local)
+    element.attribute((RDF_NS, local))
 }
 
 fn attr_xml<'a>(element: Node<'a, '_>, local: &str) -> Option<&'a str> {
-    attr_in_ns(element, XML_NS, local)
+    element.attribute((XML_NS, local))
 }
 
 fn attr_its<'a>(element: Node<'a, '_>, local: &str) -> Option<&'a str> {
-    attr_in_ns(element, ITS_NS, local)
-}
-
-fn attr_in_ns<'a>(element: Node<'a, '_>, namespace: &str, local: &str) -> Option<&'a str> {
-    element
-        .attributes()
-        .find(|attr| attr.namespace() == Some(namespace) && attr.name() == local)
-        .map(|attr| attr.value())
+    element.attribute((ITS_NS, local))
 }
 
 /// Property attributes: every attribute that is NOT an `xml:`/`its:` attribute or one
@@ -978,9 +940,10 @@ fn attr_in_ns<'a>(element: Node<'a, '_>, namespace: &str, local: &str) -> Option
 /// filter.
 fn property_attrs<'a, 'input>(
     element: Node<'a, 'input>,
-) -> impl Iterator<Item = roxmltree::Attribute<'a, 'input>> {
+) -> impl Iterator<Item = &'a Attribute<'input>> {
     element
         .attributes()
+        .iter()
         .filter(|attr| attr.namespace() != Some(XML_NS))
         .filter(|attr| attr.namespace() != Some(ITS_NS))
         .filter(|attr| {
@@ -999,20 +962,6 @@ fn property_attrs<'a, 'input>(
                         | RDF_ANNOTATION_NODE_ID
                 ))
         })
-}
-
-/// Element children of `node`, in document order (skipping text / comment nodes).
-fn element_children<'a, 'input>(node: Node<'a, 'input>) -> impl Iterator<Item = Node<'a, 'input>> {
-    node.children().filter(Node::is_element)
-}
-
-/// Concatenate the direct text-node children of `element` (the literal text content).
-fn element_text(element: Node<'_, '_>) -> String {
-    element
-        .children()
-        .filter(Node::is_text)
-        .filter_map(|n| n.text())
-        .collect()
 }
 
 fn rdf_iri(local: &str) -> Result<String, RdfDiagnostic> {
@@ -1076,9 +1025,7 @@ fn validate_blank_label(label: &str) -> Result<(), RdfDiagnostic> {
     if !is_valid_label(label, LabelAlphabet::NcName)
         && !is_valid_label(label, LabelAlphabet::BlankNodeLabel)
     {
-        return Err(parse_err(format!(
-            "invalid blank-node identifier {label:?}"
-        )));
+        return Err(RDF_XML.parse_err(format!("invalid blank-node identifier {label:?}")));
     }
     Ok(())
 }
@@ -1111,13 +1058,9 @@ fn validate_blank_label(label: &str) -> Result<(), RdfDiagnostic> {
 /// production refused. RDF/XML parse diagnostics carry no line/column (the XML
 /// reader does not surface one), which this does not change.
 fn validate_language_tag(language: &str) -> Result<(), RdfDiagnostic> {
-    match langtag::parse_with(language, langtag::Profile::ConcreteSyntaxLangtagBounded) {
-        Ok(_) => Ok(()),
-        Err(error) => Err(RdfDiagnostic::error(
-            error.diagnostic_code(),
-            format!("RDF/XML: invalid language tag {language:?}: {error}"),
-        )),
-    }
+    check_language_tag(language, |error| {
+        format!("RDF/XML: invalid language tag {language:?}: {error}")
+    })
 }
 
 // ── XML-literal (`rdf:parseType="Literal"`) inclusive canonicalization ──────────
@@ -1169,10 +1112,9 @@ enum XmlLiteralStep<'a, 'input> {
 /// below makes the depth a heap cost instead, so THIS WALK adds no bound of its own.
 ///
 /// It is not the only thing between the input and here, and the distinction matters to
-/// anyone reading this for the codec's real limit. [`guard_xml_nesting`] measures element
-/// nesting on the SOURCE TEXT, in front of the XML tokenizer that would otherwise overflow
-/// on its own, and text is all it has — it cannot tell an element that is literal content
-/// from one that is structure. So a deep literal IS refused, by that guard rather than by
+/// anyone reading this for the codec's real limit. [`parse_xml`] caps element nesting as
+/// the document is read, and the reader cannot tell an element that is literal content
+/// from one that is structure. So a deep literal IS refused, by that cap rather than by
 /// this function.
 ///
 /// Pre-order with an owed end tag reproduces the recursive walk's bytes exactly: children are
@@ -1196,7 +1138,7 @@ fn serialize_xml_node<W: TextOut + ?Sized>(
         };
         if node.is_text() {
             if let Some(text) = node.text() {
-                push_xml_text(text, out)?;
+                RDF_XML.push_xml(text, Context::Text, out)?;
             }
             continue;
         }
@@ -1214,7 +1156,7 @@ fn serialize_xml_node<W: TextOut + ?Sized>(
                     out.push_str(" xmlns:");
                     out.push_str(prefix);
                     out.push_str("=\"");
-                    push_xml_attr(iri, out)?;
+                    RDF_XML.push_xml(iri, Context::Attribute, out)?;
                     out.push('"');
                 }
             }
@@ -1223,7 +1165,7 @@ fn serialize_xml_node<W: TextOut + ?Sized>(
             out.push(' ');
             out.push_str(&raw_attr_name(node, attr));
             out.push_str("=\"");
-            push_xml_attr(attr.value(), out)?;
+            RDF_XML.push_xml(attr.value(), Context::Attribute, out)?;
             out.push('"');
         }
         // Canonical XML has no self-closing form: always emit a start/end pair.
@@ -1247,7 +1189,7 @@ fn raw_name(node: Node<'_, '_>) -> String {
 }
 
 /// The raw (prefixed) attribute name. An unprefixed attribute carries no namespace.
-fn raw_attr_name(node: Node<'_, '_>, attr: roxmltree::Attribute<'_, '_>) -> String {
+fn raw_attr_name(node: Node<'_, '_>, attr: &Attribute<'_>) -> String {
     match attr.namespace() {
         Some(ns) => qualify(node, Some(ns), attr.name()),
         None => attr.name().to_string(),
@@ -1264,23 +1206,6 @@ fn qualify(node: Node<'_, '_>, namespace: Option<&str>, local: &str) -> String {
     }
 }
 
-/// Append lossless XML character data STRAIGHT INTO the sink.
-///
-/// `push_into` rather than `escape`: the allocating spelling returns a `Cow` that
-/// allocates whenever any character needs replacing, once per term, on a path whose
-/// whole purpose is to not accumulate the document. The extra scan `push_into` pays is
-/// the trade this codec was converted to make.
-fn push_xml_text<W: TextOut + ?Sized>(value: &str, out: &mut W) -> Result<(), RdfDiagnostic> {
-    purrdf_core::xml_escape::push_into(value, purrdf_core::xml_escape::Context::Text, out)
-        .map_err(|error| serialize_err(error.to_string()))
-}
-
-/// Append a lossless double-quoted XML attribute value straight into the sink.
-fn push_xml_attr<W: TextOut + ?Sized>(value: &str, out: &mut W) -> Result<(), RdfDiagnostic> {
-    purrdf_core::xml_escape::push_into(value, purrdf_core::xml_escape::Context::Attribute, out)
-        .map_err(|error| serialize_err(error.to_string()))
-}
-
 /// Append ` name="value"` with the value escaped on its way into the sink.
 ///
 /// The interpolating spelling — `write!(out, " name=\"{}\"", escape(value)?)` — is what
@@ -1294,7 +1219,7 @@ fn push_xml_attribute<W: TextOut + ?Sized>(
     out.push(' ');
     out.push_str(name);
     out.push_str("=\"");
-    push_xml_attr(value, out)?;
+    RDF_XML.push_xml(value, Context::Attribute, out)?;
     out.push('"');
     Ok(())
 }
@@ -1339,7 +1264,7 @@ fn write_rdfxml<W: TextOut + ?Sized>(graph: &SerGraph, out: &mut W) -> Result<()
         || graph.reifiers.iter().any(|(_, _, g)| g.is_some())
         || graph.annotations.iter().any(|(_, _, _, g)| g.is_some());
     if named {
-        return Err(serialize_err("cannot serialize a named graph"));
+        return Err(RDF_XML.serialize_err("cannot serialize a named graph"));
     }
 
     // One map keyed by the rendered subject, holding BOTH the first term id seen for
@@ -1397,7 +1322,7 @@ fn write_rdfxml<W: TextOut + ?Sized>(graph: &SerGraph, out: &mut W) -> Result<()
             out.push_str(" xmlns:");
             out.push_str(prefix);
             out.push_str("=\"");
-            push_xml_attr(namespace, out)?;
+            RDF_XML.push_xml(namespace, Context::Attribute, out)?;
             out.push('"');
         }
     }
@@ -1467,11 +1392,11 @@ fn write_reifies<W: TextOut + ?Sized>(
 
 /// The grouping key for a subject term: `I<iri>` for an IRI, `B<label>` for a blank node.
 fn subject_key(graph: &SerGraph, tid: usize) -> Result<String, RdfDiagnostic> {
-    let term = ser_term(graph, tid)?;
+    let term = RDF_XML.term(graph, tid)?;
     match term.kind {
-        SerTermKind::Iri => Ok(format!("I{}", ser_value(term)?)),
-        SerTermKind::Bnode => Ok(format!("B{}", ser_value(term)?)),
-        other => Err(serialize_err(format!(
+        SerTermKind::Iri => Ok(format!("I{}", RDF_XML.value(term)?)),
+        SerTermKind::Bnode => Ok(format!("B{}", RDF_XML.value(term)?)),
+        other => Err(RDF_XML.serialize_err(format!(
             "a subject must be an IRI or blank node, got {other:?}"
         ))),
     }
@@ -1486,16 +1411,20 @@ fn write_node_attribute<W: TextOut + ?Sized>(
     graph: &SerGraph,
     tid: usize,
 ) -> Result<(), RdfDiagnostic> {
-    let term = ser_term(graph, tid)?;
+    let term = RDF_XML.term(graph, tid)?;
     match term.kind {
         SerTermKind::Iri => {
-            push_xml_attribute("rdf:about", &iri_reference(graph, ser_value(term)?), out)?;
+            push_xml_attribute(
+                "rdf:about",
+                &iri_reference(graph, RDF_XML.value(term)?),
+                out,
+            )?;
         }
         SerTermKind::Bnode => {
-            push_xml_attribute("rdf:nodeID", ser_value(term)?, out)?;
+            push_xml_attribute("rdf:nodeID", RDF_XML.value(term)?, out)?;
         }
         other => {
-            return Err(serialize_err(format!(
+            return Err(RDF_XML.serialize_err(format!(
                 "a subject must be an IRI or blank node, got {other:?}"
             )));
         }
@@ -1541,7 +1470,7 @@ fn serializer_namespaces(
         for property in properties {
             match *property {
                 PropertyItem::Pair(predicate, object) => {
-                    let iri = ser_value(ser_term(graph, predicate)?)?;
+                    let iri = RDF_XML.value(RDF_XML.term(graph, predicate)?)?;
                     register_namespace(iri, &mut namespaces, &mut next)?;
                     enqueue_quoted_triple(
                         graph,
@@ -1565,7 +1494,7 @@ fn serializer_namespaces(
     let mut cursor = 0;
     while let Some(&(_, predicate, object)) = pending.get(cursor) {
         cursor += 1;
-        let iri = ser_value(ser_term(graph, predicate)?)?;
+        let iri = RDF_XML.value(RDF_XML.term(graph, predicate)?)?;
         register_namespace(iri, &mut namespaces, &mut next)?;
         enqueue_quoted_triple(graph, reifier_index, object, &mut pending, &mut visited)?;
     }
@@ -1604,7 +1533,7 @@ fn enqueue_quoted_triple(
     pending: &mut Vec<(usize, usize, usize)>,
     visited: &mut BTreeSet<usize>,
 ) -> Result<(), RdfDiagnostic> {
-    let term = ser_term(graph, object)?;
+    let term = RDF_XML.term(graph, object)?;
     if term.kind != SerTermKind::Triple {
         return Ok(());
     }
@@ -1642,17 +1571,21 @@ fn write_property<W: TextOut + ?Sized>(
 ) -> Result<(), RdfDiagnostic> {
     let mut closings = Vec::new();
     loop {
-        let name = serializer_qname(ser_value(ser_term(graph, predicate)?)?, namespaces)?;
-        let term = ser_term(graph, object)?;
+        let name = serializer_qname(RDF_XML.value(RDF_XML.term(graph, predicate)?)?, namespaces)?;
+        let term = RDF_XML.term(graph, object)?;
         property_indent(out, indent.len(), closings.len(), 0);
         let _ = write!(out, "<{name}");
         match term.kind {
             SerTermKind::Iri => {
-                push_xml_attribute("rdf:resource", &iri_reference(graph, ser_value(term)?), out)?;
+                push_xml_attribute(
+                    "rdf:resource",
+                    &iri_reference(graph, RDF_XML.value(term)?),
+                    out,
+                )?;
                 out.push_str("/>\n");
             }
             SerTermKind::Bnode => {
-                push_xml_attribute("rdf:nodeID", ser_value(term)?, out)?;
+                push_xml_attribute("rdf:nodeID", RDF_XML.value(term)?, out)?;
                 out.push_str("/>\n");
             }
             SerTermKind::Literal => {
@@ -1665,19 +1598,19 @@ fn write_property<W: TextOut + ?Sized>(
                 if let Some(datatype) = term.datatype {
                     push_xml_attribute(
                         "rdf:datatype",
-                        ser_value(ser_term(graph, datatype)?)?,
+                        RDF_XML.value(RDF_XML.term(graph, datatype)?)?,
                         out,
                     )?;
                 }
                 out.push('>');
-                push_xml_text(ser_value(term)?, out)?;
+                RDF_XML.push_xml(RDF_XML.value(term)?, Context::Text, out)?;
                 let _ = writeln!(out, "</{name}>");
             }
             SerTermKind::Triple => {
                 let (subject, nested_predicate, nested_object) = term
                     .reifier
                     .and_then(|rf| reifier_index.get(rf))
-                    .ok_or_else(|| serialize_err("a triple term has no reifier binding"))?;
+                    .ok_or_else(|| RDF_XML.serialize_err("a triple term has no reifier binding"))?;
                 out.push_str(" rdf:parseType=\"Triple\">\n");
                 property_indent(out, indent.len(), closings.len(), 2);
                 out.push_str("<rdf:Description");
@@ -1743,23 +1676,6 @@ fn iri_reference<'a>(graph: &SerGraph, iri: &'a str) -> Cow<'a, str> {
     super::ser_model::spell_iri(iri, graph.base())
 }
 
-/// Borrow a [`SerTerm`] by id, hard-failing on an out-of-range id.
-fn ser_term(graph: &SerGraph, tid: usize) -> Result<&SerTerm, RdfDiagnostic> {
-    graph.terms.get(tid).ok_or_else(|| {
-        serialize_err(format!(
-            "term id {tid} is out of range for the serialization graph"
-        ))
-    })
-}
-
-/// Borrow a term's string value (IRI / literal lexical / blank label), hard-failing when
-/// absent.
-fn ser_value(term: &SerTerm) -> Result<&str, RdfDiagnostic> {
-    term.value
-        .as_deref()
-        .ok_or_else(|| serialize_err("term is missing its value"))
-}
-
 /// Render `iri` as the `prefix:local` element name RDF/XML spells a predicate with.
 ///
 /// The prefix comes from `namespaces`, which [`serializer_namespaces`] has already
@@ -1775,7 +1691,7 @@ fn serializer_qname<'a>(
 ) -> Result<SerializerQName<'a>, RdfDiagnostic> {
     let (namespace, local) = split_property_iri(iri)?;
     let prefix = namespaces.get(namespace).ok_or_else(|| {
-        serialize_err(format!(
+        RDF_XML.serialize_err(format!(
             "no prefix is declared for namespace `{namespace}` (predicate `{iri}`); an \
              RDF/XML element name may not use an undeclared prefix"
         ))
@@ -1864,15 +1780,15 @@ impl std::fmt::Display for SerializerQName<'_> {
 fn split_property_iri(iri: &str) -> Result<(&str, &str), RdfDiagnostic> {
     let mut start = None;
     for (index, ch) in iri.char_indices().rev() {
-        if !is_ncname_char(ch) {
+        if !terminals::is_ncname_char(ch) {
             break;
         }
-        if is_ncname_start_char(ch) {
+        if terminals::is_ncname_start(ch) {
             start = Some(index);
         }
     }
     let split = start.filter(|&index| index > 0).ok_or_else(|| {
-        serialize_err(format!(
+        RDF_XML.serialize_err(format!(
             "predicate `{iri}` has no XML NCName suffix, so RDF/XML cannot name it: an \
              element name is a QName whose local part must match `NCName ::= \
              NCNameStartChar NCNameChar*`, and this syntax has no other way to spell a \
@@ -1882,30 +1798,10 @@ fn split_property_iri(iri: &str) -> Result<(&str, &str), RdfDiagnostic> {
     Ok(iri.split_at(split))
 }
 
-/// Whether `ch` may OPEN an `NCName`: `NCNameStartChar ::= NameStartChar - ':'`
-/// (Namespaces in XML 1.0 3e §3).
-///
-/// [`is_xml_name_start_char`](purrdf_iri::terminals::is_xml_name_start_char) admits the
-/// `':'` that XML's own `Name` admits, so the subtraction is made here and is not
-/// optional — without it `ns:local` would qualify as a local part, which is the exact
-/// string the namespaces specification had to mint `NCName` to exclude.
-fn is_ncname_start_char(ch: char) -> bool {
-    purrdf_iri::terminals::is_xml_name_start_char(ch) && ch != ':'
-}
-
-/// Whether `ch` may CONTINUE an `NCName`: `NCNameChar ::= NameChar - ':'`
-/// (Namespaces in XML 1.0 3e §3).
-///
-/// Wider than [`is_ncname_start_char`] by `'-'`, `'.'`, `[0-9]`, U+00B7 MIDDLE DOT, the
-/// combining marks `[#x300-#x36F]` and the two ties `[#x203F-#x2040]` — the scalars that
-/// may follow a name's first character and may not be it.
-fn is_ncname_char(ch: char) -> bool {
-    purrdf_iri::terminals::is_xml_name_char(ch) && ch != ':'
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native_codecs::ser_model::SerTerm;
 
     fn object_chain(depth: usize) -> SerGraph {
         let term = |kind, value, reifier| SerTerm {
@@ -1991,28 +1887,24 @@ mod tests {
                 std::fmt::Write::write_char(self, value).unwrap();
             }
         }
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let depth = 100_000;
-                let graph = object_chain(depth);
-                let namespaces = BTreeMap::from([("http://example.org/".into(), "ex".into())]);
-                let mut out = Counter { bytes: 0, lines: 0 };
-                write_property(
-                    &mut out,
-                    "    ",
-                    &graph,
-                    &graph.reifier_index(),
-                    1,
-                    graph.terms.len() - 1,
-                    &namespaces,
-                )
-                .unwrap();
-                assert_eq!(out.lines, 4 * depth + 1);
-            })
-            .unwrap()
-            .join()
+        purrdf_stack::on_stack(128 * 1024, || {
+            let depth = 100_000;
+            let graph = object_chain(depth);
+            let namespaces = BTreeMap::from([("http://example.org/".into(), "ex".into())]);
+            let mut out = Counter { bytes: 0, lines: 0 };
+            write_property(
+                &mut out,
+                "    ",
+                &graph,
+                &graph.reifier_index(),
+                1,
+                graph.terms.len() - 1,
+                &namespaces,
+            )
             .unwrap();
+            assert_eq!(out.lines, 4 * depth + 1);
+        })
+        .expect("spawn");
     }
 
     /// The in-scope base a caller-supplied base string produces, matching what the
@@ -2128,16 +2020,14 @@ mod tests {
 
     /// A DEEP DOCUMENT IS A DIAGNOSTIC, NOT A DEAD PROCESS.
     ///
-    /// Twenty thousand nested `rdf:Description` elements aborted the `purrdf` binary with
-    /// `SIGABRT`, and the overflow was inside `roxmltree`'s own `parse_content` ⇄
-    /// `parse_element` recursion — before any first-party code held a tree, and past what
-    /// `catch_unwind` can see. The guard therefore sits in front of `Document::parse`, and
-    /// this is the end-to-end proof that it does.
+    /// Twenty thousand nested `rdf:Description` elements once aborted the `purrdf` binary
+    /// with `SIGABRT`, past what `catch_unwind` can see. The XML reader's depth cap is what
+    /// refuses them now, and this is the end-to-end proof that it does.
     ///
     /// An `rdf:parseType="Literal"` whose CONTENT is deeply nested is the second shape: its
     /// canonicalization walked the subtree recursively, so it overflowed on XML the RDF
-    /// grammar never descends into. That walk is iterative now, and the same door guards the
-    /// tokenizer underneath it.
+    /// grammar never descends into. That walk is iterative now, and the same cap bounds the
+    /// reader underneath it.
     #[test]
     fn a_deeply_nested_document_is_refused_rather_than_overflowing_the_stack() {
         const DEPTH: usize = 20_000;
@@ -2167,6 +2057,64 @@ mod tests {
                 error.message
             );
         }
+    }
+
+    /// RDF/XML's customary internal entities (`&xsd;`, `&ex;`) expand inside attribute
+    /// values, so the datatype and subject IRIs are the full ones; a document that asks for
+    /// an external entity is refused rather than fetched.
+    #[test]
+    fn internal_entities_expand_in_rdfxml_and_external_ones_are_refused() {
+        let text = r#"<?xml version="1.0"?>
+<!DOCTYPE rdf:RDF [
+  <!ENTITY xsd "http://www.w3.org/2001/XMLSchema#">
+  <!ENTITY ex "http://example.org/">
+]>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:ex="http://example.org/">
+  <rdf:Description rdf:about="&ex;s">
+    <ex:p rdf:datatype="&xsd;integer">7</ex:p>
+  </rdf:Description>
+</rdf:RDF>"#;
+        let dataset = parse(text, None);
+        let nquads = crate::native_codecs::serialize_dataset_with(
+            &dataset,
+            crate::NativeRdfFormat::NQuads,
+            None,
+            &crate::native_codecs::SerializeOptions {
+                selection: crate::SerializeGraph::Dataset,
+                statement_layer: crate::native_codecs::StatementLayer::Project,
+                jsonld_options: None,
+            },
+        )
+        .map(|outcome| String::from_utf8(outcome.bytes).expect("utf8"))
+        .expect("serialize n-quads");
+        assert_eq!(
+            nquads,
+            "<http://example.org/s> <http://example.org/p> \"7\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n"
+        );
+
+        let external = text.replace(
+            r#"<!ENTITY ex "http://example.org/">"#,
+            r#"<!ENTITY ex SYSTEM "http://example.org/ex.ent">"#,
+        );
+        assert!(parse_rdfxml_document(&external, &mut scope(None), None).is_err());
+
+        // An external subset is never fetched, so its default attributes and entity
+        // declarations could be missing: refused, with the reason. The internal-only
+        // document above is the valid neighbour.
+        let subset = text.replacen(
+            "<!DOCTYPE rdf:RDF [",
+            "<!DOCTYPE rdf:RDF SYSTEM \"x.dtd\" [",
+            1,
+        );
+        let error = parse_rdfxml_document(&subset, &mut scope(None), None)
+            .expect_err("an external subset is refused");
+        assert!(
+            format!("{error:?}").contains("external DTD subset"),
+            "{error:?}"
+        );
+        let bare = "<!DOCTYPE rdf:RDF SYSTEM \"x.dtd\"><rdf:RDF \
+            xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"/>";
+        assert!(parse_rdfxml_document(bare, &mut scope(None), None).is_err());
     }
 
     /// …AND ORDINARY RDF/XML IS UNTOUCHED. Node/property striping spends TWO elements per
@@ -2302,8 +2250,8 @@ mod term_walk_tests {
     use super::super::ser_model::term_walk_tests::lower;
     use super::super::ser_model::{ReifierIndex, SerGraph, SerTermKind};
     use super::{
-        ITS_NS, RDF_NS, RdfDiagnostic, iri_reference, push_xml_attribute, push_xml_text, ser_term,
-        ser_value, serialize_err, serializer_qname, write_node_attribute, write_property,
+        Context, ITS_NS, RDF_NS, RDF_XML, RdfDiagnostic, iri_reference, push_xml_attribute,
+        serializer_qname, write_node_attribute, write_property,
     };
     use core::fmt::Write as _;
     use purrdf_core::TermValue;
@@ -2318,17 +2266,21 @@ mod term_walk_tests {
         object: usize,
         namespaces: &BTreeMap<String, String>,
     ) -> Result<(), RdfDiagnostic> {
-        let name = serializer_qname(ser_value(ser_term(graph, predicate)?)?, namespaces)?;
-        let term = ser_term(graph, object)?;
+        let name = serializer_qname(RDF_XML.value(RDF_XML.term(graph, predicate)?)?, namespaces)?;
+        let term = RDF_XML.term(graph, object)?;
         match term.kind {
             SerTermKind::Iri => {
                 let _ = write!(out, "{indent}<{name}");
-                push_xml_attribute("rdf:resource", &iri_reference(graph, ser_value(term)?), out)?;
+                push_xml_attribute(
+                    "rdf:resource",
+                    &iri_reference(graph, RDF_XML.value(term)?),
+                    out,
+                )?;
                 out.push_str("/>\n");
             }
             SerTermKind::Bnode => {
                 let _ = write!(out, "{indent}<{name}");
-                push_xml_attribute("rdf:nodeID", ser_value(term)?, out)?;
+                push_xml_attribute("rdf:nodeID", RDF_XML.value(term)?, out)?;
                 out.push_str("/>\n");
             }
             SerTermKind::Literal => {
@@ -2342,19 +2294,19 @@ mod term_walk_tests {
                 if let Some(datatype) = term.datatype {
                     push_xml_attribute(
                         "rdf:datatype",
-                        ser_value(ser_term(graph, datatype)?)?,
+                        RDF_XML.value(RDF_XML.term(graph, datatype)?)?,
                         out,
                     )?;
                 }
                 out.push('>');
-                push_xml_text(ser_value(term)?, out)?;
+                RDF_XML.push_xml(RDF_XML.value(term)?, Context::Text, out)?;
                 let _ = writeln!(out, "</{name}>");
             }
             SerTermKind::Triple => {
                 let (s, p, o) = term
                     .reifier
                     .and_then(|rf| ix.get(rf))
-                    .ok_or_else(|| serialize_err("a triple term has no reifier binding"))?;
+                    .ok_or_else(|| RDF_XML.serialize_err("a triple term has no reifier binding"))?;
                 let _ = writeln!(out, "{indent}<{name} rdf:parseType=\"Triple\">");
                 let inner = format!("{indent}  ");
                 let _ = write!(out, "{inner}<rdf:Description");
@@ -2384,10 +2336,11 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = purrdf_core::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::IriPredicates,
+                purrdf_core::term_fixture::TermShape::IriPredicates,
             );
             nested += usize::from(budget < 7);
             let mut graph = SerGraph::default();
@@ -2443,35 +2396,31 @@ mod term_walk_tests {
     #[test]
     fn a_three_thousand_level_object_is_written_on_a_128_kib_thread() {
         const LEVELS: usize = 3_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = crate::test_terms::triple_chain(LEVELS);
-                let mut graph = SerGraph::default();
-                let object = lower(&mut graph, &value);
-                drop(value);
-                let predicate = lower(&mut graph, &TermValue::iri("http://example.org/q"));
-                let ix = graph.reifier_index();
-                let mut written = String::new();
-                write_property(
-                    &mut written,
-                    "",
-                    &graph,
-                    &ix,
-                    predicate,
-                    object,
-                    &namespaces(),
-                )
-                .expect("every nested subject is an IRI");
-                assert_eq!(
-                    written.matches("rdf:parseType=\"Triple\"").count(),
-                    LEVELS,
-                    "one triple element a level"
-                );
-                assert!(written.ends_with("</ex:q>\n"));
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the writer did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            let mut graph = SerGraph::default();
+            let object = lower(&mut graph, &value);
+            drop(value);
+            let predicate = lower(&mut graph, &TermValue::iri("http://example.org/q"));
+            let ix = graph.reifier_index();
+            let mut written = String::new();
+            write_property(
+                &mut written,
+                "",
+                &graph,
+                &ix,
+                predicate,
+                object,
+                &namespaces(),
+            )
+            .expect("every nested subject is an IRI");
+            assert_eq!(
+                written.matches("rdf:parseType=\"Triple\"").count(),
+                LEVELS,
+                "one triple element a level"
+            );
+            assert!(written.ends_with("</ex:q>\n"));
+        })
+        .expect("the thread starts");
     }
 }

@@ -34,9 +34,10 @@
 //! a content-digest mismatch, a duplicate logical artifact path, an absolute
 //! path, a `..` traversal component, and conflicting manifests for one unit IRI.
 
-use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
+
+use crate::FastMap;
 
 use crate::content_store::{ContentDigest, ContentStore, ContentStoreError};
 use crate::ir::RdfDataset;
@@ -76,14 +77,14 @@ impl UnitMetadata {
 /// loader (S3 conflicting-manifest rule).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UnitCatalog {
-    entries: HashMap<UnitId, UnitMetadata>,
+    entries: FastMap<UnitId, UnitMetadata>,
 }
 
 impl UnitCatalog {
     /// A fresh, empty catalog.
     pub fn new() -> Self {
         Self {
-            entries: HashMap::new(),
+            entries: FastMap::default(),
         }
     }
 
@@ -145,17 +146,12 @@ pub struct ArtifactRecord {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ArtifactIndex {
     records: Vec<ArtifactRecord>,
-    by_id: HashMap<ArtifactId, usize>,
-    by_path: HashMap<String, usize>,
-    by_unit: HashMap<UnitId, Vec<usize>>,
+    by_id: FastMap<ArtifactId, usize>,
+    by_path: FastMap<String, usize>,
+    by_unit: FastMap<UnitId, Vec<usize>>,
 }
 
 impl ArtifactIndex {
-    /// A fresh, empty index.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Append an artifact record. Duplicate logical paths and duplicate
     /// `ArtifactId`s are *not* rejected here — the loader enforces those rules so
     /// builder code can stage freely; [`RdfBundle::load`] is the gate.
@@ -226,17 +222,12 @@ impl ArtifactIndex {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SegmentUnitMap {
     /// segment index -> set of units (sorted, deduped).
-    seg_to_units: HashMap<usize, Vec<UnitId>>,
+    seg_to_units: FastMap<usize, Vec<UnitId>>,
     /// unit -> set of segment indices (sorted, deduped).
-    unit_to_segs: HashMap<UnitId, Vec<usize>>,
+    unit_to_segs: FastMap<UnitId, Vec<usize>>,
 }
 
 impl SegmentUnitMap {
-    /// A fresh, empty map.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Associate `segment` with `unit`. Idempotent: a repeated `(segment, unit)`
     /// pair does not duplicate either side.
     pub fn associate(&mut self, segment: usize, unit: UnitId) {
@@ -397,9 +388,9 @@ impl RdfBundle {
             dataset,
             provenance,
             units: UnitCatalog::new(),
-            artifacts: ArtifactIndex::new(),
+            artifacts: ArtifactIndex::default(),
             blobs: ContentStore::new(),
-            segments: SegmentUnitMap::new(),
+            segments: SegmentUnitMap::default(),
         }
     }
 
@@ -464,8 +455,8 @@ impl RdfBundle {
 
         // 2. Artifact paths: no duplicates, no absolute, no `..`; blob present;
         //    and no two records may share one `ArtifactId`.
-        let mut seen: HashMap<&str, ()> = HashMap::new();
-        let mut seen_ids: HashMap<ArtifactId, ()> = HashMap::new();
+        let mut seen: FastMap<&str, ()> = FastMap::default();
+        let mut seen_ids: FastMap<ArtifactId, ()> = FastMap::default();
         for record in self.artifacts.records() {
             let path = record.logical_path.as_str();
             check_logical_path(path)?;
@@ -488,7 +479,7 @@ impl RdfBundle {
         }
 
         // 3. No two units may share an IRI with conflicting metadata.
-        let mut by_iri: HashMap<&str, &UnitMetadata> = HashMap::new();
+        let mut by_iri: FastMap<&str, &UnitMetadata> = FastMap::default();
         for (_, meta) in self.units.iter() {
             match by_iri.get(meta.iri.as_str()) {
                 Some(existing) if *existing != meta => {
@@ -613,7 +604,7 @@ mod tests {
         // exclusive unit — a packaging choice).
         let mut resegmented = sample_bundle();
         let unit = resegmented.provenance.units.intern("slices/core/sample"); // idempotent: existing id
-        resegmented.segments = SegmentUnitMap::new();
+        resegmented.segments = SegmentUnitMap::default();
         resegmented.associate_segment(0, unit);
         resegmented.associate_segment(1, unit);
 

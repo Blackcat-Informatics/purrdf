@@ -38,7 +38,7 @@ use purrdf_core::embedding::{ChunkingContractId, TargetId, TextChunkTarget};
 use crate::dialect::Reading;
 use crate::error::MarkdownError;
 use crate::profile::Profile;
-use crate::split::{floor_boundary, split_spans};
+use crate::split::split_spans;
 
 /// How many bytes of context a unit's [content anchor](Unit::anchor)
 /// reaches on each side, snapped to a scalar boundary so the context is
@@ -71,6 +71,12 @@ impl Span {
     #[must_use]
     pub const fn new(start: u64, end: u64) -> Self {
         Self { start, end }
+    }
+
+    /// The span as a range of `usize` offsets, for slicing the source it
+    /// annotates: `&source[span.range()]`.
+    pub(crate) const fn range(&self) -> std::ops::Range<usize> {
+        self.start as usize..self.end as usize
     }
 
     /// How many bytes the span covers.
@@ -419,7 +425,7 @@ impl<'a> Unit<'a> {
     /// The unit's exact bytes: `&source[span]`, verbatim.
     #[must_use]
     pub fn quote(&self) -> &'a str {
-        &self.source[self.span.start as usize..self.span.end as usize]
+        &self.source[self.span.range()]
     }
 
     /// Up to [`CONTEXT_BYTES`] of the document immediately before the
@@ -429,10 +435,10 @@ impl<'a> Unit<'a> {
     #[must_use]
     pub fn prefix(&self) -> &'a str {
         let start = self.span.start as usize;
-        let mut from = start.saturating_sub(CONTEXT_BYTES);
-        while from < start && !self.source.is_char_boundary(from) {
-            from += 1;
-        }
+        // `start` is a boundary, so the snap forward never passes it.
+        let from = self
+            .source
+            .ceil_char_boundary(start.saturating_sub(CONTEXT_BYTES));
         &self.source[from..start]
     }
 
@@ -442,10 +448,9 @@ impl<'a> Unit<'a> {
     #[must_use]
     pub fn suffix(&self) -> &'a str {
         let end = self.span.end as usize;
-        let to = floor_boundary(
-            self.source,
-            self.source.len().min(end.saturating_add(CONTEXT_BYTES)),
-        );
+        let to = self
+            .source
+            .floor_char_boundary(end.saturating_add(CONTEXT_BYTES));
         &self.source[end..to]
     }
 
@@ -704,7 +709,7 @@ impl<'a> MalformedRow<'a> {
     /// The row's line, verbatim.
     #[must_use]
     pub fn line(&self) -> &'a str {
-        &self.source[self.span.start as usize..self.span.end as usize]
+        &self.source[self.span.range()]
     }
 
     /// What could not be made of it.
@@ -912,7 +917,7 @@ impl<'a> Document<'a> {
     /// than answer with bytes the span does not denote.
     #[must_use]
     pub fn structure_text(&self, span: Span) -> &'a str {
-        &self.source[span.start as usize..span.end as usize]
+        &self.source[span.range()]
     }
 
     /// Every concordance row that could be read, in document order,

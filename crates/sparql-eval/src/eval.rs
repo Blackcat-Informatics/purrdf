@@ -21,7 +21,6 @@
 //! indexed read surface through `DatasetView` (the inherent `quads_for_pattern`
 //! override, P4b).
 
-use purrdf_core::TermBox;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -45,7 +44,7 @@ use crate::witness::RelationWitness;
 use crate::{DetHashMap, DetHashSet};
 
 /// Tunable evaluation behavior. Every flag defaults to the production-optimal
-/// value; the criterion benches and differential tests flip individual flags to
+/// value; the benches and differential tests flip individual flags to
 /// measure their effect (the flags are a measurement seam, never a degraded
 /// production mode).
 // Deliberate flag set: each bool is an independent opt-in measurement toggle, not a
@@ -75,7 +74,7 @@ pub struct EvalOptions {
     pub force_structural_bgp_order: bool,
     /// Keep evaluator fork sites on their sequential implementation.
     ///
-    /// This is a measurement seam for Criterion comparisons against the ordered
+    /// This is a measurement seam for bench comparisons against the ordered
     /// parallel fold, and for differential tests. Production leaves it `false`.
     pub force_sequential: bool,
 }
@@ -279,14 +278,15 @@ thread_local! {
 }
 
 /// For the fork-safety walks: `Some(unsafe)` when `body` is a placeholder of `deferred`,
-/// judged by the body it stands for; `None` for a body to be walked as written.
+/// judged by the body or `LATERAL` operand it stands for; `None` for a body to be walked
+/// as written.
 fn placeholder_unsafe(
     deferred: &crate::deferred_exists::DeferredMap,
     body: &GraphPattern,
 ) -> Option<bool> {
     deferred
         .get(&(std::ptr::from_ref(body) as usize))
-        .map(|slot| slot.site.parallel_unsafe)
+        .map(crate::deferred_exists::Deferred::parallel_unsafe)
 }
 
 impl PreparedExists {
@@ -376,17 +376,17 @@ impl PreparedExists {
 /// for [`ExistsCacheKey`]. Two schemas with the same ordered variable list hash equal,
 /// so the cached probe index is only reused against a matching outer-row layout.
 pub(crate) fn schema_fingerprint(schema: &VarSchema) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for v in schema.vars() {
-        for b in v.as_str().as_bytes() {
-            h ^= u64::from(*b);
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        // Separator so ["ab","c"] and ["a","bc"] do not collide.
-        h ^= 0xff;
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    h
+    schema
+        .vars()
+        .iter()
+        .fold(purrdf_hash::fnv::BASIS, |state, v| {
+            // A 0xFF separator after each name (never a UTF-8 byte), so ["ab","c"] and
+            // ["a","bc"] do not collide.
+            purrdf_hash::fnv::fold(
+                purrdf_hash::fnv::fold(state, v.as_str().as_bytes()),
+                &[0xFF],
+            )
+        })
 }
 
 /// Spell one minted blank-node label: `stem` followed by the decimal counter value
@@ -906,7 +906,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
 
         Self {
             dataset,
-            scratch: ScratchInterner::new(),
+            scratch: ScratchInterner::default(),
             active_graph: GraphMatch::Default,
             active_dataset: ActiveDataset::store_default(),
             bnode_counter: 0,
@@ -1562,7 +1562,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         if !agg
             .order_by()
             .iter()
-            .all(|order| self.may_fork_row_loop(crate::modifier::order_sort_key(order)))
+            .all(|order| self.may_fork_row_loop(order.expression()))
         {
             return false;
         }
@@ -2250,7 +2250,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // Fresh: the body is an independent query that mints its own computed
             // terms; its parameter inputs ride in as ground substitutions, not
             // scratch ids, so no parent scratch state is needed.
-            scratch: ScratchInterner::new(),
+            scratch: ScratchInterner::default(),
             // The body evaluates as a root query; `evaluate_query` re-installs the
             // body's own FROM/base, so seed the default graph here.
             active_graph: GraphMatch::Default,
@@ -2694,6 +2694,18 @@ fn commit_answer_rows<D: DatasetView + Sync>(
 
 /// Dispatch one algebra node to its operator. Split out of [`eval_evaluated`] so that the
 /// charge points bracketing every node are written once rather than once per variant.
+///
+/// # Thin-dispatcher invariant
+///
+/// This function must stay a bare `match` whose arms call out-of-line operators: every
+/// operator it dispatches to carries `#[inline(never)]`. A nested query pays this frame
+/// (together with [`eval_evaluated`]'s) at every level of nesting — twice per level for
+/// a `FILTER NOT EXISTS`, once for the filter node and once for its inner pattern — so any
+/// callee an optimizer inlines here (a deduplicator, a small-vector grow path) is charged
+/// against the machine stack once per level of every recursive query, not once per call
+/// of that operator. On wasm32, where the whole evaluation shares one fixed stack, a few
+/// hundred bytes pulled into this frame cost several levels of admitted nesting depth. A
+/// new `GraphPattern` arm must therefore call a function marked `#[inline(never)]`.
 fn eval_node<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
@@ -2747,8 +2759,9 @@ fn eval_node<D: DatasetView + Sync>(
         GraphPattern::Project { inner, variables } => {
             crate::modifier::eval_project(pattern, inner, variables, ctx)
         }
-        GraphPattern::Distinct { inner } => crate::modifier::eval_distinct(pattern, inner, ctx),
-        GraphPattern::Reduced { inner } => crate::modifier::eval_reduced(pattern, inner, ctx),
+        GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
+            crate::modifier::eval_dedup(pattern, inner, ctx)
+        }
         GraphPattern::Slice {
             inner,
             start,
@@ -2878,7 +2891,7 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
         match step {
             Step::Derive(pattern) => match pattern {
                 GraphPattern::Bgp { patterns } => {
-                    let mut schema = VarSchema::new();
+                    let mut schema = VarSchema::default();
                     for pattern in patterns {
                         push_triple(pattern, &mut schema);
                     }
@@ -2889,7 +2902,7 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
                     path: _,
                     object,
                 } => {
-                    let mut schema = VarSchema::new();
+                    let mut schema = VarSchema::default();
                     push_term(subject, &mut schema);
                     push_term(object, &mut schema);
                     schemas.push(schema);
@@ -2976,7 +2989,7 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
                 // flattened first-seen order, subject side then object side, which is the
                 // order the dispatch fills them in.
                 GraphPattern::PropertyFunction(call) => {
-                    let mut schema = VarSchema::new();
+                    let mut schema = VarSchema::default();
                     for term in call.subject_args.iter().chain(&call.object_args) {
                         push_term(term, &mut schema);
                     }
@@ -3013,7 +3026,7 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
                 let first = schemas.len() - count;
                 let union = schemas
                     .drain(first..)
-                    .fold(VarSchema::new(), |schema, arm| schema.union(&arm));
+                    .fold(VarSchema::default(), |schema, arm| schema.union(&arm));
                 schemas.push(union);
             }
         }
@@ -3347,7 +3360,7 @@ pub(crate) fn evaluate_query_evaluated_over<D: DatasetView + Sync>(
     kept: Option<&crate::plan::PlanCache>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
-    // Criterion and differential tests can hold the operation on the sequential branch
+    // Benches and differential tests can hold the operation on the sequential branch
     // (`EvalOptions::force_sequential`, read by every fork gate through
     // `EvalCtx::sequential_operation_required`); production keeps the ordered parallel fold.
     prepare_query_context_over(query, kept, ctx)?;
@@ -3495,108 +3508,15 @@ pub(crate) fn materialize_solutions<D: DatasetView + Sync>(
         .iter()
         .map(|v| v.as_str().to_owned())
         .collect();
-    // Literal datatype IRIs repeat massively across a result (a handful of XSD
-    // types over tens of thousands of cells), so each datatype id is resolved
-    // once per call and cloned from a small memo instead of re-resolved per cell.
-    let mut datatype_memo: DetHashMap<D::Id, String> = DetHashMap::default();
     let mut rows = Vec::with_capacity(seq.rows.len());
     for row in &seq.rows {
         let mut out = Vec::with_capacity(row.len());
         for cell in row {
-            out.push(cell.map(|t| memoized_value_of(ctx, t, &mut datatype_memo)));
+            out.push(cell.map(|t| ctx.scratch.value_of(ctx.dataset, t)));
         }
         rows.push(out);
     }
     (variables, rows)
-}
-
-/// [`ScratchInterner::value_of`], with repeated literal datatype-IRI resolutions
-/// served from `datatype_memo` (egress-only; identical output values).
-fn memoized_value_of<D: DatasetView + Sync>(
-    ctx: &EvalCtx<'_, D>,
-    term: SolutionTerm<D::Id>,
-    datatype_memo: &mut DetHashMap<D::Id, String>,
-) -> TermValue {
-    match term {
-        SolutionTerm::Existing(id) => memoized_term_value(ctx.dataset, id, datatype_memo),
-        SolutionTerm::Computed(_) => ctx.scratch.value_of(ctx.dataset, term),
-    }
-}
-
-/// `scratch::term_id_to_value`, with the literal datatype id → IRI string
-/// resolution memoized across cells.
-///
-/// A triple term is assembled bottom-up over a work list: its components are resolved
-/// subject, predicate, object — each fully before the next, so the memo is written in
-/// that order — and the triple is built once all three exist. A term of any nesting
-/// costs no more machine stack.
-fn memoized_term_value<D: DatasetView>(
-    dataset: &D,
-    id: D::Id,
-    datatype_memo: &mut DetHashMap<D::Id, String>,
-) -> TermValue {
-    enum Step<I> {
-        Resolve(I),
-        Assemble,
-    }
-    // Inline until a term nests deeper than a quoted triple of quoted triples, so a
-    // plain cell costs only its own value.
-    let mut steps: purrdf_core::SmallVec<[Step<D::Id>; 8]> =
-        purrdf_core::smallvec![Step::Resolve(id)];
-    let mut values: purrdf_core::SmallVec<[TermValue; 3]> = purrdf_core::SmallVec::new();
-    while let Some(step) = steps.pop() {
-        match step {
-            Step::Resolve(id) => match dataset.resolve(id) {
-                purrdf_core::TermRef::Iri(iri) => values.push(TermValue::Iri(iri.to_owned())),
-                purrdf_core::TermRef::Blank { label, scope } => values.push(TermValue::Blank {
-                    label: label.to_owned(),
-                    scope,
-                }),
-                purrdf_core::TermRef::Literal {
-                    lexical,
-                    datatype,
-                    language,
-                    direction,
-                } => {
-                    let datatype = datatype_memo
-                        .entry(datatype)
-                        .or_insert_with(|| match dataset.resolve(datatype) {
-                            purrdf_core::TermRef::Iri(iri) => iri.to_owned(),
-                            // A literal's datatype is always an interned IRI (C0.1).
-                            other => {
-                                unreachable!("literal datatype must be an IRI, got {other:?}")
-                            }
-                        })
-                        .clone();
-                    values.push(TermValue::Literal {
-                        lexical_form: lexical.to_owned(),
-                        datatype,
-                        language: language.map(str::to_owned),
-                        direction,
-                    });
-                }
-                purrdf_core::TermRef::Triple { s, p, o } => steps.extend([
-                    Step::Assemble,
-                    Step::Resolve(o),
-                    Step::Resolve(p),
-                    Step::Resolve(s),
-                ]),
-            },
-            Step::Assemble => {
-                let o = values.pop().expect("a triple term's object is resolved");
-                let p = values.pop().expect("a triple term's predicate is resolved");
-                let s = values.pop().expect("a triple term's subject is resolved");
-                values.push(TermValue::Triple {
-                    s: TermBox::new(s),
-                    p: TermBox::new(p),
-                    o: TermBox::new(o),
-                });
-            }
-        }
-    }
-    values
-        .pop()
-        .expect("the root term's value is the last one assembled")
 }
 
 #[cfg(test)]
@@ -4032,7 +3952,7 @@ mod tests {
             Variable,
         };
 
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
 
         let mut b = RdfDatasetBuilder::new();
         let name = b.intern_iri("http://ex/name");
@@ -4200,7 +4120,7 @@ mod tests {
             Expression, NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
         };
 
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
 
         // :a :knows :b (age 50) — passes the OPTIONAL filter (age > 40).
         // :a :knows :c (age 10) — right row exists but fails the filter ⇒ left-alone.
@@ -4482,155 +4402,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod term_value_walk_tests {
-    //! The memoized id-to-value resolution, checked against a recursive reference over
-    //! generated triple-term shapes: the same value and the same datatype memo after
-    //! each. There is no deep case: a dataset's triple terms nest a bounded number of
-    //! levels, so the deepest term it can hand back is far shallower than the generated
-    //! shapes already cover.
-
-    use super::memoized_term_value;
-    use crate::DetHashMap;
-    use purrdf_core::{
-        BlankScope, RdfDataset, RdfDatasetBuilder, TermBox, TermFactory as _, TermId, TermRef,
-        TermValue,
-    };
-    use std::sync::Arc;
-
-    const EX: &str = "http://example.org/";
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-
-    /// A deterministic choice sequence.
-    struct Choices {
-        state: u64,
-    }
-
-    impl Choices {
-        const fn new(seed: u64) -> Self {
-            Self { state: seed }
-        }
-
-        /// One choice below `n`.
-        fn choose(&mut self, n: usize) -> usize {
-            let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
-                .expect("a draw below the count fits")
-        }
-    }
-
-    fn typed(lexical: &str, datatype: &str) -> TermValue {
-        TermValue::Literal {
-            lexical_form: lexical.to_owned(),
-            datatype: datatype.to_owned(),
-            language: None,
-            direction: None,
-        }
-    }
-
-    /// A generated value a dataset admits, with triple terms nested through the object
-    /// while `budget` lasts.
-    fn admissible(choices: &mut Choices, budget: &mut usize) -> TermValue {
-        match choices.choose(if *budget > 0 { 5 } else { 4 }) {
-            0 => TermValue::Iri(format!("{EX}i{}", choices.choose(3))),
-            1 => TermValue::Blank {
-                label: ["a", "bb"][choices.choose(2)].to_owned(),
-                scope: BlankScope::DEFAULT,
-            },
-            2 => typed(["x", "y"][choices.choose(2)], XSD_STRING),
-            3 => typed(["1", "2"][choices.choose(2)], XSD_INTEGER),
-            _ => {
-                *budget -= 1;
-                TermValue::Triple {
-                    s: TermBox::new(TermValue::Iri(format!("{EX}s"))),
-                    p: TermBox::new(TermValue::Iri(format!("{EX}p"))),
-                    o: TermBox::new(admissible(choices, budget)),
-                }
-            }
-        }
-    }
-
-    /// The recursive reference for [`memoized_term_value`].
-    fn reference(
-        dataset: &RdfDataset,
-        id: TermId,
-        memo: &mut DetHashMap<TermId, String>,
-    ) -> TermValue {
-        match dataset.resolve(id) {
-            TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
-            TermRef::Blank { label, scope } => TermValue::Blank {
-                label: label.to_owned(),
-                scope,
-            },
-            TermRef::Literal {
-                lexical,
-                datatype,
-                language,
-                direction,
-            } => {
-                let datatype = memo
-                    .entry(datatype)
-                    .or_insert_with(|| {
-                        let TermRef::Iri(iri) = dataset.resolve(datatype) else {
-                            panic!("a literal's datatype is an IRI");
-                        };
-                        iri.to_owned()
-                    })
-                    .clone();
-                TermValue::Literal {
-                    lexical_form: lexical.to_owned(),
-                    datatype,
-                    language: language.map(str::to_owned),
-                    direction,
-                }
-            }
-            TermRef::Triple { s, p, o } => TermValue::Triple {
-                s: TermBox::new(reference(dataset, s, memo)),
-                p: TermBox::new(reference(dataset, p, memo)),
-                o: TermBox::new(reference(dataset, o, memo)),
-            },
-        }
-    }
-
-    /// A dataset holding `values`, each as the object of a `:s :p` quad, and their ids.
-    fn dataset_of(values: &[TermValue]) -> (Arc<RdfDataset>, Vec<TermId>) {
-        let mut builder = RdfDatasetBuilder::new();
-        let s = builder.intern_iri(&format!("{EX}s"));
-        let p = builder.intern_iri(&format!("{EX}p"));
-        let ids: Vec<TermId> = values
-            .iter()
-            .map(|value| {
-                let id = builder.intern_value(value);
-                builder.push_quad(s, p, id, None);
-                id
-            })
-            .collect();
-        (builder.freeze().expect("the generated values freeze"), ids)
-    }
-
-    #[test]
-    fn the_memoized_resolution_agrees_with_the_recursive_reference() {
-        let mut choices = Choices::new(13);
-        let values: Vec<TermValue> = (0..200)
-            .map(|_| {
-                let mut budget = 6;
-                admissible(&mut choices, &mut budget)
-            })
-            .collect();
-        let (dataset, ids) = dataset_of(&values);
-        let mut memo_walk = DetHashMap::default();
-        let mut memo_ref = DetHashMap::default();
-        for (value, id) in values.iter().zip(ids) {
-            let walked = memoized_term_value(&*dataset, id, &mut memo_walk);
-            assert_eq!(walked, reference(&dataset, id, &mut memo_ref));
-            assert_eq!(walked, *value);
-            assert_eq!(memo_walk, memo_ref);
-        }
-        assert_eq!(memo_walk.len(), 2, "one memo entry per literal datatype");
-    }
-}
-
 /// The syntactic schema against a recursive reading of the same algebra, over generated
 /// shapes, and at a depth no recursive reading could reach on a small stack.
 #[cfg(test)]
@@ -4667,7 +4438,7 @@ mod syntactic_schema_tests {
     fn reference(pattern: &GraphPattern) -> VarSchema {
         match pattern {
             GraphPattern::Bgp { patterns } => {
-                let mut schema = VarSchema::new();
+                let mut schema = VarSchema::default();
                 for pattern in patterns {
                     reference_triple(pattern, &mut schema);
                 }
@@ -4676,7 +4447,7 @@ mod syntactic_schema_tests {
             GraphPattern::Path {
                 subject, object, ..
             } => {
-                let mut schema = VarSchema::new();
+                let mut schema = VarSchema::default();
                 reference_term(subject, &mut schema);
                 reference_term(object, &mut schema);
                 schema
@@ -4684,9 +4455,11 @@ mod syntactic_schema_tests {
             GraphPattern::Join { left, right }
             | GraphPattern::LeftJoin { left, right, .. }
             | GraphPattern::Lateral { left, right } => reference(left).union(&reference(right)),
-            GraphPattern::Union { arms } => arms.iter().fold(VarSchema::new(), |schema, arm| {
-                schema.union(&reference(arm))
-            }),
+            GraphPattern::Union { arms } => {
+                arms.iter().fold(VarSchema::default(), |schema, arm| {
+                    schema.union(&reference(arm))
+                })
+            }
             GraphPattern::Minus { left, .. } => reference(left),
             GraphPattern::Filter { inner, .. }
             | GraphPattern::OrderBy { inner, .. }
@@ -4736,7 +4509,7 @@ mod syntactic_schema_tests {
                 schema
             }
             GraphPattern::PropertyFunction(call) => {
-                let mut schema = VarSchema::new();
+                let mut schema = VarSchema::default();
                 for term in call.subject_args.iter().chain(&call.object_args) {
                     reference_term(term, &mut schema);
                 }
@@ -4750,21 +4523,20 @@ mod syntactic_schema_tests {
     const NAMES: [&str; 6] = ["a", "b", "c", "d", "e", "f"];
 
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 30,
             }
         }
 
         fn choose(&mut self, options: usize) -> usize {
-            let draw = purrdf_testkit::rng::splitmix64_next(&mut self.state);
-            usize::try_from(draw % options as u64).expect("a choice fits usize")
+            self.state.below_usize(options)
         }
 
         fn spend(&mut self) -> bool {
@@ -4958,53 +4730,49 @@ mod syntactic_schema_tests {
     #[test]
     fn a_hundred_thousand_level_shape_is_derived_on_a_128_kib_thread() {
         const DEPTH: usize = 100_000;
-        let (shallow, wide, quoted) = std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let leaf = || GraphPattern::Bgp {
-                    patterns: vec![TriplePattern {
-                        subject: TermPattern::Variable(Variable::new("s")),
-                        predicate: NamedNodePattern::NamedNode(iri("p")),
-                        object: TermPattern::Variable(Variable::new("o")),
-                    }],
+        let (shallow, wide, quoted) = purrdf_stack::on_stack(128 * 1024, || {
+            let leaf = || GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("s")),
+                    predicate: NamedNodePattern::NamedNode(iri("p")),
+                    object: TermPattern::Variable(Variable::new("o")),
+                }],
+            };
+            let mut distinct = leaf();
+            let mut spine = leaf();
+            let mut term = TermPattern::Variable(Variable::new("deep"));
+            for level in 0..DEPTH {
+                distinct = GraphPattern::Distinct {
+                    inner: Child::new(distinct),
                 };
-                let mut distinct = leaf();
-                let mut spine = leaf();
-                let mut term = TermPattern::Variable(Variable::new("deep"));
-                for level in 0..DEPTH {
-                    distinct = GraphPattern::Distinct {
-                        inner: Child::new(distinct),
-                    };
-                    spine = GraphPattern::Join {
-                        left: Child::new(spine),
-                        right: Child::new(GraphPattern::Extend {
-                            inner: Child::new(leaf()),
-                            variable: Variable::new(format!("x{level}")),
-                            expression: Expression::Variable(Variable::new("s")),
-                        }),
-                    };
-                    term = TermPattern::Triple(Child::new(TriplePattern {
-                        subject: TermPattern::NamedNode(iri("n")),
-                        predicate: NamedNodePattern::NamedNode(iri("p")),
-                        object: term,
-                    }));
-                }
-                let quoted = GraphPattern::Bgp {
-                    patterns: vec![TriplePattern {
-                        subject: TermPattern::Variable(Variable::new("s")),
-                        predicate: NamedNodePattern::Variable(Variable::new("p")),
-                        object: term,
-                    }],
+                spine = GraphPattern::Join {
+                    left: Child::new(spine),
+                    right: Child::new(GraphPattern::Extend {
+                        inner: Child::new(leaf()),
+                        variable: Variable::new(format!("x{level}")),
+                        expression: Expression::Variable(Variable::new("s")),
+                    }),
                 };
-                (
-                    syntactic_schema(&distinct).vars().to_vec(),
-                    syntactic_schema(&spine).len(),
-                    syntactic_schema(&quoted).vars().to_vec(),
-                )
-            })
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned");
+                term = TermPattern::Triple(Child::new(TriplePattern {
+                    subject: TermPattern::NamedNode(iri("n")),
+                    predicate: NamedNodePattern::NamedNode(iri("p")),
+                    object: term,
+                }));
+            }
+            let quoted = GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("s")),
+                    predicate: NamedNodePattern::Variable(Variable::new("p")),
+                    object: term,
+                }],
+            };
+            (
+                syntactic_schema(&distinct).vars().to_vec(),
+                syntactic_schema(&spine).len(),
+                syntactic_schema(&quoted).vars().to_vec(),
+            )
+        })
+        .expect("spawn");
         assert_eq!(shallow, [Variable::new("s"), Variable::new("o")]);
         assert_eq!(wide, 2 + DEPTH);
         assert_eq!(

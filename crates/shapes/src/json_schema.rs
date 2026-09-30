@@ -142,14 +142,16 @@
 //! A property whose `sh:class` or ontology `rdfs:range` is such a vocabulary emits
 //! a `$ref` to its enum `$def`, cardinality preserved.
 
+use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_be_labelled;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
+use crate::json_model::{Map, ToJson, Value, ValueKind, json};
 use ::purrdf::RdfDataset;
 use ::purrdf::RdfLocation;
+use ::purrdf::RdfTextDirection;
 use ::purrdf::loss::{LossEntry, LossLedger};
-use serde::Serialize;
-use serde_json::{Map, Value, json};
 
 use crate::data::{GraphFilter, native_quads};
 use crate::model::{rdf, rdfs};
@@ -168,20 +170,14 @@ mod temporal_order;
 
 use numeric_order::{BoundNumber, Decimal, Facet, Threshold, order_pattern};
 
-const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
-const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const RDFS_NS: &str = "http://www.w3.org/2000/01/rdf-schema#";
-const OWL_NS: &str = "http://www.w3.org/2002/07/owl#";
-const SH_NS: &str = "http://www.w3.org/ns/shacl#";
-/// The two datatype IRIs whose literals project as a bare JSON string (no alloc
-/// per literal — see [`crate::instance`] for the matching projection convention).
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-const XSD_FLOAT: &str = "http://www.w3.org/2001/XMLSchema#float";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+use purrdf_iri::vocab::owl::NS as OWL_NS;
+use purrdf_iri::vocab::rdf::{
+    DIR_LANG_STRING as RDF_DIR_LANG_STRING, LANG_STRING as RDF_LANG_STRING, NIL as RDF_NIL,
+    NS as RDF_NS,
+};
+use purrdf_iri::vocab::rdfs::NS as RDFS_NS;
+use purrdf_iri::vocab::sh::NS as SH_NS;
+use purrdf_xsd::datatype::{XSD_DOUBLE, XSD_FLOAT, XSD_INTEGER, XSD_NS, XSD_STRING};
 
 /// The `xsd:integer`-derived datatypes (local names) with the bounds of their
 /// value spaces, `None` where unbounded (XSD 1.1 Part 2 §3.4).
@@ -254,10 +250,11 @@ const BUILTIN_PREFIXES: &[(&str, &str)] = &[
 /// ```
 #[derive(Debug, Clone)]
 pub struct Namespaces {
-    /// `(prefix, namespace)` pairs sorted longest-namespace-first so the most
-    /// specific namespace always wins compaction (prefix name breaks ties
-    /// deterministically).
+    /// Every `(prefix, namespace)` pair, builtins merged, in prefix order.
     prefixes: Vec<(String, String)>,
+    /// `prefixes` as the compaction table of [`purrdf_iri::contract`]: the
+    /// longest matching namespace wins, the prefix name breaking ties.
+    curies: purrdf_iri::PrefixMap,
     /// The prefix whose classes key `$defs` by bare local name.
     primary_prefix: String,
     /// The namespace `primary_prefix` resolves to.
@@ -296,13 +293,10 @@ impl Namespaces {
                  doc_prefixes (the shapes document's @prefix declarations) or use a W3C builtin"
             ));
         };
-        let mut prefixes: Vec<(String, String)> = merged.into_iter().collect();
-        // Longest-namespace-first so the most specific namespace is matched
-        // before any shorter one that prefixes it; tie-break on prefix name for
-        // run-to-run determinism.
-        prefixes.sort_by(|(pa, na), (pb, nb)| nb.len().cmp(&na.len()).then_with(|| pa.cmp(pb)));
+        let curies = merged.iter().collect();
         Ok(Self {
-            prefixes,
+            prefixes: merged.into_iter().collect(),
+            curies,
             primary_prefix: primary_prefix.to_owned(),
             primary_ns,
             declared_prefixes: declared.into_iter().collect(),
@@ -316,12 +310,7 @@ impl Namespaces {
     /// emitter and the instance projector ([`crate::instance`]).
     #[must_use]
     pub fn compact_iri(&self, iri: &str) -> String {
-        for (prefix, ns) in &self.prefixes {
-            if let Some(local) = iri.strip_prefix(ns.as_str()) {
-                return format!("{prefix}:{local}");
-            }
-        }
-        iri.to_owned()
+        purrdf_iri::contract(iri, &self.curies).unwrap_or_else(|| iri.to_owned())
     }
 
     /// Whether an IRI is in the primary namespace (object refs to primary
@@ -352,13 +341,13 @@ impl Namespaces {
             // and `class_iri_for_def_key` reverses it via `expand_iri`. Falls back to
             // the bare local name if the primary namespace has no declared prefix to
             // compact with (then the reserved-key guard in `compile` still fires).
-            if RESERVED_DEF_KEYS.contains(&local.as_str()) {
+            if RESERVED_DEF_KEYS.contains(&local) {
                 let curie = self.compact_iri(iri);
                 if curie.contains(':') {
                     return curie;
                 }
             }
-            local
+            local.to_owned()
         } else {
             self.compact_iri(iri)
         }
@@ -464,14 +453,8 @@ impl Namespaces {
     }
 }
 
-/// The bare local name of an IRI: the substring after the last `#` or `/`.
-pub fn local_name(iri: &str) -> String {
-    let after_hash = iri.rsplit('#').next().unwrap_or(iri);
-    // `rsplit('#')` returns the whole string when there is no `#`, so split on
-    // `/` over that remainder.
-    let local = after_hash.rsplit('/').next().unwrap_or(after_hash);
-    local.to_owned()
-}
+/// The bare local name of an IRI: the text after its last `#`, `/` or `:`.
+pub use purrdf_iri::local_name;
 
 /// Build a runtime SHACL→JSON-Schema [`LossEntry`]: `from` is `"shacl"`, `to`
 /// is `"json-schema"`, and `location` carries `subject` — the shape/class IRI
@@ -510,8 +493,7 @@ pub struct CompiledSchema {
 /// The legacy [`compile`] and [`compile_with_value_vocab`] entry points always
 /// use [`Self::ShapedOnly`]. Ontology-aware callers must choose explicitly;
 /// there is intentionally no `Default` implementation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SchemaSurfaceMode {
     /// Emit exactly the active SHACL target-class union.
     ShapedOnly,
@@ -530,8 +512,7 @@ impl SchemaSurfaceMode {
 }
 
 /// Stable reason attached to one property/class coverage decision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SchemaCoverageStatus {
     /// A direct SHACL predicate shape supplies the emitted property.
     HasShape,
@@ -548,8 +529,7 @@ pub enum SchemaCoverageStatus {
 }
 
 /// Precision of a schema-surface decision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SchemaCoveragePrecision {
     /// The emitted structure follows a direct SHACL or exact RDF/RDFS rule.
     Exact,
@@ -559,7 +539,7 @@ pub enum SchemaCoveragePrecision {
 }
 
 /// One source axiom supporting a schema-surface decision.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SchemaCoverageProvenance {
     /// Subject IRI in the source axiom.
     pub subject: String,
@@ -570,7 +550,7 @@ pub struct SchemaCoverageProvenance {
 }
 
 /// One catalogued property's decision for one eligible class.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaClassPropertyCoverage {
     /// Existing caller-owned class IRI.
     pub class_iri: String,
@@ -586,7 +566,7 @@ pub struct SchemaClassPropertyCoverage {
 }
 
 /// Aggregate coverage for one ontology-declared property.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaPropertyCoverage {
     /// Full property IRI.
     pub property_iri: String,
@@ -603,7 +583,7 @@ pub struct SchemaPropertyCoverage {
 }
 
 /// Deterministic audit manifest for ontology property coverage.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaCoverageReport {
     /// Surface mode used by the compilation.
     pub mode: SchemaSurfaceMode,
@@ -638,9 +618,69 @@ impl SchemaCoverageReport {
                 class.provenance.dedup();
             }
         }
-        let value = serde_json::to_value(canonical)
-            .expect("SchemaCoverageReport contains only serializable values");
+        let mut value = json!({ "mode": canonical.mode, "properties": canonical.properties });
+        value.sort_keys();
         to_pretty(&value)
+    }
+}
+
+impl ToJson for SchemaSurfaceMode {
+    fn to_json(&self) -> Value {
+        Value::from(match self {
+            Self::ShapedOnly => "shaped_only",
+            Self::OntologyComplete => "ontology_complete",
+        })
+    }
+}
+
+impl ToJson for SchemaCoverageStatus {
+    fn to_json(&self) -> Value {
+        Value::from(match self {
+            Self::HasShape => "has_shape",
+            Self::IncludedUnshaped => "included_unshaped",
+            Self::ExcludedShapedOnly => "excluded_shaped_only",
+            Self::ExcludedNamespace => "excluded_namespace",
+            Self::ExcludedDomain => "excluded_domain",
+            Self::ExcludedClosedShape => "excluded_closed_shape",
+        })
+    }
+}
+
+impl ToJson for SchemaCoveragePrecision {
+    fn to_json(&self) -> Value {
+        Value::from(match self {
+            Self::Exact => "exact",
+            Self::RepresentationApproximation => "representation_approximation",
+        })
+    }
+}
+
+impl ToJson for SchemaCoverageProvenance {
+    fn to_json(&self) -> Value {
+        json!({ "subject": self.subject, "predicate": self.predicate, "object": self.object })
+    }
+}
+
+impl ToJson for SchemaClassPropertyCoverage {
+    fn to_json(&self) -> Value {
+        json!({
+            "class_iri": self.class_iri,
+            "synthesized_open_class": self.synthesized_open_class,
+            "status": self.status,
+            "precision": self.precision,
+            "provenance": self.provenance,
+        })
+    }
+}
+
+impl ToJson for SchemaPropertyCoverage {
+    fn to_json(&self) -> Value {
+        json!({
+            "property_iri": self.property_iri,
+            "declarations": self.declarations,
+            "outcomes": self.outcomes,
+            "classes": self.classes,
+        })
     }
 }
 
@@ -884,7 +924,7 @@ pub struct SchemaCompilation {
     pub key: SchemaCompilationKey,
 }
 
-const SCHEMA_KEY_SALT: &str = "purrdf-shapes/schema-compilation-key/v1";
+const SCHEMA_KEY_SALT: Domain = Domain::new(b"purrdf-shapes/schema-compilation-key/v1");
 const SCHEMA_POLICY_SALT: &str =
     "rdf12;json-schema-2020-12;openapi-3.1;surface-limits-v1;owl-rdfs-fragment-v1";
 pub(crate) const MAX_SCHEMA_PROPERTIES: usize = 65_536;
@@ -912,22 +952,22 @@ fn schema_compilation_key(
     let mut bytes = Vec::with_capacity(
         shapes.nquads.len() + ontology.nquads.len() + request.namespaces.prefixes.len() * 64 + 256,
     );
-    append_key_part(&mut bytes, "key-salt", SCHEMA_KEY_SALT.as_bytes());
-    append_key_part(&mut bytes, "policy", SCHEMA_POLICY_SALT.as_bytes());
-    append_key_part(&mut bytes, "crate-version", crate::VERSION.as_bytes());
-    append_key_part(&mut bytes, "shapes-rdfc", shapes.nquads.as_bytes());
-    append_key_part(&mut bytes, "ontology-rdfc", ontology.nquads.as_bytes());
-    append_key_part(
+    frame_be_labelled(&mut bytes, "key-salt", SCHEMA_KEY_SALT.as_bytes());
+    frame_be_labelled(&mut bytes, "policy", SCHEMA_POLICY_SALT.as_bytes());
+    frame_be_labelled(&mut bytes, "crate-version", crate::VERSION.as_bytes());
+    frame_be_labelled(&mut bytes, "shapes-rdfc", shapes.nquads.as_bytes());
+    frame_be_labelled(&mut bytes, "ontology-rdfc", ontology.nquads.as_bytes());
+    frame_be_labelled(
         &mut bytes,
         "primary-prefix",
         request.namespaces.primary_prefix.as_bytes(),
     );
     for (prefix, namespace) in &request.namespaces.declared_prefixes {
-        append_key_part(&mut bytes, "namespace-prefix", prefix.as_bytes());
-        append_key_part(&mut bytes, "namespace-iri", namespace.as_bytes());
+        frame_be_labelled(&mut bytes, "namespace-prefix", prefix.as_bytes());
+        frame_be_labelled(&mut bytes, "namespace-iri", namespace.as_bytes());
     }
-    append_key_part(&mut bytes, "surface-mode", &[request.mode.key_byte()]);
-    append_key_part(
+    frame_be_labelled(&mut bytes, "surface-mode", &[request.mode.key_byte()]);
+    frame_be_labelled(
         &mut bytes,
         "value-vocab-marker",
         request
@@ -940,18 +980,11 @@ fn schema_compilation_key(
         MAX_SCHEMA_RELATIONS,
         MAX_OWL_EXPRESSION_DEPTH,
     ] {
-        append_key_part(&mut bytes, "fixed-limit", &limit.to_be_bytes());
+        frame_be_labelled(&mut bytes, "fixed-limit", &limit.to_be_bytes());
     }
     Ok(SchemaCompilationKey(
         ::purrdf::ContentDigest::of(&bytes).to_hex(),
     ))
-}
-
-fn append_key_part(bytes: &mut Vec<u8>, label: &str, value: &[u8]) {
-    bytes.extend_from_slice(&(label.len() as u64).to_be_bytes());
-    bytes.extend_from_slice(label.as_bytes());
-    bytes.extend_from_slice(&(value.len() as u64).to_be_bytes());
-    bytes.extend_from_slice(value);
 }
 
 // ── Value-vocabulary projection config ───────────────────────────────────────
@@ -1554,9 +1587,14 @@ fn augment_object_schema(mut body: Value, class: Option<&SurfaceClass>, ctx: &Ct
         .and_then(Value::as_object_mut)
         .expect("compiled class object always has a properties map");
     for property in class.properties.values() {
-        properties
-            .entry(ctx.ns.compact_iri(&property.iri))
-            .or_insert_with(|| ontology_property_schema(property, ctx));
+        let key = ctx.ns.compact_iri(&property.iri);
+        if !properties.contains_key(&key) {
+            crate::json_model::insert_sorted(
+                properties,
+                key,
+                ontology_property_schema(property, ctx),
+            );
+        }
     }
     body
 }
@@ -1602,7 +1640,8 @@ fn ontology_property_schema(property: &SurfaceProperty, ctx: &Ctx<'_>) -> Value 
         }
     };
     if let Value::Object(schema) = &mut single {
-        schema.insert(
+        crate::json_model::insert_sorted(
+            schema,
             "$comment".to_owned(),
             Value::String(if property.functional {
                 "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation."
@@ -1650,7 +1689,7 @@ fn named_range_schema(iri: &str, property: &SurfaceProperty, ctx: &Ctx<'_>) -> V
     if let Some(enum_key) = ctx.value_vocab_enums.get(iri) {
         return json!({ "$ref": format!("#/$defs/{enum_key}") });
     }
-    if iri == "http://www.w3.org/2000/01/rdf-schema#Literal" {
+    if iri == rdfs::LITERAL {
         return general_literal_schema();
     }
     if iri == RDF_LANG_STRING || iri == RDF_DIR_LANG_STRING {
@@ -1886,7 +1925,7 @@ fn members_of(
         .map(|iri| VocabMember {
             iri: iri.clone(),
             curie: ns.compact_iri(iri),
-            varname: local_name(iri),
+            varname: local_name(iri).to_owned(),
             description: member_description(datasets, iri),
         })
         .collect();
@@ -1963,7 +2002,7 @@ fn build_enum_def(members: &[VocabMember]) -> Value {
         "$comment".to_owned(),
         Value::String("projection of an open value vocabulary (anchor, not a fence)".to_owned()),
     );
-    Value::Object(def)
+    crate::json_model::object(def)
 }
 
 /// Enforce that the value-vocabulary enum `$def` keys are collision-free
@@ -2124,7 +2163,7 @@ fn root_schema(defs: &Map<String, Value>, ns: &Namespaces) -> Value {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": format!("{}schema/instance.schema.json", ns.primary_ns()),
         "title": "PURRDF instance schema (SHACL-derived, closed-world)",
-        "$defs": Value::Object(defs.clone()),
+        "$defs": crate::json_model::object(defs.clone()),
         "type": "object",
         "anyOf": [graph_envelope, node_ref],
         "properties": {
@@ -2252,7 +2291,7 @@ fn openapi_doc(defs: &Map<String, Value>) -> Value {
                 }
             }
         },
-        "components": { "schemas": Value::Object(defs.clone()) }
+        "components": { "schemas": crate::json_model::object(defs.clone()) }
     })
 }
 
@@ -2753,7 +2792,7 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
         id.insert("type".to_owned(), json!("string"));
         id.insert("pattern".to_owned(), json!(IRI_ID_PATTERN));
         id.insert("allOf".to_owned(), Value::Array(focus_lexical));
-        all_of.push(focus_id_schema(Value::Object(id)));
+        all_of.push(focus_id_schema(crate::json_model::object(id)));
     }
 
     // sh:closed: allow the ignored predicates, and the paths of the property
@@ -2770,7 +2809,10 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
     let mut obj: Map<String, Value> = Map::new();
     obj.insert("type".to_owned(), json!("object"));
 
-    obj.insert("properties".to_owned(), Value::Object(properties));
+    obj.insert(
+        "properties".to_owned(),
+        crate::json_model::object(properties),
+    );
 
     if !required.is_empty() {
         required.sort();
@@ -2801,7 +2843,7 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
         obj.insert("$comment".to_owned(), json!(comments.join("; ")));
     }
 
-    Value::Object(obj)
+    crate::json_model::object(obj)
 }
 
 // ── Per-property value schema ────────────────────────────────────────────────
@@ -2972,11 +3014,11 @@ fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
         props.insert(key.clone(), value_schema);
         let mut obj: Map<String, Value> = Map::new();
         obj.insert("type".to_owned(), json!("object"));
-        obj.insert("properties".to_owned(), Value::Object(props));
+        obj.insert("properties".to_owned(), crate::json_model::object(props));
         if is_required {
             obj.insert("required".to_owned(), json!([key]));
         }
-        parts.push(Value::Object(obj));
+        parts.push(crate::json_model::object(obj));
     }
 
     if parts.is_empty() {
@@ -3356,7 +3398,8 @@ fn compile_property(
                             // form WITHOUT the `$ref` branch.
                             let mut node_ref = node_ref_schema();
                             if let Value::Object(map) = &mut node_ref {
-                                map.insert(
+                                crate::json_model::insert_sorted(
+                                    map,
                                     "$comment".to_owned(),
                                     json!(format!(
                                         "{} has no NodeShape; node reference only",
@@ -3383,7 +3426,8 @@ fn compile_property(
                         // object, keeping a `$comment` noting the external class.
                         let mut node_ref = node_ref_schema();
                         if let Value::Object(map) = &mut node_ref {
-                            map.insert(
+                            crate::json_model::insert_sorted(
+                                map,
                                 "$comment".to_owned(),
                                 json!(format!("external class {}", c.as_str())),
                             );
@@ -3822,7 +3866,7 @@ fn compile_property(
     group_schemas.dedup();
     if group_schemas.len() == 1 {
         // Fold the one group into the value map.
-        if let Some(Value::Object(only)) = group_schemas.pop() {
+        if let Some(Ok(only)) = group_schemas.pop().map(crate::json_model::into_object) {
             for (k, v) in only {
                 value.entry(k).or_insert(v);
             }
@@ -3931,13 +3975,13 @@ fn compile_property(
     // an unconstrained value beside an unbounded array of unconstrained values
     // accepts every array either way.
     let judges = value.keys().any(|key| key != "$comment") || max_count.is_some() || requires_value;
-    if single_beside_array && judges && !rejects_arrays(&Value::Object(value.clone())) {
+    if single_beside_array && judges && !rejects_arrays(&crate::json_model::object(value.clone())) {
         value.insert(
             "type".to_owned(),
             json!(["boolean", "number", "object", "string"]),
         );
     }
-    let item = Value::Object(value.clone());
+    let item = crate::json_model::object(value.clone());
     match has_values.as_slice() {
         [] => {}
         [only] => {
@@ -3965,7 +4009,7 @@ fn compile_property(
         all.extend(some_values.iter().cloned());
         value.insert("allOf".to_owned(), Value::Array(all));
     }
-    let single = Value::Object(value);
+    let single = crate::json_model::object(value);
 
     // `sh:hasValue` and `sh:someValue` require a value, so each implies
     // `sh:minCount 1`, stated as such so that the schema reads back as the
@@ -4024,7 +4068,7 @@ fn compile_property(
         if let Some(n) = max_count {
             arr.insert("maxItems".to_owned(), json!(n));
         }
-        let array_form = Value::Object(arr);
+        let array_form = crate::json_model::object(arr);
 
         // A single value is permissible exactly when minCount <= 1.
         let allow_single = min_count.is_none_or(|n| n <= 1);
@@ -4240,12 +4284,12 @@ fn line_break_rejections() -> [Value; 2] {
 fn literal_value_rejection(lexical: Value) -> Value {
     let mut at_value = Map::new();
     at_value.insert("type".to_owned(), json!("string"));
-    if let Value::Object(lexical) = lexical {
+    if let Ok(lexical) = crate::json_model::into_object(lexical) {
         at_value.extend(lexical);
     }
     json!({
         "type": "object",
-        "properties": { "@value": Value::Object(at_value) },
+        "properties": { "@value": crate::json_model::object(at_value) },
         "required": ["@value"]
     })
 }
@@ -4258,12 +4302,12 @@ fn iri_id_rejection(id: Value) -> Value {
     let mut at_id = Map::new();
     at_id.insert("type".to_owned(), json!("string"));
     at_id.insert("pattern".to_owned(), json!(IRI_ID_PATTERN));
-    if let Value::Object(id) = id {
+    if let Ok(id) = crate::json_model::into_object(id) {
         at_id.extend(id);
     }
     json!({
         "type": "object",
-        "properties": { "@id": Value::Object(at_id) },
+        "properties": { "@id": crate::json_model::object(at_id) },
         "required": ["@id"]
     })
 }
@@ -4300,7 +4344,7 @@ impl LexicalConstraints<'_> {
             || self.max_length.is_some_and(|n| length > n)
             || self.sources.iter().any(|(regex, flags)| {
                 purrdf_core::xsd_regex::compile(regex, flags)
-                    .is_ok_and(|compiled| !compiled.as_regex().is_match(lexical))
+                    .is_ok_and(|compiled| !compiled.is_match(lexical))
             })
     }
 
@@ -4546,7 +4590,7 @@ fn range_bound(term: &Term) -> RangeBound {
     let Term::Literal(literal) = term else {
         return RangeBound::Incomparable;
     };
-    let lexical = literal.value().trim_matches(['\t', '\n', '\r', ' ']);
+    let lexical = purrdf_iri::terminals::trim_ws(literal.value());
     let Some(local) = literal.datatype_str().strip_prefix(XSD_NS) else {
         return RangeBound::Incomparable;
     };
@@ -4855,7 +4899,8 @@ const fn facet_term(facet: Facet) -> &'static str {
 /// ([`range_bound_rejections`]).
 fn with_bound_comment(mut rejection: Value, facet: Facet, term: &Term) -> Value {
     if let Value::Object(object) = &mut rejection {
-        object.insert(
+        crate::json_model::insert_sorted(
+            object,
             "$comment".to_owned(),
             json!(format!("{} {term}", facet_term(facet))),
         );
@@ -5025,7 +5070,7 @@ fn ieee_member_satisfies(member: &Term, bounds: &[(Facet, BoundNumberValue)]) ->
     let Term::Literal(literal) = member else {
         return false;
     };
-    let lexical = literal.value().trim_matches(['\t', '\n', '\r', ' ']);
+    let lexical = purrdf_iri::terminals::trim_ws(literal.value());
     let value = if literal.datatype_str() == XSD_FLOAT {
         purrdf_xsd::parse_float_xsd10(lexical).ok().map(f64::from)
     } else {
@@ -5156,7 +5201,7 @@ impl<'s> ListComponents<'s> {
         if let Some(member) = member {
             array.insert("items".to_owned(), member.clone());
         }
-        Value::Object(array)
+        crate::json_model::object(array)
     }
 
     /// The value schema of a list value node: its `@list` object.
@@ -5435,7 +5480,7 @@ fn compile_member_schema_body(
             Some(existing) => format!("{existing}; {}", comments.join("; ")),
             None => comments.join("; "),
         };
-        object.insert("$comment".to_owned(), json!(joined));
+        crate::json_model::insert_sorted(object, "$comment".to_owned(), json!(joined));
     }
     schema
 }
@@ -5446,9 +5491,12 @@ fn focus_id_schema(id: Value) -> Value {
     let mut properties = Map::new();
     properties.insert("@id".to_owned(), id);
     let mut schema = Map::new();
-    schema.insert("properties".to_owned(), Value::Object(properties));
+    schema.insert(
+        "properties".to_owned(),
+        crate::json_model::object(properties),
+    );
     schema.insert("required".to_owned(), json!(["@id"]));
-    Value::Object(schema)
+    crate::json_model::object(schema)
 }
 
 /// The `@id` a focus node equal to `term` has: an IRI's full string or a blank
@@ -5467,9 +5515,12 @@ fn list_value_schema(members: Value) -> Value {
     properties.insert("@list".to_owned(), members);
     let mut schema = Map::new();
     schema.insert("type".to_owned(), json!("object"));
-    schema.insert("properties".to_owned(), Value::Object(properties));
+    schema.insert(
+        "properties".to_owned(),
+        crate::json_model::object(properties),
+    );
     schema.insert("required".to_owned(), json!(["@list"]));
-    Value::Object(schema)
+    crate::json_model::object(schema)
 }
 
 /// Any list, empty or not.
@@ -5530,7 +5581,9 @@ fn datatype_value_schema(dt_iri: &str, ns: &Namespaces) -> Value {
             "properties": {
                 "@value": { "type": "string" },
                 "@language": { "type": "string" },
-                "@direction": { "enum": ["ltr", "rtl"] }
+                "@direction": {
+                    "enum": [RdfTextDirection::Ltr.as_str(), RdfTextDirection::Rtl.as_str()]
+                }
             },
             "required": ["@value", "@language", "@direction"]
         });
@@ -5539,11 +5592,15 @@ fn datatype_value_schema(dt_iri: &str, ns: &Namespaces) -> Value {
     let local = dt_iri.strip_prefix(XSD_NS);
     let scalar = match local {
         Some("boolean") => {
-            lexical["pattern"] = json!(BOOLEAN_LEXICAL_PATTERN);
+            crate::json_model::set_member(&mut lexical, "pattern", json!(BOOLEAN_LEXICAL_PATTERN));
             Some(json!({ "type": "boolean" }))
         }
         Some("integer") => {
-            lexical["pattern"] = json!(order_pattern(&Threshold::All, true));
+            crate::json_model::set_member(
+                &mut lexical,
+                "pattern",
+                json!(order_pattern(&Threshold::All, true)),
+            );
             Some(json!({ "type": "integer" }))
         }
         Some(name) if INTEGER_DATATYPES.iter().any(|(n, _, _)| *n == name) => {
@@ -5551,27 +5608,31 @@ fn datatype_value_schema(dt_iri: &str, ns: &Namespaces) -> Value {
             None
         }
         Some("decimal") => {
-            lexical["pattern"] = json!(order_pattern(&Threshold::All, false));
+            crate::json_model::set_member(
+                &mut lexical,
+                "pattern",
+                json!(order_pattern(&Threshold::All, false)),
+            );
             None
         }
         Some("double" | "float") => {
-            lexical["pattern"] = json!(IEEE_LEXICAL_PATTERN);
+            crate::json_model::set_member(&mut lexical, "pattern", json!(IEEE_LEXICAL_PATTERN));
             None
         }
         Some("dateTime" | "dateTimeStamp") => {
-            lexical["format"] = json!("date-time");
+            crate::json_model::set_member(&mut lexical, "format", json!("date-time"));
             None
         }
         Some("date") => {
-            lexical["format"] = json!("date");
+            crate::json_model::set_member(&mut lexical, "format", json!("date"));
             None
         }
         Some("time") => {
-            lexical["format"] = json!("time");
+            crate::json_model::set_member(&mut lexical, "format", json!("time"));
             None
         }
         Some("anyURI") => {
-            lexical["format"] = json!("uri");
+            crate::json_model::set_member(&mut lexical, "format", json!("uri"));
             None
         }
         _ => None,
@@ -5704,12 +5765,11 @@ fn term_enum_value(term: &Term, ns: &Namespaces) -> Value {
 
 /// Pretty-print a JSON value with 2-space indent + a single trailing newline.
 ///
-/// `serde_json::Value` uses a BTreeMap-backed `Map` (no `preserve_order`
-/// feature), so object keys serialize in sorted order; arrays were sorted at
-/// build time — output is therefore byte-stable run-to-run. UTF-8, LF only.
+/// Every object is built with its members in name order
+/// ([`crate::json_model`]) and arrays were sorted at build time, so the
+/// output is byte-stable run-to-run. UTF-8, LF only.
 fn to_pretty(value: &Value) -> String {
-    let mut s =
-        serde_json::to_string_pretty(value).expect("serde_json::Value never fails to serialize");
+    let mut s = crate::json_model::write_pretty(value);
     s.push('\n');
     s
 }
@@ -5780,7 +5840,7 @@ mod tests {
     }
 
     fn schema_of(c: &CompiledSchema) -> Value {
-        serde_json::from_str(&c.schema_json).expect("schema is valid JSON")
+        purrdf_lex::json::read(&c.schema_json).expect("schema is valid JSON")
     }
 
     fn def<'a>(schema: &'a Value, name: &str) -> &'a Value {
@@ -5863,7 +5923,8 @@ mod tests {
                 purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
                     .iter()
                     .map(|&(uri, text)| {
-                        let document: Value = serde_json::from_str(text).expect("meta-schema JSON");
+                        let document: Value =
+                            purrdf_lex::json::read(text).expect("meta-schema JSON");
                         (uri, document)
                     }),
             )
@@ -5876,7 +5937,7 @@ mod tests {
         metaschemas: &purrdf_jsonschema::Metaschemas,
         schema_json: &str,
     ) -> Result<purrdf_jsonschema::Schema, purrdf_jsonschema::SchemaError> {
-        let schema_val: Value = serde_json::from_str(schema_json).expect("schema is valid JSON");
+        let schema_val: Value = purrdf_lex::json::read(schema_json).expect("schema is valid JSON");
         purrdf_jsonschema::Schema::from_document(
             metaschemas,
             "mem:///instance.schema.json",
@@ -6006,11 +6067,6 @@ mod tests {
         assert_eq!(
             ns.compact_iri("http://example.org/Foo"),
             "http://example.org/Foo"
-        );
-        assert_eq!(local_name("https://example.org/meta/Person"), "Person");
-        assert_eq!(
-            local_name("http://www.w3.org/2001/XMLSchema#integer"),
-            "integer"
         );
     }
 
@@ -6341,7 +6397,7 @@ mod tests {
         );
 
         let openapi: Value =
-            serde_json::from_str(&compilation.compiled.openapi_json).expect("OpenAPI is JSON");
+            purrdf_lex::json::read(&compilation.compiled.openapi_json).expect("OpenAPI is JSON");
         assert_eq!(
             openapi["components"]["schemas"]["EmailMessage"], schema["$defs"]["EmailMessage"],
             "OpenAPI embeds the exact shared carrier definition"
@@ -6693,7 +6749,7 @@ mod tests {
 
         // Production surface: the value schema ACCEPTS an @id object and REJECTS a
         // bare string, verified with a trusted draft-2020-12 validator.
-        let basis_json = serde_json::to_string(basis).expect("value schema serializes");
+        let basis_json = crate::json_model::write_compact(basis);
         assert!(
             validates(
                 &basis_json,
@@ -6715,7 +6771,7 @@ mod tests {
             &json!({ "type": "string" }),
             "datatype xsd:string projects to exactly the bare string its literals project as"
         );
-        let label_json = serde_json::to_string(label).expect("value schema serializes");
+        let label_json = crate::json_model::write_compact(label);
         assert!(
             validates(&label_json, &json!("hello")),
             "datatype xsd:string must still accept a bare string literal"
@@ -6787,11 +6843,11 @@ mod tests {
             })
         );
         assert!(validates(
-            &serde_json::to_string(at).expect("schema"),
+            &crate::json_model::write_compact(at),
             &json!({ "@value": "2026-01-01T00:00:00Z", "@type": "xsd:dateTime" })
         ));
         assert!(!validates(
-            &serde_json::to_string(at).expect("schema"),
+            &crate::json_model::write_compact(at),
             &json!("2026-01-01T00:00:00Z")
         ));
         // integer → the bare JSON integer, or the typed object of xsd:integer.
@@ -6807,7 +6863,7 @@ mod tests {
         // (a bare integer is exactly a canonical xsd:integer), so the datatype
         // is judged exactly and nothing is recorded.
         assert!(c.losses.is_empty(), "{}", c.losses.render_json());
-        let count_json = serde_json::to_string(count).expect("schema");
+        let count_json = crate::json_model::write_compact(count);
         for (value, valid) in [
             (json!(42), true),
             (json!({ "@value": "+42", "@type": "xsd:integer" }), true),
@@ -7231,9 +7287,7 @@ mod tests {
         let schema = schema_of(&c);
         let maxt = def(&schema, "MaxT");
         assert!(
-            !serde_json::to_string(maxt)
-                .expect("def serializes")
-                .contains("\"not\""),
+            !crate::json_model::write_compact(maxt).contains("\"not\""),
             "the vacuous-total `not` must be GONE from the def, got {maxt:?}"
         );
         // Behavioural: the sh:not is honestly DROPPED (a recorded loss), so the
@@ -7281,9 +7335,7 @@ mod tests {
         let schema = schema_of(&c);
         let exact = def(&schema, "ExactT");
         assert!(
-            !serde_json::to_string(exact)
-                .expect("def serializes")
-                .contains("\"not\""),
+            !crate::json_model::write_compact(exact).contains("\"not\""),
             "the vacuous `not` must be GONE from the def, got {exact:?}"
         );
         assert!(
@@ -7317,9 +7369,7 @@ mod tests {
         let schema = schema_of(&c);
         let dtt = def(&schema, "DtT");
         assert!(
-            !serde_json::to_string(dtt)
-                .expect("def serializes")
-                .contains("\"not\""),
+            !crate::json_model::write_compact(dtt).contains("\"not\""),
             "no `not` must be emitted for a dropped value-restriction negand, got {dtt:?}"
         );
         // The constraint is honestly DROPPED (recorded loss): a node WITH the
@@ -7358,9 +7408,7 @@ mod tests {
         let schema = schema_of(&c);
         let dtt = def(&schema, "DtArrT");
         assert!(
-            !serde_json::to_string(dtt)
-                .expect("def serializes")
-                .contains("\"not\""),
+            !crate::json_model::write_compact(dtt).contains("\"not\""),
             "no `not` must be emitted for a dropped value-restriction negand, got {dtt:?}"
         );
         // Both an all-string array and a mixed array must be ACCEPTED (dropped).
@@ -7400,9 +7448,7 @@ mod tests {
         let schema = schema_of(&c);
         let nk = def(&schema, "NkT");
         assert!(
-            !serde_json::to_string(nk)
-                .expect("def serializes")
-                .contains("\"not\""),
+            !crate::json_model::write_compact(nk).contains("\"not\""),
             "no `not` must be emitted for a dropped value-restriction negand, got {nk:?}"
         );
         assert!(
@@ -7434,9 +7480,7 @@ mod tests {
         let schema = schema_of(&c);
         let li = def(&schema, "LiT");
         assert!(
-            !serde_json::to_string(li)
-                .expect("def serializes")
-                .contains("\"not\""),
+            !crate::json_model::write_compact(li).contains("\"not\""),
             "no `not` must be emitted for a dropped value-restriction negand, got {li:?}"
         );
         assert!(
@@ -7471,9 +7515,7 @@ mod tests {
         let schema = schema_of(&c);
         let pat = def(&schema, "PatT");
         assert!(
-            !serde_json::to_string(pat)
-                .expect("def serializes")
-                .contains("\"not\""),
+            !crate::json_model::write_compact(pat).contains("\"not\""),
             "the vacuous `not` must be GONE from the def, got {pat:?}"
         );
         // Behavioural (a real validator): the false-reject is gone — the constraint is
@@ -7522,9 +7564,7 @@ mod tests {
         let schema = schema_of(&c);
         let num = def(&schema, "NumT");
         assert!(
-            !serde_json::to_string(num)
-                .expect("def serializes")
-                .contains("\"not\""),
+            !crate::json_model::write_compact(num).contains("\"not\""),
             "the vacuous `not` must be GONE from the def, got {num:?}"
         );
         // Behavioural (a real validator): a node with meta:p = [5] is ACCEPTED — the
@@ -7567,9 +7607,7 @@ mod tests {
         let schema = schema_of(&c);
         let person = def(&schema, "Person");
         assert!(
-            !serde_json::to_string(person)
-                .expect("def serializes")
-                .contains("\"not\""),
+            !crate::json_model::write_compact(person).contains("\"not\""),
             "the unsound `not` must be GONE from the def, got {person:?}"
         );
         // Behavioural (a real validator): the multivalue + absent cases that expose the
@@ -7619,9 +7657,7 @@ mod tests {
         let schema = schema_of(&c);
         let it = def(&schema, "InT");
         assert!(
-            !serde_json::to_string(it)
-                .expect("def serializes")
-                .contains("\"not\""),
+            !crate::json_model::write_compact(it).contains("\"not\""),
             "no `not` must be emitted for a dropped value-restriction negand, got {it:?}"
         );
         assert!(
@@ -8232,7 +8268,7 @@ mod tests {
                 sh:property [ sh:path meta:name ; sh:datatype xsd:string ] .
             ",
         );
-        let openapi: Value = serde_json::from_str(&c.openapi_json).expect("openapi JSON");
+        let openapi: Value = purrdf_lex::json::read(&c.openapi_json).expect("openapi JSON");
         assert_eq!(openapi["openapi"], json!("3.1.0"));
         assert!(openapi["components"]["schemas"]["Person"].is_object());
         assert!(openapi["paths"]["/entities/{id}"]["get"].is_object());
@@ -8573,7 +8609,7 @@ mod tests {
         );
         let schema = schema_of(&compiled);
         let openapi: Value =
-            serde_json::from_str(&compiled.openapi_json).expect("openapi is valid JSON");
+            purrdf_lex::json::read(&compiled.openapi_json).expect("openapi is valid JSON");
         assert_eq!(
             schema["$defs"]["ColorEnum"], openapi["components"]["schemas"]["ColorEnum"],
             "the enum $def is byte-identical across JSON Schema $defs and OpenAPI components/schemas"

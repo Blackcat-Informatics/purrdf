@@ -23,20 +23,20 @@
 #[path = "support/purremb.rs"]
 mod purremb;
 
+#[path = "support/fixture.rs"]
+mod fixture;
+use fixture::params;
+use purrdf_core::term_fixture::empty_dataset as dataset;
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
-use purrdf_hnsw::{Params, relation::HnswSpace};
+use purrdf_core::{SparqlRequest, SparqlResult, TermValue};
+use purrdf_hnsw::relation::HnswSpace;
 use purrdf_sparql_eval::{
     ExtensionEnv, KnnGuard, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
 };
 
 /// The caller-supplied predicate this host calls approximate retrieval by.
 const NEAREST: &str = "https://example.org/pf#nearest";
-
-fn params() -> Params {
-    Params::new(4, 8, 16, 8).expect("valid")
-}
 
 /// A space over the real artifact, plus the row terms the fixture bound.
 fn space(rows: usize) -> (Arc<HnswSpace>, Vec<TermValue>) {
@@ -58,11 +58,6 @@ fn registry(space: &Arc<HnswSpace>) -> PropertyFunctionRegistry {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(NEAREST.to_owned(), Arc::new(space.relation()));
     registry
-}
-
-/// An empty dataset: the relation is self-contained, so nothing here comes from quads.
-fn dataset() -> Arc<RdfDataset> {
-    RdfDatasetBuilder::new().freeze().expect("empty dataset")
 }
 
 /// Evaluate `query` with `registry` in scope and return the solution rows as terms.

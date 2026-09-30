@@ -1,35 +1,30 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The serde-friendly value types a plan is built from.
+//! The value types a plan is built from.
 //!
-//! A plan is pure data that a caller serializes, edits and hands back, so every
-//! value it carries must round-trip through a document format and compare for
-//! equality. The kernel's `Iri` is a zero-dependency parsed value with neither a
-//! `Hash` impl nor a serde impl, and `purrdf-text`'s `Fixed` has no serde impl
-//! either; rather than widen those ring-fenced leaves, this module wraps them
-//! with the exact behaviour a plan needs:
+//! A plan is pure data that a caller writes out as JSON, edits and hands back,
+//! so every value it carries must round-trip through that document and compare
+//! for equality. The kernel's `Iri` is a zero-dependency parsed value with no
+//! `Hash` impl; rather than widen that ring-fenced leaf, this module wraps it,
+//! and carries terms, with the exact behaviour a plan needs:
 //!
 //! * [`Iri`] validates through the kernel parser, hashes and orders by its
-//!   textual content, and serializes as the IRI string — a deserialized IRI is
-//!   re-parsed, so a forged document cannot smuggle an unvalidated IRI in.
+//!   textual content, and is written as the IRI string — an IRI read back from
+//!   JSON is re-parsed ([`Iri::from_json`]), so a forged document cannot smuggle
+//!   an unvalidated IRI in.
 //! * [`Term`] carries a caller's canonical term lexical; the layer mints no
 //!   vocabulary and parses no RDF.
-//! * `fixed_option` carries an optional exact fixed-point value as its raw
-//!   `i128`, so a round trip preserves it without introducing a decimal-string
-//!   parsing convention the layer does not otherwise need.
 
 use core::fmt;
 use core::hash::{Hash, Hasher};
-
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::PlanError;
 
 /// A validated IRI in caller-supplied retrieval configuration.
 ///
 /// This is the kernel's parsed IRI, held so the layer can hash it, order it,
-/// and serialize it as a string. Construction is fallible and validates through
+/// and write it as a string. Construction is fallible and validates through
 /// `purrdf_core::parse_iri`; equality, ordering and hashing are all over the
 /// IRI's textual content, which is what a plan's identity needs.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -95,36 +90,24 @@ impl Ord for Iri {
     }
 }
 
-impl Serialize for Iri {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.0.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for Iri {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = String::deserialize(deserializer)?;
-        Self::parse(&text).map_err(serde::de::Error::custom)
-    }
-}
-
 /// A caller-supplied RDF term, carried in its canonical lexical form.
 ///
 /// The composition layer neither mints terms nor parses RDF: the caller supplies
 /// the term in the canonical form its own term codec produces, and the layer
 /// carries it verbatim. It never names a dataset-local `TermId`, so a plan is
 /// valid against any dataset.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Term(String);
 
-impl Term {
-    /// Carry `text` as a term.
-    #[must_use]
-    pub fn new(text: impl Into<String>) -> Self {
-        Self(text.into())
+purrdf_lex::constructors! {
+    impl Term {
+        /// Carry `text` as a term.
+        #[must_use]
+        pub fn new(text) -> Self;
     }
+}
 
+impl Term {
     /// The term's canonical text.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -153,35 +136,7 @@ impl From<String> for Term {
 
 impl From<&str> for Term {
     fn from(value: &str) -> Self {
-        Self(value.to_owned())
-    }
-}
-
-/// Serde bridge for a field typed `Option<Fixed>`.
-///
-/// `Fixed` serializes as its raw `i128`, preserving the value exactly; the
-/// presence discriminant is serde's own `Option` handling.
-pub(crate) mod fixed_option {
-    use purrdf_text::Fixed;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    /// Serialize an optional exact fixed-point value as its raw integer.
-    ///
-    /// The `&Option<Fixed>` signature is fixed by serde's `with` contract; the
-    /// idiomatic `Option<&Fixed>` the lint prefers cannot be expressed here.
-    #[allow(clippy::ref_option)]
-    pub(crate) fn serialize<S: Serializer>(
-        value: &Option<Fixed>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        value.map(Fixed::into_raw).serialize(serializer)
-    }
-
-    /// Deserialize an optional exact fixed-point value from its raw integer.
-    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Option<Fixed>, D::Error> {
-        Ok(Option::<i128>::deserialize(deserializer)?.map(Fixed::from_raw))
+        Self::new(value)
     }
 }
 

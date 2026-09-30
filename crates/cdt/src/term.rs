@@ -26,39 +26,10 @@ use crate::datatype::{RDF_DIR_LANG_STRING, RDF_LANG_STRING};
 use crate::error::CdtError;
 use crate::value::CdtValue;
 
-/// The RDF 1.2 base direction of a directional language-tagged string.
-///
-/// Carried exactly as the workspace's concrete syntaxes already write it: the
-/// `--ltr` / `--rtl` suffix after a language tag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TextDirection {
-    /// Left-to-right base direction (`ltr`).
-    Ltr,
-    /// Right-to-left base direction (`rtl`).
-    Rtl,
-}
-
-impl TextDirection {
-    /// The lowercase direction token (`"ltr"` or `"rtl"`) as it appears in concrete
-    /// syntaxes.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Ltr => "ltr",
-            Self::Rtl => "rtl",
-        }
-    }
-
-    /// Parse the token after `--`, or `None` when it is neither direction.
-    #[must_use]
-    pub fn from_str_token(token: &str) -> Option<Self> {
-        match token {
-            "ltr" => Some(Self::Ltr),
-            "rtl" => Some(Self::Rtl),
-            _ => None,
-        }
-    }
-}
+/// The RDF 1.2 base direction of a directional language-tagged string: the
+/// stack's one direction type, carried exactly as the workspace's concrete
+/// syntaxes write it (the `--ltr` / `--rtl` suffix after a language tag).
+pub use purrdf_events::TextDirection;
 
 /// An RDF literal appearing inside a composite lexical form.
 ///
@@ -241,7 +212,7 @@ impl CdtTerm {
     /// )?;
     /// assert_eq!(
     ///     CdtValue::list(vec![triple])?.canonical_lexical(),
-    ///     "[<<(<http://example.org/s> <http://example.org/p> null)>>]"
+    ///     "[<<( <http://example.org/s> <http://example.org/p> null )>>]"
     /// );
     /// # Ok::<(), purrdf_cdt::CdtError>(())
     /// ```

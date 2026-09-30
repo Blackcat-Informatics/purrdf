@@ -87,7 +87,7 @@ mod tests {
             "http://example.org/x",
             "https://example.org/a/b?q=1#f",
             "urn:uuid:0b7f0a1e-0000-4000-8000-000000000000",
-            "blake3:0123456789abcdef",
+            "blake3:00112233445566778899aabbccddeeff",
             "file:///tmp/x",
             // RFC-3987: non-ASCII code points are permitted verbatim.
             "http://example.org/caf\u{e9}",

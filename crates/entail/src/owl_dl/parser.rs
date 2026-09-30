@@ -68,9 +68,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use purrdf_core::{DatasetView, TermValue};
+use purrdf_core::collections::{SoleObject, walk_rdf_list};
+use purrdf_core::{DatasetView, ListError, TermValue};
 
-use crate::engine::resolve_value;
 use purrdf_datalog::StopSignal;
 use purrdf_xsd::XsdDatatype;
 use purrdf_xsd::range::{DataRange, Facet};
@@ -116,45 +116,6 @@ use crate::vocab::{
 /// per operator, and the deepest published ontologies nest tens of levels, not hundreds.
 /// This crate's sibling bound on RDF 1.2 triple-term nesting is 16.
 pub(crate) const MAX_EXPRESSION_DEPTH: usize = 256;
-
-/// Apply the `whiteSpace` = `collapse` normalization an XSD atomic datatype fixes, as far as
-/// a single-token lexical space can observe it.
-///
-/// XSD 1.1 Part 2 §4.3.6 states the two steps in full:
-///
-/// > `replace` — All occurrences of `#x9` (tab), `#xA` (line feed) and `#xD` (carriage
-/// > return) are replaced with `#x20` (space).
-/// >
-/// > `collapse` — After the processing implied by `replace`, contiguous sequences of `#x20`s
-/// > are collapsed to a single `#x20`, and any `#x20` at the start or end of the string are
-/// > then removed.
-///
-/// The whole normalization therefore quantifies over four code points and no others — the
-/// same four as XML `S`, "`S ::= (#x20 | #x9 | #xD | #xA)+`" (XML 1.0 5e §2.3 `[3]`) — and
-/// [`purrdf_iri::terminals::is_ws_char`] is that class.
-///
-/// Squeezing internal runs is not performed, and does not need to be: every lexical space
-/// this is applied to here (`xsd:boolean`, `xsd:integer`, `xsd:nonNegativeInteger`) is a
-/// single token containing no `#x20`, so an internal run survives `collapse` as one `#x20`
-/// and is refused by the token grammar either way. The verdict is identical; only the
-/// trimming is observable.
-///
-/// # Why this is not [`str::trim`], and why the direction matters HERE
-///
-/// `str::trim` trims the Unicode `White_Space` property — twenty-six code points, including
-/// U+00A0 NO-BREAK SPACE, U+2028, U+3000 and the `[#x2000-#x200A]` block — where the
-/// datatype names four. Every one of the extra twenty-two is **over-acceptance**: the
-/// lexical form `"\u{A0}2"` is not in `xsd:nonNegativeInteger`'s lexical space at all, and a
-/// trim that strips the NO-BREAK SPACE turns it into the cardinality bound `2`.
-///
-/// This is a reasoner, so an ill-typed literal admitted here does not surface as a lenient
-/// parse: it becomes a premise. A cardinality restriction, an `owl:hasSelf` truth value or a
-/// length facet read out of a literal the datatype refuses makes every consequence drawn
-/// from it a DERIVED verdict resting on input the ontology does not state — reported with
-/// the same certificate as a sound one.
-fn collapse_trim(lexical: &str) -> &str {
-    lexical.trim_matches(purrdf_iri::terminals::is_ws_char)
-}
 
 /// Which constraining facet a predicate of an `owl:withRestrictions` list cell states.
 ///
@@ -392,6 +353,36 @@ impl Vocab {
 /// objects; deterministic lookups). Shared by the knowledge-base build and the query
 /// class-expression view.
 pub(crate) type TripleIndex = BTreeMap<u32, BTreeMap<u32, Vec<u32>>>;
+
+/// The members of the RDF collection headed by `head` in `index`, by the strict walker
+/// ([`walk_rdf_list`]): the one reading of a collection the DL parser and the profile
+/// certifier share.
+///
+/// # Errors
+///
+/// [`ListError`] when the collection is malformed.
+pub(crate) fn index_list(
+    index: &TripleIndex,
+    v: &Vocab,
+    head: u32,
+) -> Result<Vec<u32>, ListError<u32>> {
+    let objects = |cell: u32, predicate: u32| {
+        SoleObject::of(
+            index
+                .get(&cell)
+                .and_then(|preds| preds.get(&predicate))
+                .into_iter()
+                .flatten()
+                .copied(),
+        )
+    };
+    walk_rdf_list(
+        head,
+        Some(v.nil),
+        |cell| objects(cell, v.first),
+        |cell| objects(cell, v.rest),
+    )
+}
 
 /// Insert `(s, p, o)` into `index`.
 pub(crate) fn index_insert(index: &mut TripleIndex, s: u32, p: u32, o: u32) {
@@ -811,9 +802,11 @@ impl<'a> CeExtractor<'a> {
             FacetSlot::Length | FacetSlot::MinLength | FacetSlot::MaxLength => {
                 // `xsd:length`/`minLength`/`maxLength` take an `xsd:nonNegativeInteger`
                 // (XSD 1.1 Part 2 §4.3.1), which fixes `whiteSpace` = `collapse` — see
-                // `collapse_trim`. `None` here makes the whole range opaque rather than
+                // `purrdf_iri::terminals::trim_ws`. `None` here makes the whole range opaque rather than
                 // dropping the facet, so an ill-typed bound cannot shrink a range.
-                let length = collapse_trim(lexical_form).parse::<u64>().ok()?;
+                let length = purrdf_iri::terminals::trim_ws(lexical_form)
+                    .parse::<u64>()
+                    .ok()?;
                 Some(match slot {
                     FacetSlot::Length => Facet::Length(length),
                     FacetSlot::MinLength => Facet::MinLength(length),
@@ -917,13 +910,15 @@ impl<'a> CeExtractor<'a> {
         let truth = match self.interner.value(lit) {
             // `owl:hasSelf` takes an `xsd:boolean`, whose lexical space is
             // "`{true, false, 1, 0}`" and which fixes `whiteSpace` = `collapse`
-            // (XSD 1.1 Part 2 §3.3.2) — see `collapse_trim`. A value the datatype
+            // (XSD 1.1 Part 2 §3.3.2) — see `purrdf_iri::terminals::trim_ws`. A value the datatype
             // refuses is `None`, which is the opaque reading, not a guessed truth.
-            TermValue::Literal { lexical_form, .. } => match collapse_trim(lexical_form) {
-                "true" | "1" => Some(true),
-                "false" | "0" => Some(false),
-                _ => None,
-            },
+            TermValue::Literal { lexical_form, .. } => {
+                match purrdf_iri::terminals::trim_ws(lexical_form) {
+                    "true" | "1" => Some(true),
+                    "false" | "0" => Some(false),
+                    _ => None,
+                }
+            }
             _ => None,
         };
         match truth {
@@ -979,11 +974,15 @@ impl<'a> CeExtractor<'a> {
                 // The OWL-2-RDF mapping types a cardinality as
                 // `xsd:nonNegativeInteger`, which fixes `whiteSpace` = `collapse`
                 // (XSD 1.1 Part 2 §3.4.13 `xsd:integer`, from which it derives) — see
-                // `collapse_trim`. A lexical form the datatype refuses is a malformed
+                // `purrdf_iri::terminals::trim_ws`. A lexical form the datatype refuses is a malformed
                 // graph and a hard error, never a bound guessed from it.
-                let n = collapse_trim(lexical_form).parse::<u32>().map_err(|_| {
-                    EntailError::Parse(format!("non-integer cardinality literal: {lexical_form:?}"))
-                })?;
+                let n = purrdf_iri::terminals::trim_ws(lexical_form)
+                    .parse::<u32>()
+                    .map_err(|_| {
+                        EntailError::Parse(format!(
+                            "non-integer cardinality literal: {lexical_form:?}"
+                        ))
+                    })?;
                 if n == u32::MAX {
                     return Err(EntailError::Parse(format!(
                         "cardinality {n} exceeds this reasoner's representable bound \
@@ -1000,25 +999,11 @@ impl<'a> CeExtractor<'a> {
         }
     }
 
-    /// Walk an RDF list to its member node ids.
+    /// Walk an RDF list to its member node ids ([`index_list`]).
     pub(crate) fn node_list(&self, head: u32) -> Result<Vec<u32>, EntailError> {
-        let mut out = Vec::new();
-        let mut seen = BTreeSet::new();
-        let mut cur = head;
-        while cur != self.v.nil {
-            self.poll()?;
-            if !seen.insert(cur) {
-                return Err(EntailError::Parse("cyclic RDF list".to_owned()));
-            }
-            let first = self
-                .get(cur, self.v.first)
-                .ok_or_else(|| EntailError::Parse("RDF list cell without rdf:first".to_owned()))?;
-            out.push(first);
-            cur = self
-                .get(cur, self.v.rest)
-                .ok_or_else(|| EntailError::Parse("RDF list cell without rdf:rest".to_owned()))?;
-        }
-        Ok(out)
+        self.poll()?;
+        index_list(self.index, self.v, head)
+            .map_err(|error| EntailError::Parse(format!("malformed RDF list: {}", error.kind)))
     }
 
     /// Walk an RDF list of class expressions.
@@ -1076,9 +1061,9 @@ pub(crate) fn build_until<D: DatasetView>(
         if q.g.is_some() {
             continue;
         }
-        let s = interner.intern(resolve_value(ds, q.s));
-        let p = interner.intern(resolve_value(ds, q.p));
-        let o = interner.intern(resolve_value(ds, q.o));
+        let s = interner.intern(ds.term_value(q.s)?);
+        let p = interner.intern(ds.term_value(q.p)?);
+        let o = interner.intern(ds.term_value(q.o)?);
         triples.push((s, p, o));
         index_insert(&mut index, s, p, o);
     }
@@ -1359,7 +1344,7 @@ fn axiom_node(
         // `owl:distinctMembers`, and an ontology may carry either.
         for list_property in [v.members, v.distinct_members] {
             ce.poll()?;
-            let Some(head) = first_object(ce, node, list_property) else {
+            let Some(head) = ce.get(node, list_property) else {
                 continue;
             };
             let members = ce.node_list(head)?;
@@ -1375,7 +1360,7 @@ fn axiom_node(
             }
         }
     } else if axiom_class == v.all_disjoint_classes {
-        if let Some(head) = first_object(ce, node, v.members) {
+        if let Some(head) = ce.get(node, v.members) {
             let members = ce.node_list(head)?;
             let concepts: Vec<Concept> = members
                 .iter()
@@ -1394,7 +1379,7 @@ fn axiom_node(
             }
         }
     } else if axiom_class == v.all_disjoint_properties {
-        if let Some(head) = first_object(ce, node, v.members) {
+        if let Some(head) = ce.get(node, v.members) {
             let members = ce.node_list(head)?;
             for (index, &left) in members.iter().enumerate() {
                 for &right in &members[index + 1..] {
@@ -1428,13 +1413,14 @@ fn negative_assertion(
 ) -> Result<(), EntailError> {
     ce.poll()?;
     let (Some(source), Some(property)) = (
-        first_object(ce, node, v.source_individual),
-        first_object(ce, node, v.assertion_property),
+        ce.get(node, v.source_individual),
+        ce.get(node, v.assertion_property),
     ) else {
         return Ok(());
     };
-    let Some(target) = first_object(ce, node, v.target_individual)
-        .or_else(|| first_object(ce, node, v.target_value))
+    let Some(target) = ce
+        .get(node, v.target_individual)
+        .or_else(|| ce.get(node, v.target_value))
     else {
         return Ok(());
     };
@@ -1446,11 +1432,6 @@ fn negative_assertion(
     acc.abox_types.push((source, cid));
     acc.individuals.insert(source);
     Ok(())
-}
-
-/// The first object of `(subject, predicate, ·)` in the extractor's own index.
-fn first_object(ce: &CeExtractor<'_>, subject: u32, predicate: u32) -> Option<u32> {
-    ce.index.get(&subject)?.get(&predicate)?.first().copied()
 }
 
 /// Interpret one `(s, p, o)` triple as an axiom / ABox fact.
@@ -1728,16 +1709,16 @@ mod tests {
     use crate::report::Construct;
 
     const NS: &str = "http://example.org/test#";
-    const RDF_TYPE_IRI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-    const RDFS_SUBCLASSOF_IRI: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
-    const OWL_CLASS_IRI: &str = "http://www.w3.org/2002/07/owl#Class";
-    const OWL_OBJECTPROPERTY_IRI: &str = "http://www.w3.org/2002/07/owl#ObjectProperty";
-    const OWL_RESTRICTION_IRI: &str = "http://www.w3.org/2002/07/owl#Restriction";
-    const OWL_ONPROPERTY_IRI: &str = "http://www.w3.org/2002/07/owl#onProperty";
-    const OWL_MAXCARDINALITY_IRI: &str = "http://www.w3.org/2002/07/owl#maxCardinality";
-    const OWL_HASSELF_IRI: &str = "http://www.w3.org/2002/07/owl#hasSelf";
-    const XSD_NON_NEGATIVE_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#nonNegativeInteger";
-    const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+    use purrdf_iri::vocab::owl::CLASS as OWL_CLASS_IRI;
+    use purrdf_iri::vocab::owl::HAS_SELF as OWL_HASSELF_IRI;
+    use purrdf_iri::vocab::owl::MAX_CARDINALITY as OWL_MAXCARDINALITY_IRI;
+    use purrdf_iri::vocab::owl::OBJECT_PROPERTY as OWL_OBJECTPROPERTY_IRI;
+    use purrdf_iri::vocab::owl::ON_PROPERTY as OWL_ONPROPERTY_IRI;
+    use purrdf_iri::vocab::owl::RESTRICTION as OWL_RESTRICTION_IRI;
+    use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE_IRI;
+    use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASSOF_IRI;
+    use purrdf_xsd::datatype::XSD_BOOLEAN;
+    use purrdf_xsd::datatype::XSD_NON_NEGATIVE_INTEGER;
 
     /// `A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty p ; <facet> "<lexical>"^^<dt> ]`.
     fn restriction_ontology(
@@ -1784,7 +1765,7 @@ mod tests {
         .expect("owl:hasSelf never refuses the whole run")
     }
 
-    /// `collapse_trim` strips a scalar from an edge if and only if the `whiteSpace` =
+    /// `purrdf_iri::terminals::trim_ws` strips a scalar from an edge if and only if the `whiteSpace` =
     /// `collapse` facet names it — stated as a total function over every Unicode scalar, so
     /// the class cannot drift toward either the Unicode property or the ASCII one.
     ///
@@ -1793,7 +1774,7 @@ mod tests {
     /// cardinality bounds), so pinning it here pins the facet site that has no cheap
     /// end-to-end fixture of its own.
     #[test]
-    fn collapse_trim_strips_exactly_the_four_code_points_the_facet_names() {
+    fn whitespace_collapse_trim_strips_exactly_the_four_code_points_the_facet_names() {
         for cp in 0..=0x0010_FFFF_u32 {
             let Some(c) = char::from_u32(cp) else {
                 continue;
@@ -1801,17 +1782,17 @@ mod tests {
             let named = matches!(c, '\u{20}' | '\u{9}' | '\u{D}' | '\u{A}');
             let padded = format!("{c}x{c}");
             assert_eq!(
-                super::collapse_trim(&padded) == "x",
+                purrdf_iri::terminals::trim_ws(&padded) == "x",
                 named,
                 "{c:?} ({cp:#06X}) must be stripped iff whiteSpace=collapse names it"
             );
         }
         // Runs at both ends go, and an interior member survives as content the token
         // grammar then refuses — `collapse` squeezes it, it never deletes it.
-        assert_eq!(super::collapse_trim(" \t\r\n42\n\r\t "), "42");
-        assert_eq!(super::collapse_trim("4 2"), "4 2");
-        assert_eq!(super::collapse_trim(""), "");
-        assert_eq!(super::collapse_trim("   "), "");
+        assert_eq!(purrdf_iri::terminals::trim_ws(" \t\r\n42\n\r\t "), "42");
+        assert_eq!(purrdf_iri::terminals::trim_ws("4 2"), "4 2");
+        assert_eq!(purrdf_iri::terminals::trim_ws(""), "");
+        assert_eq!(purrdf_iri::terminals::trim_ws("   "), "");
     }
 
     /// A cardinality bound is read after `whiteSpace` = `collapse`, which names four code

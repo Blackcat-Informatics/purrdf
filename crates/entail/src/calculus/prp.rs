@@ -204,24 +204,23 @@ pub(super) fn property_chain() -> Vec<DlClause> {
     ]
 }
 
-/// `prp-eqp1`: `?p1 owl:equivalentProperty ?p2`, `T(?x, ?p1, ?y)` ⇒ `T(?x, ?p2, ?y)`.
-pub(super) fn equivalent_property_left() -> Vec<DlClause> {
+/// `prp-eqp1` (`FORWARD`): `?p1 owl:equivalentProperty ?p2`, `T(?x, ?p1, ?y)` ⇒
+/// `T(?x, ?p2, ?y)`; `prp-eqp2` (not `FORWARD`): the same assertion read right to left,
+/// `T(?x, ?p2, ?y)` ⇒ `T(?x, ?p1, ?y)`.
+///
+/// The two rules are one schema read in each direction of the symmetric relation, so they
+/// are one body instantiated twice.
+pub(super) fn equivalent_property<const FORWARD: bool>() -> Vec<DlClause> {
+    let (from, to) = if FORWARD {
+        ("?p1", "?p2")
+    } else {
+        ("?p2", "?p1")
+    };
     vec![DlClause::datalog(
-        quad(var("?x"), var("?p2"), var("?y")),
+        quad(var("?x"), var(to), var("?y")),
         vec![
             atom(var("?p1"), OWL_EQUIVALENTPROPERTY, var("?p2")),
-            quad(var("?x"), var("?p1"), var("?y")),
-        ],
-    )]
-}
-
-/// `prp-eqp2`: `?p1 owl:equivalentProperty ?p2`, `T(?x, ?p2, ?y)` ⇒ `T(?x, ?p1, ?y)`.
-pub(super) fn equivalent_property_right() -> Vec<DlClause> {
-    vec![DlClause::datalog(
-        quad(var("?x"), var("?p1"), var("?y")),
-        vec![
-            atom(var("?p1"), OWL_EQUIVALENTPROPERTY, var("?p2")),
-            quad(var("?x"), var("?p2"), var("?y")),
+            quad(var("?x"), var(from), var("?y")),
         ],
     )]
 }
@@ -262,24 +261,23 @@ pub(super) fn all_disjoint_properties() -> Vec<DlClause> {
     ])]
 }
 
-/// `prp-inv1`: `?p1 owl:inverseOf ?p2`, `T(?x, ?p1, ?y)` ⇒ `T(?y, ?p2, ?x)`.
-pub(super) fn inverse1() -> Vec<DlClause> {
+/// `prp-inv1` (`FORWARD`): `?p1 owl:inverseOf ?p2`, `T(?x, ?p1, ?y)` ⇒ `T(?y, ?p2, ?x)`;
+/// `prp-inv2` (not `FORWARD`): the same assertion read right to left, `T(?x, ?p2, ?y)` ⇒
+/// `T(?y, ?p1, ?x)`.
+///
+/// The two rules are one schema read in each direction of the assertion, so they are one
+/// body instantiated twice.
+pub(super) fn inverse<const FORWARD: bool>() -> Vec<DlClause> {
+    let (from, to) = if FORWARD {
+        ("?p1", "?p2")
+    } else {
+        ("?p2", "?p1")
+    };
     vec![DlClause::datalog(
-        quad(var("?y"), var("?p2"), var("?x")),
+        quad(var("?y"), var(to), var("?x")),
         vec![
             atom(var("?p1"), OWL_INVERSEOF, var("?p2")),
-            quad(var("?x"), var("?p1"), var("?y")),
-        ],
-    )]
-}
-
-/// `prp-inv2`: `?p1 owl:inverseOf ?p2`, `T(?x, ?p2, ?y)` ⇒ `T(?y, ?p1, ?x)`.
-pub(super) fn inverse2() -> Vec<DlClause> {
-    vec![DlClause::datalog(
-        quad(var("?y"), var("?p1"), var("?x")),
-        vec![
-            atom(var("?p1"), OWL_INVERSEOF, var("?p2")),
-            quad(var("?x"), var("?p2"), var("?y")),
+            quad(var("?x"), var(from), var("?y")),
         ],
     )]
 }
@@ -417,14 +415,14 @@ macro_rules! prp_rules {
             EquivalentPropertyLeft {
                 id: PrpEqp1,
                 lanes: [OwlRl],
-                clauses: prp::equivalent_property_left,
+                clauses: prp::equivalent_property::<true>,
             },
             /// `prp-eqp2` — an `owl:equivalentProperty` assertion, read right to left.
             /// `OWL-RL` only.
             EquivalentPropertyRight {
                 id: PrpEqp2,
                 lanes: [OwlRl],
-                clauses: prp::equivalent_property_right,
+                clauses: prp::equivalent_property::<false>,
             },
             /// `prp-pdw` — two disjoint properties sharing a subject/object pair is an
             /// inconsistency. DECLARED, not evaluated: the head is `false`.
@@ -447,14 +445,14 @@ macro_rules! prp_rules {
             Inverse1 {
                 id: PrpInv1,
                 lanes: [OwlRl],
-                clauses: prp::inverse1,
+                clauses: prp::inverse::<true>,
             },
             /// `prp-inv2` — an `owl:inverseOf` assertion, read right to left. `OWL-RL`
             /// only.
             Inverse2 {
                 id: PrpInv2,
                 lanes: [OwlRl],
-                clauses: prp::inverse2,
+                clauses: prp::inverse::<false>,
             },
             /// `prp-key` — two instances agreeing on every key property are the same
             /// thing. `OWL-RL` only.

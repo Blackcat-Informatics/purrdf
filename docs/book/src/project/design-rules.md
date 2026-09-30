@@ -45,10 +45,11 @@ update the affected golden files, visibly.
 
 ## The kernel ring-fence
 
-`purrdf-core` must never depend on oxigraph or PyO3 — the whole workspace is
-oxigraph-free, and a hygiene gate asserts the dependency tree. The three
-foundation leaves (`purrdf-iri`, `purrdf-xsd`, `purrdf-events`) keep **zero
-runtime dependencies**. Diagnostics stay structured and SARIF-free in the
+`purrdf-core` must never depend on PyO3, and a hygiene gate asserts the
+dependency tree. The root `purrdf-hash` keeps **zero runtime dependencies**,
+and the foundation leaves above it (`purrdf-lex`, `purrdf-iri`, `purrdf-xsd`, `purrdf-events`)
+depend only on the first-party crates their `layers.toml` rows allow and on no
+third-party crate. Diagnostics stay structured and SARIF-free in the
 kernel; the SARIF boundary is the `purrdf-validate` leaf.
 
 ## Everything is wasm-able
@@ -93,7 +94,7 @@ on their expected-failure ledgers. See
 
 ## Supporting rules
 
-- **Measured performance** — perf claims require a criterion bench, not an
+- **Measured performance** — perf claims require a bench, not an
   adjective ([Performance](performance.md)).
 - **One version, lockstep releases** — crates.io, PyPI, and npm ship one
   workspace version ([Versioning & Releases](releases.md)).

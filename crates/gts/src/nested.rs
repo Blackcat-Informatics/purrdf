@@ -3,9 +3,9 @@
 
 //! Bounded nested-GTS discovery for Full Reader callers.
 
-use std::collections::HashSet;
+use crate::FastSet;
 
-use ciborium::value::Value;
+use purrdf_lex::cbor::Value;
 
 use crate::model::{Diagnostic, Graph};
 use crate::reader::read;
@@ -28,10 +28,7 @@ pub struct NestedReadResult {
 impl NestedReadResult {
     /// Look up a nested fold by its containing blob digest.
     pub fn subgraph(&self, digest: &str) -> Option<&Graph> {
-        self.subgraphs
-            .iter()
-            .find(|(d, _)| d == digest)
-            .map(|(_, graph)| graph)
+        purrdf_lex::assoc::get(&self.subgraphs, digest)
     }
 }
 
@@ -42,7 +39,7 @@ impl NestedReadResult {
 /// recursion and decoded-size budgets required by §12.1/§18.
 pub fn read_nested(data: &[u8], max_depth: usize, max_decoded_bytes: usize) -> NestedReadResult {
     let mut remaining = max_decoded_bytes;
-    let mut seen = HashSet::new();
+    let mut seen = FastSet::default();
     let mut subgraphs = Vec::new();
     let graph = visit(
         data,
@@ -68,7 +65,7 @@ fn visit(
     depth: usize,
     max_depth: usize,
     remaining: &mut usize,
-    seen: &mut HashSet<String>,
+    seen: &mut FastSet<String>,
     subgraphs: &mut Vec<(String, Graph)>,
 ) -> Graph {
     let mut graph = read(data, true, None);

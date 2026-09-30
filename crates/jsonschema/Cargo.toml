@@ -33,7 +33,7 @@ all-features = true
 workspace = true
 
 [lib]
-# rlib-only leaf over three dependencies: the JSON value model, the regex engine
+# rlib-only leaf: the JSON value model, the regex engine
 # the ECMA-262 `pattern` translation targets, and the workspace's one RFC 3986
 # reference resolver. No threads, no filesystem, no clock: wasm32-clean.
 crate-type = ["rlib"]
@@ -41,22 +41,30 @@ path = "src/lib.rs"
 name = "purrdf_jsonschema"
 
 [dependencies]
-# Schemas and instances are `serde_json::Value`s; numbers are read exactly from
-# the workspace's `float_roundtrip` parse.
-serde_json = { workspace = true }
 # The engine every translated ECMA-262 `pattern` runs on.
 regex = { workspace = true }
 # `$id`/`$ref`/`$dynamicRef` resolution: the workspace's single RFC 3986 §5
 # resolver, never a second one.
 purrdf-iri = { workspace = true }
+# The fixed-key hasher that buckets `uniqueItems` candidates.
+purrdf-hash = { workspace = true }
+# The RFC 3339 grammar behind the `date-time`, `date` and `time` formats, and
+# the exact value of a JSON number that equality, ordering and `multipleOf`
+# compute on.
+purrdf-xsd = { workspace = true }
+# Schemas and instances are `purrdf_lex::json::Value`s, whose numbers keep the
+# lexeme the document wrote; the ECMA-262 `WhiteSpace` and `LineTerminator`
+# terminals `\s` and `.` are spelled with; and the Unicode version the property
+# tables assert.
+purrdf-lex = { workspace = true }
 
 [dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
 # The `harness = false` suite runner and the frozen differential vectors.
 # Path-only and unpublished, so it is stripped from the packaged manifest.
 purrdf-testkit = { workspace = true }
-# Compile and validation baselines. DEV-DEPENDENCY ONLY: it never reaches the
-# published library's graph.
-criterion = { workspace = true }
 
 [[bench]]
 name = "validate"

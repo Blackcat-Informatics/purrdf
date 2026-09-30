@@ -705,36 +705,75 @@ impl Graph {
     ) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&IMAGE_MAGIC);
-        push_u32(&mut out, IMAGE_VERSION);
-        push_u32(&mut out, kernel_tag(kernel));
-        push_u64(&mut out, as_u64(params.m()));
-        push_u64(&mut out, as_u64(params.m0()));
-        push_u64(&mut out, as_u64(params.ef_construction()));
-        push_u64(&mut out, as_u64(params.ef_search()));
-        push_u64(&mut out, as_u64(self.node_count()));
-        push_u32(&mut out, self.max_level);
+        out.extend_from_slice(&IMAGE_VERSION.to_le_bytes());
+        out.extend_from_slice(&kernel_tag(kernel).to_le_bytes());
+        out.extend_from_slice(
+            &u64::try_from(params.m())
+                .expect("an in-memory index fits u64")
+                .to_le_bytes(),
+        );
+        out.extend_from_slice(
+            &u64::try_from(params.m0())
+                .expect("an in-memory index fits u64")
+                .to_le_bytes(),
+        );
+        out.extend_from_slice(
+            &u64::try_from(params.ef_construction())
+                .expect("an in-memory index fits u64")
+                .to_le_bytes(),
+        );
+        out.extend_from_slice(
+            &u64::try_from(params.ef_search())
+                .expect("an in-memory index fits u64")
+                .to_le_bytes(),
+        );
+        out.extend_from_slice(
+            &u64::try_from(self.node_count())
+                .expect("an in-memory index fits u64")
+                .to_le_bytes(),
+        );
+        out.extend_from_slice(&self.max_level.to_le_bytes());
         // The arithmetic, and path, the recorded distances were folded under, and the
         // shape of the build that compiled that path, where the arithmetic has one.
-        push_u32(&mut out, arithmetic.code);
+        out.extend_from_slice(&arithmetic.code.to_le_bytes());
         if let Some(shape) = arithmetic.shape {
-            push_u64(&mut out, shape.bits());
-            push_u64(&mut out, shape.identity().digest());
+            out.extend_from_slice(&shape.bits().to_le_bytes());
+            out.extend_from_slice(&shape.identity().digest().to_le_bytes());
         }
-        push_u64(&mut out, self.entry.map_or(u64::MAX, as_u64));
+        out.extend_from_slice(
+            &self
+                .entry
+                .map_or(u64::MAX, |entry| {
+                    u64::try_from(entry).expect("an in-memory index fits u64")
+                })
+                .to_le_bytes(),
+        );
 
         for row in 0..self.node_count() {
-            push_u64(&mut out, as_u64(row));
-            push_u32(&mut out, self.level(row));
-            push_u32(&mut out, 0);
+            out.extend_from_slice(
+                &u64::try_from(row)
+                    .expect("an in-memory index fits u64")
+                    .to_le_bytes(),
+            );
+            out.extend_from_slice(&self.level(row).to_le_bytes());
+            out.extend_from_slice(&0u32.to_le_bytes());
             for layer in 0..=self.level(row) {
-                push_u32(&mut out, layer);
-                push_u32(&mut out, 0);
+                out.extend_from_slice(&layer.to_le_bytes());
+                out.extend_from_slice(&0u32.to_le_bytes());
                 let mut neighbors: Vec<Ranked> = self.neighbors(row, layer).to_vec();
                 neighbors.sort_unstable_by_key(|neighbor| neighbor.row);
-                push_u64(&mut out, as_u64(neighbors.len()));
+                out.extend_from_slice(
+                    &u64::try_from(neighbors.len())
+                        .expect("an in-memory index fits u64")
+                        .to_le_bytes(),
+                );
                 for neighbor in neighbors {
-                    push_u64(&mut out, as_u64(neighbor.row));
-                    push_u64(&mut out, neighbor.distance.to_bits());
+                    out.extend_from_slice(
+                        &u64::try_from(neighbor.row)
+                            .expect("an in-memory index fits u64")
+                            .to_le_bytes(),
+                    );
+                    out.extend_from_slice(&neighbor.distance.to_bits().to_le_bytes());
                 }
             }
         }
@@ -1070,22 +1109,6 @@ fn kernel_of_tag(tag: u32) -> Result<Kernel> {
     }
 }
 
-fn push_u32(out: &mut Vec<u8>, value: u32) {
-    out.extend_from_slice(&value.to_le_bytes());
-}
-
-fn push_u64(out: &mut Vec<u8>, value: u64) {
-    out.extend_from_slice(&value.to_le_bytes());
-}
-
-/// Widen a `usize` for the fixed-width little-endian image.
-///
-/// On a 32-bit target the conversion is infallible; on 64-bit it is still exact. The
-/// payload is only ever produced for indexes that fit the target, so this never truncates.
-fn as_u64(value: usize) -> u64 {
-    value as u64
-}
-
 /// A bounds-checked reader over the canonical image.
 struct Cursor<'a> {
     bytes: &'a [u8],
@@ -1122,14 +1145,14 @@ impl<'a> Cursor<'a> {
     fn u32(&mut self) -> Result<u32> {
         let bytes = self.take(4)?;
         Ok(u32::from_le_bytes(
-            bytes.try_into().expect("take returned four bytes"),
+            *bytes.first_chunk().expect("take returned four bytes"),
         ))
     }
 
     fn u64(&mut self) -> Result<u64> {
         let bytes = self.take(8)?;
         Ok(u64::from_le_bytes(
-            bytes.try_into().expect("take returned eight bytes"),
+            *bytes.first_chunk().expect("take returned eight bytes"),
         ))
     }
 

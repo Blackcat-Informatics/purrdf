@@ -22,26 +22,17 @@
 //! This file guards against REMOVAL or RESHAPING of the pinned 2.0.2 surface. It is
 //! not a substitute for review of genuinely new, additive surface.
 
+#[path = "support/paged.rs"]
+mod paged;
+use paged::page;
 use std::sync::Arc;
 
 use purrdf_core::{
     DatasetView, FallibleDatasetView, GlobalDictionary, InMemoryPageProvider, PageFault,
     PageGeneration, PageId, PagePart, PageProvider, PageTranslation, PagedDataset,
     PagedFreezeError, PagedQueryError, PagedQueryEvidence, PagedQueryLimits, PagedQueryView,
-    RdfDataset, RdfDatasetBuilder, RdfStoreCapabilities, ViewOperationStatus,
+    RdfStoreCapabilities, ViewOperationStatus,
 };
-
-/// One frozen single-triple page in the default graph, `example.org`-scoped.
-fn page(subject: &str, object: &str) -> Arc<RdfDataset> {
-    let mut builder = RdfDatasetBuilder::new();
-    let subject_iri = format!("http://example.org/{subject}");
-    let object_iri = format!("http://example.org/{object}");
-    let subject = builder.intern_iri(&subject_iri);
-    let predicate = builder.intern_iri("http://example.org/p");
-    let object = builder.intern_iri(&object_iri);
-    builder.push_quad(subject, predicate, object, None);
-    builder.freeze().expect("valid page")
-}
 
 /// A two-page sealed `PagedDataset` at `PageGeneration::INITIAL`, for tests that need
 /// a real dataset to pull real field values out of.

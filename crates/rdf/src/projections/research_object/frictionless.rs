@@ -1,19 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use super::jsonld::{LossRecorder, validate_data_path};
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::loss::{
     LOSS_RESEARCH_INLINE_PAYLOAD_DROPPED, LOSS_RESEARCH_LITERAL_FIDELITY_DROPPED,
     LOSS_RESEARCH_LOCAL_ID_RESOLVED, LOSS_RESEARCH_ORDER_DROPPED,
-    LOSS_RESEARCH_PROFILE_FIELD_DROPPED, LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
-    LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED,
+    LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
 };
 use purrdf_core::{
     DatasetView, LossLedger, rdf_to_research_object_loss_ledger, research_object_to_rdf_loss_ledger,
 };
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Map, Value};
+use purrdf_lex::json::{Object, Value};
 
 use super::super::{ProjectionError, ProjectionPackage, validate_absolute_iri};
 use super::json::{
@@ -24,6 +23,7 @@ use super::{
     ResearchAgent, ResearchChecksum, ResearchDataset, ResearchObjectConfig, ResearchObjectModel,
     ResearchResource, ResearchText, ResearchValue, lift_research_object, project_research_object,
 };
+use purrdf_lex::json::record::{Owned, into_owned};
 
 /// Closed Frictionless Data Package profile identifier.
 pub const FRICTIONLESS_PROFILE: &str = "frictionless-data-package-1";
@@ -31,7 +31,7 @@ pub const FRICTIONLESS_PROFILE: &str = "frictionless-data-package-1";
 pub const FRICTIONLESS_ARTIFACT: &str = "datapackage.json";
 
 /// Mandatory caller-owned Frictionless Data Package v1 configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrictionlessConfig {
     common: ResearchObjectConfig,
     package_profile: String,
@@ -77,24 +77,17 @@ impl FrictionlessConfig {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawFrictionlessConfig {
-    common: ResearchObjectConfig,
-    package_profile: String,
-    package_name: String,
-}
+purrdf_lex::json_record!(impl FromJson for FrictionlessConfig as "struct FrictionlessConfig" {
+    "common" => common: required::<ResearchObjectConfig>,
+    "package_profile" => package_profile: required::<String>,
+    "package_name" => package_name: required::<String>,
+} => FrictionlessConfig::new);
 
-impl<'de> Deserialize<'de> for FrictionlessConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawFrictionlessConfig::deserialize(deserializer)?;
-        Self::new(raw.common, raw.package_profile, raw.package_name)
-            .map_err(serde::de::Error::custom)
-    }
-}
+purrdf_lex::json_record!(impl ToJson for FrictionlessConfig {
+    "common" => common,
+    "package_profile" => package_profile,
+    "package_name" => package_name,
+});
 
 /// Project caller-vocabulary RDF 1.2 into canonical Data Package v1 JSON.
 ///
@@ -176,7 +169,7 @@ fn encode_document(
     }
 
     let dataset = &model.dataset;
-    let mut root = Map::from_iter([
+    let mut root = Object::from_iter([
         (
             "profile".to_owned(),
             Value::String(config.package_profile().to_owned()),
@@ -294,7 +287,7 @@ fn encode_document(
             ledger,
             contract,
             LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-            &format!("dataset:identifier:{}", value_lexical(identifier)),
+            &format!("dataset:identifier:{}", identifier.lexical().to_owned()),
         );
     }
     for (index, _) in dataset.modified.iter().enumerate() {
@@ -345,15 +338,15 @@ fn encode_licenses(
         let subject = format!("dataset:license[{index}]");
         match license {
             ResearchValue::Iri { value } => {
-                encoded.push(Value::Object(Map::from_iter([(
+                encoded.push(Value::Object(Object::from_iter([(
                     "path".to_owned(),
                     Value::String(value.clone()),
                 )])));
             }
             ResearchValue::Text(value) => {
                 record_text_fidelity(value, config, contract, ledger, &subject);
-                if validate_license_name(&value.value) {
-                    encoded.push(Value::Object(Map::from_iter([(
+                if is_name_token(&value.value) {
+                    encoded.push(Value::Object(Object::from_iter([(
                         "name".to_owned(),
                         Value::String(value.value.clone()),
                     )])));
@@ -435,7 +428,7 @@ fn encode_contributor(
             &format!("{}:name[{index}]", agent.id),
         );
     }
-    Ok(Value::Object(Map::from_iter([
+    Ok(Value::Object(Object::from_iter([
         ("title".to_owned(), Value::String(name.value.clone())),
         ("path".to_owned(), Value::String(agent.id.clone())),
         ("role".to_owned(), Value::String(role.to_owned())),
@@ -458,11 +451,12 @@ fn encode_resource(
             ))
         })?;
     validate_package_name(native_name, "Frictionless resource name")?;
-    let mut object = Map::from_iter([("name".to_owned(), Value::String(native_name.to_owned()))]);
+    let mut object =
+        Object::from_iter([("name".to_owned(), Value::String(native_name.to_owned()))]);
 
     let mut paths = Vec::new();
     for path in &resource.paths {
-        validate_data_path(path)?;
+        validate_data_path(path, "Frictionless resource path")?;
         paths.push(Value::String(path.clone()));
     }
     for (index, url) in resource.urls.iter().enumerate() {
@@ -494,7 +488,7 @@ fn encode_resource(
         // removing `entity_base_iri`. Data Package permits the same safe value
         // as both resource name and path, which keeps identifier-only resources
         // from stricter citation carriers usable without fabricating an IRI.
-        validate_data_path(native_name)?;
+        validate_data_path(native_name, "Frictionless resource path")?;
         paths.push(Value::String(native_name.to_owned()));
     }
     object.insert("path".to_owned(), Value::Array(paths));
@@ -560,7 +554,7 @@ fn encode_hash(
             &format!("{}:checksum[{index}]", resource.id),
         );
     }
-    let algorithm = value_lexical(&checksum.algorithm);
+    let algorithm = checksum.algorithm.lexical().to_owned();
     record_value_fidelity(
         &checksum.algorithm,
         config,
@@ -575,7 +569,7 @@ fn encode_hash(
         ledger,
         &format!("{}:checksum-value", resource.id),
     );
-    if !validate_hash_algorithm(&algorithm) || !is_hex(&checksum.value.value) {
+    if !is_name_token(&algorithm) || !is_hex(&checksum.value.value) {
         forward_loss(
             ledger,
             contract,
@@ -588,7 +582,7 @@ fn encode_hash(
 }
 
 fn insert_required_single_text(
-    object: &mut Map<String, Value>,
+    object: &mut Object,
     member: &str,
     values: &[ResearchText],
     subject: &str,
@@ -606,7 +600,7 @@ fn insert_required_single_text(
 }
 
 fn insert_single_text(
-    object: &mut Map<String, Value>,
+    object: &mut Object,
     member: &str,
     values: &[ResearchText],
     subject: &str,
@@ -631,7 +625,7 @@ fn insert_single_text(
 
 #[allow(clippy::too_many_arguments)]
 fn insert_single_value(
-    object: &mut Map<String, Value>,
+    object: &mut Object,
     member: &str,
     values: &[ResearchValue],
     subject: &str,
@@ -643,7 +637,7 @@ fn insert_single_value(
     let Some(value) = values.first() else {
         return Ok(());
     };
-    let lexical = value_lexical(value);
+    let lexical = value.lexical().to_owned();
     if require_absolute {
         validate_absolute_iri(&lexical, &format!("Frictionless `{member}`"))?;
     }
@@ -696,13 +690,6 @@ fn forward_loss(ledger: &mut LossLedger, contract: &LossLedger, code: &'static s
     record_loss(ledger, contract, code, FRICTIONLESS_ARTIFACT, subject);
 }
 
-fn value_lexical(value: &ResearchValue) -> String {
-    match value {
-        ResearchValue::Iri { value } => value.clone(),
-        ResearchValue::Text(value) => value.value.clone(),
-    }
-}
-
 struct FrictionlessDecoder<'a> {
     config: &'a FrictionlessConfig,
     contract: &'a LossLedger,
@@ -715,9 +702,21 @@ struct DecodedContributors {
     publishers: Vec<String>,
 }
 
+impl LossRecorder for FrictionlessDecoder<'_> {
+    fn loss(&mut self, code: &'static str, pointer: &str) {
+        record_loss(
+            self.ledger,
+            self.contract,
+            code,
+            FRICTIONLESS_ARTIFACT,
+            pointer,
+        );
+    }
+}
+
 impl FrictionlessDecoder<'_> {
     fn decode(mut self, value: Value) -> Result<ResearchObjectModel, ProjectionError> {
-        let Value::Object(mut root) = value else {
+        let Owned::Object(mut root) = into_owned(value) else {
             return Err(
                 ProjectionError::syntax("Frictionless document root must be an object")
                     .at_path(FRICTIONLESS_ARTIFACT),
@@ -800,7 +799,7 @@ impl FrictionlessDecoder<'_> {
                 publishers: Vec::new(),
             });
         };
-        let Value::Array(values) = value else {
+        let Owned::Array(values) = into_owned(value) else {
             return Err(self.shape(
                 "Frictionless contributors must be an array",
                 "/contributors",
@@ -812,7 +811,7 @@ impl FrictionlessDecoder<'_> {
         let mut publishers = Vec::new();
         for (index, value) in values.into_iter().enumerate() {
             let pointer = format!("/contributors/{index}");
-            let Value::Object(mut object) = value else {
+            let Owned::Object(mut object) = into_owned(value) else {
                 return Err(self.shape("Frictionless contributor must be an object", &pointer));
             };
             let title = self.require_string(&mut object, "title", &pointer)?;
@@ -857,7 +856,7 @@ impl FrictionlessDecoder<'_> {
         let Some(value) = value else {
             return Ok(Vec::new());
         };
-        let Value::Array(values) = value else {
+        let Owned::Array(values) = into_owned(value) else {
             return Err(self.shape("Frictionless licenses must be an array", "/licenses"));
         };
         self.record_order(values.len(), "/licenses");
@@ -865,7 +864,7 @@ impl FrictionlessDecoder<'_> {
         for (index, value) in values.into_iter().enumerate() {
             let pointer = format!("/licenses/{index}");
             let previous_len = licenses.len();
-            let Value::Object(mut object) = value else {
+            let Owned::Object(mut object) = into_owned(value) else {
                 return Err(self.shape("Frictionless license must be an object", &pointer));
             };
             if let Some(path) = self.take_string(&mut object, "path", &pointer)? {
@@ -875,7 +874,7 @@ impl FrictionlessDecoder<'_> {
                 licenses.push(ResearchValue::iri(path)?);
             }
             if let Some(name) = self.take_string(&mut object, "name", &pointer)? {
-                if !validate_license_name(&name) {
+                if !is_name_token(&name) {
                     return Err(self.shape(
                         "Frictionless license name is outside the v1 grammar",
                         &json_pointer(&pointer, "name"),
@@ -901,7 +900,7 @@ impl FrictionlessDecoder<'_> {
         let Some(value) = value else {
             return Err(self.shape("Frictionless resources are required", "/resources"));
         };
-        let Value::Array(values) = value else {
+        let Owned::Array(values) = into_owned(value) else {
             return Err(self.shape("Frictionless resources must be an array", "/resources"));
         };
         if values.is_empty() {
@@ -937,7 +936,7 @@ impl FrictionlessDecoder<'_> {
         value: Value,
         pointer: &str,
     ) -> Result<Option<ResearchResource>, ProjectionError> {
-        let Value::Object(mut object) = value else {
+        let Owned::Object(mut object) = into_owned(value) else {
             return Err(self.shape("Frictionless resource must be an object", pointer));
         };
         let native_name = self.require_string(&mut object, "name", pointer)?;
@@ -1023,9 +1022,9 @@ impl FrictionlessDecoder<'_> {
         let Some(value) = value else {
             return Ok((Vec::new(), Vec::new()));
         };
-        let values = match value {
-            Value::String(value) => vec![Value::String(value)],
-            Value::Array(values) if !values.is_empty() => {
+        let values = match into_owned(value) {
+            Owned::String(value) => vec![Value::String(value)],
+            Owned::Array(values) if !values.is_empty() => {
                 self.record_order(values.len(), &json_pointer(parent, "path"));
                 values
             }
@@ -1040,13 +1039,13 @@ impl FrictionlessDecoder<'_> {
         let mut urls = Vec::new();
         for (index, value) in values.into_iter().enumerate() {
             let pointer = format!("{}/{}", json_pointer(parent, "path"), index);
-            let Value::String(value) = value else {
+            let Owned::String(value) = into_owned(value) else {
                 return Err(self.shape("Frictionless path item must be a string", &pointer));
             };
             if validate_absolute_iri(&value, "Frictionless resource URL").is_ok() {
                 urls.push(ResearchValue::iri(value)?);
             } else {
-                validate_data_path(&value)
+                validate_data_path(&value, "Frictionless resource path")
                     .map_err(|error| self.shape(error.message(), &pointer))?;
                 paths.push(value);
             }
@@ -1062,7 +1061,7 @@ impl FrictionlessDecoder<'_> {
         let Some(value) = value else {
             return Ok(None);
         };
-        let Value::String(hash) = value else {
+        let Owned::String(hash) = into_owned(value) else {
             return Err(self.shape(
                 "Frictionless hash must be a string",
                 &json_pointer(parent, "hash"),
@@ -1078,7 +1077,7 @@ impl FrictionlessDecoder<'_> {
                 &json_pointer(parent, "hash"),
             ));
         };
-        if !validate_hash_algorithm(algorithm) || !is_hex(lexical) {
+        if !is_name_token(algorithm) || !is_hex(lexical) {
             return Err(self.shape(
                 "Frictionless hash must use algorithm:hex syntax",
                 &json_pointer(parent, "hash"),
@@ -1092,7 +1091,7 @@ impl FrictionlessDecoder<'_> {
 
     fn require_exact_string(
         &self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         member: &str,
         expected: &str,
         parent: &str,
@@ -1114,7 +1113,7 @@ impl FrictionlessDecoder<'_> {
 
     fn require_text(
         &self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         member: &str,
         parent: &str,
     ) -> Result<ResearchText, ProjectionError> {
@@ -1124,7 +1123,7 @@ impl FrictionlessDecoder<'_> {
 
     fn take_text(
         &self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         member: &str,
         parent: &str,
     ) -> Result<Option<ResearchText>, ProjectionError> {
@@ -1135,7 +1134,7 @@ impl FrictionlessDecoder<'_> {
 
     fn require_string(
         &self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         member: &str,
         parent: &str,
     ) -> Result<String, ProjectionError> {
@@ -1149,14 +1148,14 @@ impl FrictionlessDecoder<'_> {
 
     fn take_string(
         &self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         member: &str,
         parent: &str,
     ) -> Result<Option<String>, ProjectionError> {
         let Some(value) = object.remove(member) else {
             return Ok(None);
         };
-        let Value::String(value) = value else {
+        let Owned::String(value) = into_owned(value) else {
             return Err(self.shape(
                 format!("Frictionless `{member}` must be a string"),
                 &json_pointer(parent, member),
@@ -1167,7 +1166,7 @@ impl FrictionlessDecoder<'_> {
 
     fn take_absolute_value(
         &self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         member: &str,
         parent: &str,
     ) -> Result<Option<ResearchValue>, ProjectionError> {
@@ -1181,7 +1180,7 @@ impl FrictionlessDecoder<'_> {
 
     fn take_scalar_value(
         &self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         member: &str,
         parent: &str,
     ) -> Result<Option<ResearchValue>, ProjectionError> {
@@ -1197,7 +1196,7 @@ impl FrictionlessDecoder<'_> {
 
     fn take_u64(
         &self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         member: &str,
         parent: &str,
     ) -> Result<Option<u64>, ProjectionError> {
@@ -1215,14 +1214,14 @@ impl FrictionlessDecoder<'_> {
 
     fn take_string_array(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         member: &str,
         parent: &str,
     ) -> Result<Vec<ResearchText>, ProjectionError> {
         let Some(value) = object.remove(member) else {
             return Ok(Vec::new());
         };
-        let Value::Array(values) = value else {
+        let Owned::Array(values) = into_owned(value) else {
             return Err(self.shape(
                 format!("Frictionless `{member}` must be an array"),
                 &json_pointer(parent, member),
@@ -1239,7 +1238,7 @@ impl FrictionlessDecoder<'_> {
             .into_iter()
             .enumerate()
             .map(|(index, value)| {
-                let Value::String(value) = value else {
+                let Owned::String(value) = into_owned(value) else {
                     return Err(self.shape(
                         format!("Frictionless `{member}` item must be a string"),
                         &format!("{}/{index}", json_pointer(parent, member)),
@@ -1264,29 +1263,6 @@ impl FrictionlessDecoder<'_> {
         if length > 1 {
             self.loss(LOSS_RESEARCH_ORDER_DROPPED, pointer);
         }
-    }
-
-    fn record_unknowns(&mut self, object: &Map<String, Value>, parent: &str) {
-        for member in object.keys() {
-            self.loss(
-                LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
-                &json_pointer(parent, member),
-            );
-        }
-    }
-
-    fn unsupported(&mut self, pointer: &str) {
-        self.loss(LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED, pointer);
-    }
-
-    fn loss(&mut self, code: &'static str, pointer: &str) {
-        record_loss(
-            self.ledger,
-            self.contract,
-            code,
-            FRICTIONLESS_ARTIFACT,
-            pointer,
-        );
     }
 
     fn shape(&self, message: impl Into<String>, pointer: &str) -> ProjectionError {
@@ -1326,30 +1302,9 @@ fn validate_package_name(value: &str, description: &str) -> Result<(), Projectio
     Ok(())
 }
 
-fn validate_data_path(path: &str) -> Result<(), ProjectionError> {
-    if path.is_empty()
-        || path.starts_with('/')
-        || path.contains('\\')
-        || path.contains(['?', '#'])
-        || path
-            .split('/')
-            .any(|segment| matches!(segment, "" | "." | ".."))
-    {
-        return Err(ProjectionError::integrity(format!(
-            "unsafe Frictionless resource path `{path}`"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_license_name(value: &str) -> bool {
-    !value.is_empty()
-        && value.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '-' | '.' | '_')
-        })
-}
-
-fn validate_hash_algorithm(value: &str) -> bool {
+/// Whether `value` is a non-empty run of ASCII alphanumerics, `-`, `.` and
+/// `_`: the token grammar of a Frictionless license name and hash algorithm.
+fn is_name_token(value: &str) -> bool {
     !value.is_empty()
         && value.chars().all(|character| {
             character.is_ascii_alphanumeric() || matches!(character, '-' | '.' | '_')
@@ -1366,6 +1321,9 @@ mod tests {
     use crate::projections::{
         ProjectionLimits, RESEARCH_ROLES, ResearchObjectIdentity, ResearchObjectPolicy,
         ResearchObjectRoles,
+    };
+    use purrdf_core::loss::{
+        LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED,
     };
 
     const INPUT: &[u8] = include_bytes!(

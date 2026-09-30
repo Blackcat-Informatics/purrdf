@@ -7,20 +7,13 @@
 
 use core::hint::black_box;
 
+use purrdf_testkit::rng::SplitMix64;
+
 use super::reference as soft;
 use super::{
     Binary32Scope, Binary64Scope, f32_add, f32_div, f32_mul, f32_sqrt, f32_sub, f64_add, f64_div,
     f64_mul, f64_sqrt, f64_sub,
 };
-
-/// A SplitMix64 stream: deterministic operands, no clock and no RNG.
-struct Stream(u64);
-
-impl Stream {
-    const fn next_u64(&mut self) -> u64 {
-        purrdf_testkit::rng::splitmix64_next(&mut self.0)
-    }
-}
 
 // ---- the witnesses -----------------------------------------------------------------------
 
@@ -255,7 +248,7 @@ fn every_binary32_witness_rounds_twice_at_24_bits_and_once_under_the_scope() {
 
 /// A binary64 of the adversarial class `class`: every exponent, subnormals, values near
 /// one (where ties are dense), and powers of two.
-fn operand64(stream: &mut Stream, class: u64) -> f64 {
+fn operand64(stream: &mut SplitMix64, class: u64) -> f64 {
     let bits = stream.next_u64();
     let sign = bits & (1 << 63);
     let fraction = bits & ((1 << 52) - 1);
@@ -281,7 +274,7 @@ fn operand64(stream: &mut Stream, class: u64) -> f64 {
 }
 
 /// A binary32 of the adversarial class `class`, as [`operand64`].
-fn operand32(stream: &mut Stream, class: u64) -> f32 {
+fn operand32(stream: &mut SplitMix64, class: u64) -> f32 {
     let bits = stream.next_u64();
     let sign = u32::from(bits >> 63 == 1) << 31;
     let fraction = u32::try_from(bits & ((1 << 23) - 1)).expect("23 bits");
@@ -323,7 +316,7 @@ fn canonical32(value: f32) -> u32 {
 fn binary64_operations_equal_the_software_reference() {
     // On an IEEE binary64 unit this is the reference proven against the hardware; on the
     // x87 it is the scope and the scaling proven against the reference.
-    let mut stream = Stream(0x5eed_b64f);
+    let mut stream = SplitMix64::new(0x5eed_b64f);
     let mut pairs: Vec<(f64, f64)> = (0..60_000_u64)
         .map(|index| {
             (
@@ -381,7 +374,7 @@ fn binary64_operations_equal_the_software_reference() {
 
 #[test]
 fn binary32_operations_equal_the_software_reference() {
-    let mut stream = Stream(0x5eed_b32f);
+    let mut stream = SplitMix64::new(0x5eed_b32f);
     let mut pairs: Vec<(f32, f32)> = (0..60_000_u64)
         .map(|index| {
             (
@@ -442,7 +435,7 @@ fn binary32_operations_equal_the_software_reference() {
 fn binary32_subnormal_products_and_quotients_equal_the_software_reference() {
     // Dense in the range the scaling exists for: operands whose product or quotient lands
     // within a few binades of binary32's smallest normal, both signs, all significands.
-    let mut stream = Stream(0x5eed_5b32);
+    let mut stream = SplitMix64::new(0x5eed_5b32);
     let scope = Binary32Scope::enter();
     let ops = scope.ops();
     let mut subnormal = 0_usize;
@@ -480,7 +473,7 @@ fn binary32_subnormal_products_and_quotients_equal_the_software_reference() {
 fn square_roots_that_round_twice_through_64_bits_round_once_here() {
     // About one binary64 in four thousand has a square root whose 64-bit rounding lands on
     // a binary64 midpoint; at both widths, every such root is the reference's.
-    let mut stream = Stream(0x5eed_5a47);
+    let mut stream = SplitMix64::new(0x5eed_5a47);
     let mut witnesses = 0_usize;
     for _ in 0..200_000 {
         let bits = stream.next_u64();
@@ -765,7 +758,7 @@ fn every_successor_midpoint_is_exact() {
         soft::successor_midpoint_decimal(9_007_199_254_740_992.0),
         "9007199254740993"
     );
-    let mut stream = Stream(0x6d69_6470_6f69_6e74);
+    let mut stream = SplitMix64::new(0x6d69_6470_6f69_6e74);
     let mut xs = vec![f64::MIN_POSITIVE, 5e-324, f64::MAX / 2.0, 0.1, 1e23];
     for _ in 0..200 {
         let bits = stream.next_u64() & 0x7fef_ffff_ffff_ffff;

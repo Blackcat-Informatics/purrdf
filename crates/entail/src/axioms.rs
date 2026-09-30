@@ -185,9 +185,9 @@ mod tests {
     use std::collections::BTreeSet;
 
     /// The RDF prefix, for the transcription checks below.
-    const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    use purrdf_iri::vocab::rdf::NS as RDF;
     /// The RDFS prefix.
-    const RDFS: &str = "http://www.w3.org/2000/01/rdf-schema#";
+    use purrdf_iri::vocab::rdfs::NS as RDFS;
 
     /// Both tables are duplicate-free, and the two do not overlap.
     #[test]

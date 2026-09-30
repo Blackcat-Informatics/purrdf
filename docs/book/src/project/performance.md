@@ -23,7 +23,7 @@ lazy ordinal permutation indexes (~4 bytes/quad per axis), and evaluation in
 `TermId` space so solution comparison is an integer compare.
 
 Crucially, the *layout itself* was chosen by benchmark: the
-`crates/rdf-core/benches/ir_layout.rs` criterion suite measures
+`crates/rdf-core/benches/ir_layout.rs` bench suite measures
 array-of-structs vs. struct-of-arrays vs. predicate-adjacency layouts on
 allocation counts, high-water memory, and end-to-end latency — and the
 shipped layout is whichever wins.
@@ -32,7 +32,7 @@ shipped layout is whichever wins.
 
 | Layer | What it measures | How to run |
 | --- | --- | --- |
-| **Rust criterion suites** | Native engine hot paths — IR layout, copy-on-write mutation, pack index alternatives, codecs, graph/tabular/research-object projections, SPARQL lexing/evaluation/planning, SHACL validation, entailment chase, GTS authoring, IRI parsing. | `make bench` |
+| **Rust bench suites** | Native engine hot paths — IR layout, copy-on-write mutation, pack index alternatives, codecs, graph/tabular/research-object projections, SPARQL lexing/evaluation/planning, SHACL validation, entailment chase, GTS authoring, IRI parsing. | `make bench` |
 | **Python compat harness** | `purrdf.compat.rdflib` (the native-backed drop-in) vs. the real rdflib 7.x on parse, serialize, SPARQL, and triple-pattern iteration, over a deterministic `example.org` corpus. | `make bench-python` |
 
 Both layers are report-only: they are never part of `make check`, and no test
@@ -40,13 +40,13 @@ gate asserts a speedup.
 
 ## The discipline for changes
 
-Any change claiming a performance win must **extend the criterion benches**
+Any change claiming a performance win must **extend the benches**
 rather than asserting the speedup in prose. Where a planner or algorithm
 choice matters for correctness-adjacent behavior, it is gated by
 *deterministic* tests instead of timings — for example, the cost-based BGP
 planner's win over the retired structural heuristic is asserted by unit tests
 that count real intermediate rows, and by a differential corpus test, while
-the criterion bench merely watches for regressions.
+the bench merely watches for regressions.
 
 `NativeSparqlEngine::explain_query` exposes the chosen BGP join order so
 planner decisions can be audited without running the query
@@ -64,7 +64,7 @@ instruction coverage from throughput measured on the target hardware.
 ## Reproducing locally
 
 ```sh
-make bench                              # the default criterion set
+make bench                              # the default bench set
 cargo bench -p purrdf-iri --bench parse # a single package's bench
 cargo bench -p purrdf-core --bench pack_index_compare # pack index experiment
 cargo bench -p purrdf-rdf --bench projections -- --quick # projection/carrier sample

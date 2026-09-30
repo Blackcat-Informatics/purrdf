@@ -9,8 +9,8 @@ use purrdf_core::loss::{
     LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED,
 };
 use purrdf_core::{DatasetView, LossLedger, research_object_to_rdf_loss_ledger};
-use roxmltree::{Document, Node};
-use serde::{Deserialize, Deserializer, Serialize};
+use purrdf_lex::terminals::trim_ws;
+use purrdf_lex::xml::Node;
 
 use super::super::{
     ProjectionError, ProjectionPackage, escape_xml_attribute, escape_xml_text,
@@ -32,7 +32,7 @@ pub const DATACITE_PROFILE: &str = "datacite-4.6";
 pub const DATACITE_ARTIFACT: &str = "datacite.xml";
 
 /// Caller-selected DataCite 4.6 controlled values and identifier policy.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataCiteControlledValues {
     identifier_type: String,
     resource_type_general: String,
@@ -184,51 +184,40 @@ impl DataCiteControlledValues {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawDataCiteControlledValues {
-    identifier_type: String,
-    resource_type_general: String,
-    creator_name_type: String,
-    agent_identifier_scheme: String,
-    agent_identifier_scheme_uri: String,
-    related_identifier_type: String,
-    landing_page_relation_type: String,
-    resource_relation_type: String,
-    activity_relation_type: String,
-    record_set_relation_type: String,
-    issued_date_type: String,
-    modified_date_type: String,
-    description_type: String,
-}
+purrdf_lex::json_record!(impl FromJson for DataCiteControlledValues as "struct DataCiteControlledValues" {
+    "identifier_type" => identifier_type: required::<String>,
+    "resource_type_general" => resource_type_general: required::<String>,
+    "creator_name_type" => creator_name_type: required::<String>,
+    "agent_identifier_scheme" => agent_identifier_scheme: required::<String>,
+    "agent_identifier_scheme_uri" => agent_identifier_scheme_uri: required::<String>,
+    "related_identifier_type" => related_identifier_type: required::<String>,
+    "landing_page_relation_type" => landing_page_relation_type: required::<String>,
+    "resource_relation_type" => resource_relation_type: required::<String>,
+    "activity_relation_type" => activity_relation_type: required::<String>,
+    "record_set_relation_type" => record_set_relation_type: required::<String>,
+    "issued_date_type" => issued_date_type: required::<String>,
+    "modified_date_type" => modified_date_type: required::<String>,
+    "description_type" => description_type: required::<String>,
+} => DataCiteControlledValues::new);
 
-impl<'de> Deserialize<'de> for DataCiteControlledValues {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawDataCiteControlledValues::deserialize(deserializer)?;
-        Self::new(
-            raw.identifier_type,
-            raw.resource_type_general,
-            raw.creator_name_type,
-            raw.agent_identifier_scheme,
-            raw.agent_identifier_scheme_uri,
-            raw.related_identifier_type,
-            raw.landing_page_relation_type,
-            raw.resource_relation_type,
-            raw.activity_relation_type,
-            raw.record_set_relation_type,
-            raw.issued_date_type,
-            raw.modified_date_type,
-            raw.description_type,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+purrdf_lex::json_record!(impl ToJson for DataCiteControlledValues {
+    "identifier_type" => identifier_type,
+    "resource_type_general" => resource_type_general,
+    "creator_name_type" => creator_name_type,
+    "agent_identifier_scheme" => agent_identifier_scheme,
+    "agent_identifier_scheme_uri" => agent_identifier_scheme_uri,
+    "related_identifier_type" => related_identifier_type,
+    "landing_page_relation_type" => landing_page_relation_type,
+    "resource_relation_type" => resource_relation_type,
+    "activity_relation_type" => activity_relation_type,
+    "record_set_relation_type" => record_set_relation_type,
+    "issued_date_type" => issued_date_type,
+    "modified_date_type" => modified_date_type,
+    "description_type" => description_type,
+});
 
 /// Mandatory caller-owned DataCite 4.6 schema and semantic configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataCiteConfig {
     common: ResearchObjectConfig,
     namespace_iri: String,
@@ -291,32 +280,21 @@ impl DataCiteConfig {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawDataCiteConfig {
-    common: ResearchObjectConfig,
-    namespace_iri: String,
-    xml_schema_instance_iri: String,
-    schema_location: String,
-    controlled: DataCiteControlledValues,
-}
+purrdf_lex::json_record!(impl FromJson for DataCiteConfig as "struct DataCiteConfig" {
+    "common" => common: required::<ResearchObjectConfig>,
+    "namespace_iri" => namespace_iri: required::<String>,
+    "xml_schema_instance_iri" => xml_schema_instance_iri: required::<String>,
+    "schema_location" => schema_location: required::<String>,
+    "controlled" => controlled: required::<DataCiteControlledValues>,
+} => DataCiteConfig::new);
 
-impl<'de> Deserialize<'de> for DataCiteConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawDataCiteConfig::deserialize(deserializer)?;
-        Self::new(
-            raw.common,
-            raw.namespace_iri,
-            raw.xml_schema_instance_iri,
-            raw.schema_location,
-            raw.controlled,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+purrdf_lex::json_record!(impl ToJson for DataCiteConfig {
+    "common" => common,
+    "namespace_iri" => namespace_iri,
+    "xml_schema_instance_iri" => xml_schema_instance_iri,
+    "schema_location" => schema_location,
+    "controlled" => controlled,
+});
 
 /// Project caller-vocabulary RDF 1.2 into deterministic DataCite 4.6 XML.
 ///
@@ -379,7 +357,7 @@ fn validate_controlled_token(value: &str, field: &str) -> Result<(), ProjectionE
     Ok(())
 }
 
-const XML_NAMESPACE: &str = "http://www.w3.org/XML/1998/namespace";
+use purrdf_iri::vocab::xml::NS as XML_NAMESPACE;
 
 fn parse_datacite(
     bytes: &[u8],
@@ -397,16 +375,19 @@ fn parse_datacite(
         )
         .at_path(DATACITE_ARTIFACT));
     }
-    // `roxmltree`'s tokenizer recurses once per element, so a deeply nested document aborts
-    // the process rather than returning an error. The nesting is measured first and refused.
-    crate::nesting::guard_xml_nesting(text).map_err(|depth| {
-        ProjectionError::syntax(format!(
+    let document = crate::nesting::parse_xml(text).map_err(|error| match error {
+        crate::nesting::XmlReadError::TooDeep(depth) => ProjectionError::syntax(format!(
             "DataCite XML nests {depth} elements deep, past the parser limit"
         ))
-        .at_path(DATACITE_ARTIFACT)
-    })?;
-    let document = Document::parse(text).map_err(|error| {
-        ProjectionError::syntax(format!("parse DataCite XML: {error}")).at_path(DATACITE_ARTIFACT)
+        .at_path(DATACITE_ARTIFACT),
+        crate::nesting::XmlReadError::DeclarationsUnread => {
+            ProjectionError::syntax(crate::nesting::XmlReadError::UNREAD_MESSAGE)
+                .at_path(DATACITE_ARTIFACT)
+        }
+        crate::nesting::XmlReadError::Malformed(error) => {
+            ProjectionError::syntax(format!("parse DataCite XML: {error}"))
+                .at_path(DATACITE_ARTIFACT)
+        }
     })?;
     let element_count = document.descendants().filter(Node::is_element).count();
     if element_count > config.common().policy().max_records() {
@@ -421,7 +402,7 @@ fn parse_datacite(
     require_datacite_element(root, "resource", config)?;
     let expected_schema_location =
         format!("{} {}", config.namespace_iri(), config.schema_location());
-    if namespaced_attribute(root, config.xml_schema_instance_iri(), "schemaLocation")
+    if root.attribute((config.xml_schema_instance_iri(), "schemaLocation"))
         != Some(expected_schema_location.as_str())
     {
         return Err(ProjectionError::integrity(
@@ -667,7 +648,7 @@ impl DataCiteParser<'_> {
         let mut expected = expected_attributes.to_vec();
         expected.push((Some(XML_NAMESPACE), "lang"));
         let value = self.parse_plain_text(node, path, &expected)?;
-        let language = namespaced_attribute(node, XML_NAMESPACE, "lang").map(str::to_owned);
+        let language = node.attribute((XML_NAMESPACE, "lang")).map(str::to_owned);
         if language.as_deref().is_some_and(str::is_empty) {
             return Err(
                 ProjectionError::integrity("DataCite xml:lang cannot be empty")
@@ -1127,7 +1108,7 @@ fn reject_related_duplicates(related: &RelatedEntities) -> Result<(), Projection
             related
                 .landing_pages
                 .iter()
-                .map(value_lexical)
+                .map(|value| value.lexical().to_owned())
                 .collect::<Vec<_>>(),
         ),
         (
@@ -1203,12 +1184,6 @@ fn require_datacite_namespace(
     Ok(())
 }
 
-fn namespaced_attribute<'a>(node: Node<'a, '_>, namespace: &str, local: &str) -> Option<&'a str> {
-    node.attributes()
-        .find(|attribute| attribute.namespace() == Some(namespace) && attribute.name() == local)
-        .map(|attribute| attribute.value())
-}
-
 fn record_unknown_attributes(
     node: Node<'_, '_>,
     expected: &[(Option<&str>, &str)],
@@ -1243,7 +1218,9 @@ fn simple_element_text(node: Node<'_, '_>, path: &str) -> Result<String, Project
     for child in node.children().filter(Node::is_text) {
         value.push_str(child.text().unwrap_or_default());
     }
-    let value = value.trim().to_owned();
+    // XML whitespace is `S ::= (#x20 | #x9 | #xD | #xA)+` (XML 1.0 §2.3): a
+    // NO-BREAK SPACE or any other Unicode space is element content.
+    let value = trim_ws(&value).to_owned();
     if value.is_empty() {
         return Err(
             ProjectionError::integrity(format!("DataCite {path} cannot be empty"))
@@ -1282,7 +1259,7 @@ fn write_datacite(
     let identifier = dataset
         .identifiers
         .first()
-        .map_or_else(|| dataset.id.clone(), value_lexical);
+        .map_or_else(|| dataset.id.clone(), |value| value.lexical().to_owned());
     if dataset.titles.is_empty() {
         return Err(ProjectionError::integrity(
             "DataCite 4.6 requires at least one title",
@@ -1425,7 +1402,7 @@ fn write_datacite(
                 &format!(
                     "<alternateIdentifier alternateIdentifierType=\"{}\">{}</alternateIdentifier>",
                     escape_xml_attribute(config.controlled().identifier_type())?,
-                    escape_xml_text(&value_lexical(value))?
+                    escape_xml_text(value.lexical())?
                 ),
             )?;
         }
@@ -1629,7 +1606,7 @@ fn collect_related<'a>(
         .collect();
     for landing_page in &model.dataset.landing_pages {
         values.push((
-            value_lexical(landing_page),
+            landing_page.lexical().to_owned(),
             config.controlled().landing_page_relation_type(),
         ));
     }
@@ -1717,13 +1694,6 @@ fn collect_related<'a>(
     values.sort();
     values.dedup();
     values
-}
-
-fn value_lexical(value: &ResearchValue) -> String {
-    match value {
-        ResearchValue::Iri { value } => value.clone(),
-        ResearchValue::Text(value) => value.value.clone(),
-    }
 }
 
 fn resource_has_detail(resource: &ResearchResource) -> bool {
@@ -2039,6 +2009,37 @@ mod tests {
         )
         .expect("DataCite UTF-8");
         assert_eq!(xml.matches("<version>").count(), 1);
+    }
+
+    /// The text of the first `<subject>` in `xml`, read as element text.
+    fn subject_text(xml: &str) -> Result<String, ProjectionError> {
+        let document = crate::nesting::parse_xml(xml).expect("well-formed XML");
+        let subject = document
+            .descendants()
+            .find(|node| node.is_element() && node.tag_name().name() == "subject")
+            .expect("a subject element");
+        simple_element_text(subject, "/subject")
+    }
+
+    /// Element text is trimmed of XML whitespace only: the four ASCII `S`
+    /// characters go, and a NO-BREAK SPACE (or any other Unicode space) is
+    /// content, so a value of NO-BREAK SPACEs alone is not empty.
+    #[test]
+    fn element_text_trims_xml_whitespace_only() {
+        assert_eq!(
+            subject_text("<subject> \t\r\n cats \n</subject>").expect("text"),
+            "cats"
+        );
+        assert_eq!(
+            subject_text("<subject>\u{a0}cats\u{2003}</subject>").expect("text"),
+            "\u{a0}cats\u{2003}"
+        );
+        assert_eq!(
+            subject_text("<subject>\u{a0}</subject>").expect("NO-BREAK SPACE is content"),
+            "\u{a0}"
+        );
+        let empty = subject_text("<subject> \t\n</subject>").expect_err("XML whitespace only");
+        assert!(empty.message().contains("cannot be empty"), "{empty}");
     }
 
     #[test]

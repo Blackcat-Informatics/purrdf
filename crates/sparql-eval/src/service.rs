@@ -240,40 +240,13 @@ impl ServiceCredential {
                      the field separator, so encoding one would move part of the user id into \
                      the password"
                 );
-                let encoded = base64_standard(format!("{username}:{password}").as_bytes());
+                let encoded =
+                    purrdf_xsd::canonical_base64(format!("{username}:{password}").as_bytes());
                 ("Authorization".to_owned(), format!("Basic {encoded}"))
             }
             Self::Header { name, value } => (name.clone(), value.clone()),
         }
     }
-}
-
-/// RFC 4648 §4 base64 with the standard alphabet and `=` padding.
-///
-/// Hand-rolled rather than a dependency: it is twenty lines, it is on the wasm path, and
-/// HTTP Basic is its only caller.
-fn base64_standard(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b0 = u32::from(chunk[0]);
-        let b1 = chunk.get(1).copied().map_or(0, u32::from);
-        let b2 = chunk.get(2).copied().map_or(0, u32::from);
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-        out.push(ALPHABET[(triple >> 18) as usize & 0x3f] as char);
-        out.push(ALPHABET[(triple >> 12) as usize & 0x3f] as char);
-        out.push(if chunk.len() > 1 {
-            ALPHABET[(triple >> 6) as usize & 0x3f] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            ALPHABET[triple as usize & 0x3f] as char
-        } else {
-            '='
-        });
-    }
-    out
 }
 
 // ── Denials ──────────────────────────────────────────────────────────────────────
@@ -534,6 +507,8 @@ impl ServiceProfile {
 /// A catalog is the whole per-service policy in one value, so what a resolver will do is
 /// inspectable in one place rather than spread across the resolver, the query text, and
 /// the environment.
+///
+/// The [`Default`] catalog is empty: every service is denied.
 #[derive(Debug, Clone, Default)]
 pub struct ServiceCatalog {
     /// Per-endpoint profiles.
@@ -543,12 +518,6 @@ pub struct ServiceCatalog {
 }
 
 impl ServiceCatalog {
-    /// An empty catalog: every service is denied.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Register `profile` for the service IRI `endpoint`.
     #[must_use]
     pub fn with_service(mut self, endpoint: impl Into<String>, profile: ServiceProfile) -> Self {
@@ -650,7 +619,7 @@ impl ServiceCatalog {
 /// the catalog is consulted for every resolution, **including the nested ones** a
 /// `SERVICE` inside a forwarded body performs, because a nested body is resolved by
 /// threading `self` — the gated resolver — back into the forwarded evaluation.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct InProcessServiceResolver {
     /// Endpoint IRI → the dataset that answers it.
     datasets: DetHashMap<String, Arc<RdfDataset>>,
@@ -658,11 +627,16 @@ pub struct InProcessServiceResolver {
     catalog: Option<ServiceCatalog>,
 }
 
+purrdf_hash::default_from_new!(InProcessServiceResolver);
+
 impl InProcessServiceResolver {
-    /// An empty resolver with no endpoints and no catalog.
+    /// An empty resolver with no endpoints and no catalog; [`Default`] delegates here.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            datasets: DetHashMap::default(),
+            catalog: None,
+        }
     }
 
     /// Register `dataset` as the contents of `endpoint`.
@@ -755,11 +729,7 @@ impl fmt::Debug for ServiceRouter<'_> {
     }
 }
 
-impl Default for ServiceRouter<'_> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(ServiceRouter<'_>);
 
 impl<'a> ServiceRouter<'a> {
     /// A router with no routes and no fallback: every service is denied.
@@ -814,29 +784,6 @@ impl ServiceResolver for ServiceRouter<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn base64_matches_the_rfc_4648_test_vectors() {
-        // RFC 4648 §10, verbatim: the padding boundaries are where a hand-rolled encoder
-        // goes wrong, and every one of them is exercised here.
-        for (input, expected) in [
-            ("", ""),
-            ("f", "Zg=="),
-            ("fo", "Zm8="),
-            ("foo", "Zm9v"),
-            ("foob", "Zm9vYg=="),
-            ("fooba", "Zm9vYmE="),
-            ("foobar", "Zm9vYmFy"),
-        ] {
-            assert_eq!(
-                base64_standard(input.as_bytes()),
-                expected,
-                "input {input:?}"
-            );
-        }
-        // A byte outside ASCII exercises the high bits of the 24-bit group.
-        assert_eq!(base64_standard(&[0xff, 0xef, 0xbf]), "/++/");
-    }
 
     #[test]
     fn a_basic_credential_renders_the_rfc_7617_header() {
@@ -938,7 +885,7 @@ mod tests {
 
     #[test]
     fn an_uncatalogued_service_is_denied_and_a_listed_one_is_not() {
-        let catalog = ServiceCatalog::new();
+        let catalog = ServiceCatalog::default();
         let denial = catalog
             .authorize(
                 "https://example.org/sparql",
@@ -959,7 +906,7 @@ mod tests {
 
         // …and the neighbouring VALID case: the same catalog with the service listed
         // authorizes it. A denial that fired for everything would prove nothing.
-        let catalog = ServiceCatalog::new().with_service(
+        let catalog = ServiceCatalog::default().with_service(
             "https://example.org/sparql",
             ServiceProfile::new(ServiceCapabilities::granting([ServiceCapability::Query])),
         );
@@ -974,7 +921,7 @@ mod tests {
 
     #[test]
     fn a_fallback_profile_is_the_explicit_opt_out_of_deny_by_default() {
-        let catalog = ServiceCatalog::new().with_fallback(ServiceProfile::new(
+        let catalog = ServiceCatalog::default().with_fallback(ServiceProfile::new(
             ServiceCapabilities::granting([ServiceCapability::Query]),
         ));
         catalog
@@ -999,7 +946,7 @@ mod tests {
 
     #[test]
     fn a_credential_without_its_capability_is_refused_rather_than_dropped() {
-        let catalog = ServiceCatalog::new().with_service(
+        let catalog = ServiceCatalog::default().with_service(
             "https://example.org/sparql",
             ServiceProfile::new(ServiceCapabilities::granting([
                 ServiceCapability::Query,
@@ -1020,7 +967,7 @@ mod tests {
 
         // The neighbouring VALID case: grant the capability and the same profile
         // authorizes, and its request headers carry the credential.
-        let catalog = ServiceCatalog::new().with_service(
+        let catalog = ServiceCatalog::default().with_service(
             "https://example.org/sparql",
             ServiceProfile::new(ServiceCapabilities::granting([
                 ServiceCapability::Query,
@@ -1175,7 +1122,7 @@ mod tests {
             value,
             format!(
                 "Basic {}",
-                base64_standard("user:p\r\nass\0word — café".as_bytes())
+                purrdf_xsd::canonical_base64("user:p\r\nass\0word — café".as_bytes())
             )
         );
 
@@ -1214,7 +1161,7 @@ mod tests {
         .header();
         assert_eq!(
             value,
-            format!("Basic {}", base64_standard(b"user:pass:word"))
+            format!("Basic {}", purrdf_xsd::canonical_base64(b"user:pass:word"))
         );
     }
 }

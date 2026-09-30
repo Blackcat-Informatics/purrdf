@@ -9,16 +9,22 @@
 //! drift between five readers. Accepted omissions are always recorded on a
 //! closed source-language → `shacl` loss profile.
 
+use purrdf_iri::json_pointer;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::error::Error;
-use std::fmt;
 use std::sync::{Arc, OnceLock};
 
+use crate::json_model::{Map, Number, NumberKind, Object, Value, ValueKind};
+use crate::limits::MAX_SCHEMA_DEPTH;
 use ::purrdf::RdfLocation;
+use ::purrdf::RdfTextDirection;
 use ::purrdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_loss_ledger};
+use purrdf_hash::fnv::fnv1a64;
+use purrdf_iri::vocab::rdf::{
+    DIR_LANG_STRING as RDF_DIR_LANG_STRING, FIRST as RDF_FIRST, LANG_STRING as RDF_LANG_STRING,
+    NIL as RDF_NIL, REST as RDF_REST, TYPE as RDF_TYPE,
+};
 use purrdf_xsd::ieee::Binary64Scope;
-use serde_json::{Map, Number, Value};
 
 use crate::json_schema::{CompiledSchema, Namespaces};
 use crate::report::Severity;
@@ -32,14 +38,10 @@ const JSON_SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema"
 /// A property schema split into its per-value schema, `minItems`, `maxItems`,
 /// and the `sh:hasValue` constants an array form states under `contains`.
 type CardinalitySplit = (Value, Option<u64>, Option<u64>, Vec<Value>);
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
 const JSON_SCHEMA_SOURCE: &str = "json-schema";
 const MAX_SCHEMA_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DEFINITIONS: usize = 65_536;
 const MAX_PROPERTIES: usize = 65_536;
-const MAX_SCHEMA_DEPTH: usize = 128;
 const MAX_SCHEMA_NODES: usize = 1_000_000;
 const MAX_STRING_BYTES: usize = 16 * 1024 * 1024;
 
@@ -176,34 +178,12 @@ pub struct ImportedShapes {
     pub losses: LossLedger,
 }
 
-/// A malformed, ambiguous, unsupported-resource, or internally inconsistent
-/// schema import request.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SchemaImportError {
-    detail: String,
+purrdf_lex::message_error! {
+    /// A malformed, ambiguous, unsupported-resource, or internally inconsistent
+    /// schema import request.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct SchemaImportError, detail;
 }
-
-impl SchemaImportError {
-    fn new(detail: impl Into<String>) -> Self {
-        Self {
-            detail: detail.into(),
-        }
-    }
-
-    /// Stable human-readable error detail.
-    #[must_use]
-    pub fn detail(&self) -> &str {
-        &self.detail
-    }
-}
-
-impl fmt::Display for SchemaImportError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.detail)
-    }
-}
-
-impl Error for SchemaImportError {}
 
 /// Import one JSON Schema draft 2020-12 document as SHACL shapes.
 ///
@@ -247,14 +227,18 @@ pub(crate) fn import_json_schema_from(
             "schema input exceeds the {MAX_SCHEMA_BYTES}-byte limit"
         )));
     }
-    // A JSON Schema number becomes a SHACL bound's lexical form: read it inside a
-    // binary64 scope so the x87 rounds `serde_json`'s exact fast path once, like every
-    // other unit (the workspace's `float_roundtrip` makes the rest correctly rounded).
-    let document: Value = {
-        let _binary64 = Binary64Scope::enter();
-        serde_json::from_str(input)
-    }
+    // Numbers keep their lexemes; a repeated member name is refused rather than
+    // resolved, since which copy a schema meant is not stated (RFC 7493 §2.3).
+    // Members are held in name order, the order every walk below visits them in.
+    let mut document = purrdf_lex::json::read_with(
+        input,
+        purrdf_lex::json::Limits {
+            unique_members: true,
+            ..purrdf_lex::json::Limits::with_depth(MAX_SCHEMA_DEPTH)
+        },
+    )
     .map_err(|error| SchemaImportError::new(format!("invalid JSON Schema JSON: {error}")))?;
+    document.sort_keys();
     import_schema_value_from(source, &document, config)
 }
 
@@ -329,7 +313,7 @@ struct SchemaImportModel {
 struct ImportContext<'a> {
     source: &'static str,
     config: &'a SchemaImportConfig,
-    definitions: &'a Map<String, Value>,
+    definitions: &'a Object,
     contract: LossLedger,
     losses: LossLedger,
     nested_shape_counter: usize,
@@ -340,7 +324,7 @@ impl<'a> ImportContext<'a> {
     fn new(
         source: &'static str,
         config: &'a SchemaImportConfig,
-        definitions: &'a Map<String, Value>,
+        definitions: &'a Object,
         generated_envelope: bool,
     ) -> Self {
         Self {
@@ -387,40 +371,27 @@ impl<'a> ImportContext<'a> {
     fn nested_shape_id(&mut self, path: &str) -> Term {
         let id = self.nested_shape_counter;
         self.nested_shape_counter += 1;
-        Term::blank(format!("schema-import-{id:08x}-{}", fnv1a(path.as_bytes())))
+        Term::blank(format!(
+            "schema-import-{id:08x}-{}",
+            fnv1a64(path.as_bytes())
+        ))
     }
 }
 
 fn validate_absolute_iri(label: &str, value: &str) -> Result<(), SchemaImportError> {
-    let iri = purrdf_iri::parse(value)
-        .map_err(|error| SchemaImportError::new(format!("{label} is not a valid IRI: {error}")))?;
-    if !iri.has_scheme() {
-        return Err(SchemaImportError::new(format!(
+    match purrdf_iri::BaseIri::parse(value) {
+        Ok(_) => Ok(()),
+        Err(purrdf_iri::IriError::NonAbsoluteBase(_)) => Err(SchemaImportError::new(format!(
             "{label} must be an absolute IRI"
-        )));
+        ))),
+        Err(error) => Err(SchemaImportError::new(format!(
+            "{label} is not a valid IRI: {error}"
+        ))),
     }
-    Ok(())
 }
 
 fn definition_path(key: &str) -> String {
-    format!("#/$defs/{}", pointer_escape(key))
-}
-
-fn pointer_escape(value: &str) -> Cow<'_, str> {
-    if value.contains('~') || value.contains('/') {
-        Cow::Owned(value.replace('~', "~0").replace('/', "~1"))
-    } else {
-        Cow::Borrowed(value)
-    }
-}
-
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
+    format!("#/$defs/{}", json_pointer::escape_token(key))
 }
 
 /// An imported property has no source RDF node. Preserve its source shape and
@@ -428,15 +399,11 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 /// This uses no shared counter, so adding a property does not renumber existing
 /// nested node shapes.
 fn property_shape_id(source: &Term, path: &str) -> Term {
-    use std::fmt::Write as _;
-
     let source = source.to_string();
     let mut label = String::from("schema-property");
     for part in [source.as_str(), path] {
         label.push('-');
-        for byte in part.bytes() {
-            write!(label, "{byte:02x}").expect("writing to a String cannot fail");
-        }
+        purrdf_hash::hex::encode_into(part.as_bytes(), &mut label);
     }
     Term::blank(label)
 }
@@ -444,11 +411,11 @@ fn property_shape_id(source: &Term, path: &str) -> Term {
 impl ImportContext<'_> {
     fn audit_root(
         &mut self,
-        root: &Map<String, Value>,
+        root: &Object,
         generated_envelope: bool,
     ) -> Result<(), SchemaImportError> {
         for (keyword, value) in root {
-            let path = format!("#/{}", pointer_escape(keyword));
+            let path = format!("#/{}", json_pointer::escape_token(keyword));
             match keyword.as_str() {
                 "$schema" | "$id" if generated_envelope => {}
                 "$schema" | "$id" | "$anchor" | "$dynamicAnchor" => {
@@ -507,11 +474,11 @@ impl ImportContext<'_> {
 
     fn audit_non_object_definition(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         path: &str,
     ) -> Result<(), SchemaImportError> {
         for (keyword, value) in object {
-            let location = format!("{path}/{}", pointer_escape(keyword));
+            let location = format!("{path}/{}", json_pointer::escape_token(keyword));
             match keyword.as_str() {
                 "$ref" => {}
                 "title" | "description" | "$comment" | "default" | "examples" | "deprecated"
@@ -538,7 +505,7 @@ impl ImportContext<'_> {
 
     fn import_object_shape(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         path: &str,
         id: Term,
         targets: Vec<Target>,
@@ -566,13 +533,13 @@ impl ImportContext<'_> {
                 if !self.generated_envelope {
                     self.record(
                         "value-term-kind-widened",
-                        &format!("{path}/properties/{}", pointer_escape(key)),
+                        &format!("{path}/properties/{}", json_pointer::escape_token(key)),
                     );
                 }
                 continue;
             }
             imported_property_names.insert(key.clone());
-            let property_path = format!("{path}/properties/{}", pointer_escape(key));
+            let property_path = format!("{path}/properties/{}", json_pointer::escape_token(key));
             let predicate_iri = self
                 .config
                 .namespaces
@@ -635,7 +602,10 @@ impl ImportContext<'_> {
                 )));
             }
             property_shapes.push(PropertyShape {
-                id: property_shape_id(&id, &format!("{path}/properties/{}", pointer_escape(key))),
+                id: property_shape_id(
+                    &id,
+                    &format!("{path}/properties/{}", json_pointer::escape_token(key)),
+                ),
                 path: Path::Predicate(NamedNode::new_unchecked(predicate_iri)),
                 values: None,
                 default_value: None,
@@ -702,7 +672,7 @@ impl ImportContext<'_> {
 
     fn import_object_logic(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         path: &str,
         constraints: &mut Vec<Constraint>,
     ) -> Result<(), SchemaImportError> {
@@ -784,11 +754,11 @@ impl ImportContext<'_> {
 
     fn audit_object_keywords(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         path: &str,
     ) -> Result<(), SchemaImportError> {
         for (keyword, value) in object {
-            let location = format!("{path}/{}", pointer_escape(keyword));
+            let location = format!("{path}/{}", json_pointer::escape_token(keyword));
             match keyword.as_str() {
                 "type"
                 | "properties"
@@ -904,7 +874,7 @@ impl ImportContext<'_> {
 
     fn array_cardinality(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         path: &str,
     ) -> Result<CardinalitySplit, SchemaImportError> {
         // Omitting `items` is the draft-2020-12 identity schema. Keep the
@@ -937,7 +907,7 @@ impl ImportContext<'_> {
             }
         }
         for (keyword, value) in object {
-            let location = format!("{path}/{}", pointer_escape(keyword));
+            let location = format!("{path}/{}", json_pointer::escape_token(keyword));
             match keyword.as_str() {
                 "allOf" if contains_is_has_value => {}
                 "type" | "items" | "minItems" | "maxItems" | "contains" | "minContains"
@@ -1116,7 +1086,7 @@ impl ImportContext<'_> {
             if handled.contains(keyword.as_str()) {
                 continue;
             }
-            let location = format!("{path}/{}", pointer_escape(keyword));
+            let location = format!("{path}/{}", json_pointer::escape_token(keyword));
             match keyword.as_str() {
                 "title" | "description" | "$comment" | "default" | "examples" | "deprecated"
                 | "readOnly" | "writeOnly" => {
@@ -1148,7 +1118,7 @@ impl ImportContext<'_> {
     /// `exclusiveMinimum`, `exclusiveMaximum`) and its `not`, marking each handled.
     fn import_value_bounds(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         path: &str,
         constraints: &mut Vec<Constraint>,
         handled: &mut BTreeSet<&'static str>,
@@ -1725,14 +1695,14 @@ impl ImportContext<'_> {
     /// only that the value be a list, which `sh:uniqueMembers false` states.
     fn import_list_members(
         &mut self,
-        members: &Map<String, Value>,
+        members: &Object,
         path: &str,
         skipped: u64,
         constraints: &mut Vec<Constraint>,
     ) -> Result<(), SchemaImportError> {
         let start = constraints.len();
         for (keyword, value) in members {
-            let location = format!("{path}/{}", pointer_escape(keyword));
+            let location = format!("{path}/{}", json_pointer::escape_token(keyword));
             match keyword.as_str() {
                 "type" => {}
                 "minItems" => {
@@ -1802,16 +1772,10 @@ impl ImportContext<'_> {
         else {
             return Ok(false);
         };
-        let first = self
-            .config
-            .namespaces
-            .compact_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#first");
-        let rest = self
-            .config
-            .namespaces
-            .compact_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#rest");
-        let nil = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-        let nil_form = serde_json::json!({
+        let first = self.config.namespaces.compact_iri(RDF_FIRST);
+        let rest = self.config.namespaces.compact_iri(RDF_REST);
+        let nil = RDF_NIL;
+        let nil_form = crate::json_model::json!({
             "type": "object",
             "properties": {
                 "@id": { "const": nil },
@@ -1821,7 +1785,7 @@ impl ImportContext<'_> {
             "required": ["@id"]
         });
         let mut has_nil = false;
-        let mut cons: Option<(usize, &Map<String, Value>)> = None;
+        let mut cons: Option<(usize, &Object)> = None;
         for (index, alternative) in alternatives.iter().enumerate() {
             if alternative == &nil_form {
                 has_nil = true;
@@ -1834,7 +1798,7 @@ impl ImportContext<'_> {
                 && object.get("type").and_then(Value::as_str) == Some("object")
                 && is_exact_required(object.get("required"), &[first.as_str(), rest.as_str()])
                 && object.get("not")
-                    == Some(&serde_json::json!({
+                    == Some(&crate::json_model::json!({
                         "properties": { "@id": { "const": nil } },
                         "required": ["@id"]
                     }));
@@ -1857,7 +1821,7 @@ impl ImportContext<'_> {
                     return Ok(false);
                 };
                 let single =
-                    serde_json::json!({ "type": ["boolean", "number", "object", "string"] });
+                    crate::json_model::json!({ "type": ["boolean", "number", "object", "string"] });
                 let head = match properties.get(&first) {
                     Some(schema) if schema == &single => None,
                     Some(schema) => match schema
@@ -1883,8 +1847,10 @@ impl ImportContext<'_> {
                 if !is_plain_node_ref(tail_node) {
                     return Ok(false);
                 }
-                let tail_path =
-                    format!("{base}/{}/anyOf/0/properties/@list", pointer_escape(&rest));
+                let tail_path = format!(
+                    "{base}/{}/anyOf/0/properties/@list",
+                    json_pointer::escape_token(&rest)
+                );
                 let mut listed = Vec::new();
                 self.import_list_members(members, &tail_path, 1, &mut listed)?;
                 // The tail's own member shape repeats the head's; a lone
@@ -1905,7 +1871,7 @@ impl ImportContext<'_> {
                 if let Some(member) = head {
                     let shape = self.import_member_shape(
                         member,
-                        &format!("{base}/{}/allOf/1", pointer_escape(&first)),
+                        &format!("{base}/{}/allOf/1", json_pointer::escape_token(&first)),
                     )?;
                     listed.push(Constraint::MemberShape(Box::new(shape)));
                 }
@@ -1929,7 +1895,7 @@ impl ImportContext<'_> {
         // Every kind a lone projected value can be, and no array: the compiler's
         // statement that one value is not an array of values, which constrains no
         // term.
-        if value == &serde_json::json!(["boolean", "number", "object", "string"])
+        if value == &crate::json_model::json!(["boolean", "number", "object", "string"])
             && format.is_none()
         {
             return Ok(());
@@ -1995,7 +1961,7 @@ impl ImportContext<'_> {
 
     fn import_term_object(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         path: &str,
     ) -> Result<Option<Term>, SchemaImportError> {
         if let Some(id) = object.get("@id") {
@@ -2076,7 +2042,7 @@ impl ImportContext<'_> {
     /// is the subject, and its one other member the predicate and object.
     fn import_triple_term(
         &mut self,
-        embedded: &Map<String, Value>,
+        embedded: &Object,
         path: &str,
     ) -> Result<Option<Term>, SchemaImportError> {
         let [(first_key, first), (second_key, second)] = embedded
@@ -2097,8 +2063,7 @@ impl ImportContext<'_> {
                 "{path} embedded triple must state its subject as @id"
             )));
         };
-        let mut reference = Map::new();
-        reference.insert("@id".to_owned(), subject.clone());
+        let reference = Object::new().with("@id", subject.clone());
         let Some(subject) = self.import_term_object(&reference, &format!("{path}/@id"))? else {
             return Ok(None);
         };
@@ -2107,7 +2072,7 @@ impl ImportContext<'_> {
             .namespaces
             .expand_iri(predicate)
             .map_err(|error| SchemaImportError::new(format!("{path} predicate: {error}")))?;
-        let object_path = format!("{path}/{}", pointer_escape(predicate.as_str()));
+        let object_path = format!("{path}/{}", json_pointer::escape_token(predicate.as_str()));
         let Some(object) = self.import_term(object, &object_path)? else {
             return Ok(None);
         };
@@ -2196,7 +2161,7 @@ fn validate_value_limits(
                     value,
                     depth + 1,
                     nodes,
-                    &format!("{path}/{}", pointer_escape(key)),
+                    &format!("{path}/{}", json_pointer::escape_token(key)),
                 )?;
             }
             Ok(())
@@ -2207,7 +2172,7 @@ fn validate_value_limits(
 
 fn validate_references(
     value: &Value,
-    definitions: &Map<String, Value>,
+    definitions: &Object,
     path: &str,
     depth: usize,
 ) -> Result<(), SchemaImportError> {
@@ -2229,7 +2194,7 @@ fn validate_references(
         validate_json_keyword_value(
             keyword,
             value,
-            &format!("{path}/{}", pointer_escape(keyword)),
+            &format!("{path}/{}", json_pointer::escape_token(keyword)),
         )?;
     }
     for keyword in ["$dynamicRef", "$recursiveRef"] {
@@ -2278,7 +2243,7 @@ fn validate_references(
                 validate_references(
                     child,
                     definitions,
-                    &format!("{path}/{keyword}/{}", pointer_escape(key)),
+                    &format!("{path}/{keyword}/{}", json_pointer::escape_token(key)),
                     depth + 1,
                 )?;
             }
@@ -2320,19 +2285,15 @@ fn validate_references(
     Ok(())
 }
 
-fn is_generated_envelope(
-    root: &Map<String, Value>,
-    definitions: &Map<String, Value>,
-    namespaces: &Namespaces,
-) -> bool {
+fn is_generated_envelope(root: &Object, definitions: &Object, namespaces: &Namespaces) -> bool {
     let Some(node) = definitions.get("Node").and_then(Value::as_object) else {
         return false;
     };
     let Some(annotation) = definitions.get("Annotation") else {
         return false;
     };
-    let node_ref = serde_json::json!({ "$ref": "#/$defs/Node" });
-    let graph_envelope = serde_json::json!({
+    let node_ref = crate::json_model::json!({ "$ref": "#/$defs/Node" });
+    let graph_envelope = crate::json_model::json!({
         "type": "object",
         "required": ["@graph"],
         "properties": {
@@ -2340,11 +2301,11 @@ fn is_generated_envelope(
             "@graph": { "type": "array", "items": node_ref }
         }
     });
-    let expected_properties = serde_json::json!({
+    let expected_properties = crate::json_model::json!({
         "@context": true,
         "@graph": { "type": "array", "items": node_ref }
     });
-    let expected_annotation = serde_json::json!({
+    let expected_annotation = crate::json_model::json!({
         "type": "object",
         "title": "RDF-1.2 statement metadata (reifier annotation)",
         "description": "Free-form metadata about an asserted triple (e.g. meta:accordingTo, meta:confidence, meta:assertedAt). Permissive.",
@@ -2378,7 +2339,7 @@ fn is_generated_envelope(
             properties.len() == 3
                 && ["@id", "@type", "@annotation"]
                     .iter()
-                    .all(|key| properties.contains_key(*key))
+                    .all(|key| properties.contains_key(key))
         });
     root.get("$schema").and_then(Value::as_str) == Some(JSON_SCHEMA_DIALECT)
         && root.get("$id").and_then(Value::as_str)
@@ -2386,20 +2347,20 @@ fn is_generated_envelope(
         && root.get("title").and_then(Value::as_str)
             == Some("PURRDF instance schema (SHACL-derived, closed-world)")
         && root.get("type").and_then(Value::as_str) == Some("object")
-        && root.get("anyOf") == Some(&serde_json::json!([graph_envelope, node_ref]))
+        && root.get("anyOf") == Some(&crate::json_model::json!([graph_envelope, node_ref]))
         && root.get("properties") == Some(&expected_properties)
         && annotation == &expected_annotation
         && has_node_contract
 }
 
-fn is_object_schema(object: &Map<String, Value>) -> bool {
+fn is_object_schema(object: &Object) -> bool {
     schema_type_contains(object.get("type"), "object")
         || object.contains_key("properties")
         || object.contains_key("required")
         || object.contains_key("additionalProperties")
         || ["allOf", "anyOf", "oneOf"].iter().any(|keyword| {
             object
-                .get(*keyword)
+                .get(keyword)
                 .and_then(Value::as_array)
                 .is_some_and(|branches| {
                     branches
@@ -2409,11 +2370,11 @@ fn is_object_schema(object: &Map<String, Value>) -> bool {
         })
 }
 
-fn is_array_schema(object: &Map<String, Value>) -> bool {
+fn is_array_schema(object: &Object) -> bool {
     schema_type_contains(object.get("type"), "array") || object.contains_key("items")
 }
 
-fn is_simple_scalar_carrier(object: &Map<String, Value>) -> bool {
+fn is_simple_scalar_carrier(object: &Object) -> bool {
     object.contains_key("type")
         && object
             .keys()
@@ -2429,11 +2390,11 @@ fn schema_type_contains(value: Option<&Value>, expected: &str) -> bool {
 }
 
 fn optional_object<'a>(
-    object: &'a Map<String, Value>,
+    object: &'a Object,
     keyword: &str,
     path: &str,
-) -> Result<&'a Map<String, Value>, SchemaImportError> {
-    static EMPTY: OnceLock<Map<String, Value>> = OnceLock::new();
+) -> Result<&'a Object, SchemaImportError> {
+    static EMPTY: OnceLock<Object> = OnceLock::new();
     object
         .get(keyword)
         .map(|value| {
@@ -2442,12 +2403,12 @@ fn optional_object<'a>(
             })
         })
         .transpose()
-        .map(|value| value.unwrap_or_else(|| EMPTY.get_or_init(Map::new)))
+        .map(|value| value.unwrap_or_else(|| EMPTY.get_or_init(Object::new)))
 }
 
 fn required_names(
-    object: &Map<String, Value>,
-    _properties: &Map<String, Value>,
+    object: &Object,
+    _properties: &Object,
     path: &str,
 ) -> Result<BTreeSet<String>, SchemaImportError> {
     let Some(required) = object.get("required") else {
@@ -2535,24 +2496,7 @@ fn reference_key(reference: &str) -> Option<String> {
     if encoded.contains('/') {
         return None;
     }
-    pointer_unescape(encoded)
-}
-
-fn pointer_unescape(value: &str) -> Option<String> {
-    let mut output = String::with_capacity(value.len());
-    let mut characters = value.chars();
-    while let Some(character) = characters.next() {
-        if character != '~' {
-            output.push(character);
-            continue;
-        }
-        match characters.next()? {
-            '0' => output.push('~'),
-            '1' => output.push('/'),
-            _ => return None,
-        }
-    }
-    Some(output)
+    json_pointer::unescape_token(encoded).map(Cow::into_owned)
 }
 
 fn is_typed_literal_schema(value: &Value) -> bool {
@@ -2568,7 +2512,7 @@ fn is_typed_literal_schema(value: &Value) -> bool {
         && properties
             .get("@value")
             .and_then(Value::as_object)
-            .is_some_and(Map::is_empty)
+            .is_some_and(Object::is_empty)
         && properties
             .get("@type")
             .is_some_and(|schema| is_exact_type_schema(schema, "string"))
@@ -2647,10 +2591,10 @@ const VALUE_BOUND_KEYWORDS: [&str; 5] = [
 
 /// `object` without its value-bound keywords and `$comment`, when it has at least
 /// one value-bound keyword — the datatype schema the compiler folded them into.
-fn without_value_bounds(object: &Map<String, Value>) -> Option<Value> {
+fn without_value_bounds(object: &Object) -> Option<Value> {
     if !VALUE_BOUND_KEYWORDS
         .iter()
-        .any(|keyword| object.contains_key(*keyword))
+        .any(|keyword| object.contains_key(keyword))
     {
         return None;
     }
@@ -2661,7 +2605,7 @@ fn without_value_bounds(object: &Map<String, Value>) -> Option<Value> {
         })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    Some(Value::Object(rest))
+    Some(crate::json_model::object(rest))
 }
 
 fn classify_rejection(value: &Value) -> Option<Rejection> {
@@ -2726,7 +2670,7 @@ fn classify_rejection(value: &Value) -> Option<Rejection> {
     if object.len() == 3 && is_exact_required(object.get("required"), &["@value", "@type"]) {
         let at_type = properties.get("@type")?;
         if properties.len() == 2
-            && properties.get("@value") == Some(&Value::Object(Map::new()))
+            && properties.get("@value") == Some(&crate::json_model::object(Map::new()))
             && at_type.get("not").and_then(|not| not.get("enum")).is_some()
         {
             return Some(Rejection::NonNumeric);
@@ -2843,7 +2787,11 @@ fn is_lang_string_schema(value: &Value) -> bool {
         let mut rest = object.clone();
         let mut rest_properties = properties.clone();
         rest_properties.remove("@direction").as_ref() == Some(&Value::Bool(false)) && {
-            rest.insert("properties".to_owned(), Value::Object(rest_properties));
+            crate::json_model::insert_sorted(
+                &mut rest,
+                "properties".to_owned(),
+                Value::Object(rest_properties),
+            );
             is_any_language_object(&Value::Object(rest))
         }
     })
@@ -2870,8 +2818,8 @@ fn is_dir_lang_string_schema(value: &Value) -> bool {
                             .get("@direction")
                             .and_then(|schema| schema.get("enum"))
                             == Some(&Value::Array(vec![
-                                Value::String("ltr".to_owned()),
-                                Value::String("rtl".to_owned()),
+                                Value::String(RdfTextDirection::Ltr.as_str().to_owned()),
+                                Value::String(RdfTextDirection::Rtl.as_str().to_owned()),
                             ]))
                 })
             && is_exact_required(
@@ -2905,7 +2853,7 @@ fn is_any_language_object(value: &Value) -> bool {
 
 /// Whether `object` is a language-tagged literal object (any tag, or a
 /// `sh:languageIn` pattern).
-fn is_language_carrier(object: &Map<String, Value>) -> bool {
+fn is_language_carrier(object: &Object) -> bool {
     is_language_literal_schema(object) || is_any_language_object(&Value::Object(object.clone()))
 }
 
@@ -3039,13 +2987,13 @@ fn node_kind_union(branches: &[Value]) -> Option<Vec<NodeKindValue>> {
 fn json_any_of(branches: &[Value]) -> Value {
     let mut object = Map::new();
     object.insert("anyOf".to_owned(), Value::Array(branches.to_vec()));
-    Value::Object(object)
+    crate::json_model::object(object)
 }
 
 /// The `sh:hasValue` constants an array schema states: `contains: {const: v}`,
 /// or one such `contains` per term under `allOf`. `None` when the array states
 /// none that way.
-fn contained_constants(object: &Map<String, Value>) -> Option<Vec<Value>> {
+fn contained_constants(object: &Object) -> Option<Vec<Value>> {
     let constant = |contains: &Value| {
         contains
             .as_object()
@@ -3080,7 +3028,7 @@ fn with_has_values(items: &Value, has_values: &[Value]) -> Value {
     match has_values {
         [] => {}
         [only] => {
-            object.insert("const".to_owned(), only.clone());
+            crate::json_model::insert_sorted(object, "const".to_owned(), only.clone());
         }
         several => {
             let mut all = object
@@ -3091,9 +3039,9 @@ fn with_has_values(items: &Value, has_values: &[Value]) -> Value {
             all.extend(several.iter().map(|value| {
                 let mut constant = Map::new();
                 constant.insert("const".to_owned(), value.clone());
-                Value::Object(constant)
+                crate::json_model::object(constant)
             }));
-            object.insert("allOf".to_owned(), Value::Array(all));
+            crate::json_model::insert_sorted(object, "allOf".to_owned(), Value::Array(all));
         }
     }
     single
@@ -3102,7 +3050,7 @@ fn with_has_values(items: &Value, has_values: &[Value]) -> Value {
 /// The members schema `M` of the projection of a list,
 /// `{"type": "object", "properties": {"@list": M}, "required": ["@list"]}`,
 /// when `M` is an array schema.
-fn list_members(value: &Value) -> Option<&Map<String, Value>> {
+fn list_members(value: &Value) -> Option<&Object> {
     let object = value.as_object()?;
     if object.len() != 3
         || object.get("type").and_then(Value::as_str) != Some("object")
@@ -3186,7 +3134,7 @@ fn is_exact_required(value: Option<&Value>, expected: &[&str]) -> bool {
 }
 
 fn node_ref_class(
-    object: &Map<String, Value>,
+    object: &Object,
     namespaces: &Namespaces,
 ) -> Result<Option<NamedNode>, SchemaImportError> {
     let Some(comment) = object.get("$comment").and_then(Value::as_str) else {
@@ -3205,7 +3153,7 @@ fn node_ref_class(
 }
 
 fn type_discriminator_class(
-    object: &Map<String, Value>,
+    object: &Object,
     namespaces: &Namespaces,
 ) -> Result<Option<NamedNode>, SchemaImportError> {
     let required = object.get("required").and_then(Value::as_array);
@@ -3243,7 +3191,7 @@ fn type_discriminator_class(
     Ok(Some(NamedNode::new_unchecked(iri)))
 }
 
-fn is_language_literal_schema(object: &Map<String, Value>) -> bool {
+fn is_language_literal_schema(object: &Object) -> bool {
     let Some(properties) = object.get("properties").and_then(Value::as_object) else {
         return false;
     };
@@ -3264,7 +3212,7 @@ fn is_language_literal_schema(object: &Map<String, Value>) -> bool {
         && is_exact_required(object.get("required"), &["@value", "@language"])
 }
 
-fn language_tags(object: &Map<String, Value>) -> Option<Vec<String>> {
+fn language_tags(object: &Object) -> Option<Vec<String>> {
     let pattern = object
         .get("properties")?
         .get("@language")?
@@ -3314,9 +3262,9 @@ fn case_insensitive_tag(value: &str) -> Option<String> {
         } else {
             let escape = rest.strip_prefix("\\u{")?;
             let end = escape.find('}')?;
-            output.push(char::from_u32(
-                u32::from_str_radix(&escape[..end], 16).ok()?,
-            )?);
+            // ECMA-262 `\u{ CodePoint }`: one or more hex digits, no sign.
+            let code = purrdf_hash::hex::parse_u32(&escape.as_bytes()[..end])?;
+            output.push(char::from_u32(code)?);
             rest = &escape[end + 1..];
         }
     }
@@ -3338,12 +3286,14 @@ fn unescape_regex_literal(value: &str) -> Option<String> {
 
 /// A JSON number's lexical form as an RDF numeric literal.
 ///
-/// A non-integral number's own `Display` is `serde_json`'s shortest form, which switches
+/// A non-integral number's shortest round-trip spelling switches
 /// to an exponent (`2.2e-230`) outside `[1e-5, 1e16)`: not in the lexical space of
 /// `xsd:decimal`, the usual carrier. The binary64's `Display` writes the same shortest
 /// digits positionally, a lexical form every numeric datatype accepts.
 fn number_lexical(number: &Number) -> String {
-    match number.as_f64() {
+    // The binary64 read rounds once even on the x87.
+    let _binary64 = Binary64Scope::enter();
+    match number.as_finite_f64() {
         Some(value) if !(number.is_i64() || number.is_u64()) => value.to_string(),
         _ => number.to_string(),
     }
@@ -3494,13 +3444,16 @@ fn validate_json_keyword_value(
                 return invalid("an object of unique string arrays");
             };
             for (name, names) in entries {
-                validate_unique_string_array(names, &format!("{path}/{}", pointer_escape(name)))?;
+                validate_unique_string_array(
+                    names,
+                    &format!("{path}/{}", json_pointer::escape_token(name)),
+                )?;
             }
             Ok(())
         }
         "allOf" | "anyOf" | "oneOf" | "prefixItems" => validate_array(value, path, true, false),
         "multipleOf" => {
-            if value.as_f64().is_some_and(|number| number > 0.0) {
+            if value.as_finite_f64().is_some_and(|number| number > 0.0) {
                 Ok(())
             } else {
                 invalid("a positive JSON number")
@@ -3557,9 +3510,7 @@ fn validate_array(
     if require_unique {
         let mut seen = BTreeSet::new();
         for item in values {
-            let canonical = serde_json::to_string(item).map_err(|error| {
-                SchemaImportError::new(format!("{path} cannot be canonicalized: {error}"))
-            })?;
+            let canonical = crate::json_model::write_compact(item);
             if !seen.insert(canonical) {
                 return Err(SchemaImportError::new(format!(
                     "{path} must not contain duplicate values"
@@ -3591,9 +3542,38 @@ fn validate_unique_string_array(value: &Value, path: &str) -> Result<(), SchemaI
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::json_model::json;
+    use purrdf_xsd::datatype::XSD_NS as XSD;
 
-    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+    #[test]
+    fn a_signed_code_point_escape_is_refused() {
+        assert_eq!(case_insensitive_tag("\\u{+41}"), None);
+        assert_eq!(case_insensitive_tag("\\u{}"), None);
+    }
+
+    #[test]
+    fn an_unsigned_code_point_escape_still_decodes() {
+        assert_eq!(case_insensitive_tag("\\u{41}").as_deref(), Some("A"));
+        assert_eq!(case_insensitive_tag("\\u{0041}-1").as_deref(), Some("A-1"));
+    }
+
+    /// A repeated member name leaves which copy the schema meant unstated, so
+    /// the reader refuses it; the same schema with distinct names imports.
+    #[test]
+    fn a_repeated_member_name_is_refused_and_distinct_names_import() {
+        let schema = |second: &str| {
+            format!(
+                r#"{{"$schema":"https://json-schema.org/draft/2020-12/schema","$defs":{{"Probe":{{"type":"object","properties":{{"ex:a":{{"type":"string"}},"{second}":{{"type":"integer"}}}}}}}}}}"#
+            )
+        };
+        let error = import_json_schema(&schema("ex:a"), &config()).expect_err("repeated name");
+        assert!(
+            error.to_string().contains("repeats a member name"),
+            "{error}"
+        );
+        let imported = import_json_schema(&schema("ex:b"), &config()).expect("distinct names");
+        assert_eq!(imported.shapes.node_shapes[0].property_shapes.len(), 2);
+    }
 
     fn config() -> SchemaImportConfig {
         let namespaces = Namespaces::new(
@@ -3662,7 +3642,7 @@ mod tests {
             let data = crate::text_ingest::parse_turtle_to_dataset(
                 &format!(
                     "@prefix ex: <https://example.org/> . ex:probe a ex:Probe ; ex:code {} .",
-                    serde_json::to_string(input).expect("literal")
+                    crate::json_model::json_string(input)
                 ),
                 None,
             )

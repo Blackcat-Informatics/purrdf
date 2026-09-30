@@ -7,11 +7,10 @@
 //! so a protocol violation can be produced deliberately; the oracle recomputes
 //! the fused order from first principles and must agree with the engine.
 
+use purrdf_testkit::rng::xorshift64_next;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDomains, ClassWidth, Completeness, DecayRule, DomainTag,
@@ -27,6 +26,13 @@ use purrdf_sparql_eval::{
     RankedDeclaration, TermKind, TermPattern,
 };
 
+#[path = "support/streams.rs"]
+mod streams;
+
+use purrdf_retrieval::block_on;
+use purrdf_retrieval::fixture::iri;
+use streams::{profile, render, stratum, unique_items};
+
 const K: u32 = 60;
 
 /// The row bound these fixtures fuse under.
@@ -37,70 +43,14 @@ const K: u32 = 60;
 /// bound, the bound must not be what decides the answer.
 const TOP_K: TopK = TopK::new(1024);
 
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
-
-fn stratum(text: &str) -> Iri {
-    iri(&format!("http://example.org/stratum/{text}"))
-}
-
 fn plan_id(tag: &str) -> PlanId {
     PlanId::from_canonical(tag.as_bytes())
-}
-
-/// A fixture profile over the named strata.
-///
-/// There is no contribution-maximum argument to pass: the profile derives it
-/// from `weights`, because a candidate may surface at most once per stratum.
-fn profile(weights: &[(&str, Fixed)], k: u32) -> FusionProfile {
-    let map: BTreeMap<Iri, Fixed> = weights
-        .iter()
-        .map(|(name, weight)| (stratum(name), *weight))
-        .collect();
-    FusionProfile::with_decay(map, DecayRule::ReciprocalRank { k })
-        .expect("fixture profile is valid")
-}
-
-/// A minimal single-threaded executor. The mock streams never actually pend, so
-/// a waking no-op is sufficient; the real system is runtime-agnostic by design.
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
 }
 
 /// One scripted step of a mock producer.
 enum Step {
     Row(RankedRow<Term>),
     Fail(ProtocolError),
-}
-
-/// The contract most fixtures here declare: no repeated item. It is the honest
-/// declaration for a scripted stream of distinct items, and it is what
-/// `register_ranked`'s own fixtures elsewhere in the crate state. The contiguous,
-/// ascending ranks those scripts emit are not part of it -- that law holds for
-/// every stream and is checked rank by rank rather than declared.
-fn unique_items() -> StreamContract {
-    StreamContract::new(
-        DuplicatePolicy::Unique,
-        RankFidelity::EXACT,
-        CandidateDomains::Unrestricted,
-        ExclusionBasis::Unavailable,
-    )
 }
 
 /// A producer whose rows and failures are pre-scripted.
@@ -512,35 +462,6 @@ async fn golden_fusion() -> FusionResult<Term> {
         ),
     ];
     run_fuse(streams, &profile).await
-}
-
-/// Render a fusion result as deterministic text: rows by rank, then statuses by
-/// stratum, then the profile identity. Nothing here depends on a `HashMap`.
-fn render(result: &FusionResult<Term>) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::new();
-    for row in &result.rows {
-        let _ = writeln!(
-            out,
-            "row {} score={} witness={}",
-            row.entity.as_str(),
-            row.score.to_decimal_lexical(),
-            row.threshold_witness.to_decimal_lexical()
-        );
-        for (stratum, rank, score) in &row.contributions {
-            let _ = writeln!(
-                out,
-                "  {} rank={rank} score={}",
-                stratum.as_str(),
-                score.to_decimal_lexical()
-            );
-        }
-    }
-    for (stratum, status) in &result.trailer.statuses {
-        let _ = writeln!(out, "status {} {status:?}", stratum.as_str());
-    }
-    let _ = writeln!(out, "profile {}", result.trailer.profile_id.to_hex());
-    out
 }
 
 // 6. The engine agrees with a simple eager oracle over small streams.
@@ -5811,62 +5732,43 @@ fn block_items(prefix: &str, count: u64) -> Vec<String> {
         .collect()
 }
 
-/// **Case A**, the reported reproduction: two thousand-row strata whose
-/// candidate sets are disjoint, each declaring its own block.
-fn case_a() -> Vec<StratumSpec> {
+/// The disjoint two-stratum shape every lettered case shares: a `docs` and a
+/// `people` stratum at weight one, each declaring its own block, `docs` and
+/// `people` rows long.
+fn disjoint(docs: u64, people: u64) -> Vec<StratumSpec> {
     vec![
         StratumSpec {
             name: "docs",
             tags: vec![DOMAIN_DOCS],
             weight: Fixed::ONE,
-            items: block_items("doc", 1_000),
+            items: block_items("doc", docs),
         },
         StratumSpec {
             name: "people",
             tags: vec![DOMAIN_PEOPLE],
             weight: Fixed::ONE,
-            items: block_items("person", 1_000),
+            items: block_items("person", people),
         },
     ]
+}
+
+/// **Case A**, the reported reproduction: two thousand-row strata whose
+/// candidate sets are disjoint, each declaring its own block.
+fn case_a() -> Vec<StratumSpec> {
+    disjoint(1_000, 1_000)
 }
 
 /// **Case B**: the same disjoint shape, with both streams shorter than the
 /// caller's bound. Nothing here can end at a ceiling, because the rows run out
 /// first — the valid neighbour of case A's bounded stop.
 fn case_b() -> Vec<StratumSpec> {
-    vec![
-        StratumSpec {
-            name: "docs",
-            tags: vec![DOMAIN_DOCS],
-            weight: Fixed::ONE,
-            items: block_items("doc", 2),
-        },
-        StratumSpec {
-            name: "people",
-            tags: vec![DOMAIN_PEOPLE],
-            weight: Fixed::ONE,
-            items: block_items("person", 2),
-        },
-    ]
+    disjoint(2, 2)
 }
 
 /// **Case C**: one short stratum beside one long one. The short one exhausts
 /// and says so; the long one is stopped at a bound and says that.
 fn case_c() -> Vec<StratumSpec> {
-    vec![
-        StratumSpec {
-            name: "docs",
-            tags: vec![DOMAIN_DOCS],
-            weight: Fixed::ONE,
-            items: block_items("doc", 3),
-        },
-        StratumSpec {
-            name: "people",
-            tags: vec![DOMAIN_PEOPLE],
-            weight: Fixed::ONE,
-            items: block_items("person", 1_000),
-        },
-    ]
+    disjoint(3, 1_000)
 }
 
 /// **The cross-cutting configuration**: two disjoint strata and a third that
@@ -6390,20 +6292,6 @@ fn a_declaration_changes_the_reading_and_never_the_answer() {
     }
 }
 
-/// A deterministic stream of values, seeded once per configuration.
-///
-/// A named, fixed recurrence rather than a random-number generator: every
-/// configuration below is reproduced exactly by its index, so a failure names a
-/// case a reader can rebuild, and nothing in an assertion depends on a draw.
-fn seeded(state: &mut u64) -> u64 {
-    // A 64-bit xorshift. Its only property that matters here is that it is a
-    // pure function of its state, identical on every target.
-    *state ^= *state << 13;
-    *state ^= *state >> 7;
-    *state ^= *state << 17;
-    *state
-}
-
 /// Configuration `index` of the differential: three strata over a twelve-item
 /// universe partitioned into two blocks, with a cross-cutting third producer.
 ///
@@ -6413,11 +6301,11 @@ fn seeded(state: &mut u64) -> u64 {
 /// responsible for. A configuration that violated it would be testing the
 /// refusal, and the refusal is T6.5's subject.
 fn differential_spec(index: u64) -> Vec<StratumSpec> {
-    let mut state = index.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    let mut state = index.wrapping_mul(purrdf_hash::mix::GOLDEN_GAMMA) | 1;
     // Each item's block, drawn once and then respected by every producer.
     let blocks: Vec<&'static str> = (0..12)
         .map(|_: u64| {
-            if seeded(&mut state).is_multiple_of(2) {
+            if xorshift64_next(&mut state).is_multiple_of(2) {
                 DOMAIN_DOCS
             } else {
                 DOMAIN_PEOPLE
@@ -6445,13 +6333,13 @@ fn differential_spec(index: u64) -> Vec<StratumSpec> {
             .iter()
             .zip(&blocks)
             .filter(|(_, block)| allowed.contains(block))
-            .filter(|_| !seeded(state).is_multiple_of(3))
+            .filter(|_| !xorshift64_next(state).is_multiple_of(3))
             .map(|(item, _)| item.clone())
             .collect();
         // A deterministic rotation, so the strata disagree about the order of
         // the items they share — which is what makes the fusion do work.
         if !chosen.is_empty() {
-            let rotation = (seeded(state) % chosen.len() as u64) as usize;
+            let rotation = (xorshift64_next(state) % chosen.len() as u64) as usize;
             chosen.rotate_left(rotation);
         }
         chosen
@@ -6468,19 +6356,19 @@ fn differential_spec(index: u64) -> Vec<StratumSpec> {
         StratumSpec {
             name: "docs",
             tags: vec![DOMAIN_DOCS],
-            weight: weights[(seeded(&mut state) % 3) as usize],
+            weight: weights[(xorshift64_next(&mut state) % 3) as usize],
             items: docs_items,
         },
         StratumSpec {
             name: "people",
             tags: vec![DOMAIN_PEOPLE],
-            weight: weights[(seeded(&mut state) % 3) as usize],
+            weight: weights[(xorshift64_next(&mut state) % 3) as usize],
             items: people_items,
         },
         StratumSpec {
             name: "prior",
             tags: vec![DOMAIN_DOCS, DOMAIN_PEOPLE],
-            weight: weights[(seeded(&mut state) % 3) as usize],
+            weight: weights[(xorshift64_next(&mut state) % 3) as usize],
             items: prior_items,
         },
     ]
@@ -8339,12 +8227,7 @@ fn the_backward_pass_agrees_with_the_quadratic_definition() {
     // can overflow, so every case exercises the comparison rather than the
     // arithmetic's refusal.
     let mut state: u64 = 0x2545_f491_4f6c_dd1d;
-    let mut next = |bound: u64| {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        state % bound
-    };
+    let mut next = |bound: u64| xorshift64_next(&mut state) % bound;
 
     let mut saw_empty = 0_u32;
     let mut saw_partial = 0_u32;

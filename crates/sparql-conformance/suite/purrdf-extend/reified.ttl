@@ -5,7 +5,7 @@
 # `<< ex:alice ex:age 42 >>` is NOT asserted as a plain quad — it lives only in
 # the reifier side-table, named by the reifier `ex:r1`, which also carries one
 # annotation (`ex:certainty "high"`). This is the shape incumbent SPARQL engines
-# (rdflib, oxigraph) cannot query: there is no triple to match, only a reifier.
+# (e.g. rdflib) cannot query: there is no triple to match, only a reifier.
 @prefix ex:  <http://ex/> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .

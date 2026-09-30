@@ -153,7 +153,15 @@
 //! thread calls [`Selected::resolve`] and passes the same check.
 
 pub(crate) mod binary64;
+/// The build identity's text encoder. The crate's build script compiles this same
+/// file through `#[path]`, so each of its functions exists once in source and twice
+/// in the build: a build script cannot link the library it is building.
 mod build_identity;
+/// The thread's floating-point control register, read and written through one
+/// assembly wrapper each, for the float-environment tests of this crate and its
+/// dependants; not a stable interface.
+#[doc(hidden)]
+pub mod control;
 mod dispatch;
 mod env;
 mod exact;
@@ -349,6 +357,68 @@ impl fmt::Display for Path {
     }
 }
 
+/// Every dispatch path, in declaration order: the `distance` family of
+/// `PURRDF_REQUIRE_SIMD_PATHS`.
+const EVERY_PATH: [Path; 8] = [
+    Path::Portable,
+    Path::Avx2,
+    Path::Sse2,
+    Path::Avx2Fma,
+    Path::Avx512f,
+    Path::Neon,
+    Path::WasmSimd128,
+    Path::WasmScalar,
+];
+
+/// Whether this host is expected to run `path`: its architecture and build,
+/// and the processor features it advertises independently of the run-time
+/// detection the tests check.
+fn expected_here(path: Path) -> bool {
+    use purrdf_hash::dispatch::host_advertises;
+
+    let x86_64 = cfg!(target_arch = "x86_64");
+    match path {
+        Path::Portable => true,
+        Path::Sse2 => x86_64,
+        Path::Avx2 => x86_64 && host_advertises(&["avx2"]),
+        Path::Avx2Fma => x86_64 && host_advertises(&["avx2", "fma"]),
+        Path::Avx512f => x86_64 && host_advertises(&["avx512f", "avx2", "fma"]),
+        Path::Neon => cfg!(target_arch = "aarch64"),
+        Path::WasmSimd128 => cfg!(all(target_arch = "wasm32", target_feature = "simd128")),
+        Path::WasmScalar => cfg!(all(target_arch = "wasm32", not(target_feature = "simd128"))),
+    }
+}
+
+/// The dispatch paths [`purrdf_hash::dispatch::REQUIRE_SIMD_PATHS`] requires of
+/// the `distance` family, in declaration order, for the tests of every crate
+/// that runs the distance arithmetic (this one, the kNN relation and the HNSW
+/// index): none when it is unset; under `1`, every path this host is expected
+/// to run; otherwise the `distance:<path>` entries it names.
+///
+/// Not a stable interface: test-harness support, never reached by a
+/// distance computation.
+///
+/// # Panics
+///
+/// As [`purrdf_hash::dispatch::required_names`]: a misspelt requirement fails
+/// rather than requiring nothing.
+#[doc(hidden)]
+#[must_use]
+pub fn required_paths() -> Vec<Path> {
+    let by_name = |name: &str| {
+        EVERY_PATH
+            .into_iter()
+            .find(|path| path.name() == name)
+            .expect("a required name is a dispatch path")
+    };
+    purrdf_hash::dispatch::required_names("distance", &EVERY_PATH.map(Path::name), |name| {
+        expected_here(by_name(name))
+    })
+    .into_iter()
+    .map(by_name)
+    .collect()
+}
+
 /// Why this process cannot run a dispatch path an image recorded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -422,11 +492,9 @@ impl std::error::Error for RecordedPathError {
     }
 }
 
-impl From<FloatEnvironmentError> for RecordedPathError {
-    fn from(error: FloatEnvironmentError) -> Self {
-        Self::FloatEnvironment(error)
-    }
-}
+purrdf_lex::variant_from!(RecordedPathError {
+    FloatEnvironment(FloatEnvironmentError),
+});
 
 /// A flat, row-major matrix of stored vectors, with the per-row norms a cosine kernel
 /// divides by.
@@ -742,30 +810,24 @@ impl<A: Arithmetic> Resolved<A> {
     }
 
     /// The divergence evidence of this arithmetic along this path; see
-    /// [`Arithmetic::evidence`].
+    /// [`Selected::evidence`].
     #[must_use]
     pub fn evidence(self) -> Option<&'static str> {
-        A::evidence(self.path)
+        self.selected().evidence()
     }
 
     /// The code an image records for results computed by this handle; see
-    /// [`Arithmetic::image_code`].
+    /// [`Selected::image_code`].
     #[must_use]
     pub fn image_code(self) -> u32 {
-        A::image_code(self.path).unwrap_or_else(|| {
-            unreachable!(
-                "{} resolved to {}, which is not one of its paths",
-                A::ID,
-                self.path
-            )
-        })
+        self.selected().image_code()
     }
 
     /// The compile shape of this build's compilations of the arithmetic; see
-    /// [`Arithmetic::build_shape`].
+    /// [`Selected::build_shape`].
     #[must_use]
     pub fn build_shape(self) -> Option<BuildShape> {
-        A::build_shape()
+        self.selected().build_shape()
     }
 
     /// See [`Arithmetic::distances`].
@@ -943,11 +1005,17 @@ impl<A: Arithmetic> Eq for Selected<A> {}
 
 impl<A: Arithmetic> fmt::Debug for Selected<A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Selected")
-            .field("arithmetic", &A::ID)
-            .field("path", &self.path)
-            .finish()
+        debug_handle::<A>(f, "Selected", self.path)
     }
+}
+
+/// The `Debug` of a [`Selected`] or [`Resolved`] handle, named `name`: the
+/// arithmetic's id and the path, which is everything either handle carries.
+fn debug_handle<A: Arithmetic>(f: &mut fmt::Formatter<'_>, name: &str, path: Path) -> fmt::Result {
+    f.debug_struct(name)
+        .field("arithmetic", &A::ID)
+        .field("path", &path)
+        .finish()
 }
 
 impl<A: Arithmetic> PartialEq for Resolved<A> {
@@ -960,10 +1028,7 @@ impl<A: Arithmetic> Eq for Resolved<A> {}
 
 impl<A: Arithmetic> fmt::Debug for Resolved<A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Resolved")
-            .field("arithmetic", &A::ID)
-            .field("path", &self.path)
-            .finish()
+        debug_handle::<A>(f, "Resolved", self.path)
     }
 }
 

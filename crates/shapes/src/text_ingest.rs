@@ -27,17 +27,6 @@ use ::purrdf::RdfDataset;
 use ::purrdf::{ParseOptions, parse_dataset, parse_dataset_with};
 use purrdf_iri::terminals;
 
-/// Strip the leading and trailing runs of Turtle `WS` from `text`.
-///
-/// `WS ::= #x20 | #x9 | #xD | #xA` (RDF 1.2 Turtle §6.5; SPARQL 1.2 §19.8 names
-/// the same four code points), so this is deliberately NOT [`str::trim`], whose
-/// class is the Unicode `White_Space` property: U+00A0 NO-BREAK SPACE, U+000C FORM
-/// FEED, U+2001, U+2028 and U+3000 are `White_Space` and are not `WS`, and a chunk
-/// made of one is content for the codec to judge, not layout to discard.
-fn trim_ws(text: &str) -> &str {
-    text.trim_matches(terminals::is_ws_char)
-}
-
 /// Parse a Turtle document into a frozen [`RdfDataset`] via the native codecs,
 /// resolving relative IRI references against `base`.
 ///
@@ -190,7 +179,7 @@ fn turtle_statement_errors(ttl: &str, base: Option<&str>) -> Vec<String> {
     let mut state_base: Option<String> = base.map(str::to_owned);
     let mut errors: Vec<String> = Vec::new();
     for statement in split_turtle_statements(ttl) {
-        let trimmed = trim_ws(&statement);
+        let trimmed = terminals::trim_ws(&statement);
         if trimmed.is_empty() {
             continue;
         }
@@ -289,7 +278,7 @@ fn split_turtle_statements(ttl: &str) -> Vec<String> {
     // `WS`-exact (§6.5): a trailing chunk made only of U+00A0 is not blank Turtle,
     // so it is kept as a statement and offered to the codec rather than discarded
     // here as if it were layout.
-    if !trim_ws(&current).is_empty() {
+    if !terminals::trim_ws(&current).is_empty() {
         statements.push(current);
     }
     statements
@@ -310,7 +299,7 @@ fn split_turtle_statements(ttl: &str) -> Vec<String> {
 fn ntriples_line_errors(data_nt: &str) -> Vec<String> {
     let mut errors: Vec<String> = Vec::new();
     for line in data_nt.lines() {
-        let trimmed = trim_ws(line);
+        let trimmed = terminals::trim_ws(line);
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }

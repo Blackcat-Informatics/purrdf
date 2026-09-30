@@ -14,13 +14,6 @@ use std::borrow::Cow;
 
 use purrdf_text::{Analyzer, Token, unicode_versions};
 
-/// The token texts of `input`, in order.
-fn tokens(input: &str) -> Vec<String> {
-    let mut out: Vec<Token<'_>> = Vec::new();
-    Analyzer::new().analyze(input, &mut out);
-    out.into_iter().map(|t| t.text.into_owned()).collect()
-}
-
 /// The `(text, position)` pairs of `input`, in order.
 fn positioned(input: &str) -> Vec<(String, u32)> {
     let mut out: Vec<Token<'_>> = Vec::new();
@@ -45,9 +38,12 @@ fn nfkc_composed_and_decomposed_forms_fold_identically() {
         "the two spellings must differ as byte strings, or this proves nothing"
     );
 
-    assert_eq!(tokens(precomposed), vec!["café".to_owned()]);
-    assert_eq!(tokens(decomposed), vec!["café".to_owned()]);
-    assert_eq!(tokens(precomposed), tokens(decomposed));
+    assert_eq!(Analyzer::new().terms(precomposed), vec!["café".to_owned()]);
+    assert_eq!(Analyzer::new().terms(decomposed), vec!["café".to_owned()]);
+    assert_eq!(
+        Analyzer::new().terms(precomposed),
+        Analyzer::new().terms(decomposed)
+    );
 }
 
 /// The test that fails under `str::to_lowercase`, and the reason this crate
@@ -59,11 +55,14 @@ fn nfkc_composed_and_decomposed_forms_fold_identically() {
 /// spellings — and the uppercase spelling German itself uses — agree.
 #[test]
 fn full_case_fold_matches_sharp_s() {
-    assert_eq!(tokens("STRASSE"), vec!["strasse".to_owned()]);
-    assert_eq!(tokens("Straße"), vec!["strasse".to_owned()]);
-    assert_eq!(tokens("strasse"), vec!["strasse".to_owned()]);
+    assert_eq!(Analyzer::new().terms("STRASSE"), vec!["strasse".to_owned()]);
+    assert_eq!(Analyzer::new().terms("Straße"), vec!["strasse".to_owned()]);
+    assert_eq!(Analyzer::new().terms("strasse"), vec!["strasse".to_owned()]);
 
-    assert_eq!(tokens("STRASSE"), tokens("Straße"));
+    assert_eq!(
+        Analyzer::new().terms("STRASSE"),
+        Analyzer::new().terms("Straße")
+    );
     assert_ne!(
         "Straße".to_lowercase(),
         "STRASSE".to_lowercase(),
@@ -82,21 +81,27 @@ fn full_case_fold_matches_sharp_s() {
 /// document or a PDF.
 #[test]
 fn compatibility_fold_matches_fullwidth_and_ligatures() {
-    assert_eq!(tokens("ｒｕｓｔ"), vec!["rust".to_owned()]);
-    assert_eq!(tokens("ｒｕｓｔ"), tokens("rust"));
-    assert_eq!(tokens("ＲＵＳＴ"), tokens("rust"));
+    assert_eq!(Analyzer::new().terms("ｒｕｓｔ"), vec!["rust".to_owned()]);
+    assert_eq!(
+        Analyzer::new().terms("ｒｕｓｔ"),
+        Analyzer::new().terms("rust")
+    );
+    assert_eq!(
+        Analyzer::new().terms("ＲＵＳＴ"),
+        Analyzer::new().terms("rust")
+    );
 
     assert_eq!(
-        tokens("ﬁle ﬂow"),
+        Analyzer::new().terms("ﬁle ﬂow"),
         vec!["file".to_owned(), "flow".to_owned()]
     );
-    assert_eq!(tokens("ﬁ"), tokens("fi"));
+    assert_eq!(Analyzer::new().terms("ﬁ"), Analyzer::new().terms("fi"));
 
     // Compatibility folding also reaches the presentation forms of numbers:
     // a Roman numeral and a circled digit are spellings, not characters of
     // their own.
-    assert_eq!(tokens("Ⅻ"), vec!["xii".to_owned()]);
-    assert_eq!(tokens("①②③"), vec!["123".to_owned()]);
+    assert_eq!(Analyzer::new().terms("Ⅻ"), vec!["xii".to_owned()]);
+    assert_eq!(Analyzer::new().terms("①②③"), vec!["123".to_owned()]);
 }
 
 /// Greek writes its lowercase sigma two ways — `σ` mid-word and `ς` word-final
@@ -109,24 +114,30 @@ fn compatibility_fold_matches_fullwidth_and_ligatures() {
 /// cannot arrive unannounced.
 #[test]
 fn greek_final_sigma_folds_with_medial_sigma() {
-    assert_eq!(tokens("ΣΟΦΟΣ"), vec!["σοφοσ".to_owned()]);
-    assert_eq!(tokens("σοφος"), vec!["σοφοσ".to_owned()]);
+    assert_eq!(Analyzer::new().terms("ΣΟΦΟΣ"), vec!["σοφοσ".to_owned()]);
+    assert_eq!(Analyzer::new().terms("σοφος"), vec!["σοφοσ".to_owned()]);
     assert_eq!(
-        tokens("ΣΟΦΟΣ"),
-        tokens("σοφος"),
+        Analyzer::new().terms("ΣΟΦΟΣ"),
+        Analyzer::new().terms("σοφος"),
         "uppercase and lowercase spellings of the same word must agree"
     );
 
     // The same word spelled with the word-final sigma, which is the spelling
     // Greek actually uses, folds onto the medial letter as well.
     let with_final_sigma = "\u{03C3}\u{03BF}\u{03C6}\u{03BF}\u{03C2}";
-    assert_eq!(tokens(with_final_sigma), vec!["σοφοσ".to_owned()]);
-    assert_eq!(tokens(with_final_sigma), tokens("ΣΟΦΟΣ"));
+    assert_eq!(
+        Analyzer::new().terms(with_final_sigma),
+        vec!["σοφοσ".to_owned()]
+    );
+    assert_eq!(
+        Analyzer::new().terms(with_final_sigma),
+        Analyzer::new().terms("ΣΟΦΟΣ")
+    );
 
-    assert_eq!(tokens("σοφός"), vec!["σοφόσ".to_owned()]);
+    assert_eq!(Analyzer::new().terms("σοφός"), vec!["σοφόσ".to_owned()]);
     assert_ne!(
-        tokens("σοφός"),
-        tokens("σοφος"),
+        Analyzer::new().terms("σοφός"),
+        Analyzer::new().terms("σοφος"),
         "case folding must not strip accents"
     );
 }
@@ -140,9 +151,9 @@ fn greek_final_sigma_folds_with_medial_sigma() {
 /// does not.
 #[test]
 fn uax29_word_boundaries_over_apostrophes_and_numerals() {
-    assert_eq!(tokens("don't"), vec!["don't".to_owned()]);
+    assert_eq!(Analyzer::new().terms("don't"), vec!["don't".to_owned()]);
     assert_eq!(
-        tokens("shelf's don't O'Brien"),
+        Analyzer::new().terms("shelf's don't O'Brien"),
         vec![
             "shelf's".to_owned(),
             "don't".to_owned(),
@@ -150,18 +161,18 @@ fn uax29_word_boundaries_over_apostrophes_and_numerals() {
         ]
     );
 
-    assert_eq!(tokens("3.14"), vec!["3.14".to_owned()]);
+    assert_eq!(Analyzer::new().terms("3.14"), vec!["3.14".to_owned()]);
     assert_eq!(
-        tokens("3.14 and 2,718"),
+        Analyzer::new().terms("3.14 and 2,718"),
         vec!["3.14".to_owned(), "and".to_owned(), "2,718".to_owned()]
     );
     assert_eq!(
-        tokens("1st 42 007"),
+        Analyzer::new().terms("1st 42 007"),
         vec!["1st".to_owned(), "42".to_owned(), "007".to_owned()]
     );
 
     assert_eq!(
-        tokens("state-of-the-art"),
+        Analyzer::new().terms("state-of-the-art"),
         vec![
             "state".to_owned(),
             "of".to_owned(),
@@ -181,7 +192,7 @@ fn uax29_word_boundaries_over_apostrophes_and_numerals() {
 fn cjk_tokenization_matches_the_documented_model() {
     // Six adjacent ideographs become five overlapping bigrams.
     assert_eq!(
-        tokens("中文全文検索"),
+        Analyzer::new().terms("中文全文検索"),
         vec![
             "中文".to_owned(),
             "文全".to_owned(),
@@ -193,20 +204,26 @@ fn cjk_tokenization_matches_the_documented_model() {
 
     // A phrase query is expressible: the needle's bigram is one of the
     // document's.
-    assert_eq!(tokens("全文"), vec!["全文".to_owned()]);
+    assert_eq!(Analyzer::new().terms("全文"), vec!["全文".to_owned()]);
 
     // A lone ideograph has no bigram to form and survives whole.
-    assert_eq!(tokens("中"), vec!["中".to_owned()]);
+    assert_eq!(Analyzer::new().terms("中"), vec!["中".to_owned()]);
 
     // A space ends a run, so two separated ideographs are two whole tokens and
     // NOT the bigram the unspaced spelling produces.
-    assert_eq!(tokens("中 文"), vec!["中".to_owned(), "文".to_owned()]);
-    assert_ne!(tokens("中 文"), tokens("中文"));
+    assert_eq!(
+        Analyzer::new().terms("中 文"),
+        vec!["中".to_owned(), "文".to_owned()]
+    );
+    assert_ne!(
+        Analyzer::new().terms("中 文"),
+        Analyzer::new().terms("中文")
+    );
 
     // A Latin word ends a run in both directions, and is itself untouched by
     // bigram expansion.
     assert_eq!(
-        tokens("中文rust混合"),
+        Analyzer::new().terms("中文rust混合"),
         vec!["中文".to_owned(), "rust".to_owned(), "混合".to_owned()]
     );
 
@@ -214,7 +231,7 @@ fn cjk_tokenization_matches_the_documented_model() {
     // arrives as a whole run, but both are CJK and adjacent, so the whole
     // sentence is one run and bigrams cross the script change.
     assert_eq!(
-        tokens("私はサンドイッチを食べます"),
+        Analyzer::new().terms("私はサンドイッチを食べます"),
         vec![
             "私は".to_owned(),
             "はサ".to_owned(),
@@ -234,7 +251,7 @@ fn cjk_tokenization_matches_the_documented_model() {
     // Korean is written with spaces, so each space-delimited word is its own
     // run and is bigrammed within itself.
     assert_eq!(
-        tokens("한국어 전문 검색"),
+        Analyzer::new().terms("한국어 전문 검색"),
         vec![
             "한국".to_owned(),
             "국어".to_owned(),
@@ -313,7 +330,7 @@ fn positions_are_consecutive_and_zero_based() {
 fn an_empty_or_punctuation_only_input_yields_no_tokens() {
     for input in ["", " ", "   ", "\t\n", "!!! ... ???", "—— :: ;;", "()[]{}"] {
         assert_eq!(
-            tokens(input),
+            Analyzer::new().terms(input),
             Vec::<String>::new(),
             "{input:?} must produce no tokens"
         );
@@ -324,8 +341,8 @@ fn an_empty_or_punctuation_only_input_yields_no_tokens() {
 ///
 /// Tokenization is a function of the Unicode tables it is generated from —
 /// case folding, normalization, word-break properties and the alphanumeric
-/// predicate — all generated in this crate from the one vendored Unicode
-/// Character Database. A regenerated table can therefore change what a literal
+/// predicate — all generated in this crate from the vendored Unicode Character
+/// Database in `crates/iri/unicode/`. A regenerated table can therefore change what a literal
 /// tokenizes to, which changes the term dictionary, which changes which
 /// documents a query retrieves. Nothing about that failure announces itself:
 /// the engine still returns rows, just not the same rows, and a ranking that
@@ -392,7 +409,11 @@ fn golden_token_vectors_pin_the_unicode_tables() {
 
     for (input, expected) in golden {
         let expected: Vec<String> = expected.iter().map(|s| (*s).to_owned()).collect();
-        assert_eq!(tokens(input), expected, "golden vector moved for {input:?}");
+        assert_eq!(
+            Analyzer::new().terms(input),
+            expected,
+            "golden vector moved for {input:?}"
+        );
     }
 }
 

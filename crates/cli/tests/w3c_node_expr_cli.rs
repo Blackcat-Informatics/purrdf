@@ -5,7 +5,7 @@
 //! binary — the production entry point, not the library harness's internals.
 //!
 //! Discovery is the library harness's own corpus reader
-//! (`crates/shapes/tests/shacl_corpora`, included here by path), with its drift guards:
+//! (`purrdf_shapes::shacl_corpora`, shared with the library harness), with its drift guards:
 //! the discovered total and per-type counts are asserted before anything runs. Grading is
 //! its own `sht:EvalNodeExpr` grader (`shacl_corpora::node_expr_grading`): exact RDF 1.2
 //! term equality, in order unless `sht:ignoreOrder true`, with the one table of entries
@@ -21,8 +21,7 @@
 //! evaluated from the harness's absent focus node, a blank node the test graph is proved
 //! never to mention.
 
-#[path = "../../shapes/tests/shacl_corpora/mod.rs"]
-mod shacl_corpora;
+use purrdf_shapes::shacl_corpora;
 
 use std::process::Command;
 

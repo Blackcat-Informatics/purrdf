@@ -6,6 +6,8 @@
 //! `xsd:string`'s value space is its lexical space, so it has no dedicated parser
 //! (the [`crate::parse`] entry maps it straight to [`crate::XsdValue::String`]).
 
+use purrdf_lex::scan::in_runs;
+
 use crate::datatype::XsdDatatype;
 use crate::value::XsdError;
 
@@ -14,11 +16,11 @@ pub fn parse_boolean(s: &str) -> Result<bool, XsdError> {
     match s {
         "true" | "1" => Ok(true),
         "false" | "0" => Ok(false),
-        _ => Err(XsdError::InvalidLexical {
-            datatype: XsdDatatype::Boolean,
-            lexical: s.to_string(),
-            reason: "expected one of: true, false, 1, 0",
-        }),
+        _ => Err(XsdError::invalid(
+            XsdDatatype::Boolean,
+            s,
+            "expected one of: true, false, 1, 0",
+        )),
     }
 }
 
@@ -107,22 +109,6 @@ const CHUNK: usize = 16;
 const REPLACED_RUNS: [(u8, u8); 2] = [(b'\t', b'\n'), (b'\r', b'\r')];
 /// The byte the `collapse` facet additionally folds, `#x20`, as a byte run.
 const SPACE_RUNS: [(u8, u8); 1] = [(b' ', b' ')];
-
-/// Whether `b` falls in one of `runs`: one wrapping subtraction and one unsigned
-/// comparison per run, OR-ed with no early exit.
-#[allow(
-    clippy::inline_always,
-    reason = "the lane helpers must be inlined into the chunk loop so the class's runs fold \
-              in as constants and the lane compares vectorize"
-)]
-#[inline(always)]
-fn in_runs(b: u8, runs: &[(u8, u8)]) -> bool {
-    let mut hit = false;
-    for &(lo, hi) in runs {
-        hit |= b.wrapping_sub(lo) <= hi - lo;
-    }
-    hit
-}
 
 /// The lanes of one chunk for one class: lane `i` is `0xFF` iff `chunk[i]` is in
 /// `runs`, else `0x00`.
@@ -230,6 +216,7 @@ fn is_collapsed(bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_testkit::rng::SplitMix64;
 
     /// The pre-byte-scan per-char `replace` facet, kept as the oracle.
     fn replace_char_reference(s: &str) -> String {
@@ -299,16 +286,6 @@ mod tests {
         out
     }
 
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        fn below(&mut self, n: usize) -> usize {
-            let z = purrdf_testkit::rng::splitmix64_next(&mut self.0);
-            usize::try_from(z % 1_000_003).expect("small") % n
-        }
-    }
-
     /// Every byte on either side of the facet's classes (`#x9-#xA`, `#xD`,
     /// `#x20`), and non-ASCII scalars of every UTF-8 length including the Unicode
     /// whitespace the facet must leave alone.
@@ -337,16 +314,16 @@ mod tests {
     /// Fixed-seed random values at lengths 0..=70 and beyond, mostly clean so the
     /// precheck's clean path, and hits at every chunk offset, are both reached.
     fn facet_corpus() -> Vec<String> {
-        let mut rng = SplitMix(0x05DF_ACE7_5EED);
+        let mut rng = SplitMix64::new(0x05DF_ACE7_5EED);
         let mut out = Vec::new();
         for len in (0..=70).chain([127, 128, 129, 1000]) {
             for density in [0, 1, 4] {
                 for _ in 0..12 {
                     let value: String = (0..len)
                         .map(|_| {
-                            if density != 0 && rng.below(16) < density {
-                                FACET_SCALARS[rng.below(FACET_SCALARS.len())]
-                            } else if rng.below(6) == 0 {
+                            if density != 0 && rng.below_usize(16) < density {
+                                FACET_SCALARS[rng.below_usize(FACET_SCALARS.len())]
+                            } else if rng.below_usize(6) == 0 {
                                 // Single spaces keep collapse's clean path reachable.
                                 ' '
                             } else {

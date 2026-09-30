@@ -36,6 +36,9 @@
 //!
 //! Fixture IRIs are `example.org`; PurRDF mints none.
 
+#[path = "support/relation.rs"]
+mod relation;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
@@ -103,13 +106,6 @@ fn node(dataset: &RdfDataset, kind: &str, verdict: &str) -> TermId {
         .collect();
     assert_eq!(objects.len(), 1, "{kind}-{verdict}: one marked node");
     objects[0]
-}
-
-/// The dataset's own id for a term the validation or the relation handed back.
-fn id_in(dataset: &RdfDataset, value: &TermValue, what: &str) -> TermId {
-    dataset
-        .term_id_by_value(value)
-        .unwrap_or_else(|| panic!("{what} {value:?} is a node the dataset holds"))
 }
 
 /// Approves exactly the terms it was built with, by identity.
@@ -239,7 +235,7 @@ fn check(body: &str, reports: Reports, modes: &[&str]) {
         .results
         .iter()
         .map(|result| {
-            id_in(
+            relation::id_in(
                 &dataset,
                 &result.focus_node.to_term_value(),
                 "the focus node",
@@ -263,7 +259,7 @@ fn check(body: &str, reports: Reports, modes: &[&str]) {
             .as_ref()
             .unwrap_or_else(|| panic!("{context}: every invocation is bound — {seen:?}"));
         *bound
-            .entry(id_in(&dataset, subject, "a bound subject"))
+            .entry(relation::id_in(&dataset, subject, "a bound subject"))
             .or_default() += 1;
     }
     let per_node = bound

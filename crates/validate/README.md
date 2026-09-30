@@ -19,20 +19,21 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 `purrdf-validate` is the **SARIF 2.1.0 reporting boundary** of the PurRDF
 toolkit. The PurRDF kernel stays *structured but SARIF-free*: parse failures are
 `RdfDiagnostic`s and SHACL results are `ValidationReport`s, and neither knows
-anything about SARIF or serde. This crate is where that structured data crosses
+anything about SARIF. This crate is where that structured data crosses
 into a **source-traced, byte-deterministic SARIF 2.1.0 log** for editors, CI,
 and code-scanning dashboards.
 
 What lives here, and why here:
 
-- A hand-rolled SARIF serde model — no heavyweight SARIF dependency.
+- A hand-rolled SARIF object model written through `purrdf_lex::json` — no
+  heavyweight SARIF dependency.
 - The mappings from PurRDF severities, rules, and source locations to SARIF
   `level` / `ruleId` / `physicalLocation` / `logicalLocation`.
 - The resolution of runtime-only provenance ids to public IRIs at the
   serialization boundary — numeric ids never enter the emitted JSON.
 
 Hosting the writer in this leaf keeps the kernel ring-fence intact:
-`purrdf-core` and `purrdf-shapes` never gain a SARIF or serde-derive concern.
+`purrdf-core` and `purrdf-shapes` never gain a SARIF concern.
 Like every PurRDF release crate, it is pure library code with no ambient I/O
 and builds cleanly for `wasm32-unknown-unknown`.
 

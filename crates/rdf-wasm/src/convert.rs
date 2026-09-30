@@ -9,41 +9,91 @@
 //! value, with literals canonicalized exactly as the interner canonicalizes them, so a
 //! JS-built quad and an engine-stored quad resolve to the same term ids.
 
-use std::convert::Infallible;
-
 use purrdf::ir::QuadValues;
-use purrdf::{BlankScope, RdfLiteral, RdfTerm, RdfTriple, TermBox, TermValue};
+use purrdf::{BlankScope, RdfTerm, TermBox, TermValue};
 
-use crate::term::{Quad, Term, TermInner, canonicalize_literal};
+use crate::term::{Quad, Term, TermInner};
 
-/// Lower an owned [`RdfTerm`] to its dataset-independent [`TermValue`]. Owned terms
-/// have no blank-node scope, so blanks take the default scope (matching the engine's
-/// `intern_owned_term`).
+/// How a blank node's scope crosses to JS: a declared option of the conversion, set on
+/// the engine as `QueryEngine#blankScope` (`"keep"` or `"merge"`).
 ///
-/// A triple term is lowered bottom-up over [`RdfTerm::try_fold`]'s work list.
-pub(crate) fn rdf_term_to_term_value(term: &RdfTerm) -> TermValue {
-    let lowered = term.try_fold(
+/// The engine holds a blank node as a `(label, scope)` pair, so two nodes that share a
+/// label in different scopes are two nodes. JS has one string for a blank node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum BlankScopeMode {
+    /// The default. A scoped blank crosses as its deterministic scope envelope, so two
+    /// blank nodes that share a label in different scopes stay two nodes in JS, and an
+    /// unscoped blank keeps its bare label.
+    #[default]
+    Keep,
+    /// The scope is dropped: a blank crosses as its bare label, so two blank nodes that
+    /// share a label in different scopes are ONE node in JS. Lossy by declaration, for a
+    /// caller that wants the labels the data was written with.
+    Merge,
+}
+
+impl BlankScopeMode {
+    /// The option's spelling for `"keep"`.
+    pub(crate) const KEEP: &'static str = "keep";
+    /// The option's spelling for `"merge"`.
+    pub(crate) const MERGE: &'static str = "merge";
+
+    /// The mode a JS option value names, or the refusal that lists the accepted values.
+    pub(crate) fn parse(name: &str) -> Result<Self, String> {
+        match name {
+            Self::KEEP => Ok(Self::Keep),
+            Self::MERGE => Ok(Self::Merge),
+            other => Err(format!(
+                "unknown blankScope {other:?} (expected \"{}\" or \"{}\")",
+                Self::KEEP,
+                Self::MERGE
+            )),
+        }
+    }
+
+    /// The option's spelling of this mode.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Keep => Self::KEEP,
+            Self::Merge => Self::MERGE,
+        }
+    }
+}
+
+/// Lift a dataset-independent [`TermValue`] into an owned [`RdfTerm`] by moving
+/// every string and nested value: [`TermValue::into_rdf_term`]. Query-result egress
+/// uses this path so one cell is not cloned while crossing the wasm boundary. Under
+/// [`BlankScopeMode::Keep`] a scoped blank node crosses as its deterministic scope
+/// envelope, so two blank nodes that share a label in different scopes stay two nodes
+/// in JS; under [`BlankScopeMode::Merge`] every blank crosses as its bare label.
+///
+/// Out of line, so the per-cell marshalling is one compiled function rather than a
+/// fragment of the SELECT row loop.
+#[inline(never)]
+pub(crate) fn term_value_into_rdf_term(
+    value: TermValue,
+    mode: BlankScopeMode,
+) -> Result<RdfTerm, String> {
+    let value = match mode {
+        BlankScopeMode::Keep => value,
+        BlankScopeMode::Merge => merge_blank_scopes(value),
+    };
+    value.into_rdf_term().map_err(|error| error.to_string())
+}
+
+/// `value` with every blank node, at any depth of a triple term, moved to the default
+/// scope. Folded over the term's own work list, so a deep triple term costs no stack.
+fn merge_blank_scopes(value: TermValue) -> TermValue {
+    match value.try_fold_owned::<TermValue, std::convert::Infallible>(
         |leaf| {
-            Ok::<_, Infallible>(match leaf {
-                RdfTerm::Iri(iri) => TermValue::Iri(iri.clone()),
-                RdfTerm::BlankNode(label) => TermValue::Blank {
-                    label: label.clone(),
+            Ok(match leaf {
+                TermValue::Blank { label, .. } => TermValue::Blank {
+                    label,
                     scope: BlankScope::DEFAULT,
                 },
-                RdfTerm::Literal(lit) => {
-                    let canonical = canonicalize_literal(lit.clone());
-                    TermValue::Literal {
-                        lexical_form: canonical.lexical_form,
-                        // canonicalize_literal always sets a datatype.
-                        datatype: canonical.datatype.unwrap_or_default(),
-                        language: canonical.language,
-                        direction: canonical.direction,
-                    }
-                }
-                RdfTerm::Triple(_) => unreachable!("a triple term is folded from its parts"),
+                other => other,
             })
         },
-        |predicate| Ok(TermValue::Iri(predicate.to_owned())),
         |s, p, o| {
             Ok(TermValue::Triple {
                 s: TermBox::new(s),
@@ -51,78 +101,23 @@ pub(crate) fn rdf_term_to_term_value(term: &RdfTerm) -> TermValue {
                 o: TermBox::new(o),
             })
         },
-    );
-    match lowered {
-        Ok(value) => value,
+    ) {
+        Ok(merged) => merged,
     }
-}
-
-/// The owned [`RdfTerm`] of a term value that is not a triple term.
-fn leaf_rdf_term(value: TermValue) -> RdfTerm {
-    match value {
-        TermValue::Iri(iri) => RdfTerm::Iri(iri),
-        TermValue::Blank { label, .. } => RdfTerm::BlankNode(label),
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => RdfTerm::Literal(RdfLiteral {
-            lexical_form,
-            datatype: Some(datatype),
-            language,
-            direction,
-        }),
-        TermValue::Triple { .. } => unreachable!("a triple term is folded from its parts"),
-    }
-}
-
-/// Assemble an owned triple term, refusing a predicate that is not an IRI.
-fn triple_rdf_term(
-    subject: RdfTerm,
-    predicate: RdfTerm,
-    object: RdfTerm,
-) -> Result<RdfTerm, String> {
-    let RdfTerm::Iri(predicate) = predicate else {
-        return Err("a triple-term predicate must be an IRI".to_owned());
-    };
-    Ok(RdfTerm::Triple(Box::new(RdfTriple::new(
-        subject, predicate, object,
-    ))))
-}
-
-/// Lift a dataset-independent [`TermValue`] back to an owned [`RdfTerm`].
-///
-/// A triple term is lifted bottom-up over [`TermValue::try_fold`]'s work list.
-pub(crate) fn term_value_to_rdf_term(value: &TermValue) -> Result<RdfTerm, String> {
-    value.try_fold(|leaf| Ok(leaf_rdf_term(leaf.clone())), triple_rdf_term)
-}
-
-/// Lift a dataset-independent [`TermValue`] into an owned [`RdfTerm`] by moving
-/// every string and nested value. Query-result egress uses this path so one cell
-/// is not cloned while crossing the wasm boundary.
-///
-/// A triple term is lifted bottom-up over [`TermValue::try_fold_owned`]'s work list.
-///
-/// Out of line, so the per-cell marshalling is one compiled function rather than a
-/// fragment of the SELECT row loop.
-#[inline(never)]
-pub(crate) fn term_value_into_rdf_term(value: TermValue) -> Result<RdfTerm, String> {
-    value.try_fold_owned(|leaf| Ok(leaf_rdf_term(leaf)), triple_rdf_term)
 }
 
 /// Lower a JS [`Quad`] to the engine's [`QuadValues`] insert/query key.
 pub(crate) fn quad_to_quad_values(quad: &Quad) -> Result<QuadValues, String> {
-    let s = rdf_term_to_term_value(&quad.subject.to_rdf_term()?);
+    let s = TermValue::from_rdf_term(&quad.subject.to_rdf_term()?);
     let p = match &quad.predicate.inner {
         TermInner::Named(iri) => TermValue::Iri(iri.clone()),
         _ => return Err("a quad predicate must be a NamedNode".to_owned()),
     };
-    let o = rdf_term_to_term_value(&quad.object.to_rdf_term()?);
+    let o = TermValue::from_rdf_term(&quad.object.to_rdf_term()?);
     let g = match &quad.graph.inner {
         TermInner::DefaultGraph => None,
         TermInner::Named(_) | TermInner::Blank(_) => {
-            Some(rdf_term_to_term_value(&quad.graph.to_rdf_term()?))
+            Some(TermValue::from_rdf_term(&quad.graph.to_rdf_term()?))
         }
         _ => return Err("a quad graph must be a NamedNode, BlankNode, or DefaultGraph".to_owned()),
     };
@@ -131,15 +126,15 @@ pub(crate) fn quad_to_quad_values(quad: &Quad) -> Result<QuadValues, String> {
 
 /// Lift an engine [`QuadValues`] back to a JS [`Quad`].
 pub(crate) fn quad_values_to_quad(values: &QuadValues) -> Result<Quad, String> {
-    let subject = Term::from_rdf_term(&term_value_to_rdf_term(&values.s)?);
+    let subject = Term::from_rdf_term(&values.s.to_rdf_term().map_err(|e| e.to_string())?);
     let predicate = match &values.p {
         TermValue::Iri(iri) => Term::from_inner(TermInner::Named(iri.clone())),
         _ => return Err("a quad predicate must be an IRI".to_owned()),
     };
-    let object = Term::from_rdf_term(&term_value_to_rdf_term(&values.o)?);
+    let object = Term::from_rdf_term(&values.o.to_rdf_term().map_err(|e| e.to_string())?);
     let graph = match &values.g {
         None => Term::from_inner(TermInner::DefaultGraph),
-        Some(g) => Term::from_rdf_term(&term_value_to_rdf_term(g)?),
+        Some(g) => Term::from_rdf_term(&g.to_rdf_term().map_err(|e| e.to_string())?),
     };
     Ok(Quad::from_parts(subject, predicate, object, graph))
 }
@@ -147,6 +142,7 @@ pub(crate) fn quad_values_to_quad(values: &QuadValues) -> Result<Quad, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf::RdfLiteral;
 
     fn named(iri: &str) -> Term {
         Term::from_inner(TermInner::Named(iri.to_owned()))
@@ -219,130 +215,131 @@ mod tests {
             }),
         };
         assert_eq!(
-            term_value_into_rdf_term(value.clone()).expect("owned conversion"),
-            term_value_to_rdf_term(&value).expect("borrowed conversion")
+            term_value_into_rdf_term(value.clone(), BlankScopeMode::Keep)
+                .expect("owned conversion"),
+            value.to_rdf_term().expect("borrowed conversion")
         );
     }
-}
 
-#[cfg(test)]
-mod term_walk_tests {
-    //! The owned-model conversions against their recursive references, and the lowering
-    //! at a hundred thousand levels on a 128 KiB thread.
-
-    use purrdf::{BlankScope, RdfLiteral, RdfTerm, RdfTriple, TermBox, TermValue};
-
-    use super::{rdf_term_to_term_value, term_value_into_rdf_term, term_value_to_rdf_term};
-    use crate::term::canonicalize_literal;
-
-    fn reference_lower(term: &RdfTerm) -> TermValue {
-        match term {
-            RdfTerm::Triple(triple) => TermValue::Triple {
-                s: TermBox::new(reference_lower(&triple.subject)),
-                p: TermBox::new(TermValue::Iri(triple.predicate.clone())),
-                o: TermBox::new(reference_lower(&triple.object)),
-            },
-            RdfTerm::BlankNode(label) => TermValue::Blank {
-                label: label.clone(),
-                scope: BlankScope::DEFAULT,
-            },
-            RdfTerm::Literal(lit) => {
-                let canonical = canonicalize_literal(lit.clone());
-                TermValue::Literal {
-                    lexical_form: canonical.lexical_form,
-                    datatype: canonical.datatype.unwrap_or_default(),
-                    language: canonical.language,
-                    direction: canonical.direction,
-                }
-            }
-            RdfTerm::Iri(iri) => TermValue::Iri(iri.clone()),
+    fn scoped_blank(label: &str, scope: BlankScope) -> TermValue {
+        TermValue::Blank {
+            label: label.to_owned(),
+            scope,
         }
     }
 
-    fn reference_lift(value: &TermValue) -> Result<RdfTerm, String> {
-        Ok(match value {
-            TermValue::Triple { s, p, o } => {
-                let TermValue::Iri(predicate) = p.as_ref() else {
-                    return Err("a triple-term predicate must be an IRI".to_owned());
-                };
-                RdfTerm::Triple(Box::new(RdfTriple::new(
-                    reference_lift(s)?,
-                    predicate.clone(),
-                    reference_lift(o)?,
-                )))
-            }
-            TermValue::Iri(iri) => RdfTerm::Iri(iri.clone()),
-            TermValue::Blank { label, .. } => RdfTerm::BlankNode(label.clone()),
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                direction,
-            } => RdfTerm::Literal(RdfLiteral {
-                lexical_form: lexical_form.clone(),
-                datatype: Some(datatype.clone()),
-                language: language.clone(),
-                direction: *direction,
-            }),
-        })
+    /// A quad whose subject and object are two blank nodes: the values as the engine
+    /// holds them, and the JS quad they cross the boundary as.
+    fn blank_pair_quad(subject: TermValue, object: TermValue) -> (QuadValues, Quad) {
+        let values = QuadValues {
+            s: subject,
+            p: TermValue::iri("https://e/p"),
+            o: object,
+            g: None,
+        };
+        let quad = quad_values_to_quad(&values).expect("blank nodes cross the boundary");
+        (values, quad)
     }
 
-    /// Every generated term lowers and lifts — by reference and by value — exactly as the
-    /// recursive references do, a non-IRI predicate's refusal included.
     #[test]
-    fn the_conversions_agree_with_their_recursive_references_on_generated_terms() {
-        let mut refused = 0;
-        for seed in 0..400_u64 {
-            let mut state = seed;
-            let mut budget = 8;
-            let value = crate::test_terms::term_value(
-                &mut state,
-                &mut budget,
-                crate::test_terms::TermShape::Any,
-            );
-            let lifted = term_value_to_rdf_term(&value);
-            assert_eq!(lifted, reference_lift(&value), "seed {seed}");
-            assert_eq!(term_value_into_rdf_term(value), lifted, "seed {seed}");
-            match lifted {
-                Ok(term) => assert_eq!(
-                    rdf_term_to_term_value(&term),
-                    reference_lower(&term),
-                    "seed {seed}"
-                ),
-                Err(_) => refused += 1,
-            }
+    fn two_scoped_blanks_sharing_a_label_stay_distinct_in_js() {
+        let (values, quad) = blank_pair_quad(
+            scoped_blank("b", BlankScope(1)),
+            scoped_blank("b", BlankScope(2)),
+        );
+        assert_eq!(quad.subject().term_type(), "BlankNode");
+        assert_eq!(quad.object().term_type(), "BlankNode");
+        assert_ne!(
+            quad.subject().value(),
+            quad.object().value(),
+            "two scopes collapsed into one JS blank node"
+        );
+        assert!(!quad.subject().equals(&quad.object()));
+        // The label is deterministic: the same pair crosses as the same label.
+        let (_, again) = blank_pair_quad(
+            scoped_blank("b", BlankScope(1)),
+            scoped_blank("b", BlankScope(2)),
+        );
+        assert_eq!(quad.subject().value(), again.subject().value());
+        assert_eq!(quad.object().value(), again.object().value());
+        // And the round trip restores both `(label, scope)` pairs.
+        assert_eq!(quad_to_quad_values(&quad).expect("the quad lowers"), values);
+    }
+
+    #[test]
+    fn a_scoped_blank_is_distinct_from_the_unscoped_blank_of_its_label() {
+        let (values, quad) = blank_pair_quad(
+            scoped_blank("b", BlankScope::DEFAULT),
+            scoped_blank("b", BlankScope(1)),
+        );
+        assert_ne!(quad.subject().value(), quad.object().value());
+        assert_eq!(quad_to_quad_values(&quad).expect("the quad lowers"), values);
+    }
+
+    #[test]
+    fn an_unscoped_blank_keeps_its_label_in_js() {
+        let (values, quad) = blank_pair_quad(
+            scoped_blank("b0", BlankScope::DEFAULT),
+            scoped_blank("a.b", BlankScope::DEFAULT),
+        );
+        assert_eq!(quad.subject().value(), "b0");
+        assert_eq!(quad.object().value(), "a.b");
+        assert_eq!(quad_to_quad_values(&quad).expect("the quad lowers"), values);
+    }
+
+    #[test]
+    fn the_blank_scope_option_names_exactly_keep_and_merge() {
+        assert_eq!(BlankScopeMode::default(), BlankScopeMode::Keep);
+        assert_eq!(BlankScopeMode::parse("keep"), Ok(BlankScopeMode::Keep));
+        assert_eq!(BlankScopeMode::parse("merge"), Ok(BlankScopeMode::Merge));
+        for mode in [BlankScopeMode::Keep, BlankScopeMode::Merge] {
+            assert_eq!(BlankScopeMode::parse(mode.name()), Ok(mode));
         }
-        assert!(refused > 0, "some generated term has a non-IRI predicate");
+        let refused = BlankScopeMode::parse("Merge").expect_err("the names are case-sensitive");
+        assert!(refused.contains("\"keep\" or \"merge\""), "{refused}");
     }
 
-    /// An owned triple term a hundred thousand levels deep is lowered on a thread whose
-    /// whole stack is 128 KiB.
     #[test]
-    fn a_hundred_thousand_level_term_is_lowered_on_a_128_kib_thread() {
-        const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut term = RdfTerm::iri("http://example.org/o");
-                for _ in 0..LEVELS {
-                    term = RdfTerm::triple(RdfTriple::new(
-                        RdfTerm::iri("http://example.org/s"),
-                        "http://example.org/p",
-                        term,
-                    ));
-                }
-                assert_eq!(
-                    rdf_term_to_term_value(&term),
-                    crate::test_terms::triple_chain(LEVELS)
-                );
-                // The owned model's derived drop descends once per level, so the chain
-                // is taken apart one level at a time.
-                while let RdfTerm::Triple(triple) = term {
-                    term = triple.object;
-                }
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the lowering did not overflow the thread's stack");
+    fn merge_drops_scope_where_keep_holds_two_nodes_on_the_rust_side() {
+        let first = scoped_blank("b", BlankScope(1));
+        let second = scoped_blank("b", BlankScope(2));
+        // The Rust side: two nodes, and under `keep` two distinct JS labels.
+        assert_ne!(first, second);
+        let keep = |v: &TermValue| {
+            term_value_into_rdf_term(v.clone(), BlankScopeMode::Keep).expect("converts")
+        };
+        assert_ne!(keep(&first), keep(&second));
+        // The declared lossy side: both cross as the bare label, and are one JS node.
+        let merge = |v: &TermValue| {
+            term_value_into_rdf_term(v.clone(), BlankScopeMode::Merge).expect("converts")
+        };
+        assert_eq!(merge(&first), RdfTerm::BlankNode("b".to_owned()));
+        assert_eq!(merge(&first), merge(&second));
+        // An unscoped blank is unchanged by either mode.
+        let plain = scoped_blank("b", BlankScope::DEFAULT);
+        assert_eq!(keep(&plain), merge(&plain));
+        // A neighbour that is not a blank is unchanged too.
+        let iri = TermValue::iri("https://e/s");
+        assert_eq!(keep(&iri), merge(&iri));
+    }
+
+    #[test]
+    fn merge_reaches_a_blank_inside_a_triple_term() {
+        let triple = |object: TermValue| TermValue::Triple {
+            s: TermBox::new(TermValue::iri("https://e/s")),
+            p: TermBox::new(TermValue::iri("https://e/p")),
+            o: TermBox::new(object),
+        };
+        let one = triple(scoped_blank("b", BlankScope(1)));
+        let two = triple(scoped_blank("b", BlankScope(2)));
+        let convert = |v: &TermValue, mode| term_value_into_rdf_term(v.clone(), mode).expect("ok");
+        assert_ne!(
+            convert(&one, BlankScopeMode::Keep),
+            convert(&two, BlankScopeMode::Keep)
+        );
+        assert_eq!(
+            convert(&one, BlankScopeMode::Merge),
+            convert(&two, BlankScopeMode::Merge)
+        );
     }
 }

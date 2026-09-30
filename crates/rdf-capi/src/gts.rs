@@ -4,7 +4,7 @@
 //! `purrdf_from_gts` / `purrdf_to_gts`: lossless GTS container read/write.
 //!
 //! libpurrdf statically reuses the permissive `purrdf-gts` Rust crate (via the
-//! oxigraph-free `gts_write` / `import_gts_events` core), so a language shim
+//! `gts_write` / `import_gts_events` core), so a language shim
 //! links `libpurrdf` ALONE and still reads/writes `.gts` containers — the spec's
 //! "one shared library, not two" clause.
 //!
@@ -24,6 +24,7 @@ use crate::buffer::PurrdfBuffer;
 use crate::cstr_to_str;
 use crate::error::PurrdfError;
 use crate::handles::PurrdfDataset;
+use crate::handles::into_handle;
 use crate::status::PurrdfStatus;
 
 /// Read a GTS container into a fresh frozen dataset. `*out_dataset` is a
@@ -62,7 +63,7 @@ pub unsafe extern "C" fn purrdf_from_gts(
             let bundle = import_gts_graph(graph).map_err(|diagnostic| {
                 PurrdfError::from_diagnostic(PurrdfStatus::GtsError, &diagnostic)
             })?;
-            *out_dataset = PurrdfDataset::into_raw(bundle.dataset);
+            *out_dataset = into_handle(PurrdfDataset(bundle.dataset));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -99,7 +100,7 @@ pub unsafe extern "C" fn purrdf_to_gts(
             .map_err(|diagnostic| {
                 PurrdfError::from_diagnostic(PurrdfStatus::GtsError, &diagnostic)
             })?;
-            *out_buffer = PurrdfBuffer::into_raw(bytes);
+            *out_buffer = into_handle(PurrdfBuffer(bytes));
             Ok(PurrdfStatus::Ok)
         })
     }

@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Oxigraph-free RDF query surface for the slice emitters and linters.
+//! Native RDF query surface for the slice emitters and linters.
 //!
-//! The slice crate used to parse Turtle/N-Triples into an `oxigraph::store::Store`
-//! and pattern-match it. Every store/term type is now native: parsing folds the
+//! Every store/term type is native: parsing folds the
 //! RDF 1.2 statement layer into the frozen [`purrdf::RdfDataset`] IR via the
 //! native codecs ([`purrdf::parse_dataset`]), pattern queries route through the
 //! IR's [`purrdf::DatasetView::quads_for_pattern`] (an indexed lookup), and the
@@ -24,26 +23,20 @@
 use std::path::Path;
 
 use purrdf::{
-    DatasetView, GraphMatch, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm,
+    DatasetView, GraphMatch, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, RdfQuad,
     RdfTextDirection, TermId, TermRef, TermValue, parse_dataset,
 };
 
 use crate::error::SliceError;
 
-/// The `rdf:reifies` predicate IRI — re-materialized when flattening the RDF 1.2
-/// statement overlay back to plain quads for canonicalization.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
-
 // ── Native NamedNode ───────────────────────────────────────────────────────────
 
-/// An absolute IRI in term position — the oxigraph-free replacement for
-/// `oxigraph::model::NamedNode` across the slice crate.
+/// An absolute IRI in term position across the slice crate.
 ///
 /// `new` validates the IRI through the native `purrdf-iri` parser (via the
-/// `purrdf-sparql-algebra` validator, the same RFC-3987 check oxigraph applied), so
+/// `purrdf-sparql-algebra` RFC-3987 validator), so
 /// the `Ok`/`Err` discrimination at the slice's IRI-construction sites is preserved.
-/// `Ord`/`Hash` are lexical on the IRI string, matching oxigraph's `NamedNode`
-/// ordering (it orders by the IRI string), so every `BTreeMap`/`BTreeSet` keyed on a
+/// `Ord`/`Hash` are lexical on the IRI string, so every `BTreeMap`/`BTreeSet` keyed on a
 /// `NamedNode` keeps the same iteration order.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NamedNode {
@@ -52,7 +45,7 @@ pub struct NamedNode {
 
 impl NamedNode {
     /// Validate and wrap an absolute IRI, returning `Err` on a malformed or relative
-    /// IRI (term-position IRIs must be absolute) — mirrors `oxigraph::model::NamedNode::new`.
+    /// IRI (term-position IRIs must be absolute).
     pub fn new(iri: impl Into<String>) -> Result<Self, SliceError> {
         let iri = iri.into();
         purrdf_sparql_algebra::NamedNode::new(iri.clone())
@@ -80,9 +73,9 @@ impl core::fmt::Debug for NamedNode {
 // ── Native object value model ───────────────────────────────────────────────────
 
 /// The kinds of RDF subject a quad can carry (named node, blank node, OR a quoted
-/// triple term in subject position, RDF 1.2), surfaced from the native IR. Mirrors
-/// the `oxigraph::model::NamedOrBlankNode` discrimination the slice linters relied
-/// on, extended with the RDF 1.2 triple-term arm.
+/// triple term in subject position, RDF 1.2), surfaced from the native IR — the
+/// named/blank discrimination the slice linters rely on, plus the RDF 1.2
+/// triple-term arm.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Subject {
     /// An IRI subject.
@@ -93,8 +86,7 @@ pub enum Subject {
     Triple(Box<TripleTerm>),
 }
 
-/// An RDF object term, surfaced from the native IR as an owned value — the
-/// oxigraph-free replacement for `oxigraph::model::Term` in object position.
+/// An RDF object term, surfaced from the native IR as an owned value, in object position.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Object {
     /// An IRI object.
@@ -104,7 +96,7 @@ pub enum Object {
     /// A literal, carried at full fidelity: its lexical form, its datatype IRI, an
     /// optional language tag, and an optional RDF 1.2 base direction.
     Literal {
-        /// The lexical form (the `.value()` of the old oxigraph literal).
+        /// The lexical form.
         value: String,
         /// The datatype IRI (e.g. `…#string`, `…#integer`).
         datatype: String,
@@ -136,7 +128,7 @@ pub struct TripleTerm {
 }
 
 impl Object {
-    /// The IRI, if this object is a named node (`oxigraph` `Term::NamedNode` arm).
+    /// The IRI, if this object is a named node.
     pub fn as_named(&self) -> Option<&str> {
         match self {
             Self::Named(iri) => Some(iri.as_str()),
@@ -400,7 +392,7 @@ impl Dataset {
         let base = crate::retrieval::retrieval_base_iri(path)?;
         Self::parse(
             bytes,
-            media_type_for_path(path),
+            rdf_media_type_for_path(path),
             Some(base.as_str()),
             &path.display().to_string(),
         )
@@ -427,13 +419,13 @@ impl Dataset {
             .subject_terms_of_type(type_iri)
     }
 
-    /// All object terms of `<subject> <pred> ?o` in the default graph, where the
+    /// The distinct object terms of `<subject> <pred> ?o` in the default graph, where the
     /// subject is named.
     pub fn objects(&self, subject_iri: &str, pred: &str) -> Result<Vec<Object>, SliceError> {
         self.graph(GraphSel::Default).objects(subject_iri, pred)
     }
 
-    /// All object terms of `<subject> <pred> ?o` in the default graph (subject may be
+    /// The distinct object terms of `<subject> <pred> ?o` in the default graph (subject may be
     /// a blank node).
     pub fn objects_of_subject(
         &self,
@@ -539,38 +531,19 @@ impl Dataset {
     /// The canonical N-Quads document (full W3C RDFC-1.0) of this dataset's quads,
     /// **flattened** — the RDF 1.2 statement overlay (reifier bindings + annotations)
     /// is re-materialized back into plain `rdf:reifies` / annotation triples BEFORE
-    /// canonicalizing, with no overlay re-fold. This is byte-identical to the prior
-    /// `purrdf::canonical_nquads` over a flat oxigraph quad set: both canonicalize
+    /// canonicalizing, with no overlay re-fold. This is byte-identical to
+    /// `purrdf::canonical_nquads` over the flat quad set: both canonicalize
     /// the same flat triple set, so the semantic digest is preserved (the native
     /// folded `canonicalize` would instead emit reserved overlay sentinels).
     pub fn canonical_nquads_flat(&self) -> Result<String, SliceError> {
         let mut builder = RdfDatasetBuilder::new();
-        for quad in self.flat_quads() {
+        for quad in purrdf::flat_rdf_quads(&self.ds) {
             builder.push_owned_quad(&quad);
         }
         let frozen = builder
             .freeze()
             .map_err(|e| SliceError::Parse(format!("flatten for canonicalization: {e}")))?;
         Ok(purrdf::canonicalize(&frozen).nquads)
-    }
-
-    /// Flatten the dataset to the source-faithful plain-quad stream: base quads, then
-    /// the re-materialized `rdf:reifies` reifier rows, then the annotation rows. The
-    /// oxigraph-free twin of `purrdf::oxigraph::flat_rdf_quads_from_dataset`.
-    fn flat_quads(&self) -> Vec<RdfQuad> {
-        let mut quads: Vec<RdfQuad> = self.ds.owned_quads().collect();
-        for reifier in self.ds.owned_reifiers() {
-            let statement = RdfTerm::triple(reifier.statement);
-            quads.push(RdfQuad::new(reifier.reifier, RDF_REIFIES, statement));
-        }
-        for annotation in self.ds.owned_annotations() {
-            quads.push(RdfQuad::new(
-                annotation.reifier,
-                annotation.predicate,
-                annotation.object,
-            ));
-        }
-        quads
     }
 
     /// Build a frozen [`RdfDataset`] from a flat owned-quad set (`push_owned_quad`,
@@ -664,14 +637,15 @@ impl GraphView<'_> {
         Ok(out)
     }
 
-    /// All object terms of `<subject> <pred> ?o` in this graph, where the subject is
+    /// The distinct object terms of `<subject> <pred> ?o` in this graph, where the subject is
     /// named.
     pub fn objects(&self, subject_iri: &str, pred: &str) -> Result<Vec<Object>, SliceError> {
         self.objects_of_subject(&Subject::Named(subject_iri.to_owned()), pred)
     }
 
-    /// All object terms of `<subject> <pred> ?o` in this graph (subject may be a
-    /// blank node).
+    /// The distinct object terms of `<subject> <pred> ?o` in this graph (subject may
+    /// be a blank node), in [`DatasetView::objects`] order: a statement asserted in
+    /// several graphs of an `Any` view is one object.
     pub fn objects_of_subject(
         &self,
         subject: &Subject,
@@ -684,11 +658,12 @@ impl GraphView<'_> {
         ) else {
             return Ok(Vec::new());
         };
-        let mut out = Vec::new();
-        for q in self.ds.quads_for_pattern(Some(s), Some(p), None, graph) {
-            out.push(object_of(self.ds, q.o));
-        }
-        Ok(out)
+        Ok(self
+            .ds
+            .objects(s, p, graph)
+            .into_iter()
+            .map(|o| object_of(self.ds, o))
+            .collect())
     }
 
     /// The first object of `<subject> <pred> ?o` in this graph, or `None`.
@@ -907,7 +882,7 @@ impl DatasetAccumulator {
         let base = crate::retrieval::retrieval_base_iri(path)?;
         self.add(
             bytes,
-            media_type_for_path(path),
+            rdf_media_type_for_path(path),
             Some(base.as_str()),
             &path.display().to_string(),
         )
@@ -939,32 +914,90 @@ impl DatasetAccumulator {
     }
 }
 
-impl Default for DatasetAccumulator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(DatasetAccumulator);
 
 // ── Media-type routing ──────────────────────────────────────────────────────────
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
 /// Map a file extension to the native RDF media type, defaulting to Turtle.
 ///
-/// Mirrors the historical extension routing (`.nt` → N-Triples, `.nq` → N-Quads,
-/// `.trig` → TriG, everything else Turtle).
-pub(crate) fn media_type_for_path(path: &Path) -> &'static str {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("nt") => NativeRdfFormat::NTriples.media_type(),
-        Some("nq") => NativeRdfFormat::NQuads.media_type(),
-        Some("trig") => NativeRdfFormat::TriG.media_type(),
-        _ => NativeRdfFormat::Turtle.media_type(),
-    }
+/// The extension table is `purrdf_gts::files::media_type_for_path`; this keeps
+/// its answer where it names a native RDF syntax (`.nt` → N-Triples, `.nq` →
+/// N-Quads, `.trig` → TriG) and routes everything else to Turtle.
+pub(crate) fn rdf_media_type_for_path(path: &Path) -> &'static str {
+    purrdf_gts::files::media_type_for_path_among(
+        path,
+        &[
+            NativeRdfFormat::NTriples.media_type(),
+            NativeRdfFormat::NQuads.media_type(),
+            NativeRdfFormat::TriG.media_type(),
+        ],
+        NativeRdfFormat::Turtle.media_type(),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const REIFIES: &str = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies>";
+
+    fn flat_lines(trig: &str) -> Vec<String> {
+        let ds = Dataset::parse(trig.as_bytes(), "application/trig", None, "test").unwrap();
+        let mut lines: Vec<String> = ds
+            .canonical_nquads_flat()
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        lines.sort();
+        lines
+    }
+
+    #[test]
+    fn a_graph_scoped_reifier_and_its_annotation_keep_their_graph_when_flattened() {
+        let lines = flat_lines(
+            "@prefix ex: <https://example.org/> .\n\
+             GRAPH ex:g { ex:s ex:p ex:o ~ ex:r {| ex:source ex:w |} . }\n",
+        );
+        let (s, p, o) = (
+            "<https://example.org/s>",
+            "<https://example.org/p>",
+            "<https://example.org/o>",
+        );
+        let (r, g) = ("<https://example.org/r>", "<https://example.org/g>");
+        assert_eq!(
+            lines,
+            vec![
+                format!("{r} {REIFIES} <<( {s} {p} {o} )>> {g} ."),
+                format!("{r} <https://example.org/source> <https://example.org/w> {g} ."),
+                format!("{s} {p} {o} {g} ."),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_default_graph_reifier_flattens_into_the_default_graph() {
+        let lines = flat_lines(
+            "@prefix ex: <https://example.org/> .\n\
+             ex:s ex:p ex:o ~ ex:r {| ex:source ex:w |} .\n",
+        );
+        let (s, p, o) = (
+            "<https://example.org/s>",
+            "<https://example.org/p>",
+            "<https://example.org/o>",
+        );
+        let r = "<https://example.org/r>";
+        assert_eq!(
+            lines,
+            vec![
+                format!("{r} {REIFIES} <<( {s} {p} {o} )>> ."),
+                format!("{r} <https://example.org/source> <https://example.org/w> ."),
+                format!("{s} {p} {o} ."),
+            ]
+        );
+    }
 
     #[test]
     fn named_node_validates_and_orders_lexically() {
@@ -1599,10 +1632,11 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = purrdf_core::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::WellFormed,
+                purrdf_core::term_fixture::TermShape::WellFormed,
             );
             nested += usize::from(budget < 7);
             let mut builder = RdfDatasetBuilder::new();

@@ -131,6 +131,8 @@
 //! [`QueryGovernors::METERED`]: purrdf_sparql_eval::QueryGovernors::METERED
 //! [`QueryExplanation::ledger`]: purrdf_sparql_eval::QueryExplanation::ledger
 
+use purrdf::viz::stable_hash_hex;
+use purrdf_gts::files::media_type_for_path;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -149,6 +151,8 @@ use purrdf_sparql_eval::{
     PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors,
     QueryOptions, RemoteError, StopSignal, Volatility, WallDeadline,
 };
+use purrdf_testkit::golden::regenerating;
+use purrdf_testkit::paths::workspace_root;
 
 /// The dimensions a case may set a ceiling on, in the order every pinned consumption
 /// record lists them.
@@ -196,12 +200,11 @@ const PARALLEL_FORK_MIN_ROWS: usize = 1024;
 // Corpus locations
 // ---------------------------------------------------------------------------
 
-fn corpus_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors/sparql-governors")
-}
+/// The switch that rewrites the corpus's expectations instead of comparing them.
+const UPDATE_ENV: &str = "PURRDF_UPDATE_GOVERNOR_CORPUS";
 
-fn updating() -> bool {
-    std::env::var_os("PURRDF_UPDATE_GOVERNOR_CORPUS").is_some()
+fn corpus_root() -> PathBuf {
+    workspace_root().join("vectors/sparql-governors")
 }
 
 // ---------------------------------------------------------------------------
@@ -956,7 +959,7 @@ impl CustomAggregate for CorpusSumAggregate {
 /// per-observation construction: a governed run must never carry state left over from a
 /// previous one.
 fn registered_custom_aggregate() -> AggregateRegistry {
-    let mut registry = AggregateRegistry::new();
+    let mut registry = AggregateRegistry::default();
     registry.register(AGGREGATE_IRI, Arc::new(CorpusSumAggregate));
     registry
 }
@@ -965,21 +968,10 @@ fn registered_custom_aggregate() -> AggregateRegistry {
 // Running a case
 // ---------------------------------------------------------------------------
 
-/// The media type a case's data extension selects. Driven off the extension rather than
-/// recorded in the manifest, so a fixture cannot be listed under a syntax it is not
-/// written in.
-fn media_type_for(path: &Path) -> &'static str {
-    match path.extension().and_then(|extension| extension.to_str()) {
-        Some("ttl") => "text/turtle",
-        Some("trig") => "application/trig",
-        other => panic!("unhandled corpus data extension {other:?} for {path:?}"),
-    }
-}
-
 fn load_dataset(case: &Case) -> Arc<RdfDataset> {
     let path = corpus_root().join(&case.data);
     let bytes = std::fs::read(&path).unwrap_or_else(|error| panic!("read {path:?}: {error}"));
-    purrdf::parse_dataset(&bytes, media_type_for(&path), None)
+    purrdf::parse_dataset(&bytes, media_type_for_path(&path), None)
         .unwrap_or_else(|error| panic!("{} data must parse: {error}", case.name))
 }
 
@@ -1879,7 +1871,7 @@ fn the_corpus_matches_its_pinned_expectations() {
     let specs = load_transport();
     let relations = load_relations();
 
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         regenerate(&cases, &specs, &relations);
         return;
     }
@@ -1987,7 +1979,7 @@ fn the_corpus_matches_its_pinned_expectations() {
 /// cannot leave a stale boundary sitting in the manifest looking authoritative.
 #[test]
 fn every_boundary_is_derived_from_a_metered_run() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2108,7 +2100,7 @@ fn every_boundary_is_derived_from_a_metered_run() {
 /// A count alone would pass on fifteen cases that all governed fuel.
 #[test]
 fn every_governor_carries_a_zero_a_boundary_and_an_over_bound_case() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2175,7 +2167,7 @@ fn every_governor_carries_a_zero_a_boundary_and_an_over_bound_case() {
 /// layer.
 #[test]
 fn the_rdf12_statement_layer_is_governed() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2235,7 +2227,7 @@ fn the_rdf12_statement_layer_is_governed() {
 /// flight, and reaches an outcome indistinguishable from an honouring transport's.
 #[test]
 fn a_transport_that_ignores_the_stop_signal_is_bounded_per_request() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2317,7 +2309,7 @@ fn a_transport_that_ignores_the_stop_signal_is_bounded_per_request() {
 /// that makes the query bounded" means, stated as evidence instead of as prose.
 #[test]
 fn a_relation_that_ignores_the_stop_signal_is_bounded_per_invocation() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2444,7 +2436,7 @@ fn pinned_row_count(case: &Case) -> usize {
 /// thing this test exists to rule out.
 #[test]
 fn the_two_property_function_charge_points_are_banded_separately() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2547,7 +2539,7 @@ fn the_two_property_function_charge_points_are_banded_separately() {
 /// ever reached.
 #[test]
 fn the_two_aggregate_charge_points_are_banded_separately() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2666,7 +2658,7 @@ fn the_two_aggregate_charge_points_are_banded_separately() {
 /// only the custom path's cost cannot hide behind a green in-crate unit test alone.
 #[test]
 fn a_custom_aggregate_costs_the_same_fuel_as_a_built_in_over_the_same_group_shape() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2705,7 +2697,7 @@ fn a_custom_aggregate_costs_the_same_fuel_as_a_built_in_over_the_same_group_shap
 /// the host that happened to build it.
 #[test]
 fn the_custom_aggregate_scratch_bytes_band_exercises_the_folds_retained_state() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2738,7 +2730,7 @@ fn the_custom_aggregate_scratch_bytes_band_exercises_the_folds_retained_state() 
 /// threshold makes this test fail loudly instead of leaving the lane silently inert.
 #[test]
 fn the_parallel_drive_is_actually_above_the_fork_threshold() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2776,7 +2768,7 @@ fn the_parallel_drive_is_actually_above_the_fork_threshold() {
 /// fold charged the same items in the same order.
 #[test]
 fn the_parallel_drive_spends_what_the_sequential_measurement_spent() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2827,7 +2819,7 @@ fn the_parallel_drive_spends_what_the_sequential_measurement_spent() {
 /// exactly one admitted row.
 #[test]
 fn a_fuel_ceiling_between_an_invocation_and_its_first_row_truncates_deterministically() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2898,7 +2890,7 @@ fn a_fuel_ceiling_between_an_invocation_and_its_first_row_truncates_deterministi
 /// to reach the same trip point — on any worker count, in any completion order.
 #[test]
 fn the_corpus_is_reproducible_within_a_run() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2952,16 +2944,6 @@ fn fuel_sweep_points(total: u64) -> Vec<u64> {
     points.insert(total - 1);
     points.insert(total);
     points.into_iter().collect()
-}
-
-/// FNV-1a, 64-bit: a fixed, dependency-free digest for a sweep point's rows.
-fn fnv1a(text: &str) -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in text.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{hash:016x}")
 }
 
 /// The per-node ledger of `case`'s metered explanation, wired to the same seam
@@ -3070,7 +3052,7 @@ fn render_sweep_point(observation: &Observation, fuel: u64) -> String {
         out,
         "{} rows={rows} quads={quads} digest={} | {} | posts={} invocations={} pulls={}",
         observation.outcome,
-        fnv1a(answer_rows(&answer)),
+        stable_hash_hex(answer_rows(&answer)),
         observation
             .spend
             .trim_end()
@@ -3183,7 +3165,7 @@ fn fuel_sweep_trace() -> String {
 /// --ignored regenerate_fuel_sweep_trace`.
 #[test]
 fn the_fuel_sweep_over_the_corpus_matches_its_trace() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let actual = fuel_sweep_trace();

@@ -29,29 +29,55 @@
 //! * [`jsonschema_metaschemas`] — the published JSON Schema meta-schemas as
 //!   test data, for every test and example that registers them with
 //!   `purrdf-jsonschema` (which carries none).
+//! * [`mod@bench`] — the micro-benchmark harness for `harness = false` bench
+//!   targets: warm-up, flat sampling, the median with its MAD and a seeded
+//!   bootstrap interval, throughput, saved baselines compared with a
+//!   bootstrapped change, and a fixed-schema JSON estimates file per
+//!   benchmark, written with [`bench_group!`] and [`bench_main!`]. The same
+//!   targets run on `wasm32-unknown-unknown` under the test runner.
 //! * [`rng`] — the one deterministic SplitMix64 / xoshiro256** stream every
-//!   crate's fixed-seed tests draw from, including [`prop`] itself.
+//!   crate's fixed-seed tests draw from, including [`prop`] itself, and the
+//!   xorshift64 and 64-bit LCG recurrences pinned test fixtures are built on.
+//! * [`paths`] — the workspace root, resolved from the `[workspace]` manifest
+//!   rather than by counting `..`, and the Rust sources under a directory.
+//! * [`scalars`] — boundary sweeps of a scanner over Unicode scalars: the
+//!   corpus read off a membership predicate, the shared `IRIREF` content
+//!   oracle, and the three-valued check of where a token stops.
+//! * [`text`] — generated parser input (a construct nested to any depth) and a
+//!   child process's output read as UTF-8.
+//! * [`ucd`] — readers for the Unicode Character Database's text files: a
+//!   hexadecimal code point field, a code point sequence, and `UnicodeData.txt`
+//!   with its ranges expanded.
 //!
-//! The crate depends on no `purrdf-*` crate, and must not: every crate in the
-//! workspace may take it as a dev-dependency, so a first-party edge from here
-//! would close a cycle through that crate's tests. It is never published and
-//! appears only in `[dev-dependencies]`.
+//! Its one first-party dependency is `purrdf-hash`, the zero-dependency root,
+//! whose own tests and benches do not use this crate; `layers.toml` allows no
+//! other. Every crate in the workspace may take this one as a dev-dependency,
+//! so any further first-party edge from here would close a cycle through that
+//! crate's tests. It is never published and appears only in
+//! `[dev-dependencies]` and in unpublished crates: `purrdf-hash-conformance`,
+//! the home of the root's suites; `purrdf-sparql-conformance`, whose manifest
+//! reader resolves the workspace root; and `helper-census`, which scans it.
 
 // The wasm32 host's imports are `#[wasm_bindgen]` declarations, whose
 // expansion is `unsafe`; `host` is the one module allowed it, and only there.
 #![cfg_attr(not(target_arch = "wasm32"), forbid(unsafe_code))]
 #![cfg_attr(target_arch = "wasm32", deny(unsafe_code))]
 
+pub mod bench;
 pub mod golden;
 pub mod harness;
 #[cfg(target_arch = "wasm32")]
 #[allow(unsafe_code, reason = "the expansion of `#[wasm_bindgen]` imports")]
 mod host;
 pub mod jsonschema_metaschemas;
+pub mod paths;
 pub mod prop;
 pub mod rng;
+pub mod scalars;
 #[cfg(not(target_arch = "wasm32"))]
 mod temp;
+pub mod text;
+pub mod ucd;
 pub mod vectors;
 
 #[cfg(not(target_arch = "wasm32"))]

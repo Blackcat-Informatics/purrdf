@@ -878,7 +878,7 @@ fn parse_coord(cursor: &mut Cursor<'_>, dim: CoordDim) -> Result<Coord, GeoError
         return Err(GeoError::literal(format!(
             "a {} position has {} ordinates, but another number follows the last one at byte {}; \
              the dimension is written once in the tag and governs every position",
-            dim_label(dim),
+            dim.name(),
             dim.ordinates(),
             cursor.pos
         )));
@@ -895,19 +895,9 @@ fn read_ordinate(cursor: &mut Cursor<'_>, dim: CoordDim, index: usize) -> Result
             "{} — this is ordinate {index} of the {} a {} position carries",
             err.detail(),
             dim.ordinates(),
-            dim_label(dim)
+            dim.name()
         ))
     })
-}
-
-/// The dimension's name as diagnostics spell it.
-const fn dim_label(dim: CoordDim) -> &'static str {
-    match dim {
-        CoordDim::Xy => "XY",
-        CoordDim::Xyz => "XYZ",
-        CoordDim::Xym => "XYM",
-        CoordDim::Xyzm => "XYZM",
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1984,28 +1974,24 @@ mod tests {
         let wrappers = 99_999usize;
         let text = nested(wrappers, "POINT(1 2)");
         assert_eq!(text.len(), wrappers * 20 + 10);
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(move || {
-                let parsed = good(&text);
-                assert_eq!(parsed.geometry().coord_count(), 1);
-                assert!(!parsed.geometry().is_empty());
-                let rendered = write_bare(parsed.geometry(), SCALE);
-                assert!(
-                    rendered == text,
-                    "the geometry must render back exactly as written"
-                );
-                let again = good(&rendered);
-                assert!(
-                    again.geometry() == parsed.geometry(),
-                    "and must re-read as itself"
-                );
-                drop(again);
-                drop(parsed);
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the walks did not abort");
+        purrdf_stack::on_stack(128 * 1024, move || {
+            let parsed = good(&text);
+            assert_eq!(parsed.geometry().coord_count(), 1);
+            assert!(!parsed.geometry().is_empty());
+            let rendered = write_bare(parsed.geometry(), SCALE);
+            assert!(
+                rendered == text,
+                "the geometry must render back exactly as written"
+            );
+            let again = good(&rendered);
+            assert!(
+                again.geometry() == parsed.geometry(),
+                "and must re-read as itself"
+            );
+            drop(again);
+            drop(parsed);
+        })
+        .expect("the thread starts");
     }
 
     /// A malformed token at the bottom of a hundred thousand collections is refused
@@ -2023,27 +2009,23 @@ mod tests {
         let ordinate_at = keyword_at + "POINT(1 ".len();
         let misspelled = nested(wrappers, "PONT(1 2)");
         let not_a_number = nested(wrappers, "POINT(1 x)");
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(move || {
-                let error = refused(&misspelled);
-                assert!(
-                    error
-                        .detail()
-                        .contains(&format!("expected a geometry keyword at byte {keyword_at}")),
-                    "got {error}"
-                );
-                let error = refused(&not_a_number);
-                assert!(
-                    error
-                        .detail()
-                        .contains(&format!("expected a number at byte {ordinate_at}")),
-                    "got {error}"
-                );
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the walks did not abort");
+        purrdf_stack::on_stack(128 * 1024, move || {
+            let error = refused(&misspelled);
+            assert!(
+                error
+                    .detail()
+                    .contains(&format!("expected a geometry keyword at byte {keyword_at}")),
+                "got {error}"
+            );
+            let error = refused(&not_a_number);
+            assert!(
+                error
+                    .detail()
+                    .contains(&format!("expected a number at byte {ordinate_at}")),
+                "got {error}"
+            );
+        })
+        .expect("the thread starts");
         // The same two refusals at the top level, so the diagnostic is shown to be
         // the same one and not a depth-specific message.
         assert!(

@@ -131,10 +131,7 @@ impl fmt::Write for PanicReason {
             return Ok(());
         }
         let room = REASON_CAPACITY - TRUNCATED.len() - self.len;
-        let mut take = text.len().min(room);
-        while !text.is_char_boundary(take) {
-            take -= 1;
-        }
+        let take = text.floor_char_boundary(room);
         self.bytes[self.len..self.len + take].copy_from_slice(&text.as_bytes()[..take]);
         self.len += take;
         self.truncated = take < text.len();

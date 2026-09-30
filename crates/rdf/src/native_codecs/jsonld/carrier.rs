@@ -8,18 +8,19 @@
 //! PurRDF RDF 1.2 extension controls, and context compaction never rewrites an
 //! arbitrary JSON tree.
 
-use std::cell::RefCell;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 
-use serde::ser::{Error as _, SerializeMap, SerializeSeq};
-use serde::{Serialize, Serializer};
-use serde_json::Value as JsonValue;
+use purrdf_lex::json::{self, Object, Value as JsonValue};
+use purrdf_lex::yaml;
+
+use purrdf_iri::langtag::identity_fold;
 
 use super::{
     CompiledJsonLdContext, JsonLdContainer, JsonLdDirection, JsonLdNullable, JsonLdTermDefinition,
     JsonLdTermSelection, JsonLdTermSelectionKind, JsonLdTypeMapping, RdfDiagnostic, decode,
-    increment_multiplicity, to_json_object,
+    increment_multiplicity,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,47 +35,59 @@ impl Document {
         writer: W,
         context: &JsonValue,
     ) -> Result<(), RdfDiagnostic> {
-        serde_json::to_writer_pretty(
-            writer,
-            &ExpandedDocument {
-                document: self,
-                context,
-            },
-        )
-        .map_err(|source| decode(format!("JSON-LD serialization: {source}")))
+        self.write_expanded(&mut Stream::new(writer, Spelling::Json), context)
     }
 
-    /// Takes `self` BY VALUE because compaction rewrites the document in place.
-    ///
-    /// The two preparation passes below — consuming graph-index metadata, relocating
-    /// reverse properties — need `&mut`, and reaching them from `&self` meant cloning
-    /// the whole carrier for no reason other than the receiver's shape. On a
-    /// dataset-sized document that clone is the largest single allocation on the
-    /// serialize side, and it is pure duplication: the original is dropped the moment
-    /// this returns.
-    ///
-    /// Every caller builds its carrier locally and hands it over exactly once, so the
-    /// move costs them nothing.
     /// The same document as [`Document::write_expanded_json`], emitted as YAML.
     ///
-    /// Straight from the carrier, exactly as the JSON spelling is. YAML-LD used to
-    /// reach this point by serializing the whole JSON document to a `String`,
-    /// reparsing it into a `serde_json::Value`, and converting that — so it held the
-    /// `SerGraph`, the carrier, the JSON text and the value tree at once, which is
-    /// strictly more resident than the eager path it replaced.
+    /// Straight from the carrier, exactly as the JSON spelling is: one node's value
+    /// tree is resident at a time, never the whole document's.
     pub(super) fn write_expanded_yaml<W: Write>(
         &self,
         writer: W,
         context: &JsonValue,
     ) -> Result<(), RdfDiagnostic> {
-        serde_yaml::to_writer(
-            writer,
-            &ExpandedDocument {
-                document: self,
-                context,
-            },
-        )
-        .map_err(|source| decode(format!("YAML-LD serialization: {source}")))
+        self.write_expanded(&mut Stream::new(writer, Spelling::Yaml), context)
+    }
+
+    fn write_expanded<W: Write>(
+        &self,
+        stream: &mut Stream<W>,
+        context: &JsonValue,
+    ) -> Result<(), RdfDiagnostic> {
+        let document = Object::new().with("@context", context.clone());
+        if self.default_nodes.is_empty() && self.named_graphs.is_empty() {
+            return stream.value(document.into());
+        }
+        stream.frame(document.with("@graph", ()), "@graph", |graph| {
+            let mut nodes = self.default_nodes.iter().peekable();
+            let mut named = self.named_graphs.iter().peekable();
+            while nodes.peek().is_some() || named.peek().is_some() {
+                if named
+                    .peek()
+                    .is_some_and(|graph| nodes.peek().is_none_or(|node| graph.id < node.id))
+                {
+                    let named = named.next().expect("peeked named graph");
+                    let skeleton = Object::new()
+                        .with("@graph", ())
+                        .with("@id", named.id.as_str());
+                    graph.frame(skeleton, "@graph", |nodes| {
+                        for node in &named.nodes {
+                            nodes.value(node.expanded_json())?;
+                        }
+                        Ok(())
+                    })?;
+                } else {
+                    graph.value(
+                        nodes
+                            .next()
+                            .expect("one expanded entry remains")
+                            .expanded_json(),
+                    )?;
+                }
+            }
+            Ok(())
+        })
     }
 
     /// Rewrite this document into its compacted form, in place.
@@ -103,21 +116,23 @@ impl Document {
         Ok((self, graph_index_plans))
     }
 
+    /// Takes `self` BY VALUE because compaction rewrites the document in place.
+    ///
+    /// The two preparation passes — consuming graph-index metadata, relocating
+    /// reverse properties — need `&mut`, and reaching them from `&self` meant cloning
+    /// the whole carrier for no reason other than the receiver's shape. On a
+    /// dataset-sized document that clone is the largest single allocation on the
+    /// serialize side, and it is pure duplication: the original is dropped the moment
+    /// this returns.
+    ///
+    /// Every caller builds its carrier locally and hands it over exactly once, so the
+    /// move costs them nothing.
     pub(super) fn write_compacted_json<W: Write>(
         self,
         writer: W,
         context: &CompiledJsonLdContext,
     ) -> Result<(), RdfDiagnostic> {
-        let (prepared, graph_index_plans) = self.compact(context)?;
-        serde_json::to_writer_pretty(
-            writer,
-            &CompactedDocument {
-                document: &prepared,
-                context,
-                graph_index_plans: &graph_index_plans,
-            },
-        )
-        .map_err(|source| decode(format!("JSON-LD serialization: {source}")))
+        self.write_compacted(&mut Stream::new(writer, Spelling::Json), context)
     }
 
     /// The same document as [`Document::write_compacted_json`], emitted as YAML.
@@ -126,241 +141,288 @@ impl Document {
         writer: W,
         context: &CompiledJsonLdContext,
     ) -> Result<(), RdfDiagnostic> {
-        let (prepared, graph_index_plans) = self.compact(context)?;
-        serde_yaml::to_writer(
-            writer,
-            &CompactedDocument {
-                document: &prepared,
-                context,
-                graph_index_plans: &graph_index_plans,
-            },
-        )
-        .map_err(|source| decode(format!("YAML-LD serialization: {source}")))
+        self.write_compacted(&mut Stream::new(writer, Spelling::Yaml), context)
     }
-}
 
-struct ExpandedDocument<'a> {
-    document: &'a Document,
-    context: &'a JsonValue,
-}
-
-impl Serialize for ExpandedDocument<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let has_graph =
-            !self.document.default_nodes.is_empty() || !self.document.named_graphs.is_empty();
-        let mut document = serializer.serialize_map(Some(if has_graph { 2 } else { 1 }))?;
-        document.serialize_entry("@context", self.context)?;
-        if has_graph {
-            document.serialize_entry("@graph", &ExpandedGraph(self.document))?;
+    fn write_compacted<W: Write>(
+        self,
+        stream: &mut Stream<W>,
+        context: &CompiledJsonLdContext,
+    ) -> Result<(), RdfDiagnostic> {
+        let (document, graph_index_plans) = self.compact(context)?;
+        let skeleton = Object::new().with("@context", context.canonical_context().clone());
+        if document.default_nodes.is_empty() && document.named_graphs.is_empty() {
+            return stream.value(skeleton.into());
         }
-        document.end()
-    }
-}
-
-struct ExpandedGraph<'a>(&'a Document);
-
-impl Serialize for ExpandedGraph<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let graph_len = self
-            .0
-            .default_nodes
-            .len()
-            .checked_add(self.0.named_graphs.len())
-            .ok_or_else(|| S::Error::custom("JSON-LD expanded graph length overflow"))?;
-        let mut graph = serializer.serialize_seq(Some(graph_len))?;
-        let mut nodes = self.0.default_nodes.iter().peekable();
-        let mut named = self.0.named_graphs.iter().peekable();
-        while nodes.peek().is_some() || named.peek().is_some() {
-            if named
-                .peek()
-                .is_some_and(|graph| nodes.peek().is_none_or(|node| graph.id < node.id))
-            {
-                graph.serialize_element(&ExpandedNamedGraph(
-                    named.next().expect("peeked named graph"),
-                ))?;
-            } else {
-                graph.serialize_element(
-                    &nodes
-                        .next()
-                        .expect("one expanded entry remains")
-                        .expanded_json(),
-                )?;
-            }
-        }
-        graph.end()
-    }
-}
-
-struct ExpandedNamedGraph<'a>(&'a NamedGraph);
-
-impl Serialize for ExpandedNamedGraph<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut graph = serializer.serialize_map(Some(2))?;
-        graph.serialize_entry("@graph", &ExpandedNodes(&self.0.nodes))?;
-        graph.serialize_entry("@id", &self.0.id)?;
-        graph.end()
-    }
-}
-
-struct ExpandedNodes<'a>(&'a [Node]);
-
-impl Serialize for ExpandedNodes<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut nodes = serializer.serialize_seq(Some(self.0.len()))?;
-        for node in self.0 {
-            nodes.serialize_element(&node.expanded_json())?;
-        }
-        nodes.end()
-    }
-}
-
-struct CompactedDocument<'a> {
-    document: &'a Document,
-    context: &'a CompiledJsonLdContext,
-    graph_index_plans: &'a GraphIndexPlans,
-}
-
-impl Serialize for CompactedDocument<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let has_graph =
-            !self.document.default_nodes.is_empty() || !self.document.named_graphs.is_empty();
-        let mut document = serializer.serialize_map(Some(if has_graph { 2 } else { 1 }))?;
-        document.serialize_entry("@context", self.context.canonical_context())?;
-        if has_graph {
-            let graph_key = compact_keyword(self.context, "@graph").map_err(S::Error::custom)?;
-            document.serialize_entry(
-                &graph_key,
-                &CompactedGraph {
-                    document: self.document,
-                    context: self.context,
-                    graph_index_plans: self.graph_index_plans,
-                },
-            )?;
-        }
-        document.end()
-    }
-}
-
-struct CompactedGraph<'a> {
-    document: &'a Document,
-    context: &'a CompiledJsonLdContext,
-    graph_index_plans: &'a GraphIndexPlans,
-}
-
-impl Serialize for CompactedGraph<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let named_by_id: BTreeMap<&str, &NamedGraph> = self
-            .document
+        let graph_key = compact_keyword(context, "@graph")?;
+        let named_by_id: BTreeMap<&str, &NamedGraph> = document
             .named_graphs
             .iter()
             .map(|named| (named.id.as_str(), named))
             .collect();
-        let embedded_graphs = RefCell::new(BTreeSet::new());
-        let mut graph = serializer.serialize_seq(None)?;
-        for node in &self.document.default_nodes {
-            let mut compacted = node
-                .compacted_json(self.context)
-                .map_err(S::Error::custom)?;
-            apply_graph_containers(
-                node,
-                None,
-                &mut compacted,
-                self.context,
-                self.document,
-                &named_by_id,
-                &mut embedded_graphs.borrow_mut(),
-                self.graph_index_plans,
-            )
-            .map_err(S::Error::custom)?;
-            graph.serialize_element(&compacted)?;
-        }
-        for named in &self.document.named_graphs {
-            if embedded_graphs.borrow().contains(&named.id) {
-                continue;
-            }
-            embedded_graphs.borrow_mut().insert(named.id.clone());
-            graph.serialize_element(&CompactedNamedGraph {
-                graph: named,
-                document: self.document,
-                context: self.context,
-                graph_index_plans: self.graph_index_plans,
-                embedded_graphs: &embedded_graphs,
-            })?;
-        }
-        graph.end()
-    }
-}
-
-struct CompactedNamedGraph<'a> {
-    graph: &'a NamedGraph,
-    document: &'a Document,
-    context: &'a CompiledJsonLdContext,
-    graph_index_plans: &'a GraphIndexPlans,
-    embedded_graphs: &'a RefCell<BTreeSet<String>>,
-}
-
-impl Serialize for CompactedNamedGraph<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut graph = serializer.serialize_map(Some(2))?;
-        let id_key = compact_keyword(self.context, "@id").map_err(S::Error::custom)?;
-        let graph_key = compact_keyword(self.context, "@graph").map_err(S::Error::custom)?;
-        let id = compact_id(self.context, &self.graph.id, false).map_err(S::Error::custom)?;
-        let nodes = CompactedNodes {
-            nodes: &self.graph.nodes,
-            scope: Some(self.graph.id.as_str()),
-            document: self.document,
-            context: self.context,
-            graph_index_plans: self.graph_index_plans,
-            embedded_graphs: self.embedded_graphs,
+        let mut embedded_graphs = BTreeSet::new();
+        let scope = CompactionScope {
+            document: &document,
+            context,
+            graph_index_plans: &graph_index_plans,
+            named_by_id: &named_by_id,
         };
-        if graph_key < id_key {
-            graph.serialize_entry(&graph_key, &nodes)?;
-            graph.serialize_entry(&id_key, &id)?;
-        } else {
-            graph.serialize_entry(&id_key, &id)?;
-            graph.serialize_entry(&graph_key, &nodes)?;
-        }
-        graph.end()
+        stream.frame(skeleton.with(graph_key.as_str(), ()), &graph_key, |graph| {
+            for node in &document.default_nodes {
+                graph.value(scope.node(node, None, &mut embedded_graphs)?)?;
+            }
+            for named in &document.named_graphs {
+                if !embedded_graphs.insert(named.id.clone()) {
+                    continue;
+                }
+                scope.write_named_graph(graph, named, &mut embedded_graphs)?;
+            }
+            Ok(())
+        })
     }
 }
 
-struct CompactedNodes<'a> {
-    nodes: &'a [Node],
-    scope: Option<&'a str>,
+/// What every compacted node of one document is emitted against.
+struct CompactionScope<'a> {
     document: &'a Document,
     context: &'a CompiledJsonLdContext,
     graph_index_plans: &'a GraphIndexPlans,
-    embedded_graphs: &'a RefCell<BTreeSet<String>>,
+    named_by_id: &'a BTreeMap<&'a str, &'a NamedGraph>,
 }
 
-impl Serialize for CompactedNodes<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let named_by_id: BTreeMap<&str, &NamedGraph> = self
-            .document
-            .named_graphs
-            .iter()
-            .map(|named| (named.id.as_str(), named))
-            .collect();
-        let mut nodes = serializer.serialize_seq(Some(self.nodes.len()))?;
-        for node in self.nodes {
-            let mut compacted = node
-                .compacted_json(self.context)
-                .map_err(S::Error::custom)?;
-            apply_graph_containers(
-                node,
-                self.scope,
-                &mut compacted,
-                self.context,
-                self.document,
-                &named_by_id,
-                &mut self.embedded_graphs.borrow_mut(),
-                self.graph_index_plans,
-            )
-            .map_err(S::Error::custom)?;
-            nodes.serialize_element(&compacted)?;
-        }
-        nodes.end()
+impl CompactionScope<'_> {
+    /// One node, compacted, with its graph containers applied.
+    fn node(
+        &self,
+        node: &Node,
+        scope: Option<&str>,
+        embedded_graphs: &mut BTreeSet<String>,
+    ) -> Result<JsonValue, RdfDiagnostic> {
+        let mut compacted = node.compacted_json(self.context)?;
+        apply_graph_containers(
+            node,
+            scope,
+            &mut compacted,
+            self.context,
+            self.document,
+            self.named_by_id,
+            embedded_graphs,
+            self.graph_index_plans,
+        )?;
+        Ok(compacted)
     }
+
+    /// A top-level named graph object, `@id` and `@graph` members in key order, its
+    /// nodes streamed.
+    fn write_named_graph<W: Write>(
+        &self,
+        graph: &mut Stream<W>,
+        named: &NamedGraph,
+        embedded_graphs: &mut BTreeSet<String>,
+    ) -> Result<(), RdfDiagnostic> {
+        let id_key = compact_keyword(self.context, "@id")?;
+        let graph_key = compact_keyword(self.context, "@graph")?;
+        let id = compact_id(self.context, &named.id, false)?;
+        let skeleton = if graph_key < id_key {
+            Object::new().with(graph_key.as_str(), ()).with(id_key, id)
+        } else {
+            Object::new().with(id_key, id).with(graph_key.as_str(), ())
+        };
+        graph.frame(skeleton, &graph_key, |nodes| {
+            for node in &named.nodes {
+                nodes.value(self.node(node, Some(named.id.as_str()), embedded_graphs)?)?;
+            }
+            Ok(())
+        })
+    }
+}
+
+/// The output syntax a [`Stream`] writes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Spelling {
+    /// Two-space pretty JSON ([`json::write_pretty`]).
+    Json,
+    /// Block YAML ([`yaml::write`]).
+    Yaml,
+}
+
+impl Spelling {
+    /// The document kind named in a write failure.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Json => "JSON-LD",
+            Self::Yaml => "YAML-LD",
+        }
+    }
+
+    /// Whether `c` ends a line of this spelling's output. JSON writes line breaks
+    /// only as layout (a string escapes its own); YAML's literal block scalars break
+    /// on every YAML line break character.
+    const fn breaks_line(self, c: char) -> bool {
+        match self {
+            Self::Json => c == '\n',
+            Self::Yaml => matches!(c, '\r' | '\n' | '\u{85}' | '\u{2028}' | '\u{2029}'),
+        }
+    }
+}
+
+/// A document written one node at a time.
+///
+/// A document is a skeleton — the `@context` and graph envelope — around arrays of
+/// node objects. The skeleton is laid out by the one JSON or YAML writer with a
+/// single marker string where its array's items go; the text before the marker's
+/// line is written, then each item as that writer lays it out on its own, shifted
+/// right by the marker's indentation, then the text after. Both layouts indent a
+/// nested value by a fixed amount per level and never fold a line, so an item laid
+/// out alone and shifted is byte for byte the item laid out in place, and only one
+/// node's value tree is resident at a time.
+struct Stream<W> {
+    out: W,
+    spelling: Spelling,
+    /// Spaces before every line of the current array's items.
+    indent: usize,
+    /// Whether an array is open (the next value is one of its items).
+    in_array: bool,
+    /// The open array's text up to its first item, held until an item arrives.
+    head: Option<String>,
+    /// Whether the open array has an item.
+    started: bool,
+}
+
+impl<W: Write> Stream<W> {
+    const fn new(out: W, spelling: Spelling) -> Self {
+        Self {
+            out,
+            spelling,
+            indent: 0,
+            in_array: false,
+            head: None,
+            started: false,
+        }
+    }
+
+    /// `value` laid out as a document (outside any array) or as an array item.
+    fn render(&self, value: JsonValue) -> String {
+        match (self.spelling, self.in_array) {
+            (Spelling::Json, _) => json::write_pretty(&value),
+            (Spelling::Yaml, false) => yaml::write(&value),
+            (Spelling::Yaml, true) => yaml::write(&JsonValue::Array(vec![value])),
+        }
+    }
+
+    /// Write `text`, every line that starts in it shifted right by `indent` spaces;
+    /// `at_line_start` says whether its first character starts a line.
+    fn write_shifted(
+        &mut self,
+        text: &str,
+        indent: usize,
+        at_line_start: bool,
+    ) -> Result<(), RdfDiagnostic> {
+        let shifted = shift(text, indent, at_line_start, self.spelling);
+        self.out
+            .write_all(shifted.as_bytes())
+            .map_err(|source| decode(format!("{} serialization: {source}", self.spelling.name())))
+    }
+
+    /// Open the next item of the current array: the array's held head before the
+    /// first, the separator before any other.
+    fn begin_item(&mut self) -> Result<(), RdfDiagnostic> {
+        if let Some(head) = self.head.take() {
+            self.write_shifted(&head, 0, true)?;
+        } else if self.started && self.spelling == Spelling::Json {
+            self.write_shifted(",\n", 0, false)?;
+        }
+        self.started = true;
+        Ok(())
+    }
+
+    /// Write a whole value: the document, or the current array's next item.
+    fn value(&mut self, mut value: JsonValue) -> Result<(), RdfDiagnostic> {
+        if self.in_array {
+            self.begin_item()?;
+            // A node's members are written in name order.
+            value.sort_keys();
+        }
+        let text = self.render(value);
+        self.write_shifted(&text, self.indent, true)
+    }
+
+    /// Write `skeleton` — the document, or the current array's next item — with
+    /// the array under its member `slot` written item by item by `fill`.
+    fn frame(
+        &mut self,
+        mut skeleton: Object,
+        slot: &str,
+        fill: impl FnOnce(&mut Self) -> Result<(), RdfDiagnostic>,
+    ) -> Result<(), RdfDiagnostic> {
+        if self.in_array {
+            self.begin_item()?;
+        }
+        // A marker that occurs exactly once in the laid-out skeleton, so its line is
+        // the array's one item and nothing the skeleton's own values spell.
+        let (text, at) = (0_u32..)
+            .find_map(|serial| {
+                let marker = format!("\u{e000}{serial}");
+                skeleton.insert(slot, JsonValue::Array(vec![marker.as_str().into()]));
+                let text = self.render(skeleton.clone().into());
+                let mut found = text.match_indices(&marker).map(|(at, _)| at);
+                match (found.next(), found.next()) {
+                    (Some(at), None) => Some((text, at)),
+                    _ => None,
+                }
+            })
+            .expect("some serial marker occurs once");
+        let line_start = text[..at].rfind('\n').map_or(0, |at| at + 1);
+        let line_end = text[at..].find('\n').map_or(text.len(), |end| at + end);
+        let item_indent = text[line_start..]
+            .bytes()
+            .take_while(|&byte| byte == b' ')
+            .count();
+        let (head, tail, tail_at_line_start) = match self.spelling {
+            Spelling::Json => (&text[..line_start], &text[line_end..], false),
+            Spelling::Yaml => (
+                &text[..line_start],
+                text.get(line_end + 1..).unwrap_or(""),
+                true,
+            ),
+        };
+        let outer = (self.indent, self.in_array, self.head.take(), self.started);
+        self.head = Some(shift(head, outer.0, true, self.spelling).into_owned());
+        self.indent = outer.0 + item_indent;
+        self.in_array = true;
+        self.started = false;
+        let filled = fill(self);
+        let started = self.started;
+        (self.indent, self.in_array, self.head, self.started) = outer;
+        filled?;
+        if started {
+            self.write_shifted(tail, self.indent, tail_at_line_start)
+        } else {
+            // No item arrived: the array is empty, and is laid out as one.
+            skeleton.insert(slot, JsonValue::Array(Vec::new()));
+            let text = self.render(skeleton.into());
+            self.write_shifted(&text, self.indent, true)
+        }
+    }
+}
+
+/// `text` with every line that starts in it shifted right by `indent` spaces; an empty
+/// line stays empty. `at_line_start` says whether the first character starts a line.
+fn shift(text: &str, indent: usize, at_line_start: bool, spelling: Spelling) -> Cow<'_, str> {
+    if indent == 0 {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len() + indent * 8);
+    let mut line_start = at_line_start;
+    for c in text.chars() {
+        let breaks = spelling.breaks_line(c);
+        if line_start && !breaks {
+            out.extend(std::iter::repeat_n(' ', indent));
+        }
+        out.push(c);
+        line_start = breaks;
+    }
+    Cow::Owned(out)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -583,42 +645,13 @@ fn document_id_reference_counts(document: &Document) -> BTreeMap<String, u8> {
 }
 
 fn count_node_term_ids(node: &Node, counts: &mut BTreeMap<String, u8>) {
-    for values in node
-        .properties
-        .values()
-        .chain(node.reverse_properties.values())
-    {
-        for value in values {
-            count_value_term_ids(value, counts);
-        }
-    }
-}
-
-fn count_value_term_ids(value: &Value, counts: &mut BTreeMap<String, u8>) {
-    count_term_ids(&value.term, counts);
-    for annotation in &value.annotations {
-        let count = counts.entry(annotation.id.clone()).or_default();
-        increment_multiplicity(count);
-        count_node_term_ids(annotation, counts);
-    }
-}
-
-fn count_term_ids(term: &Term, counts: &mut BTreeMap<String, u8>) {
-    match term {
-        Term::Id(id) => {
-            let count = counts.entry(id.clone()).or_default();
-            increment_multiplicity(count);
-        }
-        Term::Triple(triple) => {
-            count_term_ids(&triple.subject, counts);
-            count_term_ids(&triple.object, counts);
-        }
-        Term::List(values) => {
-            for value in values {
-                count_value_term_ids(value, counts);
-            }
-        }
-        Term::Literal(_) => {}
+    for part in node.parts() {
+        let id = match part {
+            Part::Term(Term::Id(id)) => id,
+            Part::Annotation(annotation) => &annotation.id,
+            Part::Term(_) => continue,
+        };
+        increment_multiplicity(counts.entry(id.clone()).or_default());
     }
 }
 
@@ -734,18 +767,14 @@ fn apply_graph_containers(
                     force_array,
                 )?);
             }
-            to_json_object(
-                map.into_iter()
-                    .map(|(index, values)| {
-                        let value = if !force_array && let [only] = values.as_slice() {
-                            only.clone()
-                        } else {
-                            JsonValue::Array(values)
-                        };
-                        (index, value)
-                    })
-                    .collect(),
-            )
+            JsonValue::Object(Object::from_iter(map.into_iter().map(|(index, values)| {
+                let value = if !force_array && let [only] = values.as_slice() {
+                    only.clone()
+                } else {
+                    JsonValue::Array(values)
+                };
+                (index, value)
+            })))
         } else if has_id_map {
             let mut map = BTreeMap::new();
             for value in values {
@@ -768,7 +797,7 @@ fn apply_graph_containers(
                     )?,
                 )?;
             }
-            to_json_object(map)
+            JsonValue::Object(Object::from_iter(map))
         } else {
             let mut bodies = Vec::new();
             for value in values {
@@ -850,10 +879,12 @@ fn insert_compacted_property(
         } else {
             nest.to_owned()
         };
+        if !object.contains_key(&nest) {
+            object.insert(nest.as_str(), Object::new());
+        }
         let nested = object
-            .entry(nest)
-            .or_insert_with(|| JsonValue::Object(serde_json::Map::new()))
-            .as_object_mut()
+            .get_mut(&nest)
+            .and_then(JsonValue::as_object_mut)
             .ok_or_else(|| decode("JSON-LD @nest target is not an object"))?;
         if nested.insert(term.to_owned(), value).is_some() {
             return Err(decode(format!(
@@ -886,6 +917,14 @@ impl Node {
         }
     }
 
+    /// Every term and annotation node below this node, pre-order: the terms
+    /// of its property values and everything inside them (see [`Parts`]).
+    pub(super) fn parts(&self) -> Parts<'_> {
+        let mut parts = Parts { work: Vec::new() };
+        parts.push_node_values(self);
+        parts
+    }
+
     pub(super) fn sort_values(&mut self) {
         self.types.sort();
         for values in self.properties.values_mut() {
@@ -906,10 +945,10 @@ impl Node {
                     self.types
                         .iter()
                         .map(|iri| {
-                            to_json_object(BTreeMap::from([(
+                            JsonValue::Object(Object::from_iter(BTreeMap::from([(
                                 "@id".to_owned(),
                                 JsonValue::String(iri.clone()),
-                            )]))
+                            )])))
                         })
                         .collect(),
                 ),
@@ -937,9 +976,12 @@ impl Node {
                     },
                 );
             }
-            node.insert("@reverse".to_owned(), to_json_object(reverse));
+            node.insert(
+                "@reverse".to_owned(),
+                JsonValue::Object(Object::from_iter(reverse)),
+            );
         }
-        to_json_object(node)
+        JsonValue::Object(Object::from_iter(node))
     }
 
     fn compacted_json(&self, context: &CompiledJsonLdContext) -> Result<JsonValue, RdfDiagnostic> {
@@ -1016,9 +1058,13 @@ impl Node {
             )?;
         }
         for (nest, values) in nested {
-            insert_unique(&mut node, &nest, to_json_object(values))?;
+            insert_unique(
+                &mut node,
+                &nest,
+                JsonValue::Object(Object::from_iter(values)),
+            )?;
         }
-        Ok(to_json_object(node))
+        Ok(JsonValue::Object(Object::from_iter(node)))
     }
 }
 
@@ -1184,21 +1230,98 @@ impl Value {
     }
 
     pub(super) fn expanded_json(&self) -> JsonValue {
-        let mut value = self.term.expanded_json();
+        let folded: Result<JsonValue, std::convert::Infallible> =
+            self.fold_lists(|value, _, items| {
+                let term = match items {
+                    Some(items) => JsonValue::Object(Object::new().with("@list", items)),
+                    None => value.term.expanded_json(),
+                };
+                Ok(value.with_annotation(term, value.annotations.iter().map(Node::expanded_json)))
+            });
+        folded.unwrap_or_else(|never| match never {})
+    }
+
+    /// `json` with this value's annotation nodes, already written, under
+    /// `@annotation`: one node bare, several as an array, none left out.
+    fn with_annotation(
+        &self,
+        mut json: JsonValue,
+        annotations: impl Iterator<Item = JsonValue>,
+    ) -> JsonValue {
         if !self.annotations.is_empty() {
-            let annotations: Vec<JsonValue> =
-                self.annotations.iter().map(Node::expanded_json).collect();
-            let annotation = if let [only] = annotations.as_slice() {
-                only.clone()
-            } else {
-                JsonValue::Array(annotations)
+            let annotations: Vec<JsonValue> = annotations.collect();
+            let annotation = match <[JsonValue; 1]>::try_from(annotations) {
+                Ok([one]) => one,
+                Err(several) => JsonValue::Array(several),
             };
-            value
-                .as_object_mut()
+            json.as_object_mut()
                 .expect("every typed carrier term emits a JSON object")
                 .insert("@annotation".to_owned(), annotation);
         }
-        value
+        json
+    }
+
+    /// Fold this value's nesting of `@list` values bottom-up over a heap work
+    /// list: `combine(value, depth, items)` builds the output of `value`, which
+    /// sits inside `depth` enclosing lists, from its folded items (`Some`, a list
+    /// value) or from nothing (`None`, any other value).
+    ///
+    /// An RDF list whose items are lists folds to one `@list` per level, as deep
+    /// as the data nests them, so every walk over the folded carrier goes
+    /// through here and its depth costs no machine stack.
+    fn fold_lists<T, E>(
+        &self,
+        mut combine: impl FnMut(&Self, usize, Option<Vec<T>>) -> Result<T, E>,
+    ) -> Result<T, E> {
+        struct Frame<'a, T> {
+            value: &'a Value,
+            items: std::slice::Iter<'a, Value>,
+            done: Vec<T>,
+        }
+        let mut stack: Vec<Frame<'_, T>> = Vec::new();
+        let mut next = Some(self);
+        loop {
+            let mut result = match next.take() {
+                Some(value) => match &value.term {
+                    Term::List(items) => {
+                        stack.push(Frame {
+                            value,
+                            items: items.iter(),
+                            done: Vec::with_capacity(items.len()),
+                        });
+                        None
+                    }
+                    _ => Some(combine(value, stack.len(), None)?),
+                },
+                None => None,
+            };
+            loop {
+                let Some(frame) = stack.last_mut() else {
+                    return Ok(result.expect("the root value is folded before the walk ends"));
+                };
+                if let Some(folded) = result.take() {
+                    frame.done.push(folded);
+                }
+                if let Some(item) = frame.items.next() {
+                    next = Some(item);
+                    break;
+                }
+                let frame = stack.pop().expect("the frame just inspected");
+                result = Some(combine(frame.value, stack.len(), Some(frame.done))?);
+            }
+        }
+    }
+
+    /// The value's term, its annotations dropped.
+    pub(super) fn into_term(mut self) -> Term {
+        std::mem::replace(&mut self.term, Term::Id(String::new()))
+    }
+
+    /// Every term and annotation node in this value's tree, pre-order.
+    pub(super) fn parts(&self) -> Parts<'_> {
+        Parts {
+            work: vec![PartWork::Value(self)],
+        }
     }
 
     fn selection(&self) -> JsonLdTermSelection {
@@ -1301,11 +1424,11 @@ fn literal_preferences(literal: &Literal) -> (JsonLdTermSelectionKind, Vec<Strin
     let mut preferred = Vec::new();
     match (&literal.language, &literal.direction) {
         (Some(language), Some(direction)) => {
-            preferred.push(format!("{}_{}", language.to_ascii_lowercase(), direction));
-            preferred.push(language.to_ascii_lowercase());
+            preferred.push(format!("{}_{}", identity_fold(language), direction));
+            preferred.push(identity_fold(language));
             preferred.push(format!("_{direction}"));
         }
-        (Some(language), None) => preferred.push(language.to_ascii_lowercase()),
+        (Some(language), None) => preferred.push(identity_fold(language)),
         (None, Some(direction)) => preferred.push(format!("_{direction}")),
         (None, None) => preferred.push("@null".to_owned()),
     }
@@ -1325,20 +1448,107 @@ pub(super) enum Term {
 impl Term {
     fn expanded_json(&self) -> JsonValue {
         match self {
-            Self::Id(id) => to_json_object(BTreeMap::from([(
+            Self::Id(id) => JsonValue::Object(Object::from_iter(BTreeMap::from([(
                 "@id".to_owned(),
                 JsonValue::String(id.clone()),
-            )])),
+            )]))),
             Self::Literal(literal) => literal.expanded_json(),
-            Self::Triple(triple) => to_json_object(BTreeMap::from([(
+            Self::Triple(triple) => JsonValue::Object(Object::from_iter(BTreeMap::from([(
                 "@triple".to_owned(),
                 triple.expanded_json(),
-            )])),
-            Self::List(values) => to_json_object(BTreeMap::from([(
+            )]))),
+            Self::List(values) => JsonValue::Object(Object::from_iter(BTreeMap::from([(
                 "@list".to_owned(),
                 JsonValue::Array(values.iter().map(Value::expanded_json).collect()),
-            )])),
+            )]))),
         }
+    }
+}
+
+impl Drop for Value {
+    /// Drop nested `@list` values over a heap work list, so a list of lists as
+    /// deep as the data costs no stack to free.
+    fn drop(&mut self) {
+        let Term::List(items) = &mut self.term else {
+            return;
+        };
+        let mut work = std::mem::take(items);
+        while let Some(mut value) = work.pop() {
+            if let Term::List(items) = &mut value.term {
+                work.append(items);
+            }
+        }
+    }
+}
+
+/// A part of a carrier value's tree: a term (a list's, a triple term's
+/// component's, or a value's own), or an annotation node.
+#[derive(Clone, Copy)]
+pub(super) enum Part<'a> {
+    /// A term.
+    Term(&'a Term),
+    /// An annotation node.
+    Annotation(&'a Node),
+}
+
+/// The pre-order walk of [`Value::parts`] and [`Node::parts`]: a value's own
+/// term, then its list items or triple-term components, then its annotation
+/// nodes and their property values. Over a heap work list, so neither list
+/// nesting nor annotation nesting costs stack; every read-only walk of the
+/// carrier is this one.
+pub(super) struct Parts<'a> {
+    work: Vec<PartWork<'a>>,
+}
+
+enum PartWork<'a> {
+    Value(&'a Value),
+    Term(&'a Term),
+    Node(&'a Node),
+}
+
+impl<'a> Iterator for Parts<'a> {
+    type Item = Part<'a>;
+
+    fn next(&mut self) -> Option<Part<'a>> {
+        loop {
+            match self.work.pop()? {
+                PartWork::Value(value) => {
+                    self.work
+                        .extend(value.annotations.iter().rev().map(PartWork::Node));
+                    self.work.push(PartWork::Term(&value.term));
+                }
+                PartWork::Term(term) => {
+                    match term {
+                        Term::Triple(triple) => {
+                            self.work.push(PartWork::Term(&triple.object));
+                            self.work.push(PartWork::Term(&triple.subject));
+                        }
+                        Term::List(items) => {
+                            self.work.extend(items.iter().rev().map(PartWork::Value));
+                        }
+                        Term::Id(_) | Term::Literal(_) => {}
+                    }
+                    return Some(Part::Term(term));
+                }
+                PartWork::Node(node) => {
+                    self.push_node_values(node);
+                    return Some(Part::Annotation(node));
+                }
+            }
+        }
+    }
+}
+
+impl<'a> Parts<'a> {
+    fn push_node_values(&mut self, node: &'a Node) {
+        self.work.extend(
+            node.properties
+                .values()
+                .chain(node.reverse_properties.values())
+                .rev()
+                .flat_map(|values| values.iter().rev())
+                .map(PartWork::Value),
+        );
     }
 }
 
@@ -1366,7 +1576,7 @@ impl Literal {
         if let Some(datatype) = &self.datatype {
             literal.insert("@type".to_owned(), JsonValue::String(datatype.clone()));
         }
-        to_json_object(literal)
+        JsonValue::Object(Object::from_iter(literal))
     }
 }
 
@@ -1379,14 +1589,14 @@ pub(super) struct Triple {
 
 impl Triple {
     fn expanded_json(&self) -> JsonValue {
-        to_json_object(BTreeMap::from([
+        JsonValue::Object(Object::from_iter(BTreeMap::from([
             ("@object".to_owned(), self.object.expanded_json()),
             (
                 "@predicate".to_owned(),
                 JsonValue::String(self.predicate.clone()),
             ),
             ("@subject".to_owned(), self.subject.expanded_json()),
-        ]))
+        ])))
     }
 }
 
@@ -1439,22 +1649,19 @@ fn compact_id_map(
         id_map
             .entry(compact_id(context, id, false)?)
             .or_default()
-            .push(to_json_object(BTreeMap::new()));
+            .push(JsonValue::Object(Object::new()));
     }
     let force_array = definition.containers().contains(&JsonLdContainer::Set);
-    Ok(to_json_object(
-        id_map
-            .into_iter()
-            .map(|(id, values)| {
-                let value = if !force_array && let [only] = values.as_slice() {
-                    only.clone()
-                } else {
-                    JsonValue::Array(values)
-                };
-                (id, value)
-            })
-            .collect(),
-    ))
+    Ok(JsonValue::Object(Object::from_iter(
+        id_map.into_iter().map(|(id, values)| {
+            let value = if !force_array && let [only] = values.as_slice() {
+                only.clone()
+            } else {
+                JsonValue::Array(values)
+            };
+            (id, value)
+        }),
+    )))
 }
 
 fn compact_language_map(
@@ -1476,8 +1683,7 @@ fn compact_language_map(
             || literal.direction.as_deref()
                 != match definition.direction_mapping() {
                     Some(JsonLdNullable::Null) => None,
-                    Some(JsonLdNullable::Value(JsonLdDirection::LeftToRight)) => Some("ltr"),
-                    Some(JsonLdNullable::Value(JsonLdDirection::RightToLeft)) => Some("rtl"),
+                    Some(JsonLdNullable::Value(direction)) => Some(direction.as_str()),
                     None => context.default_direction().map(JsonLdDirection::as_str),
                 }
         {
@@ -1492,19 +1698,16 @@ fn compact_language_map(
             .push(JsonValue::String(literal.lexical.clone()));
     }
     let force_array = definition.containers().contains(&JsonLdContainer::Set);
-    Ok(to_json_object(
-        language_map
-            .into_iter()
-            .map(|(language, values)| {
-                let value = if !force_array && let [only] = values.as_slice() {
-                    only.clone()
-                } else {
-                    JsonValue::Array(values)
-                };
-                (language, value)
-            })
-            .collect(),
-    ))
+    Ok(JsonValue::Object(Object::from_iter(
+        language_map.into_iter().map(|(language, values)| {
+            let value = if !force_array && let [only] = values.as_slice() {
+                only.clone()
+            } else {
+                JsonValue::Array(values)
+            };
+            (language, value)
+        }),
+    )))
 }
 
 impl Value {
@@ -1513,8 +1716,40 @@ impl Value {
         context: &CompiledJsonLdContext,
         definition: Option<&JsonLdTermDefinition>,
     ) -> Result<JsonValue, RdfDiagnostic> {
-        let mut compacted = match &self.term {
-            Term::Id(id) => {
+        self.fold_lists(|value, depth, items| {
+            // List-item compaction inherits the property term's
+            // type/language/direction coercion. A nested list must not inherit
+            // the outer @list container itself or it would lose one structural
+            // level, so it, and everything inside it, compacts under none.
+            let own = match (depth, &items) {
+                (0, _) | (1, None) => definition,
+                _ => None,
+            };
+            value.compacted_one(context, own, items)
+        })
+    }
+
+    /// This value compacted under `definition`, a list value from its
+    /// already-compacted `items`.
+    fn compacted_one(
+        &self,
+        context: &CompiledJsonLdContext,
+        definition: Option<&JsonLdTermDefinition>,
+        items: Option<Vec<JsonValue>>,
+    ) -> Result<JsonValue, RdfDiagnostic> {
+        let compacted = match (&self.term, items) {
+            (Term::List(_), Some(values)) => {
+                if definition.is_some_and(|definition| {
+                    definition.containers().contains(&JsonLdContainer::List)
+                }) {
+                    JsonValue::Array(values)
+                } else {
+                    JsonValue::Object(
+                        Object::new().with(compact_keyword(context, "@list")?, values),
+                    )
+                }
+            }
+            (Term::Id(id), _) => {
                 let coercion = definition.and_then(JsonLdTermDefinition::type_mapping);
                 if self.annotations.is_empty()
                     && matches!(
@@ -1525,70 +1760,38 @@ impl Value {
                     let vocab = matches!(coercion, Some(JsonLdTypeMapping::Vocab));
                     JsonValue::String(compact_id(context, id, vocab)?)
                 } else {
-                    to_json_object(BTreeMap::from([(
+                    JsonValue::Object(Object::new().with(
                         compact_keyword(context, "@id")?,
-                        JsonValue::String(compact_id(context, id, false)?),
-                    )]))
+                        compact_id(context, id, false)?,
+                    ))
                 }
             }
-            Term::Literal(literal) => {
+            (Term::Literal(literal), _) => {
                 compact_literal(context, definition, literal, self.annotations.is_empty())?
             }
-            Term::Triple(triple) => to_json_object(BTreeMap::from([(
-                "@triple".to_owned(),
-                triple.compacted_json(context)?,
-            )])),
-            Term::List(values) => {
-                let values = values
-                    .iter()
-                    .map(|value| {
-                        // List-item compaction inherits the parent term's
-                        // type/language/direction coercion. A nested list must not
-                        // inherit the outer @list container itself or it would lose
-                        // one structural level.
-                        let item_definition = if matches!(value.term, Term::List(_)) {
-                            None
-                        } else {
-                            definition
-                        };
-                        value.compacted_json(context, item_definition)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                if definition.is_some_and(|definition| {
-                    definition.containers().contains(&JsonLdContainer::List)
-                }) {
-                    JsonValue::Array(values)
-                } else {
-                    to_json_object(BTreeMap::from([(
-                        compact_keyword(context, "@list")?,
-                        JsonValue::Array(values),
-                    )]))
-                }
+            (Term::Triple(triple), _) => {
+                JsonValue::Object(Object::new().with("@triple", triple.compacted_json(context)?))
             }
+            (Term::List(_), None) => unreachable!("a list value is folded from its items"),
         };
-        if !self.annotations.is_empty() {
-            let annotations = self
-                .annotations
-                .iter()
-                .map(|node| node.compacted_json(context))
-                .collect::<Result<Vec<_>, _>>()?;
-            let annotation = if let [only] = annotations.as_slice() {
-                only.clone()
-            } else {
-                JsonValue::Array(annotations)
-            };
-            compacted
-                .as_object_mut()
-                .ok_or_else(|| decode("annotated JSON-LD value cannot compact to a scalar"))?
-                .insert("@annotation".to_owned(), annotation);
+        if self.annotations.is_empty() {
+            return Ok(compacted);
         }
-        Ok(compacted)
+        if compacted.as_object().is_none() {
+            return Err(decode("annotated JSON-LD value cannot compact to a scalar"));
+        }
+        let annotations = self
+            .annotations
+            .iter()
+            .map(|node| node.compacted_json(context))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(self.with_annotation(compacted, annotations.into_iter()))
     }
 }
 
 impl Triple {
     fn compacted_json(&self, context: &CompiledJsonLdContext) -> Result<JsonValue, RdfDiagnostic> {
-        Ok(to_json_object(BTreeMap::from([
+        Ok(JsonValue::Object(Object::from_iter(BTreeMap::from([
             (
                 "@object".to_owned(),
                 compact_component(context, &self.object)?,
@@ -1601,7 +1804,7 @@ impl Triple {
                 "@subject".to_owned(),
                 compact_component(context, &self.subject)?,
             ),
-        ])))
+        ]))))
     }
 }
 
@@ -1661,16 +1864,12 @@ fn compact_literal(
             JsonValue::String(context.compact_iri(datatype, true)?),
         )?;
     }
-    Ok(to_json_object(value))
+    Ok(JsonValue::Object(Object::from_iter(value)))
 }
 
 fn canonical_json_value(lexical: &str) -> Option<JsonValue> {
     let parsed = crate::json_number::parse_strict(lexical.as_bytes(), usize::MAX, 128).ok()?;
-    (serde_json::to_string(&crate::json_value::Binary64(&parsed))
-        .ok()?
-        .as_str()
-        == lexical)
-        .then_some(parsed)
+    (json::write_compact(&crate::json_number::binary64(&parsed).ok()?) == lexical).then_some(parsed)
 }
 
 fn literal_matches_mapping(
@@ -1691,8 +1890,7 @@ fn literal_matches_mapping(
             };
             let direction = match definition.direction_mapping() {
                 Some(JsonLdNullable::Null) => None,
-                Some(JsonLdNullable::Value(JsonLdDirection::LeftToRight)) => Some("ltr"),
-                Some(JsonLdNullable::Value(JsonLdDirection::RightToLeft)) => Some("rtl"),
+                Some(JsonLdNullable::Value(direction)) => Some(direction.as_str()),
                 None => context.default_direction().map(JsonLdDirection::as_str),
             };
             literal.language.as_deref() == language && literal.direction.as_deref() == direction
@@ -1745,7 +1943,7 @@ mod tests {
     fn a_serialized_number_is_canonical_json_with_its_own_value() {
         use purrdf_xsd::ieee::reference as soft;
 
-        let serialized = |value: f64| serde_json::to_string(&value).ok();
+        let serialized = |value: f64| json::Number::from_f64(value).map(json::Number::into_lexeme);
         let witnesses = soft::misread_spellings(40, serialized)
             .into_iter()
             .chain(soft::x87_misread_spellings(20, serialized));

@@ -34,11 +34,13 @@ use std::fmt::Write as _;
 use std::io::Write as IoWrite;
 use std::sync::Arc;
 
-use serde_json::Value;
+use purrdf_core::collections::{ListCellUse, convertible_list_cells};
+use purrdf_lex::json::{Object, Value};
 
 use self::carrier::{
     Document as CarrierDocument, Literal as CarrierLiteral, NamedGraph as CarrierNamedGraph,
-    Node as CarrierNode, Term as CarrierTerm, Triple as CarrierTriple, Value as CarrierValue,
+    Node as CarrierNode, Part as CarrierPart, Term as CarrierTerm, Triple as CarrierTriple,
+    Value as CarrierValue,
 };
 
 use super::NativeRdfFormat;
@@ -49,15 +51,16 @@ use super::text_parse::LineParseMode;
 use crate::{DatasetView, RdfDataset, RdfDiagnostic, RdfQuad, RdfTerm, SerializeGraph};
 
 // Literal datatype sentinels (read off the carrier's first-class literal fields).
-const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_JSON: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_iri::vocab::language_datatype_iri;
+use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
+use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+use purrdf_iri::vocab::rdf::JSON as RDF_JSON;
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+use purrdf_iri::vocab::rdf::REST as RDF_REST;
+use purrdf_xsd::datatype::XSD_STRING;
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 /// Schema reference for the YAML-LD language-server header when the output is
 /// consumed from the bundled `purrdf.gts` snapshot. The schema is shipped as
 /// `schemas-archive/purrdf.schema.json`, so a bare member name resolves inside the
@@ -99,7 +102,7 @@ impl ByteLimit {
     }
 
     fn from_usize(bytes: usize) -> Self {
-        Self(usize_to_u64(bytes))
+        Self(u64::try_from(bytes).unwrap_or(u64::MAX))
     }
 
     const fn bytes(self) -> u64 {
@@ -107,7 +110,7 @@ impl ByteLimit {
     }
 
     fn admits_usize(self, bytes: usize) -> bool {
-        usize_to_u64(bytes) <= self.bytes()
+        u64::try_from(bytes).unwrap_or(u64::MAX) <= self.bytes()
     }
 
     const fn admits_u64(self, bytes: u64) -> bool {
@@ -121,12 +124,8 @@ impl std::fmt::Display for ByteLimit {
     }
 }
 
-fn usize_to_u64(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
-}
-
 /// RDF 1.2 reifier predicate.
-pub const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+pub use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// The CALLER-SUPPLIED statement-metadata reification vocabulary the
 /// JSON-LD-star downcast emits.
@@ -199,10 +198,9 @@ fn datatype_iri<'a>(g: &'a SerGraph, term: &'a SerTerm) -> Cow<'a, str> {
         None if term.kind != SerTermKind::Literal => Cow::Borrowed(""),
         // A language-tagged literal: `rdf:dirLangString` when a base direction is also
         // carried, else `rdf:langString` (the carrier's first-class representation).
-        None if term.lang.is_some() && term.direction.is_some() => {
-            Cow::Borrowed(RDF_DIR_LANG_STRING)
+        None if term.lang.is_some() => {
+            Cow::Borrowed(language_datatype_iri(term.direction.is_some()))
         }
-        None if term.lang.is_some() => Cow::Borrowed(RDF_LANG_STRING),
         // A plain literal (no language) is `xsd:string`.
         None => Cow::Borrowed(XSD_STRING),
     }
@@ -225,11 +223,6 @@ fn triple_components_in(
     term: &SerTerm,
 ) -> Option<(usize, usize, usize)> {
     term.reifier.and_then(|rid| bindings.get(rid))
-}
-
-/// Convert a sorted BTreeMap into a serde_json object value.
-fn to_json_object(map: BTreeMap<String, Value>) -> Value {
-    Value::Object(map.into_iter().collect())
 }
 
 /// The JSON-LD-star codec — the registry's behavior seam for `application/ld+json`.
@@ -265,7 +258,7 @@ impl RdfCodec for JsonLdCodec {
         graph: &SerGraph,
         out: &mut TextSink<'_>,
     ) -> Result<(), RdfDiagnostic> {
-        // Emitted through the sink. `serde_json` already writes into an `io::Write`,
+        // Emitted through the sink. The carrier writes each node into an `io::Write`,
         // so the only thing that ever made this document whole was the buffer the
         // byte limit was being counted against; that buffer is gone and the limit is
         // now a running total. What remains resident is the carrier — the JSON-LD
@@ -485,10 +478,7 @@ fn context_with_base(
 
 /// The `{"@base": iri}` context document.
 fn base_context_value(iri: &str) -> Value {
-    to_json_object(BTreeMap::from([(
-        "@base".to_owned(),
-        Value::String(iri.to_owned()),
-    )]))
+    Value::Object(Object::new().with("@base", iri))
 }
 
 fn write_carrier_expanded(
@@ -557,7 +547,7 @@ impl IoWrite for BoundedJsonOutput<'_, '_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         let next = self
             .written
-            .checked_add(usize_to_u64(bytes.len()))
+            .checked_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX))
             .ok_or_else(|| std::io::Error::other("JSON-LD output length overflow"))?;
         if !self.limit.admits_u64(next) {
             return Err(std::io::Error::other(format!(
@@ -731,7 +721,7 @@ pub(crate) fn serialize_ser_graph_to_yamlld_with_options(
 /// selected deterministic derived context. No-options entry points retain this exact
 /// expanded representation for compatibility.
 fn build_context() -> Value {
-    to_json_object(BTreeMap::new())
+    Value::Object(Object::new())
 }
 
 /// Build the typed expanded carrier from the first-party serialization graph.
@@ -934,7 +924,9 @@ fn validate_source_carrier_budget(graph: &SerGraph) -> Result<(), RdfDiagnostic>
         graph.annotations.len(),
     ]
     .into_iter()
-    .try_fold(0_u64, |total, count| total.checked_add(usize_to_u64(count)))
+    .try_fold(0_u64, |total, count| {
+        total.checked_add(u64::try_from(count).unwrap_or(u64::MAX))
+    })
     .ok_or_else(|| decode("JSON-LD carrier row count overflow"))?;
     if rows > MAX_JSON_LD_CARRIER_ROWS {
         return Err(decode(format!(
@@ -950,7 +942,7 @@ fn validate_source_carrier_budget(graph: &SerGraph) -> Result<(), RdfDiagnostic>
         .into_iter()
         .flatten()
         .try_fold(total, |total, value| {
-            total.checked_add(usize_to_u64(value.len()))
+            total.checked_add(u64::try_from(value.len()).unwrap_or(u64::MAX))
         })
     });
     let retained_text =
@@ -1171,7 +1163,7 @@ fn carrier_term_footprint(
         .into_iter()
         .flatten()
         .try_fold(0_u64, |total, value| {
-            total.checked_add(usize_to_u64(value.len()))
+            total.checked_add(u64::try_from(value.len()).unwrap_or(u64::MAX))
         })
         .ok_or_else(|| decode("JSON-LD materialized carrier text count overflow"))?,
     };
@@ -1253,144 +1245,110 @@ fn carrier_node_usage(nodes: &[CarrierNode]) -> FixedHashSet<String> {
     let mut usage = FixedHashSet::default();
     for node in nodes {
         usage.insert(node.id.clone());
-        for values in node.properties.values() {
-            for value in values {
-                collect_carrier_value_ids(value, &mut usage, true);
+        for part in node.parts() {
+            match part {
+                CarrierPart::Term(CarrierTerm::Id(id)) => {
+                    usage.insert(id.clone());
+                }
+                CarrierPart::Annotation(annotation) => {
+                    usage.insert(annotation.id.clone());
+                }
+                CarrierPart::Term(_) => {}
             }
         }
     }
     usage
 }
 
-fn collect_carrier_value_ids(
-    value: &CarrierValue,
-    output: &mut FixedHashSet<String>,
-    annotation_subjects: bool,
-) {
-    collect_carrier_term_ids(&value.term, output);
-    for annotation in &value.annotations {
-        if annotation_subjects {
-            output.insert(annotation.id.clone());
-        }
-        for values in annotation.properties.values() {
-            for value in values {
-                collect_carrier_value_ids(value, output, annotation_subjects);
-            }
-        }
-    }
-}
-
-fn collect_carrier_term_ids(term: &CarrierTerm, output: &mut FixedHashSet<String>) {
-    match term {
-        CarrierTerm::Id(id) => {
-            output.insert(id.clone());
-        }
-        CarrierTerm::Triple(triple) => {
-            collect_carrier_term_ids(&triple.subject, output);
-            collect_carrier_term_ids(&triple.object, output);
-        }
-        CarrierTerm::List(values) => {
-            for value in values {
-                collect_carrier_value_ids(value, output, true);
-            }
-        }
-        CarrierTerm::Literal(_) => {}
-    }
-}
-
+/// Fold the RDF lists of one graph's nodes into `@list` values: JSON-LD 1.1
+/// Processing Algorithms and API §8.4.2 (Serialize RDF as JSON-LD), step 6.4,
+/// whose walk is the shared [`convertible_list_cells`].
+///
+/// A cell is a well-formed list node when it is a blank node that no other
+/// graph uses, that is no annotation's subject, that has no `@type`, whose
+/// only entries are one `rdf:first` and one `rdf:rest` value (neither
+/// annotated), and that is referenced exactly once in this graph. A reference
+/// as the `rdf:rest` of a node continues the walk back towards the head there;
+/// any other reference — a property value, an annotation's value, a triple
+/// term component — makes the cell a head. Every head's cells, read forward to
+/// `rdf:nil`, become the `@list` that replaces the reference, and the cells are
+/// no longer written as nodes.
 fn fold_rdf_lists(nodes: &mut Vec<CarrierNode>, externally_used: impl Fn(&str) -> bool) {
-    let mut annotation_subjects = BTreeSet::new();
-    for node in nodes.iter() {
-        collect_annotation_subjects(node, &mut annotation_subjects);
-    }
-    let node_by_id: FixedHashMap<&str, usize> = nodes
-        .iter()
-        .enumerate()
-        .map(|(index, node)| (node.id.as_str(), index))
-        .collect();
-    let candidates: BTreeSet<String> = nodes
-        .iter()
-        .filter(|node| {
-            node.id.starts_with("_:")
-                && !externally_used(&node.id)
-                && !annotation_subjects.contains(&node.id)
-                && node.types.is_empty()
-                && node.properties.len() == 2
-                && node
-                    .properties
-                    .get(RDF_FIRST)
-                    .is_some_and(|values| values.len() == 1 && values[0].annotations.is_empty())
-                && node
-                    .properties
-                    .get(RDF_REST)
-                    .is_some_and(|values| values.len() == 1 && values[0].annotations.is_empty())
-        })
-        .map(|node| node.id.clone())
-        .collect();
+    let (lists, consumed) = {
+        let mut annotation_subjects = BTreeSet::new();
+        for node in nodes.iter() {
+            collect_annotation_subjects(node, &mut annotation_subjects);
+        }
+        let node_by_id: FixedHashMap<&str, &CarrierNode> =
+            nodes.iter().map(|node| (node.id.as_str(), node)).collect();
+        let candidates: BTreeSet<&str> = nodes
+            .iter()
+            .filter(|node| {
+                node.id.starts_with("_:")
+                    && !externally_used(&node.id)
+                    && !annotation_subjects.contains(&node.id)
+                    && node.types.is_empty()
+                    && node.properties.len() == 2
+                    && sole_entry(node, RDF_FIRST).is_some()
+                    && sole_entry(node, RDF_REST).is_some()
+            })
+            .map(|node| node.id.as_str())
+            .collect();
 
-    // List folding only needs to distinguish a unique incoming edge from
-    // multiple edges, so retain a bounded cardinality instead of an unbounded
-    // pointer-sized counter.
-    let mut incoming: BTreeMap<String, u8> = BTreeMap::new();
-    let mut external_heads = BTreeSet::new();
-    for node in nodes.iter() {
-        for (property, values) in &node.properties {
-            for value in values {
-                count_list_references(
-                    value,
-                    &candidates,
-                    &mut incoming,
-                    &mut external_heads,
-                    property == RDF_REST && candidates.contains(&node.id),
-                );
+        let mut usages: BTreeMap<&str, CellUsage<'_>> = BTreeMap::new();
+        for node in nodes.iter() {
+            for (property, values) in &node.properties {
+                let rest_of = (property == RDF_REST).then_some(node.id.as_str());
+                for value in values {
+                    note_list_references(value, &candidates, &mut usages, rest_of);
+                }
             }
         }
-    }
+        let tails = candidates.iter().copied().filter(|id| {
+            node_by_id
+                .get(id)
+                .and_then(|node| sole_entry(node, RDF_REST))
+                .is_some_and(|rest| matches!(&rest.term, CarrierTerm::Id(tail) if tail == RDF_NIL))
+        });
+        let cells = convertible_list_cells(tails, |cell| {
+            if !candidates.contains(cell) {
+                return None;
+            }
+            match usages.get(cell)? {
+                CellUsage::Once(Some(previous)) => Some(ListCellUse::RestOf(*previous)),
+                CellUsage::Once(None) => Some(ListCellUse::Head),
+                CellUsage::Many => None,
+            }
+        });
 
-    let mut lists = BTreeMap::new();
-    let mut consumed = BTreeSet::new();
-    for head in external_heads {
-        if incoming.get(&head) != Some(&1) {
-            continue;
+        // A head is a converted cell whose reference is not the `rdf:rest` of
+        // another converted cell; its list reads forward to `rdf:nil`, and
+        // every cell on the way was converted by the walk that reached it.
+        let mut lists: BTreeMap<String, Vec<CarrierValue>> = BTreeMap::new();
+        for &head in &cells {
+            if matches!(usages.get(head), Some(CellUsage::Once(Some(previous))) if cells.contains(previous))
+            {
+                continue;
+            }
+            let mut values = Vec::new();
+            let mut cell = head;
+            while let Some(node) = node_by_id.get(cell) {
+                let (Some(first), Some(rest)) =
+                    (sole_entry(node, RDF_FIRST), sole_entry(node, RDF_REST))
+                else {
+                    break;
+                };
+                values.push(first.clone());
+                match &rest.term {
+                    CarrierTerm::Id(next) if cells.contains(next.as_str()) => cell = next,
+                    _ => break,
+                }
+            }
+            lists.insert(head.to_owned(), values);
         }
-        let mut current = head.clone();
-        let mut seen = BTreeSet::new();
-        let mut values = Vec::new();
-        let mut chain = Vec::new();
-        let valid = loop {
-            if !seen.insert(current.clone()) || incoming.get(&current) != Some(&1) {
-                break false;
-            }
-            let Some(node) = node_by_id
-                .get(current.as_str())
-                .and_then(|index| nodes.get(*index))
-            else {
-                break false;
-            };
-            let Some(first) = node.properties.get(RDF_FIRST).and_then(|rows| rows.first()) else {
-                break false;
-            };
-            let Some(rest) = node.properties.get(RDF_REST).and_then(|rows| rows.first()) else {
-                break false;
-            };
-            values.push(first.clone());
-            chain.push(current.clone());
-            let CarrierTerm::Id(rest_id) = &rest.term else {
-                break false;
-            };
-            if rest_id == RDF_NIL {
-                break true;
-            }
-            if !candidates.contains(rest_id) {
-                break false;
-            }
-            current.clone_from(rest_id);
-        };
-        if valid && chain.iter().all(|id| !consumed.contains(id)) {
-            consumed.extend(chain);
-            lists.insert(head, values);
-        }
-    }
+        let consumed: BTreeSet<String> = cells.iter().map(|cell| (*cell).to_owned()).collect();
+        (lists, consumed)
+    };
 
     if lists.is_empty() {
         return;
@@ -1406,107 +1364,114 @@ fn fold_rdf_lists(nodes: &mut Vec<CarrierNode>, externally_used: impl Fn(&str) -
     nodes.retain(|node| !consumed.contains(&node.id));
 }
 
+/// The one unannotated value of `node`'s `property`, when it has exactly one.
+fn sole_entry<'a>(node: &'a CarrierNode, property: &str) -> Option<&'a CarrierValue> {
+    node.properties
+        .get(property)
+        .filter(|values| values.len() == 1 && values[0].annotations.is_empty())
+        .map(|values| &values[0])
+}
+
+/// How often, and how, a candidate list cell is referenced within one graph.
+#[derive(Clone, Copy)]
+enum CellUsage<'a> {
+    /// Exactly one reference: as the `rdf:rest` of the node named here, or
+    /// (`None`) in any other position.
+    Once(Option<&'a str>),
+    /// More than one reference.
+    Many,
+}
+
 fn collect_annotation_subjects(node: &CarrierNode, output: &mut BTreeSet<String>) {
-    for values in node.properties.values() {
-        for value in values {
-            for annotation in &value.annotations {
-                output.insert(annotation.id.clone());
-                collect_annotation_subjects(annotation, output);
-            }
+    for part in node.parts() {
+        if let CarrierPart::Annotation(annotation) = part {
+            output.insert(annotation.id.clone());
         }
     }
 }
 
-fn count_list_references(
-    value: &CarrierValue,
-    candidates: &BTreeSet<String>,
-    incoming: &mut BTreeMap<String, u8>,
-    external_heads: &mut BTreeSet<String>,
-    direct_rest: bool,
+/// Record every reference `value` makes to a candidate cell: its own term (as
+/// the `rdf:rest` of `rest_of`, when that is where it stands), and every term
+/// inside its triple terms, lists and annotations.
+fn note_list_references<'a>(
+    value: &'a CarrierValue,
+    candidates: &BTreeSet<&'a str>,
+    usages: &mut BTreeMap<&'a str, CellUsage<'a>>,
+    rest_of: Option<&'a str>,
 ) {
-    count_list_term_references(
-        &value.term,
-        candidates,
-        incoming,
-        external_heads,
-        direct_rest,
-    );
-    for annotation in &value.annotations {
-        for values in annotation.properties.values() {
-            for value in values {
-                count_list_references(value, candidates, incoming, external_heads, false);
-            }
+    // The walk yields the value's own term first; every other reference stands
+    // somewhere other than an `rdf:rest`.
+    for (index, part) in value.parts().enumerate() {
+        let CarrierPart::Term(CarrierTerm::Id(id)) = part else {
+            continue;
+        };
+        if let Some(&cell) = candidates.get(id.as_str()) {
+            let rest_of = if index == 0 { rest_of } else { None };
+            usages
+                .entry(cell)
+                .and_modify(|usage| *usage = CellUsage::Many)
+                .or_insert(CellUsage::Once(rest_of));
         }
     }
 }
 
-fn count_list_term_references(
-    term: &CarrierTerm,
-    candidates: &BTreeSet<String>,
-    incoming: &mut BTreeMap<String, u8>,
-    external_heads: &mut BTreeSet<String>,
-    direct_rest: bool,
-) {
-    match term {
-        CarrierTerm::Id(id) if candidates.contains(id) => {
-            let count = incoming.entry(id.clone()).or_default();
-            increment_multiplicity(count);
-            if !direct_rest {
-                external_heads.insert(id.clone());
-            }
-        }
-        CarrierTerm::Triple(triple) => {
-            count_list_term_references(
-                &triple.subject,
-                candidates,
-                incoming,
-                external_heads,
-                false,
-            );
-            count_list_term_references(&triple.object, candidates, incoming, external_heads, false);
-        }
-        CarrierTerm::List(values) => {
-            for value in values {
-                count_list_references(value, candidates, incoming, external_heads, false);
-            }
-        }
-        CarrierTerm::Id(_) | CarrierTerm::Literal(_) => {}
-    }
-}
-
+/// Replace, throughout `value`, every reference to a folded list's head by
+/// that list, the list's own items rewritten the same way. The walk is over a
+/// heap work list: a list of lists folds one `@list` per level, as deep as the
+/// data nests them, so depth costs no stack.
 fn rewrite_folded_lists(value: &mut CarrierValue, lists: &BTreeMap<String, Vec<CarrierValue>>) {
-    rewrite_folded_term(&mut value.term, lists);
-    for annotation in &mut value.annotations {
-        for values in annotation.properties.values_mut() {
-            for value in values {
-                rewrite_folded_lists(value, lists);
+    enum Work<'a> {
+        Value(&'a mut CarrierValue),
+        Term(&'a mut CarrierTerm),
+    }
+    let mut work = vec![Work::Value(value)];
+    while let Some(item) = work.pop() {
+        let term = match item {
+            Work::Term(term) => term,
+            Work::Value(value) => {
+                let CarrierValue { term, annotations } = value;
+                for annotation in annotations {
+                    // An annotation's values sort by their own terms, so each
+                    // head is replaced before the sort; what lies inside them
+                    // is rewritten when the walk reaches it.
+                    for value in annotation.properties.values_mut().flatten() {
+                        replace_folded_head(&mut value.term, lists);
+                    }
+                    annotation.sort_values();
+                    work.extend(
+                        annotation
+                            .properties
+                            .values_mut()
+                            .flatten()
+                            .map(Work::Value),
+                    );
+                }
+                term
             }
+        };
+        replace_folded_head(term, lists);
+        match term {
+            CarrierTerm::Triple(triple) => {
+                let CarrierTriple {
+                    subject, object, ..
+                } = &mut **triple;
+                work.push(Work::Term(subject));
+                work.push(Work::Term(object));
+            }
+            CarrierTerm::List(values) => work.extend(values.iter_mut().map(Work::Value)),
+            CarrierTerm::Id(_) | CarrierTerm::Literal(_) => {}
         }
-        annotation.sort_values();
     }
 }
 
-fn rewrite_folded_term(term: &mut CarrierTerm, lists: &BTreeMap<String, Vec<CarrierValue>>) {
-    match term {
-        CarrierTerm::Id(id) => {
-            if let Some(values) = lists.get(id) {
-                let mut values = values.clone();
-                for value in &mut values {
-                    rewrite_folded_lists(value, lists);
-                }
-                *term = CarrierTerm::List(values);
-            }
-        }
-        CarrierTerm::Triple(triple) => {
-            rewrite_folded_term(&mut triple.subject, lists);
-            rewrite_folded_term(&mut triple.object, lists);
-        }
-        CarrierTerm::List(values) => {
-            for value in values {
-                rewrite_folded_lists(value, lists);
-            }
-        }
-        CarrierTerm::Literal(_) => {}
+/// Replace `term`, when it names a folded list's head, by that list.
+fn replace_folded_head(term: &mut CarrierTerm, lists: &BTreeMap<String, Vec<CarrierValue>>) {
+    let folded = match &*term {
+        CarrierTerm::Id(id) => lists.get(id).cloned(),
+        _ => None,
+    };
+    if let Some(values) = folded {
+        *term = CarrierTerm::List(values);
     }
 }
 
@@ -1533,7 +1498,7 @@ fn build_node(
         if predicate_iri == RDF_TYPE {
             node.types.push(term_id(object_term)?);
         } else {
-            let key = absolute_iri(predicate_iri);
+            let key = predicate_iri.to_owned();
             let value = build_value_object(graph, subject, p, o, g, object_term, indexes)?;
             node.properties.entry(key).or_default().push(value);
         }
@@ -1606,7 +1571,7 @@ fn build_nested_triple_node(
 
     Ok(CarrierTerm::Triple(Box::new(CarrierTriple {
         subject: Box::new(subject),
-        predicate: absolute_iri(p_iri),
+        predicate: p_iri.to_owned(),
         object: Box::new(object),
     })))
 }
@@ -1690,7 +1655,7 @@ fn build_annotation_node(
             let v_term = &graph.terms[v];
             let value = CarrierValue::plain(simple_term_value(graph, indexes.bindings, v_term)?);
             node.properties
-                .entry(absolute_iri(p_iri))
+                .entry(p_iri.to_owned())
                 .or_default()
                 .push(value);
         }
@@ -1714,7 +1679,7 @@ fn build_orphan_reifier_node(
 ) -> Result<CarrierNode, RdfDiagnostic> {
     let mut node = build_annotation_node(graph, reifier_id, g, indexes)?;
     node.properties
-        .entry(absolute_iri(RDF_REIFIES))
+        .entry(RDF_REIFIES.to_owned())
         .or_default()
         .push(CarrierValue::plain(build_nested_triple_node(
             graph,
@@ -1746,7 +1711,7 @@ fn term_id(term: &SerTerm) -> Result<String, RdfDiagnostic> {
         SerTermKind::Iri => Ok(term
             .value
             .as_deref()
-            .map_or_else(|| "_:missing-iri".to_string(), absolute_iri)),
+            .map_or_else(|| "_:missing-iri".to_string(), str::to_owned)),
         SerTermKind::Bnode => Ok(format!(
             "_:{}",
             term.value.as_deref().unwrap_or("missing-bnode")
@@ -1781,11 +1746,6 @@ fn term_sort_key(graph: &SerGraph, bindings: &ReifierBindings, term: &SerTerm) -
             None => "triple:none".to_string(),
         },
     }
-}
-
-/// Preserve a source IRI verbatim at the vocabulary-free serialization boundary.
-fn absolute_iri(iri: &str) -> String {
-    iri.to_string()
 }
 
 /// The base IRI in force in `scope`, as the `Option<&str>` the JSON-LD active context
@@ -1851,8 +1811,7 @@ pub(super) fn parse_jsonld_into_scope(
     json_bytes: &[u8],
     base: &mut purrdf_iri::BaseScope,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    let context =
-        CompiledJsonLdContext::compile(&to_json_object(BTreeMap::new()), scope_base(base))?;
+    let context = CompiledJsonLdContext::compile(&Value::Object(Object::new()), scope_base(base))?;
     let value = context::parse_document(json_bytes)?;
     let in_force = expand::document_base(&value, &context)?;
     // `value` is MOVED here: the base question is already answered, so the parsed
@@ -1863,7 +1822,7 @@ pub(super) fn parse_jsonld_into_scope(
     // truthful one; overwriting it would claim the document said something it did not.
     if in_force.as_deref() != scope_base(base) {
         match in_force {
-            // `BaseOrigin::Enclosing` is the JSON-LD context frame — serde_json carries no
+            // `BaseOrigin::Enclosing` is the JSON-LD context frame — the value tree carries no
             // source position, so `Directive { line, column }` could only be invented.
             Some(iri) => base
                 .rebind(&iri, purrdf_iri::BaseOrigin::Enclosing)
@@ -1954,8 +1913,8 @@ pub fn jsonld_to_statement_metadata_nquads(
     let quads = crate::flat_rdf_quads_from_dataset(&dataset);
 
     // Identify reifiers and the quoted triple each one refers to.
-    let mut reifier_quotes: std::collections::HashMap<RdfTerm, (RdfTerm, String, RdfTerm)> =
-        std::collections::HashMap::new();
+    let mut reifier_quotes: FixedHashMap<RdfTerm, (RdfTerm, String, RdfTerm)> =
+        FixedHashMap::default();
     for quad in &quads {
         if quad.predicate == RDF_REIFIES
             && let RdfTerm::Triple(triple) = &quad.object
@@ -2033,86 +1992,32 @@ pub fn jsonld_to_statement_metadata_nquads(
 ///
 /// The conversion is purely structural: YAML scalars/sequences/mappings map one-to-one
 /// onto JSON, so the resulting JSON is consumable by [`parse_jsonld`] and the
-/// statement-metadata downcast.
+/// statement-metadata downcast. The document is read by [`purrdf_lex::yaml`] under
+/// YAML-LD's JSON profile: anchors and aliases, tags beyond the core schema, keys that
+/// are not strings, repeated keys, `.inf`/`.nan` and a second document are refused.
+/// The key refusal is the specification's: "every mapping key MUST be a YAML scalar
+/// whose resolved node tag in the representation graph is `tag:yaml.org,2002:str`.
+/// Otherwise, a mapping-key-error MUST be detected, and processing aborted" (YAML-LD,
+/// "Mapping Key Types"), so `1: a`, `true: a` and `null: a` are refused while `'1': a`
+/// and `!!str 1: a` are read. Mapping keys keep their document order and numbers their
+/// lexemes.
 pub fn yamlld_to_jsonld(yaml_bytes: &[u8]) -> Result<String, RdfDiagnostic> {
     let text = std::str::from_utf8(yaml_bytes)
         .map_err(|e| decode(format!("YAML-LD-star bytes are not UTF-8: {e}")))?;
-    // Reject anchors/aliases BEFORE deserializing — extended YAML is out of scope.
-    // Detection is structural (node-position only), so `&`/`*` inside scalar definition
-    // prose does not false-positive.
-    if yaml_uses_anchor_or_alias(text) {
-        return Err(decode("YAML-LD-star must not use anchors or aliases"));
-    }
-    let value: serde_yaml::Value =
-        serde_yaml::from_str(text).map_err(|e| decode(format!("parse YAML-LD-star: {e}")))?;
-    serde_json::to_string(&value).map_err(|e| decode(format!("YAML-LD-star -> JSON-LD-star: {e}")))
-}
-
-/// Structural YAML anchor/alias detector (node-position only), so a `&`/`*` that appears
-/// inside scalar prose (e.g. a `skos:definition` value) does not false-positive.
-fn yaml_uses_anchor_or_alias(text: &str) -> bool {
-    let mut block_scalar_indent: Option<usize> = None;
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        let indent = line.len() - trimmed.len();
-        // Inside a block scalar: its content is indented deeper than the header.
-        if let Some(header_indent) = block_scalar_indent {
-            if trimmed.is_empty() || indent > header_indent {
-                continue;
-            }
-            block_scalar_indent = None;
+    let value = purrdf_lex::yaml::read_with(
+        text,
+        purrdf_lex::yaml::Limits {
+            aliases: false,
+            ..purrdf_lex::yaml::Limits::DEFAULT
+        },
+    )
+    .map_err(|e| match e.kind() {
+        purrdf_lex::yaml::ErrorKind::Alias => {
+            decode(format!("YAML-LD-star must not use anchors or aliases: {e}"))
         }
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        // Strip leading block-sequence indicators (possibly nested: "- - x").
-        let mut rest = trimmed;
-        while let Some(r) = rest.strip_prefix("- ") {
-            rest = r.trim_start();
-        }
-        if rest == "-" {
-            continue;
-        }
-        // The node value is the text after the mapping separator (`: `), or the
-        // whole remainder when this line is a bare sequence/scalar node.
-        let value = block_mapping_value(rest).unwrap_or(rest).trim_start();
-        // A block-scalar header (`|`, `>`, `|-`, `>+2`, …) opens here; skip its body.
-        if value.starts_with('|') || value.starts_with('>') {
-            block_scalar_indent = Some(indent);
-            continue;
-        }
-        if value.starts_with('&') || value.starts_with('*') {
-            return true;
-        }
-    }
-    false
-}
-
-/// The block-mapping node value: the text after the `: ` separator, or `None` if the
-/// line is not a `key: value` mapping entry. A quoted key is skipped first so a `:`
-/// inside it is not mistaken for the separator, and IRIs/curies (`https://…`,
-/// `ex:foo`) keep their `:`-without-space.
-fn block_mapping_value(s: &str) -> Option<&str> {
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    if let Some(&q @ (b'\'' | b'"')) = bytes.first() {
-        i = 1;
-        while i < bytes.len() && bytes[i] != q {
-            i += 1;
-        }
-        i = (i + 1).min(bytes.len());
-    }
-    while i < bytes.len() {
-        if bytes[i] == b':' && (i + 1 == bytes.len() || bytes[i + 1] == b' ') {
-            return Some(if i + 2 <= bytes.len() {
-                &s[i + 1..]
-            } else {
-                ""
-            });
-        }
-        i += 1;
-    }
-    None
+        _ => decode(format!("parse YAML-LD-star: {e}")),
+    })?;
+    Ok(purrdf_lex::json::write_compact(&value))
 }
 
 /// Downcast YAML-LD-star bytes to statement-metadata N-Quads in the caller's
@@ -2150,8 +2055,8 @@ mod carrier_law_tests {
     #[allow(unused_imports)]
     use std::io::Write as _;
 
+    use purrdf_lex::json::{self, Object};
     use purrdf_testkit::prop::prelude::*;
-    use serde_json::json;
 
     use super::*;
 
@@ -2225,7 +2130,8 @@ mod carrier_law_tests {
         let compacted =
             serialize_carrier_compacted(expanded.clone(), &context).expect("compaction");
         let document = context::parse_document(compacted.as_bytes()).expect("strict JSON");
-        let initial = CompiledJsonLdContext::compile(&json!({}), None).expect("empty context");
+        let initial =
+            CompiledJsonLdContext::compile(&Object::new().into(), None).expect("empty context");
         let reexpanded = expand::expand_document(document, &initial).expect("re-expansion");
         assert_eq!(expanded, reexpanded, "compacted document:\n{compacted}");
     }
@@ -2245,10 +2151,13 @@ mod carrier_law_tests {
             .expect("rich RDF 1.2 fixture");
         assert_exact_carrier_lens(
             &dataset,
-            &json!({
-                "ex": {"@id": "https://example.org/", "@prefix": true},
-                "items": {"@id": "ex:items", "@container": "@list", "@language": "en"}
-            }),
+            &json::read(
+                r#"{
+                    "ex": {"@id": "https://example.org/", "@prefix": true},
+                    "items": {"@id": "ex:items", "@container": "@list", "@language": "en"}
+                }"#,
+            )
+            .expect("context JSON"),
         );
     }
 
@@ -2314,9 +2223,63 @@ mod carrier_law_tests {
                 .expect("generated fixture");
             assert_exact_carrier_lens(
                 &dataset,
-                &json!({"ex": {"@id": "https://example.org/", "@prefix": true}}),
+                &json::read(r#"{"ex": {"@id": "https://example.org/", "@prefix": true}}"#)
+                    .expect("context JSON"),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod yamlld_input {
+    use super::yamlld_to_jsonld;
+
+    /// Each refused YAML-LD document beside the nearest accepted one.
+    #[test]
+    fn yaml_ld_refuses_what_its_json_profile_cannot_hold_and_accepts_the_neighbours() {
+        for (yaml, refusal) in [
+            ("'@id': https://example.org/s\n", None),
+            (
+                "'@id': https://example.org/s\n'@id': https://example.org/t\n",
+                Some("repeats a key"),
+            ),
+            ("https://example.org/p:\n  '1': one\n", None),
+            (
+                "https://example.org/p:\n  1: one\n",
+                Some("must be a string"),
+            ),
+            (
+                "https://example.org/p: &a one\nhttps://example.org/q: *a\n",
+                Some("must not use anchors or aliases"),
+            ),
+            (
+                "https://example.org/p: one & two\nhttps://example.org/q: '*a'\n",
+                None,
+            ),
+        ] {
+            let result = yamlld_to_jsonld(yaml.as_bytes());
+            match refusal {
+                None => {
+                    result.unwrap_or_else(|error| panic!("{yaml:?} must convert: {error}"));
+                }
+                Some(reason) => {
+                    let error = result.expect_err("the YAML-LD document must be refused");
+                    assert!(
+                        error.message.contains(reason),
+                        "{yaml:?}: {}",
+                        error.message
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn yaml_ld_keys_keep_document_order_and_numbers_their_lexemes() {
+        assert_eq!(
+            yamlld_to_jsonld(b"b: 1.50\na: [x, 2]\n").expect("YAML-LD"),
+            r#"{"b":1.50,"a":["x",2]}"#
+        );
     }
 }
 
@@ -2376,5 +2339,69 @@ mod parse_residency {
             measured.peak_working_bytes,
             measured.peak_working_bytes as f64 / bytes.len() as f64
         );
+    }
+}
+
+#[cfg(test)]
+mod list_depth {
+    use super::*;
+    use crate::{BlankScope, RdfDatasetBuilder, RdfLiteral};
+
+    const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+
+    /// `<s> <p> ( ( ( … ( "x" ) … ) ) )`: an RDF list whose one item is a list,
+    /// `levels` deep, each level a blank cell referenced exactly once.
+    fn list_of_lists(levels: usize) -> Arc<RdfDataset> {
+        let mut builder = RdfDatasetBuilder::new();
+        let first = builder.intern_iri(&format!("{RDF_NS}first"));
+        let rest = builder.intern_iri(&format!("{RDF_NS}rest"));
+        let nil = builder.intern_iri(&format!("{RDF_NS}nil"));
+        let subject = builder.intern_iri("https://example.org/s");
+        let predicate = builder.intern_iri("https://example.org/p");
+        let mut inner = builder.intern_literal(RdfLiteral::simple("x"));
+        for level in 0..levels {
+            let cell = builder.intern_blank(&format!("c{level}"), BlankScope(0));
+            builder.push_quad(cell, first, inner, None);
+            builder.push_quad(cell, rest, nil, None);
+            inner = cell;
+        }
+        builder.push_quad(subject, predicate, inner, None);
+        builder.freeze().expect("the list dataset freezes")
+    }
+
+    /// A list of lists folds to one `@list` per level, as deep as the data
+    /// nests it; folding, compacting and freeing that carrier all run on a
+    /// thread whose whole stack is 128 KiB.
+    #[test]
+    fn a_list_of_lists_two_thousand_deep_compacts_on_a_128_kib_thread() {
+        const LEVELS: usize = 2_000;
+        let dataset = list_of_lists(LEVELS);
+        purrdf_stack::on_stack(128 * 1024, move || {
+            let context =
+                purrdf_lex::json::read(r#"{"ex":"https://example.org/"}"#).expect("context JSON");
+            for options in [
+                JsonLdSerializeOptions::derived(),
+                JsonLdSerializeOptions::context(&context, None).expect("a context"),
+            ] {
+                let document = serialize_dataset_to_jsonld_with_options(&*dataset, &options)
+                    .expect("the nested lists serialize");
+                assert_eq!(document.matches("@list").count(), LEVELS);
+                assert!(!document.contains("_:c"), "every cell folds into its list");
+            }
+        })
+        .expect("the thread starts");
+    }
+
+    /// The folded form is the same list at every depth: a shallow list of lists
+    /// reads back to the dataset it was written from.
+    #[test]
+    fn a_shallow_list_of_lists_round_trips() {
+        let dataset = list_of_lists(3);
+        let document =
+            serialize_dataset_to_jsonld_with_options(&*dataset, &JsonLdSerializeOptions::derived())
+                .expect("the nested lists serialize");
+        assert_eq!(document.matches("@list").count(), 3);
+        let parsed = parse_jsonld(document.as_bytes(), None).expect("the document parses back");
+        assert!(crate::datasets_isomorphic(&*parsed, &*dataset));
     }
 }

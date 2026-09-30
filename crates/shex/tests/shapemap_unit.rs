@@ -15,12 +15,8 @@ use purrdf_shex::{
 };
 
 const P1: &str = "http://a.example/p1";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 const CLASS: &str = "http://a.example/C";
-
-fn iri(s: &str) -> TermValue {
-    TermValue::iri(s)
-}
 
 /// s1 <p1> o1 ; s2 <p1> o2 ; s1 <p1> o3 ; s3 a C
 fn data() -> Arc<RdfDataset> {
@@ -56,7 +52,7 @@ fn parses_query_and_explicit_forms() {
     assert_eq!(map.0.len(), 2);
     assert_eq!(
         map.0[0].node,
-        NodeSelector::Node(iri("http://a.example/s1"))
+        NodeSelector::Node(TermValue::iri("http://a.example/s1"))
     );
     assert_eq!(
         map.0[0].shape,
@@ -79,7 +75,10 @@ fn focus_subject_selects_subjects_deduped() {
     let got = nodes(&format!("{{FOCUS <{P1}> _}}@<http://a.example/S>"), &data);
     assert_eq!(
         got,
-        vec![iri("http://a.example/s1"), iri("http://a.example/s2")]
+        vec![
+            TermValue::iri("http://a.example/s1"),
+            TermValue::iri("http://a.example/s2")
+        ]
     );
 }
 
@@ -90,9 +89,9 @@ fn focus_object_selects_objects() {
     assert_eq!(
         got,
         vec![
-            iri("http://a.example/o1"),
-            iri("http://a.example/o2"),
-            iri("http://a.example/o3"),
+            TermValue::iri("http://a.example/o1"),
+            TermValue::iri("http://a.example/o2"),
+            TermValue::iri("http://a.example/o3"),
         ]
     );
 }
@@ -104,7 +103,7 @@ fn focus_typed_subjects() {
         &format!("{{FOCUS a <{CLASS}>}}@<http://a.example/S>"),
         &data,
     );
-    assert_eq!(got, vec![iri("http://a.example/s3")]);
+    assert_eq!(got, vec![TermValue::iri("http://a.example/s3")]);
 }
 
 #[test]
@@ -116,7 +115,10 @@ fn anchored_subject_selects_its_objects() {
     );
     assert_eq!(
         got,
-        vec![iri("http://a.example/o1"), iri("http://a.example/o3")]
+        vec![
+            TermValue::iri("http://a.example/o1"),
+            TermValue::iri("http://a.example/o3")
+        ]
     );
 }
 
@@ -140,73 +142,90 @@ fn parse_node(src: &str) -> TermValue {
     }
 }
 
+const S: &str = "<http://a.example/s>";
+const P: &str = "<http://a.example/p>";
+const O: &str = "<http://a.example/o>";
+
 #[test]
-fn parses_quoted_triple_term() {
-    let got = parse_node("<< <http://a.example/s> <http://a.example/p> <http://a.example/o> >>");
+fn parses_triple_term() {
+    let got = parse_node(&format!("<<( {S} {P} {O} )>>"));
     assert_eq!(
         got,
         TermValue::Triple {
-            s: TermBox::new(iri("http://a.example/s")),
-            p: TermBox::new(iri("http://a.example/p")),
-            o: TermBox::new(iri("http://a.example/o")),
+            s: TermBox::new(TermValue::iri("http://a.example/s")),
+            p: TermBox::new(TermValue::iri("http://a.example/p")),
+            o: TermBox::new(TermValue::iri("http://a.example/o")),
         }
     );
 }
 
 #[test]
-fn parses_quoted_triple_term_tolerates_extra_whitespace() {
-    let got =
-        parse_node("<<   <http://a.example/s>\t<http://a.example/p>\n\n<http://a.example/o>   >>");
-    assert_eq!(
-        got,
-        TermValue::Triple {
-            s: TermBox::new(iri("http://a.example/s")),
-            p: TermBox::new(iri("http://a.example/p")),
-            o: TermBox::new(iri("http://a.example/o")),
-        }
-    );
+fn parses_triple_term_tolerates_extra_whitespace() {
+    let got = parse_node(&format!("<<(   {S}\t{P}\n\n{O}   )>>"));
+    assert_eq!(got, parse_node(&format!("<<( {S} {P} {O} )>>")));
 }
 
 #[test]
-fn parses_nested_quoted_triple_term() {
-    let got = parse_node(
-        "<< << <http://a.example/s> <http://a.example/p> <http://a.example/o> >> <http://a.example/p2> <http://a.example/o2> >>",
-    );
+fn parses_nested_triple_term() {
+    let got = parse_node(&format!(
+        "<<( <<( {S} {P} {O} )>> <http://a.example/p2> <http://a.example/o2> )>>"
+    ));
     let inner = TermValue::Triple {
-        s: TermBox::new(iri("http://a.example/s")),
-        p: TermBox::new(iri("http://a.example/p")),
-        o: TermBox::new(iri("http://a.example/o")),
+        s: TermBox::new(TermValue::iri("http://a.example/s")),
+        p: TermBox::new(TermValue::iri("http://a.example/p")),
+        o: TermBox::new(TermValue::iri("http://a.example/o")),
     };
     assert_eq!(
         got,
         TermValue::Triple {
             s: TermBox::new(inner),
-            p: TermBox::new(iri("http://a.example/p2")),
-            o: TermBox::new(iri("http://a.example/o2")),
+            p: TermBox::new(TermValue::iri("http://a.example/p2")),
+            o: TermBox::new(TermValue::iri("http://a.example/o2")),
         }
     );
 }
 
 #[test]
-fn parses_quoted_triple_with_blank_and_literal_positions() {
-    let got = parse_node(r#"<< _:b1 <http://a.example/p> "lit"@en >>"#);
+fn parses_triple_term_with_blank_and_literal_positions() {
+    let got = parse_node(r#"<<( _:b1 <http://a.example/p> "lit"@en )>>"#);
     assert_eq!(
         got,
         TermValue::Triple {
             s: TermBox::new(TermValue::blank("b1")),
-            p: TermBox::new(iri("http://a.example/p")),
+            p: TermBox::new(TermValue::iri("http://a.example/p")),
             o: TermBox::new(TermValue::lang_literal("lit", "en")),
         }
     );
 }
 
 #[test]
-fn quoted_triple_term_requires_closing_delimiter() {
-    let err = parse_shape_map(
-        "<< <http://a.example/s> <http://a.example/p> <http://a.example/o> @START",
-        None,
-    );
+fn triple_term_requires_closing_delimiter() {
+    let err = parse_shape_map(&format!("<<( {S} {P} {O} @START"), None);
     assert!(err.is_err());
+}
+
+/// `<< s p o >>` is RDF 1.2 reifier syntax, not a triple term: refused at the top
+/// level and at every nesting position, with an error naming `<<( … )>>`; the
+/// neighbouring `<<( s p o )>>` spelling is accepted in the same positions.
+#[test]
+fn reifier_syntax_is_refused_not_read_as_a_triple_term() {
+    for legacy in [
+        format!("<< {S} {P} {O} >>"),
+        format!("<<{S} {P} {O}>>"),
+        format!("<<( << {S} {P} {O} >> {P} {O} )>>"),
+        format!("<<( {S} {P} << {S} {P} {O} >> )>>"),
+        format!("<< <<( {S} {P} {O} )>> {P} {O} >>"),
+    ] {
+        let err = parse_shape_map(&format!("{legacy} @START"), None).unwrap_err();
+        assert!(err.to_string().contains("<<( s p o )>>"), "{legacy}: {err}");
+    }
+    for valid in [
+        format!("<<( {S} {P} {O} )>>"),
+        format!("<<( <<( {S} {P} {O} )>> {P} {O} )>>"),
+        format!("<<( {S} {P} <<( {S} {P} {O} )>> )>>"),
+    ] {
+        parse_shape_map(&format!("{valid} @START"), None).expect(&valid);
+    }
 }
 
 /// A relative `<iri>` in a shape map with no base is refused with the same shared
@@ -223,7 +242,7 @@ fn relative_selector_with_no_base_is_refused() {
     .expect("a base in scope resolves the selector");
     assert_eq!(
         map.0[0].node,
-        NodeSelector::Node(iri("http://a.example/dir/alice"))
+        NodeSelector::Node(TermValue::iri("http://a.example/dir/alice"))
     );
 }
 
@@ -529,12 +548,12 @@ fn an_iri_uchar_escape_decodes_to_the_same_iri_as_the_plain_spelling() {
 
     assert_eq!(
         node("<urn:example:a>@START"),
-        iri("urn:example:a"),
+        TermValue::iri("urn:example:a"),
         "the plain spelling is unchanged"
     );
     assert_eq!(
         node("<urn:example:\\u0061>@START"),
-        iri("urn:example:a"),
+        TermValue::iri("urn:example:a"),
         "U+0061 is `a`, so the escaped spelling names the same IRI"
     );
 
@@ -547,13 +566,13 @@ fn an_iri_uchar_escape_decodes_to_the_same_iri_as_the_plain_spelling() {
     ] {
         assert_eq!(
             node(src),
-            iri("urn:ex:café"),
+            TermValue::iri("urn:ex:café"),
             "{src} must agree with its NFC literal twin"
         );
     }
     assert_eq!(
         node("<urn:ex:\\U0001F600>@START"),
-        iri("urn:ex:\u{1f600}"),
+        TermValue::iri("urn:ex:\u{1f600}"),
         "`\\U` carries eight HEX digits"
     );
 }

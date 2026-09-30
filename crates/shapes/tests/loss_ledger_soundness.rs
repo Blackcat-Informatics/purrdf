@@ -175,12 +175,12 @@ fn shacl12_constraints_record_declared_codes() {
     );
     assert_eq!(recorded_codes(&listness), vec!["sh:uniqueMembers"]);
     assert_ledger_sound(&listness.losses, "shacl", "json-schema");
-    let schema: serde_json::Value =
-        serde_json::from_str(&neighbours.schema_json).expect("schema JSON");
+    let schema = purrdf_lex::json::read(&neighbours.schema_json).expect("schema JSON");
     let properties = &schema["$defs"]["Quiet"]["properties"];
     assert_eq!(
         properties["ex:label"]["anyOf"][0]["not"]["anyOf"][0],
-        serde_json::json!({ "type": "string", "pattern": "[\\n\\r\\u000B\\u000C]" }),
+        purrdf_lex::json::read(r#"{ "pattern": "[\\n\\r\\u000B\\u000C]", "type": "string" }"#)
+            .expect("literal"),
         "sh:singleLine true is projected: {properties}"
     );
     assert!(

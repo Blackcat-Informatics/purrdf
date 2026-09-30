@@ -6,40 +6,17 @@ use std::collections::BTreeSet;
 
 use purrdf_core::{BlankScope, DatasetView, RdfLiteral, RdfTextDirection, TermRef, TermValue};
 use purrdf_iri::langtag;
-use serde::{Deserialize, Serialize};
+use purrdf_lex::json::{Object, Value};
 
 use super::util::canonical_json_bounded;
 use super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
+use crate::direction_json::{direction_from_json, direction_to_json};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
 
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
 
-/// Portable RDF 1.2 literal base direction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ProjectionDirection {
-    /// Left-to-right.
-    Ltr,
-    /// Right-to-left.
-    Rtl,
-}
-
-impl From<RdfTextDirection> for ProjectionDirection {
-    fn from(value: RdfTextDirection) -> Self {
-        match value {
-            RdfTextDirection::Ltr => Self::Ltr,
-            RdfTextDirection::Rtl => Self::Rtl,
-        }
-    }
-}
-
-impl From<ProjectionDirection> for RdfTextDirection {
-    fn from(value: ProjectionDirection) -> Self {
-        match value {
-            ProjectionDirection::Ltr => Self::Ltr,
-            ProjectionDirection::Rtl => Self::Rtl,
-        }
-    }
-}
+/// Portable RDF 1.2 literal base direction: the one RDF 1.2 base-direction type.
+pub type ProjectionDirection = RdfTextDirection;
 
 /// Dataset-independent, serialization-stable RDF 1.2 term identity.
 ///
@@ -47,8 +24,7 @@ impl From<ProjectionDirection> for RdfTextDirection {
 /// preserves blank-node scope, literal lexical/datatype/language/direction identity,
 /// and recursively nested triple terms. The tagged JSON representation is canonical
 /// for a given value because variant and field order are fixed.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ProjectionTerm {
     /// Full absolute IRI.
     Iri {
@@ -85,6 +61,111 @@ pub enum ProjectionTerm {
 }
 
 impl ProjectionTerm {
+    /// The IRI term `value`.
+    pub(crate) fn iri(value: impl Into<String>) -> Self {
+        Self::Iri {
+            value: value.into(),
+        }
+    }
+
+    /// The IRI this term is, if it is one.
+    pub(crate) fn as_iri(&self) -> Option<&str> {
+        let Self::Iri { value } = self else {
+            return None;
+        };
+        Some(value)
+    }
+
+    /// Whether this term is an RDF 1.2 triple term.
+    pub(crate) const fn is_triple(&self) -> bool {
+        matches!(self, Self::Triple { .. })
+    }
+
+    /// Whether a blank node occurs anywhere in this term, at any triple-term
+    /// depth. The walk is over a heap work list, so depth costs no stack.
+    pub(crate) fn contains_blank(&self) -> bool {
+        let mut work = vec![self];
+        while let Some(term) = work.pop() {
+            match term {
+                Self::Blank { .. } => return true,
+                Self::Triple {
+                    subject,
+                    predicate,
+                    object,
+                } => work.extend([&**subject, &**predicate, &**object]),
+                Self::Iri { .. } | Self::Literal { .. } => {}
+            }
+        }
+        false
+    }
+
+    /// The term `id` names in `view`, resolved through `cache`: resolved once
+    /// under `limits`, refused unless its canonical JSON fits the artifact
+    /// bound, and cloned from the cache on every later request.
+    ///
+    /// Every projection that reads terms from a dataset view resolves them
+    /// here, so a term is admitted by one law whichever projection meets it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProjectionTerm::from_view`]'s refusal, or a limit error when
+    /// the term's canonical JSON exceeds the artifact bound.
+    pub(crate) fn resolve_cached<D: DatasetView>(
+        view: &D,
+        id: D::Id,
+        limits: ProjectionLimits,
+        cache: &mut std::collections::BTreeMap<D::Id, Self>,
+    ) -> Result<Self, ProjectionError> {
+        if let Some(term) = cache.get(&id) {
+            return Ok(term.clone());
+        }
+        let term = Self::from_view(view, id, limits)?;
+        let _ = term.to_canonical_json(limits)?;
+        cache.insert(id, term.clone());
+        Ok(term)
+    }
+
+    /// Intern this term into `builder`, triple terms included.
+    ///
+    /// # Errors
+    ///
+    /// Returns an integrity error when a triple term's predicate is not an IRI.
+    pub(crate) fn intern(
+        &self,
+        builder: &mut purrdf_core::RdfDatasetBuilder,
+    ) -> Result<purrdf_core::TermId, ProjectionError> {
+        Ok(match self {
+            Self::Iri { value } => builder.intern_iri(value),
+            Self::Blank { label, scope } => builder.intern_blank(label, BlankScope(*scope)),
+            Self::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => builder.intern_literal(RdfLiteral {
+                lexical_form: lexical.clone(),
+                datatype: Some(datatype.clone()),
+                language: language.clone(),
+                direction: *direction,
+            }),
+            Self::Triple {
+                subject,
+                predicate,
+                object,
+            } => {
+                let subject = subject.intern(builder)?;
+                let Self::Iri { value: predicate } = predicate.as_ref() else {
+                    return Err(ProjectionError::integrity(
+                        "projected triple term predicate is not an IRI",
+                    ));
+                };
+                let predicate = builder.intern_iri(predicate);
+                let object = object.intern(builder)?;
+                builder.intern_triple(subject, predicate, object)
+            }
+        })
+    }
+
     /// Resolve a dataset-local term id into a durable value under the configured
     /// recursion bound.
     ///
@@ -137,7 +218,7 @@ impl ProjectionTerm {
                     lexical: lexical.to_owned(),
                     datatype: datatype.to_owned(),
                     language: language.map(str::to_owned),
-                    direction: direction.map(Into::into),
+                    direction,
                 })
             }
             TermRef::Triple { s, p, o } => {
@@ -199,7 +280,7 @@ impl ProjectionTerm {
                 lexical: lexical_form.clone(),
                 datatype: datatype.clone(),
                 language: language.clone(),
-                direction: direction.map(Into::into),
+                direction: *direction,
             },
             TermValue::Triple { s, p, o } => {
                 Self::validate_depth(limits, depth)?;
@@ -239,7 +320,7 @@ impl ProjectionTerm {
                 lexical_form: lexical.clone(),
                 datatype: datatype.clone(),
                 language: language.clone(),
-                direction: direction.map(Into::into),
+                direction: *direction,
             },
             Self::Triple {
                 subject,
@@ -253,7 +334,7 @@ impl ProjectionTerm {
         }
     }
 
-    /// Serialize this term to its canonical tagged JSON bytes.
+    /// Write this term as its canonical tagged JSON bytes.
     ///
     /// # Errors
     ///
@@ -281,7 +362,7 @@ impl ProjectionTerm {
                 limits.max_artifact_bytes()
             )));
         }
-        let term: Self = serde_json::from_slice(bytes)
+        let term: Self = purrdf_lex::json::record::from_slice(bytes)
             .map_err(|error| ProjectionError::syntax(format!("parse term JSON: {error}")))?;
         term.validate(limits)?;
         let canonical = term.to_canonical_json(limits)?;
@@ -345,12 +426,12 @@ impl ProjectionTerm {
                 }
                 if let Some(language) = language {
                     validate_language_tag(language)?;
-                    if language != &language.to_lowercase() {
+                    if !langtag::is_identity_folded(language) {
                         return Err(ProjectionError::term(
                             "language tag must use lowercase canonical form",
                         ));
                     }
-                    let expected = RdfLiteral::language_datatype_iri(direction.map(Into::into));
+                    let expected = RdfLiteral::language_datatype_iri(*direction);
                     if datatype != expected {
                         return Err(ProjectionError::term(format!(
                             "language-tagged literals must use datatype {expected}"
@@ -390,6 +471,75 @@ impl ProjectionTerm {
     }
 }
 
+/// The tag values of [`ProjectionTerm`]'s `kind` member.
+const TERM_KINDS: &[&str] = &["iri", "blank", "literal", "triple"];
+
+impl FromJson for ProjectionTerm {
+    /// `{"kind": …}` plus the variant's members. Members a variant does not
+    /// declare are ignored here; [`ProjectionTerm::from_canonical_json`]
+    /// refuses them by re-encoding.
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum ProjectionTerm")?;
+        Ok(match fields.tag("kind", TERM_KINDS)? {
+            "iri" => Self::Iri {
+                value: fields.required("value")?,
+            },
+            "blank" => Self::Blank {
+                label: fields.required("label")?,
+                scope: fields.required("scope")?,
+            },
+            "literal" => Self::Literal {
+                lexical: fields.required("lexical")?,
+                datatype: fields.required("datatype")?,
+                language: fields.optional("language")?,
+                direction: fields.optional_with("direction", direction_from_json)?,
+            },
+            _ => Self::Triple {
+                subject: fields.required("subject")?,
+                predicate: fields.required("predicate")?,
+                object: fields.required("object")?,
+            },
+        })
+    }
+}
+
+impl ToJson for ProjectionTerm {
+    /// `kind` first, then the variant's members in declaration order; an absent
+    /// language or direction is `null`.
+    fn to_json(&self) -> Value {
+        let object = match self {
+            Self::Iri { value } => Object::new()
+                .with("kind", "iri")
+                .with("value", value.as_str()),
+            Self::Blank { label, scope } => Object::new()
+                .with("kind", "blank")
+                .with("label", label.as_str())
+                .with("scope", *scope),
+            Self::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => Object::new()
+                .with("kind", "literal")
+                .with("lexical", lexical.as_str())
+                .with("datatype", datatype.as_str())
+                .with("language", language.to_json())
+                .with("direction", direction_to_json(*direction)),
+            Self::Triple {
+                subject,
+                predicate,
+                object,
+            } => Object::new()
+                .with("kind", "triple")
+                .with("subject", subject.to_json())
+                .with("predicate", predicate.to_json())
+                .with("object", object.to_json()),
+        };
+        Value::Object(object)
+    }
+}
+
 /// The language-tag half of a projected literal's identity, decided by
 /// [`purrdf_iri::langtag`].
 ///
@@ -412,7 +562,7 @@ impl ProjectionTerm {
 /// [`langtag::LanguageTagError`] `Display` is appended so the message names the
 /// production that refused rather than only the tag.
 /// `pub(crate)` rather than private: [`crate::projections::VoidStaticValue`]'s
-/// `language_literal` constructor is a second, serde-reachable ingress for a
+/// `language_literal` constructor is a second, configuration-reachable ingress for a
 /// caller-authored language tag into the very same projection artifacts, and it
 /// must reach the same verdict. One helper, one profile, or the two doors drift.
 pub(crate) fn validate_language_tag(tag: &str) -> Result<(), ProjectionError> {

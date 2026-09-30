@@ -20,14 +20,20 @@ mod host {
 
     #[wasm_bindgen]
     extern "C" {
-        #[wasm_bindgen(js_namespace = Date, js_name = now)]
-        fn date_now_import() -> f64;
-
         #[wasm_bindgen(js_namespace = Math, js_name = random)]
         fn math_random_import() -> f64;
     }
 
+    /// The raw `Date.now` global, read here rather than through the evaluator's one
+    /// import: the fixture proves the runner's seal, so it must reach the global itself.
+    /// The import sits inside the function so the helpers ledger names it exactly
+    /// (`wasm-host-clock`).
     pub(super) fn date_now() -> f64 {
+        #[wasm_bindgen]
+        extern "C" {
+            #[wasm_bindgen(js_namespace = Date, js_name = now)]
+            fn date_now_import() -> f64;
+        }
         date_now_import()
     }
 

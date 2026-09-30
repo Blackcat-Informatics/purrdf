@@ -1,16 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! `purrdf-core` -- oxigraph-free, PyO3-free RDF 1.2 kernel for the PurRDF Rust workspace.
+//! `purrdf-core` -- PyO3-free RDF 1.2 kernel for the PurRDF Rust workspace.
 //!
 //! This crate is the ring-fenced core extracted out of
 //! `purrdf`: the immutable value-interned IR, the owned value model, structured
 //! diagnostics, dataset capability flags, the loss ledger, and provenance. It
 //! models RDF 1.2 terms directly, preserves
 //! source/location context where adapters can provide it, and keeps reporting
-//! structured but SARIF-free. The oxigraph adapters and the PyO3 extension surface
-//! live in the sibling `purrdf` crate; **nothing here may pull oxigraph** — that
-//! is the acceptance gate.
+//! structured but SARIF-free. The concrete adapters live in the sibling `purrdf`
+//! crate and the PyO3 extension surface in `bindings/python`; **nothing here may
+//! pull PyO3** — that is the acceptance gate.
 //!
 //! # `no_std` readiness
 //!
@@ -36,9 +36,9 @@
 // Blank-node label syntax shared by parser and serializer egress contracts.
 pub mod blank_label;
 pub mod cdt_blank;
-// The ONE transcription of which scalars an `IRIREF` writer must escape — the
-// egress mirror of the ingress production in `purrdf_iri::terminals`.
-pub mod iri_escape;
+// Which scalars an `IRIREF` writer must escape, and the emission: the lexical
+// layer's one implementation, re-exported at its long-standing path.
+pub use purrdf_lex::iri_escape;
 pub mod xml_escape;
 // The arity-generic binding-pattern adornment lattice shared by the Datalog
 // evaluator's demand keying and the SPARQL property-function access-pattern
@@ -51,9 +51,12 @@ pub mod binding_pattern;
 pub mod artifact;
 pub mod bundle;
 // Narrow purrdf backend traits (P2d): term interning, parser ingress,
-// SPARQL execution, and serializer egress. PyO3-free, oxigraph-free — pure
+// SPARQL execution, and serializer egress. PyO3-free — pure
 // contract only; concrete adapters live in `purrdf`.
 pub mod backend;
+// Fixed-width little-endian integers at an offset of a byte buffer, read and
+// written bounds-checked: the one accessor set every binary container uses.
+pub mod bytes;
 // RDF Collection (rdf:first/rest/nil) and Container (rdf:Seq/Bag/Alt) traversal:
 // the malformed-list taxonomy and standard-`rdf:` const set backing the
 // `DatasetView` walker methods.
@@ -66,7 +69,7 @@ pub mod content_store;
 // drift apart on it.
 pub mod cover;
 // The static, allocation-free read view over an RDF dataset:
-// `DatasetView` + `GraphMatch`. PyO3-free, oxigraph-free — pure kernel.
+// `DatasetView` + `GraphMatch`. PyO3-free — pure kernel.
 pub mod dataset_view;
 pub mod describe;
 /// Structured diagnostics: severity, source/GTS locations, conversion losses,
@@ -97,11 +100,6 @@ pub mod governor;
 // FastMap/FastSet/IdSet lookup-table aliases (determinism comes from id-sorting,
 // never hash order).
 pub mod hash;
-// The workspace's one one-shot lowercase-hex renderer (`&[u8]` -> `String`).
-// `pub` because its consumers are other crates — `purrdf-rdf`'s GTS bridges and
-// `purrdf-datalog`'s proof keys — not `purrdf-core` internals. Pure
-// `core`/`alloc`, dependency-free and wasm-clean.
-pub mod hex;
 // The one graph-role classifier: which nodes declare an OWL 2 ontology header, a SHACL
 // shapes graph or a SHACL data graph. The import rule and SHACL-SPARQL's implicit prefixes
 // both select from it.
@@ -139,9 +137,10 @@ pub mod small;
 pub mod sssom;
 /// Dataset/import capability flags ([`RdfStoreCapabilities`]).
 pub mod store;
+pub mod term_writer;
 pub mod turtle;
-// The canonical, review-friendly Turtle RENDERER over the IR — the oxigraph-free half
-// of the on-disk normalizer (the oxigraph-coupled text parser stays in `purrdf`).
+// The canonical, review-friendly Turtle RENDERER over the IR — the kernel half
+// of the on-disk normalizer (the text parser stays in `purrdf`).
 // The wasm-clean canonical-Turtle authority for the correspondence EDOAL lowering.
 pub mod turtle_render;
 // XSD/XPath regular-expression dialect translation shared by `sh:pattern`
@@ -154,18 +153,22 @@ pub mod xsd_regex;
 
 pub use backend::{
     RdfParseRequest, RdfParserBackend, RdfSerializeRequest, RdfSerializer, SerializeGraph,
-    SparqlEngine, SparqlRequest, SparqlResult, TermFactory,
+    SolutionRow, SparqlEngine, SparqlRequest, SparqlResult, TermFactory,
 };
 pub use bundle::{
     ArtifactIndex, ArtifactRecord, BundleError, RdfBundle, SegmentUnitMap, UnitCatalog,
     UnitMetadata,
 };
-pub use collections::RdfListError;
+pub use collections::{
+    ListCellUse, ListError, ListErrorKind, ListFault, ListVocab, RdfListError, RdfListWalk,
+    SoleObject, build_rdf_list, convertible_list_cells, walk_rdf_list,
+};
 pub use content_id::{Blake3ContentId, ContentIdScheme};
 pub use content_store::{Bytes, ContentDigest, ContentStore, ContentStoreError};
 pub use dataset_view::{
     DatasetMut, DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView, GraphMatch,
-    GraphMatchValue, ViewOperationStatus, ViewTermId, checkpointed_drain,
+    GraphMatchValue, GraphSelector, TermLookupError, ViewOperationStatus, ViewTermId,
+    checkpointed_drain,
 };
 pub use describe::{Describer, describe};
 pub use diagnostic::{RdfDiagnostic, RdfLocation, RdfSeverity};
@@ -189,20 +192,21 @@ pub use ir::{
     CanonicalRelabeling, Canonicalized, CountingDemandProvider, DatasetDiff, DatasetSink,
     DeltaDatasetView, DeltaViewId, FrozenDatasetSource, GENID_WELL_KNOWN_PATH, GlobalDictionary,
     GlobalTermId, GraphLayer, GtsBundle, HandleEntry, HandleKey, InMemoryPageProvider,
-    MutableDataset, Nested, PIPELINE_ROOT_DOMAIN, PageFault, PageFaultKind, PageGeneration, PageId,
-    PageMaterialization, PagePart, PageProvider, PageTranslation, PagedDataset, PagedFreezeError,
-    PagedQuadOverlap, PagedQuadTable, PagedQueryError, PagedQueryEvidence, PagedQueryLimits,
-    PagedQueryView, PipelineBundle, PipelineBundleError, PipelineViewBundle, QuadHandle, QuadIds,
-    QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues, RDFC_CALL_LIMIT, RESERVED_NAMESPACE,
-    RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor, RdfEnvelope, ReservedVocabulary, SkolemError,
-    SubsetPageProvider, TermBox, TermId, TermPosition, TermRef, TermValue, TermVisit,
-    ValidatedRdfDatasetBuilder, ViewCanonError, blank_count_view, canonical_relabel,
-    canonical_relabel_with_mapping, canonicalize, canonicalize_graph_view, canonicalize_view,
-    canonicalize_with, check_admissible, check_admissible_flat_view, check_admissible_view,
-    dataset_diff, datasets_isomorphic, deskolemize, fold_term, graph_digest_view, skolemize,
-    try_canonicalize, try_canonicalize_flat_graph_view, try_canonicalize_flat_view,
-    try_canonicalize_graph_view, try_canonicalize_view, try_canonicalize_with,
-    try_flat_digest_view, try_fold_nested, try_graph_digest_view, visit_nested,
+    MutableDataset, Nested, NonIriPredicate, PIPELINE_ROOT_DOMAIN, PageFault, PageFaultKind,
+    PageGeneration, PageId, PageMaterialization, PagePart, PageProvider, PageTranslation,
+    PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable, PagedQueryError,
+    PagedQueryEvidence, PagedQueryLimits, PagedQueryView, PipelineBundle, PipelineBundleError,
+    PipelineViewBundle, QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues,
+    RDFC_CALL_LIMIT, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor,
+    RdfEnvelope, ReservedVocabulary, SkolemError, SubsetPageProvider, TermBox, TermId,
+    TermPosition, TermRef, TermValue, TermVisit, ValidatedRdfDatasetBuilder, ViewCanonError,
+    blank_count_view, canonical_relabel, canonical_relabel_with_mapping, canonicalize,
+    canonicalize_graph_view, canonicalize_view, canonicalize_with, check_admissible,
+    check_admissible_flat_view, check_admissible_view, dataset_diff, datasets_isomorphic,
+    deskolemize, fold_term, graph_digest_view, skolemize, try_canonicalize,
+    try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_graph_view,
+    try_canonicalize_view, try_canonicalize_with, try_flat_digest_view, try_fold_nested,
+    try_graph_digest_view, visit_nested,
 };
 pub use ir::{
     PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,
@@ -232,6 +236,10 @@ pub use provenance::{
     DatasetProvenance, OriginKind, OriginSetId, OriginSetInterner, ProvenanceError, UnitId,
     UnitInterner, check_provenance,
 };
+/// The BCP 47 language-tag grammar and the RDF 1.2 identity fold of a tag
+/// ([`langtag::identity_fold`]), re-exported so every crate above the kernel
+/// folds and judges tags by the one law the kernel interns under.
+pub use purrdf_iri::langtag;
 /// The exact Turtle/SPARQL terminal character classes (`WS`, `PN_CHARS_BASE`,
 /// `PN_CHARS_U`, `PN_CHARS`, `VARNAME`), re-exported from [`purrdf_iri`].
 ///
@@ -245,6 +253,10 @@ pub use provenance::{
 /// same productions as the EGRESS contract, and the two are checked against
 /// each other.
 pub use purrdf_iri::terminals;
+/// The W3C vocabulary terms every crate above the kernel names, one module per
+/// namespace, re-exported so a crate that reaches the kernel reaches the one
+/// spelling of each term without a second dependency edge.
+pub use purrdf_iri::vocab;
 /// The IRI law this kernel interns under, and the typed failure its mutation
 /// surfaces return.
 ///
@@ -261,6 +273,9 @@ pub use purrdf_iri::terminals;
 /// [`purrdf_iri::parse`] under a name that stays unambiguous in this crate's flat
 /// root.
 pub use purrdf_iri::{BaseIri, Iri, IriError, parse as parse_iri};
+/// The XSD datatype and constraining-facet IRIs, re-exported for the same reason
+/// as [`vocab`].
+pub use purrdf_xsd::datatype;
 pub use small::{IdVec, SmallVec};
 pub use sssom::{
     SSSOM_DEFAULT_VALIDATION_TYPES, SssomColumnLayout, SssomColumnLayoutError, SssomCommentError,
@@ -268,6 +283,7 @@ pub use sssom::{
     SssomMeta, SssomSetComment,
 };
 pub use store::RdfStoreCapabilities;
+pub use term_writer::write_term_value;
 pub use turtle::{
     display_term, emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, rule_iri,
     write_dataset_annotation, write_dataset_annotation_nquad, write_dataset_nquad,
@@ -283,9 +299,9 @@ pub use turtle_render::render as render_canonical_turtle;
 pub mod prelude {
     pub use crate::backend::{
         RdfParseRequest, RdfParserBackend, RdfSerializeRequest, RdfSerializer, SerializeGraph,
-        SparqlEngine, SparqlRequest, SparqlResult, TermFactory,
+        SolutionRow, SparqlEngine, SparqlRequest, SparqlResult, TermFactory,
     };
-    pub use crate::dataset_view::{DatasetView, GraphMatch};
+    pub use crate::dataset_view::{DatasetView, GraphMatch, TermLookupError};
     pub use crate::diagnostic::{RdfDiagnostic, RdfLocation, RdfSeverity};
     pub use crate::ir::{
         QuadIds, QuadPatternCursor, QuadRef, RdfDataset, RdfDatasetBuilder, TermId, TermRef,
@@ -304,9 +320,9 @@ pub use ir::{
     ScopeBinding, ViewAccountingReport, ViewLimits, ViewStats, ViewWork,
 };
 
-#[cfg(test)]
-extern crate self as purrdf_core;
-
-#[cfg(test)]
-#[path = "../tests/support/term_fixture.rs"]
-mod test_terms;
+#[doc(hidden)]
+pub mod purremb_fixture;
+#[doc(hidden)]
+pub mod term_fixture;
+#[doc(hidden)]
+pub mod view_fixture;

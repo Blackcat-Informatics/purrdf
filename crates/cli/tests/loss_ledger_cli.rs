@@ -26,10 +26,8 @@
 //!   BEFORE the subcommand (`purrdf --loss-ledger convert …`) and AFTER it
 //!   (`purrdf convert … --loss-ledger`), and both positions produce the same ledger.
 
-use std::process::{Command, Output};
-
-/// The path to the built `purrdf` binary this integration target links against.
-const PURRDF: &str = env!("CARGO_BIN_EXE_purrdf");
+mod support;
+use support::{path, run, stderr, stdout_utf8 as stdout, write_file};
 
 /// SEED C — a star-free base quad + one reifier (`rdf:reifies` a quoted triple) +
 /// one annotation on that reifier. Serializing it to a star-INcapable target
@@ -54,44 +52,6 @@ const NAMED_GRAPH_TRIG: &str = concat!(
 /// A plain, star-free, default-graph Turtle triple. Every syntax carries it
 /// losslessly, so a conversion to N-Triples leaves the ledger empty.
 const PLAIN_TTL: &str = "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n";
-
-/// A `Command` for the built `purrdf` binary.
-fn purrdf() -> Command {
-    Command::new(PURRDF)
-}
-
-/// Run `purrdf` with `args`, returning the captured [`Output`].
-fn run(args: &[&str]) -> Output {
-    purrdf()
-        .args(args)
-        .output()
-        .expect("spawn the built purrdf binary")
-}
-
-/// stdout of an [`Output`] as a `String`.
-fn stdout(out: &Output) -> String {
-    String::from_utf8(out.stdout.clone()).expect("utf-8 stdout")
-}
-
-/// stderr of an [`Output`] as a `String`.
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
-}
-
-/// Join a name onto `dir`, returning it as an owned `String`.
-fn path(dir: &std::path::Path, name: &str) -> String {
-    dir.join(name)
-        .to_str()
-        .expect("temp path is valid UTF-8")
-        .to_owned()
-}
-
-/// Write `contents` to `dir/name`, returning the path.
-fn write_file(dir: &std::path::Path, name: &str, contents: &str) -> String {
-    let p = path(dir, name);
-    std::fs::write(&p, contents).expect("write fixture file");
-    p
-}
 
 /// A ledger JSON string is "non-empty" iff it carries at least one `"code"` field
 /// (the versioned envelope always carries `schema_version` + a `losses` array, so

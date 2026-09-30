@@ -22,15 +22,19 @@
 //! The drop is also checked for completeness: building and dropping a tree inside one
 //! counting-allocator window leaves no live byte behind.
 
+#[path = "support/patterns.rs"]
+mod patterns;
+
+use patterns::{example as iri, var};
+use purrdf_hash::fixed::hash_one as hash_of;
 use std::fmt::Write as _;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Mutex;
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_sparql_algebra::{
     ArithmeticOperator, Chain, Child, Expression, Function, GraphPattern, GroundTerm, GroundTriple,
-    Literal, NamedNode, NamedNodePattern, NonEmpty, PropertyPathExpression, TermPattern,
-    TriplePattern, Variable, pattern_to_select_query,
+    Literal, NamedNodePattern, NonEmpty, PropertyPathExpression, TermPattern, TriplePattern,
+    pattern_to_select_query,
 };
 
 #[global_allocator]
@@ -45,34 +49,16 @@ const STACK: usize = 128 * 1024;
 /// One tree a million levels deep at a time: they are large.
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
-fn var(name: &str) -> Variable {
-    Variable::new(name)
-}
-
-fn iri(local: &str) -> NamedNode {
-    NamedNode::new_unchecked(format!("http://example.org/{local}"))
-}
-
 fn empty() -> GraphPattern {
     GraphPattern::Bgp {
         patterns: Vec::new(),
     }
 }
 
-fn one_triple() -> GraphPattern {
-    GraphPattern::Bgp {
-        patterns: vec![TriplePattern {
-            subject: TermPattern::Variable(var("s")),
-            predicate: NamedNodePattern::NamedNode(iri("p")),
-            object: TermPattern::Variable(var("o")),
-        }],
-    }
-}
-
 fn filtered(expr: Expression) -> GraphPattern {
     GraphPattern::Filter {
         expr,
-        inner: Child::new(one_triple()),
+        inner: Child::new(patterns::triple_bgp("s", iri("p"), "o")),
     }
 }
 
@@ -89,12 +75,6 @@ impl std::fmt::Write for Counted {
     }
 }
 
-fn hash_of(pattern: &GraphPattern) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    pattern.hash(&mut hasher);
-    hasher.finish()
-}
-
 /// Build the tree `build` makes and walk it every whole-tree way, on a thread whose
 /// whole stack is [`STACK`], inside one counting-allocator window: when the tree and its
 /// copy are dropped, no live byte is left. Returns how many bytes `{:?}` wrote and the
@@ -103,37 +83,32 @@ fn walk_every_way(build: fn() -> GraphPattern) -> (usize, usize) {
     let _serial = ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    std::thread::Builder::new()
-        .name("deep-tree".to_owned())
-        .stack_size(STACK)
-        .spawn(move || {
-            let window = CurrentThreadWindow::open();
-            let tree = build();
-            let copy = tree.clone();
-            assert!(tree == copy, "a copy equals its original");
-            assert_eq!(hash_of(&tree), hash_of(&copy), "equal trees hash equally");
-            let mut debug = Counted::default();
-            write!(debug, "{tree:?}").expect("counting cannot fail");
-            let mut copied = Counted::default();
-            write!(copied, "{copy:?}").expect("counting cannot fail");
-            assert_eq!(debug.bytes, copied.bytes);
-            let text = pattern_to_select_query(&tree).len();
-            let built = window.sample();
-            drop(copy);
-            drop(tree);
-            let left = window.close();
-            assert!(built.retained_bytes > 0, "the tree was built");
-            assert_eq!(left.retained_bytes, 0, "the drop freed every node");
-            (debug.bytes, text)
-        })
-        .expect("the thread starts")
-        .join()
-        .expect("no walk overflowed the thread's stack")
+    purrdf_stack::on_stack(STACK, move || {
+        let window = CurrentThreadWindow::open();
+        let tree = build();
+        let copy = tree.clone();
+        assert!(tree == copy, "a copy equals its original");
+        assert_eq!(hash_of(&tree), hash_of(&copy), "equal trees hash equally");
+        let mut debug = Counted::default();
+        write!(debug, "{tree:?}").expect("counting cannot fail");
+        let mut copied = Counted::default();
+        write!(copied, "{copy:?}").expect("counting cannot fail");
+        assert_eq!(debug.bytes, copied.bytes);
+        let text = pattern_to_select_query(&tree).len();
+        let built = window.sample();
+        drop(copy);
+        drop(tree);
+        let left = window.close();
+        assert!(built.retained_bytes > 0, "the tree was built");
+        assert_eq!(left.retained_bytes, 0, "the drop freed every node");
+        (debug.bytes, text)
+    })
+    .expect("the thread starts")
 }
 
 /// `OPTIONAL` a million times: a `LeftJoin` spine down its left operand.
 fn optional_spine() -> GraphPattern {
-    let mut pattern = one_triple();
+    let mut pattern = patterns::triple_bgp("s", iri("p"), "o");
     for _ in 0..LEVELS {
         pattern = GraphPattern::LeftJoin {
             left: Child::new(pattern),
@@ -146,7 +121,7 @@ fn optional_spine() -> GraphPattern {
 
 /// `{ … } UNION { … }` nested down the second arm.
 fn union_nest() -> GraphPattern {
-    let mut pattern = one_triple();
+    let mut pattern = patterns::triple_bgp("s", iri("p"), "o");
     for _ in 0..LEVELS {
         pattern = GraphPattern::Union {
             arms: Chain::new(empty(), pattern, []),
@@ -157,7 +132,7 @@ fn union_nest() -> GraphPattern {
 
 /// `FILTER EXISTS { FILTER EXISTS { … } }`: patterns and expressions alternating.
 fn exists_nest() -> GraphPattern {
-    let mut pattern = one_triple();
+    let mut pattern = patterns::triple_bgp("s", iri("p"), "o");
     for _ in 0..LEVELS {
         pattern = GraphPattern::Filter {
             expr: Expression::Exists(Child::new(pattern)),

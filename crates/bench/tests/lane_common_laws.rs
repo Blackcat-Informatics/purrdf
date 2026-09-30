@@ -18,9 +18,14 @@
 //! unless the valid neighbour is executed too — and two defects in this file's own
 //! subject matter were caught exactly that way rather than by reading.
 
+mod support;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use support::write_executable;
+
+use purrdf_testkit::paths::workspace_root;
 
 /// Runs `body` with `scripts/lane-common.sh` sourced, returning (exit code, stdout+stderr).
 ///
@@ -35,12 +40,12 @@ use std::process::Command;
 fn in_lane_common(body: &str) -> (i32, String) {
     let script = format!(
         "set -euo pipefail\nLANE=probe\nLANE_BINARY='probe binary'\nsource '{}'\n{body}\n",
-        repo_root().join("scripts/lane-common.sh").display()
+        workspace_root().join("scripts/lane-common.sh").display()
     );
     let output = Command::new("bash")
         .arg("-c")
         .arg(script)
-        .current_dir(repo_root())
+        .current_dir(workspace_root())
         .output()
         .expect("run bash with lane-common.sh sourced");
     (
@@ -61,13 +66,13 @@ fn in_lane_common(body: &str) -> (i32, String) {
 fn in_lane_common_with_tmpdir(body: &str, tmpdir: &Path) -> (i32, String) {
     let script = format!(
         "set -euo pipefail\nLANE=probe\nLANE_BINARY='probe binary'\nsource '{}'\n{body}\n",
-        repo_root().join("scripts/lane-common.sh").display()
+        workspace_root().join("scripts/lane-common.sh").display()
     );
     let output = Command::new("bash")
         .arg("-c")
         .arg(script)
         .env("TMPDIR", tmpdir)
-        .current_dir(repo_root())
+        .current_dir(workspace_root())
         .output()
         .expect("run bash with lane-common.sh sourced");
     (
@@ -78,13 +83,6 @@ fn in_lane_common_with_tmpdir(body: &str, tmpdir: &Path) -> (i32, String) {
             String::from_utf8_lossy(&output.stderr)
         ),
     )
-}
-
-fn repo_root() -> PathBuf {
-    let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    dir.pop();
-    dir.pop();
-    dir
 }
 
 fn scratch(label: &str) -> PathBuf {
@@ -533,13 +531,13 @@ fn a_multi_line_diagnostic_survives_flattening_instead_of_being_truncated() {
 fn sourcing_the_shared_laws_pins_collation_whatever_the_caller_had() {
     let script = format!(
         "set -euo pipefail\nLANE=probe\nLANE_BINARY=b\nsource '{}'\necho \"LC_ALL=${{LC_ALL}}\"",
-        repo_root().join("scripts/lane-common.sh").display()
+        workspace_root().join("scripts/lane-common.sh").display()
     );
     let output = Command::new("bash")
         .arg("-c")
         .arg(&script)
         .env("LC_ALL", "en_US.UTF-8")
-        .current_dir(repo_root())
+        .current_dir(workspace_root())
         .output()
         .expect("run bash with a UTF-8 collation in the environment");
     let combined = String::from_utf8_lossy(&output.stdout).to_string();
@@ -1294,17 +1292,6 @@ fn a_capture_is_read_only_when_there_is_something_to_read() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// Writes `contents` to `path`, makes it executable, and returns `path`.
-fn write_executable(path: PathBuf, contents: &str) -> PathBuf {
-    std::fs::write(&path, contents).expect("write the executable script");
-    let mut permissions = std::fs::metadata(&path)
-        .expect("stat the freshly written script")
-        .permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&path, permissions).expect("make the script executable");
-    path
-}
-
 #[test]
 fn a_certificate_does_not_depend_on_the_scratch_directory() {
     // A previous version of the digest captured Python's stderr into `LANE_TMP` and read
@@ -1439,7 +1426,8 @@ fn every_stderr_capture_into_the_scratch_directory_is_reset_first() {
         // file-based capture today, so including it is what keeps that true.
         "scripts/scale-corpus.sh",
     ] {
-        let text = std::fs::read_to_string(repo_root().join(script)).expect("read the lane script");
+        let text =
+            std::fs::read_to_string(workspace_root().join(script)).expect("read the lane script");
         let lines: Vec<&str> = text.lines().collect();
         for (index, line) in lines.iter().enumerate() {
             if line.trim_start().starts_with('#') {
@@ -1589,10 +1577,11 @@ fn capture_target(line: &str, at: usize) -> Option<String> {
 // one place and not its sibling — the law this whole file opens by stating.
 #[test]
 fn every_shared_lane_helper_appears_in_the_design_doc_inventory() {
-    let shared = std::fs::read_to_string(repo_root().join("scripts/lane-common.sh"))
+    let shared = std::fs::read_to_string(workspace_root().join("scripts/lane-common.sh"))
         .expect("read the shared lane laws");
-    let doc = std::fs::read_to_string(repo_root().join("docs/design/purrdf-bench-lane-laws.md"))
-        .expect("read the lane-laws design document");
+    let doc =
+        std::fs::read_to_string(workspace_root().join("docs/design/purrdf-bench-lane-laws.md"))
+            .expect("read the lane-laws design document");
 
     // A function definition at column zero: `lane_name() {`. The digits matter — a pattern of
     // `[a-z_]` alone silently missed `lane_sha256_file`, which is how a hand count of these
@@ -1670,7 +1659,7 @@ fn every_shared_lane_helper_appears_in_the_design_doc_inventory() {
 // indistinguishable from a pass.
 #[test]
 fn a_required_pin_is_returned_and_a_missing_one_is_refused_by_name() {
-    let root = repo_root();
+    let root = workspace_root();
 
     // A pin that IS recorded comes back as its value, so a caller comparing a digest has
     // something to compare against.
@@ -1704,7 +1693,7 @@ fn a_required_pin_is_returned_and_a_missing_one_is_refused_by_name() {
 
 #[test]
 fn an_optional_pin_reports_absence_and_dies_on_a_broken_lookup() {
-    let root = repo_root();
+    let root = workspace_root();
 
     // Found: sets LANE_PIN_VALUE and returns 0.
     let (code, out) = in_lane_common(&format!(

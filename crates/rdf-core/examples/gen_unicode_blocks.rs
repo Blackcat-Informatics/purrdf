@@ -26,6 +26,7 @@
 //! Run via `make metadata` (writes) or `make check` (verifies). Output goes
 //! to stdout; run with `--locked` per this workspace's convention.
 
+use purrdf_testkit::ucd::code_point_literal as format_codepoint_literal;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
@@ -53,10 +54,10 @@ fn parse_blocks_txt(text: &str) -> Vec<RawBlock> {
         let Some((lo_str, hi_str)) = range.trim().split_once("..") else {
             panic!("Blocks.txt range has no `..` separator: {line:?}");
         };
-        let lo = u32::from_str_radix(lo_str.trim(), 16)
-            .unwrap_or_else(|err| panic!("bad start codepoint {lo_str:?} in {line:?}: {err}"));
-        let hi = u32::from_str_radix(hi_str.trim(), 16)
-            .unwrap_or_else(|err| panic!("bad end codepoint {hi_str:?} in {line:?}: {err}"));
+        let lo = purrdf_hash::hex::parse_u32(lo_str.trim().as_bytes())
+            .unwrap_or_else(|| panic!("bad start codepoint {lo_str:?} in {line:?}"));
+        let hi = purrdf_hash::hex::parse_u32(hi_str.trim().as_bytes())
+            .unwrap_or_else(|| panic!("bad end codepoint {hi_str:?} in {line:?}"));
         blocks.push(RawBlock {
             lo,
             hi,
@@ -79,16 +80,6 @@ fn xsd_block_escape_name(ucd_name: &str) -> String {
         escape_name.push(ch);
     }
     escape_name
-}
-
-/// Formats a codepoint as an underscore-grouped 8-hex-digit `u32` literal
-/// (e.g. `0x0010_FFFF`), uniformly for every table row so `clippy::
-/// unreadable_literal` has nothing to flag regardless of magnitude —
-/// `Blocks.txt` ranges from 4-digit (`0x007F`) to 6-digit (`0x10FFFF`)
-/// codepoints, and only the 6-digit ones exceed the lint's un-grouped
-/// threshold.
-fn format_codepoint_literal(codepoint: u32) -> String {
-    format!("0x{:04X}_{:04X}", codepoint >> 16, codepoint & 0xFFFF)
 }
 
 fn main() {
@@ -240,6 +231,45 @@ fn main() {
         "//! <https://www.w3.org/TR/xmlschema11-2/#cces-blockesc>"
     )
     .unwrap();
+    writeln!(out).unwrap();
+    // The pinned version, read from the vendored file's own header rather
+    // than restated, so the function cannot disagree with the table.
+    let version = text
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("# Blocks-"))
+        .and_then(|rest| rest.strip_suffix(".txt"))
+        .unwrap_or_else(|| {
+            panic!(
+                "{} has no `# Blocks-X.Y.Z.txt` header",
+                blocks_txt_path.display()
+            )
+        });
+    let parts: Vec<u8> = version
+        .split('.')
+        .map(|part| {
+            part.parse()
+                .unwrap_or_else(|err| panic!("Blocks.txt version {version:?}: {err}"))
+        })
+        .collect();
+    let [major, minor, patch] = parts[..] else {
+        panic!("Blocks.txt version {version:?} is not X.Y.Z");
+    };
+    for line in [
+        "/// The Unicode version this block table is pinned to, read from the header of",
+        "/// the vendored `Blocks.txt`: the version of the Unicode tables embedded in the",
+        "/// locked `regex-syntax`, which the `regex` engine every translated pattern runs",
+        "/// on matches with, so a block escape and the engine's own classes agree at",
+        "/// every boundary code point. It is the one Unicode table in the workspace not",
+        "/// generated at `purrdf_lex::unicode::UNICODE_VERSION`; `scripts/check-generated.sh`",
+        "/// holds the pin and fails when `regex-syntax` moves without it.",
+        "#[must_use]",
+        "pub const fn unicode_version() -> (u8, u8, u8) {",
+    ] {
+        writeln!(out, "{line}").unwrap();
+    }
+    writeln!(out, "    ({major}, {minor}, {patch})").unwrap();
+    writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
     writeln!(
         out,

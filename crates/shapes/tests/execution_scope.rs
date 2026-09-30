@@ -18,6 +18,10 @@
 //!    back, which is what lets a stack-switching host park one validation and run
 //!    another.
 
+#[path = "support/report.rs"]
+mod report;
+
+use report::focus_nodes;
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -38,7 +42,7 @@ use purrdf_sparql_eval::{
 /// Test fixtures use `example.org`; PurRDF mints no vocabulary IRIs.
 const EX: &str = "http://example.org/";
 const ENDPOINT: &str = "http://example.org/sparql";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
 /// The refusal of a `SERVICE` in a SHACL-SPARQL query.
 const SERVICE_REFUSAL: &str = "a federated query (SERVICE) is not allowed";
@@ -133,17 +137,6 @@ fn sources_over(remote: Arc<RdfDataset>) -> QuerySources {
         )),
         load: None,
     }
-}
-
-/// The focus nodes a report names, sorted.
-fn focus_nodes(report: &ValidationReport) -> Vec<String> {
-    let mut nodes: Vec<String> = report
-        .results
-        .iter()
-        .map(|result| result.focus_node.to_string())
-        .collect();
-    nodes.sort();
-    nodes
 }
 
 /// Validate under an execution scope over `governors` and `sources`, returning the

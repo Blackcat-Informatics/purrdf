@@ -4,27 +4,16 @@
 //! End-to-end `project`/`lift` carrier coverage over the built CLI.
 
 use std::path::Path;
-use std::process::{Command, Output};
 
 mod support;
+use support::{run, run_with_input as run_with_stdin};
 
+use purrdf_lex::json;
 use purrdf_rdf::{ProjectionConfig, ProjectionPackage};
 use sha2::{Digest, Sha256};
 
-const PURRDF: &str = env!("CARGO_BIN_EXE_purrdf");
 const ATTACHED_ARCHIVE_SHA256: &str =
     "d714b63370b0026a28281f605794520fd4d1bc388ae8e5fdd367c5152cb95f6b";
-
-fn run(args: &[&str]) -> Output {
-    Command::new(PURRDF)
-        .args(args)
-        .output()
-        .expect("spawn purrdf")
-}
-
-fn run_with_stdin(args: &[&str], stdin: &[u8]) -> Output {
-    support::run_with_stdin(Command::new(PURRDF).args(args), stdin)
-}
 
 fn write(path: &Path, bytes: &[u8]) -> String {
     std::fs::write(path, bytes).expect("write fixture");
@@ -91,10 +80,11 @@ const RESEARCH_CONFIGS: &[(&str, &[u8])] = &[
 ];
 
 fn attached_ro_crate_config() -> Vec<u8> {
-    let mut config: serde_json::Value =
-        serde_json::from_slice(RESEARCH_CONFIGS[1].1).expect("RO-Crate configuration JSON");
-    config["config"]["packaging"] = serde_json::Value::String("attached".to_owned());
-    serde_json::to_vec(&config).expect("attached configuration JSON")
+    let mut config = json::read_slice(RESEARCH_CONFIGS[1].1, json::Limits::DEFAULT)
+        .expect("RO-Crate configuration JSON");
+    config["config"]["packaging"] = json::Value::from("attached");
+    config.sort_keys();
+    json::write_compact(&config).into_bytes()
 }
 
 fn attached_research_source() -> Vec<u8> {
@@ -134,8 +124,8 @@ fn project_is_byte_deterministic_and_lift_round_trips_with_ledgers() {
         String::from_utf8_lossy(&projected.stderr)
     );
     assert_eq!(projected.stdout, [] as [u8; 0]);
-    let ledger: serde_json::Value =
-        serde_json::from_slice(&projected.stderr).expect("project ledger JSON");
+    let ledger: json::Value =
+        json::read_slice(&projected.stderr, json::Limits::DEFAULT).expect("project ledger JSON");
     assert_eq!(ledger["schema_version"], 1);
     assert!(
         ledger["losses"]
@@ -181,12 +171,12 @@ fn project_is_byte_deterministic_and_lift_round_trips_with_ledgers() {
         String::from_utf8(lifted.stdout).expect("N-Quads"),
         "<https://example.org/s> <https://example.org/p> <https://example.org/o> .\n"
     );
-    let ledger: serde_json::Value =
-        serde_json::from_slice(&lifted.stderr).expect("lift ledger JSON");
+    let ledger: json::Value =
+        json::read_slice(&lifted.stderr, json::Limits::DEFAULT).expect("lift ledger JSON");
     assert_eq!(ledger["schema_version"], 1);
     assert_ne!(
         ledger["losses"].as_array().expect("loss array").as_slice(),
-        [] as [serde_json::Value; 0]
+        [] as [json::Value; 0]
     );
 }
 

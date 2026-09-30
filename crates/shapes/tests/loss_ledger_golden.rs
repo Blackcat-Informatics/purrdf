@@ -109,8 +109,7 @@ fn shapes_loss_ledger_has_not_drifted() {
     );
     let rendered = compiled.losses.render_json();
 
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../generated/shapes-loss-ledger.json");
+    let path = purrdf_testkit::paths::workspace_root().join("generated/shapes-loss-ledger.json");
     let on_disk =
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     assert_eq!(

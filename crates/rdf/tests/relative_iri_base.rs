@@ -701,7 +701,8 @@ fn a_caller_jsonld_context_and_the_egress_base_compose() {
     )
     .expect("absolute fixture parses");
     let options = JsonLdSerializeOptions::context(
-        &serde_json::json!({"ex": {"@id": "http://example.org/", "@prefix": true}}),
+        &purrdf_lex::json::read(r#"{"ex": {"@id": "http://example.org/", "@prefix": true}}"#)
+            .expect("context JSON"),
         None,
     )
     .expect("caller context compiles");
@@ -748,7 +749,7 @@ fn a_context_that_declares_its_own_base_keeps_it_over_the_egress_base() {
     )
     .expect("absolute fixture parses");
     let options = JsonLdSerializeOptions::context(
-        &serde_json::json!({"@base": "http://example.org/dir2/"}),
+        &purrdf_lex::json::read(r#"{"@base": "http://example.org/dir2/"}"#).expect("context JSON"),
         None,
     )
     .expect("caller context with its own base compiles");
@@ -812,7 +813,7 @@ fn egress_source_with_statement_layer() -> String {
 ///
 /// `SerializeGraph::DefaultGraph` is the non-`Dataset` selection under test because it is
 /// the one that KEEPS the statement layer (a `Named` selection emits no statement rows at
-/// all, by the same oxigraph-parity filter, and is covered by the accounting test below).
+/// all, by the same statement-layer filter, and is covered by the accounting test below).
 /// It is also exactly what Python's `Store.dump` passes.
 #[test]
 fn a_base_and_the_statement_layer_survive_together_under_a_non_dataset_selection() {

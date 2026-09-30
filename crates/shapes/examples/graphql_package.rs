@@ -5,10 +5,19 @@
 
 use std::error::Error;
 
+#[allow(
+    dead_code,
+    unused_imports,
+    unused_macros,
+    reason = "each target uses part of the crate's shared JSON model"
+)]
+#[path = "../src/json_model.rs"]
+mod json_model;
+
+use json_model::json;
 use purrdf::loss::LossLedger;
 use purrdf_shapes::json_schema::CompiledSchema;
 use purrdf_shapes::{GRAPHQL_NAME_MAP_PATH, GRAPHQL_SCHEMA_PATH, GraphqlConfig, emit_graphql};
-use serde_json::json;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let source_schema = json!({
@@ -27,7 +36,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     });
     let compiled = CompiledSchema {
-        schema_json: format!("{}\n", serde_json::to_string_pretty(&source_schema)?),
+        schema_json: format!("{}\n", json_model::write_pretty(&source_schema)),
         openapi_json: "{}\n".to_owned(),
         losses: LossLedger::new(),
     };

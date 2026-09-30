@@ -65,25 +65,30 @@
 //! [`PropertyFunction::open`] — so a call whose ceiling is already exhausted performs no
 //! work and is charged none, and the count resets only when the engine takes it.
 
+use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_be_labelled;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use purrdf_core::binding_pattern::BindingPattern;
-use purrdf_core::distance::{Arithmetic, Exact, Reassociated};
+use purrdf_core::distance::{Arithmetic, Exact};
 use purrdf_core::{
-    ContentDigest, EmbeddingView, IndexGuardView, IndexLossContract, Iri, TargetId, TargetSetId,
-    TargetSetView, TermValue, VectorSpaceId, verify_embedding,
+    ContentDigest, EmbeddingView, IndexLossContract, Iri, TargetId, TargetSetId, TermValue,
+    VectorSpaceId, verify_embedding,
+};
+use purrdf_sparql_eval::knn::{
+    KNN_ARITY, KNN_COUNT, KNN_DISTANCE, KNN_MEMBERSHIP_MODE, KNN_MODE, KNN_NEIGHBOUR, KNN_QUERY,
+    KnnInvocation, RankSource, RankedCursor, TermRows,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, CandidateDomains, Completeness, DepthPlacement, DuplicatePolicy, EvalError,
-    ExclusionBasis, IndexGeneration, Kernel, KnnGuard, OrderFidelity, PfArgs, PfArity, PfCursor,
-    PfRow, PropertyFunction, PropertyFunctionRegistry, RankArithmetic, RankFidelity, Ranked,
-    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+    ExclusionBasis, Kernel, KnnGuard, OrderFidelity, PfArgs, PfArity, PfCursor, PropertyFunction,
+    PropertyFunctionRegistry, RankArithmetic, RankFidelity, Ranked, RankedDeclaration,
+    RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 use crate::error::HnswError;
-use crate::graph::VectorMatrix;
-use crate::{HnswIndex, profile};
+use crate::{HnswIndex, IndexArithmetic, profile};
 
 /// An HNSW failure as the evaluator's error, under `context`.
 ///
@@ -97,47 +102,6 @@ fn eval_error(context: &str, error: HnswError) -> EvalError {
     }
 }
 
-/// The `?neighbour` position: the retrieved term.
-const HNSW_NEIGHBOUR: usize = 0;
-/// The `?query` position: the term whose vector seeds the search. Always an input.
-const HNSW_QUERY: usize = 1;
-/// The `k` position: how many neighbours to retrieve. Always an input.
-const HNSW_COUNT: usize = 2;
-/// The `?distance` position: the retrieved term's distance from the query.
-const HNSW_DISTANCE: usize = 3;
-/// The general access pattern [`HnswRelation`] declares: the seed and the neighbour
-/// count are the two positions it cannot enumerate, and the two it projects are free.
-const HNSW_MODE: &str = "fbbf";
-/// The **membership** access pattern [`HnswRelation`] declares beside [`HNSW_MODE`]:
-/// the neighbour and the seed bound, and the neighbour count **free**.
-///
-/// The free count is the whole of what distinguishes the two questions, and it is
-/// deliberately a *different mode* rather than a second reading of [`HNSW_MODE`]:
-///
-/// * with the count **bound**, `?neighbour ex:knn (?query k ?distance)` asks *is this
-///   term among the `k` this beam offers*. That invocation is subsumed by
-///   [`HNSW_MODE`] and always was, and it means exactly what it has always meant.
-/// * with the count **free** it asks *do you hold this term at all* — a question `k`
-///   is no part of, answered by [`HnswSpace::row_of`] alone.
-///
-/// One binding pattern cannot mean both without silently changing the answer to
-/// somebody's query, so the lattice separates them. [`HNSW_MODE`] does **not** subsume
-/// this pattern — subsumption is `bound(declared) ⊆ bound(invocation)`, and
-/// [`HNSW_MODE`] binds the count that this leaves free — so this is a genuinely new
-/// declared capability, with its own point
-/// [`PropertyFunction::rows_per_invocation`]. It is the question an
-/// [`ExclusionBasis::Membership`] lookup asks, this relation answers it, and a lookup
-/// really does arrive in it: the consumer renders the exclusion call with the count free
-/// and declares the candidate to the prepare, so the admission pass matches THIS pattern
-/// rather than [`HNSW_MODE`]. See [`PropertyFunction::open`] and the `exclusion` field of
-/// the ranked declaration.
-const HNSW_MEMBERSHIP_MODE: &str = "bbff";
-
-/// `xsd:double`, the datatype every emitted distance carries.
-const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-/// `xsd:integer`, the only datatype a neighbour count may carry.
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-
 // ---------------------------------------------------------------------------
 // The space
 // ---------------------------------------------------------------------------
@@ -150,16 +114,15 @@ const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 /// distinct RDF term. An invocation therefore fails only on things about the invocation.
 ///
 /// `A` is the index's [`Arithmetic`], [`Exact`] by default; a space over a
-/// [`HnswIndex::build_reassociated`] index is `HnswSpace<Reassociated>`, and its evidence
+/// [`build::<Reassociated>`](crate::build) index is `HnswSpace<Reassociated>`, and its evidence
 /// says so.
 #[derive(Debug, Clone)]
 pub struct HnswSpace<A: Arithmetic = Exact> {
     /// The decoded graph.
     index: Arc<HnswIndex<A>>,
-    /// Row `r`'s RDF term, in the artifact's canonical (ascending `TargetId`) row order.
-    terms: Vec<TermValue>,
-    /// Row numbers ordered by their term, for the seed lookup.
-    rows_by_term: Vec<usize>,
+    /// Row `r`'s RDF term, in the artifact's canonical (ascending `TargetId`) row order,
+    /// and the term-to-row lookup a seed needs.
+    rows: TermRows,
     /// The bounds one invocation is held to.
     guard: KnnGuard,
     /// The approximation evidence the profile publishes for this index's arithmetic and
@@ -169,12 +132,9 @@ pub struct HnswSpace<A: Arithmetic = Exact> {
     generation: Arc<str>,
 }
 
-/// The guard adapter that decodes a space's payload under arithmetic `A`.
-type Loader<A> = fn(&IndexGuardView<'_>, VectorMatrix) -> crate::Result<HnswIndex<A>>;
-
-impl HnswSpace {
+impl<A: IndexArithmetic> HnswSpace<A> {
     /// Build a queryable space from a PURREMB artifact's `(target_set, vector_space)` HNSW
-    /// index.
+    /// index, decoded under `A` with [`crate::guard::load`].
     ///
     /// # Errors
     ///
@@ -188,6 +148,9 @@ impl HnswSpace {
     /// commitment fails, an unreadable row, or a decoded kernel that disagrees with the
     /// family contract.
     ///
+    /// A guard naming the implementation of another arithmetic, or a payload recorded on a
+    /// dispatch path this process cannot run, is [`EvalError::Data`].
+    ///
     /// [`EvalError::FloatEnvironment`] when the calling thread's float environment is not
     /// the IEEE one the distance arithmetic defines.
     pub fn from_artifact(
@@ -196,107 +159,6 @@ impl HnswSpace {
         vector_space: VectorSpaceId,
         bindings: Vec<(TargetId, TermValue)>,
         guard: KnnGuard,
-    ) -> Result<Self, EvalError> {
-        Self::from_artifact_as(
-            artifact,
-            target_set,
-            vector_space,
-            bindings,
-            guard,
-            crate::guard::load,
-        )
-    }
-}
-
-impl HnswSpace<Reassociated> {
-    /// [`HnswSpace::from_artifact`] for an artifact whose HNSW guard names the
-    /// reassociated implementation, decoded with [`crate::guard::load_reassociated`].
-    ///
-    /// # Errors
-    ///
-    /// As [`HnswSpace::from_artifact`]; a guard naming the exact implementation, or a
-    /// payload recorded on a dispatch path this process cannot run, is
-    /// [`EvalError::Data`].
-    pub fn from_artifact_reassociated(
-        artifact: &[u8],
-        target_set: TargetSetId,
-        vector_space: VectorSpaceId,
-        bindings: Vec<(TargetId, TermValue)>,
-        guard: KnnGuard,
-    ) -> Result<Self, EvalError> {
-        Self::from_artifact_as(
-            artifact,
-            target_set,
-            vector_space,
-            bindings,
-            guard,
-            crate::guard::load_reassociated,
-        )
-    }
-}
-
-impl<A: Arithmetic> HnswSpace<A> {
-    /// Assemble a space directly from a decoded index and its row terms.
-    ///
-    /// # Errors
-    ///
-    /// [`EvalError::Config`] if the term count differs from the graph's row count, one
-    /// term is claimed by two rows, or the graph holds more rows than the guard admits.
-    ///
-    /// The candidate bound is checked here and not only in [`Self::from_artifact`],
-    /// which delegates to this function: it is a property of the space, and a space
-    /// assembled straight from an index is still a space the guard promised to bound.
-    pub fn from_index(
-        index: HnswIndex<A>,
-        terms: Vec<TermValue>,
-        guard: KnnGuard,
-    ) -> Result<Self, EvalError> {
-        if terms.len() != index.rows() {
-            return Err(EvalError::config(format!(
-                "the HNSW graph holds {} row(s) but {} term(s) were bound; every row must \
-                 stand for exactly one RDF term",
-                index.rows(),
-                terms.len()
-            )));
-        }
-        if index.rows() as u64 > guard.max_candidates() {
-            return Err(EvalError::config(format!(
-                "this space holds {} row(s), which is more than the {} candidate(s) the \
-                 configured guard admits",
-                index.rows(),
-                guard.max_candidates()
-            )));
-        }
-        check_distinct_terms(&terms)?;
-        let mut rows_by_term: Vec<usize> = (0..terms.len()).collect();
-        rows_by_term.sort_unstable_by(|&left, &right| terms[left].cmp(&terms[right]));
-        // Derived once, here, so BOTH constructors carry it: `from_artifact`
-        // delegates to this function, and a field present on one construction
-        // path and absent on the other is precisely the modal optionality this
-        // workspace refuses.
-        let generation = space_generation(&index, &terms);
-        // The evidence the guard of this index publishes: the profile's statement, and for
-        // an arithmetic whose bits depend on the path, that arithmetic's evidence along the
-        // path the image records.
-        let evidence = profile::loss_evidence_for::<A>(index.arithmetic().path());
-        Ok(Self {
-            index: Arc::new(index),
-            terms,
-            rows_by_term,
-            guard,
-            evidence,
-            generation,
-        })
-    }
-
-    /// Build a space from an artifact, loading its payload with `load`.
-    fn from_artifact_as(
-        artifact: &[u8],
-        target_set: TargetSetId,
-        vector_space: VectorSpaceId,
-        bindings: Vec<(TargetId, TermValue)>,
-        guard: KnnGuard,
-        load: Loader<A>,
     ) -> Result<Self, EvalError> {
         // The float environment first: verifying a normalized projection and reading its
         // rows are exact arithmetic, and a refused environment must be reported as one,
@@ -360,8 +222,8 @@ impl<A: Arithmetic> HnswSpace<A> {
 
         let matrix = crate::guard::read_effective_matrix(&effective, exact)
             .map_err(|e| EvalError::data(format!("the effective matrix is unreadable: {e}")))?;
-        let index =
-            load(&guard_view, matrix).map_err(|e| eval_error("the HNSW payload is unusable", e))?;
+        let index = crate::guard::load::<A>(&guard_view, matrix)
+            .map_err(|e| eval_error("the HNSW payload is unusable", e))?;
         if index.kernel() != kernel {
             return Err(EvalError::data(format!(
                 "the HNSW payload was built under a different distance kernel than the \
@@ -376,14 +238,66 @@ impl<A: Arithmetic> HnswSpace<A> {
             )));
         }
 
-        let terms = bind_terms(&set, bindings)?;
-        Self::from_index(index, terms, guard)
+        let rows = TermRows::bind(&set, bindings)?;
+        Self::from_index(index, rows.terms().to_vec(), guard)
+    }
+}
+
+impl<A: Arithmetic> HnswSpace<A> {
+    /// Assemble a space directly from a decoded index and its row terms.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::Config`] if the term count differs from the graph's row count, one
+    /// term is claimed by two rows, or the graph holds more rows than the guard admits.
+    ///
+    /// The candidate bound is checked here and not only in [`Self::from_artifact`],
+    /// which delegates to this function: it is a property of the space, and a space
+    /// assembled straight from an index is still a space the guard promised to bound.
+    pub fn from_index(
+        index: HnswIndex<A>,
+        terms: Vec<TermValue>,
+        guard: KnnGuard,
+    ) -> Result<Self, EvalError> {
+        if terms.len() != index.rows() {
+            return Err(EvalError::config(format!(
+                "the HNSW graph holds {} row(s) but {} term(s) were bound; every row must \
+                 stand for exactly one RDF term",
+                index.rows(),
+                terms.len()
+            )));
+        }
+        if index.rows() as u64 > guard.max_candidates() {
+            return Err(EvalError::config(format!(
+                "this space holds {} row(s), which is more than the {} candidate(s) the \
+                 configured guard admits",
+                index.rows(),
+                guard.max_candidates()
+            )));
+        }
+        let rows = TermRows::new(terms)?;
+        // Derived once, here, so BOTH constructors carry it: `from_artifact`
+        // delegates to this function, and a field present on one construction
+        // path and absent on the other is precisely the modal optionality this
+        // workspace refuses.
+        let generation = space_generation(&index, rows.terms());
+        // The evidence the guard of this index publishes: the profile's statement, and for
+        // an arithmetic whose bits depend on the path, that arithmetic's evidence along the
+        // path the image records.
+        let evidence = profile::loss_evidence_for::<A>(index.arithmetic().path());
+        Ok(Self {
+            index: Arc::new(index),
+            rows,
+            guard,
+            evidence,
+            generation,
+        })
     }
 
     /// How many candidate rows this space holds.
     #[must_use]
     pub fn row_count(&self) -> usize {
-        self.terms.len()
+        self.rows.len()
     }
 
     /// The effective dimension of every vector in this space.
@@ -453,16 +367,13 @@ impl<A: Arithmetic> HnswSpace<A> {
     /// The RDF term row `row` stands for.
     #[must_use]
     pub fn term(&self, row: usize) -> Option<&TermValue> {
-        self.terms.get(row)
+        self.rows.term(row)
     }
 
     /// The row `term` occupies, if this space holds it.
     #[must_use]
     pub fn row_of(&self, term: &TermValue) -> Option<usize> {
-        self.rows_by_term
-            .binary_search_by(|&row| self.terms[row].cmp(term))
-            .ok()
-            .map(|at| self.rows_by_term[at])
+        self.rows.row_of(term)
     }
 
     /// A relation over this space.
@@ -470,55 +381,6 @@ impl<A: Arithmetic> HnswSpace<A> {
     pub fn relation(self: &Arc<Self>) -> HnswRelation<A> {
         HnswRelation::new(Arc::clone(self))
     }
-}
-
-/// Place each binding at its target's row, proving the cover is exact.
-fn bind_terms(
-    set: &TargetSetView<'_>,
-    bindings: Vec<(TargetId, TermValue)>,
-) -> Result<Vec<TermValue>, EvalError> {
-    let row_count = set.row_count();
-    let mut terms: Vec<Option<TermValue>> = vec![None; row_count];
-    for (target, term) in bindings {
-        let row = set.row_for_target(target).ok_or_else(|| {
-            EvalError::config(format!(
-                "the binding for target {target} names a target this space's target set \
-                 does not hold"
-            ))
-        })?;
-        if terms[row].is_some() {
-            return Err(EvalError::config(format!(
-                "target {target} (row {row}) is bound twice; a row stands for exactly one \
-                 RDF term"
-            )));
-        }
-        terms[row] = Some(term);
-    }
-    let mut bound = Vec::with_capacity(row_count);
-    for (row, term) in terms.into_iter().enumerate() {
-        let term = term.ok_or_else(|| {
-            EvalError::config(format!(
-                "row {row} has no bound RDF term; a space with an unnamed row would search \
-                 {row_count} candidates and be able to report only some of them",
-            ))
-        })?;
-        bound.push(term);
-    }
-    check_distinct_terms(&bound)?;
-    Ok(bound)
-}
-
-/// Prove no term is claimed by two rows.
-fn check_distinct_terms(terms: &[TermValue]) -> Result<(), EvalError> {
-    let mut ordered: Vec<&TermValue> = terms.iter().collect();
-    ordered.sort_unstable();
-    if let Some([duplicate, _]) = ordered.windows(2).find(|pair| pair[0] == pair[1]) {
-        return Err(EvalError::config(format!(
-            "the term {duplicate:?} is bound to two different rows; a query seed names a \
-             term, so a term claimed by two rows makes the seed ambiguous"
-        )));
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -530,8 +392,9 @@ fn check_distinct_terms(terms: &[TermValue]) -> Result<(), EvalError> {
 /// [`Volatility::Stable`]: the graph is frozen and every distance is a pure function of two
 /// of its rows computed by a shared kernel under the index's arithmetic. Under [`Exact`] an
 /// invocation's rows are the same on the main thread, on a fork-join worker, and on
-/// `wasm32-unknown-unknown`; under [`Reassociated`] they are the same wherever this process
-/// runs the dispatch path the index recorded, and a process that cannot run it is refused.
+/// `wasm32-unknown-unknown`; under [`Reassociated`](purrdf_core::distance::Reassociated)
+/// they are the same wherever this process runs the dispatch path the index recorded, and
+/// a process that cannot run it is refused.
 #[derive(Debug, Clone)]
 pub struct HnswRelation<A: Arithmetic = Exact> {
     /// The space every invocation searches.
@@ -629,13 +492,13 @@ impl HnswRelation {
     ///
     /// The positions belong to the call shape, which is the same under every arithmetic;
     /// they are named on the default type so a caller spells them without naming a law.
-    pub const NEIGHBOUR: usize = HNSW_NEIGHBOUR;
+    pub const NEIGHBOUR: usize = KNN_NEIGHBOUR;
     /// The `?query` position: the term whose vector seeds the search.
-    pub const QUERY: usize = HNSW_QUERY;
+    pub const QUERY: usize = KNN_QUERY;
     /// The `k` position: how many neighbours to retrieve.
-    pub const COUNT: usize = HNSW_COUNT;
+    pub const COUNT: usize = KNN_COUNT;
     /// The `?distance` position: the retrieved term's distance from the query.
-    pub const DISTANCE: usize = HNSW_DISTANCE;
+    pub const DISTANCE: usize = KNN_DISTANCE;
 }
 
 impl<A: Arithmetic> HnswRelation<A> {
@@ -645,8 +508,8 @@ impl<A: Arithmetic> HnswRelation<A> {
         Self {
             space,
             modes: [
-                BindingPattern::from_code(HNSW_MODE),
-                BindingPattern::from_code(HNSW_MEMBERSHIP_MODE),
+                BindingPattern::from_code(KNN_MODE),
+                BindingPattern::from_code(KNN_MEMBERSHIP_MODE),
             ],
             observations: Arc::new(HnswObservations::default()),
         }
@@ -729,8 +592,8 @@ impl<A: Arithmetic> HnswRelation<A> {
     /// # The arithmetic enters both axes
     ///
     /// The space's evidence is the one the profile publishes for its index's arithmetic
-    /// and dispatch path, so under [`Reassociated`] the completeness axis carries the
-    /// reassociated sentence verbatim. And a law whose bits depend on the dispatch path
+    /// and dispatch path, so under [`Reassociated`](purrdf_core::distance::Reassociated)
+    /// the completeness axis carries the reassociated sentence verbatim. And a law whose bits depend on the dispatch path
     /// perturbs the order: near-tied rows may order differently from the exact distances,
     /// so the order axis is composed with [`OrderFidelity::Perturbed`] carrying that
     /// arithmetic's own evidence -- the words the reassociated kNN relation carries, so a
@@ -791,15 +654,15 @@ impl<A: Arithmetic> HnswRelation<A> {
                 pattern: TermPattern::of_kind(seed),
                 placements: vec![TermPlacement {
                     facet: RequestFacet::Value,
-                    position: HNSW_QUERY,
+                    position: KNN_QUERY,
                     datatype: None,
                 }],
             }],
             depth_placement: Some(DepthPlacement {
-                position: HNSW_COUNT,
+                position: KNN_COUNT,
                 datatype: depth_datatype,
             }),
-            candidate_position: HNSW_NEIGHBOUR,
+            candidate_position: KNN_NEIGHBOUR,
             // The space enforces distinct terms at construction, and one search
             // visits a node at most once, so a row cannot repeat within an
             // invocation.
@@ -834,12 +697,12 @@ impl<A: Arithmetic> HnswRelation<A> {
             // fused read as a contradiction the first time the stream named it.
             // Those two questions are two points of this relation's mode lattice,
             // and which one an invocation asks is decided by the count — see
-            // `HNSW_MEMBERSHIP_MODE` and [`Self::open`].
+            // `KNN_MEMBERSHIP_MODE` and [`Self::open`].
             //
             // What makes the basis deliverable is that a lookup arrives in the
             // membership mode. The consumer renders the lookup with the count left
             // FREE and declares the candidate a prepare parameter, so the
-            // admission pass sees `HNSW_MEMBERSHIP_MODE` rather than the general
+            // admission pass sees `KNN_MEMBERSHIP_MODE` rather than the general
             // one, and the invocation reaches this relation as the point lookup it
             // was admitted as. The promise that the candidate really will be
             // supplied is enforced where the execution begins; a plan that
@@ -868,7 +731,7 @@ impl<A: Arithmetic> PropertyFunction for HnswRelation<A> {
     }
 
     fn arity(&self) -> PfArity {
-        PfArity::new(1, 3)
+        KNN_ARITY
     }
 
     /// Two modes, answering two different questions.
@@ -926,7 +789,7 @@ impl<A: Arithmetic> PropertyFunction for HnswRelation<A> {
     /// [`Self::ranked_declaration`].
     fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
         let rows = self.space.row_count() as u64;
-        if mode.is_bound(HNSW_NEIGHBOUR) {
+        if mode.is_bound(KNN_NEIGHBOUR) {
             rows.min(1)
         } else {
             rows.min(self.space.guard().max_neighbours())
@@ -941,8 +804,8 @@ impl<A: Arithmetic> PropertyFunction for HnswRelation<A> {
     /// The **count** decides which of two questions an invocation is, and nothing else
     /// does.
     ///
-    /// With `k` **bound** — every invocation `HNSW_MODE` subsumes, which is every
-    /// invocation that was feasible before `HNSW_MEMBERSHIP_MODE` existed — the call
+    /// With `k` **bound** — every invocation `KNN_MODE` subsumes, which is every
+    /// invocation that was feasible before `KNN_MEMBERSHIP_MODE` existed — the call
     /// means what it has always meant: traverse the graph and offer the `k` the beam
     /// reached, filtering `?neighbour` and `?distance` afterwards. A bound `?neighbour`
     /// is therefore still *is this term among the `k` this beam offers*, and a term the
@@ -951,8 +814,8 @@ impl<A: Arithmetic> PropertyFunction for HnswRelation<A> {
     /// may: it is a public query surface, and a producer that quietly answered a wider
     /// question here would change the rows of a query nobody edited.
     ///
-    /// With `k` **free** and `?neighbour` bound — `HNSW_MEMBERSHIP_MODE`, a pattern
-    /// `HNSW_MODE` does not subsume and which was infeasible until it was declared —
+    /// With `k` **free** and `?neighbour` bound — `KNN_MEMBERSHIP_MODE`, a pattern
+    /// `KNN_MODE` does not subsume and which was infeasible until it was declared —
     /// the call asks *do you hold this term at all*. That is the question
     /// [`ExclusionBasis::Membership`] declares, and `k` is no part of it: there is one
     /// candidate and no offer to size. It is answered by [`HnswSpace::row_of`] — a
@@ -985,321 +848,68 @@ impl<A: Arithmetic> PropertyFunction for HnswRelation<A> {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
     ) -> Result<Box<dyn PfCursor>, EvalError> {
-        let declared = self.arity();
-        let supplied = args.arity();
-        if supplied != declared {
-            return Err(EvalError::function(format!(
-                "the HNSW relation expects {declared} argument(s), got {supplied}"
-            )));
-        }
-
-        let Some(query) = args.get(HNSW_QUERY) else {
-            return Err(EvalError::function(format!(
-                "the query term at position {HNSW_QUERY} is free; this relation retrieves \
-                 the neighbours of a seed and cannot enumerate seeds, which is why both of \
-                 its declared modes — `{HNSW_MODE}` and `{HNSW_MEMBERSHIP_MODE}` — demand it"
-            )));
-        };
-        let query_row = self.space.row_of(query);
-
-        // THE COUNT DECIDES WHICH QUESTION THIS IS, and nothing else does. A bound count
-        // is the ranked read this relation has always performed, down to the `k` cut on a
-        // bound `?neighbour`; a free count is the membership lookup. Branching on the
-        // candidate instead would make one binding pattern mean two questions and would
-        // silently widen the answer to `?n ex:knn (?q k ?d)` — a query nobody edited.
-        let (answer, count_term) = match args.get(HNSW_COUNT) {
-            Some(count) => {
-                let k = neighbour_count(count, self.space.guard())?;
-                // `?neighbour` and `?distance` are both filtered AFTER the ranking, so the
-                // ceiling is withheld from the selection when either is bound: pushing it
-                // down would rank a prefix, let the cursor filter it, and report fewer
-                // rows than the engine asked for as an exhausted answer.
-                let post_selection_filtered =
-                    args.get(HNSW_NEIGHBOUR).is_some() || args.get(HNSW_DISTANCE).is_some();
-                let select_k = if post_selection_filtered {
-                    k
-                } else {
-                    ceiling.map_or(k, |ceiling| k.min(usize::try_from(ceiling).unwrap_or(k)))
-                };
-                (
-                    Answer::Search {
-                        query_row,
-                        select_k,
-                    },
-                    count.clone(),
-                )
-            }
-            None => {
-                let Some(candidate) = args.get(HNSW_NEIGHBOUR) else {
-                    return Err(EvalError::function(format!(
-                        "the neighbour count at position {HNSW_COUNT} is free and so is the \
-                         neighbour at position {HNSW_NEIGHBOUR}; how many neighbours to \
-                         retrieve is a question this relation is asked, not one it answers, \
-                         so the only call it serves without a count is the membership lookup \
-                         `{HNSW_MEMBERSHIP_MODE}`, which names the one term it is about"
-                    )));
-                };
-                self.observations
-                    .membership_lookups
-                    .fetch_add(1, Ordering::Relaxed);
-                (
-                    Answer::Membership(query_row.zip(self.space.row_of(candidate))),
-                    universe_size(self.space.row_count()),
-                )
-            }
-        };
-
-        Ok(Box::new(HnswCursor {
-            space: Arc::clone(&self.space),
-            observations: Arc::clone(&self.observations),
-            answer,
-            query_term: query.clone(),
-            count_term,
-            bound: args.flattened().map(<Option<&TermValue>>::cloned).collect(),
-            ranked: None,
-            at: 0,
-            remaining: ceiling,
-            unreported_work: 0,
-        }))
+        let invocation = KnnInvocation::open(
+            "the HNSW relation",
+            args,
+            ceiling,
+            &self.space.rows,
+            self.space.guard(),
+            &self.observations.membership_lookups,
+        )?;
+        Ok(Box::new(RankedCursor::new(
+            HnswSource {
+                space: Arc::clone(&self.space),
+                observations: Arc::clone(&self.observations),
+            },
+            invocation,
+        )))
     }
 }
 
-/// The value the count position carries in a **membership** answer: the number of rows
-/// the space holds, as an `xsd:integer`.
-///
-/// # Why the position needs a value at all, and why this is the one
-///
-/// A [`PfRow`] carries a value for every flattened position, so a mode that leaves the
-/// count free must still fill it. In [`HNSW_MODE`] that position is an *input* — the
-/// request — and is echoed back verbatim. In [`HNSW_MEMBERSHIP_MODE`] there is no request
-/// to echo: the caller asked *do you hold this term*, a question no `k` is part of.
-///
-/// So under that mode the position is an **output**, and what it outputs is a fact about
-/// the producer rather than a request it was never given: the size of its term universe.
-/// That is exactly the quantity a membership answer is about — the lookup says *this term
-/// is one of my rows*, and this says *how many rows there are* — it is single-valued, so
-/// the mode's declared row bound of one is exact, and it costs a length read.
-///
-/// It is emphatically **not** a fabricated `k`. Inventing a request the caller did not
-/// make would put a claim about rank into a row that traversed nothing, which is the one
-/// thing a point lookup must never do.
-fn universe_size(rows: usize) -> TermValue {
-    TermValue::typed_literal(rows.to_string(), XSD_INTEGER)
-}
-
-/// Read `k` off the invocation's neighbour-count argument.
-fn neighbour_count(value: &TermValue, guard: KnnGuard) -> Result<usize, EvalError> {
-    let TermValue::Literal {
-        lexical_form,
-        datatype,
-        ..
-    } = value
-    else {
-        return Err(EvalError::function(format!(
-            "the neighbour count at position {HNSW_COUNT} is {value:?}, which is not an \
-             integer literal; there is no number of neighbours that names"
-        )));
-    };
-    if datatype != XSD_INTEGER {
-        return Err(EvalError::function(format!(
-            "the neighbour count at position {HNSW_COUNT} is a literal of datatype \
-             <{datatype}>; this relation emits an xsd:integer there"
-        )));
-    }
-    let Ok(purrdf_xsd::XsdValue::Integer { value: count, .. }) =
-        purrdf_xsd::parse(lexical_form, purrdf_xsd::XsdDatatype::Integer)
-    else {
-        return Err(EvalError::function(format!(
-            "the neighbour count at position {HNSW_COUNT} has lexical form \
-             {lexical_form:?}, which is not in the lexical space of xsd:integer"
-        )));
-    };
-    if count < 0 {
-        return Err(EvalError::function(format!(
-            "the neighbour count at position {HNSW_COUNT} is {count}; a search cannot return \
-             a negative number of neighbours"
-        )));
-    }
-    let bound = i128::from(guard.max_neighbours());
-    if count > bound {
-        return Err(EvalError::function(format!(
-            "the invocation asks for {count} neighbour(s), and the configured guard admits \
-             at most {bound}; returning the {bound} nearest instead would be a short answer \
-             reported as a complete one, so the request is refused rather than clamped"
-        )));
-    }
-    usize::try_from(count).map_err(|_| {
-        EvalError::function(format!(
-            "the neighbour count {count} does not fit this platform's index range"
-        ))
-    })
-}
-
-/// The cursor [`HnswRelation::open`] returns: the ranked neighbours, filtered on every
-/// bound position, cut at the engine's licence, and reporting the search's work.
-/// What one invocation is going to do, decided in [`HnswRelation::open`] from the access
-/// pattern it arrived in.
-///
-/// Two shapes rather than one with an optional field, because they are two different
-/// questions: one traverses a graph for a neighbourhood and the other asks whether a
-/// named term has a row at all. Naming them apart is what makes "the beam was not
-/// entered" a branch a reader can see rather than a condition buried in a selection size.
+/// How an [`HnswRelation`] ranks: a beam search over the decoded graph, and one
+/// pairwise distance for a membership answer, counted on the relation's observations.
 #[derive(Debug)]
-enum Answer {
-    /// Rank the seed's neighbourhood: the offer of candidates.
-    Search {
-        /// The seed's row, or `None` when the space does not hold the seed term.
-        query_row: Option<usize>,
-        /// How many neighbours the ranking retains.
-        select_k: usize,
-    },
-    /// Answer *do you hold this candidate*: the seed's row and the candidate's row, or
-    /// `None` when the space holds no row for one of them — which is equally an
-    /// exclusion, because a search from a seed with no row names nothing at all.
-    Membership(Option<(usize, usize)>),
-}
-
-#[derive(Debug)]
-struct HnswCursor<A: Arithmetic> {
+struct HnswSource<A: Arithmetic> {
     /// The space being searched.
     space: Arc<HnswSpace<A>>,
-    /// The relation's counters, so the work this cursor does is observable from the
+    /// The relation's counters, so the work a cursor does is observable from the
     /// relation a host still holds after moving it into a registry.
     observations: Arc<HnswObservations>,
-    /// What this invocation is going to do.
-    answer: Answer,
-    /// The seed term, echoed verbatim into position 1 of every row.
-    query_term: TermValue,
-    /// The neighbour count, echoed verbatim into position 2 of every row.
-    count_term: TermValue,
-    /// The invocation's bound values by flattened position (`None` = free).
-    bound: Vec<Option<TermValue>>,
-    /// The ranked neighbours, once the search has run.
-    ranked: Option<Vec<Ranked>>,
-    /// How far into `ranked` this cursor has read.
-    at: usize,
-    /// The rows this invocation may still emit under the engine's licence.
-    remaining: Option<u64>,
-    /// Candidates examined and not yet reported to the governor.
-    unreported_work: u64,
 }
 
-impl<A: Arithmetic> HnswCursor<A> {
-    /// Produce this invocation's rows if they have not been produced yet, recording the
-    /// candidates it examined.
-    ///
-    /// Laziness is what makes "no rows wanted" and "no work done" the same statement: the
-    /// engine checks its ceiling before the first pull, so a call with an exhausted ceiling
-    /// never reaches this function and is charged nothing.
-    ///
+impl<A: Arithmetic> RankSource for HnswSource<A> {
     /// The **only** call site of [`HnswIndex::search_rows_work`] in this relation, which
-    /// is what makes [`HnswObservations::searches`] a measurement rather than an estimate:
-    /// an invocation that did not call `ensure_ranked` traversed nothing, because
-    /// there is no other way for it to have done so.
-    fn ensure_ranked(&mut self) -> Result<(), EvalError> {
-        if self.ranked.is_some() {
-            return Ok(());
-        }
-        let (ranked, work) = match self.answer {
-            Answer::Search {
-                query_row: Some(row),
-                select_k,
-            } => {
-                self.observations.searches.fetch_add(1, Ordering::Relaxed);
-                let (ranked, work) = self
-                    .space
-                    .index
-                    .search_rows_work(row, select_k)
-                    .map_err(|e| eval_error("the HNSW search failed", e))?;
-                self.observations
-                    .graph_candidates
-                    .fetch_add(work, Ordering::Relaxed);
-                (ranked, work)
-            }
-            Answer::Search {
-                query_row: None, ..
-            }
-            | Answer::Membership(None) => (Vec::new(), 0),
-            // One pairwise evaluation, charged as the one candidate it examined. No node
-            // is visited and no layer is consulted.
-            Answer::Membership(Some((query_row, row))) => {
-                self.observations
-                    .membership_distances
-                    .fetch_add(1, Ordering::Relaxed);
-                let distance = self
-                    .space
-                    .index
-                    .row_distance(query_row, row)
-                    .map_err(|e| eval_error("the HNSW membership lookup failed", e))?;
-                (vec![Ranked { distance, row }], 1)
-            }
-        };
-        self.unreported_work = self.unreported_work.saturating_add(work);
-        self.ranked = Some(ranked);
-        Ok(())
+    /// is what makes [`HnswObservations::searches`] a measurement rather than an estimate.
+    fn search(&self, query_row: usize, select_k: usize) -> Result<(Vec<Ranked>, u64), EvalError> {
+        self.observations.searches.fetch_add(1, Ordering::Relaxed);
+        let (ranked, work) = self
+            .space
+            .index
+            .search_rows_work(query_row, select_k)
+            .map_err(|e| eval_error("the HNSW search failed", e))?;
+        self.observations
+            .graph_candidates
+            .fetch_add(work, Ordering::Relaxed);
+        Ok((ranked, work))
     }
 
-    /// The full row for one ranked neighbour.
-    fn build(&self, scored: Ranked) -> Result<PfRow, EvalError> {
-        let neighbour = self.space.term(scored.row).ok_or_else(|| {
-            EvalError::data(format!(
-                "the ranking named row {}, which the space does not hold",
-                scored.row
-            ))
-        })?;
-        Ok(vec![
-            neighbour.clone(),
-            self.query_term.clone(),
-            self.count_term.clone(),
-            TermValue::typed_literal(
-                purrdf_xsd::numeric::canonical_double(scored.distance),
-                XSD_DOUBLE,
-            ),
-        ])
-    }
-}
-
-impl<A: Arithmetic> PfCursor for HnswCursor<A> {
-    /// The generation of the space that answered.
-    ///
-    /// The space is immutable once built, so the reading taken here is true for
-    /// every row this cursor goes on to emit.
-    ///
-    /// The `Arc` is cloned rather than the string: the space already holds the
-    /// one encoding of what it attested, and handing back a pointer to it is
-    /// what keeps a per-invocation allocation off this path.
-    fn generation(&self) -> IndexGeneration {
-        IndexGeneration::Declared(Arc::clone(&self.space.generation))
+    /// One pairwise evaluation: no node is visited and no layer is consulted.
+    fn distance(&self, query_row: usize, row: usize) -> Result<f64, EvalError> {
+        self.observations
+            .membership_distances
+            .fetch_add(1, Ordering::Relaxed);
+        self.space
+            .index
+            .row_distance(query_row, row)
+            .map_err(|e| eval_error("the HNSW membership lookup failed", e))
     }
 
-    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
-        if self.remaining == Some(0) {
-            return Ok(None);
-        }
-        self.ensure_ranked()?;
-        let ranked = self.ranked.as_ref().expect("ensure_ranked populated it");
-        while let Some(&scored) = ranked.get(self.at) {
-            self.at += 1;
-            let row = self.build(scored)?;
-            let agrees = self
-                .bound
-                .iter()
-                .zip(row.iter())
-                .all(|(want, have)| want.as_ref().is_none_or(|want| want == have));
-            if agrees {
-                if let Some(remaining) = self.remaining.as_mut() {
-                    *remaining = remaining.saturating_sub(1);
-                }
-                return Ok(Some(row));
-            }
-        }
-        Ok(None)
+    fn term(&self, row: usize) -> Option<&TermValue> {
+        self.space.term(row)
     }
 
-    /// One unit per **candidate examined** — one distance computation against one row of
-    /// the graph, taken from the index's search memo.
-    fn take_work(&mut self) -> u64 {
-        core::mem::take(&mut self.unreported_work)
+    fn generation(&self) -> Arc<str> {
+        Arc::clone(&self.space.generation)
     }
 }
 
@@ -1369,38 +979,26 @@ pub use purrdf_sparql_eval::composed_order_fidelity;
 /// same graph, parameters and terms digest identically on every target.
 fn space_generation<A: Arithmetic>(index: &HnswIndex<A>, terms: &[TermValue]) -> Arc<str> {
     let mut bytes = Vec::new();
-    append_framed(&mut bytes, b"domain", SPACE_GENERATION_DOMAIN.as_bytes());
-    append_framed(&mut bytes, b"image", &index.canonical_image());
-    append_framed(
+    frame_be_labelled(&mut bytes, "domain", SPACE_GENERATION_DOMAIN.as_bytes());
+    frame_be_labelled(&mut bytes, "image", &index.canonical_image());
+    frame_be_labelled(
         &mut bytes,
-        b"parameters",
+        "parameters",
         &profile::parameters(index.params()),
     );
-    append_framed(
-        &mut bytes,
-        b"row-count",
-        &(terms.len() as u64).to_be_bytes(),
-    );
+    frame_be_labelled(&mut bytes, "row-count", &(terms.len() as u64).to_be_bytes());
     let mut term_bytes = Vec::new();
     for term in terms {
         term_bytes.clear();
         term.canonical_bytes(&mut term_bytes);
-        append_framed(&mut bytes, b"term", &term_bytes);
+        frame_be_labelled(&mut bytes, "term", &term_bytes);
     }
     Arc::from(ContentDigest::of(&bytes).to_hex().as_str())
 }
 
-/// Append `value` to `out` under `tag`, both length-framed.
-fn append_framed(out: &mut Vec<u8>, tag: &[u8], value: &[u8]) {
-    out.extend_from_slice(&(tag.len() as u64).to_be_bytes());
-    out.extend_from_slice(tag);
-    out.extend_from_slice(&(value.len() as u64).to_be_bytes());
-    out.extend_from_slice(value);
-}
-
 /// The domain separator every HNSW space generation opens with, so this digest
 /// can never equal a digest of the same bytes taken for another purpose.
-const SPACE_GENERATION_DOMAIN: &str = "purrdf-hnsw/space-generation-v1";
+const SPACE_GENERATION_DOMAIN: Domain = Domain::new(b"purrdf-hnsw/space-generation-v1");
 
 /// Everything [`HnswRelation::ranked_declaration`] cannot derive: the five facts
 /// a host states about its own corpus and pipeline when it registers a space as
@@ -1484,16 +1082,16 @@ mod tests {
     use purrdf_core::DistanceMetric;
 
     use super::*;
-    use crate::{Params, VectorMatrix, level::splitmix64};
+    use crate::{Params, VectorMatrix};
+    use purrdf_xsd::datatype::XSD_INTEGER;
 
     fn matrix(rows: usize, dims: usize) -> VectorMatrix {
         let mut state = 0x5151_5151_5151_5151_u64;
         let mut data = Vec::with_capacity(rows * dims);
         for _ in 0..rows * dims {
-            state = splitmix64(state);
-            let unit = (state >> 11) as f64 / (1_u64 << 53) as f64;
-            let value = unit.mul_add(2.0, -1.0);
-            data.push(if value == 0.0 { 0.25 } else { value });
+            data.push(purrdf_testkit::rng::signed_unit_step_nonzero(
+                &mut state, 0.25,
+            ));
         }
         VectorMatrix::new(rows, dims, data).expect("valid fixture")
     }
@@ -1522,6 +1120,22 @@ mod tests {
         let object = [Some(&seed), Some(&count), None];
         let args = PfArgs::new(&subject, &object);
         relation.open(&args, None).expect("opens")
+    }
+
+    /// The space generation is frozen over a fixed index and fixed terms: it reaches
+    /// retrieval evidence, so a moved value is a changed persisted identity.
+    #[test]
+    fn the_space_generation_is_frozen() {
+        let index = HnswIndex::build(
+            matrix(6, 4),
+            &DistanceMetric::SquaredEuclidean,
+            Params::new(4, 8, 16, 8).expect("valid"),
+        )
+        .expect("builds");
+        assert_eq!(
+            &*space_generation(&index, &terms(6)),
+            "88d28fb13f55f3339a84a314e839558f471be39e9f715a371c8897cfa0dd7655"
+        );
     }
 
     #[test]

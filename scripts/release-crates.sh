@@ -13,8 +13,8 @@
 # necessary in the first place; there is now only one copy.
 #
 # `purrdf-python`, `purrdf-cli`, `purrdf-capi`, `purrdf-sparql-conformance`,
-# `purrdf-envelope-probe`, `purrdf-bench`, `purrdf-alloc-probe`,
-# `purrdf-testkit` and `wasm-link`
+# `purrdf-hash-conformance`, `purrdf-envelope-probe`, `purrdf-bench`,
+# `purrdf-alloc-probe`, `purrdf-testkit`, `wasm-link` and `helper-census`
 # are deliberately NOT here — see docs/RELEASE.md.
 #
 # `purrdf-alloc-probe` and `purrdf-testkit` are the ones of those that published
@@ -45,14 +45,16 @@
 
 # shellcheck disable=SC2034  # consumed by the sourcing script.
 PURRDF_RELEASE_CRATES=(
+  purrdf-hash
+  purrdf-stack
+  purrdf-lex
   purrdf-events
   purrdf-iri
   purrdf-xsd
   purrdf-cdt
   purrdf-jsonschema
-  purrdf-hash
   purrdf-deflate
-  purrdf-stack
+  purrdf-ed25519
   purrdf-gts
   purrdf-core
   purrdf-columnar
@@ -98,10 +100,12 @@ PURRDF_RELEASE_CRATES=(
 
 # shellcheck disable=SC2034  # consumed by the sourcing script.
 PURRDF_UNBOOTSTRAPPED_CRATES=(
-  purrdf-jsonschema
   purrdf-hash
-  purrdf-deflate
   purrdf-stack
+  purrdf-lex
+  purrdf-jsonschema
+  purrdf-deflate
+  purrdf-ed25519
   purrdf-hnsw
   purrdf-retrieval
 )

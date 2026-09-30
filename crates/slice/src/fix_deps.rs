@@ -22,11 +22,12 @@
 //!   set before it is returned (HIGH-7: never emit malformed Turtle).
 //!
 //! Why surgical-validated rather than full re-serialization: re-serializing the
-//! whole manifest via oxigraph would reorder/reformat the entire file (losing the
+//! whole manifest would reorder/reformat the entire file (losing the
 //! author's comments and ordering), producing an enormous diff and risking the
 //! producer/CITATION projections and `make validate`. The surgical edit keeps the
 //! diff minimal while the re-parse gives full RDF correctness.
 
+use purrdf_iri::terminals;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -230,9 +231,11 @@ fn parse_turtle(bytes: &[u8], base: Option<&str>, path: &str) -> Result<Dataset,
 fn extract_vocab_prefix(text: &str, vocab: &SliceVocab) -> String {
     let needle = format!("{}:", vocab.prefix_name());
     for line in text.lines() {
-        let trimmed = line.trim_start();
+        // Turtle `WS` before the directive and after its keyword: a NO-BREAK
+        // SPACE or FORM FEED there is content, and no directive begins with it.
+        let trimmed = &line[terminals::skip_ws(line.as_bytes(), 0)..];
         if let Some(rest) = trimmed.strip_prefix("@prefix") {
-            let rest = rest.trim_start();
+            let rest = &rest[terminals::skip_ws(rest.as_bytes(), 0)..];
             if let Some(after) = rest.strip_prefix(needle.as_str())
                 && let Some(open) = after.find('<')
                 && let Some(close) = after[open + 1..].find('>')
@@ -362,7 +365,7 @@ fn find_depends_on_block(text: &str, vocab: &SliceVocab) -> Option<DependsBlock>
         // is not the predicate.
         let before_ok = idx == 0 || is_token_boundary_before(bytes[idx - 1]);
         let after_idx = idx + needle.len();
-        let after_ok = after_idx >= bytes.len() || is_token_boundary_after(bytes[after_idx]);
+        let after_ok = after_idx >= bytes.len() || terminals::is_ws(bytes[after_idx]);
         if before_ok && after_ok && !in_span(&comments, idx) {
             break idx;
         }
@@ -413,12 +416,9 @@ fn find_depends_on_block(text: &str, vocab: &SliceVocab) -> Option<DependsBlock>
     })
 }
 
+/// Turtle `WS` or the punctuation that ends a term.
 fn is_token_boundary_before(b: u8) -> bool {
-    matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b';' | b',' | b'.')
-}
-
-fn is_token_boundary_after(b: u8) -> bool {
-    matches!(b, b' ' | b'\t' | b'\n' | b'\r')
+    terminals::is_ws(b) || matches!(b, b';' | b',' | b'.')
 }
 
 /// Rewrite an existing predicate block with the desired object set. When the set
@@ -444,7 +444,7 @@ fn rewrite_block(
         // (plus whitespace/newline). Trim trailing whitespace, swap a trailing
         // `;` to the block terminator if the block was the statement's `.`.
         if block.terminator == '.' {
-            let trimmed = out.trim_end_matches([' ', '\t', '\n', '\r']);
+            let trimmed = out.trim_end_matches(terminals::is_ws_char);
             if let Some(stripped) = trimmed.strip_suffix(';') {
                 let removed = &out[stripped.len()..]; // the `;` + trailing ws
                 let trailing_ws = &removed[1..]; // whitespace after the `;`
@@ -575,6 +575,31 @@ mod tests {
         SliceVocab::for_namespace(NS)
     }
 
+    #[test]
+    fn a_prefix_directive_led_by_a_unicode_space_is_not_a_directive() {
+        let name = vocab().prefix_name().to_owned();
+        for text in [
+            format!("\u{a0}@prefix {name}: <https://example.org/other/> ."),
+            format!("@prefix\u{a0}{name}: <https://example.org/other/> ."),
+            format!("\u{c}@prefix {name}: <https://example.org/other/> ."),
+        ] {
+            assert_eq!(extract_vocab_prefix(&text, &vocab()), NS, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_prefix_directive_led_by_turtle_ws_is_still_read() {
+        let name = vocab().prefix_name().to_owned();
+        for lead in ["", " ", "\t", " \t "] {
+            let text = format!("{lead}@prefix \t{name}: <https://example.org/other/> .");
+            assert_eq!(
+                extract_vocab_prefix(&text, &vocab()),
+                "https://example.org/other/",
+                "{text:?}"
+            );
+        }
+    }
+
     fn proposal(slice_local: &str, add: &[&str], remove: &[&str]) -> DepProposal {
         DepProposal {
             slice_iri: format!("{NS}slices/{slice_local}"),
@@ -612,8 +637,8 @@ mod tests {
         assert!(patched.contains("vocab:sliceTier vocab:tierCore ."));
     }
 
-    /// An UNDECLARED edge add must produce well-formed Turtle parseable by
-    /// oxigraph, declaring the new dependency.
+    /// An UNDECLARED edge add must produce well-formed Turtle that re-parses,
+    /// declaring the new dependency.
     #[test]
     fn add_undeclared_dependency_is_well_formed() {
         let manifest = "\

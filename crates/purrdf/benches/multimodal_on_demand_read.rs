@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! The fused read taken on demand against the same read materialised, over **real**
@@ -81,12 +81,11 @@
 //! `tests/multimodal_exclusion_lookup.rs`.
 
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::hint::black_box;
 use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
+use purrdf_testkit::rng::signed_unit_next_nonzero;
 
 use purrdf::hnsw::relation::{HnswRelation, HnswSpace};
 use purrdf::hnsw::{HnswIndex, Params, VectorMatrix};
@@ -99,37 +98,17 @@ use purrdf::sparql::{KnnGuard, PropertyFunctionRegistry, RankedDeclaration, Term
 use purrdf::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 use purrdf::{DistanceMetric, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 
+#[path = "../tests/support/multimodal.rs"]
+mod multimodal;
+
+use multimodal::kernel_iri;
+use purrdf::retrieval::block_on;
+use purrdf::retrieval::fixture::{iri, shared_block};
+
 /// The fixture namespace. A bench mints no vocabulary of its own, and a
 /// reserved-for-documentation authority is the only one it may put in a term.
 fn ex(suffix: &str) -> String {
     format!("http://example.org/{suffix}")
-}
-
-fn iri(text: &str) -> Iri {
-    Iri::parse(text).expect("fixture IRIs are valid")
-}
-
-fn kernel_iri(text: &str) -> purrdf::iri::Iri {
-    purrdf::iri::parse(text).expect("fixture IRIs are valid")
-}
-
-/// A single-threaded executor; nothing here ever pends.
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ParkWaker(std::thread::Thread);
-    impl Wake for ParkWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
 }
 
 /// The needle every text producer here is searched for.
@@ -160,11 +139,6 @@ const LOOKUP_ROWS: usize = 2_000;
 /// The smoothing constant every fusion profile here decays by.
 fn recip_k() -> u32 {
     u32::try_from(RECIP_K).expect("the smoothing constant fits")
-}
-
-/// The one shared domain tag configurations B and C declare on both producers.
-fn shared_block() -> DomainTag {
-    DomainTag::parse(&ex("domain/shared")).expect("the fixture domain tag is a valid IRI")
 }
 
 /// Statistics that narrow nothing: each stratum holds exactly what its fixture built.
@@ -222,21 +196,13 @@ fn text_index(dataset: &RdfDataset, predicate: &str) -> Arc<TextIndex> {
     Arc::new(TextIndex::from_dataset(dataset, &config).expect("the fixture index builds"))
 }
 
-/// Deterministic vectors, splitmix64, spelled here so the fixture depends on no
-/// private helper.
+/// Deterministic vectors: testkit's SplitMix64 counter stream mapped to `[-1, 1)`,
+/// the one exact zero replaced by `0.125` so no row has a zero component.
 fn splitmix_vectors(seed: u64, rows: usize, dims: usize) -> Vec<f64> {
     let mut state = seed;
-    let mut data = Vec::with_capacity(rows * dims);
-    for _ in 0..rows * dims {
-        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        let value = ((z >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0);
-        data.push(if value == 0.0 { 0.125 } else { value });
-    }
-    data
+    (0..rows * dims)
+        .map(|_| signed_unit_next_nonzero(&mut state, 0.125))
+        .collect()
 }
 
 /// An HNSW space of `terms.len()` rows, named by `terms`.
@@ -482,7 +448,7 @@ fn text_pair_profile() -> FusionProfile {
     profile_over(&[ex("stratum/left"), ex("stratum/right")])
 }
 
-fn text_text_reads(c: &mut Criterion) {
+fn text_text_reads(c: &mut Bench) {
     for (shape, name) in SHAPES {
         let mut group = c.benchmark_group(format!("multimodal_on_demand_read/text_text/{name}"));
         for &rows in &SIZES {
@@ -691,7 +657,7 @@ fn hnsw_pair_profile() -> FusionProfile {
     profile_over(&[ex("stratum/text"), ex("stratum/vector")])
 }
 
-fn text_hnsw_reads(c: &mut Criterion) {
+fn text_hnsw_reads(c: &mut Bench) {
     for (shape, name) in SHAPES {
         let mut group = c.benchmark_group(format!("multimodal_on_demand_read/text_hnsw/{name}"));
         for &rows in &SIZES {
@@ -750,10 +716,10 @@ fn text_hnsw_reads(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 /// Bench one already-open stratum's `exclusion` call against `candidate`, under the
-/// given `id`. The stratum is prepared once, before this is called; every criterion
+/// given `id`. The stratum is prepared once, before this is called; every harness
 /// iteration re-times the same lookup.
 fn bench_single_lookup(
-    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    group: &mut purrdf_testkit::bench::BenchmarkGroup<'_>,
     id: &str,
     stream: &mut purrdf::retrieval::StratumStream<'_>,
     candidate: &Term,
@@ -765,7 +731,7 @@ fn bench_single_lookup(
     });
 }
 
-fn single_lookup(c: &mut Criterion) {
+fn single_lookup(c: &mut Bench) {
     let mut group = c.benchmark_group("multimodal_on_demand_read/single_lookup");
 
     // A real text index: the shared-block, disjoint text+text pair, so the right
@@ -871,5 +837,5 @@ fn single_lookup(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, text_text_reads, text_hnsw_reads, single_lookup);
-criterion_main!(benches);
+bench_group!(benches, text_text_reads, text_hnsw_reads, single_lookup);
+bench_main!(benches);

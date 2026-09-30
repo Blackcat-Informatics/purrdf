@@ -1,27 +1,52 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use serde::Serialize;
+use crate::projections::util::require_strictly_sorted;
+use purrdf_lex::json::{Object, Value};
 
+use super::super::json_codec::{ToJson, json_string_enum};
 use super::super::util::canonical_json_bounded;
 use super::super::{ProjectionError, validate_absolute_iri};
 use super::OboGraphsConfig;
 
-// Serde's `skip_serializing_if` callback receives a shared field reference.
-#[allow(
-    clippy::trivially_copy_pass_by_ref,
-    reason = "serde skip_serializing_if requires fn(&bool)"
-)]
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-fn is_empty<T>(values: &[T]) -> bool {
-    values.is_empty()
+/// Write a type's OBO Graphs JSON object from one member list.
+///
+/// OBO Graphs 0.3.2 JSON leaves out an absent optional member and an empty
+/// list, so each member names how it is written: `always`; `some`, left out
+/// when `None`; `items`, left out when empty; `flag`, written `true` only when
+/// set. Members are written in list order.
+macro_rules! obo_json {
+    ($type:ty { $($mode:ident $name:literal => $field:ident),* $(,)? }) => {
+        impl ToJson for $type {
+            fn to_json(&self) -> Value {
+                let mut object = Object::new();
+                $(obo_json!(@$mode object, $name, self.$field);)*
+                Value::Object(object)
+            }
+        }
+    };
+    (@always $object:ident, $name:literal, $value:expr) => {
+        $object.push($name, $value.to_json())
+    };
+    (@some $object:ident, $name:literal, $value:expr) => {
+        if let Some(value) = &$value {
+            $object.push($name, value.to_json());
+        }
+    };
+    (@items $object:ident, $name:literal, $value:expr) => {
+        if !$value.is_empty() {
+            $object.push($name, $value.to_json());
+        }
+    };
+    (@flag $object:ident, $name:literal, $value:expr) => {
+        if $value {
+            $object.push($name, true);
+        }
+    };
 }
 
 /// OBO Graphs node kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-#[serde(rename_all = "UPPERCASE")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum OboNodeType {
     /// OWL/RDFS class.
     Class,
@@ -32,8 +57,7 @@ pub enum OboNodeType {
 }
 
 /// OBO Graphs property kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-#[serde(rename_all = "UPPERCASE")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum OboPropertyType {
     /// Annotation property.
     Annotation,
@@ -44,86 +68,66 @@ pub enum OboPropertyType {
 }
 
 /// One metadata property value in the 0.3.2 object model.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OboPropertyValue {
     /// Full predicate IRI.
     pub pred: String,
     /// Lexical or full-IRI value admitted by the OBO Graphs scalar surface.
     pub val: String,
     /// Supporting xrefs.
-    #[serde(skip_serializing_if = "is_empty")]
     pub xrefs: Vec<String>,
     /// RDF statement annotations retained as nested metadata.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<Box<OboMeta>>,
 }
 
 /// One OBO synonym property value.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OboSynonym {
     /// Optional caller-supplied synonym-type value.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub synonym_type: Option<String>,
     /// Full synonym predicate IRI.
     pub pred: String,
     /// Synonym text.
     pub val: String,
     /// Supporting xrefs.
-    #[serde(skip_serializing_if = "is_empty")]
     pub xrefs: Vec<String>,
     /// RDF statement annotations retained as nested metadata.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<Box<OboMeta>>,
 }
 
 /// One OBO cross-reference property value.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OboXref {
     /// Optional display label.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub lbl: Option<String>,
     /// Full xref predicate IRI.
     pub pred: String,
     /// Cross-reference value.
     pub val: String,
     /// Supporting xrefs.
-    #[serde(skip_serializing_if = "is_empty")]
     pub xrefs: Vec<String>,
     /// RDF statement annotations retained as nested metadata.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<Box<OboMeta>>,
 }
 
 /// OBO Graphs 0.3.2 metadata, including nested axiom metadata.
-#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OboMeta {
     /// Distinguished textual definition.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub definition: Option<OboPropertyValue>,
     /// Comments.
-    #[serde(skip_serializing_if = "is_empty")]
     pub comments: Vec<String>,
     /// Subset identifiers.
-    #[serde(skip_serializing_if = "is_empty")]
     pub subsets: Vec<String>,
     /// Synonyms.
-    #[serde(skip_serializing_if = "is_empty")]
     pub synonyms: Vec<OboSynonym>,
     /// Cross-references.
-    #[serde(skip_serializing_if = "is_empty")]
     pub xrefs: Vec<OboXref>,
     /// Other property values.
-    #[serde(skip_serializing_if = "is_empty")]
     pub basic_property_values: Vec<OboPropertyValue>,
     /// Version string.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// Deprecation marker.
-    #[serde(skip_serializing_if = "is_false")]
     pub deprecated: bool,
 }
 
@@ -182,80 +186,93 @@ impl OboMeta {
     }
 }
 
+/// Validate an annotated value's predicate IRI and its metadata: the one law
+/// property values, synonyms and xrefs share.
+fn validate_annotated(
+    predicate: &str,
+    what: &str,
+    meta: Option<&OboMeta>,
+    depth: usize,
+    config: &OboGraphsConfig,
+) -> Result<(), ProjectionError> {
+    validate_absolute_iri(predicate, what)?;
+    meta.map_or(Ok(()), |meta| meta.validate(depth, config))
+}
+
+/// Normalize an annotated value's xrefs and metadata: the one law property
+/// values, synonyms and xrefs share.
+fn normalize_annotated(xrefs: &mut Vec<String>, meta: Option<&mut OboMeta>) {
+    normalize_strings(xrefs);
+    if let Some(meta) = meta {
+        meta.normalize();
+    }
+}
+
 impl OboPropertyValue {
     fn normalize(&mut self) {
-        normalize_strings(&mut self.xrefs);
-        if let Some(meta) = &mut self.meta {
-            meta.normalize();
-        }
+        normalize_annotated(&mut self.xrefs, self.meta.as_deref_mut());
     }
 
     fn validate(&self, depth: usize, config: &OboGraphsConfig) -> Result<(), ProjectionError> {
-        validate_absolute_iri(&self.pred, "OBO Graphs property-value predicate")?;
-        if let Some(meta) = &self.meta {
-            meta.validate(depth, config)?;
-        }
-        Ok(())
+        validate_annotated(
+            &self.pred,
+            "OBO Graphs property-value predicate",
+            self.meta.as_deref(),
+            depth,
+            config,
+        )
     }
 }
 
 impl OboSynonym {
     fn normalize(&mut self) {
-        normalize_strings(&mut self.xrefs);
-        if let Some(meta) = &mut self.meta {
-            meta.normalize();
-        }
+        normalize_annotated(&mut self.xrefs, self.meta.as_deref_mut());
     }
 
     fn validate(&self, depth: usize, config: &OboGraphsConfig) -> Result<(), ProjectionError> {
-        validate_absolute_iri(&self.pred, "OBO Graphs synonym predicate")?;
-        if let Some(meta) = &self.meta {
-            meta.validate(depth, config)?;
-        }
-        Ok(())
+        validate_annotated(
+            &self.pred,
+            "OBO Graphs synonym predicate",
+            self.meta.as_deref(),
+            depth,
+            config,
+        )
     }
 }
 
 impl OboXref {
     fn normalize(&mut self) {
-        normalize_strings(&mut self.xrefs);
-        if let Some(meta) = &mut self.meta {
-            meta.normalize();
-        }
+        normalize_annotated(&mut self.xrefs, self.meta.as_deref_mut());
     }
 
     fn validate(&self, depth: usize, config: &OboGraphsConfig) -> Result<(), ProjectionError> {
-        validate_absolute_iri(&self.pred, "OBO Graphs xref predicate")?;
-        if let Some(meta) = &self.meta {
-            meta.validate(depth, config)?;
-        }
-        Ok(())
+        validate_annotated(
+            &self.pred,
+            "OBO Graphs xref predicate",
+            self.meta.as_deref(),
+            depth,
+            config,
+        )
     }
 }
 
 /// Basic OBO Graphs node.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OboNode {
     /// Full node IRI.
     pub id: String,
     /// Preferred label.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub lbl: Option<String>,
     /// Node kind when declared by the configured vocabulary.
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub node_type: Option<OboNodeType>,
     /// Property kind for property nodes.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub property_type: Option<OboPropertyType>,
     /// Node metadata.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<OboMeta>,
 }
 
 /// Basic OBO Graphs edge.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OboEdge {
     /// Full subject IRI.
     pub sub: String,
@@ -264,26 +281,22 @@ pub struct OboEdge {
     /// Full object IRI.
     pub obj: String,
     /// Statement annotations.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<OboMeta>,
 }
 
 /// Set of mutually equivalent named nodes.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OboEquivalentNodesSet {
     /// Deterministic representative (the lexicographically first node id).
     pub representative_node_id: String,
     /// Complete sorted set of equivalent node ids.
     pub node_ids: Vec<String>,
     /// Axiom annotations.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<OboMeta>,
 }
 
 /// Named existential restriction in one logical definition.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OboExistentialRestriction {
     /// Full object-property IRI.
     pub property_id: String,
@@ -292,8 +305,7 @@ pub struct OboExistentialRestriction {
 }
 
 /// Named-class equivalence to an intersection of genera and existentials.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OboLogicalDefinitionAxiom {
     /// Defined class IRI.
     pub defined_class_id: String,
@@ -302,82 +314,173 @@ pub struct OboLogicalDefinitionAxiom {
     /// Existential restrictions.
     pub restrictions: Vec<OboExistentialRestriction>,
     /// Axiom annotations.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<OboMeta>,
 }
 
 /// Aggregated domain/range declaration for one property.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OboDomainRangeAxiom {
     /// Property IRI.
     pub predicate_id: String,
     /// Named domain class IRIs.
-    #[serde(skip_serializing_if = "is_empty")]
     pub domain_class_ids: Vec<String>,
     /// Named range class IRIs.
-    #[serde(skip_serializing_if = "is_empty")]
     pub range_class_ids: Vec<String>,
     /// Named all-values-from edges retained by the 0.3.2 model.
-    #[serde(skip_serializing_if = "is_empty")]
     pub all_values_from_edges: Vec<OboEdge>,
     /// Axiom annotations.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<OboMeta>,
 }
 
 /// One OWL property-chain axiom.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OboPropertyChainAxiom {
     /// Super-property IRI.
     pub predicate_id: String,
     /// Ordered chain of property IRIs.
     pub chain_predicate_ids: Vec<String>,
     /// Axiom annotations.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<OboMeta>,
 }
 
 /// One OBO Graphs 0.3.2 graph.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OboGraph {
     /// Caller-owned full graph IRI.
     pub id: String,
     /// Graph label.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub lbl: Option<String>,
     /// Graph metadata.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<OboMeta>,
     /// Basic nodes.
-    #[serde(skip_serializing_if = "is_empty")]
     pub nodes: Vec<OboNode>,
     /// Basic edges.
-    #[serde(skip_serializing_if = "is_empty")]
     pub edges: Vec<OboEdge>,
     /// Named equivalence sets.
-    #[serde(skip_serializing_if = "is_empty")]
     pub equivalent_nodes_sets: Vec<OboEquivalentNodesSet>,
     /// Logical definitions.
-    #[serde(skip_serializing_if = "is_empty")]
     pub logical_definition_axioms: Vec<OboLogicalDefinitionAxiom>,
     /// Domain/range axioms.
-    #[serde(skip_serializing_if = "is_empty")]
     pub domain_range_axioms: Vec<OboDomainRangeAxiom>,
     /// Property chains.
-    #[serde(skip_serializing_if = "is_empty")]
     pub property_chain_axioms: Vec<OboPropertyChainAxiom>,
 }
 
 /// OBO Graphs 0.3.2 graph document.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OboGraphDocument {
     /// Document graphs. PurRDF's caller-owned projection emits exactly one.
     pub graphs: Vec<OboGraph>,
 }
+
+json_string_enum!(OboNodeType {
+    Class => "CLASS",
+    Individual => "INDIVIDUAL",
+    Property => "PROPERTY",
+});
+
+json_string_enum!(OboPropertyType {
+    Annotation => "ANNOTATION",
+    Object => "OBJECT",
+    Data => "DATA",
+});
+
+obo_json!(OboPropertyValue {
+    always "pred" => pred,
+    always "val" => val,
+    items "xrefs" => xrefs,
+    some "meta" => meta,
+});
+
+obo_json!(OboSynonym {
+    some "synonymType" => synonym_type,
+    always "pred" => pred,
+    always "val" => val,
+    items "xrefs" => xrefs,
+    some "meta" => meta,
+});
+
+obo_json!(OboXref {
+    some "lbl" => lbl,
+    always "pred" => pred,
+    always "val" => val,
+    items "xrefs" => xrefs,
+    some "meta" => meta,
+});
+
+obo_json!(OboMeta {
+    some "definition" => definition,
+    items "comments" => comments,
+    items "subsets" => subsets,
+    items "synonyms" => synonyms,
+    items "xrefs" => xrefs,
+    items "basicPropertyValues" => basic_property_values,
+    some "version" => version,
+    flag "deprecated" => deprecated,
+});
+
+obo_json!(OboNode {
+    always "id" => id,
+    some "lbl" => lbl,
+    some "type" => node_type,
+    some "propertyType" => property_type,
+    some "meta" => meta,
+});
+
+obo_json!(OboEdge {
+    always "sub" => sub,
+    always "pred" => pred,
+    always "obj" => obj,
+    some "meta" => meta,
+});
+
+obo_json!(OboEquivalentNodesSet {
+    always "representativeNodeId" => representative_node_id,
+    always "nodeIds" => node_ids,
+    some "meta" => meta,
+});
+
+obo_json!(OboExistentialRestriction {
+    always "propertyId" => property_id,
+    always "fillerId" => filler_id,
+});
+
+obo_json!(OboLogicalDefinitionAxiom {
+    always "definedClassId" => defined_class_id,
+    always "genusIds" => genus_ids,
+    always "restrictions" => restrictions,
+    some "meta" => meta,
+});
+
+obo_json!(OboDomainRangeAxiom {
+    always "predicateId" => predicate_id,
+    items "domainClassIds" => domain_class_ids,
+    items "rangeClassIds" => range_class_ids,
+    items "allValuesFromEdges" => all_values_from_edges,
+    some "meta" => meta,
+});
+
+obo_json!(OboPropertyChainAxiom {
+    always "predicateId" => predicate_id,
+    always "chainPredicateIds" => chain_predicate_ids,
+    some "meta" => meta,
+});
+
+obo_json!(OboGraph {
+    always "id" => id,
+    some "lbl" => lbl,
+    some "meta" => meta,
+    items "nodes" => nodes,
+    items "edges" => edges,
+    items "equivalentNodesSets" => equivalent_nodes_sets,
+    items "logicalDefinitionAxioms" => logical_definition_axioms,
+    items "domainRangeAxioms" => domain_range_axioms,
+    items "propertyChainAxioms" => property_chain_axioms,
+});
+
+obo_json!(OboGraphDocument {
+    always "graphs" => graphs,
+});
 
 impl OboGraphDocument {
     /// Validate, normalize, and serialize this document to deterministic JSON.
@@ -492,7 +595,12 @@ fn validate_graph(graph: &OboGraph, config: &OboGraphsConfig) -> Result<(), Proj
                 "equivalentNodesSet representative must be its lexicographically first node id",
             ));
         }
-        ensure_unique_sorted(&set.node_ids, "equivalentNodesSet node ids")?;
+        require_strictly_sorted(&set.node_ids, || {
+            format!(
+                "{} must be strictly sorted and unique",
+                "equivalentNodesSet node ids"
+            )
+        })?;
         for id in &set.node_ids {
             validate_absolute_iri(id, "equivalent node id")?;
         }
@@ -507,7 +615,12 @@ fn validate_graph(graph: &OboGraph, config: &OboGraphsConfig) -> Result<(), Proj
                 "a logical definition requires at least one genus or existential restriction",
             ));
         }
-        ensure_unique_sorted(&axiom.genus_ids, "logical definition genus ids")?;
+        require_strictly_sorted(&axiom.genus_ids, || {
+            format!(
+                "{} must be strictly sorted and unique",
+                "logical definition genus ids"
+            )
+        })?;
         for id in &axiom.genus_ids {
             validate_absolute_iri(id, "logical definition genus id")?;
         }
@@ -529,8 +642,12 @@ fn validate_graph(graph: &OboGraph, config: &OboGraphsConfig) -> Result<(), Proj
                 "a domainRangeAxiom must carry a domain, range, or all-values-from edge",
             ));
         }
-        ensure_unique_sorted(&axiom.domain_class_ids, "domain class ids")?;
-        ensure_unique_sorted(&axiom.range_class_ids, "range class ids")?;
+        require_strictly_sorted(&axiom.domain_class_ids, || {
+            format!("{} must be strictly sorted and unique", "domain class ids")
+        })?;
+        require_strictly_sorted(&axiom.range_class_ids, || {
+            format!("{} must be strictly sorted and unique", "range class ids")
+        })?;
         for id in axiom.domain_class_ids.iter().chain(&axiom.range_class_ids) {
             validate_absolute_iri(id, "domain/range class id")?;
         }
@@ -576,15 +693,6 @@ fn normalize_strings(values: &mut Vec<String>) {
 fn normalize_values<T: Ord>(values: &mut Vec<T>) {
     values.sort();
     values.dedup();
-}
-
-fn ensure_unique_sorted(values: &[String], description: &str) -> Result<(), ProjectionError> {
-    if values.windows(2).any(|pair| pair[0] >= pair[1]) {
-        return Err(ProjectionError::integrity(format!(
-            "{description} must be strictly sorted and unique"
-        )));
-    }
-    Ok(())
 }
 
 fn ensure_unique_by<T>(

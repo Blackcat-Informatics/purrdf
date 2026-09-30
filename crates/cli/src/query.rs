@@ -133,9 +133,8 @@ use purrdf_sparql_eval::{
     AggregateRegistry, ExtensionEnv, GovernedOutcome, NativeSparqlEngine, PreparedQuery,
     PropertyFunctionRegistry, QueryExplanation, QueryGovernors, QueryOptions as EngineQueryOptions,
 };
-use purrdf_sparql_results::{ProvenanceNamespace, ResultProvenance, SparqlResultsFormat};
+use purrdf_sparql_results::{ProvenanceNamespace, SparqlResultsFormat};
 use purrdf_validate::regime::MaterializeLimits;
-use sha2::{Digest, Sha256};
 
 use crate::cli::{CliRegime, LedgerTarget, QueryFormat, ReportTarget};
 use crate::error::{CliError, CliOutcome};
@@ -162,7 +161,7 @@ struct QueryOp<'a> {
     /// against (see [`AggregateRegistry`]'s instance-identity fingerprint) — never a
     /// freshly built one, even with identical content, or evaluation refuses the plan.
     aggregates: Option<&'a AggregateRegistry>,
-    /// The `--path-relation` specs to snapshot over this view. See [`prepare_against`]
+    /// The `--path-relation` specs to snapshot over this view. See `prepare_against`
     /// for why the registry is born here rather than beside the flags.
     relations: RelationSpecs<'a>,
 }
@@ -264,24 +263,6 @@ impl ViewOp for QueryOp<'_> {
     }
 }
 
-/// Build the statistical-aggregate registry `--aggregate-namespace` requests, or
-/// `None` when the flag is absent — the CLI's SOLE aggregate-registration surface.
-///
-/// `AggregateRegistry::register_statistical_aggregates` takes only an IRI namespace
-/// string, so it crosses this command-line boundary the same way `--property-fn-namespaces`
-/// would if this binary had a relations surface to declare one over: no callback, no
-/// per-aggregate marshaling. The general custom-aggregate seam
-/// (`purrdf_sparql_eval::agg_fn::AggregateRegistry::register`, an arbitrary
-/// `init`/`step`/`combine`/`finish` closure) is a Rust-host-only capability with no
-/// string-shaped surface at all — it genuinely cannot reach a command-line flag — and this
-/// binary does not attempt to expose it.
-pub(crate) fn build_aggregate_registry(namespace: Option<&str>) -> Option<AggregateRegistry> {
-    let namespace = namespace?;
-    let mut registry = AggregateRegistry::new();
-    registry.register_statistical_aggregates(namespace);
-    Some(registry)
-}
-
 /// Parse `--provenance-namespace PREFIX=IRI` into its raw `(prefix, iri)` halves.
 ///
 /// A bare split on the first `=` — [`ProvenanceNamespace::new`] does the real
@@ -296,32 +277,6 @@ pub(crate) fn parse_provenance_namespace(text: &str) -> Result<(String, String),
         )
     })?;
     Ok((prefix.to_owned(), iri.to_owned()))
-}
-
-/// Build the [`ResultProvenance`] a governed/ungoverned SPARQL-results emission carries:
-/// empty when no `--provenance-namespace` was supplied (pure-W3C output, unchanged from
-/// before this flag existed), or populated with a content hash of the query text plus this
-/// engine's label when one was.
-///
-/// `query_hash` is `sha256:` followed by the lowercase hex digest of the UTF-8 query text —
-/// an opaque, deterministic query identity a caller can compare across runs, computed from
-/// data this host already has in hand rather than anything the evaluator would need to
-/// track. `solutions` stays empty: per-solution source provenance is the evaluator/S11
-/// derivation graph's progressive fill (see `purrdf_sparql_results::ResultProvenance`'s
-/// module docs), not something this command-line host can populate on its own.
-fn build_query_provenance(
-    namespace: Option<&ProvenanceNamespace>,
-    query: &str,
-) -> ResultProvenance {
-    if namespace.is_none() {
-        return ResultProvenance::default();
-    }
-    let digest = Sha256::digest(query.as_bytes());
-    ResultProvenance {
-        query_hash: Some(format!("sha256:{}", purrdf_hash::hex::Lower(&digest))),
-        engine: Some("purrdf-sparql-eval".to_owned()),
-        solutions: Vec::new(),
-    }
 }
 
 /// The GOVERNED query operation: evaluate the prepared query over the concrete view under
@@ -352,7 +307,7 @@ impl ViewOp for GovernedQueryOp<'_> {
     type Output = GovernedOutcome;
 
     fn run<D: DatasetView + Sync>(self, view: &D) -> Result<GovernedOutcome, CliError> {
-        let governors: QueryGovernors = self.flags.to_governors();
+        let governors: QueryGovernors = self.flags.to_governors()?;
         let (relations, prepared) =
             self.relations
                 .prepare_against(self.engine, view, self.aggregates)?;
@@ -452,7 +407,7 @@ fn emit_result(
             // (CSV/TSV reject a boolean); its `Err` maps cleanly to a runtime failure.
             // `--provenance-namespace` + CSV/TSV is refused up front by
             // `refuse_unenforceable_combinations`, before this lane ever runs the query.
-            let provenance = build_query_provenance(provenance_namespace, query);
+            let provenance = purrdf_validate::query::provenance(provenance_namespace, query);
             // Streamed, like the RDF lane beside it: the document is written as it is
             // produced rather than accumulated and handed over. This is what gives the
             // results serializers' sink a caller in the shipped binary at all, and it is
@@ -503,7 +458,7 @@ fn emit_result(
 }
 
 /// The closing imperative of every named-graph refusal on this lane: the quad-capable
-/// `--results-format` tokens, in [`QueryFormat`] declaration order.
+/// `--results-format` tokens, in [`QueryRdfFormat`](crate::cli::QueryRdfFormat) declaration order.
 ///
 /// The rest of the sentence is `purrdf_core::named_graph::named_graph_refusal`, shared
 /// verbatim with the Python and wasm hosts; only the remedy is per-host, because
@@ -827,7 +782,7 @@ pub(crate) fn run(
     // clap's own `default_value_t` used to before `--results-format` became an
     // `Option` — the only thing that changed is that "not named" and "named `json`"
     // are now distinguishable, which is what lets `--explain` refuse the former.
-    let results_format = options.results_format.unwrap_or(QueryFormat::Json);
+    let results_format = options.results_format.unwrap_or(QueryFormat::DEFAULT);
 
     let engine = NativeSparqlEngine::new();
 
@@ -838,7 +793,9 @@ pub(crate) fn run(
     // `AggregateRegistry`'s instance-identity fingerprint) — so preparing and evaluating
     // against two independently built registries, even with identical content, would
     // break every `--aggregate-namespace` query.
-    let aggregates = build_aggregate_registry(options.aggregate_namespace);
+    // The CLI's SOLE aggregate-registration surface: `--aggregate-namespace` names
+    // the statistical set's namespace, and nothing else crosses the command line.
+    let aggregates = purrdf_validate::query::statistical_aggregates(options.aggregate_namespace);
 
     // Refused ONCE, before any lane opens the data source: `PropertyFunctionRegistry`
     // PANICS on a duplicate IRI, and a command line is a host misconfiguration rather than
@@ -912,7 +869,7 @@ pub(crate) fn run(
         // Built HERE, with the source already read and the closure not yet started, for the
         // reason `GovernedQueryOp` states: a `--deadline` is a budget for the work the flag
         // names, and reading a large file is not that work.
-        let governors = options.governors.to_governors();
+        let governors = options.governors.to_governors()?;
         // The rows go to stdout and the certificate to `--report`: a solution set that
         // depends on a closure is not readable without knowing what closed it.
         let answered = source::run_over_input(
@@ -1133,7 +1090,7 @@ fn refuse_unenforceable_combinations(
     // cannot do anything, exactly as `--provenance-namespace` is refused above beside
     // `--explain` and below for a CONSTRUCT/DESCRIBE graph, rather than accept it and
     // silently ignore it.
-    let results_format = options.results_format.unwrap_or(QueryFormat::Json);
+    let results_format = options.results_format.unwrap_or(QueryFormat::DEFAULT);
     if options.provenance_namespace.is_some()
         && matches!(
             results_format.to_results_format(),
@@ -1193,7 +1150,7 @@ fn emit_governed(
     let emit = |result: &SparqlResult| {
         emit_result(
             result,
-            options.results_format.unwrap_or(QueryFormat::Json),
+            options.results_format.unwrap_or(QueryFormat::DEFAULT),
             options.base,
             options.jsonld_options,
             provenance_namespace,

@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The canonical, review-friendly Turtle **renderer** over the purrdf IR —
-//! the oxigraph-free half of the on-disk normalizer.
+//! the kernel half of the on-disk normalizer.
 //!
 //! [`render`] takes a frozen [`RdfDataset`] and a prefix set and produces canonical
 //! Turtle text. It is a pure function of the graph: blank/triple object ordering is
 //! derived from subtree CONTENT (never from `TermId` interning order), so the output
-//! is idempotent and independent of how the terms were interned. The oxigraph-coupled
+//! is idempotent and independent of how the terms were interned. The
 //! text *parser* (`canonical_turtle` / `ingest`) lives in `purrdf`; this kernel half
 //! depends only on the IR, so it builds for `wasm32` and is the canonical-Turtle
 //! authority for the wasm-clean compiler (the correspondence EDOAL lowering).
@@ -22,15 +22,19 @@
 //!   shared/cyclic blank gets a structural-signature-derived `_:bN` label.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use crate::iri_escape::is_iriref_escape_required;
-use crate::model::RdfTextDirection;
-use crate::{RdfDataset, TermId, TermRef};
+use purrdf_hash::fnv;
 
-const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+use crate::model::RdfTextDirection;
+use crate::{DatasetView, FastMap, GraphMatch, RdfDataset, TermId, TermRef};
+use purrdf_iri::{PrefixMap, contract_where};
+use purrdf_lex::literal_escape::{self, Carrier};
+use purrdf_lex::term_syntax::{TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_iri};
+
+use purrdf_iri::vocab::rdf::NS as RDF;
+use purrdf_xsd::datatype::XSD_NS as XSD;
 
 fn rdf(local: &str) -> String {
     format!("{RDF}{local}")
@@ -54,20 +58,20 @@ type Props = BTreeMap<TermId, BTreeSet<ObjKey>>;
 struct Renderer<'a> {
     dataset: &'a RdfDataset,
     prefixes: Vec<(String, String)>,
+    /// The same bindings, for CURIE compaction.
+    prefix_map: PrefixMap,
     /// Each subject's properties.
-    by_subject: HashMap<TermId, Props>,
+    by_subject: FastMap<TermId, Props>,
     /// Times each blank `TermId` appears as an object.
-    object_refs: HashMap<TermId, usize>,
+    object_refs: FastMap<TermId, usize>,
     /// `_:bN` labels for shared/cyclic blanks that cannot inline.
-    shared_labels: HashMap<TermId, String>,
+    shared_labels: FastMap<TermId, String>,
     /// Prefixes actually used during rendering.
     used_prefixes: RefCell<BTreeSet<String>>,
     /// The well-known predicate ids, or `None` when the term table has no such IRI.
     rdf_type: Option<TermId>,
     rdf_reifies: Option<TermId>,
-    rdf_first: Option<TermId>,
     rdf_rest: Option<TermId>,
-    rdf_nil_iri: String,
 }
 
 impl<'a> Renderer<'a> {
@@ -77,8 +81,8 @@ impl<'a> Renderer<'a> {
         // the ordering of blank/triple objects is a pure function of their subtree
         // CONTENT (computed in phase 2), never of `TermId` interning order — that is
         // what makes the render idempotent regardless of how the parser interned terms.
-        let mut raw: HashMap<TermId, BTreeMap<TermId, Vec<TermId>>> = HashMap::new();
-        let mut object_refs: HashMap<TermId, usize> = HashMap::new();
+        let mut raw: FastMap<TermId, BTreeMap<TermId, Vec<TermId>>> = FastMap::default();
+        let mut object_refs: FastMap<TermId, usize> = FastMap::default();
         // The RDF 1.2 statement layer (reifier bindings + annotations) lives in SIDE
         // TABLES, not `quads` — so the canonical renderer must fold in `reifier_quads`
         // (`<reifier> rdf:reifies << s p o >>`) and `annotation_quads`
@@ -110,7 +114,7 @@ impl<'a> Renderer<'a> {
 
         // Materialize the ordered `Props`: grounded objects keep their lexical key,
         // blank/triple objects sort by the content key computed above.
-        let by_subject: HashMap<TermId, Props> = raw
+        let by_subject: FastMap<TermId, Props> = raw
             .iter()
             .map(|(&s, preds)| {
                 let props: Props = preds
@@ -150,24 +154,23 @@ impl<'a> Renderer<'a> {
             .map(|(i, id)| (id, format!("_:b{i}")))
             .collect();
 
+        let prefix_map = prefixes.iter().cloned().collect();
         let mut r = Self {
             dataset,
             prefixes,
+            prefix_map,
             by_subject,
             object_refs,
             shared_labels,
             used_prefixes: RefCell::new(BTreeSet::new()),
             rdf_type: None,
             rdf_reifies: None,
-            rdf_first: None,
             rdf_rest: None,
-            rdf_nil_iri: rdf("nil"),
         };
         // Resolve the well-known predicate ids by scanning the term table (they may
         // be absent, in which case the sentinel never matches a real predicate).
         r.rdf_type = r.find_iri(&rdf("type"));
         r.rdf_reifies = r.find_iri(&rdf("reifies"));
-        r.rdf_first = r.find_iri(&rdf("first"));
         r.rdf_rest = r.find_iri(&rdf("rest"));
         r
     }
@@ -301,7 +304,7 @@ impl<'a> Renderer<'a> {
                 // the `rdf:reifies` object. A triple term denotes the triple without
                 // asserting it, exactly as the gts codec serializer emits it.
                 format!(
-                    "<<( {} {} {} )>>",
+                    "{TRIPLE_TERM_OPEN} {} {} {} {TRIPLE_TERM_CLOSE}",
                     self.render_object(s, depth),
                     self.term_label(p),
                     self.render_object(o, depth)
@@ -320,36 +323,22 @@ impl<'a> Renderer<'a> {
         format!("[\n{inner}{close_indent}]")
     }
 
-    /// A well-formed `rdf:List` headed by `id`: a chain of inline blanks each with
-    /// exactly `rdf:first` + `rdf:rest`, ending in `rdf:nil`. Returns the elements.
+    /// A well-formed `rdf:List` headed by `id` ([`DatasetView::rdf_list_strict`])
+    /// whose every cell is an inline blank carrying nothing but its `rdf:first`
+    /// and `rdf:rest`, so the `( … )` form writes the whole of each cell. Returns
+    /// the members.
     fn try_collection(&self, id: TermId) -> Option<Vec<TermId>> {
-        // No `rdf:first`/`rdf:rest` IRI in the table ⇒ no list can exist.
-        let (rdf_first, rdf_rest) = (self.rdf_first?, self.rdf_rest?);
-        let mut items = Vec::new();
-        let mut cur = id;
-        let mut seen = BTreeSet::new();
-        loop {
-            if !seen.insert(cur) {
+        let rdf_rest = self.rdf_rest?;
+        let members = self.dataset.rdf_list_strict(id, GraphMatch::Any).ok()?;
+        let mut cell = id;
+        for _ in &members {
+            let props = self.by_subject.get(&cell)?;
+            if !self.is_inline_bnode(cell) || props.len() != 2 {
                 return None;
             }
-            let props = self.by_subject.get(&cur)?;
-            if props.len() != 2 || !props.contains_key(&rdf_first) || !props.contains_key(&rdf_rest)
-            {
-                return None;
-            }
-            let firsts = &props[&rdf_first];
-            let rests = &props[&rdf_rest];
-            if firsts.len() != 1 || rests.len() != 1 {
-                return None;
-            }
-            items.push(firsts.iter().next().unwrap().id);
-            let rest = rests.iter().next().unwrap().id;
-            match self.dataset.resolve(rest) {
-                TermRef::Iri(iri) if iri == self.rdf_nil_iri => return Some(items),
-                TermRef::Blank { .. } if self.is_inline_bnode(rest) => cur = rest,
-                _ => return None,
-            }
+            cell = props.get(&rdf_rest)?.iter().next()?.id;
         }
+        Some(members)
     }
 
     fn render_collection(&self, items: &[TermId], depth: usize) -> String {
@@ -398,15 +387,25 @@ impl<'a> Renderer<'a> {
     }
 
     fn iri(&self, iri: &str) -> String {
-        for (prefix, ns) in &self.prefixes {
-            if let Some(local) = iri.strip_prefix(ns.as_str())
-                && is_valid_pn_local(local)
-            {
-                self.used_prefixes.borrow_mut().insert(prefix.clone());
-                return format!("{prefix}:{local}");
-            }
+        if let Some((curie, prefix_len)) = self.curie(iri) {
+            self.used_prefixes
+                .borrow_mut()
+                .insert(curie[..prefix_len].to_owned());
+            return curie;
         }
-        format!("<{}>", escape_iri(iri))
+        let mut out = String::with_capacity(iri.len() + 2);
+        write_iri(iri, &mut out);
+        out
+    }
+
+    /// `iri` as a Turtle prefixed name under the longest declared namespace
+    /// whose local part [`is_valid_pn_local`] admits
+    /// ([`purrdf_iri::contract_where`]; the empty prefix `:` included), and the
+    /// prefix's length.
+    fn curie(&self, iri: &str) -> Option<(String, usize)> {
+        let curie = contract_where(iri, &self.prefix_map, |_, local| is_valid_pn_local(local))?;
+        let prefix_len = curie.find(':')?;
+        Some((curie, prefix_len))
     }
 
     fn literal(
@@ -453,14 +452,8 @@ impl<'a> Renderer<'a> {
 
     /// Abbreviation used only for ORDERING (does not record prefix usage).
     fn abbrev_for_sort(&self, iri: &str) -> String {
-        for (prefix, ns) in &self.prefixes {
-            if let Some(local) = iri.strip_prefix(ns.as_str())
-                && is_valid_pn_local(local)
-            {
-                return format!("{prefix}:{local}");
-            }
-        }
-        iri.to_owned()
+        self.curie(iri)
+            .map_or_else(|| iri.to_owned(), |(curie, _)| curie)
     }
 }
 
@@ -476,20 +469,20 @@ impl<'a> Renderer<'a> {
 /// pathological chains; ties under the budget are harmless because they only affect
 /// sort order between structurally indistinguishable subtrees.
 struct ContentKeys {
-    keys: HashMap<TermId, String>,
+    keys: FastMap<TermId, String>,
 }
 
 impl ContentKeys {
     const MAX_DEPTH: usize = 40;
 
-    fn new(dataset: &RdfDataset, raw: &HashMap<TermId, BTreeMap<TermId, Vec<TermId>>>) -> Self {
+    fn new(dataset: &RdfDataset, raw: &FastMap<TermId, BTreeMap<TermId, Vec<TermId>>>) -> Self {
         // `keys` doubles as the memoization cache: every acyclic blank/triple term
         // `compute_content_key` fully resolves is inserted, so a single traversal from
         // the top-level subjects/objects populates keys for ALL reachable nested
         // blank/triple terms (not just `q.s`/`q.o`) and never recomputes a shared
         // subtree. Cyclic / depth-capped subtrees are deliberately left out (see the
         // `cacheable` flag in `compute_content_key`).
-        let mut keys: HashMap<TermId, String> = HashMap::new();
+        let mut keys: FastMap<TermId, String> = FastMap::default();
         for q in dataset.quads() {
             for term in [q.s, q.o] {
                 if matches!(
@@ -524,11 +517,11 @@ impl ContentKeys {
 /// fall through to the `id.index()` tiebreak in [`ObjKey`], exactly as before this fix.
 fn compute_content_key(
     dataset: &RdfDataset,
-    raw: &HashMap<TermId, BTreeMap<TermId, Vec<TermId>>>,
+    raw: &FastMap<TermId, BTreeMap<TermId, Vec<TermId>>>,
     id: TermId,
     seen: &mut BTreeSet<TermId>,
     depth: usize,
-    cache: &mut HashMap<TermId, String>,
+    cache: &mut FastMap<TermId, String>,
 ) -> (String, bool) {
     // A memoized key is always a fully-resolved acyclic blank/triple key (leaf terms are
     // never cached), so reusing it is sound and cannot be a live back-edge: a node is
@@ -666,12 +659,12 @@ impl Ord for ObjKey {
 /// for the non-symmetric blank graphs the authored ontology sources contain.
 fn blank_signatures(
     dataset: &RdfDataset,
-    by_subject: &HashMap<TermId, Props>,
+    by_subject: &FastMap<TermId, Props>,
     shared: &[TermId],
-) -> HashMap<TermId, u64> {
+) -> FastMap<TermId, u64> {
     let ground = |id: TermId| -> u64 { ground_sig(dataset, id, 0) };
     let shared_set: BTreeSet<TermId> = shared.iter().copied().collect();
-    let mut sig: HashMap<TermId, u64> = shared.iter().map(|&b| (b, 1)).collect();
+    let mut sig: FastMap<TermId, u64> = shared.iter().map(|&b| (b, 1)).collect();
     for round in 0..2 {
         let mut next = sig.clone();
         for &b in shared {
@@ -686,7 +679,7 @@ fn blank_signatures(
                             ground(obj.id)
                         };
                         // Commutative fold across statements.
-                        acc ^= pg.wrapping_mul(0x100_0000_01b3) ^ og.rotate_left(17);
+                        acc ^= pg.wrapping_mul(fnv::PRIME) ^ og.rotate_left(17);
                     }
                 }
             }
@@ -697,14 +690,6 @@ fn blank_signatures(
     sig
 }
 
-fn fnv(mut hash: u64, bytes: &[u8]) -> u64 {
-    for &b in bytes {
-        hash ^= u64::from(b);
-        hash = hash.wrapping_mul(0x100_0000_01b3);
-    }
-    hash
-}
-
 /// A grounded content hash for the blank-signature fold: IRIs/literals by their
 /// lexical content, an RDF-1.2 quoted triple by its `(s, p, o)` content (so reifier
 /// blanks that reify DIFFERENT statements get distinct signatures — without this they
@@ -712,13 +697,13 @@ fn fnv(mut hash: u64, bytes: &[u8]) -> u64 {
 /// own signature carries it). Depth-capped against pathological nested triple terms.
 fn ground_sig(dataset: &RdfDataset, id: TermId, depth: usize) -> u64 {
     match dataset.resolve(id) {
-        TermRef::Iri(iri) => fnv(0xcbf2_9ce4_8422_2325, iri.as_bytes()),
-        TermRef::Literal { lexical, .. } => fnv(0x1000_0001, lexical.as_bytes()),
+        TermRef::Iri(iri) => fnv::fnv1a64(iri.as_bytes()),
+        TermRef::Literal { lexical, .. } => fnv::fold(0x1000_0001, lexical.as_bytes()),
         TermRef::Triple { s, p, o } if depth < 8 => {
             let s = ground_sig(dataset, s, depth + 1);
             let p = ground_sig(dataset, p, depth + 1);
             let o = ground_sig(dataset, o, depth + 1);
-            0x3000_0001u64 ^ s.wrapping_mul(0x100_0000_01b3) ^ p.rotate_left(11) ^ o.rotate_left(23)
+            0x3000_0001u64 ^ s.wrapping_mul(fnv::PRIME) ^ p.rotate_left(11) ^ o.rotate_left(23)
         }
         _ => 0, // blank, or a triple deeper than the cap: carried by its own signature
     }
@@ -749,68 +734,23 @@ fn is_valid_pn_local(local: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
 
-/// Escape an IRI body for a `<…>` `IRIREF`.
-///
-/// Which scalars ride as `\uXXXX` is decided by
-/// [`is_iriref_escape_required`](crate::iri_escape::is_iriref_escape_required)
-/// and by nothing written here — see that module for the production
-/// (`IRIREF ::= '<' ( [^#x00-#x20<>"{}|^`\] | UCHAR )* '>'`, Turtle 1.2 §6.5
-/// `[18t]`) and for why egress escapes DEL and the C1 block, which the grammar
-/// permits raw.
-fn escape_iri(iri: &str) -> String {
-    let mut out = String::with_capacity(iri.len());
-    for c in iri.chars() {
-        if is_iriref_escape_required(c) {
-            let _ = write!(out, "\\u{:04X}", c as u32);
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
+/// A string literal's quoted body: a value holding a LINE FEED as a Turtle
+/// long string (`"""…"""`, the [`TurtleLong`](Carrier::TurtleLong) carrier,
+/// which keeps the line breaks readable), every other value as a short string
+/// (the [`Xml`](Carrier::Xml) carrier). Both carriers escape the C1 controls,
+/// because this rendering feeds the CL-dialect carrier, whose payload is
+/// embedded in an XML text node where raw C1 is normalized on read.
 fn quote(value: &str) -> String {
-    if value.contains('\n') {
-        // Triple-quoted long string: `\` and the `"""` delimiter escape exactly as before
-        // (byte-parity-critical), then `\n` stays literal while every other control character
-        // (C0, DEL, and the C1 block) is `\uXXXX`-escaped. This escapes MORE than the W3C
-        // canonical form (canon.rs keeps C1 raw): this rendering feeds the CL-dialect carrier,
-        // whose payload is embedded in an XML text node where raw C1 is normalized/replaced on
-        // read, so it must ride as ASCII. The control-char pass runs after the `\`/`"""`
-        // replaces; since it only rewrites control code points it never disturbs the `\`/`"`
-        // those introduced.
-        let pre = value
-            .replace('\\', "\\\\")
-            .replace("\"\"\"", "\\\"\\\"\\\"");
-        let mut escaped = String::with_capacity(pre.len());
-        for c in pre.chars() {
-            match c {
-                '\n' => escaped.push('\n'),
-                c if c.is_control() => {
-                    let _ = write!(escaped, "\\u{:04X}", c as u32);
-                }
-                c => escaped.push(c),
-            }
-        }
-        format!("\"\"\"{escaped}\"\"\"")
+    let (delimiter, carrier) = if value.contains('\n') {
+        ("\"\"\"", Carrier::TurtleLong)
     } else {
-        let mut out = String::with_capacity(value.len() + 2);
-        out.push('"');
-        for c in value.chars() {
-            match c {
-                '"' => out.push_str("\\\""),
-                '\\' => out.push_str("\\\\"),
-                '\t' => out.push_str("\\t"),
-                '\r' => out.push_str("\\r"),
-                c if c.is_control() => {
-                    let _ = write!(out, "\\u{:04X}", c as u32);
-                }
-                c => out.push(c),
-            }
-        }
-        out.push('"');
-        out
-    }
+        ("\"", Carrier::Xml)
+    };
+    let mut out = String::with_capacity(value.len() + 2 * delimiter.len());
+    out.push_str(delimiter);
+    literal_escape::write(value, carrier, &mut out);
+    out.push_str(delimiter);
+    out
 }
 
 fn is_turtle_integer(v: &str) -> bool {
@@ -840,6 +780,62 @@ fn is_turtle_double(v: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Turtle's empty prefix is a prefix, and a namespace whose local part is not a
+    /// `PN_LOCAL` yields to a shorter one that gives a valid name; an IRI no namespace
+    /// names validly stays bracketed.
+    #[test]
+    fn prefixed_names_take_the_empty_prefix_and_fall_back_to_a_valid_local_part() {
+        use crate::ir::builder::RdfDatasetBuilder;
+        let render_one = |s: &str, p: &str, o: &str, prefixes: &[(&str, &str)]| {
+            let mut b = RdfDatasetBuilder::new();
+            let (s, p, o) = (b.intern_iri(s), b.intern_iri(p), b.intern_iri(o));
+            b.push_quad(s, p, o, None);
+            let prefixes: Vec<(String, String)> = prefixes
+                .iter()
+                .map(|&(prefix, ns)| (prefix.to_owned(), ns.to_owned()))
+                .collect();
+            render(&b.freeze().unwrap(), &prefixes)
+        };
+        let prefixes = [("", "http://example.org/"), ("x", "http://example.org/ab")];
+
+        // The empty prefix is a prefix.
+        let out = render_one(
+            "http://example.org/s",
+            "http://example.org/p",
+            "http://example.org/o",
+            &prefixes,
+        );
+        assert!(
+            out.contains("\n:s\n    :p :o ."),
+            "the empty prefix compacts, got:\n{out}"
+        );
+
+        // Under the longest namespace `x:` the local part `.c` is no PN_LOCAL (it may
+        // not start with `.`), so the shorter `:` namespace names it as `:ab.c`.
+        let out = render_one(
+            "http://example.org/ab.c",
+            "http://example.org/abp",
+            "http://example.org/o",
+            &prefixes,
+        );
+        assert!(
+            out.contains("\n:ab.c\n    x:p :o ."),
+            "fallback to a valid local, got:\n{out}"
+        );
+
+        // A local part no namespace admits (it ends in `.`) stays bracketed.
+        let out = render_one(
+            "http://example.org/s",
+            "http://example.org/p",
+            "http://example.org/o.",
+            &prefixes,
+        );
+        assert!(
+            out.contains("<http://example.org/o.>"),
+            "no valid local, got:\n{out}"
+        );
+    }
 
     #[test]
     fn renders_rdf12_reifier_flat() {
@@ -892,11 +888,55 @@ mod tests {
 
     #[test]
     fn quote_escapes_control_chars_short_string() {
-        // NUL, backspace, form-feed escape as \uXXXX; tab/cr keep their named escapes.
+        // NUL escapes as \uXXXX; backspace, form feed, tab and CR take their ECHARs.
         assert_eq!(quote("a\u{0}b"), "\"a\\u0000b\"");
-        assert_eq!(quote("a\u{8}b"), "\"a\\u0008b\"");
-        assert_eq!(quote("a\u{c}b"), "\"a\\u000Cb\"");
+        assert_eq!(quote("a\u{8}b"), "\"a\\bb\"");
+        assert_eq!(quote("a\u{c}b"), "\"a\\fb\"");
         assert_eq!(quote("a\tb"), "\"a\\tb\"");
+        // The XML carrier escapes the C1 block and the two noncharacters.
+        assert_eq!(quote("a\u{85}\u{FFFF}"), "\"a\\u0085\\uFFFF\"");
+        assert_eq!(quote("plain caf\u{e9}"), "\"plain caf\u{e9}\"");
+    }
+
+    #[test]
+    fn a_long_string_escapes_only_the_quotes_that_would_close_it() {
+        // A trailing `"` would merge into the closing delimiter.
+        assert_eq!(quote("a\nb\""), "\"\"\"a\nb\\\"\"\"\"");
+        // A lone interior quote rides raw; a run escapes all but its last.
+        assert_eq!(quote("a\n\"b\"\"\"c"), "\"\"\"a\n\"b\\\"\\\"\"c\"\"\"");
+        // TAB and CR take their ECHARs, the line feed stays raw.
+        assert_eq!(quote("a\tb\r\nc"), "\"\"\"a\\tb\\r\nc\"\"\"");
+        assert_eq!(
+            quote("line one\nline two"),
+            "\"\"\"line one\nline two\"\"\""
+        );
+    }
+
+    #[test]
+    fn a_list_with_two_rests_is_not_collapsed_into_collection_syntax() {
+        let rdf_iri = |local: &str| format!("{RDF}{local}");
+        let render_list = |extra_rest: bool| {
+            let mut b = crate::RdfDatasetBuilder::new();
+            let s = b.intern_iri("https://ex/s");
+            let p = b.intern_iri("https://ex/p");
+            let cell = b.intern_blank("c", crate::BlankScope::DEFAULT);
+            let first = b.intern_iri(&rdf_iri("first"));
+            let rest = b.intern_iri(&rdf_iri("rest"));
+            let nil = b.intern_iri(&rdf_iri("nil"));
+            let member = b.intern_iri("https://ex/m");
+            b.push_quad(s, p, cell, None);
+            b.push_quad(cell, first, member, None);
+            b.push_quad(cell, rest, nil, None);
+            if extra_rest {
+                let other = b.intern_iri("https://ex/other");
+                b.push_quad(cell, rest, other, None);
+            }
+            render(&b.freeze().unwrap(), &[])
+        };
+        assert!(render_list(false).contains("<https://ex/p> ( <https://ex/m> ) ."));
+        let broken = render_list(true);
+        assert!(!broken.contains("( <https://ex/m> )"), "{broken}");
+        assert!(broken.contains("<https://ex/other>"), "{broken}");
     }
 
     #[test]

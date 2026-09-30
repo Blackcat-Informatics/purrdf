@@ -21,7 +21,7 @@ use ::purrdf::{DatasetView, RdfDataset};
 use ::purrdf::{FastMap, FastSet};
 use purrdf_sparql_eval::Prebinding;
 
-use crate::data::{GraphFilter, native_quads};
+use crate::data::{GraphFilter, native_quads, objects_of};
 use crate::error::{IllFormedDeclaration, PrebindingViolation, RuleViolation as Violation};
 use crate::model::{rdf, rdfs, sh, xsd};
 use crate::path;
@@ -31,14 +31,6 @@ use crate::shapes::{ComponentValidator, Path};
 use crate::sparql::{run_ask_with_shacl_prebinding_view, run_select_with_shacl_prebinding_view};
 use crate::term::{Literal, NamedNode, Term, term_value_to_native};
 use crate::validator_alternatives::{AlternativeValidator, ValidatorLanguage};
-
-/// `sh:JSValidator`, the SHACL JavaScript Extensions validator class. Not a SHACL 1.2
-/// term, so it has no `model::sh` constant; it is named here so the refusal of a
-/// validator of that class says what it is. It is not a validator of any attachment:
-/// "The values of sh:validator must be ASK-based validators" and the values of
-/// `sh:nodeValidator` / `sh:propertyValidator` "must be SELECT-based validators"
-/// (SHACL 1.2 SPARQL Extensions, "Summary of Syntax Rules").
-const JS_VALIDATOR: &str = "http://www.w3.org/ns/shacl#JSValidator";
 
 /// Discriminator for a SPARQL validator's query form.
 #[derive(Debug, Clone, Copy)]
@@ -234,7 +226,7 @@ impl ComponentRegistry {
                 let param_names: Vec<String> = row
                     .params
                     .iter()
-                    .map(|param| sparql_local_name(param.path))
+                    .map(|param| purrdf_iri::local_name(param.path).to_owned())
                     .collect();
                 for (attachment, validator, kind) in
                     declared_validators(data, &component_term, &mut subclass_memo)
@@ -803,52 +795,8 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
-///
-/// Extract the SPARQL local name for an IRI: the substring after the last `/`,
-/// `#`, or `:` delimiter. This is used to derive the variable name bound to a
-/// declared component parameter.
-///
-/// ```ignore
-/// use crate::components::sparql_local_name;
-///
-/// assert_eq!(sparql_local_name("http://example.org/ns#requiredParam"), "requiredParam");
-/// assert_eq!(sparql_local_name("http://example.org/ns/requiredParam"), "requiredParam");
-/// assert_eq!(sparql_local_name("ex:requiredParam"), "requiredParam");
-/// ```
-#[must_use]
-pub(crate) fn sparql_local_name(iri: &str) -> String {
-    let mut idx = iri.rfind('/').map_or(0, |i| i + 1);
-    if let Some(i) = iri.rfind('#') {
-        idx = idx.max(i + 1);
-    }
-    if let Some(i) = iri.rfind(':') {
-        idx = idx.max(i + 1);
-    }
-    iri[idx..].to_owned()
-}
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
-
-/// Return all objects for `(subject, predicate, ?)`.
-fn objects_of(data: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
-    let Some(subject_id) = crate::data::resolve_id(data, subject) else {
-        return Vec::new();
-    };
-    let Some(predicate_id) = data.term_id_by_iri(predicate) else {
-        return Vec::new();
-    };
-    let mut seen = ::purrdf::IdSet::default();
-    crate::data::quads_for_pattern_ids(
-        data,
-        Some(subject_id),
-        Some(predicate_id),
-        None,
-        GraphFilter::AnyGraph,
-    )
-    .filter(|quad| seen.insert(quad.o))
-    .map(|quad| crate::term::term_id_to_native(data, quad.o))
-    .collect()
-}
 
 /// Return the first object for `(subject, predicate, ?)`, if any.
 fn first_object_of(data: &RdfDataset, subject: &Term, predicate: &str) -> Option<Term> {
@@ -919,7 +867,7 @@ fn validator_kind(
         };
         is_ask |= is_subclass_of(data, class.as_str(), sh::SPARQL_ASK_VALIDATOR, memo);
         is_select |= is_subclass_of(data, class.as_str(), sh::SPARQL_SELECT_VALIDATOR, memo);
-        is_js |= is_subclass_of(data, class.as_str(), JS_VALIDATOR, memo);
+        is_js |= is_subclass_of(data, class.as_str(), sh::JS_VALIDATOR, memo);
     }
     match (is_ask, is_select) {
         (true, true) => Err(format!(
@@ -1299,20 +1247,6 @@ mod tests {
         let document = parse_turtle_document(ttl, Some(base_iri)).expect("fixture parses");
         let prefixes = PrefixResolver::new(&document.prefixes);
         ComponentRegistry::parse(document.dataset.as_ref(), &prefixes).expect("registry parses")
-    }
-
-    #[test]
-    fn sparql_local_name_extracts_suffix() {
-        assert_eq!(
-            sparql_local_name("http://example.org/ns#requiredParam"),
-            "requiredParam"
-        );
-        assert_eq!(
-            sparql_local_name("http://example.org/ns/requiredParam"),
-            "requiredParam"
-        );
-        assert_eq!(sparql_local_name("ex:requiredParam"), "requiredParam");
-        assert_eq!(sparql_local_name("requiredParam"), "requiredParam");
     }
 
     #[test]

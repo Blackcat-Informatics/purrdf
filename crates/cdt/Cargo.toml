@@ -30,12 +30,21 @@ path = "src/lib.rs"
 name = "purrdf_cdt"
 
 [dependencies]
+# The uppercase hex digits of the `\uXXXX` / `\UXXXXXXXX` escapes the writer emits.
+purrdf-hash = { workspace = true }
+purrdf-lex = { workspace = true }
 # Absolute-IRI validation for every IRIREF the grammar admits.
 purrdf-iri = { workspace = true }
 # The XSD value space the numeric/boolean shorthands and `parse_literal` resolve into.
 purrdf-xsd = { workspace = true }
+# The one RDF 1.2 base-direction type, defined in the event protocol below this
+# crate, so a directional literal's direction is the same type at every layer.
+purrdf-events = { workspace = true }
 
 [dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
 # Round-trip / injectivity property tests (canonical -> value -> canonical) on
 # the shared property harness. Path-only and unpublished, so it is stripped from
 # the packaged manifest.

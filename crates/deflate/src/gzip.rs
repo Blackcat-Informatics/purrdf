@@ -114,11 +114,7 @@ impl std::fmt::Debug for GzipDecoder {
     }
 }
 
-impl Default for GzipDecoder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(GzipDecoder);
 
 impl GzipDecoder {
     /// A decoder on the fastest kernel path this processor supports.
@@ -410,8 +406,9 @@ impl GzipDecoder {
     }
 
     fn end_member(&mut self) -> Result<(), Error> {
-        let stored_crc = u32::from_le_bytes(self.small[..4].try_into().expect("four bytes"));
-        let stored_size = u32::from_le_bytes(self.small[4..].try_into().expect("four bytes"));
+        let [c0, c1, c2, c3, s0, s1, s2, s3] = self.small;
+        let stored_crc = u32::from_le_bytes([c0, c1, c2, c3]);
+        let stored_size = u32::from_le_bytes([s0, s1, s2, s3]);
         let computed_crc = self.crc.finalize();
         let computed_size = self.member_out as u32;
         if stored_crc != computed_crc {
@@ -499,13 +496,7 @@ pub struct GzipReader<R> {
     eof: bool,
 }
 
-impl<R> std::fmt::Debug for GzipReader<R> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GzipReader")
-            .field("decoder", &self.decoder)
-            .finish_non_exhaustive()
-    }
-}
+purrdf_hash::debug_non_exhaustive!([R] GzipReader<R> { decoder });
 
 impl<R: Read> GzipReader<R> {
     /// Decode the gzip stream `inner` yields.
@@ -586,14 +577,7 @@ pub struct GzipWriter<W: Write> {
     out_pos: usize,
 }
 
-impl<W: Write> std::fmt::Debug for GzipWriter<W> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GzipWriter")
-            .field("deflater", &self.deflater)
-            .field("size", &self.size)
-            .finish_non_exhaustive()
-    }
-}
+purrdf_hash::debug_non_exhaustive!([W: Write] GzipWriter<W> { deflater, size });
 
 /// Output gathered before it is passed to the inner writer.
 const WRITE_CHUNK: usize = 16 * 1024;

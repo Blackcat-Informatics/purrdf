@@ -41,8 +41,6 @@
 //! therefore attacked with the same shapes, since a consumer assembling a value from
 //! bindings never goes near a lexical form.
 
-use std::thread;
-
 use purrdf_cdt::{
     CDT_LIST, CdtEntry, CdtError, CdtKey, CdtLiteral, CdtTerm, CdtValue, MAX_ELEMENTS,
     MAX_LEXICAL_BYTES, canonical_lexical_len, list_equal, list_less_than, parse_list, parse_map,
@@ -70,12 +68,7 @@ fn rust_min_stack_is_unset_so_the_evidence_is_honest() {
 /// stack overflow on that thread aborts the whole process, which is the failure this
 /// harness exists to make visible.
 fn on_a_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-    thread::Builder::new()
-        .stack_size(SMALL_STACK)
-        .spawn(body)
-        .expect("the thread starts")
-        .join()
-        .expect("the thread did not abort")
+    purrdf_stack::on_stack(SMALL_STACK, body).expect("the thread starts")
 }
 
 /// `[` × `depth`, then `]` × `depth`: a list nested `depth` deep with nothing in it.

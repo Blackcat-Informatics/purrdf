@@ -1,322 +1,91 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use std::collections::BTreeSet;
+use super::super::util::{iri_role_group, validate_distinct_roles};
 
-use serde::{Deserialize, Deserializer, Serialize};
+use purrdf_lex::json::{Object, Value};
 
 use super::super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
 
-/// Caller-owned RDF type and SKOS class roles.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SkosClassRoles {
-    rdf_type: String,
-    concept: String,
-    concept_scheme: String,
-}
-
-impl SkosClassRoles {
-    /// Construct the mandatory class-role group.
-    pub fn new(
-        rdf_type: impl Into<String>,
-        concept: impl Into<String>,
-        concept_scheme: impl Into<String>,
-    ) -> Result<Self, ProjectionError> {
-        let roles = Self {
-            rdf_type: rdf_type.into(),
-            concept: concept.into(),
-            concept_scheme: concept_scheme.into(),
-        };
-        validate_named_iris(roles.named_iris())?;
-        Ok(roles)
-    }
-
-    /// RDF type predicate role.
-    pub fn rdf_type(&self) -> &str {
-        &self.rdf_type
-    }
-
-    /// SKOS Concept class role.
-    pub fn concept(&self) -> &str {
-        &self.concept
-    }
-
-    /// SKOS ConceptScheme class role.
-    pub fn concept_scheme(&self) -> &str {
-        &self.concept_scheme
-    }
-
-    fn named_iris(&self) -> [(&'static str, &str); 3] {
-        [
-            ("rdf_type", &self.rdf_type),
-            ("concept", &self.concept),
-            ("concept_scheme", &self.concept_scheme),
-        ]
+iri_role_group! {
+    /// Caller-owned RDF type and SKOS class roles.
+    SkosClassRoles as "struct SkosClassRoles" in "SKOS" {
+        /// RDF type predicate role.
+        rdf_type,
+        /// SKOS Concept class role.
+        concept,
+        /// SKOS ConceptScheme class role.
+        concept_scheme,
     }
 }
 
-/// Caller-owned SKOS lexical-label and notation roles.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SkosLabelRoles {
-    pref_label: String,
-    alt_label: String,
-    hidden_label: String,
-    notation: String,
-}
-
-impl SkosLabelRoles {
-    /// Construct the mandatory lexical-role group.
-    pub fn new(
-        pref_label: impl Into<String>,
-        alt_label: impl Into<String>,
-        hidden_label: impl Into<String>,
-        notation: impl Into<String>,
-    ) -> Result<Self, ProjectionError> {
-        let roles = Self {
-            pref_label: pref_label.into(),
-            alt_label: alt_label.into(),
-            hidden_label: hidden_label.into(),
-            notation: notation.into(),
-        };
-        validate_named_iris(roles.named_iris())?;
-        Ok(roles)
-    }
-
-    /// Preferred-label predicate role.
-    pub fn pref_label(&self) -> &str {
-        &self.pref_label
-    }
-
-    /// Alternate-label predicate role.
-    pub fn alt_label(&self) -> &str {
-        &self.alt_label
-    }
-
-    /// Hidden-label predicate role.
-    pub fn hidden_label(&self) -> &str {
-        &self.hidden_label
-    }
-
-    /// Notation predicate role.
-    pub fn notation(&self) -> &str {
-        &self.notation
-    }
-
-    fn named_iris(&self) -> [(&'static str, &str); 4] {
-        [
-            ("pref_label", &self.pref_label),
-            ("alt_label", &self.alt_label),
-            ("hidden_label", &self.hidden_label),
-            ("notation", &self.notation),
-        ]
+iri_role_group! {
+    /// Caller-owned SKOS lexical-label and notation roles.
+    SkosLabelRoles as "struct SkosLabelRoles" in "SKOS" {
+        /// Preferred-label predicate role.
+        pref_label,
+        /// Alternate-label predicate role.
+        alt_label,
+        /// Hidden-label predicate role.
+        hidden_label,
+        /// Notation predicate role.
+        notation,
     }
 }
 
-/// Caller-owned SKOS documentation-property roles.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SkosDocumentationRoles {
-    note: String,
-    change_note: String,
-    definition: String,
-    editorial_note: String,
-    example: String,
-    history_note: String,
-    scope_note: String,
-}
-
-impl SkosDocumentationRoles {
-    /// Construct the complete documentation-role group.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "mandatory named roles forbid an incomplete or fabricated vocabulary"
-    )]
-    pub fn new(
-        note: impl Into<String>,
-        change_note: impl Into<String>,
-        definition: impl Into<String>,
-        editorial_note: impl Into<String>,
-        example: impl Into<String>,
-        history_note: impl Into<String>,
-        scope_note: impl Into<String>,
-    ) -> Result<Self, ProjectionError> {
-        let roles = Self {
-            note: note.into(),
-            change_note: change_note.into(),
-            definition: definition.into(),
-            editorial_note: editorial_note.into(),
-            example: example.into(),
-            history_note: history_note.into(),
-            scope_note: scope_note.into(),
-        };
-        validate_named_iris(roles.named_iris())?;
-        Ok(roles)
-    }
-
-    /// Generic note predicate role.
-    pub fn note(&self) -> &str {
-        &self.note
-    }
-    /// Change-note predicate role.
-    pub fn change_note(&self) -> &str {
-        &self.change_note
-    }
-    /// Definition predicate role.
-    pub fn definition(&self) -> &str {
-        &self.definition
-    }
-    /// Editorial-note predicate role.
-    pub fn editorial_note(&self) -> &str {
-        &self.editorial_note
-    }
-    /// Example predicate role.
-    pub fn example(&self) -> &str {
-        &self.example
-    }
-    /// History-note predicate role.
-    pub fn history_note(&self) -> &str {
-        &self.history_note
-    }
-    /// Scope-note predicate role.
-    pub fn scope_note(&self) -> &str {
-        &self.scope_note
-    }
-
-    fn named_iris(&self) -> [(&'static str, &str); 7] {
-        [
-            ("note", &self.note),
-            ("change_note", &self.change_note),
-            ("definition", &self.definition),
-            ("editorial_note", &self.editorial_note),
-            ("example", &self.example),
-            ("history_note", &self.history_note),
-            ("scope_note", &self.scope_note),
-        ]
+iri_role_group! {
+    /// Caller-owned SKOS documentation-property roles.
+    SkosDocumentationRoles as "struct SkosDocumentationRoles" in "SKOS" {
+        /// Generic note predicate role.
+        note,
+        /// Change-note predicate role.
+        change_note,
+        /// Definition predicate role.
+        definition,
+        /// Editorial-note predicate role.
+        editorial_note,
+        /// Example predicate role.
+        example,
+        /// History-note predicate role.
+        history_note,
+        /// Scope-note predicate role.
+        scope_note,
     }
 }
 
-/// Caller-owned SKOS hierarchy, mapping, membership, and top-concept roles.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SkosRelationRoles {
-    broader: String,
-    narrower: String,
-    related: String,
-    close_match: String,
-    exact_match: String,
-    broad_match: String,
-    narrow_match: String,
-    related_match: String,
-    in_scheme: String,
-    has_top_concept: String,
-    top_concept_of: String,
-}
-
-impl SkosRelationRoles {
-    /// Construct the complete relation-role group.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "mandatory named roles forbid an incomplete or fabricated vocabulary"
-    )]
-    pub fn new(
-        broader: impl Into<String>,
-        narrower: impl Into<String>,
-        related: impl Into<String>,
-        close_match: impl Into<String>,
-        exact_match: impl Into<String>,
-        broad_match: impl Into<String>,
-        narrow_match: impl Into<String>,
-        related_match: impl Into<String>,
-        in_scheme: impl Into<String>,
-        has_top_concept: impl Into<String>,
-        top_concept_of: impl Into<String>,
-    ) -> Result<Self, ProjectionError> {
-        let roles = Self {
-            broader: broader.into(),
-            narrower: narrower.into(),
-            related: related.into(),
-            close_match: close_match.into(),
-            exact_match: exact_match.into(),
-            broad_match: broad_match.into(),
-            narrow_match: narrow_match.into(),
-            related_match: related_match.into(),
-            in_scheme: in_scheme.into(),
-            has_top_concept: has_top_concept.into(),
-            top_concept_of: top_concept_of.into(),
-        };
-        validate_named_iris(roles.named_iris())?;
-        Ok(roles)
-    }
-
-    /// Broader-concept predicate role.
-    pub fn broader(&self) -> &str {
-        &self.broader
-    }
-    /// Narrower-concept predicate role.
-    pub fn narrower(&self) -> &str {
-        &self.narrower
-    }
-    /// Associative-related predicate role.
-    pub fn related(&self) -> &str {
-        &self.related
-    }
-    /// Close-match predicate role.
-    pub fn close_match(&self) -> &str {
-        &self.close_match
-    }
-    /// Exact-match predicate role.
-    pub fn exact_match(&self) -> &str {
-        &self.exact_match
-    }
-    /// Broad-match predicate role.
-    pub fn broad_match(&self) -> &str {
-        &self.broad_match
-    }
-    /// Narrow-match predicate role.
-    pub fn narrow_match(&self) -> &str {
-        &self.narrow_match
-    }
-    /// Related-match predicate role.
-    pub fn related_match(&self) -> &str {
-        &self.related_match
-    }
-    /// Concept-scheme membership predicate role.
-    pub fn in_scheme(&self) -> &str {
-        &self.in_scheme
-    }
-    /// Scheme-to-top-concept predicate role.
-    pub fn has_top_concept(&self) -> &str {
-        &self.has_top_concept
-    }
-    /// Top-concept-to-scheme predicate role.
-    pub fn top_concept_of(&self) -> &str {
-        &self.top_concept_of
-    }
-
-    fn named_iris(&self) -> [(&'static str, &str); 11] {
-        [
-            ("broader", &self.broader),
-            ("narrower", &self.narrower),
-            ("related", &self.related),
-            ("close_match", &self.close_match),
-            ("exact_match", &self.exact_match),
-            ("broad_match", &self.broad_match),
-            ("narrow_match", &self.narrow_match),
-            ("related_match", &self.related_match),
-            ("in_scheme", &self.in_scheme),
-            ("has_top_concept", &self.has_top_concept),
-            ("top_concept_of", &self.top_concept_of),
-        ]
+iri_role_group! {
+    /// Caller-owned SKOS hierarchy, mapping, membership, and top-concept roles.
+    SkosRelationRoles as "struct SkosRelationRoles" in "SKOS" {
+        /// Broader-concept predicate role.
+        broader,
+        /// Narrower-concept predicate role.
+        narrower,
+        /// Associative-related predicate role.
+        related,
+        /// Close-match predicate role.
+        close_match,
+        /// Exact-match predicate role.
+        exact_match,
+        /// Broad-match predicate role.
+        broad_match,
+        /// Narrow-match predicate role.
+        narrow_match,
+        /// Related-match predicate role.
+        related_match,
+        /// Concept-scheme membership predicate role.
+        in_scheme,
+        /// Scheme-to-top-concept predicate role.
+        has_top_concept,
+        /// Top-concept-to-scheme predicate role.
+        top_concept_of,
     }
 }
 
 macro_rules! role_set {
-    ($name:ident, $description:literal) => {
+    ($name:ident, $expecting:literal, $description:literal) => {
         #[doc = $description]
-        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-        #[serde(deny_unknown_fields)]
+        #[derive(Debug, Clone, PartialEq, Eq)]
         pub struct $name {
             classes: SkosClassRoles,
             labels: SkosLabelRoles,
@@ -360,44 +129,40 @@ macro_rules! role_set {
             }
 
             fn validate(&self) -> Result<(), ProjectionError> {
-                let mut seen = BTreeSet::new();
-                for (role, iri) in self.named_iris() {
-                    validate_absolute_iri(iri, concat!(stringify!($name), " role"))?;
-                    if !seen.insert(iri) {
-                        return Err(ProjectionError::configuration(format!(
-                            "{} role `{role}` reuses `{iri}`; semantic roles must be distinct",
-                            stringify!($name)
-                        )));
-                    }
-                }
-                Ok(())
-            }
-
-            fn named_iris(&self) -> Vec<(&'static str, &str)> {
-                self.classes
-                    .named_iris()
-                    .into_iter()
-                    .chain(self.labels.named_iris())
-                    .chain(self.documentation.named_iris())
-                    .chain(self.relations.named_iris())
-                    .collect()
+                validate_distinct_roles(
+                    stringify!($name),
+                    self.classes
+                        .named_iris()
+                        .chain(self.labels.named_iris())
+                        .chain(self.documentation.named_iris())
+                        .chain(self.relations.named_iris()),
+                )
             }
         }
+
+        // The four role groups, read without cross-checking: [`SkosConfig`] does that.
+        purrdf_lex::json_record!($name as $expecting {
+            "classes" => classes: required,
+            "labels" => labels: required,
+            "documentation" => documentation: required,
+            "relations" => relations: required,
+        });
     };
 }
 
 role_set!(
     SkosSourceRoles,
+    "struct SkosSourceRoles",
     "Complete caller-owned source interpretation for the RDF→SKOS projection."
 );
 role_set!(
     SkosTargetRoles,
+    "struct SkosTargetRoles",
     "Complete caller-owned target vocabulary for the emitted SKOS view."
 );
 
 /// Source graph selection for one SKOS concept-scheme view.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "mode", rename_all = "kebab-case", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SkosGraphSelection {
     /// Read only default-graph statements.
     DefaultGraph,
@@ -420,7 +185,7 @@ impl SkosGraphSelection {
 }
 
 /// Mandatory identity, vocabulary, graph, and resource policy for RDF→SKOS.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkosConfig {
     source: SkosSourceRoles,
     target: SkosTargetRoles,
@@ -519,42 +284,91 @@ impl SkosConfig {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawSkosConfig {
-    source: SkosSourceRoles,
-    target: SkosTargetRoles,
-    scheme_iri: String,
-    graph_selection: SkosGraphSelection,
-    limits: ProjectionLimits,
-    max_records: usize,
-    #[serde(default)]
-    document_base_iri: Option<String>,
-}
-
-impl<'de> Deserialize<'de> for SkosConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawSkosConfig::deserialize(deserializer)?;
-        Self::new(
-            raw.source,
-            raw.target,
-            raw.scheme_iri,
-            raw.graph_selection,
-            raw.limits,
-            raw.max_records,
-        )
-        .map_err(serde::de::Error::custom)?
-        .with_document_base_iri(raw.document_base_iri)
-        .map_err(serde::de::Error::custom)
+impl FromJson for SkosConfig {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct SkosConfig")?;
+        let source = fields.required("source")?;
+        let target = fields.required("target")?;
+        let scheme_iri: String = fields.required("scheme_iri")?;
+        let graph_selection = fields.required("graph_selection")?;
+        let limits = fields.required("limits")?;
+        let max_records = fields.required("max_records")?;
+        let document_base_iri = fields.optional("document_base_iri")?;
+        fields.deny_unknown()?;
+        Ok(Self::new(
+            source,
+            target,
+            scheme_iri,
+            graph_selection,
+            limits,
+            max_records,
+        )?
+        .with_document_base_iri(document_base_iri)?)
     }
 }
 
-fn validate_named_iris<const N: usize>(iris: [(&str, &str); N]) -> Result<(), ProjectionError> {
-    for (name, iri) in iris {
-        validate_absolute_iri(iri, &format!("SKOS vocabulary role `{name}`"))?;
+purrdf_lex::json_record!(impl ToJson for SkosConfig {
+    "source" => source,
+    "target" => target,
+    "scheme_iri" => scheme_iri,
+    "graph_selection" => graph_selection,
+    "limits" => limits,
+    "max_records" => max_records,
+    "document_base_iri" => document_base_iri,
+});
+
+/// The `mode` tags of [`SkosGraphSelection`].
+const GRAPH_SELECTION_MODES: &[&str] = &["default-graph", "named-graph", "union"];
+
+impl FromJson for SkosGraphSelection {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum SkosGraphSelection")?;
+        let selection = match fields.tag("mode", GRAPH_SELECTION_MODES)? {
+            "default-graph" => Self::DefaultGraph,
+            "named-graph" => Self::NamedGraph {
+                graph_iri: fields.required("graph_iri")?,
+            },
+            _ => Self::Union,
+        };
+        fields.deny_unknown()?;
+        Ok(selection)
     }
-    Ok(())
+}
+
+impl ToJson for SkosGraphSelection {
+    fn to_json(&self) -> Value {
+        let object = match self {
+            Self::DefaultGraph => Object::new().with("mode", "default-graph"),
+            Self::NamedGraph { graph_iri } => Object::new()
+                .with("mode", "named-graph")
+                .with("graph_iri", graph_iri.as_str()),
+            Self::Union => Object::new().with("mode", "union"),
+        };
+        Value::Object(object)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read(text: &str) -> Result<SkosGraphSelection, DecodeError> {
+        SkosGraphSelection::from_json(&purrdf_lex::json::read(text).expect("JSON"))
+    }
+
+    /// A field-less graph selection is exactly its tag: a member beside the tag
+    /// is an unknown field, while the bare tag and the named-graph variant's own
+    /// member are read.
+    #[test]
+    fn a_field_less_graph_selection_refuses_an_extra_member() {
+        assert!(read(r#"{"mode":"union","graph_iri":"https://example.org/g"}"#).is_err());
+        assert_eq!(read(r#"{"mode":"union"}"#), Ok(SkosGraphSelection::Union));
+        assert_eq!(
+            read(r#"{"mode":"named-graph","graph_iri":"https://example.org/g"}"#),
+            Ok(SkosGraphSelection::NamedGraph {
+                graph_iri: "https://example.org/g".to_owned()
+            })
+        );
+        assert!(read(r#"{"mode":"named-graph","graph_iri":"x","extra":1}"#).is_err());
+    }
 }

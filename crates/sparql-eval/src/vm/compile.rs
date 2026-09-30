@@ -17,6 +17,15 @@
 //!   literal constant is its own lexical form, uninterned.
 //! * [`Mode::LangLexical`] — `LANG(x)`'s operand under [`Mode::StringArg`]: a literal
 //!   constant's tag, uninterned.
+//! * [`Mode::TripleObject`] — a triple term constructor (`TRIPLE(s, p, o)`, `<<( s p o
+//!   )>>`) in the object position of another: the value it builds, uninterned, moved
+//!   into the term that encloses it. A chain of `d` nested constructors interns its
+//!   outermost term alone, rather than every level's whole term — `d` terms of up to `d`
+//!   levels each, stored and hashed once each, which is the square of the depth in time
+//!   and memory. The value, and every value it is unbound for, is the one the
+//!   level-by-level interning answered: each level's subject and predicate are judged
+//!   where they are built, and the one language-tag check at the outermost level reads
+//!   every level's tags.
 //!
 //! Every other position evaluates in [`Mode::Term`], and an effective boolean value is
 //! the term's, read by [`Op::EbvOf`] after the term is built — so a logical operator's
@@ -34,9 +43,9 @@ use purrdf_sparql_algebra::{
 
 use crate::DetHashMap;
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// One of the four ordering comparisons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,6 +167,14 @@ pub(crate) enum Op {
     /// Pop flags, pattern and text string arguments; push `REGEX`. Regex slot `k`
     /// holds the link-time pattern when pattern and flags are constants.
     Regex(u32),
+    /// Pop the object — a term, or a value a nested constructor built — then the
+    /// predicate and subject terms; build the triple term `TRIPLE` builds. `intern`
+    /// pushes it interned as a term; otherwise it is pushed as the value, for the
+    /// constructor it is the object of.
+    Triple {
+        /// Whether the triple term is interned, rather than left a value.
+        intern: bool,
+    },
     /// Pop range and tag string arguments; push `LANGMATCHES`.
     LangMatches,
 }
@@ -212,6 +229,7 @@ enum Mode {
     StringArg,
     StrLexical,
     LangLexical,
+    TripleObject,
 }
 
 /// One unit of pending compilation.
@@ -374,6 +392,13 @@ impl Compiler {
     fn expand<'x>(&mut self, expr: &'x Expression, mode: Mode, out: &mut Tasks<'x>) {
         match mode {
             Mode::Term => self.expand_term(expr, out),
+            Mode::TripleObject => match expr {
+                Expression::FunctionCall(Function::Triple, args) if args.len() == 3 => {
+                    triple_operands(args, out);
+                    out.push(Task::Emit(Op::Triple { intern: false }));
+                }
+                _ => out.push(Task::Compile(expr, Mode::Term)),
+            },
             Mode::StringArg => match expr {
                 Expression::Literal(lit)
                     if lit.datatype().as_str() == XSD_STRING
@@ -381,7 +406,7 @@ impl Compiler {
                 {
                     let op = self.string(
                         lit.value().to_owned(),
-                        lit.language().map(str::to_ascii_lowercase),
+                        lit.language().map(purrdf_iri::langtag::identity_fold),
                     );
                     out.push(Task::Emit(op));
                 }
@@ -412,8 +437,11 @@ impl Compiler {
             },
             Mode::LangLexical => match expr {
                 Expression::Literal(lit) => {
-                    let op =
-                        self.string(lit.language().map_or_default(str::to_ascii_lowercase), None);
+                    let op = self.string(
+                        lit.language()
+                            .map_or_default(purrdf_iri::langtag::identity_fold),
+                        None,
+                    );
                     out.push(Task::Emit(op));
                 }
                 _ => {
@@ -580,6 +608,12 @@ impl Compiler {
                 string_args(2, out);
                 out.push(Task::Emit(Op::LangMatches));
             }
+            // A constructor whose object is another constructor: the chain below it is
+            // built as one value and interned here, once.
+            Function::Triple if args.len() == 3 && is_triple_constructor(&args[2]) => {
+                triple_operands(args, out);
+                out.push(Task::Emit(Op::Triple { intern: true }));
+            }
             Function::Custom(_) => {
                 for arg in args {
                     out.push(Task::Compile(arg, Mode::Term));
@@ -629,6 +663,26 @@ impl Compiler {
     }
 }
 
+/// Whether `expr` is a three-argument triple term constructor.
+pub(super) fn is_triple_constructor(expr: &Expression) -> bool {
+    matches!(expr, Expression::FunctionCall(Function::Triple, args) if args.len() == 3)
+}
+
+/// A triple term constructor's three operands, in order: the subject and predicate as
+/// terms, and the object as a value when it is itself a constructor.
+fn triple_operands<'x>(args: &'x [Expression], out: &mut Tasks<'x>) {
+    out.push(Task::Compile(&args[0], Mode::Term));
+    out.push(Task::Compile(&args[1], Mode::Term));
+    out.push(Task::Compile(
+        &args[2],
+        if is_triple_constructor(&args[2]) {
+            Mode::TripleObject
+        } else {
+            Mode::Term
+        },
+    ));
+}
+
 /// The string a [`Mode::StringArg`] operand reads without evaluating anything, when it
 /// is one: a string literal, or `STR`/`LANG` of a constant.
 fn constant_string_arg(expr: Option<&Expression>) -> Option<String> {
@@ -645,9 +699,10 @@ fn constant_string_arg(expr: Option<&Expression>) -> Option<String> {
             _ => None,
         },
         Expression::FunctionCall(Function::Lang, inner) if inner.len() == 1 => match &inner[0] {
-            Expression::Literal(lit) => {
-                Some(lit.language().map_or_default(str::to_ascii_lowercase))
-            }
+            Expression::Literal(lit) => Some(
+                lit.language()
+                    .map_or_default(purrdf_iri::langtag::identity_fold),
+            ),
             _ => None,
         },
         _ => None,

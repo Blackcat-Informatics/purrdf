@@ -73,10 +73,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
+use purrdf_testkit::paths::{collect_rs, workspace_root};
 use syn::visit::{self, Visit};
 
 // ── The declared census ─────────────────────────────────────────────────────────
@@ -155,12 +155,7 @@ const PROFILE_ID: &str = "purrdf-shacl-core-v1";
 /// the place it ships from. A change to it is a change to what a prepared product
 /// MEANS, and every product minted under the old id describes a different model.
 fn shipped_stage_id() -> String {
-    purrdf_shapes::product::STAGE_ID
-        .iter()
-        .fold(String::with_capacity(64), |mut out, byte| {
-            let _ = write!(out, "{byte:02x}");
-            out
-        })
+    purrdf_hash::hex::encode(&purrdf_shapes::product::STAGE_ID)
 }
 
 // ── Census data model ───────────────────────────────────────────────────────────
@@ -720,32 +715,6 @@ pub fn scan_sources(sources: &[(String, String)]) -> Scan {
 
 // ── Repository sources ──────────────────────────────────────────────────────────
 
-/// The workspace root.
-///
-/// # Panics
-///
-/// Panics when the workspace root cannot be resolved.
-#[must_use]
-pub fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("the workspace root resolves")
-}
-
-fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
-    let entries =
-        std::fs::read_dir(dir).unwrap_or_else(|error| panic!("read {}: {error}", dir.display()));
-    for entry in entries {
-        let path = entry.expect("directory entry").path();
-        if path.is_dir() {
-            collect_rs(&path, out);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            out.push(path);
-        }
-    }
-}
-
 /// Every `crates/shapes/src/**/*.rs` source, as `(repository-relative path, text)`.
 ///
 /// # Panics
@@ -754,7 +723,7 @@ fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
 /// sources — a broken walker must not pass as a small crate.
 #[must_use]
 pub fn shapes_sources() -> Sources {
-    let root = repo_root();
+    let root = workspace_root();
     let src = root.join("crates/shapes/src");
     let mut paths = Vec::new();
     collect_rs(&src, &mut paths);
@@ -848,7 +817,7 @@ pub fn stage_rows(scan: &Scan) -> Vec<ModelType> {
 /// Panics when the parser's table cannot be located, or is implausibly small.
 #[must_use]
 pub fn builtin_function_table() -> Vec<(String, String)> {
-    let path = repo_root().join("crates/sparql-algebra/src/parser.rs");
+    let path = workspace_root().join("crates/sparql-algebra/src/parser.rs");
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
     let parsed = syn::parse_file(&text).expect("the SPARQL parser source parses as Rust");
@@ -945,7 +914,8 @@ fn string_consts_in_module(source: &syn::File, module: &str) -> BTreeMap<String,
 ///
 /// Two halves, both read out of the live sources:
 ///
-/// * every `sh:…ConstraintComponent` IRI `crates/shapes/src/model.rs` declares —
+/// * every `sh:…ConstraintComponent` IRI the shared W3C vocabulary
+///   (`crates/iri/src/vocab.rs`, re-exported as `purrdf_shapes::model::sh`) declares —
 ///   the component identities a validation result is reported under; and
 /// * the native metadata-cardinality table in
 ///   `crates/shapes/src/shapes/parser/cardinality.rs`, resolved to the IRIs it
@@ -965,14 +935,14 @@ fn string_consts_in_module(source: &syn::File, module: &str) -> BTreeMap<String,
 /// # Panics
 ///
 /// Panics when a table cannot be located or is implausibly small, or when a table
-/// entry names a constant `model.rs` does not declare.
+/// entry names a constant `vocab.rs` does not declare.
 #[must_use]
 pub fn constraint_component_parameter_table() -> Vec<(String, String)> {
-    let root = repo_root();
-    let model_path = root.join("crates/shapes/src/model.rs");
+    let root = workspace_root();
+    let model_path = root.join("crates/iri/src/vocab.rs");
     let model_text = std::fs::read_to_string(&model_path)
         .unwrap_or_else(|error| panic!("read {}: {error}", model_path.display()));
-    let model = syn::parse_file(&model_text).expect("model.rs parses as Rust");
+    let model = syn::parse_file(&model_text).expect("vocab.rs parses as Rust");
     let sh = string_consts_in_module(&model, "sh");
     assert!(
         sh.len() > 100,
@@ -1033,7 +1003,7 @@ pub fn constraint_component_parameter_table() -> Vec<(String, String)> {
                 .ident
                 .to_string();
             let iri = sh.get(&name).unwrap_or_else(|| {
-                panic!("`{want}[{index}]` names `sh::{name}`, which model.rs does not declare")
+                panic!("`{want}[{index}]` names `sh::{name}`, which vocab.rs does not declare")
             });
             table.push((format!("{want}[{index}] sh::{name}"), iri.clone()));
         }
@@ -1111,7 +1081,7 @@ const CLASS_ANALYSIS_SITES: [(&str, &str, &str); 7] = [
 /// every other way a scrape refuses.
 #[must_use]
 pub fn class_analysis_table() -> Vec<(String, String)> {
-    let path = repo_root().join(CLASS_ANALYSIS_SOURCE);
+    let path = workspace_root().join(CLASS_ANALYSIS_SOURCE);
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
     class_analysis_table_from(&text)
@@ -1342,7 +1312,7 @@ pub fn stage_id(
     analysis: &[(String, String)],
 ) -> String {
     let preimage = stage_id_preimage(types, builtins, components, analysis);
-    purrdf_gts::wire::hex(&purrdf_gts::wire::blake3_256(preimage.as_bytes()))
+    purrdf_hash::hex::encode(&purrdf_gts::wire::blake3_256(preimage.as_bytes()))
 }
 
 /// The stage id of the live repository sources.
@@ -1592,7 +1562,7 @@ fn stage_id_depends_on_the_profile_id() {
     );
     assert_ne!(real, other, "the profile line must appear in the preimage");
     assert_ne!(
-        purrdf_gts::wire::hex(&purrdf_gts::wire::blake3_256(other.as_bytes())),
+        purrdf_hash::hex::encode(&purrdf_gts::wire::blake3_256(other.as_bytes())),
         live_stage_id()
     );
 }
@@ -1834,7 +1804,7 @@ fn constraint_variants_are_the_spec_table_component_rows() {
 /// touched, so this cannot rot into "the test that passed once".
 #[test]
 fn stage_id_changes_when_the_class_reachability_rule_changes() {
-    let path = repo_root().join(CLASS_ANALYSIS_SOURCE);
+    let path = workspace_root().join(CLASS_ANALYSIS_SOURCE);
     let real = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
 
@@ -1884,7 +1854,7 @@ fn stage_id_changes_when_the_class_reachability_rule_changes() {
 /// forms, and the digest must be unmoved.
 #[test]
 fn reformatting_the_class_walk_does_not_move_the_stage_id() {
-    let path = repo_root().join(CLASS_ANALYSIS_SOURCE);
+    let path = workspace_root().join(CLASS_ANALYSIS_SOURCE);
     let real = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
 

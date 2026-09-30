@@ -3,72 +3,19 @@
 
 //! Exact external bindings and opaque inline/detached index guards.
 
+use purrdf_core::purremb_fixture::{Identities, put_u32, read_u64, reseal, section_span};
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, DerivedIndex, DimensionalityPolicy, DistanceMetric,
-    EffectivePrefix, EmbeddingBuilder, EmbeddingFamily, EmbeddingFamilyContract, EmbeddingTarget,
-    EmbeddingView, ExtensionTarget, ExternalBinding, ExternalBindingContract, ExternalScope,
-    IndexBuildDeterminism, IndexCoordinates, IndexGuardContract, IndexLossContract,
-    IndexPayloadStorage, IndexStorage, IndexUseRole, MatrixCommitment, MatrixInput, MatrixRow,
-    PURREMB_HEADER_LENGTH, PrefixPostprocessing, ProjectionCommitment, ProjectionSpec,
-    RdfDatasetBuilder, SECTION_CONTRACTS, SECTION_EXTERNAL_BINDINGS, SECTION_INDEX_GUARDS,
-    SECTION_INDEX_PAYLOAD, SECTION_TARGETS, StageImplementation, TargetSet, VectorDtype,
-    derive_artifact_root, derive_matrix_content_digest, derive_matrix_id,
-    derive_projection_content_digest, derive_projection_id, verify_embedding,
-    verify_external_artifact, verify_external_pack,
+    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, ContentDigest, DerivedIndex,
+    DimensionalityPolicy, DistanceMetric, EffectivePrefix, EmbeddingBuilder, EmbeddingFamily,
+    EmbeddingFamilyContract, EmbeddingTarget, EmbeddingView, ExtensionTarget, ExternalBinding,
+    ExternalBindingContract, ExternalScope, IndexBuildDeterminism, IndexCoordinates,
+    IndexGuardContract, IndexLossContract, IndexPayloadStorage, IndexStorage, IndexUseRole,
+    MatrixCommitment, MatrixInput, MatrixRow, PrefixPostprocessing, ProjectionCommitment,
+    ProjectionSpec, RdfDatasetBuilder, SECTION_CONTRACTS, SECTION_EXTERNAL_BINDINGS,
+    SECTION_INDEX_GUARDS, SECTION_INDEX_PAYLOAD, SECTION_TARGETS, TargetSet, VectorDtype,
+    derive_matrix_content_digest, derive_matrix_id, derive_projection_content_digest,
+    derive_projection_id, verify_embedding, verify_external_artifact, verify_external_pack,
 };
-use sha2::{Digest as _, Sha256};
-
-const DIRECTORY_ENTRY_LENGTH: usize = 64;
-
-fn read_u32(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("u32 field"))
-}
-
-fn read_u64(bytes: &[u8], offset: usize) -> u64 {
-    u64::from_le_bytes(bytes[offset..offset + 8].try_into().expect("u64 field"))
-}
-
-fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
-    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-}
-
-fn directory_entry(bytes: &[u8], kind: u32, instance: u32) -> usize {
-    let count = usize::try_from(read_u32(bytes, 20)).expect("section count");
-    (0..count)
-        .map(|index| PURREMB_HEADER_LENGTH as usize + index * DIRECTORY_ENTRY_LENGTH)
-        .find(|offset| read_u32(bytes, *offset) == kind && read_u32(bytes, *offset + 8) == instance)
-        .expect("section directory entry")
-}
-
-fn section_span(bytes: &[u8], kind: u32, instance: u32) -> (usize, usize) {
-    let entry = directory_entry(bytes, kind, instance);
-    (
-        usize::try_from(read_u64(bytes, entry + 16)).expect("section offset"),
-        usize::try_from(read_u64(bytes, entry + 24)).expect("section length"),
-    )
-}
-
-fn reseal(bytes: &mut [u8], sections: &[(u32, u32)]) {
-    for &(kind, instance) in sections {
-        let entry = directory_entry(bytes, kind, instance);
-        let (offset, length) = section_span(bytes, kind, instance);
-        let digest: [u8; 32] = Sha256::digest(&bytes[offset..offset + length]).into();
-        bytes[entry + 32..entry + 64].copy_from_slice(&digest);
-    }
-    let count = usize::try_from(read_u32(bytes, 20)).expect("section count");
-    let directory_end = PURREMB_HEADER_LENGTH as usize + count * DIRECTORY_ENTRY_LENGTH;
-    let mut header = [0u8; PURREMB_HEADER_LENGTH as usize];
-    header.copy_from_slice(&bytes[..PURREMB_HEADER_LENGTH as usize]);
-    header[64..96].fill(0);
-    let root = derive_artifact_root(
-        &header,
-        &bytes[PURREMB_HEADER_LENGTH as usize..directory_end],
-    );
-    bytes[64..96].copy_from_slice(root.as_bytes());
-    let trailer = usize::try_from(read_u64(bytes, 48)).expect("trailer offset");
-    bytes[trailer + 24..trailer + 56].copy_from_slice(root.as_bytes());
-}
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> usize {
     haystack
@@ -95,28 +42,11 @@ struct Context {
     commitment: MatrixCommitment,
 }
 
-fn artifact(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        format!("https://example.org/index/{name}"),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("artifact")
-}
-
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            format!("https://example.org/index/{name}"),
-            ContentDigest::of(name.as_bytes()),
-            "application/cbor",
-            vec![1, 2],
-        )
-        .expect("stage"),
-    )
-}
+const FX: Identities = Identities {
+    stage_media: "application/cbor",
+    stage_payload: &[1, 2],
+    ..Identities::at("https://example.org/index/")
+};
 
 fn context() -> Context {
     context_with_metric(DistanceMetric::Cosine)
@@ -129,14 +59,14 @@ fn context_with_metric(metric: DistanceMetric) -> Context {
     let target = source.dataset_target(true).expect("dataset target");
     let target_set = TargetSet::new(vec![target.id]).expect("target set");
     let contract = EmbeddingFamilyContract {
-        model: artifact("model"),
-        engine: artifact("engine"),
-        tokenizer: artifact("tokenizer"),
-        execution: stage("execution"),
-        subject_projection: stage("projection"),
+        model: FX.artifact("model"),
+        engine: FX.artifact("engine"),
+        tokenizer: FX.artifact("tokenizer"),
+        execution: FX.stage("execution"),
+        subject_projection: FX.stage("projection"),
         preprocessing: AppliedStage::NotApplied,
         chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling"),
+        pooling: FX.stage("pooling"),
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F32,
@@ -233,7 +163,7 @@ fn guard(
     certified_metadata_binding: Option<purrdf_core::ExternalBindingId>,
 ) -> IndexGuardContract {
     IndexGuardContract {
-        implementation: artifact("hnsw-fixture"),
+        implementation: FX.artifact("hnsw-fixture"),
         parameter_encoding: "application/cbor".into(),
         parameters: vec![0xa1, 0x61, b'm', 0x10],
         loss: IndexLossContract {

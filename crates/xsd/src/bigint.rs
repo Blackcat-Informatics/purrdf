@@ -21,17 +21,22 @@
 //! too (by the same deliberate, documented bound), so promoting a running
 //! integer sum through `Decimal` hits the identical ceiling one type up. A
 //! genuine "arbitrary precision" accumulator therefore needs a representation
-//! with no fixed width at all — this module is the minimal one: constructed
-//! from an `i128`, added to another `BigInt`, narrowed back to `i128` when it
-//! fits, and rendered as the canonical `xsd:integer` decimal lexical form when
-//! it does not. `SUM` needs only that. `AVG`'s finish (dividing the running sum
-//! by the folded row count) needs two more narrow operations once the sum has
-//! escaped `i128`: scaling by a power of ten and dividing by a single machine
-//! integer (the count) — [`BigInt::mul_pow10`] and [`BigInt::div_rem_u64`],
-//! both still exact and both still far short of a general-purpose bignum: no
-//! `BigInt × BigInt` multiplication, no `BigInt ÷ BigInt` division, no parsing
-//! from a lexical form, because a row count is always a single machine word and
-//! nothing in this crate ever needs to multiply two running sums together.
+//! with no fixed width at all. `SUM` needs addition, narrowing back to `i128`
+//! and the canonical lexical form; `AVG`'s finish scales by a power of ten and
+//! divides by the row count ([`BigInt::mul_pow10`], [`BigInt::div_rem_u64`]).
+//!
+//! It is also the workspace's one arbitrary-precision integer, so the other
+//! exact-number jobs compute on it rather than on a second digit vector:
+//!
+//! * writing a binary floating-point value, or the midpoint between two, out in
+//!   full as a decimal ([`BigInt::from_binary`], over [`BigInt::mul_pow2`] and
+//!   [`BigInt::mul_pow5`]);
+//! * JSON numbers whose digits or exponent no machine word holds
+//!   ([`crate::json_number::JsonNumber`]), and JSON Schema's `multipleOf` over them
+//!   ([`BigInt::from_digits`], [`BigInt::mul`], [`BigInt::rem`]).
+//!
+//! It is still not a general-purpose bignum: there is no quotient of two
+//! `BigInt`s, only the remainder divisibility needs.
 //!
 //! # Representation
 //!
@@ -57,7 +62,7 @@ const I128_MIN_MAGNITUDE: u128 = 1u128 << 127;
 
 /// An arbitrary-precision signed integer — see the module docs for why this
 /// exists and what it deliberately does not support.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BigInt {
     /// `true` for a negative value. Always `false` when `limbs` is empty (zero).
     negative: bool,
@@ -255,9 +260,9 @@ impl BigInt {
     /// bypass this module's own [`Self::to_decimal_string`] already gives
     /// `SUM`'s finish for a pure-integer running total that exceeds `i128`.
     #[must_use]
-    pub fn to_decimal_lexical(&self, scale: u8) -> String {
+    pub fn to_decimal_lexical(&self, scale: u32) -> String {
         let digits = magnitude_decimal_digits(&self.limbs);
-        let scale = usize::from(scale);
+        let scale = usize::try_from(scale).unwrap_or(usize::MAX);
         let (int_part, frac_part) = if scale == 0 {
             (digits, String::new())
         } else if digits.len() > scale {
@@ -357,6 +362,140 @@ impl BigInt {
             limbs: quotient_limbs,
         };
         Some((quotient, remainder))
+    }
+}
+
+impl BigInt {
+    /// Parse `[+-]?DIGIT+`, exactly — `None` for any other text. Leading zeros
+    /// are allowed and `-0` is zero.
+    #[must_use]
+    pub fn from_digits(text: &str) -> Option<Self> {
+        let (negative, digits) = match text.as_bytes().first() {
+            Some(b'-') => (true, &text[1..]),
+            Some(b'+') => (false, &text[1..]),
+            _ => (false, text),
+        };
+        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        // Nine digits per limb, least significant limb first.
+        let bytes = digits.as_bytes();
+        let mut limbs = Vec::with_capacity(bytes.len() / 9 + 1);
+        let mut end = bytes.len();
+        while end > 0 {
+            let start = end.saturating_sub(9);
+            let limb = bytes[start..end]
+                .iter()
+                .fold(0_u32, |value, digit| value * 10 + u32::from(digit - b'0'));
+            limbs.push(limb);
+            end = start;
+        }
+        while limbs.last() == Some(&0) {
+            limbs.pop();
+        }
+        Some(Self {
+            negative: negative && !limbs.is_empty(),
+            limbs,
+        })
+    }
+
+    /// `numerator × 2^exponent` as an exact decimal: `(mantissa, scale)` with the
+    /// value `mantissa / 10^scale`.
+    ///
+    /// Every dyadic rational is a finite decimal, because `2^−k = 5^k / 10^k`: a
+    /// non-negative `exponent` scales by `2^exponent` at scale 0, a negative one
+    /// scales by `5^−exponent` at scale `−exponent`. This is how an IEEE value, or
+    /// the midpoint between two neighbouring ones (a dyadic rational one bit
+    /// finer), is written out in full; render it with
+    /// [`Self::to_decimal_lexical`].
+    #[must_use]
+    pub fn from_binary(numerator: i128, exponent: i32) -> (Self, u32) {
+        let value = Self::from_i128(numerator);
+        if exponent >= 0 {
+            (value.mul_pow2(exponent.unsigned_abs()), 0)
+        } else {
+            let places = exponent.unsigned_abs();
+            (value.mul_pow5(places), places)
+        }
+    }
+
+    /// `self × factor`, exactly.
+    #[must_use]
+    pub fn mul_small(&self, factor: u32) -> Self {
+        if factor == 0 {
+            return Self::zero();
+        }
+        Self {
+            negative: self.negative,
+            // `factor < 2^32`, so each limb product `< 1e9 × 2^32 < 2^62` leaves
+            // room for the carry in the `u64` lane.
+            limbs: mul_by_small(&self.limbs, u64::from(factor)),
+        }
+    }
+
+    /// `self × 5^exp`, exactly — with [`Self::mul_pow2`], the scaling that turns a
+    /// dyadic rational into a decimal one ([`Self::from_binary`]).
+    #[must_use]
+    pub fn mul_pow5(&self, exp: u32) -> Self {
+        // 5^13 = 1_220_703_125 is the largest power of five a `u32` holds.
+        const CHUNK: u32 = 13;
+        if self.is_zero() || exp == 0 {
+            return self.clone();
+        }
+        let mut limbs = self.limbs.clone();
+        let mut remaining = exp;
+        while remaining > 0 {
+            let step = remaining.min(CHUNK);
+            limbs = mul_by_small(&limbs, 5_u64.pow(step));
+            remaining -= step;
+        }
+        Self {
+            negative: self.negative,
+            limbs,
+        }
+    }
+
+    /// `self × other`, exactly (schoolbook over the base-`1e9` limbs).
+    #[must_use]
+    pub fn mul(&self, other: &Self) -> Self {
+        if self.is_zero() || other.is_zero() {
+            return Self::zero();
+        }
+        Self {
+            negative: self.negative != other.negative,
+            limbs: magnitude_mul(&self.limbs, &other.limbs),
+        }
+    }
+
+    /// `self mod divisor`, truncated as Rust's `%` is: the remainder takes the
+    /// sign of `self` and its magnitude is below `|divisor|`. `None` only for a
+    /// zero divisor.
+    #[must_use]
+    pub fn rem(&self, divisor: &Self) -> Option<Self> {
+        if divisor.is_zero() {
+            return None;
+        }
+        let limbs = magnitude_rem(&self.limbs, &divisor.limbs);
+        Some(Self {
+            negative: self.negative && !limbs.is_empty(),
+            limbs,
+        })
+    }
+
+    /// Whether the value is odd. Every limb above the first is a multiple of
+    /// `1e9`, which is even, so the lowest limb decides.
+    #[must_use]
+    pub fn is_odd(&self) -> bool {
+        self.limbs.first().is_some_and(|limb| limb & 1 == 1)
+    }
+
+    /// The value with its sign reversed; zero stays zero.
+    #[must_use]
+    pub fn negated(&self) -> Self {
+        Self {
+            negative: !self.negative && !self.is_zero(),
+            limbs: self.limbs.clone(),
+        }
     }
 }
 
@@ -545,10 +684,9 @@ fn magnitude_sub(a: &[u32], b: &[u32]) -> Vec<u32> {
     out
 }
 
-/// `a × factor` over a base-`1e9` magnitude, where `factor < LIMB_BASE` (the only
-/// case [`BigInt::mul_pow10`] needs — a single leftover decimal digit's worth of
-/// scaling after the whole-limb shift). Each limb's product is
-/// `< LIMB_BASE × LIMB_BASE < 2^60`, comfortably inside `u64` alongside the carry.
+/// `a × factor` over a base-`1e9` magnitude, where `factor < 2^32`. Each limb's
+/// product is `< 1e9 × 2^32 < 2^62`, inside `u64` alongside the carry, which is
+/// itself below `2^32`.
 fn mul_by_small(a: &[u32], factor: u64) -> Vec<u32> {
     let mut out = Vec::with_capacity(a.len() + 1);
     let mut carry: u64 = 0;
@@ -565,6 +703,75 @@ fn mul_by_small(a: &[u32], factor: u64) -> Vec<u32> {
         out.pop();
     }
     out
+}
+
+/// `a × b` over base-`1e9` magnitudes (both canonical and non-empty). Each column
+/// accumulates `limb × limb + limb + carry < 1e18 + 2e9 < 2^64`.
+fn magnitude_mul(a: &[u32], b: &[u32]) -> Vec<u32> {
+    let mut out = vec![0u32; a.len() + b.len()];
+    for (i, &x) in a.iter().enumerate() {
+        let mut carry: u64 = 0;
+        for (j, &y) in b.iter().enumerate() {
+            let cell = u64::from(x) * u64::from(y) + u64::from(out[i + j]) + carry;
+            // `cell % LIMB_BASE < 1e9`, which fits `u32`.
+            out[i + j] = (cell % LIMB_BASE) as u32;
+            carry = cell / LIMB_BASE;
+        }
+        // The top cell of this row is still zero, so the carry (`< 1e9`) fits.
+        out[i + b.len()] = carry as u32;
+    }
+    while out.last() == Some(&0) {
+        out.pop();
+    }
+    out
+}
+
+/// `a mod b` over base-`1e9` magnitudes, `b` canonical and non-empty.
+///
+/// A one-limb divisor is the machine-word division [`magnitude_div_rem_u64`]
+/// already does. Otherwise schoolbook long division, one base-`1e9` quotient
+/// digit per dividend limb, most significant first: the running remainder `r`
+/// stays below `b`, and each digit `q = ⌊(r·1e9 + limb) / b⌋` is estimated from
+/// the top three limbs of the partial dividend over the top two of `b`. With the
+/// top two divisor limbs at least `1e9` the estimate is never low and at most
+/// two high, so at most two corrections follow.
+fn magnitude_rem(a: &[u32], b: &[u32]) -> Vec<u32> {
+    if magnitude_cmp(a, b) == Ordering::Less {
+        return a.to_vec();
+    }
+    if let [single] = b {
+        let (_, remainder) = magnitude_div_rem_u64(a, u64::from(*single));
+        return magnitude_limbs(u128::from(remainder));
+    }
+    let top = u128::from(b[b.len() - 1]) * u128::from(LIMB_BASE) + u128::from(b[b.len() - 2]);
+    let mut remainder: Vec<u32> = Vec::with_capacity(b.len() + 1);
+    for &limb in a.iter().rev() {
+        // remainder = remainder × 1e9 + limb.
+        remainder.insert(0, limb);
+        while remainder.last() == Some(&0) {
+            remainder.pop();
+        }
+        if magnitude_cmp(&remainder, b) == Ordering::Less {
+            continue;
+        }
+        // The partial dividend has `b.len()` or `b.len() + 1` limbs; its top
+        // three (zero-extended) over `b`'s top two estimate the digit.
+        let limb_at = |index: usize| u128::from(remainder.get(index).copied().unwrap_or(0));
+        let n = b.len();
+        let head = (limb_at(n) * u128::from(LIMB_BASE) + limb_at(n - 1)) * u128::from(LIMB_BASE)
+            + limb_at(n - 2);
+        let mut digit = (head / top).min(u128::from(LIMB_BASE - 1));
+        loop {
+            // `digit < 1e9 < 2^32`.
+            let product = mul_by_small(b, digit as u64);
+            if magnitude_cmp(&product, &remainder) != Ordering::Greater {
+                remainder = magnitude_sub(&remainder, &product);
+                break;
+            }
+            digit -= 1;
+        }
+    }
+    remainder
 }
 
 /// `a ÷ divisor` over a base-`1e9` magnitude, `divisor > 0` (the caller checks).
@@ -714,9 +921,8 @@ mod tests {
     }
 
     // A deterministic SplitMix64 counter stream for the float-conversion
-    // tests — this zero-dependency crate ships no RNG; the workspace's
-    // shared test-only stream comes in through `purrdf-testkit`, a
-    // dev-dependency.
+    // tests: the workspace's shared test stream, through `purrdf-testkit` (a
+    // dev-dependency).
     use purrdf_testkit::rng::splitmix64_next as splitmix64;
 
     /// The exact `BigInt` `Σ words[i] × 2^(64 i)`, negated when `negative`.
@@ -1044,5 +1250,126 @@ mod tests {
             quotient.to_decimal_string(),
             format!("{}{}", i128::MAX, "0".repeat(18))
         );
+    }
+
+    #[test]
+    fn from_digits_reads_signed_digit_runs_and_refuses_anything_else() {
+        for text in ["", "+", "-", "1.0", "1e3", " 1", "0x1", "1_0"] {
+            assert_eq!(BigInt::from_digits(text), None, "{text:?}");
+        }
+        assert_eq!(BigInt::from_digits("-0"), Some(BigInt::zero()));
+        assert_eq!(BigInt::from_digits("+007"), Some(BigInt::from_i128(7)));
+        let long = "123456789012345678901234567890123456789";
+        assert_eq!(
+            BigInt::from_digits(long)
+                .map(|value| value.to_decimal_string())
+                .as_deref(),
+            Some(long)
+        );
+        assert_eq!(
+            BigInt::from_digits(&i128::MIN.to_string()),
+            Some(BigInt::from_i128(i128::MIN))
+        );
+    }
+
+    /// `mul` and `rem` agree with `i128` wherever it holds the product, and
+    /// `rem` keeps the dividend's sign as Rust's `%` does.
+    #[test]
+    fn mul_and_rem_match_i128_arithmetic() {
+        let values: [i128; 12] = [
+            0,
+            1,
+            -1,
+            7,
+            -13,
+            999_999_999,
+            1_000_000_000,
+            -1_000_000_007,
+            123_456_789_012_345_678,
+            -(1 << 62),
+            (1 << 63) - 25,
+            4_611_686_018_427_387_903,
+        ];
+        for &a in &values {
+            for &b in &values {
+                let product = BigInt::from_i128(a).mul(&BigInt::from_i128(b));
+                assert_eq!(product.to_i128(), Some(a * b), "{a} × {b}");
+                if b == 0 {
+                    assert_eq!(BigInt::from_i128(a).rem(&BigInt::zero()), None);
+                } else {
+                    let rem = BigInt::from_i128(a).rem(&BigInt::from_i128(b));
+                    assert_eq!(rem.and_then(|r| r.to_i128()), Some(a % b), "{a} % {b}");
+                }
+            }
+        }
+    }
+
+    /// Multi-limb divisors: `(q·d + r) mod d == r` for large `q` and `r < d`.
+    #[test]
+    fn rem_by_a_multi_limb_divisor_recovers_the_remainder() {
+        let divisors = [
+            "1000000000",
+            "1000000001",
+            "999999999999999999",
+            "123456789123456789123456789",
+            "1000000000000000000000000000000000001",
+        ];
+        let quotients = ["1", "999999999", "98765432109876543210987654321", "5"];
+        for divisor in divisors {
+            let d = BigInt::from_digits(divisor).expect("digits");
+            for quotient in quotients {
+                let q = BigInt::from_digits(quotient).expect("digits");
+                for remainder in ["0", "1", "999999999"] {
+                    let r = BigInt::from_digits(remainder).expect("digits");
+                    let mut n = q.mul(&d);
+                    n.add_assign(&r);
+                    assert_eq!(
+                        n.rem(&d),
+                        Some(r.clone()),
+                        "{quotient}·{divisor}+{remainder}"
+                    );
+                    assert_eq!(n.negated().rem(&d), Some(r.negated()));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mul_pow5_and_mul_pow2_compose_to_mul_pow10() {
+        let value = BigInt::from_i128(-123_456_789_987);
+        for exp in [0, 1, 12, 13, 14, 29, 100, 400] {
+            assert_eq!(
+                value.mul_pow5(exp).mul_pow2(exp),
+                value.mul_pow10(exp),
+                "{exp}"
+            );
+        }
+        assert_eq!(BigInt::from_i128(3).mul_small(0), BigInt::zero());
+        assert_eq!(
+            BigInt::from_i128(-3).mul_small(u32::MAX).to_i128(),
+            Some(-3 * i128::from(u32::MAX))
+        );
+    }
+
+    #[test]
+    fn from_binary_writes_dyadic_values_out_in_full() {
+        let show = |numerator: i128, exponent: i32| {
+            let (mantissa, scale) = BigInt::from_binary(numerator, exponent);
+            mantissa.to_decimal_lexical(scale)
+        };
+        assert_eq!(show(3, 0), "3");
+        assert_eq!(show(3, 4), "48");
+        assert_eq!(show(3, -1), "1.5");
+        assert_eq!(show(-1, -3), "-0.125");
+        assert_eq!(show(0, -1074), "0");
+    }
+
+    #[test]
+    fn parity_and_negation() {
+        assert!(BigInt::from_i128(1_000_000_001).is_odd());
+        assert!(!BigInt::from_i128(-1_000_000_000).is_odd());
+        assert!(!BigInt::zero().is_odd());
+        assert_eq!(BigInt::zero().negated(), BigInt::zero());
+        assert_eq!(BigInt::from_i128(5).negated(), BigInt::from_i128(-5));
     }
 }

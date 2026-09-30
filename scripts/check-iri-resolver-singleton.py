@@ -23,9 +23,11 @@ does not have to remember. It scans every first-party ``.rs`` source outside
 * the scheme grammar retyped as a character-class test (§3.1), which is how a
   local ``is_absolute_iri``/``has_iri_scheme`` gets written.
 
-``ALLOWLIST`` is an explicit, reasoned exemption table — never a silent skip.
-An entry that stops matching is reported as STALE so the table cannot rot, the
-same discipline the conformance harnesses apply to their xfail ledgers.
+The exemptions are ``[[job.variant]]`` rows of the ``iri-reference-resolution``
+job in ``helpers-ledger.toml`` whose ``detector`` is one of this gate's rule ids:
+explicit and reasoned, each with its criterion and documented anchor — never a
+silent skip. A row that stops matching is reported as STALE so the ledger cannot
+rot, the same discipline the conformance harnesses apply to their xfail ledgers.
 
 Delegation is recognised by the names of the shared layer, not by the name of
 the crate that houses it. ``purrdf-core`` re-exports ``BaseIri``, ``Iri``
@@ -43,6 +45,7 @@ from __future__ import annotations
 
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -133,27 +136,35 @@ DOT_SEGMENT_WINDOW = 4
 DOT_SEGMENT_RULE = "dot-segment-loop"
 DOT_SEGMENT_MEANING = "the RFC 3986 §5.2.4 dot-segment loop, written out"
 
-# (repo-relative path, rule id) -> why this occurrence is NOT a second resolver.
-# Every entry must keep matching; a stale one fails this gate.
-ALLOWLIST: dict[tuple[str, str], str] = {
-    ("crates/gts/src/files.rs", DOT_SEGMENT_RULE): (
-        "archive member/symlink target normalization, not IRI resolution. It "
-        "must REFUSE an escape above the extraction root; RFC 3986 §5.2.4 "
-        "clamps at the root instead, so routing it through purrdf-iri would "
-        "convert a rejected zip-slip into a silently rewritten path."
-    ),
-    ("crates/rdf/src/native_codecs/okf/reader.rs", DOT_SEGMENT_RULE): (
-        "OKF bundle-relative Markdown link targets, resolved inside the "
-        "bundle's file tree. Same refuse-don't-clamp requirement as the "
-        "archive normalizer above; these are member paths, not IRI references."
-    ),
-    ("crates/rdf/src/projections/research_object/config.rs", "resolver-fn"): (
-        "not a resolver: validate_relative_identifier() first rejects every "
-        "input a resolver would have to reason about (absolute, dot-segment, "
-        "query, fragment, backslash), leaving a plain concatenation under a "
-        "caller-owned base. Nothing of RFC 3986 §5.2 is reimplemented."
-    ),
-}
+# The helpers-ledger job whose variant rows are this gate's exemptions.
+LEDGER_PATH = REPO_ROOT / "helpers-ledger.toml"
+LEDGER_JOB = "iri-reference-resolution"
+
+
+def rule_ids() -> set[str]:
+    """Every rule id this gate reports under."""
+    return set(SINGLE_LINE_RULES) | set(FUNCTION_RULES) | {DOT_SEGMENT_RULE}
+
+
+def load_allowlist(path: Path = LEDGER_PATH) -> dict[tuple[str, str], str]:
+    """(repo-relative path, rule id) -> why this occurrence is NOT a second
+    resolver, from the ledger job's variant rows that name one of this gate's
+    rules. Every entry must keep matching; a stale one fails this gate."""
+    with path.open("rb") as handle:
+        ledger = tomllib.load(handle)
+    jobs = [job for job in ledger.get("job", []) if job.get("id") == LEDGER_JOB]
+    if len(jobs) != 1:
+        raise SystemExit(
+            f"FAIL: {path.name} must hold exactly one `{LEDGER_JOB}` job; found {len(jobs)}"
+        )
+    return {
+        (variant["file"], variant["detector"]): variant["reason"]
+        for variant in jobs[0].get("variant", [])
+        if variant.get("detector") in rule_ids()
+    }
+
+
+ALLOWLIST: dict[tuple[str, str], str] = load_allowlist()
 
 
 def rust_sources() -> list[Path]:
@@ -291,15 +302,15 @@ def main() -> int:
             "(the §5.2 reference arithmetic). A crate that depends only on the "
             "kernel reaches the same law through its re-export — "
             "`purrdf_core::{BaseIri, Iri, parse_iri}` — and that counts. If an "
-            "occurrence genuinely is not a resolver, add it to ALLOWLIST in "
-            "scripts/check-iri-resolver-singleton.py with the reason.",
+            f"occurrence genuinely is not a resolver, add a [[job.variant]] row to "
+            f"the `{LEDGER_JOB}` job in helpers-ledger.toml naming this rule as its "
+            "detector, with its criterion, documented anchor and reason.",
             file=sys.stderr,
         )
     if stale:
         print(
-            "\nSTALE ALLOWLIST entries in "
-            "scripts/check-iri-resolver-singleton.py — they no longer match "
-            "anything, so prune them:",
+            f"\nSTALE `{LEDGER_JOB}` variant rows in helpers-ledger.toml — they "
+            "no longer match anything, so prune them:",
             file=sys.stderr,
         )
         for rel, rule in stale:

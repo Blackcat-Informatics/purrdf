@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Micro-benchmark isolating the SHACL `quads_for_pattern` seam.
@@ -24,11 +24,11 @@
 
 use std::sync::Arc;
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use purrdf::{RdfDataset, RdfDatasetBuilder};
 use purrdf_shapes::path::eval;
 use purrdf_shapes::shapes::Path;
 use purrdf_shapes::term::{NamedNode, Term};
+use purrdf_testkit::bench::{Bench, bench_group, bench_main, black_box};
 
 const FANOUT: usize = 2_000;
 const CHAIN: usize = 2_000;
@@ -66,7 +66,7 @@ fn fixture() -> Arc<RdfDataset> {
     b.freeze().expect("freeze fixture")
 }
 
-fn bench_pattern_lookup(c: &mut Criterion) {
+fn bench_pattern_lookup(c: &mut Bench) {
     let ds = fixture();
     let ds = ds.as_ref();
 
@@ -97,5 +97,5 @@ fn bench_pattern_lookup(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_pattern_lookup);
-criterion_main!(benches);
+bench_group!(benches, bench_pattern_lookup);
+bench_main!(benches);

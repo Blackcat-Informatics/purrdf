@@ -23,11 +23,9 @@
 //!   [`QuadPatternCursor`] that pins an [`Arc`] and lazily follows the selected
 //!   quad index without collecting matching rows.
 //!
-use crate::TermBox;
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::convert::Infallible;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::{Arc, OnceLock};
 
 use hashbrown::HashTable;
@@ -43,12 +41,11 @@ use crate::{
 };
 
 use super::term::{BlankScope, InternedTerm, TermId, TermValue, arena_str};
-use super::term_walk::fold_term;
 
 /// The `rdf:reifies` predicate IRI — the indirection edge of the RDF 1.2 reification
 /// layer (`reifier rdf:reifies <<( s p o )>>`). Used to expose the reifier side-table
 /// as virtual triples in [`RdfDataset::reifier_quads`].
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// Lazy successor→predecessors reverse index for
 /// [`RdfDataset::predecessors`]: each successor `TermId` maps to its
@@ -147,6 +144,20 @@ impl From<QuadRow> for QuadIds {
     }
 }
 
+impl<Id> QuadIds<Id> {
+    /// The same quad with every id, graph slot included, through `map`: how a view
+    /// re-keys the rows of the dataset it wraps into its own id space.
+    #[inline]
+    pub fn map_ids<B>(self, mut map: impl FnMut(Id) -> B) -> QuadIds<B> {
+        QuadIds {
+            s: map(self.s),
+            p: map(self.p),
+            o: map(self.o),
+            g: self.g.map(map),
+        }
+    }
+}
+
 /// A borrowed, resolved view of a term — mirrors `InternedTerm` but exposes
 /// `&str` slices borrowed from the dataset, so resolving a term performs **no
 /// allocation and no clone**. Triple components are returned as ids; resolve them
@@ -188,6 +199,50 @@ pub enum TermRef<'a, Id = TermId> {
         /// The quoted triple's object term id.
         o: Id,
     },
+}
+
+impl<'a, Id> TermRef<'a, Id> {
+    /// The same term with its ids — a literal's `datatype`, a triple term's
+    /// `s`/`p`/`o` — through `map`, and a blank node's scope through `scope`; the
+    /// borrowed strings are untouched. This is the one re-keying of a resolved term:
+    /// a view over other datasets moves their terms into its own id space (and, when
+    /// it merges several, keeps their blank-node scopes apart) here.
+    #[inline]
+    pub fn map_ids_scoped<B>(
+        self,
+        mut map: impl FnMut(Id) -> B,
+        scope: impl FnOnce(BlankScope) -> BlankScope,
+    ) -> TermRef<'a, B> {
+        match self {
+            TermRef::Iri(iri) => TermRef::Iri(iri),
+            TermRef::Blank { label, scope: old } => TermRef::Blank {
+                label,
+                scope: scope(old),
+            },
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => TermRef::Literal {
+                lexical,
+                datatype: map(datatype),
+                language,
+                direction,
+            },
+            TermRef::Triple { s, p, o } => TermRef::Triple {
+                s: map(s),
+                p: map(p),
+                o: map(o),
+            },
+        }
+    }
+
+    /// [`Self::map_ids_scoped`] keeping the blank-node scope.
+    #[inline]
+    pub fn map_ids<B>(self, map: impl FnMut(Id) -> B) -> TermRef<'a, B> {
+        self.map_ids_scoped(map, |scope| scope)
+    }
 }
 
 /// A borrowed, resolved quad view: each position is a [`TermRef`] borrowing into the
@@ -778,132 +833,32 @@ impl RdfDataset {
 
     /// Resolve a term id to the owned [`RdfTerm`] model, triple terms included.
     /// This allocates owned strings at the explicit owned-model boundary
-    /// used by serializers, oxigraph materialization, the C-ABI (`purrdf-capi`
+    /// used by serializers, the C-ABI (`purrdf-capi`
     /// renders a cursor term to N-Triples through this), and tests.
     ///
-    /// A triple term is assembled bottom-up over a work list: its subject, then its
-    /// predicate IRI, then its object, each resolved fully before the next, and the
-    /// owned triple once all three exist.
+    /// The id's [`TermValue`] lifted by [`TermValue::into_rdf_term`]: a scoped blank
+    /// label is qualified, and a plain or language-tagged literal's implied datatype
+    /// is left implicit.
     pub fn to_owned_term(&self, id: TermId) -> RdfTerm {
-        enum Step {
-            Term(TermId),
-            Predicate(TermId),
-            Assemble,
-        }
-        let mut steps: Vec<Step> = vec![Step::Term(id)];
-        let mut terms: Vec<RdfTerm> = Vec::new();
-        let mut predicates: Vec<String> = Vec::new();
-        while let Some(step) = steps.pop() {
-            match step {
-                Step::Term(id) => match self.resolve(id) {
-                    TermRef::Iri(iri) => terms.push(RdfTerm::iri(iri)),
-                    TermRef::Blank { label, scope } => {
-                        terms.push(RdfTerm::blank_node(scope.qualify_label(label)));
-                    }
-                    TermRef::Literal {
-                        lexical,
-                        datatype,
-                        language,
-                        direction,
-                    } => {
-                        let datatype_iri = match self.resolve(datatype) {
-                            TermRef::Iri(iri) => iri.to_owned(),
-                            other => {
-                                unreachable!(
-                                    "literal datatype must resolve to an IRI, got {other:?}"
-                                )
-                            }
-                        };
-                        terms.push(RdfTerm::literal(RdfLiteral {
-                            lexical_form: lexical.to_owned(),
-                            datatype: Some(datatype_iri),
-                            language: language.map(str::to_owned),
-                            direction,
-                        }));
-                    }
-                    TermRef::Triple { s, p, o } => steps.extend([
-                        Step::Assemble,
-                        Step::Term(o),
-                        Step::Predicate(p),
-                        Step::Term(s),
-                    ]),
-                },
-                Step::Predicate(id) => predicates.push(self.iri_string(id)),
-                Step::Assemble => {
-                    let object = terms.pop().expect("a triple term's object is resolved");
-                    let predicate = predicates
-                        .pop()
-                        .expect("a triple term's predicate is resolved");
-                    let subject = terms.pop().expect("a triple term's subject is resolved");
-                    terms.push(RdfTerm::triple(RdfTriple::new(subject, predicate, object)));
-                }
-            }
-        }
-        terms
-            .pop()
-            .expect("the term's own owned form is the last one assembled")
+        self.term_value(id)
+            .into_rdf_term()
+            .expect("a frozen dataset's triple terms have IRI predicates")
     }
 
-    /// Resolve a term id to its dataset-independent [`TermValue`], through the
-    /// literal datatype and triple components. The inverse of interning a value:
-    /// the literal datatype is expanded to its IRI string, the blank label is
-    /// scope-qualified, and triple terms are taken by value (C0.1/C0.2/C0.3).
+    /// Resolve a term id to its dataset-independent [`TermValue`] (C0.1/C0.2/C0.3).
     ///
-    /// This is the value-model companion to [`to_owned_term`](Self::to_owned_term):
-    /// consumers that key on the dataset-independent value identity (LOGIC's
-    /// world-store, the SPARQL egress) resolve through this rather than the
-    /// `RdfTerm` owned model.
+    /// [`DatasetView::term_value`](crate::dataset_view::DatasetView::term_value) for an
+    /// id this dataset minted, which always resolves: every literal it interns has an
+    /// IRI datatype. Consumers that key on
+    /// the dataset-independent value identity (the SPARQL egress, the reasoners)
+    /// resolve through this rather than the `RdfTerm` owned model.
     ///
-    /// A triple term is assembled bottom-up over [`fold_term`]'s work list: its
-    /// subject, predicate and object are resolved in that order, each fully before
-    /// the next.
+    /// # Panics
+    ///
+    /// On an id this dataset did not mint.
     pub fn term_value(&self, id: TermId) -> TermValue {
-        match fold_term(
-            self,
-            id,
-            |_, term| {
-                Ok::<_, Infallible>(match term {
-                    TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
-                    TermRef::Blank { label, scope } => TermValue::Blank {
-                        label: label.to_owned(),
-                        scope,
-                    },
-                    TermRef::Literal {
-                        lexical,
-                        datatype,
-                        language,
-                        direction,
-                    } => {
-                        let datatype = match self.resolve(datatype) {
-                            TermRef::Iri(dt) => dt.to_owned(),
-                            other => {
-                                unreachable!(
-                                    "literal datatype must resolve to an IRI, got {other:?}"
-                                )
-                            }
-                        };
-                        TermValue::Literal {
-                            lexical_form: lexical.to_owned(),
-                            datatype,
-                            language: language.map(str::to_owned),
-                            direction,
-                        }
-                    }
-                    TermRef::Triple { .. } => {
-                        unreachable!("a triple term is assembled from its components")
-                    }
-                })
-            },
-            |_, s, p, o| {
-                Ok(TermValue::Triple {
-                    s: TermBox::new(s),
-                    p: TermBox::new(p),
-                    o: TermBox::new(o),
-                })
-            },
-        ) {
-            Ok(value) => value,
-        }
+        crate::DatasetView::term_value(self, id)
+            .expect("every literal this dataset interns has an IRI datatype")
     }
 
     /// Resolve a term id that must be an IRI (a predicate / triple-predicate
@@ -1388,8 +1343,8 @@ impl RdfDataset {
             datatype
         };
         let lowered = language
-            .filter(|tag| !super::builder::is_lowercase(tag))
-            .map(str::to_lowercase);
+            .filter(|tag| !purrdf_iri::langtag::is_identity_folded(tag))
+            .map(purrdf_iri::langtag::identity_fold);
         let language = lowered.as_deref().or(language);
 
         let datatype_id = self.term_id_by_iri(datatype)?;
@@ -1575,8 +1530,7 @@ impl RdfDataset {
     /// infallible. The triple-term resolves to [`TermRef::Triple`].
     ///
     /// The borrowed twin of [`reifiers`](Self::reifiers): consumers that read the
-    /// RDF 1.2 statement layer off the concrete IR (the GTS writer, the oxigraph
-    /// materializer) use this to read reifiers WITHOUT the owned `RdfReifier` model —
+    /// RDF 1.2 statement layer off the concrete IR (the GTS writer) use this to read reifiers WITHOUT the owned `RdfReifier` model —
     /// the id-based read surface for the purrdf consumer migration.
     #[inline]
     pub fn reifier_refs(&self) -> impl Iterator<Item = (TermRef<'_>, TermRef<'_>)> + '_ {
@@ -1764,9 +1718,7 @@ impl RdfDataset {
     /// names dropped), then the RDF 1.2 statement layer re-materialized as
     /// `<reifier> rdf:reifies <<( s p o )>>` rows and the annotation rows.
     ///
-    /// This is the oxigraph-free, value-model twin of the legacy
-    /// `flat_oxigraph_quads_from_dataset` under `GraphPolicy::FlattenToDefaultGraph`:
-    /// a consumer that needs a single merged default graph (the LOGIC reasoned-graph
+    /// A consumer that needs a single merged default graph (the LOGIC reasoned-graph
     /// verify) folds over these `QuadValues` directly. Deterministic: base quads in
     /// frozen order, then reifier rows, then annotation rows.
     pub fn flat_default_graph_quads(&self) -> impl Iterator<Item = crate::QuadValues> + '_ {
@@ -1997,10 +1949,7 @@ impl RdfDataset {
     /// never incorrect. For a content-exact identity use the RDFC-1.0 canonical digest.
     #[inline]
     pub fn stats_fingerprint(&self) -> u64 {
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        self.quads.len().hash(&mut h);
-        self.terms.len().hash(&mut h);
-        h.finish()
+        crate::hash::stats_fingerprint(self.quads.len(), self.terms.len())
     }
 
     /// The caller-configured content-id recognition scheme (see
@@ -2193,6 +2142,68 @@ mod tests {
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
         b.intern_iri(&format!("http://example.org/{n}"))
+    }
+
+    #[test]
+    fn map_ids_rekeys_every_id_column_and_only_those() {
+        let quad = QuadIds {
+            s: 1_u32,
+            p: 2,
+            o: 3,
+            g: Some(4),
+        };
+        assert_eq!(
+            quad.map_ids(|id| u64::from(id) * 10),
+            QuadIds {
+                s: 10_u64,
+                p: 20,
+                o: 30,
+                g: Some(40),
+            }
+        );
+        let default_graph = QuadIds {
+            s: 1_u32,
+            p: 2,
+            o: 3,
+            g: None,
+        };
+        assert_eq!(default_graph.map_ids(u64::from).g, None);
+
+        let literal = TermRef::Literal {
+            lexical: "x",
+            datatype: 7_u32,
+            language: Some("en"),
+            direction: None,
+        };
+        assert_eq!(
+            literal.map_ids(|id| id + 1),
+            TermRef::Literal {
+                lexical: "x",
+                datatype: 8_u32,
+                language: Some("en"),
+                direction: None,
+            }
+        );
+        let triple: TermRef<'_, u32> = TermRef::Triple { s: 1, p: 2, o: 3 };
+        assert_eq!(
+            triple.map_ids(|id| id * 2),
+            TermRef::Triple { s: 2, p: 4, o: 6 }
+        );
+        let blank: TermRef<'_, u32> = TermRef::Blank {
+            label: "b",
+            scope: BlankScope::DEFAULT,
+        };
+        assert_eq!(blank.map_ids(|id| id), blank);
+        let rescoped = blank.map_ids_scoped(|id| id, |_| BlankScope(9));
+        assert_eq!(
+            rescoped,
+            TermRef::Blank {
+                label: "b",
+                scope: BlankScope(9),
+            }
+        );
+        let iri: TermRef<'_, u32> = TermRef::Iri("http://example.org/i");
+        assert_eq!(iri.map_ids(u64::from), TermRef::Iri("http://example.org/i"));
     }
 
     #[test]
@@ -3061,7 +3072,7 @@ mod tests {
         );
 
         // The two distinct blank heads carry distinct qualified labels.
-        let heads: std::collections::HashSet<String> = u
+        let heads: crate::FastSet<String> = u
             .owned_quads()
             .filter_map(|q| match q.subject {
                 RdfTerm::BlankNode(label) => Some(label),
@@ -3250,8 +3261,6 @@ mod tests {
                 0..48,
             )
         ) {
-            use std::collections::HashSet;
-
             let mut b = RdfDatasetBuilder::new();
             // Intern a fixed pool of IRIs once so positional constraints always hold.
             let pool: Vec<TermId> = (0..5)
@@ -3261,7 +3270,8 @@ mod tests {
                 .map(|n| b.intern_iri(&format!("http://example.org/g{n}")))
                 .collect();
 
-            let mut distinct: HashSet<(TermId, TermId, TermId, Option<TermId>)> = HashSet::new();
+            let mut distinct: crate::FastSet<(TermId, TermId, TermId, Option<TermId>)> =
+                crate::FastSet::default();
             for (s, p, o, g) in rows {
                 let s = pool[s as usize];
                 let p = pool[p as usize];
@@ -3565,12 +3575,10 @@ mod tests {
 
         const DERIVED_FROM: &str = "http://example.org/wasDerivedFrom";
 
-        /// Renders through [`crate::hex::lower`] — the same renderer
-        /// `Blake3ContentId::to_hex` uses and the inverse of what
-        /// `Blake3ContentId::from_hex` decodes — rather than a test-local copy
-        /// of the byte loop.
+        /// The content-id IRI of the digest `[byte; 32]` under `scheme_prefix`,
+        /// spelt as `Blake3ContentId` renders and reads it.
         fn hex_iri(scheme_prefix: &str, byte: u8) -> String {
-            format!("{scheme_prefix}{}", crate::hex::lower(&[byte; 32]))
+            format!("{scheme_prefix}{}", Blake3ContentId::from_raw([byte; 32]))
         }
 
         /// `content_id`/`content_ids`/`derivation_predicate` round-trip through
@@ -3596,10 +3604,8 @@ mod tests {
 
             let ds = b.freeze().expect("valid dataset");
 
-            let expected1 =
-                Blake3ContentId::from_hex(&crate::hex::lower(&[0xAA; 32])).expect("valid hex");
-            let expected2 =
-                Blake3ContentId::from_hex(&crate::hex::lower(&[0xBB; 32])).expect("valid hex");
+            let expected1 = Blake3ContentId::from_raw([0xAA; 32]);
+            let expected2 = Blake3ContentId::from_raw([0xBB; 32]);
             assert_eq!(ds.content_id(ca1), Some(expected1));
             assert_eq!(ds.content_id(ca2), Some(expected2));
             assert_eq!(
@@ -3699,8 +3705,7 @@ mod tests {
                 last_ordinary = Some(ordinary);
                 let ca_iri = hex_iri("blake3:", n);
                 let ca_id = b.intern_iri(&ca_iri);
-                let digest =
-                    Blake3ContentId::from_hex(&crate::hex::lower(&[n; 32])).expect("valid hex");
+                let digest = Blake3ContentId::from_raw([n; 32]);
                 expected.push((ca_id, digest));
             }
             let s = last_ordinary.expect("at least one ordinary term interned");
@@ -3946,8 +3951,8 @@ mod tests {
     /// that position, and a graph id that names no graph.
     #[test]
     fn chunked_scan_filter_matches_per_row_filter() {
-        let mut state = 0x0DA7_A5E7_u64;
-        let mut next = move |bound: u64| purrdf_testkit::rng::splitmix64_next(&mut state) % bound;
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(0x0DA7_A5E7);
+        let mut next = move |bound: u64| rng.below(bound);
         let mut sequential = 0_usize;
         let mut permuted = 0_usize;
         for rows in (0..=40).chain([63, 64, 65, 127, 200]) {

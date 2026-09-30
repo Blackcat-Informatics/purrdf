@@ -48,10 +48,12 @@
 //! words may be disclosed. It matches every variant, so a failure added to the enum
 //! cannot compile until it has a status.
 
+use purrdf_iri::percent;
 use std::fmt;
 
 use purrdf_sparql_algebra::lexer::{Token, tokenize};
 use purrdf_sparql_algebra::{ParserOptions, SparqlParser, UpdateDatasetSlot};
+use purrdf_sparql_results::SparqlResultsFormat;
 
 use crate::error::{EvalError, UnsupportedKind};
 use crate::remote::RemoteError;
@@ -878,68 +880,38 @@ fn decode_form(text: &str) -> Result<Vec<(String, String)>, ProtocolError> {
         .filter(|pair| !pair.is_empty())
         .map(|pair| {
             let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-            Ok((percent_decode(name)?, percent_decode(value)?))
+            Ok((form_component(name)?, form_component(value)?))
         })
         .collect()
 }
 
-fn percent_decode(text: &str) -> Result<String, ProtocolError> {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'+' => {
-                out.push(b' ');
-                index += 1;
-            }
-            b'%' => {
-                let hex = |offset: usize| bytes.get(index + offset).copied().and_then(hex_value);
-                let (Some(high), Some(low)) = (hex(1), hex(2)) else {
-                    let end = (index + 3).min(bytes.len());
-                    return Err(ProtocolError::MalformedForm {
-                        reason: format!(
-                            "`%` must be followed by two hex digits, found `{}` in `{text}`",
-                            String::from_utf8_lossy(&bytes[index..end])
-                        ),
-                    });
-                };
-                out.push((high << 4) | low);
-                index += 3;
-            }
-            byte => {
-                out.push(byte);
-                index += 1;
-            }
-        }
-    }
-    String::from_utf8(out).map_err(|err| ProtocolError::MalformedForm {
-        reason: format!(
-            "`{text}` decodes to bytes that are not UTF-8 (invalid sequence at decoded offset \
-             {})",
-            err.utf8_error().valid_up_to()
-        ),
-    })
+/// One form name or value decoded by [`percent::decode_form`].
+fn form_component(text: &str) -> Result<String, ProtocolError> {
+    percent::decode_form(text)
+        .map(std::borrow::Cow::into_owned)
+        .map_err(|error| ProtocolError::MalformedForm {
+            reason: format!("`{text}` is not form-urlencoded: {error}"),
+        })
 }
 
-const fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
+/// A SPARQL results format as a `(token, media type)` pair: the token the engine's result
+/// serializer takes, and its registered media type, both as the results crate names them.
+const fn results_pair(format: SparqlResultsFormat) -> (&'static str, &'static str) {
+    (format.token(), format.media_type())
 }
 
-/// The formats a solutions result is offered in, in server preference order: the token
-/// the engine's result serializer takes, and its media type. The first is the default
+/// The formats a solutions result is offered in, in server preference order: every SPARQL
+/// results format, in [`SparqlResultsFormat::ALL`]'s order. The first is the default
 /// (SPARQL 1.1 Query Results JSON).
-const SOLUTION_FORMATS: [(&str, &str); 4] = [
-    ("json", "application/sparql-results+json"),
-    ("xml", "application/sparql-results+xml"),
-    ("csv", "text/csv"),
-    ("tsv", "text/tab-separated-values"),
-];
+const SOLUTION_FORMATS: [(&str, &str); 4] = {
+    let all = SparqlResultsFormat::ALL;
+    [
+        results_pair(all[0]),
+        results_pair(all[1]),
+        results_pair(all[2]),
+        results_pair(all[3]),
+    ]
+};
 
 /// The formats a graph result is offered in, in server preference order. The first is the
 /// default (Turtle).
@@ -963,8 +935,8 @@ const DATASET_FORMATS: [(&str, &str); 3] = [
 /// The formats an `ASK` boolean is offered in: the SPARQL results formats that define a
 /// boolean result, in the same relative order. The first is the default (JSON).
 const BOOLEAN_FORMATS: [(&str, &str); 2] = [
-    ("json", "application/sparql-results+json"),
-    ("xml", "application/sparql-results+xml"),
+    results_pair(SparqlResultsFormat::Json),
+    results_pair(SparqlResultsFormat::Xml),
 ];
 
 const fn formats(kind: ResultKind) -> &'static [(&'static str, &'static str)] {

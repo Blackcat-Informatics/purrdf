@@ -11,7 +11,7 @@
 //! algorithms, encrypted secret keys, v5/v6 packets) is rejected with a clear
 //! error.
 
-use ed25519_dalek::SigningKey;
+use purrdf_ed25519::SigningKey;
 use purrdf_hash::sha1::Sha1;
 
 /// OpenPGP public-key algorithm id for EdDSA (RFC 9580 §9.1).
@@ -330,7 +330,7 @@ fn parse_ed25519_public_material(body: &[u8]) -> Result<([u8; 32], usize)> {
     if oid != ED25519_OID {
         return Err(OpenPgpError(format!(
             "unsupported curve OID {}",
-            crate::wire::hex(oid)
+            purrdf_hash::hex::Lower(oid)
         )));
     }
 
@@ -417,7 +417,7 @@ fn fingerprint(pub_key_body: &[u8]) -> String {
     hasher.update(&(pub_key_body.len() as u16).to_be_bytes());
     hasher.update(pub_key_body);
     let digest = hasher.finalize();
-    crate::wire::hex(&digest).to_uppercase()
+    purrdf_hash::hex::encode_upper(&digest)
 }
 
 /// Parse an armored OpenPGP certificate into its raw Ed25519 key + v4 fingerprint.
@@ -479,7 +479,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn vectors_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vectors/openpgp")
+        purrdf_testkit::paths::workspace_root().join("vectors/openpgp")
     }
 
     fn fixture(name: &str) -> String {
@@ -492,59 +492,20 @@ mod tests {
             .find(&needle)
             .unwrap_or_else(|| panic!("missing JSON string field {key:?}"))
             + needle.len();
-        let mut out = String::new();
-        let mut chars = raw[start..].chars();
-        while let Some(ch) = chars.next() {
-            match ch {
-                '"' => return out,
-                '\\' => match chars.next().expect("unterminated JSON escape") {
-                    '"' => out.push('"'),
-                    '\\' => out.push('\\'),
-                    '/' => out.push('/'),
-                    'b' => out.push('\u{0008}'),
-                    'f' => out.push('\u{000c}'),
-                    'n' => out.push('\n'),
-                    'r' => out.push('\r'),
-                    't' => out.push('\t'),
-                    'u' => {
-                        let mut hex = String::new();
-                        for _ in 0..4 {
-                            hex.push(chars.next().expect("truncated JSON unicode escape"));
-                        }
-                        let value =
-                            u32::from_str_radix(&hex, 16).expect("invalid JSON unicode escape");
-                        out.push(char::from_u32(value).expect("invalid JSON unicode scalar"));
-                    }
-                    escape => panic!("unsupported JSON escape {escape:?}"),
-                },
-                ch => out.push(ch),
-            }
-        }
-        panic!("unterminated JSON string field {key:?}");
-    }
-
-    fn b64_encode(data: &[u8]) -> String {
-        const ALPHABET: &[u8; 64] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut out = String::new();
-        for chunk in data.chunks(3) {
-            let b0 = chunk[0];
-            let b1 = chunk.get(1).copied().unwrap_or(0);
-            let b2 = chunk.get(2).copied().unwrap_or(0);
-            out.push(ALPHABET[(b0 >> 2) as usize] as char);
-            out.push(ALPHABET[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
-            if chunk.len() > 1 {
-                out.push(ALPHABET[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] as char);
+        let body = &raw.as_bytes()[start..];
+        let mut end = 0;
+        while body[end] != b'"' {
+            end += if body[end] == b'\\' {
+                purrdf_iri::json_escape::decode_escape(&body[end..])
+                    .expect("a JSON escape")
+                    .1
             } else {
-                out.push('=');
-            }
-            if chunk.len() > 2 {
-                out.push(ALPHABET[(b2 & 0x3f) as usize] as char);
-            } else {
-                out.push('=');
-            }
+                1
+            };
         }
-        out
+        purrdf_iri::json_escape::unescape(&raw[start..start + end])
+            .expect("a JSON string body")
+            .into_owned()
     }
 
     fn encode_packet(tag: u8, body: &[u8]) -> Vec<u8> {
@@ -565,7 +526,7 @@ mod tests {
     }
 
     fn armor_private_key(data: &[u8]) -> String {
-        let b64 = b64_encode(data);
+        let b64 = purrdf_xsd::canonical_base64(data);
         let mut wrapped = String::new();
         for line in b64.as_bytes().chunks(64) {
             wrapped.push_str(std::str::from_utf8(line).unwrap());
@@ -597,7 +558,7 @@ mod tests {
         let armored = json_string_field(&raw, "armored");
         let key = parse_transport_key(&armored).unwrap();
         assert_eq!(
-            crate::wire::hex(&key.raw_public),
+            purrdf_hash::hex::encode(&key.raw_public),
             json_string_field(&raw, "raw_pub")
         );
         assert_eq!(key.fingerprint, json_string_field(&raw, "fingerprint"));

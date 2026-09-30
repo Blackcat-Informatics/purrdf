@@ -39,7 +39,7 @@
 //!
 //! # A pack source is described zero-copy
 //!
-//! [`Describer`](purrdf_core::describe::Describer) is generic over [`DatasetView`], so the
+//! [`Describer`] is generic over [`DatasetView`], so the
 //! extraction runs over whichever concrete view the input resolved to — a parsed `RdfDataset`
 //! for a text source, or a verified `PackView` for a pack, with no `dataset_from_view` rebuild
 //! in between. The extracted subgraph is always a fresh, frozen `RdfDataset`.
@@ -107,7 +107,7 @@ use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
 use purrdf_rdf::{JsonLdSerializeOptions, SourceFormat};
 
 use crate::cli::{CliRdfFormat, LedgerTarget};
-use crate::error::CliError;
+use crate::error::{CliError, argv_iri_refusal};
 use crate::source::ViewOp;
 use crate::{format, ledger, sink, source};
 
@@ -151,7 +151,7 @@ impl ViewOp for DescribeOp<'_> {
 }
 
 /// The closing imperative of this verb's named-graph refusal: the quad-capable `--to`
-/// targets, in [`CliRdfFormat`](crate::cli::CliRdfFormat) declaration order.
+/// targets, in [`CliRdfFormat`] declaration order.
 ///
 /// The rest of the sentence is `purrdf_core::named_graph::named_graph_refusal`, shared
 /// verbatim with the `query` lane and with the Python and wasm hosts; only the remedy is
@@ -276,7 +276,18 @@ fn resolve_subjects(
             scope
                 .resolve(raw)
                 .map(|iri| iri.as_str().to_owned())
-                .map_err(|error| subject_refusal(raw, &error))
+                .map_err(|error| {
+                    argv_iri_refusal(
+                        &format!("--iri `{raw}`"),
+                        &error,
+                        "iri-relative-no-base",
+                        "a relative IRI reference has no base in scope, so it denotes no \
+                         resource to describe. Pass --base <IRI> — `--iri` resolves against \
+                         it exactly as the data graph does — or write the resource in \
+                         absolute form",
+                        "",
+                    )
+                })
         })
         .collect()
 }
@@ -296,22 +307,4 @@ fn subject_base(
         SourceFormat::Native(native) => source::effective_base(options.input, native, options.base),
         SourceFormat::Pack | SourceFormat::Gts => Ok(options.base.map(ToOwned::to_owned)),
     }
-}
-
-/// The refusal for an `--iri` that does not denote a resource.
-///
-/// It carries the shared [`purrdf_iri::IriError::diagnostic_code`] so it groups with every
-/// other IRI failure in this toolkit, but it does NOT carry the library's remedy: that one
-/// names `@base` and `xml:base`, which are document directives, and `--iri` is not in a
-/// document. Naming a fix the operator cannot apply is worse than naming none.
-fn subject_refusal(raw: &str, error: &purrdf_iri::IriError) -> CliError {
-    let code = error.diagnostic_code();
-    if code == "iri-relative-no-base" {
-        return CliError::Usage(format!(
-            "--iri `{raw}`: {code}: a relative IRI reference has no base in scope, so it \
-             denotes no resource to describe. Pass --base <IRI> — `--iri` resolves against it \
-             exactly as the data graph does — or write the resource in absolute form"
-        ));
-    }
-    CliError::Usage(format!("--iri `{raw}`: {code}: {error}"))
 }

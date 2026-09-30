@@ -82,86 +82,28 @@
 //! a successfully-opened buffer.
 
 use std::cmp::Ordering;
-use std::fmt;
 
 use crate::dataset_view::DatasetView;
 use crate::ir::composite::owned_value;
 use crate::{RdfStoreCapabilities, TermValue};
 
-use super::bits::{IntVector, IntVectorRef, PackBitsError, bits_for};
+use super::bits::{IntVector, IntVectorRef, PackBitsError, read_header_u64};
 use super::dict::{PackDict, PackTermId};
 
 /// The `rdf:reifies` predicate IRI — see the identical local constant (and its
 /// doc comment explaining the duplication) in `super::dict`.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
 
-/// Why decoding a [`SideTables`] byte buffer failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum PackSideError {
-    /// The buffer ended before all the bytes a header promised were present.
-    Truncated {
-        /// The total leading byte count the format required.
-        needed: usize,
-        /// The byte count actually available.
-        found: usize,
-    },
-    /// The buffer's header was internally inconsistent, an id/offset reference
-    /// fell outside its documented domain, or the offset/count index disagreed
-    /// with the row data it is supposed to address.
-    Malformed(&'static str),
-}
-
-impl fmt::Display for PackSideError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Truncated { needed, found } => write!(
-                f,
-                "pack-side: truncated input: needed at least {needed} bytes, found {found}"
-            ),
-            Self::Malformed(reason) => write!(f, "pack-side: malformed input: {reason}"),
-        }
-    }
-}
-
-impl std::error::Error for PackSideError {}
-
-impl From<PackBitsError> for PackSideError {
-    fn from(e: PackBitsError) -> Self {
-        match e {
-            PackBitsError::Truncated { needed, found } => Self::Truncated { needed, found },
-            PackBitsError::Malformed(reason) => Self::Malformed(reason),
-        }
-    }
-}
-
-/// Read an 8-byte little-endian header field at `*pos`, advancing `*pos` past it.
-/// A small local mirror of `bits::read_header_u64` (private to that module).
-fn read_u64_header(bytes: &[u8], pos: &mut usize) -> Result<u64, PackSideError> {
-    let end = *pos + 8;
-    let slice = bytes.get(*pos..end).ok_or(PackSideError::Truncated {
-        needed: end,
-        found: bytes.len(),
-    })?;
-    let value = u64::from_le_bytes(slice.try_into().expect("slice is exactly 8 bytes"));
-    *pos = end;
-    Ok(value)
-}
-
-/// Build a bit-packed [`IntVector`] wide enough for `values`' maximum element —
-/// a local mirror of `triples::build_int_vector` (private to that module).
-fn build_int_vector(values: &[u64]) -> IntVector {
-    let max = values.iter().copied().max().unwrap_or(0);
-    let mut v = IntVector::with_width(bits_for(max));
-    for &x in values {
-        v.push(x);
-    }
-    v
-}
+/// Why decoding a [`SideTables`] byte buffer failed: the pack codecs' one decode
+/// error. Every section decoder reads the same bit-packed primitives and fails in
+/// the same two ways (a header promising bytes the buffer lacks, or an
+/// inconsistent header), so it reports [`PackBitsError`] itself; which section
+/// refused is the container's variant, not a second error type.
+pub type PackSideError = PackBitsError;
 
 /// Resolve `value` to its unified [`PackTermId`] — [`PackDict`] mints exactly
 /// ONE id per distinct value regardless of role (see its module docs), so a
@@ -366,25 +308,31 @@ impl SideTables {
         out.push(SIDE_FORMAT_VERSION);
         out.extend_from_slice(&reifies_predicate.to_le_bytes());
         out.extend_from_slice(
-            &build_int_vector(&reifier_rows.iter().map(|r| r.0).collect::<Vec<_>>()).to_bytes(),
+            &IntVector::from_values(&reifier_rows.iter().map(|r| r.0).collect::<Vec<_>>())
+                .to_bytes(),
         );
         out.extend_from_slice(
-            &build_int_vector(&reifier_rows.iter().map(|r| r.1).collect::<Vec<_>>()).to_bytes(),
+            &IntVector::from_values(&reifier_rows.iter().map(|r| r.1).collect::<Vec<_>>())
+                .to_bytes(),
         );
         out.extend_from_slice(
-            &build_int_vector(&reifier_rows.iter().map(|r| r.2).collect::<Vec<_>>()).to_bytes(),
+            &IntVector::from_values(&reifier_rows.iter().map(|r| r.2).collect::<Vec<_>>())
+                .to_bytes(),
         );
-        out.extend_from_slice(&build_int_vector(&local_reifier).to_bytes());
-        out.extend_from_slice(&build_int_vector(&offsets).to_bytes());
-        out.extend_from_slice(&build_int_vector(&counts).to_bytes());
+        out.extend_from_slice(&IntVector::from_values(&local_reifier).to_bytes());
+        out.extend_from_slice(&IntVector::from_values(&offsets).to_bytes());
+        out.extend_from_slice(&IntVector::from_values(&counts).to_bytes());
         out.extend_from_slice(
-            &build_int_vector(&annotation_rows.iter().map(|r| r.1).collect::<Vec<_>>()).to_bytes(),
+            &IntVector::from_values(&annotation_rows.iter().map(|r| r.1).collect::<Vec<_>>())
+                .to_bytes(),
         );
         out.extend_from_slice(
-            &build_int_vector(&annotation_rows.iter().map(|r| r.2).collect::<Vec<_>>()).to_bytes(),
+            &IntVector::from_values(&annotation_rows.iter().map(|r| r.2).collect::<Vec<_>>())
+                .to_bytes(),
         );
         out.extend_from_slice(
-            &build_int_vector(&annotation_rows.iter().map(|r| r.3).collect::<Vec<_>>()).to_bytes(),
+            &IntVector::from_values(&annotation_rows.iter().map(|r| r.3).collect::<Vec<_>>())
+                .to_bytes(),
         );
 
         Self { bytes: out }
@@ -440,7 +388,7 @@ impl<'a> SideTablesRef<'a> {
             return Err(PackSideError::Malformed("side: unsupported format version"));
         }
         let mut pos = 1usize;
-        let reifies_predicate = read_u64_header(bytes, &mut pos)?;
+        let reifies_predicate = read_header_u64(bytes, &mut pos)?;
 
         let reifier_reifier = IntVectorRef::from_bytes(&bytes[pos..])?;
         pos += reifier_reifier.serialized_len();
@@ -781,55 +729,29 @@ pub fn capabilities(
 mod tests {
     use super::*;
     use crate::TermBox;
-    use crate::{RdfDataset, RdfDatasetBuilder, TermId};
-    use std::collections::HashSet;
+    use crate::backend::TermFactory as _;
+    use crate::{RdfDataset, RdfDatasetBuilder};
 
     fn iri(name: &str) -> TermValue {
         TermValue::iri(format!("http://example.org/{name}"))
-    }
-
-    /// Intern one dataset-independent value into a builder, recursing for triple
-    /// terms (mirrors `dict.rs`'s test helper of the same name).
-    fn intern_value(b: &mut RdfDatasetBuilder, v: &TermValue) -> TermId {
-        match v {
-            TermValue::Iri(s) => b.intern_iri(s),
-            TermValue::Blank { label, scope } => b.intern_blank(label, *scope),
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                direction,
-            } => b.intern_literal(crate::RdfLiteral {
-                lexical_form: lexical_form.clone(),
-                datatype: Some(datatype.clone()),
-                language: language.clone(),
-                direction: *direction,
-            }),
-            TermValue::Triple { s, p, o } => {
-                let s = intern_value(b, s);
-                let p = intern_value(b, p);
-                let o = intern_value(b, o);
-                b.intern_triple(s, p, o)
-            }
-        }
     }
 
     /// Build+encode a dataset with one reifier binding `r rdf:reifies << s p o >>`
     /// and two annotations on `r`, one in the default graph and one in `g1`.
     fn build_fixture() -> (std::sync::Arc<RdfDataset>, PackDict, Vec<u8>) {
         let mut b = RdfDatasetBuilder::new();
-        let s = intern_value(&mut b, &iri("s"));
-        let p = intern_value(&mut b, &iri("p"));
-        let o = intern_value(&mut b, &iri("o"));
+        let s = b.intern_value(&iri("s"));
+        let p = b.intern_value(&iri("p"));
+        let o = b.intern_value(&iri("o"));
         let triple = b.intern_triple(s, p, o);
-        let r = intern_value(&mut b, &iri("r"));
-        let g1 = intern_value(&mut b, &iri("g1"));
+        let r = b.intern_value(&iri("r"));
+        let g1 = b.intern_value(&iri("g1"));
         b.push_reifier(r, triple);
-        let ap1 = intern_value(&mut b, &iri("ap1"));
-        let ao1 = intern_value(&mut b, &iri("ao1"));
+        let ap1 = b.intern_value(&iri("ap1"));
+        let ao1 = b.intern_value(&iri("ao1"));
         b.push_annotation(r, ap1, ao1);
-        let ap2 = intern_value(&mut b, &iri("ap2"));
-        let ao2 = intern_value(&mut b, &iri("ao2"));
+        let ap2 = b.intern_value(&iri("ap2"));
+        let ao2 = b.intern_value(&iri("ao2"));
         b.push_annotation_in_graph(r, ap2, ao2, Some(g1));
         let dataset = b.freeze().expect("valid dataset");
 
@@ -844,7 +766,7 @@ mod tests {
     fn to_value_quads(
         dict: &PackDict,
         rows: impl Iterator<Item = (PackTermId, PackTermId, PackTermId, Option<PackTermId>)>,
-    ) -> HashSet<ValueQuad> {
+    ) -> crate::FastSet<ValueQuad> {
         rows.map(|(s, p, o, g)| {
             (
                 dict.term_value(s),
@@ -861,14 +783,14 @@ mod tests {
         let (dataset, dict, bytes) = build_fixture();
         let side = SideTablesRef::from_bytes(&bytes).expect("opens");
 
-        let expected: HashSet<ValueQuad> = dataset
+        let expected: crate::FastSet<ValueQuad> = dataset
             .reifier_quads()
             .map(|q| {
                 (
-                    dataset.term_value(q.s),
-                    dataset.term_value(q.p),
-                    dataset.term_value(q.o),
-                    q.g.map(|g| dataset.term_value(g)),
+                    dataset.term_value(q.s).unwrap(),
+                    dataset.term_value(q.p).unwrap(),
+                    dataset.term_value(q.o).unwrap(),
+                    q.g.map(|g| dataset.term_value(g).unwrap()),
                 )
             })
             .collect();
@@ -876,7 +798,7 @@ mod tests {
         assert_eq!(actual, expected);
         assert_eq!(
             actual,
-            HashSet::from([(
+            crate::FastSet::from_iter([(
                 iri("r"),
                 TermValue::Iri(RDF_REIFIES.to_owned()),
                 TermValue::Triple {
@@ -894,14 +816,14 @@ mod tests {
         let (dataset, dict, bytes) = build_fixture();
         let side = SideTablesRef::from_bytes(&bytes).expect("opens");
 
-        let expected: HashSet<ValueQuad> = dataset
+        let expected: crate::FastSet<ValueQuad> = dataset
             .annotation_quads()
             .map(|q| {
                 (
-                    dataset.term_value(q.s),
-                    dataset.term_value(q.p),
-                    dataset.term_value(q.o),
-                    q.g.map(|g| dataset.term_value(g)),
+                    dataset.term_value(q.s).unwrap(),
+                    dataset.term_value(q.p).unwrap(),
+                    dataset.term_value(q.o).unwrap(),
+                    q.g.map(|g| dataset.term_value(g).unwrap()),
                 )
             })
             .collect();
@@ -919,17 +841,17 @@ mod tests {
         let r_dataset_id = dataset.term_id_by_value(&r_value).expect("interned");
         let r_pack_id = dict.id_by_value(&r_value).expect("in dict");
 
-        let expected: HashSet<(TermValue, TermValue, Option<TermValue>)> = dataset
+        let expected: crate::FastSet<(TermValue, TermValue, Option<TermValue>)> = dataset
             .annotations_of_with_graph(r_dataset_id)
             .map(|(p, o, g)| {
                 (
-                    dataset.term_value(p),
-                    dataset.term_value(o),
-                    g.map(|g| dataset.term_value(g)),
+                    dataset.term_value(p).unwrap(),
+                    dataset.term_value(o).unwrap(),
+                    g.map(|g| dataset.term_value(g).unwrap()),
                 )
             })
             .collect();
-        let actual: HashSet<(TermValue, TermValue, Option<TermValue>)> = side
+        let actual: crate::FastSet<(TermValue, TermValue, Option<TermValue>)> = side
             .annotations_of_with_graph(r_pack_id)
             .map(|(p, o, g)| {
                 (
@@ -980,12 +902,12 @@ mod tests {
         let mut out = Vec::new();
         out.push(SIDE_FORMAT_VERSION);
         out.extend_from_slice(&7u64.to_le_bytes()); // a non-zero reifies-predicate id
-        out.extend_from_slice(&build_int_vector(&[2, 1]).to_bytes()); // DESCENDING
-        out.extend_from_slice(&build_int_vector(&[3, 4]).to_bytes()); // triples
-        out.extend_from_slice(&build_int_vector(&[0, 0]).to_bytes()); // graphs
+        out.extend_from_slice(&IntVector::from_values(&[2, 1]).to_bytes()); // DESCENDING
+        out.extend_from_slice(&IntVector::from_values(&[3, 4]).to_bytes()); // triples
+        out.extend_from_slice(&IntVector::from_values(&[0, 0]).to_bytes()); // graphs
         for empty in 0..6 {
             let _ = empty;
-            out.extend_from_slice(&build_int_vector(&[]).to_bytes());
+            out.extend_from_slice(&IntVector::from_values(&[]).to_bytes());
         }
         assert_eq!(
             SideTablesRef::from_bytes(&out).err(),
@@ -998,12 +920,12 @@ mod tests {
         let mut ok = Vec::new();
         ok.push(SIDE_FORMAT_VERSION);
         ok.extend_from_slice(&7u64.to_le_bytes());
-        ok.extend_from_slice(&build_int_vector(&[1, 2]).to_bytes());
-        ok.extend_from_slice(&build_int_vector(&[3, 4]).to_bytes());
-        ok.extend_from_slice(&build_int_vector(&[0, 0]).to_bytes());
+        ok.extend_from_slice(&IntVector::from_values(&[1, 2]).to_bytes());
+        ok.extend_from_slice(&IntVector::from_values(&[3, 4]).to_bytes());
+        ok.extend_from_slice(&IntVector::from_values(&[0, 0]).to_bytes());
         for empty in 0..6 {
             let _ = empty;
-            ok.extend_from_slice(&build_int_vector(&[]).to_bytes());
+            ok.extend_from_slice(&IntVector::from_values(&[]).to_bytes());
         }
         let side = SideTablesRef::from_bytes(&ok).expect("ascending column opens");
         assert_eq!(

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Forward-materialization chase benchmark.
@@ -23,13 +23,13 @@
 
 use std::sync::Arc;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder};
 use purrdf_entail::{Materialization, materialize};
 
-const SUBCLASSOF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
-const TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE;
+use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as SUBCLASSOF;
 
 /// The fixture namespace. `example.org` per the project rule: a bench mints no
 /// vocabulary of its own, and a reserved-for-documentation authority is the only
@@ -76,7 +76,7 @@ fn dataset_hierarchy(n: usize, graphs: usize) -> Arc<RdfDataset> {
     b.freeze().expect("freeze")
 }
 
-fn bench_chase(c: &mut Criterion) {
+fn bench_chase(c: &mut Bench) {
     let mut group = c.benchmark_group("rdfs_chase");
     for &n in &[16usize, 64] {
         let ds = hierarchy(n);
@@ -88,7 +88,7 @@ fn bench_chase(c: &mut Criterion) {
 }
 
 /// The per-graph closure's cost as the graph COUNT grows, with the work held fixed.
-fn bench_dataset(c: &mut Criterion) {
+fn bench_dataset(c: &mut Bench) {
     let mut group = c.benchmark_group("rdfs_dataset");
     for &graphs in &[0usize, 1, 4, 16] {
         let ds = dataset_hierarchy(32, graphs);
@@ -99,5 +99,5 @@ fn bench_dataset(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_chase, bench_dataset);
-criterion_main!(benches);
+bench_group!(benches, bench_chase, bench_dataset);
+bench_main!(benches);

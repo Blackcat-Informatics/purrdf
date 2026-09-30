@@ -237,16 +237,10 @@ fn messages_list<'py>(
             entry.set_item("language", language)?;
         }
         if let Some(direction) = message.direction() {
-            entry.set_item(
-                "direction",
-                match direction {
-                    ::purrdf::RdfTextDirection::Ltr => "ltr",
-                    ::purrdf::RdfTextDirection::Rtl => "rtl",
-                },
-            )?;
+            entry.set_item("direction", direction.as_str())?;
         }
         if message.language().is_none()
-            && message.datatype_str() != "http://www.w3.org/2001/XMLSchema#string"
+            && message.datatype_str() != purrdf_core::datatype::XSD_STRING
         {
             entry.set_item("datatype", message.datatype_str())?;
         }
@@ -1227,7 +1221,7 @@ impl PyPreparedShapes {
     ) -> PyResult<PyChangeValidation> {
         // Taken under the GIL (it borrows the store), then owned — so the expansion
         // and the validation below run detached with nothing py-bound in hand.
-        let snapshot = Arc::new(store.borrow().change_snapshot()?);
+        let snapshot = Arc::new(store.as_super().borrow().change_snapshot()?);
         let prepared = &self.inner;
         // The binding refuses a mutated graph whose `sh:shapesGraph` links this
         // preparation, built before the graph existed, does not hold — typed, and raised

@@ -41,8 +41,13 @@ const NOTE: &str = "http://example.org/note";
 /// relation from.
 const KIND: &str = "http://example.org/kind";
 
-/// The datatype `?rank` comes back as.
-const INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+// The datatype `?rank` comes back as.
+use purrdf_core::datatype::XSD_INTEGER as INTEGER;
+
+#[path = "support/sparql.rs"]
+mod sparql;
+
+use sparql::{render, subject, typed};
 
 // ── the recorder ─────────────────────────────────────────────────────────────
 
@@ -101,45 +106,6 @@ impl PropertyFunction for CeilingRecorder {
         self.ceilings.lock().expect("uncontended").push(ceiling);
         self.inner.open(args, ceiling)
     }
-}
-
-// ── rendering ────────────────────────────────────────────────────────────────
-
-/// One answer cell in an exact, unambiguous textual form.
-fn render(cell: Option<&TermValue>) -> String {
-    match cell {
-        None => "UNBOUND".to_owned(),
-        Some(TermValue::Iri(iri)) => format!("<{iri}>"),
-        Some(TermValue::Blank { label, scope }) => format!("_:{label}/{}", scope.ordinal()),
-        Some(TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            ..
-        }) => match language {
-            Some(tag) => format!("{lexical_form:?}@{tag}"),
-            None if datatype == "http://www.w3.org/2001/XMLSchema#string" => {
-                format!("{lexical_form:?}")
-            }
-            None => format!("{lexical_form:?}^^<{datatype}>"),
-        },
-        Some(TermValue::Triple { s, p, o }) => format!(
-            "<<{} {} {}>>",
-            render(Some(s)),
-            render(Some(p)),
-            render(Some(o))
-        ),
-    }
-}
-
-/// A typed literal cell as [`render`] writes it.
-fn typed(lexical: &str, datatype: &str) -> String {
-    format!("{lexical:?}^^<{datatype}>")
-}
-
-/// An IRI cell under the fixture namespace, as [`render`] writes it.
-fn subject(local: &str) -> String {
-    format!("<http://example.org/{local}>")
 }
 
 // ── the fixture ──────────────────────────────────────────────────────────────

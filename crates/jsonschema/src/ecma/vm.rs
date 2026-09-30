@@ -3,6 +3,8 @@
 
 //! Explicit-stack ECMA backtracking for constructs that are not regular.
 
+use purrdf_iri::terminals::in_ranges;
+
 use super::{
     Ast, Class, ClassItem, PatternError, Property, canonicalize, contains_property, emit,
     unicode_ranges,
@@ -124,11 +126,6 @@ fn word(ch: Option<char>, insensitive: bool) -> bool {
     })
 }
 
-fn in_ranges(ranges: &[(u32, u32)], code: u32) -> bool {
-    let index = ranges.partition_point(|(_, high)| *high < code);
-    ranges.get(index).is_some_and(|(low, _)| *low <= code)
-}
-
 fn folded_any(code: u32, insensitive: bool, test: impl Fn(u32) -> bool) -> bool {
     if !insensitive {
         return test(code);
@@ -152,17 +149,17 @@ fn class_match(class: &Class, code: u32, insensitive: bool) -> bool {
         }),
         ClassItem::Digit(negated) => {
             folded_any(code, insensitive, |candidate| {
-                in_ranges(emit::DIGIT, candidate)
+                in_ranges(candidate, emit::DIGIT)
             }) != *negated
         }
         ClassItem::Word(negated) => {
             folded_any(code, insensitive, |candidate| {
-                in_ranges(emit::WORD, candidate)
+                in_ranges(candidate, emit::WORD)
             }) != *negated
         }
         ClassItem::Space(negated) => {
             folded_any(code, insensitive, |candidate| {
-                in_ranges(emit::SPACE, candidate)
+                in_ranges(candidate, emit::SPACE)
             }) != *negated
         }
         ClassItem::Property(property, negated) => folded_any(code, insensitive, |candidate| {

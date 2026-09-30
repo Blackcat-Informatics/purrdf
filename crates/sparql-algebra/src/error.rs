@@ -79,28 +79,20 @@ pub enum ParseError {
     },
 }
 
+purrdf_lex::constructors! {
+    impl ParseError {
+        /// Construct a [`ParseError::Unsupported`] from any displayable feature name.
+        pub fn unsupported(feature) -> Self::Unsupported;
+
+        /// Construct a [`ParseError::Syntax`] at a byte offset.
+        pub fn syntax(reason, at: usize) -> Self::Syntax { .. };
+
+        /// Construct a [`ParseError::Lex`] at a byte offset.
+        pub fn lex(reason, at: usize) -> Self::Lex { .. };
+    }
+}
+
 impl ParseError {
-    /// Construct a [`ParseError::Unsupported`] from any displayable feature name.
-    pub fn unsupported(feature: impl Into<String>) -> Self {
-        Self::Unsupported(feature.into())
-    }
-
-    /// Construct a [`ParseError::Syntax`] at a byte offset.
-    pub fn syntax(reason: impl Into<String>, at: usize) -> Self {
-        Self::Syntax {
-            reason: reason.into(),
-            at,
-        }
-    }
-
-    /// Construct a [`ParseError::Lex`] at a byte offset.
-    pub fn lex(reason: impl Into<String>, at: usize) -> Self {
-        Self::Lex {
-            reason: reason.into(),
-            at,
-        }
-    }
-
     /// The byte offset the failure was reported at, for the position-bearing
     /// variants ([`Lex`](Self::Lex)/[`Syntax`](Self::Syntax)/[`CdtArity`](Self::CdtArity)).
     /// `None` for [`Unsupported`](Self::Unsupported)/[`Iri`](Self::Iri), which are

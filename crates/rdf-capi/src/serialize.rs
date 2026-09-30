@@ -19,6 +19,7 @@ use purrdf_rs::{
 use crate::buffer::PurrdfBuffer;
 use crate::error::PurrdfError;
 use crate::handles::PurrdfDataset;
+use crate::handles::{free_handle, into_handle};
 use crate::status::PurrdfStatus;
 use crate::{cstr_to_str, opt_cstr_to_str};
 
@@ -61,7 +62,7 @@ pub unsafe extern "C" fn purrdf_jsonld_context_compile(
                     "compiled JSON-LD context requires options mode `context`",
                 ));
             };
-            *out_context = Box::into_raw(Box::new(PurrdfJsonLdContext(Arc::clone(context))));
+            *out_context = into_handle(PurrdfJsonLdContext(Arc::clone(context)));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -73,13 +74,7 @@ pub unsafe extern "C" fn purrdf_jsonld_context_compile(
 /// `context` must be null or a live handle not already freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_jsonld_context_free(context: *mut PurrdfJsonLdContext) {
-    unsafe {
-        ffi_guard!((), {
-            if !context.is_null() {
-                drop(Box::from_raw(context));
-            }
-        });
-    }
+    unsafe { free_handle::<PurrdfJsonLdContext>(context) }
 }
 
 /// Serialize JSON-LD or YAML-LD with exactly one versioned options document or
@@ -175,7 +170,7 @@ pub unsafe extern "C" fn purrdf_serialize_jsonld_configured(
             .map_err(|diagnostic| {
                 PurrdfError::from_diagnostic(PurrdfStatus::SerializeError, &diagnostic)
             })?;
-            *out_buffer = PurrdfBuffer::into_raw(outcome.bytes);
+            *out_buffer = into_handle(PurrdfBuffer(outcome.bytes));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -306,7 +301,7 @@ pub unsafe extern "C" fn purrdf_serialize(
             if !out_named_graph_rows_dropped.is_null() {
                 *out_named_graph_rows_dropped = outcome.named_graph_rows_dropped;
             }
-            *out_buffer = PurrdfBuffer::into_raw(outcome.bytes);
+            *out_buffer = into_handle(PurrdfBuffer(outcome.bytes));
             Ok(PurrdfStatus::Ok)
         })
     }

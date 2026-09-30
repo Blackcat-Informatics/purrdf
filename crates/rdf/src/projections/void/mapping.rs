@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use crate::projections::util::push_iri_triple;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -165,7 +166,7 @@ fn required_header_literal(
     let mut values = BTreeSet::new();
     for record in records {
         if &record.graph != config.header_graph()
-            || iri(&record.subject) != Some(config.header_subject_iri())
+            || record.subject.as_iri() != Some(config.header_subject_iri())
             || record.predicate != predicate
         {
             continue;
@@ -234,7 +235,7 @@ fn analyze_data(
             .or_default()
             .record(record, "VoID property partition")?;
         if record.predicate == config.source_roles().rdf_type() {
-            let Some(class) = iri(&record.object) else {
+            let Some(class) = record.object.as_iri() else {
                 return Err(ProjectionError::integrity(
                     "VoID rdf:type object in a selected data graph must be an IRI",
                 ));
@@ -320,12 +321,12 @@ fn analyze_linksets(
         .iter()
         .filter(|record| &record.graph == config.alignment_graph())
     {
-        let Some(subject) = iri(&record.subject) else {
+        let Some(subject) = record.subject.as_iri() else {
             return Err(ProjectionError::integrity(
                 "VoID alignment subject must be an IRI",
             ));
         };
-        let Some(object) = iri(&record.object) else {
+        let Some(object) = record.object.as_iri() else {
             return Err(ProjectionError::integrity(
                 "VoID alignment object must be an IRI",
             ));
@@ -440,7 +441,7 @@ fn collect_external_links<'records, 'config>(
     let mut output = BTreeMap::<&str, BTreeSet<&str>>::new();
     for record in records {
         if &record.graph != config.metadata_graph()
-            || iri(&record.subject) != Some(config.header_subject_iri())
+            || record.subject.as_iri() != Some(config.header_subject_iri())
         {
             continue;
         }
@@ -449,7 +450,7 @@ fn collect_external_links<'records, 'config>(
         }) else {
             continue;
         };
-        let Some(object) = iri(&record.object) else {
+        let Some(object) = record.object.as_iri() else {
             return Err(ProjectionError::integrity(format!(
                 "VoID external-link source predicate `{}` requires an IRI object",
                 record.predicate
@@ -587,10 +588,7 @@ impl VoidEmitter<'_> {
     }
 
     fn push_iri_predicate(&mut self, subject: &str, predicate: &str, object: &str) {
-        let subject = self.builder.intern_iri(subject);
-        let predicate = self.builder.intern_iri(predicate);
-        let object = self.builder.intern_iri(object);
-        self.builder.push_quad(subject, predicate, object, None);
+        push_iri_triple(&mut self.builder, subject, predicate, object);
     }
 
     fn push_count(&mut self, subject: &str, predicate: VoidRole, value: u64) {
@@ -695,17 +693,12 @@ fn count_u64(value: usize, label: &str) -> Result<u64, ProjectionError> {
     u64::try_from(value).map_err(|_| ProjectionError::limit(format!("{label} count exceeds u64")))
 }
 
-fn iri(term: &ProjectionTerm) -> Option<&str> {
-    let ProjectionTerm::Iri { value } = term else {
-        return None;
-    };
-    Some(value)
-}
-
 #[cfg(test)]
 mod tests {
     use purrdf_core::{PackBuilder, PackView, datasets_isomorphic};
-    use serde_json::Value;
+    use purrdf_lex::json::Value;
+
+    use purrdf_lex::json::record::{FromJson, from_slice};
 
     use super::*;
     use crate::native_codecs::{NativeRdfFormat, parse_dataset};
@@ -721,9 +714,9 @@ mod tests {
     }
 
     fn config_for(format: NativeRdfFormat) -> VoidConfig {
-        let mut value: Value = serde_json::from_slice(CONFIG).expect("VoID fixture JSON");
+        let mut value: Value = from_slice(CONFIG).expect("VoID fixture JSON");
         value["config"]["format"] = Value::String(format.id().to_owned());
-        serde_json::from_value(value["config"].clone()).expect("VoID config")
+        VoidConfig::from_json(&value["config"]).expect("VoID config")
     }
 
     fn count_value(dataset: &RdfDataset, predicate: &str) -> u64 {
@@ -881,30 +874,28 @@ mod tests {
 
     #[test]
     fn void_config_and_source_ambiguity_fail_closed() {
-        let mut duplicate: Value = serde_json::from_slice(CONFIG).expect("fixture JSON");
+        let mut duplicate: Value = from_slice(CONFIG).expect("fixture JSON");
         let repeated = duplicate["config"]["local_datasets"][0].clone();
         duplicate["config"]["external_datasets"]
             .as_array_mut()
             .expect("external array")
             .push(repeated);
-        assert!(serde_json::from_value::<VoidConfig>(duplicate["config"].clone()).is_err());
+        assert!(VoidConfig::from_json(&duplicate["config"]).is_err());
 
-        let mut overlapping_graphs: Value = serde_json::from_slice(CONFIG).expect("fixture JSON");
+        let mut overlapping_graphs: Value = from_slice(CONFIG).expect("fixture JSON");
         overlapping_graphs["config"]["metadata_graph"] =
             overlapping_graphs["config"]["alignment_graph"].clone();
-        assert!(
-            serde_json::from_value::<VoidConfig>(overlapping_graphs["config"].clone()).is_err()
-        );
+        assert!(VoidConfig::from_json(&overlapping_graphs["config"]).is_err());
 
-        let mut tiny: Value = serde_json::from_slice(CONFIG).expect("fixture JSON");
+        let mut tiny: Value = from_slice(CONFIG).expect("fixture JSON");
         tiny["config"]["execution_limits"]["max_output_records"] = Value::from(1);
-        let tiny: VoidConfig = serde_json::from_value(tiny["config"].clone()).expect("tiny config");
+        let tiny: VoidConfig = VoidConfig::from_json(&tiny["config"]).expect("tiny config");
         assert!(project_void(source().as_ref(), &tiny).is_err());
 
-        let mut tiny_input: Value = serde_json::from_slice(CONFIG).expect("fixture JSON");
+        let mut tiny_input: Value = from_slice(CONFIG).expect("fixture JSON");
         tiny_input["config"]["execution_limits"]["max_input_records"] = Value::from(1);
         let tiny_input: VoidConfig =
-            serde_json::from_value(tiny_input["config"].clone()).expect("tiny input config");
+            VoidConfig::from_json(&tiny_input["config"]).expect("tiny input config");
         let input_error =
             project_void(source().as_ref(), &tiny_input).expect_err("input bound must fail");
         assert_eq!(input_error.kind(), ProjectionErrorKind::ResourceLimit);

@@ -58,7 +58,7 @@
 //! the premise's own `owl:imports` — a diagnostic that sends someone who fat-fingered an
 //! ARGUMENT to go and look at their DATA.
 //!
-//! [`crate::premise_imports::parse_pairs`] decides the half against the command line instead,
+//! [`crate::argv_documents::parse_import_pairs`] decides the half against the command line instead,
 //! through the shared
 //! [`purrdf_iri::BaseScope`] with no base in scope: an absolute half is carried
 //! lexical-verbatim, so nothing about a correct invocation changes, and anything else is a
@@ -119,7 +119,11 @@ use purrdf_validate::regime::{
     verify_entailment_to_string,
 };
 
-use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget, ReportTarget};
+use crate::argv_documents::{
+    ImportPair, ImportRole, import_document_legs, import_readers, parse_import_pairs,
+    refuse_shared_stdin,
+};
+use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget, ReportTarget, refuse_document_flags};
 use crate::error::CliError;
 use crate::format;
 use crate::report;
@@ -200,15 +204,42 @@ pub(crate) fn run(
     ledger_target: &LedgerTarget,
     report_target: &ReportTarget,
 ) -> Result<(), CliError> {
-    refuse_document_flags(ledger_target, options.jsonld_options)?;
+    // Refuse the two global document flags, which name outputs this command does not produce.
+    //
+    // `--loss-ledger` records what a CONVERSION dropped. This command converts nothing for the
+    // operator: it reads documents, decides a question and writes a verdict. Its own crossing
+    // into the boundary's N-Quads is lossless by construction and a realized drop is REFUSED
+    // (see [`read_as_nquads`]) rather than recorded, so there is no ledger — and a flag that
+    // silently wrote an empty one would be the no-op this repository refuses.
+    //
+    // `--jsonld-options` configures a JSON-LD/YAML-LD serializer. The answer is a line-oriented
+    // verdict in the boundary's own grammar, not RDF, so no serializer runs and the option has
+    // nothing to configure.
+    refuse_document_flags(
+        ledger_target,
+        options.jsonld_options,
+        "--loss-ledger records what a conversion dropped, and `entails` converts nothing \
+             for you: it decides a question and writes a verdict. The documents it reads cross \
+             into the boundary's N-Quads losslessly or the run is refused, so there is no \
+             ledger to surface",
+        "--jsonld-options configures a JSON-LD/YAML-LD serializer, and `entails` runs \
+             none: its answer is a line-oriented verdict, not RDF",
+    )?;
     let question = question(options)?;
-    refuse_two_stdins(options, question)?;
     refuse_unconsumable_base(options, question)?;
     // The `--import` ARGUMENTS are decided before a single document is opened: a malformed
     // pair, or an ontology-IRI half that denotes nothing, is a defect in the command line and
     // must fail against it rather than surfacing later as the boundary's refusal naming the
     // premise's own `owl:imports`.
-    let import_pairs = crate::premise_imports::parse_pairs(options.imports)?;
+    let import_pairs = parse_import_pairs(options.imports, ImportRole::PREMISE)?;
+    // The premise, the question and every `--import` document may each be `-`, and at most
+    // one of them may be.
+    let mut readers = vec![
+        ("--premise".to_owned(), options.premise),
+        (question.flag().to_owned(), question.path()),
+    ];
+    readers.extend(import_readers(&import_pairs));
+    refuse_shared_stdin(&readers)?;
 
     // Everything is read and transcoded BEFORE the boundary is called, so an unreadable
     // import fails against the file the operator named rather than as a refusal attributed
@@ -252,7 +283,7 @@ pub(crate) fn run(
             .map_err(CliError::Runtime)?
         }
         Question::Pattern { path } => {
-            let pattern = read_verbatim(path, "--pattern")?;
+            let pattern = source::read_text(path, "--pattern")?;
             certain_answers_to_string(
                 regime,
                 &premise,
@@ -294,72 +325,6 @@ fn question<'a>(options: &EntailsOptions<'a>) -> Result<Question<'a>, CliError> 
     }
 }
 
-/// Refuse the two global document flags, which name outputs this command does not produce.
-///
-/// `--loss-ledger` records what a CONVERSION dropped. This command converts nothing for the
-/// operator: it reads documents, decides a question and writes a verdict. Its own crossing
-/// into the boundary's N-Quads is lossless by construction and a realized drop is REFUSED
-/// (see [`read_as_nquads`]) rather than recorded, so there is no ledger — and a flag that
-/// silently wrote an empty one would be the no-op this repository refuses.
-///
-/// `--jsonld-options` configures a JSON-LD/YAML-LD serializer. The answer is a line-oriented
-/// verdict in the boundary's own grammar, not RDF, so no serializer runs and the option has
-/// nothing to configure.
-fn refuse_document_flags(
-    ledger_target: &LedgerTarget,
-    jsonld_options: Option<&JsonLdSerializeOptions>,
-) -> Result<(), CliError> {
-    if !matches!(ledger_target, LedgerTarget::Silent) {
-        return Err(CliError::Usage(
-            "--loss-ledger records what a conversion dropped, and `entails` converts nothing \
-             for you: it decides a question and writes a verdict. The documents it reads cross \
-             into the boundary's N-Quads losslessly or the run is refused, so there is no \
-             ledger to surface"
-                .to_owned(),
-        ));
-    }
-    if jsonld_options.is_some() {
-        return Err(CliError::Usage(
-            "--jsonld-options configures a JSON-LD/YAML-LD serializer, and `entails` runs \
-             none: its answer is a line-oriented verdict, not RDF"
-                .to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-/// Refuse a command line that reads standard input twice.
-///
-/// The premise, the question and every `--import` document may each be `-`. A process has
-/// ONE standard input, so two of them naming it is not a command that reads one stream twice
-/// — it is a command that reads half a document into each. Refused, naming both, rather than
-/// mis-read.
-fn refuse_two_stdins(options: &EntailsOptions<'_>, question: Question<'_>) -> Result<(), CliError> {
-    let mut named: Vec<String> = Vec::new();
-    if options.premise == "-" {
-        named.push("--premise".to_owned());
-    }
-    if question.path() == "-" {
-        named.push(question.flag().to_owned());
-    }
-    for spec in options.imports {
-        if let Some((iri, path)) = crate::premise_imports::split_import(spec)
-            && path == "-"
-        {
-            named.push(format!("--import {iri}=-"));
-        }
-    }
-    if named.len() > 1 {
-        return Err(CliError::Usage(format!(
-            "{} each read standard input, and there is only one: a process has a single stdin \
-             stream, so two documents reading it would each get part of one. Give all but one \
-             of them a path",
-            named.join(" and ")
-        )));
-    }
-    Ok(())
-}
-
 /// Refuse `--import` pairs the premise's `owl:imports` closure never reaches, as a USAGE
 /// error (exit 2) — the message every entailment subcommand gives
 /// ([`report::unreached_import_refusal`]), and the exit status `validate` gives an unused
@@ -380,9 +345,10 @@ pub(crate) fn refuse_unreached_pairs(
         purrdf_rdf::parse_dataset(document.as_bytes(), "application/n-quads", None)
             .map_err(|diagnostic| CliError::Runtime(format!("{what}: {diagnostic}")))
     };
-    let mut map = purrdf_entail::ImportMap::new();
+    let mut map = purrdf_entail::ImportMap::default();
     for (iri, document) in imports {
-        map.insert(iri.clone(), parse(document, &format!("--import {iri}"))?);
+        map.try_insert(iri.clone(), parse(document, &format!("--import {iri}"))?)
+            .map_err(|error| CliError::Usage(format!("--import {iri}=…: {error}")))?;
     }
     for iri in premise_iris {
         map.declare_loaded(*iri);
@@ -408,16 +374,19 @@ pub(crate) fn refuse_unreached_pairs(
 
 /// Read each resolved `--import` document, transcoding it into the boundary's N-Quads.
 ///
-/// Every argument-level decision was already made by [`crate::premise_imports::parse_pairs`], so what remains
+/// Every argument-level decision was already made by [`crate::argv_documents::parse_import_pairs`], so what remains
 /// here is I/O: this function reads documents and nothing else refuses a command line.
 fn read_imports(
-    pairs: &[(String, &str)],
+    pairs: &[ImportPair<'_>],
     options: &EntailsOptions<'_>,
 ) -> Result<Vec<(String, String)>, CliError> {
     let mut resolved = Vec::with_capacity(pairs.len());
-    for (iri, path) in pairs {
-        let what = format!("--import {iri}");
-        resolved.push((iri.clone(), read_as_nquads(path, &what, options)?));
+    for pair in pairs {
+        let what = format!("--import {}", pair.iri);
+        resolved.push((
+            pair.iri.to_owned(),
+            read_as_nquads(pair.path, &what, options)?,
+        ));
     }
     Ok(resolved)
 }
@@ -443,18 +412,12 @@ fn refuse_unconsumable_base(
     if let Question::Conclusion { path, .. } = question {
         documents.push((path, "the --conclusion document".to_owned()));
     }
-    for spec in options.imports {
-        if let Some((iri, path)) = spec.split_once('=')
-            && !iri.is_empty()
-            && !path.is_empty()
-        {
-            documents.push((path, format!("the --import {iri} document")));
-        }
-    }
-
     let mut resolved = Vec::with_capacity(documents.len());
     for (path, role) in &documents {
-        resolved.push((format::resolve(options.from, path)?, role.as_str()));
+        resolved.push((format::resolve(options.from, path)?, role.clone()));
+    }
+    for (_path, format, role) in import_document_legs(options.imports, options.from)? {
+        resolved.push((format, role));
     }
     let legs: Vec<format::BaseUse<'_>> = resolved
         .iter()
@@ -506,16 +469,4 @@ fn read_as_nquads(
             "{what} {path}: N-Quads output is not UTF-8: {error}"
         ))
     })
-}
-
-/// Read `path` (or stdin) as text, with no format resolution.
-///
-/// The `--pattern` reader. A basic graph pattern is N-Triples with `?name` / `$name` in term
-/// positions, which is not an RDF document and which no RDF parser accepts — so there is
-/// nothing to resolve a format for, and the bytes go to the boundary's own pattern parser
-/// exactly as written.
-fn read_verbatim(path: &str, what: &str) -> Result<String, CliError> {
-    let bytes = source::read_bytes(path)?;
-    String::from_utf8(bytes)
-        .map_err(|error| CliError::Runtime(format!("{what} {path}: not UTF-8 text: {error}")))
 }

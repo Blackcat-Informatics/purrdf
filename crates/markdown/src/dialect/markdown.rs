@@ -707,19 +707,7 @@ fn backticked(cell: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        const fn next(&mut self) -> u64 {
-            purrdf_testkit::rng::splitmix64_next(&mut self.0)
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            usize::try_from(self.next() % n as u64).expect("below n")
-        }
-    }
+    use purrdf_testkit::rng::SplitMix64;
 
     /// The chunked line split agrees with the per-byte one on fixed-seed text
     /// holding line feeds, runs of them, CR, the byte order mark at the start
@@ -742,7 +730,7 @@ mod tests {
             "\u{2028}",
             "\u{1f408}",
         ];
-        let mut rng = SplitMix(0x11AE_5000_0000_0001);
+        let mut rng = SplitMix64::new(0x11AE_5000_0000_0001);
         let mut far_breaks = 0_usize;
         for len in (0..=70).chain([127, 128, 129, 1000, 4099]) {
             for round in 0..40 {
@@ -752,8 +740,8 @@ mod tests {
                     text.push('\u{feff}');
                 }
                 for _ in 0..len {
-                    if rng.below(density) == 0 {
-                        text.push_str(PIECES[rng.below(PIECES.len())]);
+                    if rng.below_usize(density) == 0 {
+                        text.push_str(PIECES[rng.below_usize(PIECES.len())]);
                     } else {
                         text.push('m');
                     }

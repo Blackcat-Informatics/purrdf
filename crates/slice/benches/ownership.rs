@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Dense ownership-analysis profiling harness.
@@ -14,8 +14,8 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_slice::{OwnershipAnalyzer, SliceCatalog, SliceVocab};
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 use purrdf_testkit::{TempDir, temp_dir};
 
 const NS: &str = "https://example.org/vocab/";
@@ -72,7 +72,7 @@ fn fixture() -> (TempDir, SliceCatalog) {
     (temp, catalog)
 }
 
-fn benchmark(c: &mut Criterion) {
+fn benchmark(c: &mut Bench) {
     let (_temp, catalog) = fixture();
     let mut group = c.benchmark_group("slice_ownership");
     group.throughput(Throughput::Elements(
@@ -88,5 +88,5 @@ fn benchmark(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, benchmark);
-criterion_main!(benches);
+bench_group!(benches, benchmark);
+bench_main!(benches);
