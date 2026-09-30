@@ -169,7 +169,8 @@ pub use purrdf_lex::{json_escape, json_pointer, percent, scan, terminals};
 
 pub use base::{BaseInScope, BaseIri, BaseOrigin, BaseScope, ScopedBase};
 pub use curie::{
-    PrefixMap, contract, curie_prefix, expand_curie, local_name, resolve, split_local_name,
+    PrefixMap, contract, contract_where, curie_prefix, expand_curie, local_name, resolve,
+    split_local_name,
 };
 pub use error::{IriError, Result};
 pub use parse::{Iri, is_absolute, parse, parse_uri};

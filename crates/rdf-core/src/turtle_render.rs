@@ -29,7 +29,7 @@ use purrdf_hash::fnv;
 
 use crate::model::RdfTextDirection;
 use crate::{DatasetView, FastMap, GraphMatch, RdfDataset, TermId, TermRef};
-use purrdf_iri::{PrefixMap, contract};
+use purrdf_iri::{PrefixMap, contract_where};
 use purrdf_lex::literal_escape::{self, Carrier};
 use purrdf_lex::term_syntax::{TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_iri};
 
@@ -398,16 +398,13 @@ impl<'a> Renderer<'a> {
         out
     }
 
-    /// `iri` as `prefix:local` under the longest declared namespace
-    /// ([`purrdf_iri::contract`]) and the prefix's length, when the local part
-    /// is one [`is_valid_pn_local`] admits.
+    /// `iri` as a Turtle prefixed name under the longest declared namespace
+    /// whose local part [`is_valid_pn_local`] admits
+    /// ([`purrdf_iri::contract_where`]; the empty prefix `:` included), and the
+    /// prefix's length.
     fn curie(&self, iri: &str) -> Option<(String, usize)> {
-        let curie = contract(iri, &self.prefix_map)?;
-        let (prefix, local) = curie.split_once(':')?;
-        if !is_valid_pn_local(local) {
-            return None;
-        }
-        let prefix_len = prefix.len();
+        let curie = contract_where(iri, &self.prefix_map, |_, local| is_valid_pn_local(local))?;
+        let prefix_len = curie.find(':')?;
         Some((curie, prefix_len))
     }
 
@@ -783,6 +780,62 @@ fn is_turtle_double(v: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Turtle's empty prefix is a prefix, and a namespace whose local part is not a
+    /// `PN_LOCAL` yields to a shorter one that gives a valid name; an IRI no namespace
+    /// names validly stays bracketed.
+    #[test]
+    fn prefixed_names_take_the_empty_prefix_and_fall_back_to_a_valid_local_part() {
+        use crate::ir::builder::RdfDatasetBuilder;
+        let render_one = |s: &str, p: &str, o: &str, prefixes: &[(&str, &str)]| {
+            let mut b = RdfDatasetBuilder::new();
+            let (s, p, o) = (b.intern_iri(s), b.intern_iri(p), b.intern_iri(o));
+            b.push_quad(s, p, o, None);
+            let prefixes: Vec<(String, String)> = prefixes
+                .iter()
+                .map(|&(prefix, ns)| (prefix.to_owned(), ns.to_owned()))
+                .collect();
+            render(&b.freeze().unwrap(), &prefixes)
+        };
+        let prefixes = [("", "http://example.org/"), ("x", "http://example.org/ab")];
+
+        // The empty prefix is a prefix.
+        let out = render_one(
+            "http://example.org/s",
+            "http://example.org/p",
+            "http://example.org/o",
+            &prefixes,
+        );
+        assert!(
+            out.contains("\n:s\n    :p :o ."),
+            "the empty prefix compacts, got:\n{out}"
+        );
+
+        // Under the longest namespace `x:` the local part `.c` is no PN_LOCAL (it may
+        // not start with `.`), so the shorter `:` namespace names it as `:ab.c`.
+        let out = render_one(
+            "http://example.org/ab.c",
+            "http://example.org/abp",
+            "http://example.org/o",
+            &prefixes,
+        );
+        assert!(
+            out.contains("\n:ab.c\n    x:p :o ."),
+            "fallback to a valid local, got:\n{out}"
+        );
+
+        // A local part no namespace admits (it ends in `.`) stays bracketed.
+        let out = render_one(
+            "http://example.org/s",
+            "http://example.org/p",
+            "http://example.org/o.",
+            &prefixes,
+        );
+        assert!(
+            out.contains("<http://example.org/o.>"),
+            "no valid local, got:\n{out}"
+        );
+    }
 
     #[test]
     fn renders_rdf12_reifier_flat() {

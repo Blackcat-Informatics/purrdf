@@ -188,18 +188,63 @@ pub fn resolve(entity: &str, prefixes: &PrefixMap) -> String {
 /// assert_eq!(contract("https://example.org/x", &prefixes), None);
 /// ```
 pub fn contract(iri: &str, prefixes: &PrefixMap) -> Option<String> {
+    // An empty prefix would produce a leading-colon ":X" that `curie_prefix`
+    // rejects, breaking the contract->expand round-trip.
+    contract_where(iri, prefixes, |prefix, _| !prefix.is_empty())
+}
+
+/// [`contract`] for a syntax with its own prefixed-name grammar: `iri` as
+/// `prefix:local` under the longest declared namespace whose `(prefix, local)`
+/// split `accepts` admits, or `None` when no namespace yields an admitted split.
+///
+/// The grammar is the caller's because it is the syntax's: Turtle and SPARQL
+/// admit the empty prefix and require `local` to be a `PN_LOCAL`, RDF/XML
+/// requires an XML `NCName`. When the longest namespace leaves a local part the
+/// grammar refuses, the next-longest is tried, so a shorter namespace that
+/// yields a valid name still compacts. Among equally long namespaces the
+/// lexicographically first prefix wins, so the result never depends on
+/// insertion order.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_iri::{PrefixMap, contract_where};
+///
+/// let mut prefixes = PrefixMap::new();
+/// prefixes.insert("", "http://example.org/");
+/// prefixes.insert("n", "http://example.org/n/");
+/// let digit_free = |_: &str, local: &str| !local.starts_with(|c: char| c.is_ascii_digit());
+///
+/// // The empty prefix is a prefix when the grammar admits it.
+/// assert_eq!(
+///     contract_where("http://example.org/a", &prefixes, digit_free),
+///     Some(":a".to_owned())
+/// );
+/// // The longest namespace leaves "1x", which the grammar refuses, so the
+/// // shorter one is tried.
+/// assert_eq!(
+///     contract_where("http://example.org/n/1x", &prefixes, digit_free),
+///     Some(":n/1x".to_owned())
+/// );
+/// ```
+pub fn contract_where(
+    iri: &str,
+    prefixes: &PrefixMap,
+    accepts: impl Fn(&str, &str) -> bool,
+) -> Option<String> {
     let mut best: Option<(&str, &str)> = None; // (prefix, namespace)
     for (prefix, namespace) in &prefixes.map {
-        // Skip an empty prefix: it would produce a leading-colon ":X" that
-        // `curie_prefix` rejects, breaking the contract->expand round-trip.
-        if prefix.is_empty() {
+        let Some(local) = iri.strip_prefix(namespace.as_str()) else {
+            continue;
+        };
+        if namespace.is_empty() || !accepts(prefix, local) {
             continue;
         }
-        if !namespace.is_empty() && iri.starts_with(namespace.as_str()) {
-            match best {
-                Some((_, ns)) if ns.len() >= namespace.len() => {}
-                _ => best = Some((prefix, namespace)),
-            }
+        match best {
+            Some((best_prefix, ns))
+                if ns.len() > namespace.len()
+                    || (ns.len() == namespace.len() && best_prefix <= prefix.as_str()) => {}
+            _ => best = Some((prefix, namespace)),
         }
     }
     let (prefix, namespace) = best?;
