@@ -27,6 +27,7 @@
 #![doc(
     html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
+#![forbid(unsafe_code)]
 
 pub(crate) mod class_membership;
 pub(crate) mod components;

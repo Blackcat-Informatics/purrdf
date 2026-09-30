@@ -73,7 +73,6 @@
 // builds forbidden and deny new wasm unsafe outside that one import module.
 #![cfg_attr(not(target_arch = "wasm32"), forbid(unsafe_code))]
 #![cfg_attr(target_arch = "wasm32", deny(unsafe_code))]
-#![warn(missing_docs)]
 
 pub mod agg_fn;
 mod basic_profile;

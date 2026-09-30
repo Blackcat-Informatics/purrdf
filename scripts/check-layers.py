@@ -18,7 +18,10 @@ compares it with the graph ``cargo metadata`` resolves, and fails on:
 * a listed edge the resolved graph no longer has, and a ``pending`` edge or
   crate that now exists — the table records the graph exactly, so a planned edge
   is flipped to present in the change that adds it;
-* a cycle in the declared graph, pending edges included.
+* a cycle in the declared graph, pending edges included;
+* a crate in ``FORBID_UNSAFE_CRATES`` whose ``src/lib.rs`` no longer carries the
+  crate-level ``#![forbid(unsafe_code)]`` (those crates hold no ``unsafe`` and
+  must not be able to grow one silently).
 
 ``--ring-fence`` (``make rdf-core-hygiene``) holds the kernel ring-fence, which
 counts EVERY normal dependency, external crates included: the root has none at
@@ -40,6 +43,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tempfile
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,6 +51,10 @@ from types import ModuleType
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LAYERS_PATH = REPO_ROOT / "layers.toml"
+
+# Crates that hold no `unsafe` and must say so: directory under crates/.
+FORBID_UNSAFE_CRATES = ("rdf", "gts", "hnsw", "shapes", "slice", "purrdf")
+FORBID_UNSAFE_ATTRIBUTE = "#![forbid(unsafe_code)]"
 
 
 def load_banned_deps() -> ModuleType:
@@ -230,6 +238,21 @@ def failures(layers: Layers, members: set[str], edges: set[tuple[str, str]]) -> 
     loop = cycle(layers)
     if loop:
         found.append(f"FAIL: the declared graph has a cycle: {' -> '.join(loop)}")
+    return found
+
+
+def forbid_unsafe_failures(crates_dir: Path) -> list[str]:
+    """One line per crate whose lib.rs lacks the crate-level forbid attribute."""
+    found: list[str] = []
+    for name in FORBID_UNSAFE_CRATES:
+        lib = crates_dir / name / "src" / "lib.rs"
+        try:
+            lines = lib.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            found.append(f"FAIL: crates/{name}/src/lib.rs unreadable: {exc}")
+            continue
+        if FORBID_UNSAFE_ATTRIBUTE not in (line.strip() for line in lines):
+            found.append(f"FAIL: crates/{name}/src/lib.rs must carry `{FORBID_UNSAFE_ATTRIBUTE}` (no unsafe policy)")
     return found
 
 
@@ -454,6 +477,17 @@ def self_test() -> int:
             cases.append((f"{why} is refused", False))
         except LayersError:
             cases.append((f"{why} is refused", True))
+    with tempfile.TemporaryDirectory() as scratch:
+        crates = Path(scratch)
+        for name in FORBID_UNSAFE_CRATES:
+            (crates / name / "src").mkdir(parents=True)
+            (crates / name / "src" / "lib.rs").write_text(f"{FORBID_UNSAFE_ATTRIBUTE}\n", encoding="utf-8")
+        cases.append(("every forbid-unsafe crate carrying the attribute passes", forbid_unsafe_failures(crates) == []))
+        (crates / "gts" / "src" / "lib.rs").write_text("// #![forbid(unsafe_code)]\n", encoding="utf-8")
+        cases.append(("a crate whose forbid attribute is only commented out is reported", len(forbid_unsafe_failures(crates)) == 1))
+        (crates / "gts" / "src" / "lib.rs").write_text(f"{FORBID_UNSAFE_ATTRIBUTE}\n", encoding="utf-8")
+        (crates / "slice" / "src" / "lib.rs").unlink()
+        cases.append(("a crate with no lib.rs is reported", len(forbid_unsafe_failures(crates)) == 1))
     failed = 0
     for name, held in cases:
         print(f"{'PASS' if held else 'FAIL'}: {name}")
@@ -526,7 +560,7 @@ def main() -> int:
         print(f"FAIL: {exc}")
         return 1
     members, edges = resolved_edges(graph)
-    found = failures(layers, members, edges)
+    found = failures(layers, members, edges) + forbid_unsafe_failures(REPO_ROOT / "crates")
     if found:
         for line in found:
             print(line)
@@ -534,7 +568,8 @@ def main() -> int:
     pending = sum(pending for deps in layers.deps.values() for pending in deps.values())
     print(
         f"OK: {len(edges)} first-party normal edges across {len(members)} members match "
-        f"layers.toml ({pending} planned edges, {len(layers.pending_crates)} planned crates)"
+        f"layers.toml ({pending} planned edges, {len(layers.pending_crates)} planned crates); "
+        f"{len(FORBID_UNSAFE_CRATES)} crates forbid unsafe_code"
     )
     return 0
 

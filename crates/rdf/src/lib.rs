@@ -26,6 +26,7 @@
 #![doc(
     html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
+#![forbid(unsafe_code)]
 
 // ---------------------------------------------------------------------------
 // Re-exported kernel modules (live in `purrdf-core`). The re-export keeps the

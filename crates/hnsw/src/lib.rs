@@ -90,6 +90,8 @@
 //! # }
 //! ```
 
+#![forbid(unsafe_code)]
+
 mod builder;
 mod graph;
 mod search;
