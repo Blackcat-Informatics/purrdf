@@ -37,12 +37,31 @@
 /// must be written for the text to be what this returns.
 #[inline]
 pub(crate) fn encode_text<'o, const UPPER: bool>(input: &[u8], output: &'o mut [u8]) -> &'o str {
+    encode_text_with::<UPPER, false>(input, output)
+}
+
+/// [`encode_text`] for a rendering the caller copies out of `output` at once
+/// (a `Display` writing to a formatter): [`crate::hex::encode_bytes`] with its
+/// `DISPLAY` layout.
+#[inline]
+pub(crate) fn encode_text_display<'o, const UPPER: bool>(
+    input: &[u8],
+    output: &'o mut [u8],
+) -> &'o str {
+    encode_text_with::<UPPER, true>(input, output)
+}
+
+#[inline]
+fn encode_text_with<'o, const UPPER: bool, const DISPLAY: bool>(
+    input: &[u8],
+    output: &'o mut [u8],
+) -> &'o str {
     assert_eq!(
         output.len(),
         2 * input.len(),
         "a base16 rendering is two digits per input byte"
     );
-    crate::hex::encode_bytes::<UPPER>(input, output);
+    crate::hex::encode_bytes::<UPPER, DISPLAY>(input, output);
     debug_assert!(output.is_ascii());
     // SAFETY: `encode_bytes` writes every byte of `output` (checked above to
     // be exactly two per input byte), and every path it runs writes only

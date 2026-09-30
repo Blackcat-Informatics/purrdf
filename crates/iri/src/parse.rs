@@ -12,10 +12,7 @@
 
 use crate::error::{IriError, Result};
 use crate::host::Mode;
-use crate::scan::{
-    ByteClass, ByteRun, byte_run_count, byte_runs, count_runs, find_byte, find_byte2, in_runs,
-    needle_table,
-};
+use crate::scan::{ByteRun, byte_runs, count_runs, in_runs};
 use core::ops::Range;
 use purrdf_lex::percent;
 
@@ -164,7 +161,7 @@ impl Iri {
 /// an internationalized `ireg-name` converted by IDNA where it can be and
 /// percent-encoded where it cannot.
 fn authority_to_uri(authority: &str, out: &mut String) {
-    let (userinfo, host_port) = match find_byte(authority.as_bytes(), b'@') {
+    let (userinfo, host_port) = match find_delimiter(authority.as_bytes(), USERINFO_END) {
         Some(at) => (Some(&authority[..at]), &authority[at + 1..]),
         None => (None, authority),
     };
@@ -351,7 +348,8 @@ fn scan(s: &str, mode: Mode) -> Result<Spans> {
     if bytes[idx..].starts_with(b"//") {
         let astart = idx + 2;
         // authority runs until the next '/', '?', '#' or end.
-        let aend = astart + find_authority_end(&bytes[astart..]).unwrap_or(bytes.len() - astart);
+        let aend = astart
+            + find_delimiter(&bytes[astart..], AUTHORITY_END).unwrap_or(bytes.len() - astart);
         validate_authority(&s[astart..aend], astart, mode)?;
         authority = Some(astart..aend);
         idx = aend;
@@ -359,7 +357,7 @@ fn scan(s: &str, mode: Mode) -> Result<Spans> {
 
     // path: runs until '?' or '#' or end.
     let pstart = idx;
-    let pend = pstart + find_byte2(&bytes[pstart..], b'?', b'#').unwrap_or(bytes.len() - pstart);
+    let pend = pstart + find_delimiter(&bytes[pstart..], PATH_END).unwrap_or(bytes.len() - pstart);
     validate_path(&s[pstart..pend], pstart, mode)?;
     // RFC-3986 §4.2: a relative reference with no scheme and no authority has a
     // `path-noscheme`, whose FIRST segment must not contain a ':' — otherwise the
@@ -379,7 +377,8 @@ fn scan(s: &str, mode: Mode) -> Result<Spans> {
     let mut query: Option<Range<usize>> = None;
     if idx < bytes.len() && bytes[idx] == b'?' {
         let qstart = idx + 1;
-        let qend = qstart + find_byte(&bytes[qstart..], b'#').unwrap_or(bytes.len() - qstart);
+        let qend =
+            qstart + find_delimiter(&bytes[qstart..], QUERY_END).unwrap_or(bytes.len() - qstart);
         validate_query(&s[qstart..qend], qstart, mode)?;
         query = Some(qstart..qend);
         idx = qend;
@@ -705,7 +704,7 @@ fn clean_prefix_len(word: &[u8; CLEAN_WORD], extra_mask: u8) -> usize {
 fn validate_authority(s: &str, base_off: usize, mode: Mode) -> Result<()> {
     // authority = [ userinfo "@" ] host [ ":" port ]
     // Userinfo cannot contain an unescaped '@', so the first '@' delimits it.
-    let (userinfo, rest, host_off) = match find_byte(s.as_bytes(), b'@') {
+    let (userinfo, rest, host_off) = match find_delimiter(s.as_bytes(), USERINFO_END) {
         Some(at) => (Some(&s[..at]), &s[at + 1..], base_off + at + 1),
         None => (None, s, base_off),
     };
@@ -776,25 +775,65 @@ fn validate_fragment(s: &str, base_off: usize, mode: Mode) -> Result<()> {
     validate_component(s, base_off, COLON | AT | SLASH | QUESTION, false, mode)
 }
 
-/// The bytes that end an authority: `/`, `?`, `#`.
-const AUTHORITY_END: [u8; 256] = needle_table(b"/?#");
-/// The bytes that end a scheme candidate: `:`, `/`, `?`, `#`.
-const SCHEME_END: [u8; 256] = needle_table(b":/?#");
+/// The bytes that end an authority.
+const AUTHORITY_END: [u8; 3] = *b"/?#";
+/// The bytes that end a scheme candidate.
+const SCHEME_END: [u8; 4] = *b":/?#";
+/// The bytes that end a path.
+const PATH_END: [u8; 2] = *b"?#";
+/// The byte that ends a query.
+const QUERY_END: [u8; 1] = *b"#";
+/// The byte that ends userinfo.
+const USERINFO_END: [u8; 1] = *b"@";
 
-/// The first `/`, `?` or `#`: one chunked [`ByteClass`] kernel, out of line
-/// so the class's runs fold in as constants.
-#[inline(never)]
-fn find_authority_end(bytes: &[u8]) -> Option<usize> {
-    const CLASS: ByteClass<{ byte_run_count(&AUTHORITY_END) }> =
-        ByteClass::from_table(AUTHORITY_END);
-    CLASS.find_first(bytes)
+/// Bytes tested per step of [`find_delimiter`]: one `u64` of lanes.
+const DELIM_WORD: usize = 8;
+
+/// Broadcast a byte to all eight lanes of a `u64`.
+const LANES_LO: u64 = 0x0101_0101_0101_0101;
+/// High bit of each byte lane.
+const LANES_HI: u64 = 0x8080_8080_8080_8080;
+
+/// The offset of the first byte of `bytes` equal to one of `needles`.
+///
+/// An IRI is short (tens of bytes) and its delimiters sit at the start of each
+/// component, so the search that pays is the one with no set-up: a word-at-a-time
+/// (SWAR) scan, eight bytes per step, whose hit word reads its offset off the
+/// lane mask's trailing-zero count (little-endian, so the lowest set lane is the
+/// first byte). The needles are ASCII, so they cannot be confused with a UTF-8
+/// continuation byte. A wide vector kernel spends its fixed cost (out-of-line
+/// call, block walk, scalar tail) on every component of every IRI, which the
+/// decode of a dictionary of IRIs measured at a fifth of its time.
+#[inline(always)]
+#[allow(
+    clippy::inline_always,
+    reason = "the needles are constants at every call site; inlining folds them into the scan"
+)]
+fn find_delimiter<const N: usize>(bytes: &[u8], needles: [u8; N]) -> Option<usize> {
+    let (words, tail) = bytes.as_chunks::<DELIM_WORD>();
+    for (k, word) in words.iter().enumerate() {
+        let word = u64::from_le_bytes(*word);
+        let mut hits = 0_u64;
+        for needle in needles {
+            let v = word ^ (u64::from(needle) * LANES_LO);
+            // The classic zero-byte test: exact for the lowest zero lane.
+            hits |= v.wrapping_sub(LANES_LO) & !v & LANES_HI;
+        }
+        if hits != 0 {
+            return Some(k * DELIM_WORD + (hits.trailing_zeros() / u8::BITS) as usize);
+        }
+    }
+    tail.iter()
+        .position(|b| needles.contains(b))
+        .map(|i| words.len() * DELIM_WORD + i)
 }
 
-/// The first `:`, `/`, `?` or `#`: one chunked [`ByteClass`] kernel.
+/// The first `:`, `/`, `?` or `#`: [`find_delimiter`] over [`SCHEME_END`],
+/// compiled out of line, the symbol `iri.delimiter-scan` in
+/// `scripts/simd-asm-manifest.toml` measures.
 #[inline(never)]
 fn find_scheme_end(bytes: &[u8]) -> Option<usize> {
-    const CLASS: ByteClass<{ byte_run_count(&SCHEME_END) }> = ByteClass::from_table(SCHEME_END);
-    CLASS.find_first(bytes)
+    find_delimiter(bytes, SCHEME_END)
 }
 
 #[cfg(test)]
@@ -1065,11 +1104,43 @@ mod tests {
     #[test]
     fn delimiter_scans_find_the_first_hit() {
         let haystack = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?tail#later";
-        assert_eq!(find_byte2(haystack, b'?', b'#'), Some(32));
-        assert_eq!(find_byte(haystack, b'#'), Some(37));
-        assert_eq!(find_authority_end(haystack), Some(32));
-        assert_eq!(find_scheme_end(b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), None);
+        assert_eq!(find_delimiter(haystack, PATH_END), Some(32));
+        assert_eq!(find_delimiter(haystack, QUERY_END), Some(37));
+        assert_eq!(find_delimiter(haystack, AUTHORITY_END), Some(32));
+        assert_eq!(find_delimiter(haystack, USERINFO_END), None);
         assert_eq!(find_scheme_end(b"http://x"), Some(4));
+        assert_eq!(find_scheme_end(b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), None);
+    }
+
+    /// The word-at-a-time search agrees with the byte-at-a-time one for every
+    /// needle set, every length around the word width, and any byte value (a
+    /// non-ASCII one included) at every offset, with a trailing delimiter after.
+    #[test]
+    fn find_delimiter_matches_the_bytewise_search_at_every_offset() {
+        fn check<const N: usize>(needles: [u8; N]) {
+            for len in 0..=40 {
+                let clean = vec![b'a'; len];
+                assert_eq!(find_delimiter(&clean, needles), None, "len {len}");
+                for at in 0..len {
+                    for probe in 0..=u8::MAX {
+                        let mut bytes = clean.clone();
+                        bytes[at] = probe;
+                        bytes.push(needles[0]);
+                        let expected = bytes.iter().position(|b| needles.contains(b));
+                        assert_eq!(
+                            find_delimiter(&bytes, needles),
+                            expected,
+                            "{needles:?} len {len} at {at} probe {probe:#04X}"
+                        );
+                    }
+                }
+            }
+        }
+        check(AUTHORITY_END);
+        check(SCHEME_END);
+        check(PATH_END);
+        check(QUERY_END);
+        check(USERINFO_END);
     }
 
     /// The const `CLASS` bitmap must reproduce the original per-character grammar
