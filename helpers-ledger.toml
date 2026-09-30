@@ -2599,3 +2599,45 @@ enforced = true
 constants = []
 fingerprints = []
 names = ['^(collect_)?(term|triple)_pattern_var(s|iable|iables)$']
+
+[[job]]
+id = "wasm-host-clock"
+summary = "The wasm host's Date.now import, declared once where every user reaches it; a second #[wasm_bindgen] Date.now import fails the gate"
+home = "purrdf_sparql_eval::wasm_host::date_now"
+entry_points = []
+spec = "wasm_bindgen imports one symbol per declaration, so a second Date.now declaration is a second host binding for the same clock; the host seal of scripts/check-wasm-test-runner.sh replaces the global, and every reader must reach it through one import"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:wasm-import-date-now"]
+names = []
+
+[[job.variant]]
+symbol = "testkit_wasm_host_fixture::host::date_now"
+file = "crates/testkit/src/bin/wasm_host_fixture.rs"
+detector = "forbidden"
+criterion = "layering"
+anchor = "purrdf_testkit::harness::without_host_clock_or_entropy"
+reason = "The fixture proves the wasm32 runner's host seal by reading the raw Date.now global itself, outside the seal and inside it; purrdf-testkit sits below purrdf-sparql-eval (its dev-dependency), so the fixture cannot reach the evaluator's import, and routing through it would test that import instead of the seal."
+
+[[job]]
+id = "wasm-host-reflect-get"
+summary = "The wasm host's Reflect.get import, declared once in purrdf-wasm's host module; a second #[wasm_bindgen] Reflect.get import fails the gate"
+home = "purrdf_wasm::host::reflect_get"
+entry_points = []
+spec = "wasm_bindgen imports one symbol per declaration; the catch form maps a throwing getter to an Err the caller turns into its own refusal"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:wasm-import-reflect-get"]
+names = []

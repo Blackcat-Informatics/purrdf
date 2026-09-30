@@ -346,6 +346,24 @@ under Changed and Fixed where a longer account helps.
 
 ### Added
 
+- **wasm:** `QueryEngine.blankScope` (`"keep"` or `"merge"`, typed as
+  `BlankScopeMode`), the declared option for how a blank node's scope crosses to
+  JS in the engine's typed results (`query`, `select`, `queryGoverned`,
+  `queryEntailmentGoverned` and their `Async` twins, which take the value in
+  force when the job begins). `"keep"`, the default and the behaviour of every
+  earlier release of this cycle, hands a scoped blank over as its scope envelope,
+  so two blank nodes that share a label in different scopes stay two nodes;
+  `"merge"` drops the scope, so they are one node with the bare label (lossy by
+  declaration). Any other value throws with the code `purrdf-wasm-options`.
+- **sparql-eval, wasm, helper-census:** each wasm host import is declared once:
+  the `Date.now` import is `purrdf_sparql_eval::wasm_host::date_now` (hidden
+  public; `purrdf-wasm`'s job clock reads it) and the `Reflect.get` import is
+  `purrdf_wasm::host::reflect_get` (hidden public; the option reader and the
+  test-flag reader share it). The census rules `wasm-import-date-now` and
+  `wasm-import-reflect-get`, held by the `wasm-host-clock` and
+  `wasm-host-reflect-get` ledger jobs, fail `check-shared-helpers.py` on a second
+  `#[wasm_bindgen]` import of either, in any file; the one variant is the wasm
+  test runner's seal fixture, which must read the raw global.
 - **core:** `purrdf_core::imports::ImportMap::try_insert`, `ImportMap::check_key`
   and `ImportKeyError`: the one import-table key policy (an absolute IRI naming
   one document), used by `ShapesImports`, the reasoning services' import lists,

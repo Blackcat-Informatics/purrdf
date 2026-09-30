@@ -10,21 +10,100 @@
 //! JS-built quad and an engine-stored quad resolve to the same term ids.
 
 use purrdf::ir::QuadValues;
-use purrdf::{RdfTerm, TermValue};
+use purrdf::{BlankScope, RdfTerm, TermBox, TermValue};
 
 use crate::term::{Quad, Term, TermInner};
 
+/// How a blank node's scope crosses to JS: a declared option of the conversion, set on
+/// the engine as `QueryEngine#blankScope` (`"keep"` or `"merge"`).
+///
+/// The engine holds a blank node as a `(label, scope)` pair, so two nodes that share a
+/// label in different scopes are two nodes. JS has one string for a blank node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum BlankScopeMode {
+    /// The default. A scoped blank crosses as its deterministic scope envelope, so two
+    /// blank nodes that share a label in different scopes stay two nodes in JS, and an
+    /// unscoped blank keeps its bare label.
+    #[default]
+    Keep,
+    /// The scope is dropped: a blank crosses as its bare label, so two blank nodes that
+    /// share a label in different scopes are ONE node in JS. Lossy by declaration, for a
+    /// caller that wants the labels the data was written with.
+    Merge,
+}
+
+impl BlankScopeMode {
+    /// The option's spelling for `"keep"`.
+    pub(crate) const KEEP: &'static str = "keep";
+    /// The option's spelling for `"merge"`.
+    pub(crate) const MERGE: &'static str = "merge";
+
+    /// The mode a JS option value names, or the refusal that lists the accepted values.
+    pub(crate) fn parse(name: &str) -> Result<Self, String> {
+        match name {
+            Self::KEEP => Ok(Self::Keep),
+            Self::MERGE => Ok(Self::Merge),
+            other => Err(format!(
+                "unknown blankScope {other:?} (expected \"{}\" or \"{}\")",
+                Self::KEEP,
+                Self::MERGE
+            )),
+        }
+    }
+
+    /// The option's spelling of this mode.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Keep => Self::KEEP,
+            Self::Merge => Self::MERGE,
+        }
+    }
+}
+
 /// Lift a dataset-independent [`TermValue`] into an owned [`RdfTerm`] by moving
 /// every string and nested value: [`TermValue::into_rdf_term`]. Query-result egress
-/// uses this path so one cell is not cloned while crossing the wasm boundary, and a
-/// scoped blank node crosses as its deterministic scope envelope, so two blank nodes
-/// that share a label in different scopes stay two nodes in JS.
+/// uses this path so one cell is not cloned while crossing the wasm boundary. Under
+/// [`BlankScopeMode::Keep`] a scoped blank node crosses as its deterministic scope
+/// envelope, so two blank nodes that share a label in different scopes stay two nodes
+/// in JS; under [`BlankScopeMode::Merge`] every blank crosses as its bare label.
 ///
 /// Out of line, so the per-cell marshalling is one compiled function rather than a
 /// fragment of the SELECT row loop.
 #[inline(never)]
-pub(crate) fn term_value_into_rdf_term(value: TermValue) -> Result<RdfTerm, String> {
+pub(crate) fn term_value_into_rdf_term(
+    value: TermValue,
+    mode: BlankScopeMode,
+) -> Result<RdfTerm, String> {
+    let value = match mode {
+        BlankScopeMode::Keep => value,
+        BlankScopeMode::Merge => merge_blank_scopes(value),
+    };
     value.into_rdf_term().map_err(|error| error.to_string())
+}
+
+/// `value` with every blank node, at any depth of a triple term, moved to the default
+/// scope. Folded over the term's own work list, so a deep triple term costs no stack.
+fn merge_blank_scopes(value: TermValue) -> TermValue {
+    match value.try_fold_owned::<TermValue, std::convert::Infallible>(
+        |leaf| {
+            Ok(match leaf {
+                TermValue::Blank { label, .. } => TermValue::Blank {
+                    label,
+                    scope: BlankScope::DEFAULT,
+                },
+                other => other,
+            })
+        },
+        |s, p, o| {
+            Ok(TermValue::Triple {
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
+            })
+        },
+    ) {
+        Ok(merged) => merged,
+    }
 }
 
 /// Lower a JS [`Quad`] to the engine's [`QuadValues`] insert/query key.
@@ -63,7 +142,7 @@ pub(crate) fn quad_values_to_quad(values: &QuadValues) -> Result<Quad, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purrdf::{BlankScope, RdfLiteral, TermBox};
+    use purrdf::RdfLiteral;
 
     fn named(iri: &str) -> Term {
         Term::from_inner(TermInner::Named(iri.to_owned()))
@@ -136,7 +215,8 @@ mod tests {
             }),
         };
         assert_eq!(
-            term_value_into_rdf_term(value.clone()).expect("owned conversion"),
+            term_value_into_rdf_term(value.clone(), BlankScopeMode::Keep)
+                .expect("owned conversion"),
             value.to_rdf_term().expect("borrowed conversion")
         );
     }
@@ -205,5 +285,61 @@ mod tests {
         assert_eq!(quad.subject().value(), "b0");
         assert_eq!(quad.object().value(), "a.b");
         assert_eq!(quad_to_quad_values(&quad).expect("the quad lowers"), values);
+    }
+
+    #[test]
+    fn the_blank_scope_option_names_exactly_keep_and_merge() {
+        assert_eq!(BlankScopeMode::default(), BlankScopeMode::Keep);
+        assert_eq!(BlankScopeMode::parse("keep"), Ok(BlankScopeMode::Keep));
+        assert_eq!(BlankScopeMode::parse("merge"), Ok(BlankScopeMode::Merge));
+        for mode in [BlankScopeMode::Keep, BlankScopeMode::Merge] {
+            assert_eq!(BlankScopeMode::parse(mode.name()), Ok(mode));
+        }
+        let refused = BlankScopeMode::parse("Merge").expect_err("the names are case-sensitive");
+        assert!(refused.contains("\"keep\" or \"merge\""), "{refused}");
+    }
+
+    #[test]
+    fn merge_drops_scope_where_keep_holds_two_nodes_on_the_rust_side() {
+        let first = scoped_blank("b", BlankScope(1));
+        let second = scoped_blank("b", BlankScope(2));
+        // The Rust side: two nodes, and under `keep` two distinct JS labels.
+        assert_ne!(first, second);
+        let keep = |v: &TermValue| {
+            term_value_into_rdf_term(v.clone(), BlankScopeMode::Keep).expect("converts")
+        };
+        assert_ne!(keep(&first), keep(&second));
+        // The declared lossy side: both cross as the bare label, and are one JS node.
+        let merge = |v: &TermValue| {
+            term_value_into_rdf_term(v.clone(), BlankScopeMode::Merge).expect("converts")
+        };
+        assert_eq!(merge(&first), RdfTerm::BlankNode("b".to_owned()));
+        assert_eq!(merge(&first), merge(&second));
+        // An unscoped blank is unchanged by either mode.
+        let plain = scoped_blank("b", BlankScope::DEFAULT);
+        assert_eq!(keep(&plain), merge(&plain));
+        // A neighbour that is not a blank is unchanged too.
+        let iri = TermValue::iri("https://e/s");
+        assert_eq!(keep(&iri), merge(&iri));
+    }
+
+    #[test]
+    fn merge_reaches_a_blank_inside_a_triple_term() {
+        let triple = |object: TermValue| TermValue::Triple {
+            s: TermBox::new(TermValue::iri("https://e/s")),
+            p: TermBox::new(TermValue::iri("https://e/p")),
+            o: TermBox::new(object),
+        };
+        let one = triple(scoped_blank("b", BlankScope(1)));
+        let two = triple(scoped_blank("b", BlankScope(2)));
+        let convert = |v: &TermValue, mode| term_value_into_rdf_term(v.clone(), mode).expect("ok");
+        assert_ne!(
+            convert(&one, BlankScopeMode::Keep),
+            convert(&two, BlankScopeMode::Keep)
+        );
+        assert_eq!(
+            convert(&one, BlankScopeMode::Merge),
+            convert(&two, BlankScopeMode::Merge)
+        );
     }
 }

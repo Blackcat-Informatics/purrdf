@@ -64,6 +64,7 @@
 //! executes a real deadline trip against the optimized module so that split is *observed*
 //! rather than merely compiled.
 
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -88,7 +89,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::async_query::AsyncOperationKind;
 use crate::codec::resolve_format;
-use crate::convert::term_value_into_rdf_term;
+use crate::convert::{BlankScopeMode, term_value_into_rdf_term};
 use crate::dataset::{Dataset, serialize_frozen_with_options};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::operation::{
@@ -1082,6 +1083,7 @@ pub(crate) enum NegotiatedValue {
 /// Convert a [`NegotiatedValue`] into the JS-facing [`NegotiatedOutcome`].
 pub(crate) fn negotiated_outcome_from_value(
     value: NegotiatedValue,
+    blank_scope: BlankScopeMode,
 ) -> Result<NegotiatedOutcome, JsError> {
     match value {
         NegotiatedValue::Complete {
@@ -1104,7 +1106,7 @@ pub(crate) fn negotiated_outcome_from_value(
         }) => Ok(NegotiatedOutcome {
             body: None,
             format: None,
-            partial: Some(partial_answers_from_native(partial)?),
+            partial: Some(partial_answers_from_native(partial, blank_scope)?),
             tripped: Some(TrippedGovernor { inner: tripped }),
             evidence: Some(GovernorEvidence { inner: evidence }),
             complete: false,
@@ -1228,6 +1230,9 @@ impl UpdateOutcome {
 #[derive(Default)]
 pub struct QueryEngine {
     inner: Rc<NativeSparqlEngine>,
+    /// How a blank node's scope crosses to JS in the typed results this engine returns
+    /// (`blankScope`). An asynchronous job takes the mode in force when it begins.
+    blank_scope: Cell<BlankScopeMode>,
 }
 
 impl std::fmt::Debug for QueryEngine {
@@ -1238,6 +1243,36 @@ impl std::fmt::Debug for QueryEngine {
 
 #[wasm_bindgen]
 impl QueryEngine {
+    /// How a blank node's scope crosses to JS in the typed results this engine returns:
+    /// `"keep"` (the default) or `"merge"`.
+    ///
+    /// The engine holds a blank node as a label and a scope, so two nodes that share a
+    /// label in different scopes are two nodes. Under `"keep"` a scoped blank crosses as
+    /// its scope envelope and they stay two nodes in JS; an unscoped blank keeps its bare
+    /// label. Under `"merge"` the scope is dropped and every blank crosses as its bare
+    /// label, so nodes that share a label in different scopes are ONE node in JS. Set it
+    /// before running a query: it applies to `query`, `select`, `queryGoverned` and
+    /// `queryEntailmentGoverned`, and an asynchronous job takes the value in force when
+    /// it begins. The serialized (`queryRaw`) results are unaffected.
+    #[wasm_bindgen(getter = blankScope)]
+    pub fn blank_scope_name(&self) -> String {
+        self.blank_scope.get().name().to_owned()
+    }
+
+    /// Set [`Self::blank_scope_name`]. Throws on any value but `"keep"` or `"merge"`.
+    ///
+    /// # Errors
+    ///
+    /// A value that is neither `"keep"` nor `"merge"`; the mode is left as it was.
+    #[wasm_bindgen(setter = blankScope)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn set_blank_scope(&self, mode: String) -> Result<(), JsValue> {
+        let parsed =
+            BlankScopeMode::parse(&mode).map_err(|message| coded_error(&message, OPTIONS_CODE))?;
+        self.blank_scope.set(parsed);
+        Ok(())
+    }
+
     /// Create a reusable offline SPARQL engine.
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
@@ -1254,7 +1289,7 @@ impl QueryEngine {
         base: Option<String>,
     ) -> Result<QueryResult, JsValue> {
         let result = self.run_query(dataset, sparql, base.as_deref())?;
-        Ok(query_result_from_sparql(result)?)
+        Ok(query_result_from_sparql(result, self.blank_scope())?)
     }
 
     /// Run a SELECT query and return typed rows.
@@ -1267,7 +1302,7 @@ impl QueryEngine {
         base: Option<String>,
     ) -> Result<SelectResult, JsValue> {
         let result = self.run_query(dataset, sparql, base.as_deref())?;
-        Ok(select_result_from_sparql(result)?)
+        Ok(select_result_from_sparql(result, self.blank_scope())?)
     }
 
     /// Run an ASK query and return the boolean result.
@@ -1462,7 +1497,9 @@ impl QueryEngine {
         input.aggregate_namespace = aggregate_namespace;
         input.ceilings = args;
         match input.run_offline(args.stop_watch(cancel.as_ref()))? {
-            JobOutcome::Governed(outcome) => Ok(query_outcome_from_governed(*outcome)?),
+            JobOutcome::Governed(outcome) => {
+                Ok(query_outcome_from_governed(*outcome, self.blank_scope())?)
+            }
             other => Err(unexpected_outcome("queryGoverned", &other)),
         }
     }
@@ -1551,7 +1588,10 @@ impl QueryEngine {
         input.aggregate_namespace = aggregate_namespace;
         input.ceilings = args;
         match input.run_offline(args.stop_watch(cancel.as_ref()))? {
-            JobOutcome::Entailment(outcome) => Ok(entailment_query_outcome_from_native(*outcome)?),
+            JobOutcome::Entailment(outcome) => Ok(entailment_query_outcome_from_native(
+                *outcome,
+                self.blank_scope(),
+            )?),
             other => Err(unexpected_outcome("queryEntailmentGoverned", &other)),
         }
     }
@@ -1687,6 +1727,11 @@ impl QueryEngine {
 }
 
 impl QueryEngine {
+    /// The blank-scope mode a typed result of this engine is converted under.
+    pub(crate) fn blank_scope(&self) -> BlankScopeMode {
+        self.blank_scope.get()
+    }
+
     /// The shared engine, for an asynchronous job to hold for its own lifetime.
     pub(crate) const fn engine(&self) -> &Rc<NativeSparqlEngine> {
         &self.inner
@@ -1829,13 +1874,20 @@ pub(crate) fn aggregate_env_message(
     .map_err(|e| format!("extension environment: {e}"))
 }
 
-pub(crate) fn query_result_from_sparql(result: SparqlResult) -> Result<QueryResult, JsError> {
+pub(crate) fn query_result_from_sparql(
+    result: SparqlResult,
+    blank_scope: BlankScopeMode,
+) -> Result<QueryResult, JsError> {
     Ok(match result {
         SparqlResult::Solutions {
             variables, rows, ..
         } => QueryResult {
             kind: QueryResultKind::Select,
-            value: Some(QueryResultValue::Select(select_result(variables, rows)?)),
+            value: Some(QueryResultValue::Select(select_result(
+                variables,
+                rows,
+                blank_scope,
+            )?)),
         },
         SparqlResult::Boolean(value) => QueryResult {
             kind: QueryResultKind::Ask,
@@ -1850,11 +1902,14 @@ pub(crate) fn query_result_from_sparql(result: SparqlResult) -> Result<QueryResu
     })
 }
 
-fn select_result_from_sparql(result: SparqlResult) -> Result<SelectResult, JsError> {
+fn select_result_from_sparql(
+    result: SparqlResult,
+    blank_scope: BlankScopeMode,
+) -> Result<SelectResult, JsError> {
     match result {
         SparqlResult::Solutions {
             variables, rows, ..
-        } => select_result(variables, rows),
+        } => select_result(variables, rows, blank_scope),
         other => Err(kind_mismatch("SELECT solutions", &other)),
     }
 }
@@ -1872,12 +1927,13 @@ fn graph_result_from_sparql(result: SparqlResult) -> Result<Dataset, JsError> {
 /// `Result` is the whole point of the type.
 pub(crate) fn query_outcome_from_governed(
     outcome: GovernedOutcome,
+    blank_scope: BlankScopeMode,
 ) -> Result<QueryOutcome, JsError> {
     match outcome {
         GovernedOutcome::Complete {
             result, evidence, ..
         } => Ok(QueryOutcome {
-            result: Some(query_result_from_sparql(result)?),
+            result: Some(query_result_from_sparql(result, blank_scope)?),
             partial: None,
             tripped: None,
             evidence: Some(GovernorEvidence { inner: evidence }),
@@ -1890,7 +1946,7 @@ pub(crate) fn query_outcome_from_governed(
             ..
         }) => Ok(QueryOutcome {
             result: None,
-            partial: Some(partial_answers_from_native(partial)?),
+            partial: Some(partial_answers_from_native(partial, blank_scope)?),
             tripped: Some(TrippedGovernor { inner: tripped }),
             evidence: Some(GovernorEvidence { inner: evidence }),
             complete: false,
@@ -1900,13 +1956,14 @@ pub(crate) fn query_outcome_from_governed(
 
 pub(crate) fn entailment_query_outcome_from_native(
     outcome: GovernedEntailment,
+    blank_scope: BlankScopeMode,
 ) -> Result<EntailmentQueryOutcome, JsError> {
     match outcome {
         GovernedEntailment::Answered { outcome, report } => {
             let tripped = outcome.tripped().map(|inner| TrippedGovernor { inner });
             Ok(EntailmentQueryOutcome {
                 complete: tripped.is_none(),
-                outcome: Some(query_outcome_from_governed(outcome)?),
+                outcome: Some(query_outcome_from_governed(outcome, blank_scope)?),
                 report: Some(purrdf_validate::render_reasoning_report(&report)),
                 tripped,
                 closure_stopped: false,
@@ -1935,7 +1992,10 @@ pub(crate) fn update_outcome_from_governed(outcome: &GovernedUpdateOutcome) -> U
 }
 
 /// Convert the evaluator's certificate into the JS-facing [`PartialAnswers`] object.
-fn partial_answers_from_native(partial: PartialValue) -> Result<PartialAnswers, JsError> {
+fn partial_answers_from_native(
+    partial: PartialValue,
+    blank_scope: BlankScopeMode,
+) -> Result<PartialAnswers, JsError> {
     let certainty = match partial {
         PartialValue::Certain(_) => "certain",
         PartialValue::AtMost(_) => "at-most",
@@ -1948,7 +2008,7 @@ fn partial_answers_from_native(partial: PartialValue) -> Result<PartialAnswers, 
         Some(rows) => {
             let positional_prefix = rows.is_positional_prefix();
             (
-                Some(query_result_from_sparql(rows.into_result())?),
+                Some(query_result_from_sparql(rows.into_result(), blank_scope)?),
                 Some(positional_prefix),
             )
         }
@@ -1965,11 +2025,12 @@ fn partial_answers_from_native(partial: PartialValue) -> Result<PartialAnswers, 
 fn select_result(
     variables: Vec<String>,
     rows: Vec<Vec<Option<purrdf::TermValue>>>,
+    blank_scope: BlankScopeMode,
 ) -> Result<SelectResult, JsError> {
     let variables: Rc<[String]> = Rc::from(variables.into_boxed_slice());
     let rows: Vec<Option<SelectRow>> = rows
         .into_iter()
-        .map(|row| select_row(Rc::clone(&variables), row).map(Some))
+        .map(|row| select_row(Rc::clone(&variables), row, blank_scope).map(Some))
         .collect::<Result<Vec<_>, _>>()?;
     let remaining = rows.len();
     Ok(SelectResult {
@@ -1983,12 +2044,13 @@ fn select_result(
 fn select_row(
     variables: Rc<[String]>,
     row: Vec<Option<purrdf::TermValue>>,
+    blank_scope: BlankScopeMode,
 ) -> Result<SelectRow, JsError> {
     let values = row
         .into_iter()
         .map(|value| {
             value
-                .map(term_from_value)
+                .map(|value| term_from_value(value, blank_scope))
                 .transpose()
                 .map_err(|e| JsError::new(&e))
         })
@@ -1996,8 +2058,8 @@ fn select_row(
     Ok(SelectRow { variables, values })
 }
 
-fn term_from_value(value: purrdf::TermValue) -> Result<Term, String> {
-    let term = term_value_into_rdf_term(value)?;
+fn term_from_value(value: purrdf::TermValue, blank_scope: BlankScopeMode) -> Result<Term, String> {
+    let term = term_value_into_rdf_term(value, blank_scope)?;
     Ok(Term::from_canonical_rdf_term(term))
 }
 
@@ -2197,7 +2259,8 @@ mod tests {
             vec![Some(purrdf::TermValue::Iri("https://e/a".to_owned()))],
             vec![Some(purrdf::TermValue::Iri("https://e/b".to_owned()))],
         ];
-        let mut result = select_result(vec!["value".to_owned()], rows).expect("select result");
+        let mut result = select_result(vec!["value".to_owned()], rows, BlankScopeMode::Keep)
+            .expect("select result");
 
         assert_eq!(result.row_count(), 2);
         assert_eq!(result.remaining(), 2);
@@ -2215,6 +2278,84 @@ mod tests {
         assert!(Rc::ptr_eq(&result.variables, &first.variables));
         assert_eq!(result.remaining(), 0);
         assert!(result.next_row().is_none());
+    }
+
+    /// Two blank nodes that share the label `b` in different scopes: the engine's
+    /// values, as one row of a SELECT.
+    fn scoped_blank_row() -> Vec<Vec<Option<purrdf::TermValue>>> {
+        let blank = |scope| purrdf::TermValue::Blank {
+            label: "b".to_owned(),
+            scope: purrdf::BlankScope(scope),
+        };
+        vec![vec![Some(blank(1)), Some(blank(2)), Some(blank(0))]]
+    }
+
+    #[test]
+    fn blank_scope_keep_leaves_two_scoped_blanks_two_nodes_in_a_select_row() {
+        let mut result = select_result(
+            vec!["x".to_owned(), "y".to_owned(), "z".to_owned()],
+            scoped_blank_row(),
+            BlankScopeMode::Keep,
+        )
+        .expect("select result");
+        let row = result.take_row(0).expect("the row");
+        let (x, y, z) = (
+            row.get("x").expect("x"),
+            row.get("y").expect("y"),
+            row.get("z").expect("z"),
+        );
+        assert_ne!(x.value(), y.value(), "two scopes collapsed under keep");
+        assert!(!x.equals(&y));
+        // The unscoped blank keeps its bare label, distinct from both scoped ones.
+        assert_eq!(z.value(), "b");
+        assert_ne!(x.value(), z.value());
+    }
+
+    #[test]
+    fn blank_scope_merge_makes_them_one_node_and_a_neighbour_is_unchanged() {
+        let mut result = select_result(
+            vec!["x".to_owned(), "y".to_owned(), "z".to_owned()],
+            scoped_blank_row(),
+            BlankScopeMode::Merge,
+        )
+        .expect("select result");
+        let row = result.take_row(0).expect("the row");
+        let (x, y, z) = (
+            row.get("x").expect("x"),
+            row.get("y").expect("y"),
+            row.get("z").expect("z"),
+        );
+        assert_eq!(x.value(), "b");
+        assert!(x.equals(&y), "merge keeps the scopes apart");
+        assert!(x.equals(&z));
+        // A term that is not a blank node is unchanged by the mode.
+        let iri = select_result(
+            vec!["s".to_owned()],
+            vec![vec![Some(purrdf::TermValue::iri("https://e/s"))]],
+            BlankScopeMode::Merge,
+        )
+        .expect("select result")
+        .take_row(0)
+        .expect("the row")
+        .get("s")
+        .expect("s");
+        assert_eq!(iri.value(), "https://e/s");
+    }
+
+    #[test]
+    fn an_engine_holds_keep_until_told_otherwise() {
+        let engine = QueryEngine::new();
+        assert_eq!(engine.blank_scope(), BlankScopeMode::Keep);
+        assert_eq!(engine.blank_scope_name(), "keep");
+        engine
+            .set_blank_scope("merge".to_owned())
+            .expect("merge is a mode");
+        assert_eq!(engine.blank_scope(), BlankScopeMode::Merge);
+        assert_eq!(engine.blank_scope_name(), "merge");
+        engine
+            .set_blank_scope("keep".to_owned())
+            .expect("keep is a mode");
+        assert_eq!(engine.blank_scope(), BlankScopeMode::Keep);
     }
 
     /// A quad-template `CONSTRUCT` hands JS the graph names, and they survive

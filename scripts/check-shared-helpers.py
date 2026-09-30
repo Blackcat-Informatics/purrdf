@@ -861,12 +861,15 @@ def lex_rule_fixture_cases() -> list[tuple[str, bool]]:
 
 
 # A seeded workspace for the three structural rules (`reifier-quad-new`,
-# `default-hasher-new`, `rdf-list-walk`), run through the real census: every line
+# `default-hasher-new`, `rdf-list-walk`) and the two wasm host-import rules
+# (`wasm-import-date-now`, `wasm-import-reflect-get`), run through the real census: every line
 # marked for a job must be reported and nothing else. Beside each refusal sits a
 # valid neighbour: a plain `RdfQuad::new` row, `FixedState`, a walk that calls
 # the home's `walk_rdf_list`, a one-shot read, the home's own `DatasetView` walk,
 # and test code (except `DefaultHasher`, which the rule reads in `src` test
-# modules too).
+# modules too, and the host imports, which the rules read in every file). The
+# host-import neighbours are the homes' own imports, an import of another
+# `Math`/`Reflect`/`Date` function, and a call of the home's function.
 STRUCTURE_FIXTURE_LEDGER = """
 [[job]]
 id = "reifier-rows"
@@ -918,6 +921,40 @@ enforced = true
 constants = []
 fingerprints = ["rule:rdf-list-walk"]
 names = []
+
+[[job]]
+id = "wasm-host-clock"
+summary = "s"
+home = "purrdf_sparql_eval::wasm_host::date_now"
+entry_points = []
+spec = "s"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:wasm-import-date-now"]
+names = []
+
+[[job]]
+id = "wasm-host-reflect-get"
+summary = "s"
+home = "purrdf_wasm::host::reflect_get"
+entry_points = []
+spec = "s"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:wasm-import-reflect-get"]
+names = []
 """
 
 STRUCTURE_FIXTURE_FILES = {
@@ -928,6 +965,18 @@ STRUCTURE_FIXTURE_FILES = {
         "/// The one list reader.\n"
         "pub trait DatasetView { fn rdf_list(&self) { loop { let _ = (RDF_FIRST, RDF_REST); } } }\n"
         "/// The one strict walker.\npub fn walk_rdf_list() {}\n"
+    ),
+    "crates/sparql-eval/Cargo.toml": '[package]\nname = "purrdf-sparql-eval"\n',
+    "crates/sparql-eval/src/lib.rs": "pub mod wasm_host;\n",
+    "crates/sparql-eval/src/wasm_host.rs": (
+        '#[wasm_bindgen] extern "C" { #[wasm_bindgen(js_namespace = Date, js_name = now)] fn date_now_import() -> f64; }\n'
+        "/// The one clock import.\npub fn date_now() -> f64 { date_now_import() }\n"
+    ),
+    "crates/rdf-wasm/Cargo.toml": '[package]\nname = "purrdf-wasm"\n',
+    "crates/rdf-wasm/src/lib.rs": "pub mod host;\n",
+    "crates/rdf-wasm/src/host.rs": (
+        '#[wasm_bindgen] extern "C" { #[wasm_bindgen(catch, js_namespace = Reflect, js_name = get)] fn reflect_get_import(t: &V, k: &str) -> R; }\n'
+        "/// The one Reflect.get import.\npub fn reflect_get(t: &V, k: &str) -> R { reflect_get_import(t, k) }\n"
     ),
     "crates/user/Cargo.toml": '[package]\nname = "fixture-user"\n',
     "crates/user/src/lib.rs": (
@@ -941,6 +990,10 @@ STRUCTURE_FIXTURE_FILES = {
         "pub fn shared(g: &G, n: u32) { let _ = walk_rdf_list(n, |c| g.object(c, RDF_FIRST), |c| g.object(c, RDF_REST)); for _ in 0..2 {} }\n"
         "pub fn once(g: &G, n: u32) { let _ = (g.object(n, RDF_FIRST), g.object(n, RDF_REST)); }\n"
         "pub fn interned(i: &mut I) { for _ in 0..2 {} let _ = (i.intern(RDF_FIRST), i.intern(RDF_REST)); }\n"
+        '#[wasm_bindgen] extern "C" { #[wasm_bindgen(js_namespace = Date, js_name = now)] fn clock() -> f64; } // CLOCK\n'
+        '#[wasm_bindgen] extern "C" { #[wasm_bindgen(catch, js_namespace = Reflect, js_name = get)] fn get(t: &V, k: &str) -> R; } // REFLECT\n'
+        '#[wasm_bindgen] extern "C" { #[wasm_bindgen(js_namespace = Math, js_name = random)] fn random() -> f64; #[wasm_bindgen(js_namespace = Reflect, js_name = has)] fn has(t: &V, k: &str) -> bool; #[wasm_bindgen(js_namespace = Date, js_name = parse)] fn parse(s: &str) -> f64; }\n'
+        "pub fn shared_clock() -> f64 { purrdf_sparql_eval::wasm_host::date_now() }\n"
         "#[cfg(test)]\n"
         "mod tests {\n"
         "    fn traps(s: T, t: U) { let _ = RdfQuad::new(s, RDF_REIFIES, RdfTerm::triple(t)); }\n"
@@ -951,6 +1004,7 @@ STRUCTURE_FIXTURE_FILES = {
     "crates/user/tests/it.rs": (
         "#[test]\n"
         "fn pins(s: T, t: U) { let _ = RdfQuad::new(s, RDF_REIFIES, RdfTerm::triple(t)); let _ = DefaultHasher::new(); loop { let _ = (RDF_FIRST, RDF_REST); } }\n"
+        '#[wasm_bindgen] extern "C" { #[wasm_bindgen(js_namespace = Date, js_name = now)] fn test_clock() -> f64; } // CLOCK\n'
     ),
 }
 
@@ -958,7 +1012,13 @@ STRUCTURE_FIXTURE_FILES = {
 def structure_rule_fixture_cases() -> list[tuple[str, bool]]:
     """Run the census over the seeded structural workspace and compare each
     job's hits with the lines marked for it."""
-    markers = {"reifier-rows": "// REIFIER", "fixed-hasher-everywhere": "// HASHER", "rdf-collection": "// LIST"}
+    markers = {
+        "reifier-rows": "// REIFIER",
+        "fixed-hasher-everywhere": "// HASHER",
+        "rdf-collection": "// LIST",
+        "wasm-host-clock": "// CLOCK",
+        "wasm-host-reflect-get": "// REFLECT",
+    }
     with tempfile.TemporaryDirectory(prefix="helper-census-structure-fixture-") as directory:
         root = Path(directory)
         expected: dict[str, set[tuple[str, int]]] = {job: set() for job in markers}
@@ -981,7 +1041,10 @@ def structure_rule_fixture_cases() -> list[tuple[str, bool]]:
         copies = {(match["file"], match["line"]) for match in found["matches"] if not match["in_home"]}
         cases.append((f"every seeded {job} spelling is reported", lines <= copies))
         cases.append(
-            (f"the {job} neighbours (the home's own walk, the shared entry point, tests) are not reported", copies <= lines)
+            (
+                f"the {job} neighbours (the home's own walk or import, the shared entry point, other imports) are not reported",
+                copies <= lines,
+            )
         )
         cases.append((f"each {job} hit is a copy of the enforced job", found["copies"] == len(lines)))
     return cases

@@ -209,6 +209,10 @@ ownership, and all limits. Complete examples are in
   `CONSTRUCT` as an empty document. Naming a single-graph syntax for such a result
   throws, listing the graphs and the quad-capable alternatives, rather than returning
   bytes that omit exactly what the query asked for.
+- `QueryEngine.blankScope` — how a blank node's scope crosses to JS in the engine's typed
+  results: `"keep"` (the default) hands a scoped blank over as its scope envelope, so two
+  blank nodes that share a label in different scopes stay two nodes; `"merge"` drops the
+  scope, so they are one node (lossy by declaration). Any other value throws.
 - `QueryEngine.queryGoverned(dataset, sparql, options?)` /
   `updateGoverned(dataset, sparql, options?)` — the same evaluator under caller-supplied
   execution governors: `fuel`, `deadlineMs`, `maxAnswers`, `maxIntermediateCells`,

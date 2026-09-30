@@ -247,7 +247,9 @@ use wasm_bindgen::convert::TryFromJsValue;
 use wasm_bindgen::prelude::*;
 
 use crate::codec::resolve_media_type;
+use crate::convert::BlankScopeMode;
 use crate::dataset::{Dataset, UpdateClaim};
+use crate::host::reflect_get;
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::operation::{
     ClosureInputs, JobError, JobOutcome, JobRun, OPTIONS_CODE, OperationInput, SHACL_REFUSAL_CODE,
@@ -407,7 +409,7 @@ fn run_job(id: u32) -> RunStatus {
 /// remaining budget are read from.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn now_ms() -> f64 {
-    date_now_import()
+    purrdf_sparql_eval::wasm_host::date_now()
 }
 
 /// Milliseconds since the Unix epoch — the host clock the evidence and the deadline's
@@ -2363,6 +2365,9 @@ struct JobInner {
     /// The identity of the host's `resolveService` handler, when it supplied one.
     service_handler: Option<u32>,
     load_handler: bool,
+    /// How the typed results this job hands out convert a blank node's scope: the mode
+    /// of the engine that began it, at the moment it began.
+    blank_scope: BlankScopeMode,
     catalog: Option<NativeServiceCatalog>,
     local_services: Vec<(String, Arc<RdfDataset>)>,
     dataset_id: u64,
@@ -3008,7 +3013,7 @@ impl AsyncJob {
                 return Err(kind_mismatch(expected, &result).into());
             }
         }
-        Ok(query_result_from_sparql(result)?)
+        Ok(query_result_from_sparql(result, self.inner.blank_scope)?)
     }
 
     /// A raw job's serialized bytes, an explain job's rendered ledger, or a SHACL job's
@@ -3033,7 +3038,10 @@ impl AsyncJob {
     #[wasm_bindgen(js_name = takeQueryOutcome)]
     pub fn take_query_outcome(&self) -> Result<QueryOutcome, JsValue> {
         match self.take("takeQueryOutcome", &[AsyncOperationKind::Governed])? {
-            JobOutcome::Governed(outcome) => Ok(query_outcome_from_governed(*outcome)?),
+            JobOutcome::Governed(outcome) => Ok(query_outcome_from_governed(
+                *outcome,
+                self.inner.blank_scope,
+            )?),
             _ => Err(usage_error(
                 "takeQueryOutcome: the job holds no governed outcome",
             )),
@@ -3044,7 +3052,10 @@ impl AsyncJob {
     #[wasm_bindgen(js_name = takeNegotiatedOutcome)]
     pub fn take_negotiated_outcome(&self) -> Result<NegotiatedOutcome, JsValue> {
         match self.take("takeNegotiatedOutcome", &[AsyncOperationKind::Negotiated])? {
-            JobOutcome::Negotiated(value) => Ok(negotiated_outcome_from_value(*value)?),
+            JobOutcome::Negotiated(value) => Ok(negotiated_outcome_from_value(
+                *value,
+                self.inner.blank_scope,
+            )?),
             _ => Err(usage_error(
                 "takeNegotiatedOutcome: the job holds no negotiated outcome",
             )),
@@ -3058,7 +3069,10 @@ impl AsyncJob {
             "takeEntailmentOutcome",
             &[AsyncOperationKind::EntailmentGoverned],
         )? {
-            JobOutcome::Entailment(outcome) => Ok(entailment_query_outcome_from_native(*outcome)?),
+            JobOutcome::Entailment(outcome) => Ok(entailment_query_outcome_from_native(
+                *outcome,
+                self.inner.blank_scope,
+            )?),
             _ => Err(usage_error(
                 "takeEntailmentOutcome: the job holds no entailment outcome",
             )),
@@ -3542,9 +3556,6 @@ extern "C" {
 
     #[wasm_bindgen(js_namespace = Array, js_name = isArray)]
     fn is_array(value: &JsValue) -> bool;
-
-    #[wasm_bindgen(js_namespace = Reflect, js_name = get, catch)]
-    fn reflect_get(target: &JsValue, key: &str) -> Result<JsValue, JsValue>;
 
     /// `ServiceCatalog#copy`, called on whatever was passed as the catalog.
     #[wasm_bindgen(method, catch, js_name = copy)]
@@ -4234,6 +4245,7 @@ fn begin_job(
     kind: AsyncOperationKind,
     sparql: String,
     options: &AsyncJobOptions,
+    blank_scope: BlankScopeMode,
     jsonld: Option<JsonLdSerializeOptions>,
 ) -> Result<AsyncJob, JobError> {
     options
@@ -4284,6 +4296,7 @@ fn begin_job(
         kind,
         sparql_operation(input),
         options,
+        blank_scope,
         freeze_ms,
         (dataset.identity(), dataset.current_generation()),
         update_claim,
@@ -4321,6 +4334,7 @@ fn register_operation(
     kind: AsyncOperationKind,
     operation: Operation,
     options: &AsyncJobOptions,
+    blank_scope: BlankScopeMode,
     freeze_ms: f64,
     dataset: (u64, u64),
     update_claim: Option<UpdateClaim>,
@@ -4341,6 +4355,7 @@ fn register_operation(
             operation: RefCell::new(Some(operation)),
             service_handler: options.service_handler,
             load_handler: options.load_handler,
+            blank_scope,
             catalog: options.catalog.clone(),
             local_services: options.local_services.clone(),
             dataset_id: dataset.0,
@@ -4367,6 +4382,7 @@ fn begin_shacl_job(request: ShaclRequest, options: &AsyncJobOptions) -> Result<A
         AsyncOperationKind::Shacl,
         Box::new(move |run| execute_shacl(request, run)),
         options,
+        BlankScopeMode::Keep,
         0.0,
         (0, 0),
         None,
@@ -4444,8 +4460,16 @@ impl QueryEngine {
             (AsyncOperationKind::Raw, Some(json)) => Some(decode_options(json)?),
             _ => None,
         };
-        begin_job(self.engine(), dataset, kind, sparql, options, jsonld)
-            .map_err(|error| begin_refused(&error))
+        begin_job(
+            self.engine(),
+            dataset,
+            kind,
+            sparql,
+            options,
+            self.blank_scope(),
+            jsonld,
+        )
+        .map_err(|error| begin_refused(&error))
     }
 
     /// Start a `rawWithContext` operation: a CONSTRUCT/DESCRIBE serialized under a
@@ -4480,8 +4504,16 @@ impl QueryEngine {
                 begin_refused(&JobError::message(OPTIONS_CODE, error.to_string()))
             })?;
         }
-        begin_job(self.engine(), dataset, kind, sparql, options, Some(jsonld))
-            .map_err(|error| begin_refused(&error))
+        begin_job(
+            self.engine(),
+            dataset,
+            kind,
+            sparql,
+            options,
+            self.blank_scope(),
+            Some(jsonld),
+        )
+        .map_err(|error| begin_refused(&error))
     }
 }
 
@@ -4636,6 +4668,7 @@ mod tests {
             kind,
             sparql.to_owned(),
             &options,
+            engine.blank_scope(),
             None,
         )
         .expect("the job begins")
@@ -7019,6 +7052,7 @@ mod tests {
             AsyncOperationKind::UpdateGoverned,
             INSERT.to_owned(),
             &validated,
+            engine.blank_scope(),
             None,
         )
         .expect_err("an update is in flight");
@@ -7515,11 +7549,4 @@ mod tests {
         );
         assert!(options().validate(AsyncOperationKind::Shacl).is_ok());
     }
-}
-
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen::prelude::wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen::prelude::wasm_bindgen(js_namespace = Date, js_name = now)]
-    fn date_now_import() -> f64;
 }

@@ -26,6 +26,7 @@ import {
   type ProjectionLossLedger,
   type ProjectionPackage,
   QueryEngine,
+  type BlankScopeMode,
   governorDimensions,
   provenanceFromJson,
   type ProvenanceInfo,
@@ -187,6 +188,8 @@ const visualSvg: VisualSvgDocument = matched.visualSvg({
 });
 const queryJson: string = matched.query("ASK { ?s ?p ?o }");
 const engine = new QueryEngine();
+const blankScope: BlankScopeMode = engine.blankScope;
+engine.blankScope = "merge";
 const select: SelectResult = engine.select(matched, "SELECT ?s WHERE { ?s ?p ?o }");
 const maybeTerm: RdfTerm | undefined = select.rows.take(0)?.s;
 const ask: boolean = engine.ask(matched, "ASK { ?s ?p ?o }");

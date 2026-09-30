@@ -519,12 +519,12 @@ fn ungoverned_query(
 
 /// The aggregate environment a governed operation's `aggregateNamespace` requests.
 fn governed_env(
-    aggregate_namespace: Option<String>,
+    aggregate_namespace: Option<&str>,
 ) -> Result<purrdf_sparql_eval::ExtensionEnv, JobError> {
     // The ENTIRE wasm surface for the first-party statistical aggregate set: one
     // namespace string crosses the boundary, with no callback and no per-aggregate
     // marshaling; the general custom-aggregate seam is Rust-host-only.
-    let aggregates = purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
+    let aggregates = purrdf_validate::query::statistical_aggregates(aggregate_namespace);
     aggregate_env_message(aggregates.as_ref())
         .map_err(|message| JobError::message(EXTENSION_CODE, message))
 }
@@ -572,7 +572,7 @@ impl OperationInput<'_> {
                 })?))
             }
             AsyncOperationKind::Governed => {
-                let env = governed_env(aggregate_namespace)?;
+                let env = governed_env(aggregate_namespace.as_deref())?;
                 let governors = run.governors(
                     ceilings
                         .ceilings()
@@ -587,7 +587,7 @@ impl OperationInput<'_> {
                 Ok(JobOutcome::Governed(Box::new(outcome)))
             }
             AsyncOperationKind::Negotiated => {
-                let env = governed_env(aggregate_namespace)?;
+                let env = governed_env(aggregate_namespace.as_deref())?;
                 let governors = run.governors(
                     ceilings
                         .ceilings()
@@ -639,7 +639,7 @@ impl OperationInput<'_> {
                 .map_err(|message| JobError::message(ENTAILMENT_CODE, message))?;
                 let limits =
                     crate::entail::wasm_limits(closure.max_stored_facts, closure.max_join_steps);
-                let env = governed_env(aggregate_namespace)?;
+                let env = governed_env(aggregate_namespace.as_deref())?;
                 let governors = run.governors(
                     ceilings
                         .ceilings()
@@ -744,7 +744,7 @@ impl OperationInput<'_> {
                 crate::async_query::SHACL_STARTS_ELSEWHERE,
             )),
             AsyncOperationKind::UpdateGoverned => {
-                let env = governed_env(aggregate_namespace)?;
+                let env = governed_env(aggregate_namespace.as_deref())?;
                 let governors = run.governors(
                     ceilings
                         .update_ceilings()

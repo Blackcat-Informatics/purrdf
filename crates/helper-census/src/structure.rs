@@ -21,6 +21,14 @@
 //!   whose policy argument names the contract. Code inside an `impl` of, or the
 //!   definition of, `DatasetView` is the home and is not reported.
 //!
+//! * `wasm-import-date-now` and `wasm-import-reflect-get`: a `#[wasm_bindgen]`
+//!   `extern` block that imports `Date.now` or `Reflect.get`. Each host import is
+//!   declared once, in the lowest crate every user reaches
+//!   (`purrdf_sparql_eval::wasm_host` for the clock, `purrdf_wasm::host` for
+//!   `Reflect.get`), so a second declaration in another crate, or another file of
+//!   the home crate, is a copy. Read in every file, tests and fixtures included:
+//!   an import in test code is an import.
+//!
 //! The first and third read shipping code only, as the lexical rules do: an item
 //! under `#[test]` or a `#[cfg]` that needs `cfg(test)`, and every file under a
 //! `tests`, `benches` or `examples` directory, may spell the pattern.
@@ -36,14 +44,27 @@ pub(crate) const DEFAULT_HASHER_NEW: &str = "rule:default-hasher-new";
 /// `rule:rdf-list-walk`.
 pub(crate) const RDF_LIST_WALK: &str = "rule:rdf-list-walk";
 
+/// `rule:wasm-import-date-now`.
+pub(crate) const WASM_IMPORT_DATE_NOW: &str = "rule:wasm-import-date-now";
+/// `rule:wasm-import-reflect-get`.
+pub(crate) const WASM_IMPORT_REFLECT_GET: &str = "rule:wasm-import-reflect-get";
+
 /// Every rule this module computes.
-pub(crate) const RULES: [&str; 3] = [REIFIER_QUAD_NEW, DEFAULT_HASHER_NEW, RDF_LIST_WALK];
+pub(crate) const RULES: [&str; 5] = [
+    REIFIER_QUAD_NEW,
+    DEFAULT_HASHER_NEW,
+    RDF_LIST_WALK,
+    WASM_IMPORT_DATE_NOW,
+    WASM_IMPORT_REFLECT_GET,
+];
 
 const REIFIER_DETAIL: &str = "an `RdfQuad::new` reifier row is built in the default graph and drops the reifier's \
      graph; build reifier and annotation rows through purrdf_rdf::flat_rdf_quads (which keeps \
      `reifier.graph`), clearing `graph_name` afterwards if the graph must be flattened";
 const HASHER_DETAIL: &str = "`std`'s `DefaultHasher` is an unspecified algorithm; hash through purrdf_hash \
      (`fnv`, `mix`, or a `Domain`-keyed digest)";
+const HOST_IMPORT_DETAIL: &str = "a second wasm host import of `Date.now` or `Reflect.get`; call the one home's \
+     function (`purrdf_sparql_eval::wasm_host::date_now`, `purrdf_wasm::host::reflect_get`)";
 const LIST_DETAIL: &str = "a hand-rolled `rdf:first`/`rdf:rest` walk; walk lists through \
      `DatasetView::rdf_list_with`, whose policy names the malformed-list contract";
 
@@ -427,6 +448,7 @@ fn is_src_file(file: &str) -> bool {
 /// parsed file.
 pub(crate) fn structure_rules(package: &str, file: &str, parsed: &syn::File) -> Vec<RuleHit> {
     let test_file = crate::rules::is_test_file(file);
+    let mut hits = host_import_hits(package, file, parsed);
     let mut visitor = Structure {
         package,
         file,
@@ -440,7 +462,116 @@ pub(crate) fn structure_rules(package: &str, file: &str, parsed: &syn::File) -> 
         hits: Vec::new(),
     };
     visitor.visit_file(parsed);
-    visitor.hits
+    hits.append(&mut visitor.hits);
+    hits
+}
+
+/// The file that is the one home of the host import a `wasm-import-*` rule names.
+const fn host_import_home(rule: &str) -> &'static str {
+    match rule.as_bytes() {
+        b"rule:wasm-import-date-now" => "crates/sparql-eval/src/wasm_host.rs",
+        _ => "crates/rdf-wasm/src/host.rs",
+    }
+}
+
+/// The `(js_namespace, js_name)` a `#[wasm_bindgen(..)]` import declares, the name
+/// defaulting to the Rust function's own.
+fn wasm_import_target(function: &syn::ForeignItemFn) -> Option<(String, String)> {
+    let mut namespace = None;
+    let mut name = None;
+    for attribute in &function.attrs {
+        // `#[wasm_bindgen(..)]` however the macro is spelled: imported, or a full path.
+        if attribute
+            .path()
+            .segments
+            .last()
+            .is_none_or(|segment| segment.ident != "wasm_bindgen")
+        {
+            continue;
+        }
+        let _ = attribute.parse_nested_meta(|meta| {
+            let key = meta.path.get_ident().map(ToString::to_string);
+            if meta.input.peek(syn::Token![=]) {
+                let value: syn::Expr = meta.value()?.parse()?;
+                let text = match &value {
+                    syn::Expr::Path(path) => path.path.get_ident().map(ToString::to_string),
+                    syn::Expr::Lit(literal) => match &literal.lit {
+                        syn::Lit::Str(text) => Some(text.value()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                match key.as_deref() {
+                    Some("js_namespace") => namespace = text,
+                    Some("js_name") => name = text,
+                    _ => {}
+                }
+            }
+            Ok(())
+        });
+    }
+    Some((
+        namespace?,
+        name.unwrap_or_else(|| function.sig.ident.to_string()),
+    ))
+}
+
+/// Every `Date.now` and `Reflect.get` host import a file declares.
+fn host_import_hits(package: &str, file: &str, parsed: &syn::File) -> Vec<RuleHit> {
+    struct Imports<'a> {
+        package: &'a str,
+        file: &'a str,
+        /// The modules and functions enclosing the current node: a hit is placed in the
+        /// innermost, which is the item a ledger variant names.
+        modules: Vec<String>,
+        hits: Vec<RuleHit>,
+    }
+    impl<'ast> Visit<'ast> for Imports<'_> {
+        fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
+            self.modules.push(node.ident.to_string());
+            syn::visit::visit_item_mod(self, node);
+            self.modules.pop();
+        }
+
+        fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+            self.modules.push(node.sig.ident.to_string());
+            syn::visit::visit_item_fn(self, node);
+            self.modules.pop();
+        }
+
+        fn visit_item_foreign_mod(&mut self, node: &'ast syn::ItemForeignMod) {
+            for item in &node.items {
+                let syn::ForeignItem::Fn(function) = item else {
+                    continue;
+                };
+                let rule = match wasm_import_target(function)
+                    .as_ref()
+                    .map(|(n, m)| (n.as_str(), m.as_str()))
+                {
+                    Some(("Date", "now")) => WASM_IMPORT_DATE_NOW,
+                    Some(("Reflect", "get")) => WASM_IMPORT_REFLECT_GET,
+                    _ => continue,
+                };
+                self.hits.push(RuleHit {
+                    rule,
+                    package: self.package.to_owned(),
+                    file: self.file.to_owned(),
+                    line: function.sig.ident.span().start().line,
+                    symbol: crate::rules::scoped_symbol(self.file, &self.modules),
+                    detail: HOST_IMPORT_DETAIL.to_owned(),
+                    home_exempt: self.file == host_import_home(rule),
+                });
+            }
+        }
+    }
+    let mut imports = Imports {
+        package,
+        file,
+        modules: Vec::new(),
+        hits: Vec::new(),
+    };
+    imports.visit_file(parsed);
+    imports.hits
 }
 
 #[cfg(test)]
@@ -487,6 +618,39 @@ fn h() { let _ = FixedState::default(); }
             ]
         );
         assert_eq!(found("crates/p/tests/it.rs", source), Vec::new());
+    }
+
+    #[test]
+    fn a_second_date_now_or_reflect_get_import_is_a_hit_and_a_neighbour_is_not() {
+        let source = "\
+#[wasm_bindgen]
+extern \"C\" {
+    #[wasm_bindgen(js_namespace = Date, js_name = now)]
+    fn a() -> f64;
+    #[wasm_bindgen(catch, js_namespace = Reflect, js_name = get)]
+    fn b(t: &JsValue, k: &str) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(js_namespace = Date)]
+    fn now() -> f64;
+    #[wasm_bindgen(js_namespace = Math, js_name = random)]
+    fn c() -> f64;
+    #[wasm_bindgen::prelude::wasm_bindgen(js_namespace = Date, js_name = now)]
+    fn pathed() -> f64;
+    #[wasm_bindgen(js_namespace = Reflect, js_name = has)]
+    fn d(t: &JsValue, k: &str) -> bool;
+    #[wasm_bindgen(js_namespace = Date, js_name = parse)]
+    fn e(s: &str) -> f64;
+}
+fn now() -> f64 { 0.0 }
+";
+        assert_eq!(
+            found("crates/p/src/lib.rs", source),
+            vec![
+                (super::WASM_IMPORT_DATE_NOW, 4),
+                (super::WASM_IMPORT_REFLECT_GET, 6),
+                (super::WASM_IMPORT_DATE_NOW, 8),
+                (super::WASM_IMPORT_DATE_NOW, 12)
+            ]
+        );
     }
 
     #[test]

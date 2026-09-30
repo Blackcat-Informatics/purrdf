@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The two JavaScript host reads needed by SPARQL evaluation on wasm32.
+//! The two JavaScript host reads needed by SPARQL evaluation on wasm32, and the one home
+//! of the `Date.now` import for every crate that reaches this one (`purrdf-wasm` reads
+//! its job clock here). Hidden from the documented API: it is shared plumbing, not a
+//! surface. A second `Date.now` import elsewhere fails `check-shared-helpers.py`.
 //!
 //! Each call looks up the current global `Date.now` or `Math.random`. The wasm
 //! test runner temporarily replaces those globals inside its host seal, so a
@@ -20,12 +23,12 @@ extern "C" {
 
 /// Unix epoch milliseconds from the browser or Node host.
 #[inline]
-pub(crate) fn date_now() -> f64 {
+pub fn date_now() -> f64 {
     date_now_import()
 }
 
 /// One host pseudorandom draw in `[0, 1)`.
 #[inline]
-pub(crate) fn math_random() -> f64 {
+pub fn math_random() -> f64 {
     math_random_import()
 }

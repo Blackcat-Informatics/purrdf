@@ -993,8 +993,31 @@ export class Reasoner {
   free(): void;
 }
 
+/**
+ * How a blank node's scope crosses to JS in the typed results of a {@link QueryEngine}.
+ *
+ * The engine holds a blank node as a label and a scope, so two nodes that share a label
+ * in different scopes are two nodes. `"keep"` (the default) preserves that: a scoped
+ * blank crosses as its deterministic scope envelope, an unscoped blank keeps its bare
+ * label, and two blank nodes that share a label in different scopes stay two nodes in
+ * JS. `"merge"` drops the scope: every blank crosses as its bare label, so nodes that
+ * share a label in different scopes are ONE node in JS. `"merge"` is lossy by
+ * declaration, for a caller that wants the labels the data was written with.
+ */
+export type BlankScopeMode = "keep" | "merge";
+
 export class QueryEngine {
   constructor();
+  /**
+   * How a blank node's scope crosses to JS in the typed results this engine returns:
+   * see {@link BlankScopeMode}. It applies to `query`, `select`, `queryGoverned` and
+   * `queryEntailmentGoverned`, and a job started with a `…Async` twin takes the value in
+   * force when it begins. `queryRaw` serializations are unaffected. Assigning any other
+   * string throws, with the code `purrdf-wasm-options`, and leaves the mode unchanged.
+   *
+   * @defaultValue `"keep"`
+   */
+  blankScope: BlankScopeMode;
   query(dataset: Dataset, sparql: string, options?: QueryOptions | null): QueryResult;
   select(dataset: Dataset, sparql: string, options?: QueryOptions | null): SelectResult;
   ask(dataset: Dataset, sparql: string, options?: QueryOptions | null): boolean;

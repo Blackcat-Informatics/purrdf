@@ -93,6 +93,8 @@ mod convert;
 mod dataset;
 pub mod entail;
 mod factory;
+#[doc(hidden)]
+pub mod host;
 pub mod interleaving;
 mod jsonld;
 mod operation;
@@ -208,13 +210,10 @@ mod tests {
 extern "C" {
     #[wasm_bindgen(thread_local_v2, js_name = globalThis)]
     static GLOBAL_THIS: JsValue;
-
-    #[wasm_bindgen(catch, js_namespace = Reflect, js_name = get)]
-    fn global_property(target: &JsValue, name: &JsValue) -> Result<JsValue, JsValue>;
 }
 
 /// Read the current test flag; only the stable global object is cached.
 #[cfg(target_arch = "wasm32")]
 fn test_flag(name: &str) -> Result<JsValue, JsValue> {
-    GLOBAL_THIS.with(|global| global_property(global, &JsValue::from_str(name)))
+    GLOBAL_THIS.with(|global| host::reflect_get(global, name))
 }

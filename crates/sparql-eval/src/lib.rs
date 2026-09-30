@@ -133,7 +133,8 @@ pub mod protocol;
 pub mod remote;
 #[cfg(target_arch = "wasm32")]
 #[allow(unsafe_code, reason = "the expansion of #[wasm_bindgen] host imports")]
-mod wasm_host;
+#[doc(hidden)]
+pub mod wasm_host;
 // HTTP-shaped SERVICE source. The actual POST transport is host-injected so this
 // crate stays wasm-portable.
 pub mod remote_http;
