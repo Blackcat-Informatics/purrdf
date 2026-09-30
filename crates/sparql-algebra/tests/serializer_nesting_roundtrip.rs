@@ -18,8 +18,8 @@ mod patterns;
 use patterns::var;
 use purrdf_sparql_algebra::{
     ArithmeticOperator, Child, Expression, Function, GraphPattern, Literal, NamedNode,
-    NegatedPathElement, PropertyPathExpression, Query, SparqlParser, TermPattern,
-    pattern_to_select_query,
+    NegatedPathElement, ParserOptions, PropertyPathExpression, Query, SparqlParser, TermPattern,
+    pattern_to_select_query, pattern_to_select_query_with_options,
 };
 use purrdf_testkit::prop::prelude::*;
 
@@ -44,17 +44,20 @@ fn unproject(p: GraphPattern) -> GraphPattern {
 }
 
 /// Render `body` as the forwarded query, re-parse it, and assert the parser admits
-/// it and rebuilds exactly `body`. Returns the rendered text.
+/// it and rebuilds exactly `body`, in both registry-independent and compact modes.
+/// Returns the compact text for assertions about the grammar's own brackets.
 fn assert_forwarded_roundtrip(body: &GraphPattern) -> String {
-    let text = pattern_to_select_query(body);
-    let reparsed = try_select(&text)
-        .unwrap_or_else(|e| panic!("the forwarded text is refused: {e}\n text: {text}"));
-    assert_eq!(
-        &unproject(reparsed),
-        body,
-        "the forwarded text rebuilt a different tree\n text: {text}"
-    );
-    text
+    let compact = pattern_to_select_query_with_options(body, &ParserOptions::default());
+    for text in [pattern_to_select_query(body), compact.clone()] {
+        let reparsed = try_select(&text)
+            .unwrap_or_else(|e| panic!("the forwarded text is refused: {e}\n text: {text}"));
+        assert_eq!(
+            &unproject(reparsed),
+            body,
+            "the forwarded text rebuilt a different tree\n text: {text}"
+        );
+    }
+    compact
 }
 
 /// `parse(serialize(parse(q)))` for a whole query: returns the forwarded text.
@@ -72,12 +75,22 @@ fn rendered_filter(expr: &str) -> String {
     text[start..text.len() - ") }".len()].to_owned()
 }
 
-/// The path of `SELECT * WHERE { ?s PATH ?o }`'s rendering.
+/// A raw path expression's Display, retained beneath `+` so linear query patterns
+/// do not disappear during parsing. Both complete-query renderers also round-trip it.
 fn rendered_path(path: &str) -> String {
-    let text = assert_query_roundtrip(&format!("SELECT * WHERE {{ ?s {path} ?o }}"));
-    let start = text.find("?s ").expect("the subject is rendered") + "?s ".len();
-    let end = text.rfind(" ?o").expect("the object is rendered");
-    text[start..end].to_owned()
+    let body = unproject(
+        try_select(&format!("SELECT * WHERE {{ ?s ({path})+ ?o }}"))
+            .expect("a quantified path parses"),
+    );
+    assert_forwarded_roundtrip(&body);
+    let GraphPattern::Path {
+        path: PropertyPathExpression::OneOrMore(inner),
+        ..
+    } = body
+    else {
+        panic!("the quantifier retains its path expression");
+    };
+    inner.to_string()
 }
 
 // ── the named precedence cases ──────────────────────────────────────────────
@@ -250,9 +263,9 @@ fn a_ten_thousand_arm_union_round_trips_flat() {
     assert_eq!(text.matches(" UNION ").count(), 9_999);
 }
 
-/// A property-path chain is one node with one element per step, and forwards as the
-/// flat chain it was written as: 10 000-step sequences and alternatives, and a mixed
-/// chain of both with inverse, modified and negated steps, re-parse to the same node.
+/// A linear path forwards as flat triples, and an alternative as its flat chain.
+/// Ten thousand steps and a mixed chain of inverse, modified and negated steps
+/// re-parse to the same normalized algebra in both rendering modes.
 #[test]
 fn a_ten_thousand_step_path_round_trips_flat() {
     for op in ["/", "|"] {
@@ -266,7 +279,11 @@ fn a_ten_thousand_step_path_round_trips_flat() {
             0,
             "a flat {op} chain needs no bracket"
         );
-        assert_eq!(text.matches(&format!(">{op}<")).count(), 9_999);
+        if op == "/" {
+            assert_eq!(text.matches(" .").count(), 10_000);
+        } else {
+            assert_eq!(text.matches(&format!(">{op}<")).count(), 9_999);
+        }
     }
     let mixed = (0..2_000)
         .map(|i| match i % 5 {
@@ -688,21 +705,25 @@ prop_test! {
         assert_forwarded_roundtrip(&body);
     }
 
-    /// Every generated property path (a bare predicate is a triple, not a path, so it
-    /// is wrapped in `+`) is rendered into text that re-parses to the identical tree.
+    /// Every generated raw property-path expression, retained beneath `+`, is rendered
+    /// into text that re-parses to the identical expression tree in both modes.
     #[test]
     fn a_generated_property_path_round_trips(path in path_tree()) {
-        let path = match path {
-            PropertyPathExpression::NamedNode(_) => {
-                PropertyPathExpression::OneOrMore(Child::new(path))
-            }
-            other => other,
-        };
+        let path = PropertyPathExpression::OneOrMore(Child::new(path));
         let body = GraphPattern::Path {
             subject: TermPattern::Variable(var("s")),
             path,
             object: TermPattern::Variable(var("o")),
         };
+        assert_forwarded_roundtrip(&body);
+    }
+
+    /// Parsing normalizes each generated path pattern; the resulting BGP or retained
+    /// path is a fixed point of both complete-query serializers.
+    #[test]
+    fn a_generated_path_pattern_has_a_normalized_roundtrip(path in path_tree()) {
+        let text = format!("SELECT * WHERE {{ ?s {path} ?o }}");
+        let body = unproject(try_select(&text).expect("a generated path parses"));
         assert_forwarded_roundtrip(&body);
     }
 }

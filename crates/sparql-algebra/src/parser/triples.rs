@@ -21,10 +21,66 @@ use crate::ast::{
 use crate::error::{ParseError, Result};
 use crate::lexer::Token;
 use crate::tree::Child;
+use crate::worklist::WorkList;
 
 use super::{
-    BlockSink, Parser, RDF_FIRST, RDF_NIL, RDF_REST, RDF_TYPE, SubjectArgs, Verb, simple_predicate,
+    BlockSink, Parser, RDF_FIRST, RDF_NIL, RDF_REST, RDF_TYPE, SubjectArgs, TripleContext, Verb,
+    simple_predicate,
 };
+
+/// One predicate edge of a wholly linear path, oriented relative to its endpoints.
+#[derive(Clone, Copy)]
+struct PathEdge<'a> {
+    predicate: &'a NamedNode,
+    inverse: bool,
+}
+
+impl PathEdge<'_> {
+    /// The data triple connecting this edge's endpoints.
+    fn triple(self, subject: TermPattern, object: TermPattern) -> TriplePattern {
+        let (subject, object) = if self.inverse {
+            (object, subject)
+        } else {
+            (subject, object)
+        };
+        TriplePattern {
+            subject,
+            predicate: NamedNodePattern::NamedNode(self.predicate.clone()),
+            object,
+        }
+    }
+}
+
+/// Compile the path to an ordered word of oriented predicate edges, or reject the
+/// whole word. Inversion is an involution and reverses composition: `^(p/q)` walks
+/// `^q` then `^p`. No parser counter or block is touched before eligibility is known.
+fn linear_path(path: &PropertyPathExpression) -> Option<Vec<PathEdge<'_>>> {
+    let mut pending = WorkList::<_, 16>::with((path, false));
+    let mut edges = Vec::new();
+    while let Some((path, inverse)) = pending.pop() {
+        match path {
+            PropertyPathExpression::NamedNode(predicate) => {
+                edges.push(PathEdge { predicate, inverse });
+            }
+            PropertyPathExpression::Reverse(inner) => pending.push((inner, !inverse)),
+            PropertyPathExpression::Sequence(elements) => {
+                let queued = pending.len();
+                pending.extend(elements.iter().map(|element| (element, inverse)));
+                if !inverse {
+                    pending.reverse_top(pending.len() - queued);
+                }
+            }
+            PropertyPathExpression::Alternative(_)
+            | PropertyPathExpression::ZeroOrMore(_)
+            | PropertyPathExpression::OneOrMore(_)
+            | PropertyPathExpression::ZeroOrOne(_)
+            | PropertyPathExpression::NegatedPropertySet(_)
+            | PropertyPathExpression::Range { .. }
+            | PropertyPathExpression::Wildcard { .. } => return None,
+        }
+    }
+    Some(edges)
+}
 
 /// A predicate-object list in progress: its subject and the verb whose objects are
 /// being read.
@@ -259,7 +315,7 @@ impl Parser<'_, '_> {
             // A length-1 path is a plain predicate IRI, so it is the one shape that can
             // name a property function; a complex path (`p+`, `p1/p2`, `!(…)`, …) never
             // is.
-            Some(NamedNodePattern::NamedNode(n)) if self.is_property_fn(n.as_str()) => {
+            Some(NamedNodePattern::NamedNode(n)) if self.options.is_property_fn(n.as_str()) => {
                 Verb::PropertyFn(n.as_str().to_owned())
             }
             Some(pred) => Verb::Simple(pred),
@@ -416,11 +472,18 @@ impl Parser<'_, '_> {
                         self.annotations(state, base, None, frames, sink)
                     }
                     Verb::Path(path) => {
-                        sink.paths.push(GraphPattern::Path {
-                            subject,
-                            path: path.clone(),
-                            object,
-                        });
+                        let edges = (sink.context == TripleContext::Pattern)
+                            .then(|| linear_path(path))
+                            .flatten();
+                        if let Some(edges) = edges {
+                            self.push_linear_path(subject, &edges, object, &mut sink.triples);
+                        } else {
+                            sink.paths.push(GraphPattern::Path {
+                                subject,
+                                path: path.clone(),
+                                object,
+                            });
+                        }
                         self.continue_objects(state, frames, sink)
                     }
                     Verb::PropertyFn(_) => {
@@ -501,6 +564,27 @@ impl Parser<'_, '_> {
                 Ok(TStep::Done(Some(reifier)))
             }
         }
+    }
+
+    /// Emit a certified linear path into the current BGP (§18.2.2.4), with one
+    /// fresh hidden existential per join point. Pattern blanks already implement
+    /// those variables and keep them out of `SELECT *`.
+    fn push_linear_path(
+        &mut self,
+        subject: TermPattern,
+        edges: &[PathEdge<'_>],
+        object: TermPattern,
+        triples: &mut Vec<TriplePattern>,
+    ) {
+        let (last, prefix) = edges.split_last().expect("a linear path has an IRI leaf");
+        triples.reserve(edges.len());
+        let mut current = subject;
+        for edge in prefix {
+            let next = TermPattern::BlankNode(self.fresh_anon());
+            triples.push(edge.triple(current, next.clone()));
+            current = next;
+        }
+        triples.push(last.triple(current, object));
     }
 
     // ── property paths (§18.1.7 / §9) ────────────────────────────────────────

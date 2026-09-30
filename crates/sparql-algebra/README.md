@@ -68,6 +68,23 @@ assert!(matches!(query, Query::Select { .. }));
 | `serialize` | Query-pattern serialization helpers. |
 | `error` | Typed parse and unsupported-surface failures. |
 
+## Path normalization and serialization
+
+Sequences and inverses built entirely from predicate IRIs become ordinary triple
+patterns in their enclosing BGP. Each join point is a fresh pattern blank node,
+which binds as a hidden variable and stays outside `SELECT *`. A path containing
+repetition, an alternative or a negated property set retains its complete `Path`
+expression. Paths remain forbidden in CONSTRUCT and update templates.
+
+`pattern_to_select_query` renders named BGP data predicates as `^(^<iri>)`, two
+inversions that preserve the predicate while keeping it distinct from a property
+function under any receiver's registry. `pattern_to_select_query_with_options`
+takes `&ParserOptions` and emits that spelling only for data predicates claimed
+by its property-function namespace or exact-IRI rules; other data predicates use
+plain IRIs. Re-parse the compact form with the same options. Actual
+property-function calls retain plain IRIs in both forms, and predicates inside
+quoted triple terms and asserted templates retain their ordinary term syntax.
+
 ## Part of PurRDF
 
 This crate is one member of the [PurRDF](https://github.com/Blackcat-Informatics/purrdf)

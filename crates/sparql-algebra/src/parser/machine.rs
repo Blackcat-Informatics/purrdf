@@ -1560,7 +1560,7 @@ impl Parser<'_, '_> {
                     self.bgp_counter
                 });
                 let enclosing = self.bgp_scope.replace(bgp);
-                let block = self.parse_triples_block();
+                let block = self.parse_triples_block(super::TripleContext::Pattern);
                 self.bgp_scope = enclosing;
                 let block = block?;
                 collect_vars(&block, &mut group.scope);

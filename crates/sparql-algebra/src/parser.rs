@@ -101,12 +101,13 @@ use purrdf_xsd::datatype::{XSD_BOOLEAN, XSD_DECIMAL, XSD_DOUBLE, XSD_INTEGER};
 /// [`Self::property_fn_namespaces`] OR exactly matches an entry of
 /// [`Self::property_fn_iris`]. Its default is EMPTY as well.
 ///
-/// Note the serializer does **not** consult this configuration: a
-/// [`Function::Purrdf`] re-emits the ORIGINAL IRI it was parsed from (recorded
-/// in [`crate::algebra::PurrdfCall::iri`] — see `serialize.rs`), so re-parsing
-/// that output with the same options round-trips to the same algebra and no
-/// namespace is ever fabricated on output. A
-/// [`GraphPattern::PropertyFunction`] keeps its own IRI the same way.
+/// [`crate::pattern_to_select_query`] protects data predicates from property-function
+/// recognition under any configuration; [`crate::pattern_to_select_query_with_options`]
+/// uses this configuration to protect only the predicates it claims. Both preserve
+/// each [`Function::Purrdf`]'s original IRI (recorded in
+/// [`crate::algebra::PurrdfCall::iri`]) and each [`GraphPattern::PropertyFunction`]'s
+/// call IRI. Re-parsing with the same options therefore keeps data predicates and
+/// relation calls distinct, and no namespace is fabricated on output.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ParserOptions {
     /// The namespaces recognized as the extension-function seam in call position.
@@ -131,6 +132,17 @@ pub struct ParserOptions {
     /// `https://example.org/rel/ab` into an (unregistered, hard-erroring)
     /// property-function call.
     pub property_fn_iris: Vec<String>,
+}
+
+impl ParserOptions {
+    /// Whether a plain predicate IRI is claimed by the property-function seam: a
+    /// namespace prefix match or an exact IRI match, independently of list order.
+    pub(crate) fn is_property_fn(&self, iri: &str) -> bool {
+        self.property_fn_namespaces
+            .iter()
+            .any(|ns| iri.starts_with(ns.as_str()))
+            || self.property_fn_iris.iter().any(|exact| exact == iri)
+    }
 }
 
 /// One parse of a query, with the two positions a layer that **re-wraps** the text
@@ -1405,7 +1417,7 @@ impl<'a> Parser<'a, '_> {
         if self.at(&Token::RBrace) {
             return Ok(Vec::new());
         }
-        match self.parse_triples_block()? {
+        match self.parse_triples_block(TripleContext::Template)? {
             GraphPattern::Bgp { patterns } => Ok(patterns),
             // A template asserts triples; neither a property path nor a property
             // function (a relation call) can be asserted.
@@ -1915,7 +1927,7 @@ impl<'a> Parser<'a, '_> {
                 self.span(),
             ));
         }
-        let mut sink = BlockSink::default();
+        let mut sink = BlockSink::new(TripleContext::Template);
         let (subject, standalone_ok) = if self.at(&Token::LBracket) {
             (self.parse_graph_node(&mut sink)?, true)
         } else if self.at(&Token::LParen) {
@@ -2053,8 +2065,8 @@ impl<'a> Parser<'a, '_> {
     /// Parse a run of triples (subject + predicate-object lists) into a BGP, any
     /// complex property-path `Path` nodes, and any property-function calls,
     /// assembled together by [`BlockSink::into_pattern`].
-    fn parse_triples_block(&mut self) -> Result<GraphPattern> {
-        let mut sink = BlockSink::default();
+    fn parse_triples_block(&mut self, context: TripleContext) -> Result<GraphPattern> {
+        let mut sink = BlockSink::new(context);
         loop {
             // The subject may be a blank-node property list `[ p o ; … ]` or an RDF
             // collection `( … )`, each of which emits its own triples and yields a
@@ -2102,22 +2114,6 @@ impl<'a> Parser<'a, '_> {
             }
         }
         Ok(sink.into_pattern())
-    }
-
-    /// Is `iri` a property function under the configured options — a PREFIX match
-    /// against [`ParserOptions::property_fn_namespaces`] OR an EXACT match against
-    /// [`ParserOptions::property_fn_iris`]? Always `false` under the default (both
-    /// empty) configuration.
-    fn is_property_fn(&self, iri: &str) -> bool {
-        self.options
-            .property_fn_namespaces
-            .iter()
-            .any(|ns| iri.starts_with(ns.as_str()))
-            || self
-                .options
-                .property_fn_iris
-                .iter()
-                .any(|exact| exact == iri)
     }
 
     /// Pure lookahead over a parenthesized subject group starting at the cursor
@@ -2177,7 +2173,7 @@ impl<'a> Parser<'a, '_> {
         ) {
             return None;
         }
-        self.is_property_fn(&iri).then_some(iri)
+        self.options.is_property_fn(&iri).then_some(iri)
     }
 
     /// The token at absolute index `idx`, or `None` past the end (or at an
@@ -2670,7 +2666,8 @@ impl<'a> Parser<'a, '_> {
 }
 
 /// A parsed predicate: a simple verb (IRI/`a`/variable) yielding a triple, a
-/// complex property path yielding a `GraphPattern::Path`, or a plain IRI under a
+/// property path lowered into data triples when wholly linear, or retained as a
+/// `GraphPattern::Path`, or a plain IRI under a
 /// configured property-function namespace yielding a
 /// `GraphPattern::PropertyFunction` (carrying that IRI byte-exact).
 enum Verb {
@@ -2719,14 +2716,25 @@ impl SubjectArgs {
 /// chain in TEXTUAL order — every call sees the triples written before it on its
 /// left. With no property functions the assembly is exactly `Bgp { triples }`,
 /// bit for bit what the block produced before the seam existed.
-#[derive(Default)]
 struct BlockSink {
+    context: TripleContext,
     triples: Vec<TriplePattern>,
     paths: Vec<GraphPattern>,
     prop_fns: Vec<(usize, PropertyFunctionCall)>,
 }
 
 impl BlockSink {
+    /// An empty block under its grammar production. Templates must retain every
+    /// syntactic path so their caller can refuse it, including a linear one.
+    fn new(context: TripleContext) -> Self {
+        Self {
+            context,
+            triples: Vec::new(),
+            paths: Vec::new(),
+            prop_fns: Vec::new(),
+        }
+    }
+
     /// Record a property-function call at the current position in the block.
     fn push_property_function(&mut self, call: PropertyFunctionCall) {
         self.prop_fns.push((self.triples.len(), call));
@@ -2758,6 +2766,14 @@ impl BlockSink {
         }
         g
     }
+}
+
+/// The triples grammar being read: a graph pattern admits paths and lowers linear
+/// ones, while a template retains paths for its existing syntax rejection.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TripleContext {
+    Pattern,
+    Template,
 }
 
 #[derive(Default)]
@@ -4280,10 +4296,9 @@ mod tests {
         );
     }
 
-    /// A property-path chain (`p1 / p2 / …`, `p1 | p2 | …`) is ONE n-ary node however
-    /// many operators it has: a hundred thousand `/` or `|` parse, with every element
-    /// present in source order. A chain is flat text, so charging a level per operator
-    /// refused a generated 512-step path although it nests nothing.
+    /// A property-path expression chain (`p1 / p2 / …`, `p1 | p2 | …`) is ONE n-ary
+    /// node however many operators it has: a hundred thousand `/` or `|` parse under
+    /// `+`, which retains the expression, with every element present in source order.
     #[test]
     fn property_path_chains_of_any_length_are_one_node() {
         const OPS: usize = 100_000;
@@ -4298,9 +4313,13 @@ mod tests {
                 .map(step)
                 .collect::<Vec<_>>()
                 .join(&op.to_string());
-            let path = path_of(&format!("SELECT * WHERE {{ ?s {text} ?o }}"));
+            let PropertyPathExpression::OneOrMore(path) =
+                path_of(&format!("SELECT * WHERE {{ ?s ({text})+ ?o }}"))
+            else {
+                panic!("the quantifier retains its path expression");
+            };
             let ((PropertyPathExpression::Sequence(elements), true)
-            | (PropertyPathExpression::Alternative(elements), false)) = (&path, is_sequence)
+            | (PropertyPathExpression::Alternative(elements), false)) = (&*path, is_sequence)
             else {
                 panic!("expected one {op} chain");
             };
@@ -4325,9 +4344,12 @@ mod tests {
             )))
         };
         let q = |path: &str| {
-            path_of(&format!(
-                "PREFIX ex: <http://example.org/> SELECT * WHERE {{ ?s {path} ?o }}"
-            ))
+            let PropertyPathExpression::OneOrMore(path) = path_of(&format!(
+                "PREFIX ex: <http://example.org/> SELECT * WHERE {{ ?s ({path})+ ?o }}"
+            )) else {
+                panic!("the quantifier retains its path expression");
+            };
+            path.into_inner()
         };
         assert_eq!(
             q("ex:a/ex:b|ex:c/ex:d|ex:e"),
@@ -9380,15 +9402,20 @@ mod tests {
 
     #[test]
     fn property_path_predicate_is_never_a_property_function() {
-        for q in [
-            "SELECT * WHERE { ?s pf:related+ ?o }",
-            "SELECT * WHERE { ?s pf:related/ex:p ?o }",
-            "SELECT * WHERE { ?s ^pf:related ?o }",
-            "SELECT * WHERE { ?s !(pf:related) ?o }",
+        for (q, retained) in [
+            ("SELECT * WHERE { ?s pf:related+ ?o }", true),
+            ("SELECT * WHERE { ?s pf:related/ex:p ?o }", false),
+            ("SELECT * WHERE { ?s ^pf:related ?o }", false),
+            ("SELECT * WHERE { ?s !(pf:related) ?o }", true),
         ] {
             let p = pf_pattern(q);
-            assert!(pf_calls(&p).is_empty(), "`{q}` must stay a property path");
-            assert!(matches!(p, GraphPattern::Path { .. }), "`{q}` → {p:?}");
+            assert!(pf_calls(&p).is_empty(), "`{q}` must stay data matching");
+            assert_eq!(
+                matches!(p, GraphPattern::Path { .. }),
+                retained,
+                "`{q}` → {p:?}"
+            );
+            assert_eq!(p, pf_pattern_off(q), "recognition does not change a path");
         }
         // …so a collection subject in front of one is still an ordinary
         // collection, cons cells and all — identical to the seam-off parse.
