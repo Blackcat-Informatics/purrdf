@@ -1156,7 +1156,7 @@ impl Parser<'_> {
                     } else {
                         Flow::Mapping {
                             object: Object::new(),
-                            keys: HashSet::default(),
+                            keys: HashSet::with_hasher(FixedState::new()),
                             anchor,
                             key: None,
                             state: FlowMap::Key,
@@ -1449,7 +1449,7 @@ impl Parser<'_> {
             indent,
             start: key_at,
             object: Object::new(),
-            keys: HashSet::default(),
+            keys: HashSet::with_hasher(FixedState::new()),
             slot: Slot::Value(key, key_at),
             anchor,
         });
@@ -1560,7 +1560,7 @@ impl Parser<'_> {
                         indent: column,
                         start: at,
                         object: Object::new(),
-                        keys: HashSet::default(),
+                        keys: HashSet::with_hasher(FixedState::new()),
                         slot: Slot::ExplicitKey,
                         anchor,
                     }
@@ -1834,7 +1834,7 @@ pub fn read_with(text: &str, limits: Limits) -> Result<Value, Error> {
         limits,
         nodes: 0,
         depth: 0,
-        anchors: HashMap::default(),
+        anchors: HashMap::with_hasher(FixedState::new()),
         stack: vec![Frame::Root(None)],
         pending: None,
         located: Cell::new((0, 0, 0)),

@@ -38,8 +38,10 @@ pub const TRIPLE_TERM_OPEN: &str = "<<(";
 pub const TRIPLE_TERM_CLOSE: &str = ")>>";
 
 /// `xsd:string`, the datatype the canonical form leaves unwritten (XML Schema
-/// 1.1 Part 2 §3.3.1, the RDF 1.2 simple-literal datatype).
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+/// 1.1 Part 2 §3.3.1, the RDF 1.2 simple-literal datatype). Spelled here
+/// because this crate sits below `purrdf-xsd` and `purrdf-iri`, whose
+/// vocabulary constants name it for every crate above.
+pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
 /// Append `iri` as an `IRIREF`: `<`, the body escaped by
 /// [`crate::iri_escape::push_escaped`], `>`.

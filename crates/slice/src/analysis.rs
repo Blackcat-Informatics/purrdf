@@ -215,8 +215,8 @@ pub fn emit_analysis_graph(
     let mut forbidden_count = 0usize;
 
     // Turtle preamble.
-    let xsd_ns = iri("http://www.w3.org/2001/XMLSchema#");
-    let rdfs_ns = iri("http://www.w3.org/2000/01/rdf-schema#");
+    let xsd_ns = iri(purrdf_core::datatype::XSD_NS);
+    let rdfs_ns = iri(purrdf_iri::vocab::rdfs::NS);
     writeln!(body, "@prefix {prefix}: {} .", iri(ns)).unwrap();
     writeln!(body, "@prefix xsd:   {xsd_ns} .").unwrap();
     writeln!(body, "@prefix rdfs:  {rdfs_ns} .").unwrap();

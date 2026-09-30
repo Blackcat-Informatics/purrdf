@@ -100,32 +100,9 @@ pub enum VizTermValue {
     },
 }
 
-/// RDF 1.2 base direction in exported visualization metadata.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum VizTextDirection {
-    /// Left-to-right base direction.
-    Ltr,
-    /// Right-to-left base direction.
-    Rtl,
-}
-
-impl From<RdfTextDirection> for VizTextDirection {
-    fn from(direction: RdfTextDirection) -> Self {
-        match direction {
-            RdfTextDirection::Ltr => Self::Ltr,
-            RdfTextDirection::Rtl => Self::Rtl,
-        }
-    }
-}
-
-impl From<VizTextDirection> for RdfTextDirection {
-    fn from(direction: VizTextDirection) -> Self {
-        match direction {
-            VizTextDirection::Ltr => Self::Ltr,
-            VizTextDirection::Rtl => Self::Rtl,
-        }
-    }
-}
+/// RDF 1.2 base direction in exported visualization metadata: the workspace's one
+/// direction type, written `ltr`/`rtl` in the visualization JSON.
+pub type VizTextDirection = RdfTextDirection;
 
 /// Visualization role attached to a term or statement.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1659,7 +1636,7 @@ fn viz_term_value(value: TermValue) -> Result<VizTermValue, VizError> {
             lexical_form,
             datatype,
             language,
-            direction: direction.map(VizTextDirection::from),
+            direction,
         }),
         TermValue::Triple { .. } => Err(VizError::InvalidPredicate(
             "triple terms are represented as statements, not ordinary terms".to_owned(),

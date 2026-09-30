@@ -14,7 +14,8 @@ use crate::terminals::{
 };
 
 /// The namespace name the `xml` prefix is bound to by definition
-/// (Namespaces in XML 1.0 §3).
+/// (Namespaces in XML 1.0 §3). Spelled here because the XML reader sits below
+/// `purrdf-iri`, whose vocabulary constants every crate above uses.
 pub const XML_NAMESPACE: &str = "http://www.w3.org/XML/1998/namespace";
 
 /// The namespace name of the `xmlns` prefix, which no declaration may bind

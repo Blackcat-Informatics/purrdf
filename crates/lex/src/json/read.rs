@@ -616,7 +616,10 @@ impl<'a> Reader<'a> {
                     open.push(Open::Object {
                         members: Object::new(),
                         name: None,
-                        seen: self.limits.unique_members.then(HashSet::default),
+                        seen: self
+                            .limits
+                            .unique_members
+                            .then(|| HashSet::with_hasher(FixedState::new())),
                     });
                     continue;
                 }

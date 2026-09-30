@@ -305,18 +305,12 @@ impl VizJson for VizTermValue {
 
 impl VizJson for VizTextDirection {
     fn to_json(&self) -> Value {
-        match self {
-            Self::Ltr => Value::from("ltr"),
-            Self::Rtl => Value::from("rtl"),
-        }
+        Value::from(self.as_str())
     }
 
     fn from_json(value: &Value) -> Result<Self, VizError> {
-        match expect_str(value, "VizTextDirection")? {
-            "ltr" => Ok(Self::Ltr),
-            "rtl" => Ok(Self::Rtl),
-            other => Err(unknown_variant("VizTextDirection", other)),
-        }
+        let token = expect_str(value, "VizTextDirection")?;
+        Self::from_str_token(token).ok_or_else(|| unknown_variant("VizTextDirection", token))
     }
 }
 
