@@ -151,11 +151,21 @@ pub fn unrelated_quad() -> Arc<RdfDataset> {
     )
 }
 
+/// The shape name of a result, for a failure message that names the wrong shape
+/// without formatting the result's contents.
+fn shape(result: &SparqlResult) -> &'static str {
+    match result {
+        SparqlResult::Solutions { .. } => "SELECT solutions",
+        SparqlResult::Graph(_) => "a graph",
+        SparqlResult::Boolean(_) => "a boolean",
+    }
+}
+
 /// The variables and rows of a SELECT result, panicking on any other shape.
 pub fn solutions(result: SparqlResult) -> (Vec<String>, Vec<Vec<Option<TermValue>>>) {
     result
         .into_solutions()
-        .unwrap_or_else(|other| panic!("expected solutions, got {other:?}"))
+        .unwrap_or_else(|other| panic!("expected solutions, got {}", shape(&other)))
 }
 
 /// The row count of a `SELECT` result.
