@@ -22,7 +22,6 @@ use purrdf_core::{
 };
 use purrdf_lex::json::{Object, Value};
 
-use super::super::json_codec::{Fields, FromJson, JsonError, ToJson};
 use super::config::CsvwConfig;
 use super::input::CsvwInput;
 use super::model::{
@@ -35,6 +34,7 @@ use crate::projections::{
     ProjectionDirection, ProjectionError, ProjectionLimits, ProjectionPackage, ProjectionTerm,
     validate_absolute_iri,
 };
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
 
 /// Stable loss-contract target for the curated terms profile.
 pub const CSVW_TERMS_PROFILE: &str = "csvw-terms";
@@ -716,8 +716,8 @@ const GRAPH_SELECTION_KINDS: &[&str] = &["all", "include"];
 
 impl FromJson for CsvwTermsGraphSelection {
     /// `{"kind": "all"}` or `{"kind": "include", …}`; any other member is refused.
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "internally tagged enum CsvwTermsGraphSelection")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum CsvwTermsGraphSelection")?;
         let selection = if fields.tag("kind", GRAPH_SELECTION_KINDS)? == "all" {
             Self::All
         } else {
@@ -747,8 +747,8 @@ impl ToJson for CsvwTermsGraphSelection {
 }
 
 impl FromJson for CsvwTermsSelector {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct CsvwTermsSelector")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct CsvwTermsSelector")?;
         let selector = Self {
             type_predicate: fields.optional("type_predicate")?,
             any_types: fields.required("any_types")?,
@@ -775,8 +775,8 @@ impl ToJson for CsvwTermsSelector {
 }
 
 impl FromJson for CsvwTermsIdentityColumn {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct CsvwTermsIdentityColumn")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct CsvwTermsIdentityColumn")?;
         let column = Self {
             name: fields.required("name")?,
             titles: fields.required("titles")?,
@@ -802,8 +802,8 @@ impl ToJson for CsvwTermsIdentityColumn {
 const VALUE_MODE_KINDS: &[&str] = &["iri", "literal"];
 
 impl FromJson for CsvwTermsValueMode {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "internally tagged enum CsvwTermsValueMode")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum CsvwTermsValueMode")?;
         let mode = if fields.tag("kind", VALUE_MODE_KINDS)? == "iri" {
             Self::Iri {
                 datatype: fields.required("datatype")?,
@@ -845,8 +845,8 @@ const CARDINALITY_KINDS: &[&str] = &["one", "many"];
 impl FromJson for CsvwTermsCardinality {
     /// `{"kind": "one"}` or `{"kind": "many", "separator": …}`; any other member
     /// is refused.
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "internally tagged enum CsvwTermsCardinality")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum CsvwTermsCardinality")?;
         let cardinality = if fields.tag("kind", CARDINALITY_KINDS)? == "one" {
             Self::One
         } else {
@@ -871,8 +871,8 @@ impl ToJson for CsvwTermsCardinality {
 }
 
 impl FromJson for CsvwTermsColumn {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct CsvwTermsColumn")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct CsvwTermsColumn")?;
         let column = Self {
             name: fields.required("name")?,
             titles: fields.required("titles")?,
@@ -901,8 +901,8 @@ impl ToJson for CsvwTermsColumn {
 }
 
 impl FromJson for CsvwTermsTable {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct CsvwTermsTable")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct CsvwTermsTable")?;
         let table = Self {
             name: fields.required("name")?,
             table_url: fields.required("table_url")?,
@@ -931,8 +931,8 @@ impl ToJson for CsvwTermsTable {
 }
 
 impl FromJson for CsvwTermsLimits {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct CsvwTermsLimits")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct CsvwTermsLimits")?;
         let limits = Self {
             rows: fields.required("max_rows")?,
             values: fields.required("max_values")?,
@@ -955,8 +955,8 @@ impl ToJson for CsvwTermsLimits {
 }
 
 impl FromJson for CsvwTermsConfig {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct CsvwTermsConfig")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct CsvwTermsConfig")?;
         let csvw = fields.required("csvw")?;
         let metadata_path: String = fields.required("metadata_path")?;
         let graph_selection = fields.required("graph_selection")?;
@@ -2423,9 +2423,9 @@ mod tests {
             CsvwTermsLimits::new(1_000, 10_000, 100).expect("execution limits"),
         )
         .expect("config");
-        let bytes = crate::projections::json_codec::to_vec(&config);
+        let bytes = purrdf_lex::json::record::to_vec(&config);
         let reparsed: CsvwTermsConfig =
-            crate::projections::json_codec::from_slice(&bytes).expect("parse");
+            purrdf_lex::json::record::from_slice(&bytes).expect("parse");
         assert_eq!(config, reparsed);
     }
 

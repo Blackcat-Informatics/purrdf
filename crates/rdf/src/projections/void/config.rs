@@ -8,11 +8,12 @@ use purrdf_lex::json::{Object, Value};
 use crate::native_codecs::NativeRdfFormat;
 
 use super::super::dataset_description::{format_from_json, format_to_json};
-use super::super::json_codec::{Fields, FromJson, JsonError, ToJson, json_string_enum};
 use super::super::{
     ProjectionDirection, ProjectionError, ProjectionLimits, validate_absolute_iri,
     validate_language_tag,
 };
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
+use purrdf_lex::json_string_enum;
 
 /// Exact source graph selected for one VoID input role.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -49,8 +50,8 @@ impl VoidGraphSelector {
 
 impl FromJson for VoidGraphSelector {
     /// `{"mode": "default-graph"}` or `{"mode": "named-graph", "graph_iri": …}`.
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "internally tagged enum RawVoidGraphSelector")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum RawVoidGraphSelector")?;
         let selector = match fields.tag("mode", &["default-graph", "named-graph"])? {
             "default-graph" => Self::DefaultGraph,
             _ => {
@@ -140,8 +141,8 @@ impl VoidSourceRoles {
 }
 
 impl FromJson for VoidSourceRoles {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct RawVoidSourceRoles")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct RawVoidSourceRoles")?;
         let rdf_type: String = fields.required("rdf_type")?;
         let header_version: String = fields.required("header_version")?;
         let header_abstract: String = fields.required("header_abstract")?;
@@ -311,7 +312,7 @@ impl VoidVocabulary {
 
 impl FromJson for VoidVocabulary {
     /// The role map itself, one member per role.
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
         Ok(Self::new(BTreeMap::from_json(value)?)?)
     }
 }
@@ -361,8 +362,8 @@ impl VoidDatasetPrefix {
 }
 
 impl FromJson for VoidDatasetPrefix {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct RawVoidDatasetPrefix")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct RawVoidDatasetPrefix")?;
         let dataset_iri: String = fields.required("dataset_iri")?;
         let iri_prefix: String = fields.required("iri_prefix")?;
         fields.deny_unknown()?;
@@ -419,8 +420,8 @@ impl VoidExternalLinkMapping {
 }
 
 impl FromJson for VoidExternalLinkMapping {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct RawVoidExternalLinkMapping")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct RawVoidExternalLinkMapping")?;
         let source_predicate: String = fields.required("source_predicate")?;
         let target_predicate: String = fields.required("target_predicate")?;
         fields.deny_unknown()?;
@@ -533,8 +534,8 @@ impl VoidStaticValue {
 impl FromJson for VoidStaticValue {
     /// `{"kind": "iri" | "typed-literal" | "language-literal", …}`, each arm
     /// through its validating constructor, and no undeclared member.
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "internally tagged enum RawVoidStaticValue")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum RawVoidStaticValue")?;
         let static_value =
             match fields.tag("kind", &["iri", "typed-literal", "language-literal"])? {
                 "iri" => {
@@ -618,8 +619,8 @@ impl VoidStaticStatement {
 }
 
 impl FromJson for VoidStaticStatement {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct RawVoidStaticStatement")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct RawVoidStaticStatement")?;
         let predicate: String = fields.required("predicate")?;
         let object = fields.required("object")?;
         fields.deny_unknown()?;
@@ -743,8 +744,8 @@ impl VoidExecutionLimits {
 }
 
 impl FromJson for VoidExecutionLimits {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct RawVoidExecutionLimits")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct RawVoidExecutionLimits")?;
         let max_input_records = fields.required("max_input_records")?;
         let max_output_records = fields.required("max_output_records")?;
         let max_partitions = fields.required("max_partitions")?;
@@ -1116,8 +1117,8 @@ impl FromJson for VoidConfig {
     /// Every member through [`VoidConfig::new`], then `document_base_iri`
     /// (absent or `null` for none) through
     /// [`VoidConfig::with_document_base_iri`].
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct RawVoidConfig")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct RawVoidConfig")?;
         let format = format_from_json(&mut fields, "format")?;
         let dataset_iri: String = fields.required("dataset_iri")?;
         let generated_resource_base_iri: String = fields.required("generated_resource_base_iri")?;
@@ -1202,8 +1203,8 @@ fn validate_bound(value: usize, field: &str) -> Result<(), ProjectionError> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::json_codec::from_slice;
     use super::*;
+    use purrdf_lex::json::record::from_slice;
 
     /// Both halves of `VoidStaticValue::language_literal`'s gate, through BOTH
     /// of its doors — the Rust constructor and the JSON reader a caller's config

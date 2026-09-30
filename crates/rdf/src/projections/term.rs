@@ -8,9 +8,10 @@ use purrdf_core::{BlankScope, DatasetView, RdfLiteral, RdfTextDirection, TermRef
 use purrdf_iri::langtag;
 use purrdf_lex::json::{Object, Value};
 
-use super::json_codec::{Fields, FromJson, JsonError, ToJson, json_string_enum};
 use super::util::canonical_json_bounded;
 use super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
+use purrdf_lex::json_string_enum;
 
 use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
 
@@ -285,7 +286,7 @@ impl ProjectionTerm {
                 limits.max_artifact_bytes()
             )));
         }
-        let term: Self = super::json_codec::from_slice(bytes)
+        let term: Self = purrdf_lex::json::record::from_slice(bytes)
             .map_err(|error| ProjectionError::syntax(format!("parse term JSON: {error}")))?;
         term.validate(limits)?;
         let canonical = term.to_canonical_json(limits)?;
@@ -401,8 +402,8 @@ impl FromJson for ProjectionTerm {
     /// `{"kind": …}` plus the variant's members. Members a variant does not
     /// declare are ignored here; [`ProjectionTerm::from_canonical_json`]
     /// refuses them by re-encoding.
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "internally tagged enum ProjectionTerm")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum ProjectionTerm")?;
         Ok(match fields.tag("kind", TERM_KINDS)? {
             "iri" => Self::Iri {
                 value: fields.required("value")?,

@@ -14,7 +14,6 @@ use purrdf_core::{
 };
 use purrdf_lex::json::{Object, Value};
 
-use super::super::json_codec::{Fields, FromJson, JsonError, Owned, ToJson, into_owned};
 use super::super::{ProjectionError, ProjectionPackage, validate_absolute_iri};
 use super::json::{
     ResearchObjectPackageProjection, ResearchObjectReadOutcome, canonical_json, ensure_sound,
@@ -24,6 +23,7 @@ use super::{
     ResearchAgent, ResearchChecksum, ResearchDataset, ResearchObjectConfig, ResearchObjectModel,
     ResearchResource, ResearchText, ResearchValue, lift_research_object, project_research_object,
 };
+use purrdf_lex::json::record::{DecodeError, FromJson, Owned, Record, ToJson, into_owned};
 
 /// Closed Frictionless Data Package profile identifier.
 pub const FRICTIONLESS_PROFILE: &str = "frictionless-data-package-1";
@@ -78,8 +78,8 @@ impl FrictionlessConfig {
 }
 
 impl FromJson for FrictionlessConfig {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct FrictionlessConfig")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct FrictionlessConfig")?;
         let common: ResearchObjectConfig = fields.required("common")?;
         let package_profile: String = fields.required("package_profile")?;
         let package_name: String = fields.required("package_name")?;

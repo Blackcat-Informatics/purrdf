@@ -13,9 +13,6 @@ use purrdf_core::{
 };
 use purrdf_lex::json::{Object, Value};
 
-use super::super::json_codec::{
-    Fields, FromJson, JsonError, Owned, ToJson, into_owned, json_string_enum,
-};
 use super::super::{ProjectionError, ProjectionPackage, validate_absolute_iri};
 use super::json::{
     ResearchObjectPackageProjection, ResearchObjectReadOutcome, canonical_json, ensure_sound,
@@ -26,6 +23,8 @@ use super::{
     ResearchField, ResearchObjectConfig, ResearchObjectModel, ResearchRecordSet, ResearchResource,
     ResearchText, ResearchValue, lift_research_object, project_research_object,
 };
+use purrdf_lex::json::record::{DecodeError, FromJson, Owned, Record, ToJson, into_owned};
+use purrdf_lex::json_string_enum;
 
 /// Closed Croissant projection profile identifier.
 pub const CROISSANT_PROFILE: &str = "croissant-1.1";
@@ -250,7 +249,7 @@ impl CroissantVocabulary {
 
 impl FromJson for CroissantVocabulary {
     /// The role map itself, revalidated by [`CroissantVocabulary::new`].
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
         Ok(Self::new(BTreeMap::from_json(value)?)?)
     }
 }
@@ -322,8 +321,8 @@ impl CroissantConfig {
 }
 
 impl FromJson for CroissantConfig {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct CroissantConfig")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct CroissantConfig")?;
         let common: ResearchObjectConfig = fields.required("common")?;
         let context: OfflineJsonLdContext = fields.required("context")?;
         let vocabulary: CroissantVocabulary = fields.required("vocabulary")?;

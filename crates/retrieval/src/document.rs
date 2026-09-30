@@ -36,15 +36,16 @@
 //! [`PlanError::DuplicateStatisticsSubject`]), so JSON is never a second way to
 //! build a value the constructors refuse.
 //!
-//! The JSON form is not the plan's identity: [`Plan::canonical_bytes`] is, and a
+//! The JSON form is not a plan's identity: [`Plan::canonical_bytes`] is, and a
 //! plan read from JSON has the same [`PlanId`](crate::PlanId) as the plan that
 //! wrote it.
 
 use std::collections::BTreeMap;
 
 use purrdf_core::FastMap;
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, Within, items_with};
 use purrdf_lex::json::{self, Object, Value};
-use purrdf_lex::json_pointer::escape_token;
+use purrdf_lex::json_pointer::push_token;
 use purrdf_sparql_eval::RegistryId;
 use purrdf_text::Fixed;
 
@@ -59,164 +60,54 @@ use crate::request::{Metric, ReadBound, RequestTerm, RetrievalRequest};
 
 type Decoded<T> = Result<T, PlanError>;
 
-/// A shape refusal at the value being read; [`within`] extends its pointer
-/// outward as the error leaves each enclosing value.
-fn invalid(reason: impl Into<String>) -> PlanError {
-    PlanError::InvalidJson {
-        pointer: String::new(),
-        reason: reason.into(),
+impl From<DecodeError> for PlanError {
+    /// A shape refusal: [`PlanError::InvalidJson`] at the refusal's pointer.
+    fn from(error: DecodeError) -> Self {
+        Self::InvalidJson {
+            pointer: error.pointer().to_owned(),
+            reason: error.message().to_owned(),
+        }
     }
 }
 
-/// Prefix `token` onto the pointer of a shape refusal raised inside the member
-/// or item `token` names. Construction-law refusals pass through unchanged.
-fn within<T>(token: &str, result: Decoded<T>) -> Decoded<T> {
-    result.map_err(|error| match error {
-        PlanError::InvalidJson { pointer, reason } => PlanError::InvalidJson {
-            pointer: format!("/{}{pointer}", escape_token(token)),
-            reason,
-        },
-        other => other,
-    })
-}
-
-fn expected(what: &str, found: &Value) -> PlanError {
-    invalid(format!("expected {what}, found {}", found.kind().name()))
-}
-
-fn string(value: &Value) -> Decoded<String> {
-    value
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| expected("a string", value))
-}
-
-/// An integer lexeme that fits `T`. `-0` is `0`, and a fraction or exponent is
-/// refused even where it denotes an integer.
-fn integer<T: TryFrom<i128>>(value: &Value, what: &str) -> Decoded<T> {
-    let number = value
-        .as_number()
-        .ok_or_else(|| expected(&format!("an integer that fits {what}"), value))?;
-    number
-        .as_i128()
-        .and_then(|integer| T::try_from(integer).ok())
-        .ok_or_else(|| {
-            invalid(format!(
-                "expected an integer that fits {what}, found {}",
-                number.lexeme()
-            ))
-        })
-}
-
-fn u32_of(value: &Value) -> Decoded<u32> {
-    integer(value, "u32")
-}
-
-fn u64_of(value: &Value) -> Decoded<u64> {
-    integer(value, "u64")
-}
-
-/// The binary32 nearest a JSON number: correctly rounded to binary64 first, and
-/// then to binary32, a double rounding that is exact for every decimal of
-/// binary32's precision. A number beyond binary32's range is refused, since the
-/// JSON form writes no infinity.
-fn f32_of(value: &Value) -> Decoded<f32> {
-    let number = value
-        .as_number()
-        .ok_or_else(|| expected("a number", value))?;
-    #[allow(
-        clippy::cast_possible_truncation,
-        reason = "the binary64 to binary32 rounding is the conversion this reads"
-    )]
-    let component = number.as_f64() as f32;
-    if component.is_finite() {
-        Ok(component)
-    } else {
-        Err(invalid(format!(
-            "{} denotes no finite f32",
-            number.lexeme()
-        )))
+impl Within for PlanError {
+    /// Prefix `token` onto the pointer of a shape refusal raised inside the
+    /// member or item `token` names. Construction-law refusals pass through
+    /// unchanged.
+    fn within(self, token: &str) -> Self {
+        match self {
+            Self::InvalidJson { pointer, reason } => {
+                let mut located = String::with_capacity(1 + token.len() + pointer.len());
+                push_token(&mut located, token);
+                located.push_str(&pointer);
+                Self::InvalidJson {
+                    pointer: located,
+                    reason,
+                }
+            }
+            other => other,
+        }
     }
+}
+
+/// A shape refusal of the value being read.
+fn invalid(reason: String) -> PlanError {
+    DecodeError::custom(reason).into()
 }
 
 fn iri_of(value: &Value) -> Decoded<Iri> {
-    Iri::parse(&string(value)?)
+    Iri::parse(&String::from_json(value)?)
 }
 
-fn array<T>(value: &Value, item: impl Fn(&Value) -> Decoded<T>) -> Decoded<Vec<T>> {
-    let items = value
-        .as_array()
-        .ok_or_else(|| expected("an array", value))?;
-    items
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| within(&index.to_string(), item(entry)))
-        .collect()
-}
-
-fn nullable<T>(
-    value: Option<&Value>,
-    read: impl FnOnce(&Value) -> Decoded<T>,
-) -> Decoded<Option<T>> {
-    match value {
-        None | Some(Value::Null) => Ok(None),
-        Some(present) => read(present).map(Some),
-    }
-}
-
+/// A fixed-point value as its raw `i128`, `null` for `None`.
 fn fixed_to_json(value: Option<Fixed>) -> Value {
     value.map(Fixed::into_raw).into()
 }
 
-fn fixed_of(value: &Value) -> Decoded<Fixed> {
-    integer::<i128>(value, "i128").map(Fixed::from_raw)
-}
-
-/// The members of a JSON object a struct is read from.
-struct Fields<'a>(&'a Object);
-
-impl<'a> Fields<'a> {
-    fn of(value: &'a Value) -> Decoded<Self> {
-        value
-            .as_object()
-            .map(Self)
-            .ok_or_else(|| expected("an object", value))
-    }
-
-    /// The member `name`, or `None` when absent; a repeat is refused.
-    fn member(&self, name: &str) -> Decoded<Option<&'a Value>> {
-        if self.0.count(name) > 1 {
-            return within(name, Err(invalid("the member is repeated")));
-        }
-        Ok(self.0.get(name))
-    }
-
-    /// Read the member `name`, which must be present.
-    fn required<T>(&self, name: &str, read: impl FnOnce(&Value) -> Decoded<T>) -> Decoded<T> {
-        let value = self
-            .member(name)?
-            .ok_or_else(|| invalid(format!("missing member `{name}`")))?;
-        within(name, read(value))
-    }
-
-    /// Read the member `name`, absent or `null` being `None`.
-    fn optional<T>(
-        &self,
-        name: &str,
-        read: impl FnOnce(&Value) -> Decoded<T>,
-    ) -> Decoded<Option<T>> {
-        let value = self.member(name)?;
-        within(name, nullable(value, read))
-    }
-
-    /// Read the member `name`, which must be present, `null` being `None`.
-    fn present_nullable<T>(
-        &self,
-        name: &str,
-        read: impl FnOnce(&Value) -> Decoded<T>,
-    ) -> Decoded<Option<T>> {
-        self.required(name, |value| nullable(Some(value), read))
-    }
+/// A record every member of which is read by name; members it does not name
+/// are ignored.
+fn fields_of(value: &Value) -> Decoded<Record<'_>> {
+    Ok(Record::new(value, "an object")?)
 }
 
 /// An externally tagged enum value: the variant name, and its content (`None`
@@ -228,10 +119,11 @@ fn variant(value: &Value) -> Decoded<(&str, Option<&Value>)> {
             let (name, content) = &object.members()[0];
             Ok((name, Some(content)))
         }
-        other => Err(expected(
-            "a variant name or a one-member object naming a variant",
+        other => Err(DecodeError::invalid_type(
             other,
-        )),
+            "a variant name or a one-member object naming a variant",
+        )
+        .into()),
     }
 }
 
@@ -239,7 +131,7 @@ fn variant(value: &Value) -> Decoded<(&str, Option<&Value>)> {
 fn unit(name: &str, content: Option<&Value>) -> Decoded<()> {
     match content {
         None | Some(Value::Null) => Ok(()),
-        Some(other) => within(name, Err(expected("null", other))),
+        Some(other) => Err(DecodeError::invalid_type(other, "null").within(name).into()),
     }
 }
 
@@ -249,10 +141,7 @@ fn content<'a>(name: &str, content: Option<&'a Value>) -> Decoded<&'a Value> {
 }
 
 fn unknown_variant(name: &str, known: &[&str]) -> PlanError {
-    invalid(format!(
-        "unknown variant `{name}`, expected one of {}",
-        known.join(", ")
-    ))
+    DecodeError::unknown_variant(name, known).into()
 }
 
 /// A unit-only enum's variant, looked up by name.
@@ -315,7 +204,7 @@ impl Term {
     ///
     /// [`PlanError::InvalidJson`] when the value is not a string.
     pub fn from_json(value: &Value) -> Result<Self, PlanError> {
-        string(value).map(Self::new)
+        Ok(String::from_json(value).map(Self::new)?)
     }
 }
 
@@ -333,7 +222,7 @@ impl TopK {
     /// [`PlanError::InvalidJson`] unless the value is an integer that fits
     /// `usize`.
     pub fn from_json(value: &Value) -> Result<Self, PlanError> {
-        integer(value, "usize").map(Self::new)
+        Ok(usize::from_json(value).map(Self::new)?)
     }
 }
 
@@ -447,38 +336,46 @@ impl RequestTerm {
             return Err(unknown_variant(name, &REQUEST_TERMS));
         }
         let body = content(name, body)?;
-        within(name, Self::from_fields(name, &Fields::of(body)?))
+        fields_of(body)
+            .and_then(|mut fields| Self::from_fields(name, &mut fields))
+            .map_err(|error| error.within(name))
     }
 
-    fn from_fields(name: &str, fields: &Fields<'_>) -> Decoded<Self> {
+    /// A fixed-point member, which must be present and may be `null`: its raw
+    /// `i128`.
+    fn fixed(fields: &mut Record<'_>, name: &'static str) -> Decoded<Option<Fixed>> {
+        Ok(fields.required::<Option<i128>>(name)?.map(Fixed::from_raw))
+    }
+
+    fn from_fields(name: &str, fields: &mut Record<'_>) -> Decoded<Self> {
         Ok(match name {
             "Lexical" => Self::Lexical {
-                text: fields.required("text", string)?,
-                language: fields.optional("language", string)?,
-                predicate: fields.optional("predicate", iri_of)?,
+                text: fields.required("text")?,
+                language: fields.optional("language")?,
+                predicate: fields.optional_with("predicate", iri_of)?,
             },
             "Vector" => Self::Vector {
-                embedding: fields.required("embedding", |value| array(value, f32_of))?,
-                metric: fields.required("metric", Metric::from_json)?,
-                index_hint: fields.optional("index_hint", string)?,
+                embedding: fields.required("embedding")?,
+                metric: fields.required_with("metric", Metric::from_json)?,
+                index_hint: fields.optional("index_hint")?,
             },
             "Spatial" => Self::Spatial {
-                geometry: fields.required("geometry", string)?,
-                predicate: fields.required("predicate", iri_of)?,
-                max_distance: fields.present_nullable("max_distance", fixed_of)?,
+                geometry: fields.required("geometry")?,
+                predicate: fields.required_with("predicate", iri_of)?,
+                max_distance: Self::fixed(fields, "max_distance")?,
             },
             "Temporal" => Self::Temporal {
-                predicate: fields.required("predicate", iri_of)?,
-                lower: fields.optional("lower", string)?,
-                upper: fields.optional("upper", string)?,
+                predicate: fields.required_with("predicate", iri_of)?,
+                lower: fields.optional("lower")?,
+                upper: fields.optional("upper")?,
             },
             "NumericRange" => Self::NumericRange {
-                predicate: fields.required("predicate", iri_of)?,
-                lower: fields.present_nullable("lower", fixed_of)?,
-                upper: fields.present_nullable("upper", fixed_of)?,
+                predicate: fields.required_with("predicate", iri_of)?,
+                lower: Self::fixed(fields, "lower")?,
+                upper: Self::fixed(fields, "upper")?,
             },
             _ => Self::EntitySeed {
-                entity: fields.required("entity", Term::from_json)?,
+                entity: fields.required_with("entity", Term::from_json)?,
             },
         })
     }
@@ -503,11 +400,10 @@ impl ReadBound {
     pub fn from_json(value: &Value) -> Result<Self, PlanError> {
         match variant(value)? {
             ("Complete", body) => unit("Complete", body).map(|()| Self::Complete),
-            ("Bounded", body) => within(
-                "Bounded",
-                content("Bounded", body).and_then(TopK::from_json),
-            )
-            .map(Self::Bounded),
+            ("Bounded", body) => content("Bounded", body)
+                .and_then(TopK::from_json)
+                .map_err(|error| error.within("Bounded"))
+                .map(Self::Bounded),
             (name, _) => Err(unknown_variant(name, &["Bounded", "Complete"])),
         }
     }
@@ -533,10 +429,11 @@ impl RetrievalRequest {
     /// [`PlanError::InvalidJson`] for a shape error, and a term's own refusal
     /// otherwise.
     pub fn from_json(value: &Value) -> Result<Self, PlanError> {
-        let fields = Fields::of(value)?;
+        let mut fields = fields_of(value)?;
         Ok(Self {
-            terms: fields.required("terms", |value| array(value, RequestTerm::from_json))?,
-            bound: fields.required("bound", ReadBound::from_json)?,
+            terms: fields
+                .required_with("terms", |value| items_with(value, RequestTerm::from_json))?,
+            bound: fields.required_with("bound", ReadBound::from_json)?,
         })
     }
 }
@@ -559,11 +456,11 @@ impl ProducerBinding {
     /// [`PlanError::InvalidJson`] for a shape error, [`PlanError::InvalidIri`]
     /// for a stratum that is not an IRI.
     pub fn from_json(value: &Value) -> Result<Self, PlanError> {
-        let fields = Fields::of(value)?;
+        let mut fields = fields_of(value)?;
         Ok(Self {
-            producer: fields.required("producer", string)?,
-            stratum: fields.required("stratum", iri_of)?,
-            request_terms: fields.required("request_terms", |value| array(value, u32_of))?,
+            producer: fields.required("producer")?,
+            stratum: fields.required_with("stratum", iri_of)?,
+            request_terms: fields.required("request_terms")?,
         })
     }
 }
@@ -624,22 +521,22 @@ impl ProducerDecision {
     pub fn from_json(value: &Value) -> Result<Self, PlanError> {
         let (name, body) = variant(value)?;
         let read = |body: Option<&Value>| -> Decoded<Self> {
-            let fields = Fields::of(content(name, body)?)?;
-            let producer = fields.required("producer", string)?;
+            let mut fields = fields_of(content(name, body)?)?;
+            let producer = fields.required("producer")?;
             Ok(if name == "Selected" {
                 Self::Selected {
                     producer,
-                    stratum: fields.required("stratum", iri_of)?,
+                    stratum: fields.required_with("stratum", iri_of)?,
                 }
             } else {
                 Self::Rejected {
                     producer,
-                    reason: fields.required("reason", RejectionReason::from_json)?,
+                    reason: fields.required_with("reason", RejectionReason::from_json)?,
                 }
             })
         };
         match name {
-            "Selected" | "Rejected" => within(name, read(body)),
+            "Selected" | "Rejected" => read(body).map_err(|error| error.within(name)),
             _ => Err(unknown_variant(name, &["Selected", "Rejected"])),
         }
     }
@@ -691,10 +588,10 @@ impl UnservedTerm {
     ///
     /// [`PlanError::InvalidJson`] for a shape error.
     pub fn from_json(value: &Value) -> Result<Self, PlanError> {
-        let fields = Fields::of(value)?;
+        let mut fields = fields_of(value)?;
         Ok(Self {
-            request_term: fields.required("request_term", u32_of)?,
-            reason: fields.required("reason", UnservedReason::from_json)?,
+            request_term: fields.required("request_term")?,
+            reason: fields.required_with("reason", UnservedReason::from_json)?,
         })
     }
 }
@@ -718,14 +615,13 @@ impl DepthInputs {
     ///
     /// [`PlanError::InvalidJson`] for a shape error.
     pub fn from_json(value: &Value) -> Result<Self, PlanError> {
-        let fields = Fields::of(value)?;
+        let mut fields = fields_of(value)?;
         Ok(Self {
-            declared: fields.required("declared", u64_of)?,
-            cardinality: fields.optional("cardinality", u64_of)?,
-            selectivity_ppm: fields.optional("selectivity_ppm", u64_of)?,
-            selectivity_terms: fields
-                .required("selectivity_terms", |value| array(value, u32_of))?,
-            licensed_prefix: fields.optional("licensed_prefix", u64_of)?,
+            declared: fields.required("declared")?,
+            cardinality: fields.optional("cardinality")?,
+            selectivity_ppm: fields.optional("selectivity_ppm")?,
+            selectivity_terms: fields.required("selectivity_terms")?,
+            licensed_prefix: fields.optional("licensed_prefix")?,
         })
     }
 }
@@ -748,13 +644,12 @@ impl StatisticsEntry {
     ///
     /// [`PlanError::InvalidJson`] for a shape error.
     pub fn from_json(value: &Value) -> Result<Self, PlanError> {
-        let fields = Fields::of(value)?;
+        let mut fields = fields_of(value)?;
         Ok(Self {
-            subject: fields.required("subject", string)?,
-            cardinality: fields.optional("cardinality", u64_of)?,
-            selectivity_ppm: fields.optional("selectivity_ppm", u64_of)?,
-            selectivity_terms: fields
-                .required("selectivity_terms", |value| array(value, u32_of))?,
+            subject: fields.required("subject")?,
+            cardinality: fields.optional("cardinality")?,
+            selectivity_ppm: fields.optional("selectivity_ppm")?,
+            selectivity_terms: fields.required("selectivity_terms")?,
         })
     }
 }
@@ -775,7 +670,7 @@ impl StatisticsEntries {
     /// [`PlanError::DuplicateStatisticsSubject`] when two entries name one
     /// subject.
     pub fn from_json(value: &Value) -> Result<Self, PlanError> {
-        Self::new(array(value, StatisticsEntry::from_json)?)
+        Self::new(items_with(value, StatisticsEntry::from_json)?)
     }
 }
 
@@ -798,11 +693,11 @@ impl StatisticsSnapshot {
     /// [`PlanError::DuplicateStatisticsSubject`] when two entries name one
     /// subject.
     pub fn from_json(value: &Value) -> Result<Self, PlanError> {
-        let fields = Fields::of(value)?;
+        let mut fields = fields_of(value)?;
         Ok(Self {
-            source: fields.required("source", string)?,
-            revision: fields.required("revision", string)?,
-            entries: fields.required("entries", StatisticsEntries::from_json)?,
+            source: fields.required("source")?,
+            revision: fields.required("revision")?,
+            entries: fields.required_with("entries", StatisticsEntries::from_json)?,
         })
     }
 }
@@ -812,10 +707,15 @@ impl StatisticsSnapshot {
 fn iri_keyed<T>(value: &Value, read: impl Fn(&Value) -> Decoded<T>) -> Decoded<Vec<(Iri, T)>> {
     let object = value
         .as_object()
-        .ok_or_else(|| expected("an object", value))?;
+        .ok_or_else(|| DecodeError::invalid_type(value, "a map"))?;
     object
         .iter()
-        .map(|(key, member)| Ok((Iri::parse(key)?, within(key, read(member))?)))
+        .map(|(key, member)| {
+            Ok((
+                Iri::parse(key)?,
+                read(member).map_err(|error| error.within(key))?,
+            ))
+        })
         .collect()
 }
 
@@ -885,7 +785,7 @@ impl Plan {
     /// elsewhere.
     ///
     /// Reading checks the document's shape and each value's construction law,
-    /// never the plan's coherence; admission does that, for a plan from any
+    /// never a plan's coherence; admission does that, for a plan from any
     /// source.
     ///
     /// # Errors
@@ -895,37 +795,36 @@ impl Plan {
     /// [`PlanError::DuplicateStatisticsSubject`] for a statistics subject named
     /// twice.
     pub fn from_json(value: &Value) -> Result<Self, PlanError> {
-        let fields = Fields::of(value)?;
+        let mut fields = fields_of(value)?;
         Ok(Self {
-            version: fields.required("version", |value| integer(value, "u16"))?,
-            request_terms: fields.required("request_terms", |value| {
-                array(value, RequestTerm::from_json)
+            version: fields.required("version")?,
+            request_terms: fields.required_with("request_terms", |value| {
+                items_with(value, RequestTerm::from_json)
             })?,
-            read_bound: fields.required("read_bound", ReadBound::from_json)?,
-            producer_bindings: fields.required("producer_bindings", |value| {
-                array(value, ProducerBinding::from_json)
+            read_bound: fields.required_with("read_bound", ReadBound::from_json)?,
+            producer_bindings: fields.required_with("producer_bindings", |value| {
+                items_with(value, ProducerBinding::from_json)
             })?,
-            producer_decisions: fields.required("producer_decisions", |value| {
-                array(value, ProducerDecision::from_json)
+            producer_decisions: fields.required_with("producer_decisions", |value| {
+                items_with(value, ProducerDecision::from_json)
             })?,
-            unserved_terms: fields.required("unserved_terms", |value| {
-                array(value, UnservedTerm::from_json)
+            unserved_terms: fields.required_with("unserved_terms", |value| {
+                items_with(value, UnservedTerm::from_json)
             })?,
-            stratum_depths: fields.required("stratum_depths", |value| {
-                iri_keyed(value, u32_of)
+            stratum_depths: fields.required_with("stratum_depths", |value| {
+                iri_keyed(value, |depth| Ok(u32::from_json(depth)?))
                     .map(|entries| entries.into_iter().collect::<FastMap<_, _>>())
             })?,
-            stratum_derivations: fields.required("stratum_derivations", |value| {
+            stratum_derivations: fields.required_with("stratum_derivations", |value| {
                 iri_keyed(value, DepthInputs::from_json)
                     .map(|entries| entries.into_iter().collect::<BTreeMap<_, _>>())
             })?,
             statistics_snapshot: fields
-                .required("statistics_snapshot", StatisticsSnapshot::from_json)?,
-            registry_instance_id: fields.required("registry_instance_id", |value| {
-                u64_of(value).map(RegistryId::from_raw)
-            })?,
-            registry_content_fingerprint: fields
-                .required("registry_content_fingerprint", string)?,
+                .required_with("statistics_snapshot", StatisticsSnapshot::from_json)?,
+            registry_instance_id: fields
+                .required::<u64>("registry_instance_id")
+                .map(RegistryId::from_raw)?,
+            registry_content_fingerprint: fields.required("registry_content_fingerprint")?,
             origin: PlanOrigin::Deserialized,
         })
     }
@@ -953,7 +852,6 @@ impl Plan {
 mod tests {
     use purrdf_lex::json::{self, Value};
 
-    use super::{f32_of, integer};
     use crate::error::PlanError;
     use crate::{Iri, Metric, ReadBound, RequestTerm, StatisticsSnapshot};
 
@@ -966,33 +864,6 @@ mod tests {
             PlanError::InvalidJson { pointer, .. } => pointer,
             other => panic!("expected a JSON shape refusal, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn an_integer_field_reads_integer_lexemes_that_fit_and_refuses_the_rest() {
-        assert_eq!(
-            integer::<u32>(&read("4294967295"), "u32").ok(),
-            Some(u32::MAX)
-        );
-        assert_eq!(integer::<u32>(&read("-0"), "u32").ok(), Some(0));
-        assert!(integer::<u32>(&read("4294967296"), "u32").is_err());
-        assert!(integer::<u32>(&read("-1"), "u32").is_err());
-        assert!(integer::<u32>(&read("1.0"), "u32").is_err());
-        assert!(integer::<u32>(&read("1e2"), "u32").is_err());
-        assert!(integer::<u32>(&read("\"1\""), "u32").is_err());
-        assert_eq!(
-            integer::<i128>(&read("-170141183460469231731687303715884105728"), "i128").ok(),
-            Some(i128::MIN)
-        );
-    }
-
-    #[test]
-    fn an_embedding_component_beyond_binary32_is_refused_and_its_neighbour_reads() {
-        assert!(f32_of(&read("1e39")).is_err());
-        assert!(f32_of(&read("-1e39")).is_err());
-        assert_eq!(f32_of(&read("3.4028235e38")).ok(), Some(f32::MAX));
-        assert_eq!(f32_of(&read("2")).ok(), Some(2.0));
-        assert_eq!(f32_of(&read("0.1")).ok(), Some(0.1_f32));
     }
 
     #[test]

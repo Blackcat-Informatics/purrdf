@@ -12,9 +12,6 @@ use purrdf_core::loss::{
 use purrdf_core::{DatasetView, LossLedger, research_object_to_rdf_loss_ledger};
 use purrdf_lex::json::{Object, Value};
 
-use super::super::json_codec::{
-    Fields, FromJson, JsonError, Owned, ToJson, into_owned, json_string_enum,
-};
 use super::super::{
     ProjectionError, ProjectionLimits, ProjectionPackage, escape_xml_attribute, escape_xml_text,
     validate_absolute_iri,
@@ -28,6 +25,8 @@ use super::{
     ResearchField, ResearchObjectConfig, ResearchObjectModel, ResearchRecordSet, ResearchResource,
     ResearchText, ResearchValue, lift_research_object, project_research_object,
 };
+use purrdf_lex::json::record::{DecodeError, FromJson, Owned, Record, ToJson, into_owned};
+use purrdf_lex::json_string_enum;
 
 /// Closed RO-Crate projection profile identifier.
 pub const RO_CRATE_PROFILE: &str = "ro-crate-1.3";
@@ -425,7 +424,7 @@ impl RoCrateVocabulary {
 
 impl FromJson for RoCrateVocabulary {
     /// The role map itself, revalidated by [`RoCrateVocabulary::new`].
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
         Ok(Self::new(BTreeMap::from_json(value)?)?)
     }
 }
@@ -533,8 +532,8 @@ impl RoCrateConfig {
 }
 
 impl FromJson for RoCrateConfig {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct RoCrateConfig")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct RoCrateConfig")?;
         let common: ResearchObjectConfig = fields.required("common")?;
         let context: OfflineJsonLdContext = fields.required("context")?;
         let vocabulary: RoCrateVocabulary = fields.required("vocabulary")?;

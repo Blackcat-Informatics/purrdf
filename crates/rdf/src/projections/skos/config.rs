@@ -5,8 +5,8 @@ use std::collections::BTreeSet;
 
 use purrdf_lex::json::{Object, Value};
 
-use super::super::json_codec::{Fields, FromJson, JsonError, ToJson};
 use super::super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
 
 /// Caller-owned RDF type and SKOS class roles.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -382,8 +382,8 @@ macro_rules! role_set {
 
         impl FromJson for $name {
             /// The four role groups; [`SkosConfig`] cross-checks them.
-            fn from_json(value: &Value) -> Result<Self, JsonError> {
-                let mut fields = Fields::new(value, concat!("struct ", stringify!($name)))?;
+            fn from_json(value: &Value) -> Result<Self, DecodeError> {
+                let mut fields = Record::new(value, concat!("struct ", stringify!($name)))?;
                 let roles = Self {
                     classes: fields.required("classes")?,
                     labels: fields.required("labels")?,
@@ -542,8 +542,8 @@ impl SkosConfig {
 }
 
 impl FromJson for SkosConfig {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct SkosConfig")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct SkosConfig")?;
         let source = fields.required("source")?;
         let target = fields.required("target")?;
         let scheme_iri: String = fields.required("scheme_iri")?;
@@ -583,8 +583,8 @@ impl ToJson for SkosConfig {
 const GRAPH_SELECTION_MODES: &[&str] = &["default-graph", "named-graph", "union"];
 
 impl FromJson for SkosGraphSelection {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "internally tagged enum SkosGraphSelection")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum SkosGraphSelection")?;
         let selection = match fields.tag("mode", GRAPH_SELECTION_MODES)? {
             "default-graph" => Self::DefaultGraph,
             "named-graph" => Self::NamedGraph {
@@ -615,8 +615,8 @@ impl ToJson for SkosGraphSelection {
 macro_rules! role_group_json {
     ($name:ident { $($field:ident),+ $(,)? }) => {
         impl FromJson for $name {
-            fn from_json(value: &Value) -> Result<Self, JsonError> {
-                let mut fields = Fields::new(value, concat!("struct ", stringify!($name)))?;
+            fn from_json(value: &Value) -> Result<Self, DecodeError> {
+                let mut fields = Record::new(value, concat!("struct ", stringify!($name)))?;
                 let roles = Self {
                     $($field: fields.required(stringify!($field))?,)+
                 };
@@ -680,7 +680,7 @@ fn validate_named_iris<const N: usize>(iris: [(&str, &str); N]) -> Result<(), Pr
 mod tests {
     use super::*;
 
-    fn read(text: &str) -> Result<SkosGraphSelection, JsonError> {
+    fn read(text: &str) -> Result<SkosGraphSelection, DecodeError> {
         SkosGraphSelection::from_json(&purrdf_lex::json::read(text).expect("JSON"))
     }
 

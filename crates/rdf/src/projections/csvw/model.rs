@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use purrdf_core::RdfTextDirection;
 use purrdf_lex::json::{Object, Value};
 
-use super::super::json_codec::{Fields, FromJson, JsonError, ToJson};
 use super::super::{ProjectionError, validate_absolute_iri};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
 
 /// Natural-language values keyed by a BCP47 language tag.
 ///
@@ -177,8 +177,8 @@ pub struct CsvwDatatype {
 }
 
 impl FromJson for CsvwNumericFormat {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct CsvwNumericFormat")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct CsvwNumericFormat")?;
         let format = Self {
             pattern: fields.optional("pattern")?,
             decimal_char: fields.required("decimal_char")?,
@@ -202,12 +202,12 @@ impl ToJson for CsvwNumericFormat {
 
 impl FromJson for CsvwDatatypeFormat {
     /// `{"kind": "pattern" | "numeric", "value": …}`; other members are ignored.
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "adjacently tagged enum CsvwDatatypeFormat")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "adjacently tagged enum CsvwDatatypeFormat")?;
         let kind = fields.tag("kind", &["pattern", "numeric"])?;
         let content = fields
             .raw("value")?
-            .ok_or_else(|| JsonError::missing_field("value"))?;
+            .ok_or_else(|| DecodeError::missing_field("value"))?;
         Ok(if kind == "pattern" {
             Self::Pattern(String::from_json(content)?)
         } else {
@@ -227,8 +227,8 @@ impl ToJson for CsvwDatatypeFormat {
 }
 
 impl FromJson for CsvwDatatype {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct CsvwDatatype")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct CsvwDatatype")?;
         let datatype = Self {
             id: fields.optional("id")?,
             base: fields.required("base")?,

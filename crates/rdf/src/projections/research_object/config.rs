@@ -5,8 +5,9 @@ use std::collections::BTreeMap;
 
 use purrdf_lex::json::{Object, Value};
 
-use super::super::json_codec::{Fields, FromJson, JsonError, ToJson, json_string_enum};
 use super::super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
+use purrdf_lex::json_string_enum;
 
 /// Semantic RDF role understood by the format-neutral research-object pivot.
 ///
@@ -285,7 +286,7 @@ impl ResearchObjectRoles {
 
 impl FromJson for ResearchObjectRoles {
     /// The role map itself, revalidated by [`ResearchObjectRoles::new`].
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
         Ok(Self::new(BTreeMap::from_json(value)?)?)
     }
 }
@@ -355,8 +356,8 @@ impl ResearchObjectIdentity {
 }
 
 impl FromJson for ResearchObjectIdentity {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct ResearchObjectIdentity")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct ResearchObjectIdentity")?;
         let dataset_iri: String = fields.required("dataset_iri")?;
         let entity_base_iri: String = fields.required("entity_base_iri")?;
         fields.deny_unknown()?;
@@ -446,8 +447,8 @@ impl ResearchObjectPolicy {
 }
 
 impl FromJson for ResearchObjectPolicy {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct ResearchObjectPolicy")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct ResearchObjectPolicy")?;
         let limits = fields.required("limits")?;
         let max_records = fields.required("max_records")?;
         let max_entities = fields.required("max_entities")?;
@@ -518,8 +519,8 @@ impl ResearchObjectConfig {
 }
 
 impl FromJson for ResearchObjectConfig {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct ResearchObjectConfig")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct ResearchObjectConfig")?;
         let config = Self {
             roles: fields.required("roles")?,
             identity: fields.required("identity")?,
@@ -575,9 +576,9 @@ mod tests {
     #[test]
     fn roles_are_complete_unique_absolute_and_revalidated() {
         let roles = ResearchObjectRoles::new(role_map()).expect("roles");
-        let json = super::super::super::json_codec::to_vec(&roles);
+        let json = purrdf_lex::json::record::to_vec(&roles);
         assert_eq!(
-            super::super::super::json_codec::from_slice::<ResearchObjectRoles>(&json)
+            purrdf_lex::json::record::from_slice::<ResearchObjectRoles>(&json)
                 .expect("deserialize"),
             roles
         );

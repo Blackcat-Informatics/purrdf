@@ -11,8 +11,8 @@
 
 use purrdf_lex::json::{Object, Value};
 
-use super::json_codec::{ToJson, to_vec};
 use super::{ProjectionError, ProjectionTerm, stable_identifier};
+use purrdf_lex::json::record::{ToJson, to_vec};
 
 /// One source quad: its terms and, outside the default graph, its graph name.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

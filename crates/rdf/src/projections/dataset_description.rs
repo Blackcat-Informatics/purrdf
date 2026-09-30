@@ -15,8 +15,8 @@ use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 
 use crate::native_codecs::{NativeRdfFormat, serialize_dataset_to_format};
 
-use super::json_codec::{Fields, FromJson, JsonError, ToJson};
 use super::{ProjectionError, ProjectionLimits, ProjectionPackage};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
 
 /// Mandatory bounds and query text for a whole-dataset SPARQL CONSTRUCT view.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,15 +151,15 @@ impl FromJson for ConstructViewConfig {
     /// Every member is mandatory, `base_iri` included: it is a string or an
     /// explicit `null`, never absent, so a caller states that the query is
     /// self-contained rather than implying it by omission.
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct RawConstructViewConfig")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct RawConstructViewConfig")?;
         let query: String = fields.required("query")?;
         let base_iri = match fields.raw("base_iri")? {
-            None => return Err(JsonError::missing_field("base_iri")),
+            None => return Err(DecodeError::missing_field("base_iri")),
             Some(Value::Null) => None,
             Some(Value::String(base)) => Some(base.clone()),
             Some(_) => {
-                return Err(JsonError::custom(
+                return Err(DecodeError::custom(
                     "data did not match any variant of untagged enum RequiredNullableString",
                 ));
             }
@@ -198,16 +198,16 @@ impl ToJson for ConstructViewConfig {
 /// registry's [`classify`](crate::native_codecs::classify) accepts, which
 /// includes the stable [`NativeRdfFormat::id`] that [`format_to_json`] writes.
 pub(super) fn format_from_json(
-    fields: &mut Fields<'_>,
+    fields: &mut Record<'_>,
     name: &'static str,
-) -> Result<NativeRdfFormat, JsonError> {
+) -> Result<NativeRdfFormat, DecodeError> {
     let value = fields
         .raw(name)?
-        .ok_or_else(|| JsonError::missing_field(name))?;
+        .ok_or_else(|| DecodeError::missing_field(name))?;
     let spelling = value
         .as_str()
-        .ok_or_else(|| JsonError::invalid_type(value, "a string"))?;
-    crate::native_codecs::classify(spelling).map_err(JsonError::custom)
+        .ok_or_else(|| DecodeError::invalid_type(value, "a string"))?;
+    crate::native_codecs::classify(spelling).map_err(DecodeError::custom)
 }
 
 /// A configuration's output syntax, as its stable [`NativeRdfFormat::id`].

@@ -14,7 +14,6 @@ use purrdf_lex::json::{Object, Value};
 use crate::native_codecs::NativeRdfFormat;
 
 use super::dataset_description::{format_from_json, format_to_json, serialize_description};
-use super::json_codec::{Fields, FromJson, JsonError, ToJson};
 use super::research_object::{
     DCAT_PROFILE, DcatConfig, DcatRole, ResearchActivity, ResearchAgent, ResearchChecksum,
     ResearchField, ResearchObjectModel, ResearchRecordSet, ResearchResource, ResearchRole,
@@ -25,6 +24,7 @@ use super::{
     ConstructViewConfig, ProjectionError, ProjectionLimits, RdfDescriptionProjection,
     project_construct_view, stable_identifier, validate_absolute_iri,
 };
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
 
 /// Mandatory target-core vocabulary and output bound for mapped DCAT RDF.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,8 +100,8 @@ impl DcatRdfMappingConfig {
 }
 
 impl FromJson for DcatRdfMappingConfig {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct RawDcatRdfMappingConfig")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct RawDcatRdfMappingConfig")?;
         let dcat = fields.required("dcat")?;
         let rdf_type: String = fields.required("rdf_type")?;
         let xsd_string: String = fields.required("xsd_string")?;
@@ -153,12 +153,12 @@ const DCAT_RDF_SOURCE_MODES: &[&str] = &["mapped", "construct"];
 
 impl FromJson for DcatRdfSource {
     /// `{"mode": "mapped" | "construct", "config": …}`, and no other member.
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "adjacently tagged enum DcatRdfSource")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "adjacently tagged enum DcatRdfSource")?;
         let mode = fields.tag("mode", DCAT_RDF_SOURCE_MODES)?;
         let config = fields
             .raw("config")?
-            .ok_or_else(|| JsonError::missing_field("config"))?;
+            .ok_or_else(|| DecodeError::missing_field("config"))?;
         fields.deny_unknown()?;
         Ok(if mode == "mapped" {
             Self::Mapped(FromJson::from_json(config)?)
@@ -179,8 +179,8 @@ impl ToJson for DcatRdfSource {
 }
 
 impl FromJson for DcatRdfConfig {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct RawDcatRdfConfig")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct RawDcatRdfConfig")?;
         let format = format_from_json(&mut fields, "format")?;
         let source = fields.required("source")?;
         let document_base_iri = fields.optional("document_base_iri")?;
@@ -587,11 +587,11 @@ fn validate_record_bound(value: usize, field: &str) -> Result<(), ProjectionErro
 
 #[cfg(test)]
 mod tests {
-    use super::super::json_codec::{from_slice, to_vec};
     use super::*;
     use crate::native_codecs::parse_dataset;
     use crate::projections::{DCAT_ARTIFACT, project_dcat};
     use purrdf_core::{RdfDatasetBuilder, datasets_isomorphic};
+    use purrdf_lex::json::record::{from_slice, to_vec};
 
     const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
     const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";

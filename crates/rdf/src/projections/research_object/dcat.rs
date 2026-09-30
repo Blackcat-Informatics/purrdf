@@ -10,9 +10,6 @@ use purrdf_core::loss::{
 use purrdf_core::{DatasetView, LossLedger, research_object_to_rdf_loss_ledger};
 use purrdf_lex::json::{Object, Value};
 
-use super::super::json_codec::{
-    Fields, FromJson, JsonError, Owned, ToJson, into_owned, json_string_enum,
-};
 use super::super::{ProjectionError, ProjectionPackage, stable_identifier, validate_absolute_iri};
 use super::json::{
     ResearchObjectPackageProjection, ResearchObjectReadOutcome, canonical_json, ensure_sound,
@@ -23,6 +20,8 @@ use super::{
     ResearchField, ResearchObjectConfig, ResearchObjectModel, ResearchRecordSet, ResearchResource,
     ResearchText, ResearchValue, lift_research_object, project_research_object,
 };
+use purrdf_lex::json::record::{DecodeError, FromJson, Owned, Record, ToJson, into_owned};
+use purrdf_lex::json_string_enum;
 
 /// Closed DCAT projection profile identifier.
 pub const DCAT_PROFILE: &str = "dcat-3";
@@ -256,7 +255,7 @@ impl DcatVocabulary {
 
 impl FromJson for DcatVocabulary {
     /// The role map itself, revalidated by [`DcatVocabulary::new`].
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
         Ok(Self::new(BTreeMap::from_json(value)?)?)
     }
 }
@@ -325,8 +324,8 @@ impl DcatConfig {
 }
 
 impl FromJson for DcatConfig {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct DcatConfig")?;
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct DcatConfig")?;
         let common: ResearchObjectConfig = fields.required("common")?;
         let context: OfflineJsonLdContext = fields.required("context")?;
         let vocabulary: DcatVocabulary = fields.required("vocabulary")?;

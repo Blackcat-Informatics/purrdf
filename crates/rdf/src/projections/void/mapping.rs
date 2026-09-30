@@ -707,7 +707,7 @@ mod tests {
     use purrdf_core::{PackBuilder, PackView, datasets_isomorphic};
     use purrdf_lex::json::Value;
 
-    use super::super::super::json_codec::{FromJson, from_slice};
+    use purrdf_lex::json::record::{FromJson, from_slice};
 
     use super::*;
     use crate::native_codecs::{NativeRdfFormat, parse_dataset};
