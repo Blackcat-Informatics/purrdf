@@ -5,7 +5,7 @@
 //!
 //! OKF is a deterministic in-memory bundle of UTF-8 Markdown documents with YAML
 //! frontmatter. This module deliberately owns no filesystem API: callers can map
-//! [`OkfBundle`](crate::native_codecs::okf::OkfBundle) entries to directories, archives, browser
+//! [`OkfBundle`] entries to directories, archives, browser
 //! storage, or another transport without making the release crate non-wasm. The RDF vocabulary and
 //! document base are mandatory caller configuration; PurRDF provides no namespace
 //! default and mints no vocabulary IRI.

@@ -89,7 +89,7 @@ pub struct RulesRequest<'a> {
     /// The base IRI the rule set's relative references resolve against.
     pub srl_base: Option<&'a str>,
     /// Whether to render the proof of every inferred triple
-    /// ([`Inference::proof_text`]).
+    /// ([`Inference::proof_text`](purrdf_shapes::srl::Inference::proof_text)).
     pub explain: bool,
     /// The term-generating round limit, or `None` for the engine default. See the
     /// [module docs](self): hosts running untrusted rule sets should lower it.
@@ -185,9 +185,12 @@ pub use purrdf_shapes::RuleLimits;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RulesOutcome {
     /// The inference graph — the inferred triples only, never the base graph — as
-    /// N-Triples 1.2 in canonical order ([`Inference::inferred_ntriples`]).
+    /// N-Triples 1.2 in canonical order
+    /// ([`Inference::inferred_ntriples`](purrdf_shapes::srl::Inference::inferred_ntriples)).
     pub inferred_ntriples: String,
-    /// The proof text ([`Inference::proof_text`]) when the request asked for it.
+    /// The proof text
+    /// ([`Inference::proof_text`](purrdf_shapes::srl::Inference::proof_text))
+    /// when the request asked for it.
     pub proof: Option<String>,
     /// The shapes graph's mandatory diagnostics
     /// ([`purrdf_shapes::shapes::Shapes::mandatory_diagnostics`]): every shape with an empty

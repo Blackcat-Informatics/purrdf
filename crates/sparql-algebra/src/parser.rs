@@ -3218,9 +3218,10 @@ enum ExistsScopeBasis {
 }
 
 /// Whether a construct that introduces a fresh binding inside the pattern
-/// [`find_scope_conflict`] walks is a `BIND`/`(expr AS ?v)` target, a
-/// `VALUES` variable or an `UNFOLD` target — the shapes it can report,
-/// matching the message forms each call site produces.
+/// the parser's scope-conflict walk (`find_scope_conflict`) visits is a
+/// `BIND`/`(expr AS ?v)` target, a `VALUES` variable or an `UNFOLD` target —
+/// the shapes it can report, matching the message forms each call site
+/// produces.
 ///
 /// Public because the evaluator's `EXISTS` row-collision check reports the
 /// same introductions in the same words: one enum, so the parser's refusal
