@@ -1176,19 +1176,15 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_round_trips_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = purrdf_core::term_fixture::triple_chain(LEVELS);
-                let text = candidate_lexical(&value).expect("a chain of IRIs is spelled");
-                assert_eq!(lexical_size_hint(&value), text.len());
-                let mut written = String::new();
-                write_term(&value, &mut written).expect("a chain of IRIs is ground");
-                assert_eq!(written, text);
-                assert_eq!(decode_term(&text), Ok(value));
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no walk overflowed the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            let text = candidate_lexical(&value).expect("a chain of IRIs is spelled");
+            assert_eq!(lexical_size_hint(&value), text.len());
+            let mut written = String::new();
+            write_term(&value, &mut written).expect("a chain of IRIs is ground");
+            assert_eq!(written, text);
+            assert_eq!(decode_term(&text), Ok(value));
+        })
+        .expect("the thread starts");
     }
 }

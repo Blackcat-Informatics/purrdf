@@ -4342,21 +4342,20 @@ mod walk_tests {
     // ── A deterministic shape generator ────────────────────────────────────────────
 
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         fn new(seed: u64, budget: usize) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget,
             }
         }
 
         fn choose(&mut self, options: usize) -> usize {
-            let draw = purrdf_testkit::rng::splitmix64_next(&mut self.state);
-            usize::try_from(draw % options as u64).expect("a choice fits usize")
+            self.state.below_usize(options)
         }
 
         fn coin(&mut self) -> bool {
@@ -4720,12 +4719,7 @@ mod walk_tests {
     }
 
     fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
+        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
     }
 
     fn stringify<T>(result: Result<T, RdfDiagnostic>) -> Result<T, String> {

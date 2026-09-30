@@ -435,16 +435,7 @@ fn emit_modality(vocab: &SliceVocab) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-
-    fn repo_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf()
-    }
+    use purrdf_testkit::paths::workspace_root;
 
     fn first_diff(got: &str, want: &str) -> String {
         for (i, (g, w)) in got.lines().zip(want.lines()).enumerate() {
@@ -461,7 +452,7 @@ mod tests {
 
     #[test]
     fn every_standpoint_file_matches_committed() {
-        let root = repo_root();
+        let root = workspace_root();
         // Committed-artifact parity: the committed queries were generated with
         // the blackcatinformatics purrdf namespace (prefix `purrdf`), so this
         // cross-check must use it (pure fixtures elsewhere use example.org).

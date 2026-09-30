@@ -7,6 +7,7 @@
 //! so a protocol violation can be produced deliberately; the oracle recomputes
 //! the fused order from first principles and must agree with the engine.
 
+use purrdf_testkit::rng::xorshift64_next;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
 use std::sync::Arc;
@@ -6390,20 +6391,6 @@ fn a_declaration_changes_the_reading_and_never_the_answer() {
     }
 }
 
-/// A deterministic stream of values, seeded once per configuration.
-///
-/// A named, fixed recurrence rather than a random-number generator: every
-/// configuration below is reproduced exactly by its index, so a failure names a
-/// case a reader can rebuild, and nothing in an assertion depends on a draw.
-fn seeded(state: &mut u64) -> u64 {
-    // A 64-bit xorshift. Its only property that matters here is that it is a
-    // pure function of its state, identical on every target.
-    *state ^= *state << 13;
-    *state ^= *state >> 7;
-    *state ^= *state << 17;
-    *state
-}
-
 /// Configuration `index` of the differential: three strata over a twelve-item
 /// universe partitioned into two blocks, with a cross-cutting third producer.
 ///
@@ -6417,7 +6404,7 @@ fn differential_spec(index: u64) -> Vec<StratumSpec> {
     // Each item's block, drawn once and then respected by every producer.
     let blocks: Vec<&'static str> = (0..12)
         .map(|_: u64| {
-            if seeded(&mut state).is_multiple_of(2) {
+            if xorshift64_next(&mut state).is_multiple_of(2) {
                 DOMAIN_DOCS
             } else {
                 DOMAIN_PEOPLE
@@ -6445,13 +6432,13 @@ fn differential_spec(index: u64) -> Vec<StratumSpec> {
             .iter()
             .zip(&blocks)
             .filter(|(_, block)| allowed.contains(block))
-            .filter(|_| !seeded(state).is_multiple_of(3))
+            .filter(|_| !xorshift64_next(state).is_multiple_of(3))
             .map(|(item, _)| item.clone())
             .collect();
         // A deterministic rotation, so the strata disagree about the order of
         // the items they share — which is what makes the fusion do work.
         if !chosen.is_empty() {
-            let rotation = (seeded(state) % chosen.len() as u64) as usize;
+            let rotation = (xorshift64_next(state) % chosen.len() as u64) as usize;
             chosen.rotate_left(rotation);
         }
         chosen
@@ -6468,19 +6455,19 @@ fn differential_spec(index: u64) -> Vec<StratumSpec> {
         StratumSpec {
             name: "docs",
             tags: vec![DOMAIN_DOCS],
-            weight: weights[(seeded(&mut state) % 3) as usize],
+            weight: weights[(xorshift64_next(&mut state) % 3) as usize],
             items: docs_items,
         },
         StratumSpec {
             name: "people",
             tags: vec![DOMAIN_PEOPLE],
-            weight: weights[(seeded(&mut state) % 3) as usize],
+            weight: weights[(xorshift64_next(&mut state) % 3) as usize],
             items: people_items,
         },
         StratumSpec {
             name: "prior",
             tags: vec![DOMAIN_DOCS, DOMAIN_PEOPLE],
-            weight: weights[(seeded(&mut state) % 3) as usize],
+            weight: weights[(xorshift64_next(&mut state) % 3) as usize],
             items: prior_items,
         },
     ]
@@ -8339,12 +8326,7 @@ fn the_backward_pass_agrees_with_the_quadratic_definition() {
     // can overflow, so every case exercises the comparison rather than the
     // arithmetic's refusal.
     let mut state: u64 = 0x2545_f491_4f6c_dd1d;
-    let mut next = |bound: u64| {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        state % bound
-    };
+    let mut next = |bound: u64| xorshift64_next(&mut state) % bound;
 
     let mut saw_empty = 0_u32;
     let mut saw_partial = 0_u32;

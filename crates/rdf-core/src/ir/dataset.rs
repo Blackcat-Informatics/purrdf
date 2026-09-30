@@ -3830,8 +3830,8 @@ mod tests {
     /// that position, and a graph id that names no graph.
     #[test]
     fn chunked_scan_filter_matches_per_row_filter() {
-        let mut state = 0x0DA7_A5E7_u64;
-        let mut next = move |bound: u64| purrdf_testkit::rng::splitmix64_next(&mut state) % bound;
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(0x0DA7_A5E7);
+        let mut next = move |bound: u64| rng.below(bound);
         let mut sequential = 0_usize;
         let mut permuted = 0_usize;
         for rows in (0..=40).chain([63, 64, 65, 127, 200]) {

@@ -715,19 +715,7 @@ mod tests {
     use crate::terminals::{
         is_iriref_forbidden_byte, is_json_string_forbidden_byte, is_ws, is_xml_char,
     };
-
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        const fn next(&mut self) -> u64 {
-            purrdf_testkit::rng::splitmix64_next(&mut self.0)
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            usize::try_from(self.next() % n as u64).expect("below n")
-        }
-    }
+    use purrdf_testkit::rng::SplitMix64;
 
     /// The per-byte search each scanner replaces: the first byte whose
     /// range-table membership (by the binary search the predicates ran before
@@ -814,13 +802,13 @@ mod tests {
         (0..=70).chain([127, 128, 129, 255, 256, 1000, 4099])
     }
 
-    fn random_bytes(rng: &mut SplitMix, alphabet: &[u8], len: usize, clean: u8) -> Vec<u8> {
+    fn random_bytes(rng: &mut SplitMix64, alphabet: &[u8], len: usize, clean: u8) -> Vec<u8> {
         // Mostly one clean byte, so matches land at every offset rather than
         // almost always in the first lane.
         (0..len)
             .map(|_| {
-                if rng.below(4) == 0 {
-                    alphabet[rng.below(alphabet.len())]
+                if rng.below_usize(4) == 0 {
+                    alphabet[rng.below_usize(alphabet.len())]
                 } else {
                     clean
                 }
@@ -828,11 +816,11 @@ mod tests {
             .collect()
     }
 
-    fn random_str(rng: &mut SplitMix, len: usize, clean: char) -> String {
+    fn random_str(rng: &mut SplitMix64, len: usize, clean: char) -> String {
         (0..len)
             .map(|_| {
-                if rng.below(4) == 0 {
-                    SCALARS[rng.below(SCALARS.len())]
+                if rng.below_usize(4) == 0 {
+                    SCALARS[rng.below_usize(SCALARS.len())]
                 } else {
                     clean
                 }
@@ -932,7 +920,7 @@ mod tests {
     #[test]
     fn byte_scanners_agree_with_the_per_byte_search() {
         let alphabet = boundary_bytes();
-        let mut rng = SplitMix(0x0005_EED0_FC1A_55E5);
+        let mut rng = SplitMix64::new(0x0005_EED0_FC1A_55E5);
         type Scanner = fn(&[u8]) -> Option<usize>;
         let cases: [(&str, Scanner, &[ScalarRange], bool, u8); 3] = [
             ("trivia", find_first_trivia, ws_ranges(), false, b' '),
@@ -972,7 +960,7 @@ mod tests {
 
     #[test]
     fn xml_scanner_agrees_with_the_per_scalar_search() {
-        let mut rng = SplitMix(0x0C0F_FEE0_00A1_1000);
+        let mut rng = SplitMix64::new(0x0C0F_FEE0_00A1_1000);
         for len in lengths() {
             for _ in 0..40 {
                 let s = random_str(&mut rng, len, 'x');
@@ -992,7 +980,7 @@ mod tests {
     /// with the per-byte search on the text's bytes.
     #[test]
     fn scanners_agree_on_text_and_stop_on_char_boundaries() {
-        let mut rng = SplitMix(0x007E_A700_00BE_EF00);
+        let mut rng = SplitMix64::new(0x007E_A700_00BE_EF00);
         for len in lengths() {
             for _ in 0..20 {
                 let s = random_str(&mut rng, len, 'a');
@@ -1057,7 +1045,7 @@ mod tests {
         }
         let mut alphabet = boundary_bytes();
         alphabet.extend([b'\n', b',', 0xC2, 0xC3]);
-        let mut rng = SplitMix(0x00B7_E0C1_A550_0001);
+        let mut rng = SplitMix64::new(0x00B7_E0C1_A550_0001);
         let mut hits = [0_usize; 2];
         for len in lengths() {
             for _ in 0..40 {

@@ -32,11 +32,16 @@ use purrdf_sparql_eval::{PlanCache, PreparedQuery};
 /// re-parse).
 #[test]
 fn compiles_generated_query_set_once() {
-    let query_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../generated/queries");
+    let query_dir = purrdf_testkit::paths::workspace_root().join("generated/queries");
 
     // --- enumerate and sort ---
-    let mut entries: Vec<std::path::PathBuf> = fs::read_dir(query_dir)
-        .unwrap_or_else(|e| panic!("cannot open generated/queries dir ({query_dir}): {e}"))
+    let mut entries: Vec<std::path::PathBuf> = fs::read_dir(&query_dir)
+        .unwrap_or_else(|e| {
+            panic!(
+                "cannot open generated/queries dir ({}): {e}",
+                query_dir.display()
+            )
+        })
         .map(|res| res.expect("read_dir entry").path())
         .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("rq"))
         .collect();

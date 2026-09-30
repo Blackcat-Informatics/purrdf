@@ -305,12 +305,8 @@ fn successive_appends_keep_minted_blanks_fresh_against_destination_only_nodes() 
 /// parser's 512-byte charge; the refusal is the evaluation's own typed stack refusal.
 #[test]
 fn deeply_joined_construct_is_depth_admitted_before_survey_or_substitution() {
-    std::thread::Builder::new()
-        .stack_size(512 * 1024 * 1024)
-        .spawn(deeply_joined_construct_on_a_large_stack)
-        .expect("spawn")
-        .join()
-        .expect("the large thread returned");
+    purrdf_stack::on_stack(512 * 1024 * 1024, deeply_joined_construct_on_a_large_stack)
+        .expect("spawn");
 }
 
 fn deeply_joined_construct_on_a_large_stack() {

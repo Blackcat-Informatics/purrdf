@@ -3033,22 +3033,20 @@ mod body_walk_tests {
 
     /// A deterministic choice sequence with a nesting budget.
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 30,
             }
         }
 
         fn choose(&mut self, n: usize) -> usize {
-            let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
-                .expect("a draw below the count fits")
+            self.state.below_usize(n)
         }
 
         fn spend(&mut self) -> bool {
@@ -3390,12 +3388,7 @@ mod body_walk_tests {
     }
 
     fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
+        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
     }
 
     // ── The tests ──────────────────────────────────────────────────────────────────

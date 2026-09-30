@@ -7916,12 +7916,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
     fn on_the_smallest_stack<T: Send + 'static>(
         question: impl FnOnce() -> T + Send + 'static,
     ) -> T {
-        std::thread::Builder::new()
-            .stack_size(SMALLEST_TARGET_STACK)
-            .spawn(question)
-            .expect("a thread")
-            .join()
-            .expect("the question is answered rather than aborting the process")
+        purrdf_stack::on_stack(SMALLEST_TARGET_STACK, question).expect("a thread")
     }
 
     /// `count` ground triples sharing a subject and an object, one predicate each.
@@ -8676,23 +8671,19 @@ mod term_walk_tests {
     #[test]
     fn a_deep_malformed_term_renders_on_a_128_kib_thread() {
         const LEVELS: usize = 2_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut value = TermValue::iri("http://example.org/o");
-                for _ in 0..LEVELS {
-                    value = TermValue::Triple {
-                        s: TermBox::new(TermValue::iri("http://example.org/s")),
-                        p: TermBox::new(TermValue::blank("p")),
-                        o: TermBox::new(value),
-                    };
-                }
-                let rendered = emit(&value);
-                assert_eq!(rendered.matches("<<( ").count(), LEVELS);
-                assert!(value.to_rdf_term().is_err());
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the rendering did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut value = TermValue::iri("http://example.org/o");
+            for _ in 0..LEVELS {
+                value = TermValue::Triple {
+                    s: TermBox::new(TermValue::iri("http://example.org/s")),
+                    p: TermBox::new(TermValue::blank("p")),
+                    o: TermBox::new(value),
+                };
+            }
+            let rendered = emit(&value);
+            assert_eq!(rendered.matches("<<( ").count(), LEVELS);
+            assert!(value.to_rdf_term().is_err());
+        })
+        .expect("the thread starts");
     }
 }

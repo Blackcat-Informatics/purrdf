@@ -105,13 +105,7 @@ use std::path::{Path, PathBuf};
 use purrdf_sparql_algebra::{
     GraphPattern, GraphUpdateOperation, Query, SparqlParser, Update, pattern_to_select_query,
 };
-
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("workspace root resolves")
-}
+use purrdf_testkit::paths::workspace_root;
 
 /// Every file with extension `ext` under `dir`, recursively. Shared by the
 /// `.rq` (query) and `.ru` (update) collection passes below — every other

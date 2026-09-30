@@ -7018,58 +7018,54 @@ mod tests {
             }
         }
 
-        std::thread::Builder::new()
-            .stack_size(256 * 1024 * 1024)
-            .spawn(|| {
-                let engine = NativeSparqlEngine::new();
-                // A thousand levels, eight times the count the evaluator used to
-                // refuse past, prepare and ANSWER where the stack holds them.
-                let admitted = PreparedQuery::rewritten(nested(1_000), QueryOptions::EMPTY)
-                    .expect("a thousand nested levels prepare");
-                let answer = engine
-                    .query_prepared(&social(), &admitted, &[], QueryOptions::EMPTY)
-                    .expect("a thousand nested levels evaluate");
-                let SparqlResult::Solutions { rows, .. } = answer else {
-                    panic!("a SELECT answers with solutions, got {answer:?}");
-                };
-                assert_eq!(
-                    rows.len(),
-                    1,
-                    "the admitted plan produces its real `:a :knows :b` row: {rows:?}"
-                );
+        purrdf_stack::on_stack(256 * 1024 * 1024, || {
+            let engine = NativeSparqlEngine::new();
+            // A thousand levels, eight times the count the evaluator used to
+            // refuse past, prepare and ANSWER where the stack holds them.
+            let admitted = PreparedQuery::rewritten(nested(1_000), QueryOptions::EMPTY)
+                .expect("a thousand nested levels prepare");
+            let answer = engine
+                .query_prepared(&social(), &admitted, &[], QueryOptions::EMPTY)
+                .expect("a thousand nested levels evaluate");
+            let SparqlResult::Solutions { rows, .. } = answer else {
+                panic!("a SELECT answers with solutions, got {answer:?}");
+            };
+            assert_eq!(
+                rows.len(),
+                1,
+                "the admitted plan produces its real `:a :knows :b` row: {rows:?}"
+            );
 
-                // Ten thousand levels prepare here too — admission is this thread's
-                // measure — but their walks need 5 MB at the admission's 512-byte charge,
-                // more than the C library hands a 256 KiB request, so the same plan
-                // evaluated there is the evaluation's own typed stack refusal. The
-                // plan is built and dropped here, where its drop fits.
-                let tall = PreparedQuery::rewritten(nested(10_000), QueryOptions::EMPTY)
-                    .expect("ten thousand nested levels prepare on a large stack");
-                let refused = std::thread::scope(|scope| {
-                    std::thread::Builder::new()
-                        .stack_size(256 * 1024)
-                        .spawn_scoped(scope, || {
-                            NativeSparqlEngine::new().query_prepared(
-                                &social(),
-                                &tall,
-                                &[],
-                                QueryOptions::EMPTY,
-                            )
-                        })
-                        .expect("spawn")
-                        .join()
-                        .expect("the small thread returned rather than aborting")
-                })
-                .expect_err("a plan too tall for the evaluating thread's stack is refused");
-                assert_eq!(
-                    refused.code,
-                    crate::EvalError::STACK_EXHAUSTED_CODE,
-                    "the refusal is the evaluation's stack refusal: {refused}"
-                );
+            // Ten thousand levels prepare here too — admission is this thread's
+            // measure — but their walks need 5 MB at the admission's 512-byte charge,
+            // more than the C library hands a 256 KiB request, so the same plan
+            // evaluated there is the evaluation's own typed stack refusal. The
+            // plan is built and dropped here, where its drop fits.
+            let tall = PreparedQuery::rewritten(nested(10_000), QueryOptions::EMPTY)
+                .expect("ten thousand nested levels prepare on a large stack");
+            let refused = std::thread::scope(|scope| {
+                std::thread::Builder::new()
+                    .stack_size(256 * 1024)
+                    .spawn_scoped(scope, || {
+                        NativeSparqlEngine::new().query_prepared(
+                            &social(),
+                            &tall,
+                            &[],
+                            QueryOptions::EMPTY,
+                        )
+                    })
+                    .expect("spawn")
+                    .join()
+                    .expect("the small thread returned rather than aborting")
             })
-            .expect("spawn")
-            .join()
-            .expect("the large thread returned");
+            .expect_err("a plan too tall for the evaluating thread's stack is refused");
+            assert_eq!(
+                refused.code,
+                crate::EvalError::STACK_EXHAUSTED_CODE,
+                "the refusal is the evaluation's stack refusal: {refused}"
+            );
+        })
+        .expect("spawn");
     }
 
     /// A one-in-one-out relation whose declared [`Volatility`](crate::Volatility) is the

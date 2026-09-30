@@ -1878,35 +1878,31 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_rescoped_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut value = TermValue::Blank {
-                    label: "b".to_owned(),
-                    scope: BlankScope(3),
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut value = TermValue::Blank {
+                label: "b".to_owned(),
+                scope: BlankScope(3),
+            };
+            for _ in 0..LEVELS {
+                value = TermValue::Triple {
+                    s: TermBox::new(TermValue::iri("http://example.org/s")),
+                    p: TermBox::new(TermValue::iri("http://example.org/p")),
+                    o: TermBox::new(value),
                 };
-                for _ in 0..LEVELS {
-                    value = TermValue::Triple {
-                        s: TermBox::new(TermValue::iri("http://example.org/s")),
-                        p: TermBox::new(TermValue::iri("http://example.org/p")),
-                        o: TermBox::new(value),
-                    };
-                }
-                assert_eq!(scope_of(&value), 3);
-                let mut next = 10;
-                let mut map = ScopeMap::Fresh {
-                    assigned: BTreeMap::new(),
-                    next: &mut next,
-                };
-                let mut builder = RdfDatasetBuilder::new();
-                assert_eq!(
-                    intern_scoped(&mut builder, &value, &mut map).index(),
-                    LEVELS + 2
-                );
-                assert_eq!(assigned(&map).map(|assigned| assigned.len()), Some(1));
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no walk overflowed the thread's stack");
+            }
+            assert_eq!(scope_of(&value), 3);
+            let mut next = 10;
+            let mut map = ScopeMap::Fresh {
+                assigned: BTreeMap::new(),
+                next: &mut next,
+            };
+            let mut builder = RdfDatasetBuilder::new();
+            assert_eq!(
+                intern_scoped(&mut builder, &value, &mut map).index(),
+                LEVELS + 2
+            );
+            assert_eq!(assigned(&map).map(|assigned| assigned.len()), Some(1));
+        })
+        .expect("the thread starts");
     }
 }

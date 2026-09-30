@@ -3062,19 +3062,8 @@ mod tests {
             }
             pattern
         }
-        fn on_thread<T: Send + 'static>(
-            bytes: usize,
-            body: impl FnOnce() -> T + Send + 'static,
-        ) -> T {
-            std::thread::Builder::new()
-                .stack_size(bytes)
-                .spawn(body)
-                .expect("spawn")
-                .join()
-                .expect("the thread returned")
-        }
 
-        on_thread(64 * 1024 * 1024, || {
+        purrdf_stack::on_stack(64 * 1024 * 1024, || {
             validate_graph_pattern_depth(&nested(1_000))
                 .expect("a thousand levels are admitted where the stack holds their walks");
             // A hundred thousand levels need 51 MB of walks at the parser's 512-byte
@@ -3095,7 +3084,8 @@ mod tests {
                 matches!(error, crate::EvalError::StackExhausted { .. }),
                 "{error:?}"
             );
-        });
+        })
+        .expect("spawn");
     }
 
     // ---- prefix-monotone operators certify --------------------------------
@@ -4152,7 +4142,6 @@ mod iterative_walks {
     };
 
     use super::*;
-    use purrdf_testkit::rng::splitmix64_next;
 
     const EX: &str = "http://example.org/";
 
@@ -4851,21 +4840,21 @@ mod iterative_walks {
     /// A deterministic choice sequence: every shape is a pure function of its seed, and
     /// a size budget bounds it.
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         fn new(seed: u64, budget: usize) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget,
             }
         }
 
         /// One choice among `n`.
         fn pick(&mut self, n: usize) -> usize {
-            (splitmix64_next(&mut self.state) % n as u64) as usize
+            self.state.below_usize(n)
         }
 
         fn coin(&mut self) -> bool {
@@ -5344,12 +5333,7 @@ mod iterative_walks {
 
     /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
     fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
+        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
     }
 
     fn var(name: &str) -> Variable {

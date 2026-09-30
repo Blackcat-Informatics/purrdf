@@ -1532,23 +1532,18 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_rendered_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = purrdf_core::term_fixture::triple_chain(LEVELS);
-                let mut graph = Graph::default();
-                let id = lower(&mut graph, &value);
-                drop(value);
-                let rendered = render_term(&graph, id);
-                let level =
-                    "<<( <http://example.org/s> <http://example.org/p> ".len() + " )>>".len();
-                assert_eq!(
-                    rendered.len(),
-                    LEVELS * level + "<http://example.org/o>".len()
-                );
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the renderer did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            let mut graph = Graph::default();
+            let id = lower(&mut graph, &value);
+            drop(value);
+            let rendered = render_term(&graph, id);
+            let level = "<<( <http://example.org/s> <http://example.org/p> ".len() + " )>>".len();
+            assert_eq!(
+                rendered.len(),
+                LEVELS * level + "<http://example.org/o>".len()
+            );
+        })
+        .expect("the thread starts");
     }
 }

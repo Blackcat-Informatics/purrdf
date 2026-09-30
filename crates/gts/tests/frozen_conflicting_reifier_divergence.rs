@@ -79,7 +79,7 @@ use purrdf_lex::json::Value as Json;
 const VECTOR: &str = "12-conflicting-reifier";
 
 fn vectors_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vectors")
+    purrdf_testkit::paths::workspace_root().join("vectors")
 }
 
 /// Fold the frozen vector through the real reader, exactly as a consumer would.

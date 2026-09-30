@@ -58,7 +58,7 @@ const XFAIL_CROSS: &[(&str, &str)] = &[(
 )];
 
 fn corpus() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors/shexTest")
+    purrdf_testkit::paths::workspace_root().join("vectors/shexTest")
 }
 
 fn shex_files(dir: &Path) -> Vec<PathBuf> {

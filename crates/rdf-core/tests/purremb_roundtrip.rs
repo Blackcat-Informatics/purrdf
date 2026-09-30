@@ -288,20 +288,15 @@ fn unordered_typed_inputs_produce_identical_bytes() {
     assert_eq!(forward.artifact_bytes, reverse.artifact_bytes);
 }
 
+/// The canonical artifact, byte for byte; `PURREMB_REGENERATE_GOLDEN=1` rewrites the
+/// golden from what the build produced instead.
 #[test]
 fn canonical_artifact_matches_checked_in_golden() {
-    let expected = std::fs::read(golden_path()).expect("checked-in PURREMB golden");
-    assert_eq!(build_fixture(false).artifact_bytes, expected);
-}
-
-#[test]
-#[ignore = "explicit golden regeneration only"]
-fn regenerate_canonical_artifact_golden() {
-    assert_eq!(
-        std::env::var_os("PURREMB_REGENERATE_GOLDEN").as_deref(),
-        Some(std::ffi::OsStr::new("1")),
-        "set PURREMB_REGENERATE_GOLDEN=1 to replace the golden"
-    );
-    std::fs::write(golden_path(), build_fixture(false).artifact_bytes)
-        .expect("write PURREMB golden");
+    if let Err(error) = purrdf_testkit::golden::check_bytes(
+        &golden_path(),
+        &build_fixture(false).artifact_bytes,
+        "PURREMB_REGENERATE_GOLDEN",
+    ) {
+        panic!("{error}");
+    }
 }

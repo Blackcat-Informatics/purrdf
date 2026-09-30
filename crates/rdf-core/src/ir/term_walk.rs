@@ -1372,53 +1372,49 @@ mod tests {
     #[test]
     fn a_hundred_thousand_level_triple_term_is_folded_and_visited_without_recursion() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut term = TermValue::iri("o");
-                for _ in 0..LEVELS {
-                    term = TermValue::Triple {
-                        s: TermBox::new(TermValue::iri("s")),
-                        p: TermBox::new(TermValue::iri("p")),
-                        o: TermBox::new(term),
-                    };
-                }
-                let depth = term.fold(|_| 0_usize, |s, p, o| 1 + s.max(p).max(o));
-                assert_eq!(depth, LEVELS);
-                let mut opened = 0_usize;
-                let mut closed = 0_usize;
-                let mut leaves = 0_usize;
-                let ControlFlow::Continue(()) =
-                    term.visit_terms_pre_post(|event| -> ControlFlow<Infallible> {
-                        match event {
-                            TermVisit::Open(_) => opened += 1,
-                            TermVisit::Close(_) => closed += 1,
-                            TermVisit::Leaf(_) => leaves += 1,
-                        }
-                        ControlFlow::Continue(())
-                    });
-                assert_eq!((opened, closed, leaves), (LEVELS, LEVELS, 2 * LEVELS + 1));
-                let mut visited = 0_usize;
-                let ControlFlow::Continue(()) = term.visit_terms(|_| -> ControlFlow<Infallible> {
-                    visited += 1;
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut term = TermValue::iri("o");
+            for _ in 0..LEVELS {
+                term = TermValue::Triple {
+                    s: TermBox::new(TermValue::iri("s")),
+                    p: TermBox::new(TermValue::iri("p")),
+                    o: TermBox::new(term),
+                };
+            }
+            let depth = term.fold(|_| 0_usize, |s, p, o| 1 + s.max(p).max(o));
+            assert_eq!(depth, LEVELS);
+            let mut opened = 0_usize;
+            let mut closed = 0_usize;
+            let mut leaves = 0_usize;
+            let ControlFlow::Continue(()) =
+                term.visit_terms_pre_post(|event| -> ControlFlow<Infallible> {
+                    match event {
+                        TermVisit::Open(_) => opened += 1,
+                        TermVisit::Close(_) => closed += 1,
+                        TermVisit::Leaf(_) => leaves += 1,
+                    }
                     ControlFlow::Continue(())
                 });
-                assert_eq!(visited, 3 * LEVELS + 1);
-                let stopped = term.visit_terms(|t| match t {
-                    TermValue::Iri(iri) => ControlFlow::Break(iri.clone()),
-                    TermValue::Triple { .. } => ControlFlow::Continue(()),
-                    _ => unreachable!("the chain holds IRIs and triple terms"),
-                });
-                assert_eq!(stopped, ControlFlow::Break("s".to_owned()));
-                let owned_depth = term.try_fold_owned(
-                    |_| Ok::<usize, Infallible>(0),
-                    |s, p, o| Ok(1 + s.max(p).max(o)),
-                );
-                assert_eq!(owned_depth, Ok(LEVELS));
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no fold or visit overflowed the thread's stack");
+            assert_eq!((opened, closed, leaves), (LEVELS, LEVELS, 2 * LEVELS + 1));
+            let mut visited = 0_usize;
+            let ControlFlow::Continue(()) = term.visit_terms(|_| -> ControlFlow<Infallible> {
+                visited += 1;
+                ControlFlow::Continue(())
+            });
+            assert_eq!(visited, 3 * LEVELS + 1);
+            let stopped = term.visit_terms(|t| match t {
+                TermValue::Iri(iri) => ControlFlow::Break(iri.clone()),
+                TermValue::Triple { .. } => ControlFlow::Continue(()),
+                _ => unreachable!("the chain holds IRIs and triple terms"),
+            });
+            assert_eq!(stopped, ControlFlow::Break("s".to_owned()));
+            let owned_depth = term.try_fold_owned(
+                |_| Ok::<usize, Infallible>(0),
+                |s, p, o| Ok(1 + s.max(p).max(o)),
+            );
+            assert_eq!(owned_depth, Ok(LEVELS));
+        })
+        .expect("the thread starts");
     }
 
     /// A triple term a million levels deep is copied, compared, ordered, hashed,
@@ -1427,29 +1423,25 @@ mod tests {
     #[test]
     fn a_million_level_triple_term_is_walked_without_recursion() {
         const LEVELS: usize = 1_000_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut term = TermValue::iri("o");
-                for _ in 0..LEVELS {
-                    term = TermValue::Triple {
-                        s: TermBox::new(TermValue::iri("s")),
-                        p: TermBox::new(TermValue::iri("p")),
-                        o: TermBox::new(term),
-                    };
-                }
-                let copy = term.clone();
-                assert!(term == copy, "a copy equals its original");
-                assert_eq!(term.cmp(&copy), Ordering::Equal);
-                assert_eq!(fed(&term), fed(&copy));
-                assert!(format!("{term:?}").len() > LEVELS);
-                assert_eq!(term.to_canonical_bytes(), copy.to_canonical_bytes());
-                drop(copy);
-                drop(term);
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no walk overflowed the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut term = TermValue::iri("o");
+            for _ in 0..LEVELS {
+                term = TermValue::Triple {
+                    s: TermBox::new(TermValue::iri("s")),
+                    p: TermBox::new(TermValue::iri("p")),
+                    o: TermBox::new(term),
+                };
+            }
+            let copy = term.clone();
+            assert!(term == copy, "a copy equals its original");
+            assert_eq!(term.cmp(&copy), Ordering::Equal);
+            assert_eq!(fed(&term), fed(&copy));
+            assert!(format!("{term:?}").len() > LEVELS);
+            assert_eq!(term.to_canonical_bytes(), copy.to_canonical_bytes());
+            drop(copy);
+            drop(term);
+        })
+        .expect("the thread starts");
     }
 
     // ── The generic walks ──────────────────────────────────────────────────────────
@@ -1634,86 +1626,82 @@ mod tests {
     #[test]
     fn a_hundred_thousand_level_chain_is_walked_generically_without_recursion() {
         const LEVELS: u32 = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                // Id `n > 0` names a triple term whose object is `n - 1`; ids `u32::MAX`
-                // and `0` are leaves.
-                let enter = |id: u32| match id {
-                    0 | u32::MAX => super::Nested::Leaf(1_u32),
-                    id => super::Nested::Triple(u32::MAX, u32::MAX, id - 1),
+        purrdf_stack::on_stack(128 * 1024, || {
+            // Id `n > 0` names a triple term whose object is `n - 1`; ids `u32::MAX`
+            // and `0` are leaves.
+            let enter = |id: u32| match id {
+                0 | u32::MAX => super::Nested::Leaf(1_u32),
+                id => super::Nested::Triple(u32::MAX, u32::MAX, id - 1),
+            };
+            let depth = super::try_fold_nested(
+                LEVELS,
+                &mut (),
+                |(), id| {
+                    Ok::<_, Infallible>(match enter(id) {
+                        super::Nested::Leaf(_) => super::Nested::Leaf(0_u32),
+                        triple @ super::Nested::Triple(..) => triple,
+                    })
+                },
+                |(), _, s, p, o| Ok(1 + s.max(p).max(o)),
+            );
+            assert_eq!(depth, Ok(LEVELS));
+            let mut visited = 0_u64;
+            let ControlFlow::Continue(()) =
+                super::visit_nested(LEVELS, |id| -> ControlFlow<Infallible, _> {
+                    visited += 1;
+                    ControlFlow::Continue(match enter(id) {
+                        super::Nested::Triple(s, p, o) => Some([s, p, o]),
+                        super::Nested::Leaf(_) => None,
+                    })
+                });
+            assert_eq!(visited, 3 * u64::from(LEVELS) + 1);
+
+            let mut term = TermValue::iri("o");
+            for _ in 0..LEVELS {
+                term = TermValue::Triple {
+                    s: TermBox::new(TermValue::iri("s")),
+                    p: TermBox::new(TermValue::iri("p")),
+                    o: TermBox::new(term),
                 };
-                let depth = super::try_fold_nested(
-                    LEVELS,
-                    &mut (),
-                    |(), id| {
-                        Ok::<_, Infallible>(match enter(id) {
-                            super::Nested::Leaf(_) => super::Nested::Leaf(0_u32),
-                            triple @ super::Nested::Triple(..) => triple,
-                        })
-                    },
-                    |(), _, s, p, o| Ok(1 + s.max(p).max(o)),
-                );
-                assert_eq!(depth, Ok(LEVELS));
-                let mut visited = 0_u64;
-                let ControlFlow::Continue(()) =
-                    super::visit_nested(LEVELS, |id| -> ControlFlow<Infallible, _> {
-                        visited += 1;
-                        ControlFlow::Continue(match enter(id) {
-                            super::Nested::Triple(s, p, o) => Some([s, p, o]),
-                            super::Nested::Leaf(_) => None,
-                        })
-                    });
-                assert_eq!(visited, 3 * u64::from(LEVELS) + 1);
+            }
+            let mut written = String::new();
+            let ok = term.try_write_nested(
+                &mut written,
+                "(",
+                " ",
+                ")",
+                |out, leaf| {
+                    if let TermValue::Iri(iri) = leaf {
+                        out.push_str(iri);
+                    }
+                    Ok::<(), Infallible>(())
+                },
+                |out, text| {
+                    out.push_str(text);
+                    Ok(())
+                },
+            );
+            assert_eq!(ok, Ok(()));
+            assert_eq!(written.len(), LEVELS as usize * "(s p )".len() + 1);
+            assert!(written.starts_with("(s p (s p "));
 
-                let mut term = TermValue::iri("o");
-                for _ in 0..LEVELS {
-                    term = TermValue::Triple {
-                        s: TermBox::new(TermValue::iri("s")),
-                        p: TermBox::new(TermValue::iri("p")),
-                        o: TermBox::new(term),
-                    };
-                }
-                let mut written = String::new();
-                let ok = term.try_write_nested(
-                    &mut written,
-                    "(",
-                    " ",
-                    ")",
-                    |out, leaf| {
-                        if let TermValue::Iri(iri) = leaf {
-                            out.push_str(iri);
-                        }
-                        Ok::<(), Infallible>(())
-                    },
-                    |out, text| {
-                        out.push_str(text);
-                        Ok(())
-                    },
-                );
-                assert_eq!(ok, Ok(()));
-                assert_eq!(written.len(), LEVELS as usize * "(s p )".len() + 1);
-                assert!(written.starts_with("(s p (s p "));
-
-                let mut owned_chain = crate::RdfTerm::iri("o");
-                for _ in 0..LEVELS {
-                    owned_chain = crate::RdfTerm::triple(crate::RdfTriple::new(
-                        crate::RdfTerm::iri("s"),
-                        "p",
-                        owned_chain,
-                    ));
-                }
-                let owned_depth = owned_chain.try_fold(
-                    |_| Ok::<_, Infallible>(0_u32),
-                    |_| Ok(0),
-                    |s, p, o| Ok(1 + s.max(p).max(o)),
-                );
-                assert_eq!(owned_depth, Ok(LEVELS));
-                dismantle(owned_chain);
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no generic walk overflowed the thread's stack");
+            let mut owned_chain = crate::RdfTerm::iri("o");
+            for _ in 0..LEVELS {
+                owned_chain = crate::RdfTerm::triple(crate::RdfTriple::new(
+                    crate::RdfTerm::iri("s"),
+                    "p",
+                    owned_chain,
+                ));
+            }
+            let owned_depth = owned_chain.try_fold(
+                |_| Ok::<_, Infallible>(0_u32),
+                |_| Ok(0),
+                |s, p, o| Ok(1 + s.max(p).max(o)),
+            );
+            assert_eq!(owned_depth, Ok(LEVELS));
+            dismantle(owned_chain);
+        })
+        .expect("the thread starts");
     }
 
     /// Drop an owned-model chain nested in its object slot one level at a time: the

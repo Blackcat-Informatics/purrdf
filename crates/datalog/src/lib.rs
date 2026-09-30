@@ -323,13 +323,13 @@ pub(crate) mod test_support {
     /// A deterministic permutation of `items` selected by `seed`.
     ///
     /// A Fisher-Yates shuffle driven by the workspace's shared SplitMix64
-    /// step ([`purrdf_testkit::rng::splitmix64_next`]); the same `seed`
+    /// stream ([`purrdf_testkit::rng::SplitMix64`]); the same `seed`
     /// always yields the same order, on every target.
     pub(crate) fn permute<T: Clone>(items: &[T], seed: u64) -> Vec<T> {
         let mut out = items.to_vec();
-        let mut state = seed;
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(seed);
         for i in (1..out.len()).rev() {
-            let j = (purrdf_testkit::rng::splitmix64_next(&mut state) % (i as u64 + 1)) as usize;
+            let j = rng.below_usize(i + 1);
             out.swap(i, j);
         }
         out

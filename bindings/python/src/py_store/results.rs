@@ -28,17 +28,16 @@ use crate::sparql::{
 };
 use crate::{RdfDatasetBuilder, SparqlResult, TermValue};
 
-/// Map the short format id (`json`/`xml`/`csv`/`tsv`) to the crate's format enum.
+/// The results format `name` names, read by [`SparqlResultsFormat::from_name`]: the
+/// short token (`json`/`xml`/`csv`/`tsv`), the media type or an alias, in any ASCII
+/// case.
 fn parse_format(name: &str) -> PyResult<SparqlResultsFormat> {
-    match name {
-        "json" => Ok(SparqlResultsFormat::Json),
-        "xml" => Ok(SparqlResultsFormat::Xml),
-        "csv" => Ok(SparqlResultsFormat::Csv),
-        "tsv" => Ok(SparqlResultsFormat::Tsv),
-        other => Err(PyValueError::new_err(format!(
-            "unknown SPARQL results format `{other}` (expected json/xml/csv/tsv)"
-        ))),
-    }
+    SparqlResultsFormat::from_name(name).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "unknown SPARQL results format `{name}` (expected json/xml/csv/tsv or a SPARQL \
+             results media type)"
+        ))
+    })
 }
 
 /// Decode `provenance_namespace` (nullable `(prefix, iri)`) into an optional
@@ -59,7 +58,7 @@ fn decode_provenance(
         .map_err(|e| PyValueError::new_err(format!("provenance_namespace: {e}")))?;
     let provenance = ResultProvenance {
         query_hash,
-        engine: Some("purrdf-sparql-eval".to_owned()),
+        engine: Some(purrdf_validate::query::ENGINE_LABEL.to_owned()),
         solutions: Vec::new(),
     };
     Ok((provenance, Some(namespace)))

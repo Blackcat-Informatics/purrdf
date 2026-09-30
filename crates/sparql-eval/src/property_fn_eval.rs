@@ -5828,22 +5828,20 @@ mod walk_tests {
     // ── A deterministic shape generator ────────────────────────────────────────────
 
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 40,
             }
         }
 
         fn choose(&mut self, options: usize) -> usize {
-            let bound = u64::try_from(options).expect("a choice count fits");
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
-                .expect("a draw below the count fits")
+            self.state.below_usize(options)
         }
 
         /// Whether one more compound node fits the budget.
@@ -6104,12 +6102,7 @@ mod walk_tests {
     }
 
     fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
+        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
     }
 
     /// A quoted-triple pattern `depth` levels deep with `bottom` in its innermost

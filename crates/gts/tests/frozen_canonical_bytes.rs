@@ -3,13 +3,11 @@
 
 //! Byte-exact deterministic-CBOR gate over the frozen cross-engine GTS corpus.
 
-use std::path::PathBuf;
-
 use purrdf_gts::wire::{canonical, iter_items};
 
 #[test]
 fn every_decodable_frozen_item_is_canonical_byte_exact() {
-    let vectors = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vectors");
+    let vectors = purrdf_testkit::paths::workspace_root().join("vectors");
     let mut paths: Vec<_> = std::fs::read_dir(&vectors)
         .expect("vectors directory")
         .map(|entry| entry.expect("vector entry").path())

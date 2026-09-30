@@ -619,38 +619,34 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_simplified_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut term = RdfTerm::literal(RdfLiteral {
-                    lexical_form: "x".to_owned(),
-                    datatype: Some(XSD_STRING.to_owned()),
-                    language: None,
-                    direction: None,
-                });
-                for _ in 0..LEVELS {
-                    term = RdfTerm::triple(RdfTriple::new(
-                        term,
-                        "http://example.org/p",
-                        RdfTerm::iri("http://example.org/o"),
-                    ));
-                }
-                let mut simplified = simplify_term(&term);
-                // The owned model's derived drop descends once per level, so both chains
-                // are taken apart one level at a time, the innermost subject checked.
-                let mut levels = 0;
-                while let RdfTerm::Triple(triple) = simplified {
-                    simplified = triple.subject;
-                    levels += 1;
-                }
-                assert_eq!(levels, LEVELS);
-                assert_eq!(simplified, RdfTerm::literal(RdfLiteral::simple("x")));
-                while let RdfTerm::Triple(triple) = term {
-                    term = triple.subject;
-                }
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the normalization did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut term = RdfTerm::literal(RdfLiteral {
+                lexical_form: "x".to_owned(),
+                datatype: Some(XSD_STRING.to_owned()),
+                language: None,
+                direction: None,
+            });
+            for _ in 0..LEVELS {
+                term = RdfTerm::triple(RdfTriple::new(
+                    term,
+                    "http://example.org/p",
+                    RdfTerm::iri("http://example.org/o"),
+                ));
+            }
+            let mut simplified = simplify_term(&term);
+            // The owned model's derived drop descends once per level, so both chains
+            // are taken apart one level at a time, the innermost subject checked.
+            let mut levels = 0;
+            while let RdfTerm::Triple(triple) = simplified {
+                simplified = triple.subject;
+                levels += 1;
+            }
+            assert_eq!(levels, LEVELS);
+            assert_eq!(simplified, RdfTerm::literal(RdfLiteral::simple("x")));
+            while let RdfTerm::Triple(triple) = term {
+                term = triple.subject;
+            }
+        })
+        .expect("the thread starts");
     }
 }

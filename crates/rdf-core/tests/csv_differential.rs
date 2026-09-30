@@ -742,13 +742,11 @@ fn deterministic_spec_records_have_independent_expected_fields() {
     ];
     for &case in CASES {
         let dialect = reader_dialect(case).expect("declared case");
-        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut lcg = 0x9e37_79b9_7f4a_7c15u64;
         for index in 0..512 {
             // Fixed LCG with all inputs derived here: unlike the 200,000
             // historical digest inputs, these cases can be replayed.
-            state = state
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1);
+            let state = purrdf_testkit::rng::lcg64_next(&mut lcg, 1);
             let first = format!("a{:x}", state & 0xffff);
             let second = if index % 3 == 0 { "é" } else { "plain" };
             let third = if index % 5 == 0 && dialect.quote_char.is_some() {

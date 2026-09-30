@@ -1276,6 +1276,7 @@ impl<'a> Lexer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_testkit::rng::SplitMix64;
 
     fn toks(s: &str) -> Vec<Token<'_>> {
         tokenize(s).unwrap().into_iter().map(|s| s.token).collect()
@@ -1296,16 +1297,6 @@ mod tests {
     // non-ASCII scalars of every UTF-8 length. At EVERY char boundary of every input,
     // the rewritten function and the reference must leave the cursor in the same place
     // and return the same token or error.
-
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        fn below(&mut self, n: usize) -> usize {
-            let z = purrdf_testkit::rng::splitmix64_next(&mut self.0);
-            usize::try_from(z % 1_000_003).expect("small") % n
-        }
-    }
 
     const SCAN_PIECES: &[&str] = &[
         // `WS` and its byte neighbours.
@@ -1364,18 +1355,18 @@ mod tests {
     ];
 
     fn scan_corpus() -> Vec<String> {
-        let mut rng = SplitMix(0x1E7E_4A5E_C0DE);
+        let mut rng = SplitMix64::new(0x1E7E_4A5E_C0DE);
         let mut out = Vec::new();
         for len in (0..=70).chain([128, 300, 1000]) {
             for _ in 0..12 {
                 let mut s = String::new();
                 while s.len() < len {
                     // Mostly plain name bytes, so runs and bodies cross chunk edges.
-                    if rng.below(3) == 0 {
-                        s.push_str(SCAN_PIECES[rng.below(SCAN_PIECES.len())]);
+                    if rng.below_usize(3) == 0 {
+                        s.push_str(SCAN_PIECES[rng.below_usize(SCAN_PIECES.len())]);
                     } else {
                         s.push(
-                            "abcdefghijklmnopqrstuvwxyz:/.0123456789"[rng.below(39)..]
+                            "abcdefghijklmnopqrstuvwxyz:/.0123456789"[rng.below_usize(39)..]
                                 .chars()
                                 .next()
                                 .expect("ascii"),

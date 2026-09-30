@@ -690,28 +690,25 @@ mod tests {
     #[test]
     fn a_deep_triple_chain_clones_prints_and_drops_iteratively() {
         let depth = 100_000usize;
-        let handle = std::thread::Builder::new()
-            .stack_size(256 * 1024)
-            .spawn(move || {
-                let mut term = CdtTerm::Null;
-                for _ in 0..depth {
-                    term = CdtTerm::TripleTerm(Box::new(crate::CdtTripleTerm {
-                        subject: term,
-                        predicate: CdtTerm::Null,
-                        object: CdtTerm::Null,
-                    }));
-                }
-                let copy = term.clone();
-                assert_eq!(copy, term);
-                let text: String = format!("{term:?}");
-                // Each level writes `TripleTerm(CdtTripleTerm { subject: ` (36 bytes)
-                // before its subject and `, predicate: Null, object: Null })` (34
-                // bytes) after it, around the innermost `Null` (4 bytes).
-                assert_eq!(text.len(), 4 + depth * (36 + 34));
-                drop(copy);
-                drop(term);
-            })
-            .expect("the thread starts");
-        handle.join().expect("the walks did not abort");
+        purrdf_stack::on_stack(256 * 1024, move || {
+            let mut term = CdtTerm::Null;
+            for _ in 0..depth {
+                term = CdtTerm::TripleTerm(Box::new(crate::CdtTripleTerm {
+                    subject: term,
+                    predicate: CdtTerm::Null,
+                    object: CdtTerm::Null,
+                }));
+            }
+            let copy = term.clone();
+            assert_eq!(copy, term);
+            let text: String = format!("{term:?}");
+            // Each level writes `TripleTerm(CdtTripleTerm { subject: ` (36 bytes)
+            // before its subject and `, predicate: Null, object: Null })` (34
+            // bytes) after it, around the innermost `Null` (4 bytes).
+            assert_eq!(text.len(), 4 + depth * (36 + 34));
+            drop(copy);
+            drop(term);
+        })
+        .expect("the thread starts");
     }
 }

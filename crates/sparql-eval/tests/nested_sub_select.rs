@@ -91,12 +91,7 @@ fn is_stack_refusal(diagnostic: &RdfDiagnostic) -> bool {
 
 /// Run `body` on a thread spawned with a [`SMALL_STACK`] stack.
 fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-    std::thread::Builder::new()
-        .stack_size(SMALL_STACK)
-        .spawn(body)
-        .expect("spawn a small-stack thread")
-        .join()
-        .expect("the small-stack thread returned rather than aborting")
+    purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn a small-stack thread")
 }
 
 /// A hundred thousand levels, in every form: the parse succeeds and its tree is dropped,

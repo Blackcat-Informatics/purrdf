@@ -952,37 +952,33 @@ fn lateral_spine_parses_at_any_length_and_evaluates_where_the_stack_holds_it() {
         "every link of the spine is in the algebra"
     );
 
-    std::thread::Builder::new()
-        .stack_size(256 * 1024 * 1024)
-        .spawn(|| {
-            let ds = dataset();
-            let answered = run(
-                &ds,
-                &lateral_spine(300, "LATERAL { ?s :q ?c } ").replace(PFX, ""),
-            );
-            assert_eq!(
-                rows(&answered),
-                expect(vec![row(&[
-                    ("s", "<https://example.org/lateral#a>"),
-                    ("o", "<https://example.org/lateral#c>"),
-                    ("a", "<https://example.org/lateral#a>"),
-                    ("b", "<https://example.org/lateral#c>"),
-                    ("c", "<https://example.org/lateral#c>"),
-                ])]),
-                "a 300-link spine answers its one row"
-            );
-            let unmatched = run(
-                &ds,
-                &lateral_spine(300, "LATERAL { ?s :q :missing } ").replace(PFX, ""),
-            );
-            assert!(
-                rows(&unmatched).is_empty(),
-                "the same spine ending in a link that matches nothing answers no row"
-            );
-        })
-        .expect("spawn")
-        .join()
-        .expect("the evaluating thread returned");
+    purrdf_stack::on_stack(256 * 1024 * 1024, || {
+        let ds = dataset();
+        let answered = run(
+            &ds,
+            &lateral_spine(300, "LATERAL { ?s :q ?c } ").replace(PFX, ""),
+        );
+        assert_eq!(
+            rows(&answered),
+            expect(vec![row(&[
+                ("s", "<https://example.org/lateral#a>"),
+                ("o", "<https://example.org/lateral#c>"),
+                ("a", "<https://example.org/lateral#a>"),
+                ("b", "<https://example.org/lateral#c>"),
+                ("c", "<https://example.org/lateral#c>"),
+            ])]),
+            "a 300-link spine answers its one row"
+        );
+        let unmatched = run(
+            &ds,
+            &lateral_spine(300, "LATERAL { ?s :q :missing } ").replace(PFX, ""),
+        );
+        assert!(
+            rows(&unmatched).is_empty(),
+            "the same spine ending in a link that matches nothing answers no row"
+        );
+    })
+    .expect("spawn");
 }
 
 // ---------------------------------------------------------------------------

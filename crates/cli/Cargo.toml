@@ -64,11 +64,6 @@ purrdf = { workspace = true }
 purrdf-validate = { workspace = true }
 # Command-tree argument parsing (`Parser`/`Subcommand`/`ValueEnum`).
 clap = { workspace = true }
-# `--provenance-namespace`'s `query_hash`: a content hash of the query text, computed
-# from data this host already has in hand (see `query::build_query_provenance`).
-sha2 = { workspace = true }
-# Lowercase hex rendering of those SHA-256 digests.
-purrdf-hash = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The immutable-input authority's kernel path (`src/mmap.rs`): a read-only
@@ -105,6 +100,10 @@ purrdf-deflate = { workspace = true }
 structured-zstd = { workspace = true }
 # Parse the machine-readable runtime ledger in projection CLI integration tests.
 serde_json = { workspace = true }
+# The integration tests recompute the SHA-256 identities the binary prints, in
+# lowercase hex.
+sha2 = { workspace = true }
+purrdf-hash = { workspace = true }
 
 # The real CLI pack path, timed: mmap/immutable vs owned acquisition, verification,
 # and reasoning over a zero-copy `PackView` vs an owned-dataset rebuild.

@@ -25,7 +25,7 @@ use purrdf_core::FastMap;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use purrdf_rdf::{DatasetView, GraphMatch, RdfDataset, TermId, TermValue, parse_dataset};
@@ -57,7 +57,7 @@ const SHT: &str = "http://www.w3.org/ns/shacl/test-suite#";
 use purrdf_iri::vocab::rdf::NS as RDF;
 
 fn corpus_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors/shexTest")
+    purrdf_testkit::paths::workspace_root().join("vectors/shexTest")
 }
 
 fn url_to_path(url: &str) -> PathBuf {

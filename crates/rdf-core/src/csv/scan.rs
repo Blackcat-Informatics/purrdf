@@ -270,11 +270,6 @@ mod tests {
         }
     }
 
-    /// A uniform-enough draw below `n` (`n > 0`) for input generation.
-    fn below(rng: &mut SplitMix64, n: usize) -> usize {
-        (rng.next_u64() % n as u64) as usize
-    }
-
     /// Seeded random haystacks over a small alphabet, so members are dense in
     /// some and absent from others.
     #[test]
@@ -282,18 +277,18 @@ mod tests {
         let kernels = kernels();
         let mut rng = SplitMix64::new(0x00C5_F1E1_D5CA_2026);
         for _ in 0..4_000 {
-            let members: Vec<u8> = (0..below(&mut rng, 10))
+            let members: Vec<u8> = (0..rng.below_usize(10))
                 .map(|_| rng.next_u64().to_le_bytes()[0])
                 .collect();
             let set = StopSet::new(&members);
-            let alphabet: Vec<u8> = (0..=below(&mut rng, 12))
+            let alphabet: Vec<u8> = (0..=rng.below_usize(12))
                 .map(|_| rng.next_u64().to_le_bytes()[0])
                 .collect();
-            let len = below(&mut rng, 700);
+            let len = rng.below_usize(700);
             let haystack: Vec<u8> = (0..len)
-                .map(|_| alphabet[below(&mut rng, alphabet.len())])
+                .map(|_| alphabet[rng.below_usize(alphabet.len())])
                 .collect();
-            let start = below(&mut rng, len.max(1)).min(len);
+            let start = rng.below_usize(len.max(1)).min(len);
             let haystack = &haystack[start..];
             let expected = reference(&set, haystack);
             for (name, kernel) in &kernels {

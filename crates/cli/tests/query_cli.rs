@@ -148,6 +148,66 @@ fn select_all_four_result_formats_are_non_vacuous_and_deterministic() {
     }
 }
 
+/// `--results-format` reads a SPARQL-results name the way every host does: a media type or
+/// an alias, in any ASCII case, names the same format as its short token, byte for byte.
+/// A name that is neither a results format nor an RDF syntax is refused, listing the
+/// accepted tokens, while an RDF syntax alias beside it is still read as one.
+#[test]
+fn a_results_format_is_named_by_token_media_type_or_alias() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
+    let select = "SELECT ?o WHERE { ?s <http://example.org/knows> ?o }";
+    for (name, token) in [
+        ("JSON", "json"),
+        ("srj", "json"),
+        ("application/sparql-results+json", "json"),
+        ("sparql-xml", "xml"),
+        ("application/sparql-results+xml", "xml"),
+        ("text/csv", "csv"),
+        ("TSV", "tsv"),
+        ("text/tab-separated-values", "tsv"),
+    ] {
+        let named = run(&["query", "--data", &ttl, "--results-format", name, select]);
+        let short = run(&["query", "--data", &ttl, "--results-format", token, select]);
+        assert!(
+            named.status.success(),
+            "{name}: stderr:\n{}",
+            stderr(&named)
+        );
+        assert_eq!(named.stdout, short.stdout, "{name} names {token}");
+    }
+
+    let refused = run(&["query", "--data", &ttl, "--results-format", "jsonx", select]);
+    assert_eq!(
+        refused.status.code(),
+        Some(2),
+        "stderr:\n{}",
+        stderr(&refused)
+    );
+    let message = stderr(&refused);
+    for token in ["json", "tsv", "turtle", "yamlld"] {
+        assert!(
+            message.contains(token),
+            "the refusal lists `{token}`: {message}"
+        );
+    }
+    let construct =
+        "CONSTRUCT { ?s <http://example.org/knows> ?o } WHERE { ?s <http://example.org/knows> ?o }";
+    let rdf_alias = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "ttl",
+        construct,
+    ]);
+    assert!(
+        rdf_alias.status.success(),
+        "stderr:\n{}",
+        stderr(&rdf_alias)
+    );
+}
+
 /// An ASK with `--results-format json` returns a JSON boolean result (the W3C
 /// `{"head":{},"boolean":true}` shape).
 #[test]

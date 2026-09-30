@@ -1194,7 +1194,6 @@ mod iterative_walk_tests {
     use super::{Enf, copied, ledger_source_map, left_join_erasable, normalize, order_by_erasable};
     use crate::expr::{SubstitutionSource, SubstitutionSourceMap};
     use crate::governor::soundness;
-    use purrdf_testkit::rng::splitmix64_next;
 
     const EX: &str = "http://example.org/";
 
@@ -1346,12 +1345,12 @@ mod iterative_walk_tests {
 
     /// The choices one generated shape is built from: a SplitMix64 counter stream, so
     /// a seed names a shape.
-    struct Choices(u64);
+    struct Choices(purrdf_testkit::rng::SplitMix64);
 
     impl Choices {
         /// One choice in `0..bound`.
         fn pick(&mut self, bound: u64) -> u64 {
-            splitmix64_next(&mut self.0) % bound
+            self.0.below(bound)
         }
 
         /// One even choice.
@@ -1539,12 +1538,7 @@ mod iterative_walk_tests {
 
     /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
     fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
+        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
     }
 
     // ── The checks ─────────────────────────────────────────────────────────────────
@@ -1555,7 +1549,7 @@ mod iterative_walk_tests {
     #[test]
     fn the_loops_agree_with_the_recursive_references_over_generated_spines() {
         for seed in 0..200_u64 {
-            let mut choices = Choices(seed);
+            let mut choices = Choices(purrdf_testkit::rng::SplitMix64::new(seed));
             let mut budget = 3 + choices.pick(10) as usize;
             let pattern = gen_pattern(&mut choices, &mut budget);
 

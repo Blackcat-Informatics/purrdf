@@ -17,7 +17,7 @@
 //! it is given the same one so the two legs differ in nothing but the bytes.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use purrdf_shex::{parse_shexj, to_shexj};
 
@@ -67,7 +67,7 @@ const MUST_ROUND_TRIP: &[&str] = &[
 const XFAIL_ROUND_TRIP: &[(&str, &str)] = &[];
 
 fn corpus() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors/shexTest/schemas")
+    purrdf_testkit::paths::workspace_root().join("vectors/shexTest/schemas")
 }
 
 /// The retrieval IRI of a vendored corpus document (RFC-3986 §5.1.3).

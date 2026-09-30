@@ -2357,7 +2357,6 @@ pub(crate) mod walk_tests {
 
     use super::{EndpointUse, Occurrence, Scope, ServedIndex, indirect, merge, record};
     use crate::governor::soundness::{ExpressionPart, PatternPart};
-    use purrdf_testkit::rng::splitmix64_next;
 
     const EX: &str = "http://example.org/";
 
@@ -2712,15 +2711,13 @@ pub(crate) mod walk_tests {
 
     /// A deterministic sequence of choices, drawn from one SplitMix64 counter stream.
     pub(crate) struct Choices {
-        pub(crate) state: u64,
+        pub(crate) state: purrdf_testkit::rng::SplitMix64,
     }
 
     impl Choices {
         /// One of `n` alternatives.
         fn pick(&mut self, n: usize) -> usize {
-            let bound = u64::try_from(n).expect("an alternative count fits a u64");
-            usize::try_from(splitmix64_next(&mut self.state) % bound)
-                .expect("a remainder below the count fits a usize")
+            self.state.below_usize(n)
         }
 
         fn flag(&mut self) -> bool {
@@ -2944,7 +2941,9 @@ pub(crate) mod walk_tests {
     /// and `EXISTS` uses under the same addresses, the same `LATERAL` uses.
     #[test]
     fn every_walk_agrees_with_its_recursive_reference_on_generated_shapes() {
-        let mut choices = Choices { state: 0x5EED_0358 };
+        let mut choices = Choices {
+            state: purrdf_testkit::rng::SplitMix64::new(0x5EED_0358),
+        };
         let mut with_endpoint = 0_usize;
         for shape in 0..200 {
             let mut budget = 24;
@@ -3057,74 +3056,70 @@ pub(crate) mod walk_tests {
             chain
         }
 
-        let checked = std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let e = Variable::new("e");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let e = Variable::new("e");
 
-                let chain = direct_chain();
-                assert!(super::mentions_variable_endpoint(&chain));
-                let tree = crate::plan::Tree::build(&chain);
-                let super::EndpointScan::Present(index) = tree.shape().endpoints() else {
-                    panic!("the chain holds a variable endpoint");
-                };
-                let GraphPattern::Join { right, .. } = &chain else {
-                    panic!("the chain's root is a Join");
-                };
-                assert_eq!(
-                    tree.shape()
-                        .node_of(right)
-                        .and_then(|right| index.served_at(right))
-                        .map(AsRef::as_ref),
-                    Some([e.clone()].as_slice()),
-                    "the root's right operand serves ?e"
-                );
-                assert_eq!(index.served.iter().flatten().count(), DEPTH / 3 * 2 + 2);
-                assert!(index.exists_uses.iter().all(Option::is_none));
-                assert_eq!(
-                    super::served_endpoint_variables(&chain, None),
-                    std::slice::from_ref(&e)
-                );
-                let mut uses = Vec::new();
-                super::lateral_endpoint_uses(&chain, &mut uses);
-                assert_eq!(uses, [(e.clone(), false)]);
-                drop(chain);
+            let chain = direct_chain();
+            assert!(super::mentions_variable_endpoint(&chain));
+            let tree = crate::plan::Tree::build(&chain);
+            let super::EndpointScan::Present(index) = tree.shape().endpoints() else {
+                panic!("the chain holds a variable endpoint");
+            };
+            let GraphPattern::Join { right, .. } = &chain else {
+                panic!("the chain's root is a Join");
+            };
+            assert_eq!(
+                tree.shape()
+                    .node_of(right)
+                    .and_then(|right| index.served_at(right))
+                    .map(AsRef::as_ref),
+                Some([e.clone()].as_slice()),
+                "the root's right operand serves ?e"
+            );
+            assert_eq!(index.served.iter().flatten().count(), DEPTH / 3 * 2 + 2);
+            assert!(index.exists_uses.iter().all(Option::is_none));
+            assert_eq!(
+                super::served_endpoint_variables(&chain, None),
+                std::slice::from_ref(&e)
+            );
+            let mut uses = Vec::new();
+            super::lateral_endpoint_uses(&chain, &mut uses);
+            assert_eq!(uses, [(e.clone(), false)]);
+            drop(chain);
 
-                let nested = exists_chain();
-                assert!(super::mentions_variable_endpoint(&nested));
-                let tree = crate::plan::Tree::build(&nested);
-                let super::EndpointScan::Present(index) = tree.shape().endpoints() else {
-                    panic!("the nested chain holds a variable endpoint");
-                };
-                assert_eq!(
-                    index.exists_uses.iter().flatten().count(),
-                    DEPTH,
-                    "one entry per EXISTS body"
-                );
-                assert!(
-                    index
-                        .exists_uses
-                        .iter()
-                        .flatten()
-                        .all(|uses| uses.as_ref() == [e.clone()]),
-                    "every body uses ?e"
-                );
-                assert!(
-                    index.served.iter().all(Option::is_none),
-                    "no join operand: nothing is served"
-                );
-                assert!(
-                    super::served_endpoint_variables(&nested, None).is_empty(),
-                    "reached only through EXISTS, ?e is a conflict at the root"
-                );
-                let mut uses = Vec::new();
-                super::lateral_endpoint_uses(&nested, &mut uses);
-                assert!(uses.is_empty(), "an expression is not entered");
-                drop(nested);
-            })
-            .expect("spawn")
-            .join();
-        checked.expect("the 128 KiB thread returned");
+            let nested = exists_chain();
+            assert!(super::mentions_variable_endpoint(&nested));
+            let tree = crate::plan::Tree::build(&nested);
+            let super::EndpointScan::Present(index) = tree.shape().endpoints() else {
+                panic!("the nested chain holds a variable endpoint");
+            };
+            assert_eq!(
+                index.exists_uses.iter().flatten().count(),
+                DEPTH,
+                "one entry per EXISTS body"
+            );
+            assert!(
+                index
+                    .exists_uses
+                    .iter()
+                    .flatten()
+                    .all(|uses| uses.as_ref() == [e.clone()]),
+                "every body uses ?e"
+            );
+            assert!(
+                index.served.iter().all(Option::is_none),
+                "no join operand: nothing is served"
+            );
+            assert!(
+                super::served_endpoint_variables(&nested, None).is_empty(),
+                "reached only through EXISTS, ?e is a conflict at the root"
+            );
+            let mut uses = Vec::new();
+            super::lateral_endpoint_uses(&nested, &mut uses);
+            assert!(uses.is_empty(), "an expression is not entered");
+            drop(nested);
+        })
+        .expect("spawn");
     }
 }
 
@@ -3174,22 +3169,20 @@ mod endpoint_text_tests {
 
     /// A deterministic choice sequence.
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 12,
             }
         }
 
         fn choose(&mut self, n: usize) -> usize {
-            let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
-                .expect("a draw below the count fits")
+            self.state.below_usize(n)
         }
 
         fn spend(&mut self) -> bool {
@@ -3279,33 +3272,29 @@ mod endpoint_text_tests {
     /// innermost object bracketed.
     #[test]
     fn a_hundred_thousand_level_term_is_spelled_on_a_128_kib_thread() {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(|| {
-                let mut value = TermValue::iri("http://example.org/o");
-                for _ in 0..DEPTH {
-                    value = TermValue::Triple {
-                        s: TermBox::new(TermValue::iri("http://example.org/s")),
-                        p: TermBox::new(TermValue::iri("http://example.org/p")),
-                        o: TermBox::new(value),
-                    };
-                }
-                let text = endpoint_text(&value);
-                let level = "<<( <http://example.org/s> <http://example.org/p> ";
-                let close = " )>>";
-                let innermost = "<http://example.org/o>";
-                // Every level's opening, then the innermost object, then every level's
-                // closing: the innermost object is followed by all `DEPTH` closings.
-                let expected = format!("{}{innermost}{}", level.repeat(DEPTH), close.repeat(DEPTH));
-                assert_eq!(
-                    text.len(),
-                    DEPTH * (level.len() + close.len()) + innermost.len()
-                );
-                assert!(text == expected, "the spelling of every level, in order");
-                drop(value);
-            })
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned");
+        purrdf_stack::on_stack(SMALL_STACK, || {
+            let mut value = TermValue::iri("http://example.org/o");
+            for _ in 0..DEPTH {
+                value = TermValue::Triple {
+                    s: TermBox::new(TermValue::iri("http://example.org/s")),
+                    p: TermBox::new(TermValue::iri("http://example.org/p")),
+                    o: TermBox::new(value),
+                };
+            }
+            let text = endpoint_text(&value);
+            let level = "<<( <http://example.org/s> <http://example.org/p> ";
+            let close = " )>>";
+            let innermost = "<http://example.org/o>";
+            // Every level's opening, then the innermost object, then every level's
+            // closing: the innermost object is followed by all `DEPTH` closings.
+            let expected = format!("{}{innermost}{}", level.repeat(DEPTH), close.repeat(DEPTH));
+            assert_eq!(
+                text.len(),
+                DEPTH * (level.len() + close.len()) + innermost.len()
+            );
+            assert!(text == expected, "the spelling of every level, in order");
+            drop(value);
+        })
+        .expect("spawn");
     }
 }

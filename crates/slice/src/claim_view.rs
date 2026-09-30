@@ -63,15 +63,7 @@ pub fn emit_claim_view(vocab: &SliceVocab) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The repo root (two levels up from crates/slice).
-    fn repo_root() -> std::path::PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .canonicalize()
-            .unwrap()
-    }
+    use purrdf_testkit::paths::workspace_root;
 
     /// Committed-artifact parity uses the blackcatinformatics purrdf namespace
     /// the committed query was generated with.
@@ -82,7 +74,7 @@ mod tests {
     #[test]
     fn claim_view_matches_committed() {
         let text = emit_claim_view(&committed_vocab());
-        let committed_path = repo_root()
+        let committed_path = workspace_root()
             .join("generated")
             .join("queries")
             .join(CLAIM_VIEW_FILE);

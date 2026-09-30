@@ -531,7 +531,7 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// The root pattern of every corpus query that parses, in sorted path order.
 fn corpus_patterns() -> Vec<GraphPattern> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = purrdf_testkit::paths::workspace_root();
     let mut files = Vec::new();
     for corpus in CORPORA {
         collect(&root.join(corpus), &mut files);
@@ -562,12 +562,7 @@ fn corpus_patterns() -> Vec<GraphPattern> {
 
 /// Run `body` on a thread with room for the recursive reference.
 fn with_stack(body: impl FnOnce() + Send + 'static) {
-    std::thread::Builder::new()
-        .stack_size(256 * 1024 * 1024)
-        .spawn(body)
-        .expect("the thread starts")
-        .join()
-        .expect("the checks passed");
+    purrdf_stack::on_stack(256 * 1024 * 1024, body).expect("the thread starts");
 }
 
 #[test]

@@ -79,10 +79,9 @@ fn uniform(rows: usize, dims: usize, seed: u64) -> VectorMatrix {
     let mut state = seed;
     let mut data = Vec::with_capacity(elements);
     for _ in 0..elements {
-        state = splitmix64(state);
-        let unit = (state >> 11) as f64 / (1_u64 << 53) as f64;
-        let value = unit.mul_add(2.0, -1.0);
-        data.push(if value == 0.0 { 0.25 } else { value });
+        data.push(purrdf_testkit::rng::signed_unit_step_nonzero(
+            &mut state, 0.25,
+        ));
     }
     VectorMatrix::new(rows, dims, data).expect("the generated matrix is finite and rectangular")
 }
@@ -148,10 +147,7 @@ fn hub(rows: usize, dims: usize) -> VectorMatrix {
         .map(|row| {
             let scale = if row + 1 == rows { 10.0 } else { 0.01 };
             (0..dims)
-                .map(|_| {
-                    state = splitmix64(state);
-                    ((state >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0) * scale
-                })
+                .map(|_| purrdf_testkit::rng::signed_unit_step(&mut state) * scale)
                 .collect()
         })
         .collect();

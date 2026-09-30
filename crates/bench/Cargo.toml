@@ -39,3 +39,5 @@ purrdf-rdf = { workspace = true }
 serde_json = { workspace = true }
 # Test-only: the base16 reader and writer the percent-escape checks spell octets with.
 purrdf-hash = { workspace = true }
+# Test-only: the workspace root the make-driven tests run `make` from.
+purrdf-testkit = { workspace = true }

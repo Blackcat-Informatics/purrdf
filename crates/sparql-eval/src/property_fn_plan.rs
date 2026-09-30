@@ -4382,7 +4382,6 @@ mod iterative_walk_tests {
     use crate::agg_fn::{AggregateAccumulator, AlgebraicClass, CustomAggregate};
     use crate::property_fn::{PfArgs, PfCursor, PfRow, PropertyFunction};
     use crate::user_fn::{Arity, Volatility};
-    use purrdf_testkit::rng::splitmix64_next;
 
     // ── The recursive references ───────────────────────────────────────────────────
 
@@ -5656,12 +5655,7 @@ mod iterative_walk_tests {
 
     /// Run `body` on a fresh thread with 128 KiB of stack.
     fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
+        purrdf_stack::on_stack(128 * 1024, body).expect("spawn")
     }
 
     fn variable(name: &str) -> Variable {
@@ -5688,11 +5682,11 @@ mod iterative_walk_tests {
 
     /// A deterministic choice sequence: every shape drawn from it is a pure function of
     /// the seed, so a disagreement names the seed that reproduces it.
-    struct Choices(u64);
+    struct Choices(purrdf_testkit::rng::SplitMix64);
 
     impl Choices {
         fn below(&mut self, bound: usize) -> usize {
-            (splitmix64_next(&mut self.0) % bound as u64) as usize
+            self.0.below_usize(bound)
         }
 
         fn one_in(&mut self, bound: usize) -> bool {
@@ -6139,7 +6133,7 @@ mod iterative_walk_tests {
     #[test]
     fn generated_patterns_plan_as_the_recursive_reference_plans_them() {
         for seed in 0..200 {
-            let mut choices = Choices(seed);
+            let mut choices = Choices(purrdf_testkit::rng::SplitMix64::new(seed));
             let mut budget = 10;
             let pattern = choices.pattern(&mut budget);
             let outer = choices.set(2);
@@ -6154,7 +6148,7 @@ mod iterative_walk_tests {
     #[test]
     fn generated_patterns_bind_what_the_recursive_reference_says_they_bind() {
         for seed in 0..200 {
-            let mut choices = Choices(seed);
+            let mut choices = Choices(purrdf_testkit::rng::SplitMix64::new(seed));
             let mut budget = 10;
             let pattern = choices.pattern(&mut budget);
             let context = choices.set(2);
@@ -6190,7 +6184,7 @@ mod iterative_walk_tests {
     #[test]
     fn generated_expressions_require_what_the_recursive_reference_says_they_require() {
         for seed in 0..300 {
-            let mut choices = Choices(seed);
+            let mut choices = Choices(purrdf_testkit::rng::SplitMix64::new(seed));
             let mut budget = 8;
             let expression = choices.expression(&mut budget);
             let bound = choices.set(3);
@@ -6221,7 +6215,7 @@ mod iterative_walk_tests {
     #[test]
     fn generated_spines_peel_into_the_atoms_the_recursive_reference_peels() {
         for seed in 0..200 {
-            let mut choices = Choices(seed);
+            let mut choices = Choices(purrdf_testkit::rng::SplitMix64::new(seed));
             let mut budget = 10;
             let pattern = choices.pattern(&mut budget);
             let mut atoms = Vec::new();
@@ -6252,7 +6246,7 @@ mod iterative_walk_tests {
     #[test]
     fn generated_terms_are_bound_and_collected_as_the_recursive_reference_says() {
         for seed in 0..300 {
-            let mut choices = Choices(seed);
+            let mut choices = Choices(purrdf_testkit::rng::SplitMix64::new(seed));
             let term = choices.term(3);
             let bound = choices.set(4);
             assert_eq!(

@@ -1141,18 +1141,14 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_written_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = purrdf_core::term_fixture::triple_chain(LEVELS);
-                assert!(!term_has_directional_literal(&value));
-                let mut written = String::new();
-                write_term(&value, &mut written).expect("every predicate is an IRI");
-                assert_eq!(written.matches("<triple>").count(), LEVELS);
-                assert!(written.ends_with("</object></triple>"));
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no walk overflowed the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            assert!(!term_has_directional_literal(&value));
+            let mut written = String::new();
+            write_term(&value, &mut written).expect("every predicate is an IRI");
+            assert_eq!(written.matches("<triple>").count(), LEVELS);
+            assert!(written.ends_with("</object></triple>"));
+        })
+        .expect("the thread starts");
     }
 }

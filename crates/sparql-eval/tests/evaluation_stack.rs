@@ -142,12 +142,7 @@ fn on_stack<T: Send + 'static>(bytes: usize, body: impl FnOnce() -> T + Send + '
         core::hint::black_box(&frame);
         value
     }
-    std::thread::Builder::new()
-        .stack_size(bytes + 1024 * 1024)
-        .spawn(move || descend(bytes, body))
-        .expect("spawn")
-        .join()
-        .expect("the evaluating thread returned rather than aborting")
+    purrdf_stack::on_stack(bytes + 1024 * 1024, move || descend(bytes, body)).expect("spawn")
 }
 
 /// Prepare `query` on a roomy thread.

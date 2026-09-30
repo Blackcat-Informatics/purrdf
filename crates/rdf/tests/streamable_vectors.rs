@@ -17,7 +17,7 @@
 //! for canonical-CBOR byte-exactness; the tests here are the purrdf-local
 //! functional/drift guard on top of that (see `docs/GTS-CONFORMANCE.md` §2).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use ciborium::value::Value;
 use purrdf_ed25519::SigningKey;
@@ -36,7 +36,7 @@ fn packaging_key() -> SigningKey {
 }
 
 fn vectors_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors")
+    purrdf_testkit::paths::workspace_root().join("vectors")
 }
 
 fn read_vector(name: &str) -> Vec<u8> {

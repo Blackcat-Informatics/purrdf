@@ -14,13 +14,12 @@ use purrdf_sparql_eval::{
     AggregateRegistry, BudgetExhausted, GovernedOutcome, GovernedUpdateOutcome, NativeSparqlEngine,
     PartialAnswers, QueryOptions,
 };
-use sha2::{Digest as _, Sha256};
 
 use crate::buffer::PurrdfBuffer;
 use crate::error::PurrdfError;
 use crate::governor::{
     PurrdfGovernorEvidence, PurrdfGovernorTrip, PurrdfQueryGovernors, decode_governors,
-    encode_evidence, encode_trip, validate_update_governors,
+    decode_update_governors, encode_evidence, encode_trip,
 };
 use crate::handles::PurrdfDataset;
 use crate::rowcursor::PurrdfRowCursor;
@@ -417,28 +416,6 @@ unsafe fn decode_provenance_namespace(
     }
 }
 
-/// Build the [`purrdf_sparql_results::ResultProvenance`] a JSON emission carries: empty
-/// when no namespace was supplied (pure-W3C output), or populated with a content hash of
-/// the query text plus this engine's label when one was. Mirrors
-/// `crate::query::build_query_provenance` in the CLI. `solutions` stays empty:
-/// per-solution source provenance is the evaluator/S11 derivation graph's progressive
-/// fill (see `purrdf_sparql_results::ResultProvenance`'s module docs), not something
-/// this ABI entry point can populate on its own.
-fn build_query_provenance(
-    namespace: Option<&purrdf_sparql_results::ProvenanceNamespace>,
-    query: &str,
-) -> purrdf_sparql_results::ResultProvenance {
-    if namespace.is_none() {
-        return purrdf_sparql_results::ResultProvenance::default();
-    }
-    let digest = Sha256::digest(query.as_bytes());
-    purrdf_sparql_results::ResultProvenance {
-        query_hash: Some(format!("sha256:{}", purrdf_hash::hex::Lower(&digest))),
-        engine: Some("purrdf-sparql-eval".to_owned()),
-        solutions: Vec::new(),
-    }
-}
-
 /// Execute a SPARQL query and serialize the result to the SPARQL 1.1 Query
 /// Results JSON format (SELECT and ASK) into `*out_buffer` (UTF-8). A
 /// CONSTRUCT/DESCRIBE graph is rendered as N-Quads inside a documented
@@ -521,7 +498,7 @@ pub unsafe extern "C" fn purrdf_query_json(
             // statement layer included — and never carries the extension (`to_json`
             // only appends it for `Solutions`/`Boolean`; a `Graph` result serializes
             // as `{"graph": "..."}` regardless).
-            let provenance = build_query_provenance(namespace.as_ref(), query_text);
+            let provenance = purrdf_validate::query::provenance(namespace.as_ref(), query_text);
             let outcome = purrdf_sparql_results::to_json(&result, &provenance, namespace.as_ref())
                 .map_err(|e| {
                     PurrdfError::new(
@@ -864,10 +841,9 @@ pub unsafe extern "C" fn purrdf_update_governed(
                     "null required pointer argument to purrdf_update_governed",
                 ));
             }
-            validate_update_governors(governors)?;
+            let governors = decode_update_governors(governors)?;
             let request = cstr_to_str(request)?;
             let base_iri = opt_cstr_to_str(base_iri)?;
-            let governors = decode_governors(governors)?;
             let aggregates = decode_aggregate_namespace(aggregate_namespace)?;
             let outcome = engine()
                 .update_governed(

@@ -46,8 +46,9 @@
 //! other. Every crate in the workspace may take this one as a dev-dependency,
 //! so any further first-party edge from here would close a cycle through that
 //! crate's tests. It is never published and appears only in
-//! `[dev-dependencies]` (and in `purrdf-hash-conformance`, the unpublished
-//! home of the root's suites).
+//! `[dev-dependencies]` and in unpublished crates: `purrdf-hash-conformance`,
+//! the home of the root's suites; `purrdf-sparql-conformance`, whose manifest
+//! reader resolves the workspace root; and `helper-census`, which scans it.
 
 // The wasm32 host's imports are `#[wasm_bindgen]` declarations, whose
 // expansion is `unsafe`; `host` is the one module allowed it, and only there.

@@ -27,7 +27,10 @@ use purrdf_testkit::harness::{self, Failed, Trial};
 fn an_in_floor_request_runs() -> Result<(), Failed> {
     const BYTES: usize = 4 * MARGIN_BYTES;
     let left = on_stack(BYTES, remaining).map_err(|error| error.to_string())?;
-    if left > BYTES + MARGIN_BYTES {
+    // Never less than asked for, less the frames already live. Natively the C library
+    // may hand a thread a cached stack several times the request, so only wasm32, whose
+    // floor is installed exactly `BYTES` below the calling frame, bounds it from above.
+    if left + MARGIN_BYTES < BYTES || (cfg!(target_arch = "wasm32") && left > BYTES) {
         return Err(format!("{left} bytes left on a {BYTES}-byte stack").into());
     }
     if on_stack(BYTES, is_low).map_err(|error| error.to_string())? {

@@ -338,22 +338,20 @@ mod term_walk_tests {
 
     /// A deterministic choice sequence.
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 12,
             }
         }
 
         fn choose(&mut self, n: usize) -> usize {
-            let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
-                .expect("a draw below the count fits")
+            self.state.below_usize(n)
         }
 
         fn spend(&mut self) -> bool {
@@ -469,44 +467,40 @@ mod term_walk_tests {
     /// is refused, naming the site, without walking off the stack either.
     #[test]
     fn a_hundred_thousand_level_term_converts_on_a_128_kib_thread() {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(|| {
-                let mut deep = TermPattern::NamedNode(iri("o"));
-                let mut variable = TermPattern::Variable(Variable::new("o"));
-                let mut cell = GroundTerm::NamedNode(iri("o"));
-                for _ in 0..DEPTH {
-                    deep = TermPattern::Triple(Child::new(TriplePattern {
-                        subject: TermPattern::NamedNode(iri("s")),
-                        predicate: NamedNodePattern::NamedNode(iri("p")),
-                        object: deep,
-                    }));
-                    variable = TermPattern::Triple(Child::new(TriplePattern {
-                        subject: TermPattern::NamedNode(iri("s")),
-                        predicate: NamedNodePattern::NamedNode(iri("p")),
-                        object: variable,
-                    }));
-                    cell = GroundTerm::Triple(Child::new(GroundTriple {
-                        subject: GroundTerm::NamedNode(iri("s")),
-                        predicate: iri("p"),
-                        object: cell,
-                    }));
-                }
-                let value = ground_term_pattern_to_value(&deep, SITE).expect("a ground pattern");
-                assert_eq!(nesting(&value), DEPTH);
-                drop(value);
-                let error = ground_term_pattern_to_value(&variable, SITE)
-                    .expect_err("a variable at the innermost object");
-                assert!(error.to_string().contains(SITE), "{error}");
-                let value = ground_term_to_value(&cell);
-                assert_eq!(nesting(&value), DEPTH);
-                drop(value);
-                drop(deep);
-                drop(variable);
-                drop(cell);
-            })
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned");
+        purrdf_stack::on_stack(SMALL_STACK, || {
+            let mut deep = TermPattern::NamedNode(iri("o"));
+            let mut variable = TermPattern::Variable(Variable::new("o"));
+            let mut cell = GroundTerm::NamedNode(iri("o"));
+            for _ in 0..DEPTH {
+                deep = TermPattern::Triple(Child::new(TriplePattern {
+                    subject: TermPattern::NamedNode(iri("s")),
+                    predicate: NamedNodePattern::NamedNode(iri("p")),
+                    object: deep,
+                }));
+                variable = TermPattern::Triple(Child::new(TriplePattern {
+                    subject: TermPattern::NamedNode(iri("s")),
+                    predicate: NamedNodePattern::NamedNode(iri("p")),
+                    object: variable,
+                }));
+                cell = GroundTerm::Triple(Child::new(GroundTriple {
+                    subject: GroundTerm::NamedNode(iri("s")),
+                    predicate: iri("p"),
+                    object: cell,
+                }));
+            }
+            let value = ground_term_pattern_to_value(&deep, SITE).expect("a ground pattern");
+            assert_eq!(nesting(&value), DEPTH);
+            drop(value);
+            let error = ground_term_pattern_to_value(&variable, SITE)
+                .expect_err("a variable at the innermost object");
+            assert!(error.to_string().contains(SITE), "{error}");
+            let value = ground_term_to_value(&cell);
+            assert_eq!(nesting(&value), DEPTH);
+            drop(value);
+            drop(deep);
+            drop(variable);
+            drop(cell);
+        })
+        .expect("spawn");
     }
 }

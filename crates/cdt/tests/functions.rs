@@ -1291,23 +1291,19 @@ fn refused_by_the_element_bound() -> CdtOutcome<CdtValue> {
 #[test]
 fn a_minted_value_nests_as_deep_as_its_elements_allow() {
     let depth = 100_000usize;
-    std::thread::Builder::new()
-        .stack_size(256 * 1024)
-        .spawn(move || {
-            let mut built = value(list_constructor(Vec::new()));
-            for _ in 1..depth {
-                built = value(list_constructor(vec![composite(built)]));
-            }
-            assert_eq!(built.depth(), depth);
-            assert_eq!(built.element_count(), depth - 1);
-            assert_eq!(purrdf_cdt::canonical_lexical_len(&built), depth * 2);
-            let deeper = value(list_constructor(vec![CdtTerm::Composite(Box::new(built))]));
-            assert_eq!(deeper.depth(), depth + 1);
-            assert_eq!(deeper.element_count(), depth);
-        })
-        .expect("the thread starts")
-        .join()
-        .expect("the walks did not abort");
+    purrdf_stack::on_stack(256 * 1024, move || {
+        let mut built = value(list_constructor(Vec::new()));
+        for _ in 1..depth {
+            built = value(list_constructor(vec![composite(built)]));
+        }
+        assert_eq!(built.depth(), depth);
+        assert_eq!(built.element_count(), depth - 1);
+        assert_eq!(purrdf_cdt::canonical_lexical_len(&built), depth * 2);
+        let deeper = value(list_constructor(vec![CdtTerm::Composite(Box::new(built))]));
+        assert_eq!(deeper.depth(), depth + 1);
+        assert_eq!(deeper.element_count(), depth);
+    })
+    .expect("the thread starts");
 }
 
 #[test]

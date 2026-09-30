@@ -1228,12 +1228,7 @@ mod tests {
     /// Run `body` on a thread with a 128 KiB machine stack: a walk that recursed once
     /// per nesting level would overflow it after a few hundred levels.
     fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(body)
-            .expect("spawn a small-stack thread")
-            .join()
-            .expect("the small-stack thread finished without overflowing")
+        purrdf_stack::on_stack(128 * 1024, body).expect("spawn a small-stack thread")
     }
 
     /// `depth` nested JSON arrays around nothing: `[[…[]…]]`.

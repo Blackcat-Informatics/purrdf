@@ -1947,28 +1947,24 @@ mod tests {
                 std::fmt::Write::write_char(self, value).unwrap();
             }
         }
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let depth = 100_000;
-                let graph = object_chain(depth);
-                let namespaces = BTreeMap::from([("http://example.org/".into(), "ex".into())]);
-                let mut out = Counter { bytes: 0, lines: 0 };
-                write_property(
-                    &mut out,
-                    "    ",
-                    &graph,
-                    &graph.reifier_index(),
-                    1,
-                    graph.terms.len() - 1,
-                    &namespaces,
-                )
-                .unwrap();
-                assert_eq!(out.lines, 4 * depth + 1);
-            })
-            .unwrap()
-            .join()
+        purrdf_stack::on_stack(128 * 1024, || {
+            let depth = 100_000;
+            let graph = object_chain(depth);
+            let namespaces = BTreeMap::from([("http://example.org/".into(), "ex".into())]);
+            let mut out = Counter { bytes: 0, lines: 0 };
+            write_property(
+                &mut out,
+                "    ",
+                &graph,
+                &graph.reifier_index(),
+                1,
+                graph.terms.len() - 1,
+                &namespaces,
+            )
             .unwrap();
+            assert_eq!(out.lines, 4 * depth + 1);
+        })
+        .expect("spawn");
     }
 
     /// The in-scope base a caller-supplied base string produces, matching what the
@@ -2398,35 +2394,31 @@ mod term_walk_tests {
     #[test]
     fn a_three_thousand_level_object_is_written_on_a_128_kib_thread() {
         const LEVELS: usize = 3_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = purrdf_core::term_fixture::triple_chain(LEVELS);
-                let mut graph = SerGraph::default();
-                let object = lower(&mut graph, &value);
-                drop(value);
-                let predicate = lower(&mut graph, &TermValue::iri("http://example.org/q"));
-                let ix = graph.reifier_index();
-                let mut written = String::new();
-                write_property(
-                    &mut written,
-                    "",
-                    &graph,
-                    &ix,
-                    predicate,
-                    object,
-                    &namespaces(),
-                )
-                .expect("every nested subject is an IRI");
-                assert_eq!(
-                    written.matches("rdf:parseType=\"Triple\"").count(),
-                    LEVELS,
-                    "one triple element a level"
-                );
-                assert!(written.ends_with("</ex:q>\n"));
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the writer did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            let mut graph = SerGraph::default();
+            let object = lower(&mut graph, &value);
+            drop(value);
+            let predicate = lower(&mut graph, &TermValue::iri("http://example.org/q"));
+            let ix = graph.reifier_index();
+            let mut written = String::new();
+            write_property(
+                &mut written,
+                "",
+                &graph,
+                &ix,
+                predicate,
+                object,
+                &namespaces(),
+            )
+            .expect("every nested subject is an IRI");
+            assert_eq!(
+                written.matches("rdf:parseType=\"Triple\"").count(),
+                LEVELS,
+                "one triple element a level"
+            );
+            assert!(written.ends_with("</ex:q>\n"));
+        })
+        .expect("the thread starts");
     }
 }

@@ -174,17 +174,6 @@ mod tests {
     use super::stack_floor;
     use crate::stack_pointer;
 
-    /// Run `body` on a fresh thread with `bytes` of stack, so the read is that thread's
-    /// own bound, not the harness's.
-    fn on_thread<T: Send + 'static>(bytes: usize, body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(bytes)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("join")
-    }
-
     /// `levels` frames of 4 KiB below the caller, then `at_bottom`.
     fn deeper<T>(levels: usize, at_bottom: &dyn Fn() -> T) -> T {
         if levels == 0 {
@@ -204,7 +193,8 @@ mod tests {
     #[test]
     fn stack_floor_is_some_and_bounds_positive_headroom() {
         const BYTES: usize = 2 * 1024 * 1024;
-        let (sp, floor) = on_thread(BYTES, || (stack_pointer(), stack_floor()));
+        let (sp, floor) =
+            crate::on_stack(BYTES, || (stack_pointer(), stack_floor())).expect("spawn");
         let floor = floor.expect("a supported platform reads a floor");
         assert!(floor < sp, "floor {floor:#x} below sp {sp:#x}");
         let headroom = sp - floor;
@@ -221,11 +211,12 @@ mod tests {
     /// has fallen by what those frames used.
     #[test]
     fn stack_floor_is_fixed_so_headroom_falls_with_depth() {
-        let (top_floor, top_sp, deep_floor, deep_sp) = on_thread(2 * 1024 * 1024, || {
+        let (top_floor, top_sp, deep_floor, deep_sp) = crate::on_stack(2 * 1024 * 1024, || {
             let top = (stack_floor(), stack_pointer());
             let (deep_floor, deep_sp) = deeper(16, &|| (stack_floor(), stack_pointer()));
             (top.0, top.1, deep_floor, deep_sp)
-        });
+        })
+        .expect("spawn");
         assert_eq!(
             top_floor, deep_floor,
             "the floor belongs to the thread, not the frame that read it"
@@ -250,7 +241,8 @@ mod tests {
     #[test]
     fn stack_floor_tracks_a_thread_s_requested_stack_size() {
         for bytes in [512 * 1024, 3 * 1024 * 1024] {
-            let (sp, floor) = on_thread(bytes, || (stack_pointer(), stack_floor()));
+            let (sp, floor) =
+                crate::on_stack(bytes, || (stack_pointer(), stack_floor())).expect("spawn");
             let floor = floor.expect("a supported platform reads a floor");
             let headroom = sp - floor;
             assert!(

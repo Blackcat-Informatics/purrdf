@@ -60,6 +60,9 @@ purrdf-hash = { workspace = true }
 hashbrown = { workspace = true }
 
 [dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
 # Generates the random small knowledge bases the OWL-Direct tableau is checked against in
 # `owl_dl::oracle`, where every generated verdict is compared with a naive exponential
 # model-enumeration oracle. Driven from a FIXED seed, so the corpus is identical on every

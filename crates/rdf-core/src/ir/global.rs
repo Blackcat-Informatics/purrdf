@@ -1238,23 +1238,19 @@ mod tests {
     #[test]
     fn a_hundred_thousand_level_term_round_trips_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = crate::term_fixture::triple_chain(LEVELS);
-                let mut dict = GlobalDictionary::new();
-                let id = intern(&mut dict, &value);
-                assert_eq!(dict.reintern_validated(&value), id);
-                assert!(dict.term_matches_value(id, &value));
-                assert_eq!(stored_hash(&dict, id), hash_value(&value));
-                let resolved = dict.term_value(id);
-                assert!(
-                    resolved == value,
-                    "the resolved chain equals the interned one"
-                );
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no walk overflowed the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = crate::term_fixture::triple_chain(LEVELS);
+            let mut dict = GlobalDictionary::new();
+            let id = intern(&mut dict, &value);
+            assert_eq!(dict.reintern_validated(&value), id);
+            assert!(dict.term_matches_value(id, &value));
+            assert_eq!(stored_hash(&dict, id), hash_value(&value));
+            let resolved = dict.term_value(id);
+            assert!(
+                resolved == value,
+                "the resolved chain equals the interned one"
+            );
+        })
+        .expect("the thread starts");
     }
 }

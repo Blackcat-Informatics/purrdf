@@ -951,7 +951,7 @@ impl BaseResolver {
         let dir = dir
             .canonicalize()
             .map_err(|e| format!("resolve manifest directory {}: {e}", dir.display()))?;
-        let workspace_root = workspace_root(&dir).ok_or_else(|| {
+        let workspace_root = purrdf_testkit::paths::workspace_root_from(&dir).ok_or_else(|| {
             format!(
                 "{}: no ancestor directory carries a Cargo.toml with a [workspace] table, so no \
                  workspace-relative manifest identity can be derived. The conformance corpora \
@@ -1025,22 +1025,6 @@ impl BaseResolver {
         })?;
         Ok(paths::resolve(&self.workspace_root, relative))
     }
-}
-
-/// The nearest ancestor of `start` (inclusive) whose `Cargo.toml` declares a
-/// `[workspace]` table.
-///
-/// Member crates carry `[package]` and `workspace = true` VALUES but never a
-/// `[workspace]` section header, so the first ancestor that matches is the true
-/// workspace root and not an intervening member.
-fn workspace_root(start: &Path) -> Option<PathBuf> {
-    start
-        .ancestors()
-        .find(|dir| {
-            std::fs::read_to_string(dir.join("Cargo.toml"))
-                .is_ok_and(|text| text.lines().any(|line| line.trim() == "[workspace]"))
-        })
-        .map(Path::to_path_buf)
 }
 
 /// Resolve an OPTIONAL file IRI, keeping "no such column bound" (`None`) distinct

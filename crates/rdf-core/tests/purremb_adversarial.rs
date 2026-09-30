@@ -286,10 +286,7 @@ fn arbitrary_bytes_never_panic() {
     for length in (0..=4096).step_by(17) {
         let mut bytes = vec![0u8; length];
         for byte in &mut bytes {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            *byte = state as u8;
+            *byte = purrdf_testkit::rng::xorshift64_next(&mut state) as u8;
         }
         let outcome = std::panic::catch_unwind(|| EmbeddingView::from_bytes(&bytes));
         assert!(

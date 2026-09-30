@@ -1440,6 +1440,7 @@ fn write_literal_escaped(value: &str, out: &mut String) {
 #[cfg(test)]
 mod escape_tests {
     use super::{write_iri_escaped, write_literal_escaped};
+    use purrdf_testkit::rng::SplitMix64;
     use std::fmt::Write as _;
 
     /// The per-`char` writers this module carried before it delegated, kept
@@ -1479,19 +1480,6 @@ mod escape_tests {
         }
     }
 
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        const fn next(&mut self) -> u64 {
-            purrdf_testkit::rng::splitmix64_next(&mut self.0)
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            usize::try_from(self.next() % n as u64).expect("below n")
-        }
-    }
-
     #[test]
     fn delegated_writers_agree_with_the_per_char_writers() {
         // Every ASCII scalar (every special byte), the whole block led by 0xC2
@@ -1505,14 +1493,14 @@ mod escape_tests {
             '\u{1F408}',
             '\u{10FFFF}',
         ]));
-        let mut rng = SplitMix(0x00E7_7A11_E5CA_9E00);
+        let mut rng = SplitMix64::new(0x00E7_7A11_E5CA_9E00);
         let mut changed = 0_usize;
         for len in (0..=70).chain([127, 128, 129, 1000]) {
             for _ in 0..40 {
                 let value: String = (0..len)
                     .map(|_| {
-                        if rng.below(5) == 0 {
-                            alphabet[rng.below(alphabet.len())]
+                        if rng.below_usize(5) == 0 {
+                            alphabet[rng.below_usize(alphabet.len())]
                         } else {
                             'q'
                         }
@@ -2231,19 +2219,14 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_spelled_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = purrdf_core::term_fixture::triple_chain(LEVELS);
-                let level =
-                    "<<( <http://example.org/s> <http://example.org/p> ".len() + " )>>".len();
-                assert_eq!(
-                    surface_of(&value).len(),
-                    LEVELS * level + "<http://example.org/o>".len()
-                );
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the surface did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            let level = "<<( <http://example.org/s> <http://example.org/p> ".len() + " )>>".len();
+            assert_eq!(
+                surface_of(&value).len(),
+                LEVELS * level + "<http://example.org/o>".len()
+            );
+        })
+        .expect("the thread starts");
     }
 }

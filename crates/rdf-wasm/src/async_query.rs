@@ -254,9 +254,9 @@ use crate::operation::{
 };
 use crate::query::{
     EntailmentQueryOutcome, GovernorArgs, NegotiatedOutcome, QueryEngine, QueryOutcome,
-    QueryResult, UPDATE_REFUSES_MAX_ANSWERS, UpdateOutcome, entailment_query_outcome_from_native,
-    kind_mismatch, negotiated_outcome_from_value, query_outcome_from_governed,
-    query_result_from_sparql, update_outcome_from_governed,
+    QueryResult, UpdateOutcome, entailment_query_outcome_from_native, kind_mismatch,
+    negotiated_outcome_from_value, query_outcome_from_governed, query_result_from_sparql,
+    update_outcome_from_governed,
 };
 use crate::shacl::{
     ShaclChangeValidation, ShaclEntailment, ShaclImportError, ShaclJobRequest,
@@ -3919,9 +3919,6 @@ impl AsyncJobOptions {
                 }
             }
         }
-        if kind == AsyncOperationKind::UpdateGoverned && ceilings.contains_key("maxAnswers") {
-            return Err(OptionsError::refused(UPDATE_REFUSES_MAX_ANSWERS));
-        }
         options.ceilings = GovernorArgs::decode(
             ceilings.get("fuel").copied(),
             ceilings.get("deadlineMs").copied(),
@@ -3931,6 +3928,12 @@ impl AsyncJobOptions {
             ceilings.get("maxRemoteRequests").copied(),
         )
         .map_err(OptionsError::refused)?;
+        if kind == AsyncOperationKind::UpdateGoverned {
+            options
+                .ceilings
+                .update_ceilings()
+                .map_err(OptionsError::refused)?;
+        }
         options.quantum = count_option(
             "yieldEveryPolls",
             counts.get("yieldEveryPolls").copied(),
@@ -4476,7 +4479,7 @@ mod tests {
     use purrdf_sparql_eval::{GovernedOutcome, QueryOptions};
 
     use super::*;
-    use crate::query::sparql_request;
+    use crate::query::{UPDATE_REFUSES_MAX_ANSWERS, sparql_request};
     use crate::shacl::requests;
     use crate::shacl::tests::{TOOLS_DATA, TOOLS_SHAPES};
     use purrdf_validate::ShapesError;

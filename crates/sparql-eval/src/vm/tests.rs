@@ -19,6 +19,7 @@ use purrdf_sparql_algebra::{
     ArithmeticOperator, Child, Expression, Function, GraphPattern, Literal, NamedNode,
     NamedNodePattern, NonEmpty, TermPattern, TriplePattern, Variable,
 };
+use purrdf_testkit::rng::{LCG64_MMIX_INCREMENT, lcg64_next};
 
 use super::compile::is_triple_constructor;
 use super::{ExprProgram, Linked};
@@ -567,9 +568,9 @@ fn assert_same(expr: &Expression, context: &str) {
 
 #[test]
 fn the_vm_matches_the_tree_walk_over_every_suite_expression() {
-    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let suites = manifest.join("../sparql-conformance");
-    let vectors = manifest.join("../../vectors");
+    let root = purrdf_testkit::paths::workspace_root();
+    let suites = root.join("crates/sparql-conformance");
+    let vectors = root.join("vectors");
     let mut files = Vec::new();
     // The conformance suites and corpus, and the vendored SEP-0009 and governor
     // vectors, whose queries are the ones dense in composite-datatype function calls.
@@ -621,11 +622,8 @@ struct Choices(u64);
 
 impl Choices {
     fn next(&mut self, bound: usize) -> usize {
-        self.0 = self
-            .0
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        ((self.0 >> 33) % bound as u64) as usize
+        let state = lcg64_next(&mut self.0, LCG64_MMIX_INCREMENT);
+        ((state >> 33) % bound as u64) as usize
     }
 }
 
@@ -886,12 +884,7 @@ const DEPTH: usize = 100_000;
 /// Run `f` on a thread whose stack is 128 KiB: a recursion over a 100 000-deep
 /// expression would need far more.
 fn on_small_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    std::thread::Builder::new()
-        .stack_size(128 * 1024)
-        .spawn(f)
-        .expect("the thread spawns")
-        .join()
-        .expect("the evaluation finishes on a 128 KiB stack")
+    purrdf_stack::on_stack(128 * 1024, f).expect("the thread spawns")
 }
 
 /// Compile, link and run `expr` over the empty row, on a fresh context.

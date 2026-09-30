@@ -5773,10 +5773,11 @@ fn the_reader_and_the_law_agree_on_the_heading_stack_over_generated_level_sequen
     for _ in 0..64 {
         let mut levels: Vec<u32> = Vec::with_capacity(8);
         for _ in 0..8 {
-            state = state
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            levels.push(u32::try_from((state >> 33) % 7).expect("a level under seven"));
+            let drawn = purrdf_testkit::rng::lcg64_next(
+                &mut state,
+                purrdf_testkit::rng::LCG64_MMIX_INCREMENT,
+            );
+            levels.push(u32::try_from((drawn >> 33) % 7).expect("a level under seven"));
         }
         the_reader_and_the_law_agree_on(&levels);
     }

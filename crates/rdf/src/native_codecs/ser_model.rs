@@ -1540,26 +1540,21 @@ pub(crate) mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_written_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = purrdf_core::term_fixture::triple_chain(LEVELS);
-                let mut graph = SerGraph::default();
-                let id = lower(&mut graph, &value);
-                drop(value);
-                let ix = graph.reifier_index();
-                let level =
-                    "<<( <http://example.org/s> <http://example.org/p> ".len() + " )>>".len();
-                let innermost = "<http://example.org/o>".len();
-                let mut written = String::new();
-                write_term(&graph, &ix, id, &mut written);
-                assert_eq!(written.len(), LEVELS * level + innermost);
-                let mut written = String::new();
-                write_trig_term(&graph, &ix, id, &mut written);
-                assert_eq!(written.len(), LEVELS * level + innermost);
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no writer overflowed the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            let mut graph = SerGraph::default();
+            let id = lower(&mut graph, &value);
+            drop(value);
+            let ix = graph.reifier_index();
+            let level = "<<( <http://example.org/s> <http://example.org/p> ".len() + " )>>".len();
+            let innermost = "<http://example.org/o>".len();
+            let mut written = String::new();
+            write_term(&graph, &ix, id, &mut written);
+            assert_eq!(written.len(), LEVELS * level + innermost);
+            let mut written = String::new();
+            write_trig_term(&graph, &ix, id, &mut written);
+            assert_eq!(written.len(), LEVELS * level + innermost);
+        })
+        .expect("the thread starts");
     }
 }

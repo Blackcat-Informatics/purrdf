@@ -50,6 +50,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use purrdf_testkit::paths::workspace_root;
+
 /// A monotonically increasing counter, so every call to [`unique_tag`] in this process is
 /// distinct even across parallel test threads.
 static UNIQUE: AtomicU64 = AtomicU64::new(0);
@@ -60,16 +62,6 @@ fn unique_tag() -> String {
         std::process::id(),
         UNIQUE.fetch_add(1, Ordering::Relaxed)
     )
-}
-
-/// The repository root, resolved from `CARGO_MANIFEST_DIR` (`crates/bench`) rather than the
-/// process's current directory, so these tests are independent of how `cargo test` was invoked.
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("crates/bench has two ancestors: crates/ and the repository root")
-        .to_path_buf()
 }
 
 /// A scratch directory unique to this process, created and returned.
@@ -85,7 +77,7 @@ fn scratch(label: &str) -> PathBuf {
 /// a plain shell with no pending `make` recursion.
 fn run_make(args: &[&str]) -> (i32, String, String) {
     let output = Command::new("make")
-        .current_dir(repo_root())
+        .current_dir(workspace_root())
         .env_remove("MAKEFLAGS")
         .env_remove("MFLAGS")
         .env_remove("MAKELEVEL")
@@ -556,12 +548,12 @@ fn every_lane_accepts_a_credible_binary_at_an_awkward_but_legal_path() {
         // One path that is a SYMLINK, is RELATIVE to the repository root (the lane's own working
         // directory), and contains a SPACE — all three properties at once, so a single lane run
         // covers all three counter-checks.
-        let arena = repo_root().join(format!("target/lane over refusal {}", unique_tag()));
+        let arena = workspace_root().join(format!("target/lane over refusal {}", unique_tag()));
         std::fs::create_dir_all(&arena).expect("create the space-containing arena");
         let link = arena.join("purrdf link");
         std::os::unix::fs::symlink(&real, &link).expect("symlink the stand-in");
         let relative = link
-            .strip_prefix(repo_root())
+            .strip_prefix(workspace_root())
             .expect("the arena is under the repository root")
             .to_path_buf();
 

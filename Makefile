@@ -710,6 +710,10 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# bench binaries under `--test`, so every routine of the hash benches runs
 	@# once on wasm32 through the same runner and host clock.
 	@#
+	@# purrdf-stack's `on_stack` runs there on its inline path: a computation under
+	@# a fresh floor that many bytes below the caller, and the typed refusal of a
+	@# request larger than the stack left, beside a neighbour that fits.
+	@#
 	@# Every target here is `harness = false` on purrdf_testkit's runner, so the
 	@# same named cases run natively under `cargo test` and here. Cargo hands each
 	@# wasm32 test binary to scripts/wasm-test-runner.sh, which generates its Node
@@ -791,6 +795,9 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-testkit --test bench \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-stack --test on_stack \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo bench --locked --target wasm32-unknown-unknown \
 			-p purrdf-hash-conformance --bench hasher --bench digests -- --test \

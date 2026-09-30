@@ -103,32 +103,27 @@ fn walk_every_way(build: fn() -> GraphPattern) -> (usize, usize) {
     let _serial = ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    std::thread::Builder::new()
-        .name("deep-tree".to_owned())
-        .stack_size(STACK)
-        .spawn(move || {
-            let window = CurrentThreadWindow::open();
-            let tree = build();
-            let copy = tree.clone();
-            assert!(tree == copy, "a copy equals its original");
-            assert_eq!(hash_of(&tree), hash_of(&copy), "equal trees hash equally");
-            let mut debug = Counted::default();
-            write!(debug, "{tree:?}").expect("counting cannot fail");
-            let mut copied = Counted::default();
-            write!(copied, "{copy:?}").expect("counting cannot fail");
-            assert_eq!(debug.bytes, copied.bytes);
-            let text = pattern_to_select_query(&tree).len();
-            let built = window.sample();
-            drop(copy);
-            drop(tree);
-            let left = window.close();
-            assert!(built.retained_bytes > 0, "the tree was built");
-            assert_eq!(left.retained_bytes, 0, "the drop freed every node");
-            (debug.bytes, text)
-        })
-        .expect("the thread starts")
-        .join()
-        .expect("no walk overflowed the thread's stack")
+    purrdf_stack::on_stack(STACK, move || {
+        let window = CurrentThreadWindow::open();
+        let tree = build();
+        let copy = tree.clone();
+        assert!(tree == copy, "a copy equals its original");
+        assert_eq!(hash_of(&tree), hash_of(&copy), "equal trees hash equally");
+        let mut debug = Counted::default();
+        write!(debug, "{tree:?}").expect("counting cannot fail");
+        let mut copied = Counted::default();
+        write!(copied, "{copy:?}").expect("counting cannot fail");
+        assert_eq!(debug.bytes, copied.bytes);
+        let text = pattern_to_select_query(&tree).len();
+        let built = window.sample();
+        drop(copy);
+        drop(tree);
+        let left = window.close();
+        assert!(built.retained_bytes > 0, "the tree was built");
+        assert_eq!(left.retained_bytes, 0, "the drop freed every node");
+        (debug.bytes, text)
+    })
+    .expect("the thread starts")
 }
 
 /// `OPTIONAL` a million times: a `LeftJoin` spine down its left operand.

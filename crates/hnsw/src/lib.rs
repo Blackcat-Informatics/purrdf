@@ -996,9 +996,9 @@ mod tests {
         let mut state = 0x0dd0_c0de_1234_5678_u64;
         let mut data = Vec::with_capacity(rows * dims);
         for _ in 0..rows * dims {
-            state = level::splitmix64(state);
-            let value = ((state >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0);
-            data.push(if value == 0.0 { 0.25 } else { value });
+            data.push(purrdf_testkit::rng::signed_unit_step_nonzero(
+                &mut state, 0.25,
+            ));
         }
         VectorMatrix::new(rows, dims, data).expect("valid fixture")
     }

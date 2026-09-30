@@ -213,7 +213,7 @@ impl Stream {
 
     /// A value in `[-1, 1)`.
     pub(super) fn signed(&mut self) -> f64 {
-        ((self.next_u64() >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0)
+        purrdf_testkit::rng::signed_unit(self.next_u64())
     }
 
     /// One component of the adversarial class `class`.

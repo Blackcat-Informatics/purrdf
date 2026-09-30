@@ -11,6 +11,7 @@
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
+use purrdf_testkit::rng::{LCG64_MMIX_INCREMENT, lcg64_next};
 use purrdf_text::{
     Analyzer, Constraint, Fixed, GraphSelector, PartitionFilter, PartitionKey, Scored, TextError,
     TextIndex, TextIndexConfig, explain, rank_partition, select,
@@ -441,11 +442,7 @@ struct Lcg(u64);
 impl Lcg {
     /// The next value, in `0..bound`.
     fn next_below(&mut self, bound: u64) -> u64 {
-        self.0 = self
-            .0
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        (self.0 >> 33) % bound
+        (lcg64_next(&mut self.0, LCG64_MMIX_INCREMENT) >> 33) % bound
     }
 }
 

@@ -6,19 +6,23 @@
 //!
 //! `purrdf query` reaches the engine's governed lane through six flags — `--fuel`,
 //! `--deadline`, `--max-answers`, `--max-intermediate-cells`, `--max-scratch-bytes`, and
-//! `--max-remote-requests`. [`GovernorFlags`] is what clap parsed; [`GovernorFlags::to_governors`]
-//! is the one place they become a [`QueryGovernors`]. `purrdf update` uses the same
-//! contract except that `--max-answers` does not apply to a mutation.
+//! `--max-remote-requests` — plus `--no-ceiling`. [`GovernorFlags`] is what clap parsed;
+//! [`GovernorFlags::to_governors`] is the one place they become a [`QueryGovernors`].
+//! `purrdf update` uses the same contract except that `--max-answers` does not apply to a
+//! mutation.
 //!
-//! # `UNBOUNDED` is named here, exactly once
+//! # The base is `METERED`; `UNBOUNDED` is asked for with `--no-ceiling`
 //!
-//! [`QueryGovernors`] deliberately has no `Default`: declining every ceiling is a decision
-//! that has to be written down, so that no code path acquires ungoverned status by
-//! forgetting to say anything. This module is where the CLI writes it down —
-//! [`GovernorFlags::to_governors`] starts from [`QueryGovernors::UNBOUNDED`] and adds only
-//! the ceilings the operator actually named. Nothing else in the binary constructs a
-//! governor configuration, and [`GovernorFlags`] itself has no `Default` for the same
-//! reason.
+//! [`GovernorFlags::to_governors`] hands the flags to
+//! [`purrdf_validate::governors::from_parts`], the decoder every host shares, so a
+//! governed run means on the command line what it means through the C ABI, the wasm
+//! package and the Python binding. It starts from [`QueryGovernors::METERED`]: a
+//! dimension no flag names carries no ceiling anyone asked for, but it is still charged,
+//! so the stop signal a `--deadline` installs is polled inside a long-running operator as
+//! well as between operators. `--no-ceiling` asks for [`QueryGovernors::UNBOUNDED`]
+//! instead — no ceiling and no accounting — and is refused beside any numeric ceiling,
+//! because a request that names a ceiling and declines them all contradicts itself.
+//! [`GovernorFlags`] has no `Default`: every construction site names every flag.
 //!
 //! # A deadline is the only flag that is not a number
 //!
@@ -52,10 +56,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use purrdf_core::ResourceVector;
 use purrdf_sparql_eval::{
     BudgetExhausted, GovernorEvidence, PartialAnswers, QueryGovernors, ResourceDimension,
-    TrippedGovernor, WallDeadline,
+    StopSignal, TrippedGovernor, WallDeadline,
 };
+use purrdf_validate::governors::{GovernorParts, GovernorPartsError, from_parts};
+
+use crate::error::CliError;
 
 /// The banner line every governor report starts with.
 ///
@@ -82,6 +90,9 @@ pub(crate) struct GovernorFlags {
     pub(crate) max_scratch_bytes: Option<u64>,
     /// `--max-remote-requests`: requests issued to a remote or federated endpoint.
     pub(crate) max_remote_requests: Option<u64>,
+    /// `--no-ceiling`: decline every ceiling and all accounting
+    /// ([`QueryGovernors::UNBOUNDED`] instead of [`QueryGovernors::METERED`]).
+    pub(crate) no_ceiling: bool,
 }
 
 impl GovernorFlags {
@@ -129,34 +140,66 @@ impl GovernorFlags {
             || self.max_remote_requests.is_some()
     }
 
-    /// Build the engine configuration these flags describe.
+    /// Build the engine configuration these flags describe, through
+    /// [`purrdf_validate::governors::from_parts`]: [`QueryGovernors::METERED`] with each
+    /// named ceiling engaged, or [`QueryGovernors::UNBOUNDED`] under `--no-ceiling`. A
+    /// `--deadline` becomes a [`WallDeadline`] constructed **here**, so the budget starts
+    /// when the caller of this function is about to evaluate rather than when the process
+    /// started.
     ///
-    /// Starts from [`QueryGovernors::UNBOUNDED`] — the explicitly named "no ceiling"
-    /// state — and adds only what the operator wrote. A `--deadline` becomes a
-    /// [`WallDeadline`] constructed **here**, so the budget starts when the caller of this
-    /// function is about to evaluate rather than when the process started.
-    pub(crate) fn to_governors(self) -> QueryGovernors {
-        let mut governors = QueryGovernors::UNBOUNDED;
-        if let Some(fuel) = self.fuel {
-            governors = governors.with_fuel(fuel);
-        }
-        if let Some(rows) = self.max_answers {
-            governors = governors.with_max_answers(rows);
-        }
-        if let Some(cells) = self.max_intermediate_cells {
-            governors = governors.with_max_intermediate_cells(cells);
-        }
-        if let Some(bytes) = self.max_scratch_bytes {
-            governors = governors.with_max_scratch_bytes(bytes);
-        }
-        if let Some(requests) = self.max_remote_requests {
-            governors = governors.with_max_remote_requests(requests);
-        }
-        if let Some(budget) = self.deadline {
-            governors = governors.with_stop_signal(Arc::new(WallDeadline::after(budget)));
-        }
-        governors
+    /// # Errors
+    ///
+    /// A usage error naming both flags when `--no-ceiling` is given beside a numeric
+    /// ceiling.
+    pub(crate) fn to_governors(self) -> Result<QueryGovernors, CliError> {
+        let parts = GovernorParts {
+            fuel: self.fuel,
+            max_answers: self.max_answers,
+            max_intermediate_cells: self.max_intermediate_cells,
+            max_scratch_bytes: self.max_scratch_bytes,
+            max_remote_requests: self.max_remote_requests,
+            no_ceiling: self.no_ceiling,
+        };
+        let stop = self
+            .deadline
+            .map(|budget| Arc::new(WallDeadline::after(budget)) as Arc<dyn StopSignal>);
+        from_parts(&parts, stop).map_err(|error| CliError::Usage(refusal(error)))
     }
+}
+
+/// The command line's wording of a [`GovernorPartsError`], in its own flag spelling.
+fn refusal(error: GovernorPartsError) -> String {
+    match error {
+        GovernorPartsError::CeilingWithNoCeiling { dimension } => format!(
+            "--no-ceiling declines every ceiling, and {} names one: drop --no-ceiling to run \
+             under the ceiling, or drop the ceiling to run with none",
+            ceiling_flag(dimension)
+        ),
+        other => other.to_string(),
+    }
+}
+
+/// The flag that names a ceiling on `dimension`.
+fn ceiling_flag(dimension: ResourceDimension) -> String {
+    match dimension {
+        ResourceDimension::Fuel => "--fuel".to_owned(),
+        ResourceDimension::AnswerRows => "--max-answers".to_owned(),
+        ResourceDimension::IntermediateCells => "--max-intermediate-cells".to_owned(),
+        ResourceDimension::ScratchBytes => "--max-scratch-bytes".to_owned(),
+        ResourceDimension::RemoteRequests => "--max-remote-requests".to_owned(),
+        other => format!("a {} ceiling", other.label()),
+    }
+}
+
+/// The ceiling on `dimension` a trip report prints: the one a flag named, or `None` for a
+/// dimension that carries none — unbounded, or bounded only by the ceiling
+/// [`QueryGovernors::METERED`] installs so its counter runs, which no flag asked for.
+fn named_limit(limits: ResourceVector, dimension: ResourceDimension) -> Option<u64> {
+    let metering = QueryGovernors::METERED.limits();
+    let limit = limits.get(dimension);
+    (limits.is_bounded(dimension)
+        && !(metering.is_bounded(dimension) && limit == metering.get(dimension)))
+    .then_some(limit)
 }
 
 /// Parse `--deadline`'s human duration: a non-empty run of `<count><unit>` components.
@@ -266,11 +309,9 @@ pub(crate) fn render_trip(exhausted: &BudgetExhausted) -> String {
         );
     }
     for dimension in ResourceDimension::ALL {
-        let limit = exhausted.evidence.limit_for(dimension);
-        let _ = if exhausted.evidence.limits().is_bounded(dimension) {
-            writeln!(out, "limit {} {limit}", dimension.label())
-        } else {
-            writeln!(out, "limit {} unbounded", dimension.label())
+        let _ = match named_limit(exhausted.evidence.limits(), dimension) {
+            Some(limit) => writeln!(out, "limit {} {limit}", dimension.label()),
+            None => writeln!(out, "limit {} unbounded", dimension.label()),
         };
     }
     out
@@ -328,11 +369,9 @@ fn render_all_or_nothing_trip(
         );
     }
     for dimension in ResourceDimension::ALL {
-        let limit = evidence.limit_for(dimension);
-        let _ = if evidence.limits().is_bounded(dimension) {
-            writeln!(out, "limit {} {limit}", dimension.label())
-        } else {
-            writeln!(out, "limit {} unbounded", dimension.label())
+        let _ = match named_limit(evidence.limits(), dimension) {
+            Some(limit) => writeln!(out, "limit {} {limit}", dimension.label()),
+            None => writeln!(out, "limit {} unbounded", dimension.label()),
         };
     }
     out
@@ -408,20 +447,25 @@ mod tests {
         assert!(error.contains("longer than this clock"), "{error}");
     }
 
-    /// `UNBOUNDED` is what no flag means, and each flag lands on its own dimension.
+    /// The flags with nothing named.
+    const NONE: GovernorFlags = GovernorFlags {
+        fuel: None,
+        deadline: None,
+        max_answers: None,
+        max_intermediate_cells: None,
+        max_scratch_bytes: None,
+        max_remote_requests: None,
+        no_ceiling: false,
+    };
+
+    /// `METERED` is what no flag means, and each flag lands on its own dimension.
     #[test]
     fn flags_engage_exactly_the_dimensions_they_name() {
-        let none = GovernorFlags {
-            fuel: None,
-            deadline: None,
-            max_answers: None,
-            max_intermediate_cells: None,
-            max_scratch_bytes: None,
-            max_remote_requests: None,
-        };
-        assert!(!none.is_engaged());
-        assert_eq!(none.named(), [] as [&str; 0]);
-        assert!(!none.to_governors().is_engaged());
+        assert!(!NONE.is_engaged());
+        assert_eq!(NONE.named(), [] as [&str; 0]);
+        let metered = NONE.to_governors().expect("nothing to refuse");
+        assert_eq!(metered.limits(), QueryGovernors::METERED.limits());
+        assert!(metered.stop_signal().is_none());
 
         let all = GovernorFlags {
             fuel: Some(11),
@@ -430,6 +474,7 @@ mod tests {
             max_intermediate_cells: Some(14),
             max_scratch_bytes: Some(15),
             max_remote_requests: Some(16),
+            no_ceiling: false,
         };
         assert!(all.is_engaged());
         assert_eq!(
@@ -443,7 +488,7 @@ mod tests {
                 "--max-remote-requests",
             ]
         );
-        let governors = all.to_governors();
+        let governors = all.to_governors().expect("nothing to refuse");
         let limits = governors.limits();
         assert_eq!(limits.get(ResourceDimension::Fuel), 11);
         assert_eq!(limits.get(ResourceDimension::AnswerRows), 13);
@@ -455,18 +500,88 @@ mod tests {
             "a --deadline is a stop signal, not a ceiling"
         );
 
-        // A dimension no flag named stays unbounded even when its neighbours are capped.
+        // A dimension no flag named carries no named ceiling even when its neighbours are
+        // capped: it is metered, and the report prints it as unbounded.
         let only_fuel = GovernorFlags {
             fuel: Some(7),
-            deadline: None,
-            max_answers: None,
-            max_intermediate_cells: None,
-            max_scratch_bytes: None,
-            max_remote_requests: None,
+            ..NONE
         };
-        let limits = only_fuel.to_governors().limits();
-        assert_eq!(limits.get(ResourceDimension::Fuel), 7);
-        assert!(!limits.is_bounded(ResourceDimension::AnswerRows));
-        assert!(!limits.is_bounded(ResourceDimension::IntermediateCells));
+        let limits = only_fuel
+            .to_governors()
+            .expect("nothing to refuse")
+            .limits();
+        assert_eq!(named_limit(limits, ResourceDimension::Fuel), Some(7));
+        assert_eq!(named_limit(limits, ResourceDimension::AnswerRows), None);
+        assert_eq!(
+            named_limit(limits, ResourceDimension::IntermediateCells),
+            None
+        );
+    }
+
+    /// `--no-ceiling` alone is `UNBOUNDED`, and keeps a `--deadline` beside it.
+    #[test]
+    fn no_ceiling_declines_every_ceiling_and_keeps_the_deadline() {
+        let unbounded = GovernorFlags {
+            no_ceiling: true,
+            ..NONE
+        }
+        .to_governors()
+        .expect("nothing named beside it");
+        assert_eq!(unbounded.limits(), QueryGovernors::UNBOUNDED.limits());
+        assert!(!unbounded.is_engaged());
+
+        let with_deadline = GovernorFlags {
+            no_ceiling: true,
+            deadline: Some(Duration::from_secs(60)),
+            ..NONE
+        }
+        .to_governors()
+        .expect("a deadline is not a ceiling");
+        assert_eq!(with_deadline.limits(), QueryGovernors::UNBOUNDED.limits());
+        assert!(with_deadline.stop_signal().is_some());
+    }
+
+    /// `--no-ceiling` beside a numeric ceiling is refused, naming both flags.
+    #[test]
+    fn no_ceiling_beside_a_ceiling_is_refused_by_flag_name() {
+        for (flags, flag) in [
+            (
+                GovernorFlags {
+                    fuel: Some(1),
+                    ..NONE
+                },
+                "--fuel",
+            ),
+            (
+                GovernorFlags {
+                    max_answers: Some(1),
+                    ..NONE
+                },
+                "--max-answers",
+            ),
+            (
+                GovernorFlags {
+                    max_remote_requests: Some(1),
+                    ..NONE
+                },
+                "--max-remote-requests",
+            ),
+        ] {
+            let refused = GovernorFlags {
+                no_ceiling: true,
+                ..flags
+            }
+            .to_governors()
+            .expect_err("a ceiling and no ceiling contradict");
+            let CliError::Usage(message) = refused else {
+                panic!("a usage error, not {refused:?}");
+            };
+            assert!(
+                message.contains("--no-ceiling") && message.contains(flag),
+                "{message}"
+            );
+            // The neighbour without `--no-ceiling` runs under the ceiling.
+            assert!(flags.to_governors().is_ok(), "{flag} alone is accepted");
+        }
     }
 }

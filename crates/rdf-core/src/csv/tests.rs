@@ -685,11 +685,6 @@ fn the_field_writer_and_the_text_writer_share_the_quoting_rule() {
     assert_eq!(text, "\"a\",\"b\"\"c\"\n");
 }
 
-/// A uniform-enough draw below `n` (`n > 0`).
-fn below(rng: &mut SplitMix64, n: usize) -> usize {
-    (rng.next_u64() % n as u64) as usize
-}
-
 /// Seeded records over an alphabet dense in structure, written under each
 /// preset and read back: every field survives.
 #[test]
@@ -712,13 +707,13 @@ fn every_preset_reads_back_what_it_writes() {
     let mut rng = SplitMix64::new(0x0C5F_2026_0927);
     for dialect in presets {
         for _ in 0..300 {
-            let width = 1 + below(&mut rng, 4);
-            let table: Vec<Vec<String>> = (0..=below(&mut rng, 4))
+            let width = 1 + rng.below_usize(4);
+            let table: Vec<Vec<String>> = (0..=rng.below_usize(4))
                 .map(|_| {
                     (0..width)
                         .map(|_| {
-                            (0..below(&mut rng, 6))
-                                .map(|_| ALPHABET[below(&mut rng, ALPHABET.len())])
+                            (0..rng.below_usize(6))
+                                .map(|_| ALPHABET[rng.below_usize(ALPHABET.len())])
                                 .collect()
                         })
                         .collect()

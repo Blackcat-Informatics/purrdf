@@ -81,11 +81,10 @@ fn nquads(dataset: &purrdf_rdf::RdfDataset) -> String {
 #[test]
 fn serde_json_reads_every_witness_and_midpoint_correctly_rounded() {
     let mut lexicals = witnesses();
-    let mut bits = 0x6a73_6f6e_u64;
+    let mut state = 0x6a73_6f6e_u64;
     for index in 0..1_500_u32 {
-        bits = bits
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
+        let bits =
+            purrdf_testkit::rng::lcg64_next(&mut state, purrdf_testkit::rng::LCG64_MMIX_INCREMENT);
         let raw = if index % 10 == 0 {
             (bits >> 12).max(1)
         } else {

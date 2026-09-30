@@ -21,8 +21,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
-#[path = "support/rng.rs"]
-mod rng;
+use purrdf_testkit::rng::signed_unit_next_nonzero;
 
 use purrdf::hnsw::relation::{HnswSpace, RankedHnswRegistration, register_ranked_hnsw_relation};
 use purrdf::hnsw::{HnswIndex, Params, VectorMatrix, profile};
@@ -147,7 +146,10 @@ fn registry() -> PropertyFunctionRegistry {
 fn vector_space() -> Arc<HnswSpace> {
     let dims = 4;
     let rows = ENTITIES.len();
-    let data = rng::linear_unit_values(0x51DE_0000_1234_ABCD_u64, rows * dims);
+    let mut state = 0x51DE_0000_1234_ABCD_u64;
+    let data: Vec<f64> = (0..rows * dims)
+        .map(|_| signed_unit_next_nonzero(&mut state, 0.125))
+        .collect();
     let matrix = VectorMatrix::new(rows, dims, data).expect("a valid matrix");
     let index = HnswIndex::build(matrix, &DistanceMetric::SquaredEuclidean, params())
         .expect("the graph builds");

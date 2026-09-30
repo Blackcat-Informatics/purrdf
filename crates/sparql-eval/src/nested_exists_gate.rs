@@ -42,12 +42,7 @@ const BIG_STACK: usize = 512 * 1024 * 1024;
 
 /// Run `body` on a fresh thread with [`BIG_STACK`] of stack.
 fn on_big_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-    std::thread::Builder::new()
-        .stack_size(BIG_STACK)
-        .spawn(body)
-        .expect("spawn")
-        .join()
-        .expect("the evaluation thread returned")
+    purrdf_stack::on_stack(BIG_STACK, body).expect("spawn")
 }
 
 /// An engine that evaluates on the calling thread, so the thread-local counters and the

@@ -473,20 +473,16 @@ fn a_hundred_thousand_deep_composite_literal_is_accepted_and_scoped_like_a_shall
     let depth = 100_000usize;
     let lexical: String = "[".repeat(depth) + "_:b" + &"]".repeat(depth);
     let text = format!("{PREFIXES}_:b ex:p \"{lexical}\"^^cdt:List .\n");
-    let (quads, embedded, is_subject, stored) = std::thread::Builder::new()
-        .stack_size(256 * 1024)
-        .spawn(move || {
-            let ds = parse_dataset(text.as_bytes(), "text/turtle", None)
-                .unwrap_or_else(|e| panic!("a deep composite literal must parse: {e}"));
-            let ids = embedded_ids(&ds, "p");
-            let is_subject = ids.first() == Some(&subject_of(&ds, "p"));
-            let (stored, datatype) = composite_of(&ds, "p");
-            assert_eq!(datatype, LIST);
-            (ds.quad_count(), ids.len(), is_subject, stored)
-        })
-        .expect("the thread starts")
-        .join()
-        .expect("the walks did not abort");
+    let (quads, embedded, is_subject, stored) = purrdf_stack::on_stack(256 * 1024, move || {
+        let ds = parse_dataset(text.as_bytes(), "text/turtle", None)
+            .unwrap_or_else(|e| panic!("a deep composite literal must parse: {e}"));
+        let ids = embedded_ids(&ds, "p");
+        let is_subject = ids.first() == Some(&subject_of(&ds, "p"));
+        let (stored, datatype) = composite_of(&ds, "p");
+        assert_eq!(datatype, LIST);
+        (ds.quad_count(), ids.len(), is_subject, stored)
+    })
+    .expect("the thread starts");
     assert_eq!(quads, 1);
     assert_eq!(
         embedded, 1,

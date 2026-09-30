@@ -25,6 +25,9 @@ path = "src/main.rs"
 # Fingerprints are BLAKE3 digests of normalised token streams, so a body's id is
 # the same on every host and every build.
 purrdf-hash = { workspace = true }
+# The workspace root the census scans when `--root` is not given. The tool is
+# unpublished, so a normal edge to the unpublished test support is allowed.
+purrdf-testkit = { workspace = true }
 # The Rust parser and its token substrate: items, attributes and module
 # structure come from `syn`; bodies are re-lexed into `proc_macro2` tokens so
 # macro arguments are normalised along with everything else.

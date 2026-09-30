@@ -487,7 +487,7 @@ fn validate(
         data,
         shapes,
         shapes_graph,
-        &options.governors.to_governors(),
+        &options.governors.to_governors()?,
     )
     .map_err(|error| CliError::Runtime(error.into()))?;
 
@@ -637,7 +637,7 @@ fn validate_change(
     let governed = engine::validate_change_with_governors(
         &validator,
         snapshot,
-        &options.governors.to_governors(),
+        &options.governors.to_governors()?,
     )
     .map_err(CliError::Runtime)?;
     // Before the trip or the report, so an operator reading a run that stopped still

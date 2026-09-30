@@ -81,6 +81,9 @@ use purrdf_sparql_eval::{
 use purrdf_sparql_results::{
     ResultProvenance, SparqlResultsFormat, serialize as serialize_results,
 };
+use purrdf_validate::governors::{
+    GovernorParts, GovernorPartsError, from_parts, from_update_parts,
+};
 use wasm_bindgen::prelude::*;
 
 use crate::async_query::AsyncOperationKind;
@@ -271,8 +274,8 @@ impl QueryResult {
 /// document carried no member under `prefix`, or the member omitted that field.
 ///
 /// Per-solution source provenance (`ResultProvenance::solutions`) is not exposed here:
-/// no writer on this surface (or the CLI's/C ABI's matching `build_query_provenance`)
-/// populates it today — it is the evaluator/S11 derivation graph's progressive fill
+/// no writer on this surface (nor `purrdf_validate::query::provenance`, which every host
+/// emits through) populates it — it is the evaluator/S11 derivation graph's progressive fill
 /// (see `purrdf_sparql_results::ResultProvenance`'s module docs) — so there is nothing
 /// yet for this binding to round-trip beyond `queryHash`/`engine`.
 #[wasm_bindgen]
@@ -550,29 +553,41 @@ impl GovernorArgs {
         self.deadline_ms
     }
 
-    /// These ceilings over the `METERED` base, with no stop signal attached yet.
+    /// These ceilings as the shared decoder's [`GovernorParts`]: a governed call from this
+    /// package never asks for no ceiling.
+    const fn parts(self) -> GovernorParts {
+        GovernorParts {
+            fuel: self.fuel,
+            max_answers: self.max_answers,
+            max_intermediate_cells: self.max_intermediate_cells,
+            max_scratch_bytes: self.max_scratch_bytes,
+            max_remote_requests: self.max_remote_requests,
+            no_ceiling: false,
+        }
+    }
+
+    /// These ceilings over the `METERED` base, with no stop signal attached yet, through
+    /// [`purrdf_validate::governors::from_parts`].
     ///
-    /// The one construction path for a call's ceilings: [`Self::engage`] attaches the
-    /// synchronous lane's [`WasmStopWatch`] to it, and the asynchronous lane attaches its
-    /// own watch instead. See [`Self::engage`] for why the base is `METERED`.
-    pub(crate) fn ceilings(self) -> QueryGovernors {
-        let mut governors = QueryGovernors::METERED;
-        if let Some(fuel) = self.fuel {
-            governors = governors.with_fuel(fuel);
-        }
-        if let Some(rows) = self.max_answers {
-            governors = governors.with_max_answers(rows);
-        }
-        if let Some(cells) = self.max_intermediate_cells {
-            governors = governors.with_max_intermediate_cells(cells);
-        }
-        if let Some(bytes) = self.max_scratch_bytes {
-            governors = governors.with_max_scratch_bytes(bytes);
-        }
-        if let Some(requests) = self.max_remote_requests {
-            governors = governors.with_max_remote_requests(requests);
-        }
-        governors
+    /// The one construction path for a query's ceilings: the synchronous lane attaches its
+    /// [`WasmStopWatch`] to it, and the asynchronous lane attaches its own watch instead.
+    /// See [`Self::stop_watch`] for why the base is `METERED`.
+    ///
+    /// # Errors
+    ///
+    /// The parts' refusal, in [`governor_parts_message`]'s words.
+    pub(crate) fn ceilings(self) -> Result<QueryGovernors, String> {
+        from_parts(&self.parts(), None).map_err(governor_parts_message)
+    }
+
+    /// [`Self::ceilings`] for a governed UPDATE, through
+    /// [`purrdf_validate::governors::from_update_parts`], which refuses `maxAnswers`.
+    ///
+    /// # Errors
+    ///
+    /// [`UPDATE_REFUSES_MAX_ANSWERS`] for an answer cap.
+    pub(crate) fn update_ceilings(self) -> Result<QueryGovernors, String> {
+        from_update_parts(&self.parts(), None).map_err(governor_parts_message)
     }
 
     /// The stop signal a synchronous governed call runs under: the caller's wall deadline
@@ -608,6 +623,14 @@ impl GovernorArgs {
 pub(crate) const UPDATE_REFUSES_MAX_ANSWERS: &str = "maxAnswers is not accepted by updateGoverned: an UPDATE has no answer \
      sequence to bound. Bound the work that computes the request with fuel, \
      maxIntermediateCells, or maxScratchBytes instead";
+
+/// This package's wording of a [`GovernorPartsError`], in its option spelling.
+fn governor_parts_message(error: GovernorPartsError) -> String {
+    match error {
+        GovernorPartsError::AnswerCapOnUpdate => UPDATE_REFUSES_MAX_ANSWERS.to_owned(),
+        other => other.to_string(),
+    }
+}
 
 /// Decode one ceiling from the JavaScript boundary.
 ///
@@ -1635,17 +1658,16 @@ impl QueryEngine {
         max_remote_requests: Option<i64>,
         cancel: Option<CancellationToken>,
     ) -> Result<UpdateOutcome, JsValue> {
-        if max_answers.is_some() {
-            return Err(coded_error(UPDATE_REFUSES_MAX_ANSWERS, OPTIONS_CODE));
-        }
         let args = decode_governor_args(
             fuel,
             deadline_ms,
-            None,
+            max_answers,
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
         )?;
+        args.update_ceilings()
+            .map_err(|message| coded_error(&message, OPTIONS_CODE))?;
         let mut input = self.input(
             dataset,
             AsyncOperationKind::UpdateGoverned,
@@ -2085,29 +2107,6 @@ pub(crate) fn build_provenance_namespace(
     }
 }
 
-/// Build the [`ResultProvenance`] a tabular emission carries: empty when no namespace
-/// was supplied (pure-W3C output), or populated with a content hash of the query text
-/// plus this engine's label when one was. Mirrors the CLI's and C ABI's
-/// `build_query_provenance`. `solutions` stays empty: per-solution source provenance is
-/// the evaluator/S11 derivation graph's progressive fill, not something this binding can
-/// populate on its own.
-fn build_query_provenance(
-    namespace: Option<&purrdf_sparql_results::ProvenanceNamespace>,
-    query: &str,
-) -> ResultProvenance {
-    use sha2::{Digest as _, Sha256};
-
-    if namespace.is_none() {
-        return ResultProvenance::default();
-    }
-    let digest = Sha256::digest(query.as_bytes());
-    ResultProvenance {
-        query_hash: Some(format!("sha256:{}", purrdf_hash::hex::Lower(&digest))),
-        engine: Some("purrdf-sparql-eval".to_owned()),
-        solutions: Vec::new(),
-    }
-}
-
 /// Serialize a query result to text in `format`, or the kind's default when `None`.
 ///
 /// Returns a plain `String` error so the asynchronous lane can record it on a job and
@@ -2125,26 +2124,16 @@ pub(crate) fn serialize_query_result(
         SparqlResult::Solutions { .. } | SparqlResult::Boolean(_) => {
             let results_format = match format {
                 None => SparqlResultsFormat::Json,
-                Some(format) => resolve_results_format(format)?,
+                Some(format) => SparqlResultsFormat::from_name(format).ok_or_else(|| {
+                    format!(
+                        "unsupported SPARQL results format {:?} \
+                         (use json/xml/csv/tsv or graph formats for CONSTRUCT/DESCRIBE)",
+                        format.trim()
+                    )
+                })?,
             };
             serialize_tabular_result(result, results_format, provenance_namespace, query)
         }
-    }
-}
-
-fn resolve_results_format(format: &str) -> Result<SparqlResultsFormat, String> {
-    let normalized = format.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "json" | "srj" | "sparql-json" | "application/sparql-results+json" => {
-            Ok(SparqlResultsFormat::Json)
-        }
-        "xml" | "sparql-xml" | "application/sparql-results+xml" => Ok(SparqlResultsFormat::Xml),
-        "csv" | "text/csv" => Ok(SparqlResultsFormat::Csv),
-        "tsv" | "text/tab-separated-values" => Ok(SparqlResultsFormat::Tsv),
-        other => Err(format!(
-            "unsupported SPARQL results format {other:?} \
-             (use json/xml/csv/tsv or graph formats for CONSTRUCT/DESCRIBE)"
-        )),
     }
 }
 
@@ -2154,7 +2143,7 @@ fn serialize_tabular_result(
     provenance_namespace: Option<&purrdf_sparql_results::ProvenanceNamespace>,
     query: &str,
 ) -> Result<String, String> {
-    let provenance = build_query_provenance(provenance_namespace, query);
+    let provenance = purrdf_validate::query::provenance(provenance_namespace, query);
     let outcome = serialize_results(result, format, &provenance, provenance_namespace)
         .map_err(|e| e.to_string())?;
     String::from_utf8(outcome.bytes).map_err(|e| format!("SPARQL result is not valid UTF-8: {e}"))

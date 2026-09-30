@@ -34,6 +34,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use proc_macro2::{Delimiter, Group, TokenStream, TokenTree};
+use purrdf_testkit::paths::{collect_rs, workspace_root};
 use syn::parse::Parser;
 use syn::visit::{self, Visit};
 
@@ -83,13 +84,6 @@ const AUTHORSHIP_SITES: [(&str, &str); 10] = [
     ("crates/rdf/src/gts_write.rs", "to_writer"),
 ];
 
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("the workspace root resolves")
-}
-
 /// Every `.rs` file under `crates/*/src` and `bindings/*/src`.
 fn production_sources(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -112,19 +106,6 @@ fn production_sources(root: &Path) -> Vec<PathBuf> {
         out.len()
     );
     out
-}
-
-fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
-    for entry in
-        std::fs::read_dir(dir).unwrap_or_else(|err| panic!("read {}: {err}", dir.display()))
-    {
-        let path = entry.expect("directory entry").path();
-        if path.is_dir() {
-            collect_rs(&path, out);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            out.push(path);
-        }
-    }
 }
 
 // Resolve only explicit Rust paths, without expanding macros or evaluating cfg.
@@ -576,7 +557,7 @@ fn scan<'a>(relative: &'a str, source: &str) -> Census<'a> {
 #[test]
 fn the_writer_constructor_set_is_exactly_the_pinned_minting_and_continuing_sets() {
     let relative = "crates/gts/src/writer.rs";
-    let source = std::fs::read_to_string(repo_root().join(relative)).expect("writer.rs");
+    let source = std::fs::read_to_string(workspace_root().join(relative)).expect("writer.rs");
     let mut found = scan(relative, &source).constructors;
     found.sort();
     found.dedup();
@@ -595,7 +576,7 @@ fn the_writer_constructor_set_is_exactly_the_pinned_minting_and_continuing_sets(
 /// RULE 2 — the census of production header-minting call sites is closed.
 #[test]
 fn every_production_gts_authorship_site_is_in_the_census() {
-    let root = repo_root();
+    let root = workspace_root();
     let mut observed = Vec::new();
     for path in production_sources(&root) {
         let relative = path
@@ -632,7 +613,7 @@ fn every_production_gts_authorship_site_is_in_the_census() {
 fn the_public_authoring_facades_are_present_and_named() {
     assert!(AUTHORSHIP_SITES.contains(&("crates/rdf/src/gts_write.rs", "to_writer")));
     assert!(AUTHORSHIP_SITES.contains(&("crates/gts/src/compact.rs", "compact_streamable")));
-    let source = std::fs::read_to_string(repo_root().join("crates/rdf/src/gts_write.rs"))
+    let source = std::fs::read_to_string(workspace_root().join("crates/rdf/src/gts_write.rs"))
         .expect("gts_write.rs");
     let parsed = syn::parse_file(&source).expect("valid Rust");
     let function = parsed

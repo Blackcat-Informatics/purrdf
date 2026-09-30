@@ -225,21 +225,17 @@ mod tests {
     #[test]
     fn values_a_hundred_thousand_levels_deep_compare_and_hash_on_a_small_stack() {
         // 256 KiB of stack: comparing and hashing must not recurse per level.
-        std::thread::Builder::new()
-            .stack_size(256 * 1024)
-            .spawn(|| {
-                const DEPTH: usize = 100_000;
-                let left = nested(DEPTH, json("1"));
-                let same = nested(DEPTH, json("1.0"));
-                let differs = nested(DEPTH, json("2"));
-                assert!(equal(&left, &same));
-                assert_eq!(hash_of(&left), hash_of(&same));
-                assert!(!equal(&left, &differs));
-                assert_ne!(hash_of(&left), hash_of(&differs));
-            })
-            .expect("thread")
-            .join()
-            .expect("the deep comparison completes on a small stack");
+        purrdf_stack::on_stack(256 * 1024, || {
+            const DEPTH: usize = 100_000;
+            let left = nested(DEPTH, json("1"));
+            let same = nested(DEPTH, json("1.0"));
+            let differs = nested(DEPTH, json("2"));
+            assert!(equal(&left, &same));
+            assert_eq!(hash_of(&left), hash_of(&same));
+            assert!(!equal(&left, &differs));
+            assert_ne!(hash_of(&left), hash_of(&differs));
+        })
+        .expect("thread");
     }
 
     #[test]

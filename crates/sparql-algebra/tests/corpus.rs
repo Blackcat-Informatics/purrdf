@@ -15,10 +15,7 @@
 use std::path::{Path, PathBuf};
 
 use purrdf_sparql_algebra::SparqlParser;
-
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
+use purrdf_testkit::paths::workspace_root;
 
 fn collect_rq(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -106,7 +103,7 @@ fn assert_all_parse(dir: &Path, label: &str) -> (usize, usize) {
 
 #[test]
 fn all_hand_authored_queries_parse() {
-    let (files, queries) = assert_all_parse(&repo_root().join("queries"), "queries/");
+    let (files, queries) = assert_all_parse(&workspace_root().join("queries"), "queries/");
     // Exact gate: 92 tracked `.rq` files; one holds 3 queries → 94 individual
     // queries. A drop here means a corpus file was deleted/moved or a checkout
     // is stripped — fail loudly rather than passing a shrunken corpus.
@@ -124,7 +121,7 @@ fn all_hand_authored_queries_parse() {
 fn all_generated_projections_parse() {
     // The DSL-generated projections are tracked in git and are a hard part of
     // the corpus acceptance gate: a missing directory is a FAILURE, not a skip.
-    let dir = repo_root().join("generated/queries");
+    let dir = workspace_root().join("generated/queries");
     assert!(
         dir.exists(),
         "generated/queries is absent — the DSL projection set is a tracked, \
