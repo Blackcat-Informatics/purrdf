@@ -6,16 +6,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
-use purrdf_core::csv::{CsvError, Dialect, Reader, StringRecord, Writer};
-use purrdf_core::{DatasetView, LossLedger};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
-
+use super::super::json_codec::{FromJson, ToJson};
 use super::super::util::canonical_json_bounded;
 use super::super::{
     ProjectionArtifactSink, ProjectionError, ProjectionLimits, ProjectionPackage,
     ProjectionPackageSink, ProjectionTerm,
 };
+use super::carrier_util::CarrierManifest;
 use super::mapping::{LpgProjection, project_lpg, project_lpg_with_progress};
 use super::model::{
     LpgAnnotation, LpgConfig, LpgEdge, LpgGraph, LpgLabel, LpgNode, LpgProperty, LpgReifier,
@@ -26,6 +23,8 @@ use super::stream::{
     LpgStreamProjection, graph_report,
 };
 use crate::stable_identifier;
+use purrdf_core::csv::{CsvError, Dialect, Reader, StringRecord, Writer};
+use purrdf_core::{DatasetView, LossLedger};
 
 const GENERIC_PROFILE: &str = "purrdf-lpg-csv";
 const NEO4J_PROFILE: &str = "purrdf-lpg-neo4j-admin-csv";
@@ -74,14 +73,6 @@ pub struct LpgPackageProjection {
     pub loss_ledger: LossLedger,
     /// Exact scanned/model/node/edge counters for the RDF-to-LPG mapping.
     pub report: LpgProjectionReport,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CarrierManifest {
-    profile: String,
-    profile_version: u32,
-    lpg_schema_version: u32,
 }
 
 /// Encode a canonical LPG as deterministic generic CSV artifacts.
@@ -1266,7 +1257,7 @@ fn row_path(path: &str, zero_based_record: usize) -> String {
     format!("{path}:{}", zero_based_record + 2)
 }
 
-fn json_cell<T: Serialize>(
+fn json_cell<T: ToJson + ?Sized>(
     value: &T,
     config: &LpgConfig,
     description: &str,
@@ -1276,7 +1267,7 @@ fn json_cell<T: Serialize>(
     )
 }
 
-fn parse_json_cell<T: DeserializeOwned + Serialize>(
+fn parse_json_cell<T: FromJson + ToJson>(
     value: &str,
     config: &LpgConfig,
     description: &str,
@@ -1285,7 +1276,7 @@ fn parse_json_cell<T: DeserializeOwned + Serialize>(
     parse_json(value.as_bytes(), config, description, path)
 }
 
-fn parse_json<T: DeserializeOwned + Serialize>(
+fn parse_json<T: FromJson + ToJson>(
     bytes: &[u8],
     config: &LpgConfig,
     description: &str,
@@ -1297,7 +1288,7 @@ fn parse_json<T: DeserializeOwned + Serialize>(
         ))
         .at_path(path));
     }
-    let value: T = serde_json::from_slice(bytes).map_err(|error| {
+    let value: T = super::super::json_codec::from_slice(bytes).map_err(|error| {
         ProjectionError::syntax(format!("parse {description} JSON: {error}")).at_path(path)
     })?;
     let canonical = canonical_json_bounded(&value, config.limits(), description)?;

@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use crate::projections::source_rows::{
+    SourceAnnotation, SourceQuad, SourceReifier, source_identifier,
+};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -14,11 +17,10 @@ use purrdf_core::{
     BlankScope, DatasetView, LossEntry, LossLedger, RdfDataset, RdfDatasetBuilder, RdfLiteral,
     RdfLocation, TermId, check_ledger_sound, rdf_to_skos_loss_ledger,
 };
-use serde::Serialize;
 
 use crate::native_codecs::{NativeRdfFormat, serialize_dataset_to_format};
 
-use super::super::{ProjectionError, ProjectionTerm, stable_identifier};
+use super::super::{ProjectionError, ProjectionTerm};
 use super::{SkosConfig, SkosGraphSelection, SkosRelationRoles};
 
 /// Result of projecting an RDF 1.2 dataset into one SKOS concept-scheme view.
@@ -30,29 +32,6 @@ pub struct SkosProjection {
     pub turtle: Vec<u8>,
     /// Located, always-computed loss ledger for the source dataset.
     pub loss_ledger: LossLedger,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-struct SourceQuad {
-    subject: ProjectionTerm,
-    predicate: String,
-    object: ProjectionTerm,
-    graph: Option<ProjectionTerm>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-struct SourceReifier {
-    reifier: ProjectionTerm,
-    statement: ProjectionTerm,
-    graph: Option<ProjectionTerm>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-struct SourceAnnotation {
-    reifier: ProjectionTerm,
-    predicate: String,
-    object: ProjectionTerm,
-    graph: Option<ProjectionTerm>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -887,13 +866,6 @@ fn unordered_pair(left: &str, right: &str) -> (String, String) {
     }
 }
 
-fn source_identifier(prefix: &str, value: &impl Serialize) -> Result<String, ProjectionError> {
-    let bytes = serde_json::to_vec(value).map_err(|error| {
-        ProjectionError::integrity(format!("serialize source location: {error}"))
-    })?;
-    stable_identifier(prefix, &bytes)
-}
-
 fn reject_duplicates<T: Ord>(values: &[T], description: &str) -> Result<(), ProjectionError> {
     if values.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err(ProjectionError::integrity(format!(
@@ -958,6 +930,7 @@ mod tests {
 
     use super::*;
     use crate::native_codecs::parse_dataset;
+    use crate::projections::json_codec::{self, ToJson};
     use crate::projections::{
         ProjectionErrorKind, ProjectionLimits, SkosClassRoles, SkosDocumentationRoles,
         SkosLabelRoles, SkosSourceRoles, SkosTargetRoles,
@@ -1544,12 +1517,12 @@ mod tests {
     #[test]
     fn rejects_incomplete_or_ambiguous_configuration_and_enforces_bounds() {
         let configuration = config(SkosGraphSelection::DefaultGraph, 1_000);
-        let mut value = serde_json::to_value(&configuration).expect("config JSON");
+        let mut value = configuration.to_json();
         value["source"]["classes"]
             .as_object_mut()
             .expect("class roles")
             .remove("rdf_type");
-        assert!(serde_json::from_value::<SkosConfig>(value).is_err());
+        assert!(<SkosConfig as json_codec::FromJson>::from_json(&value).is_err());
 
         let ambiguous = SkosLabelRoles::new(
             format!("{SOURCE}same"),

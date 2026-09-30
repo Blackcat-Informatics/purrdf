@@ -9,11 +9,12 @@ use purrdf_core::{
     DatasetView, LossLedger, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection,
     check_ledger_sound,
 };
-use serde::{Deserialize, Deserializer, Serialize};
+use purrdf_lex::json::{Object, Value};
 
 use crate::native_codecs::NativeRdfFormat;
 
-use super::dataset_description::serialize_description;
+use super::dataset_description::{format_from_json, format_to_json, serialize_description};
+use super::json_codec::{Fields, FromJson, JsonError, ToJson};
 use super::research_object::{
     DCAT_PROFILE, DcatConfig, DcatRole, ResearchActivity, ResearchAgent, ResearchChecksum,
     ResearchField, ResearchObjectModel, ResearchRecordSet, ResearchResource, ResearchRole,
@@ -26,7 +27,7 @@ use super::{
 };
 
 /// Mandatory target-core vocabulary and output bound for mapped DCAT RDF.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DcatRdfMappingConfig {
     dcat: DcatConfig,
     rdf_type: String,
@@ -98,39 +99,32 @@ impl DcatRdfMappingConfig {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawDcatRdfMappingConfig {
-    dcat: DcatConfig,
-    rdf_type: String,
-    xsd_string: String,
-    max_output_records: usize,
+impl FromJson for DcatRdfMappingConfig {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct RawDcatRdfMappingConfig")?;
+        let dcat = fields.required("dcat")?;
+        let rdf_type: String = fields.required("rdf_type")?;
+        let xsd_string: String = fields.required("xsd_string")?;
+        let max_output_records = fields.required("max_output_records")?;
+        fields.deny_unknown()?;
+        Ok(Self::new(dcat, rdf_type, xsd_string, max_output_records)?)
+    }
 }
 
-impl<'de> Deserialize<'de> for DcatRdfMappingConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawDcatRdfMappingConfig::deserialize(deserializer)?;
-        Self::new(
-            raw.dcat,
-            raw.rdf_type,
-            raw.xsd_string,
-            raw.max_output_records,
+impl ToJson for DcatRdfMappingConfig {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("dcat", self.dcat.to_json())
+                .with("rdf_type", self.rdf_type.as_str())
+                .with("xsd_string", self.xsd_string.as_str())
+                .with("max_output_records", self.max_output_records),
         )
-        .map_err(serde::de::Error::custom)
     }
 }
 
 /// Complete source policy for native DCAT RDF.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    tag = "mode",
-    content = "config",
-    rename_all = "kebab-case",
-    deny_unknown_fields
-)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DcatRdfSource {
     /// Interpret the existing shared research-object model and emit direct RDF IR.
     Mapped(Box<DcatRdfMappingConfig>),
@@ -140,42 +134,69 @@ pub enum DcatRdfSource {
 
 /// Mandatory output syntax and source policy for the `dcat-rdf` profile.
 ///
-/// `Deserialize` is hand-written rather than derived, and that is load-bearing: a derived
-/// one reads `document_base_iri` straight into the field and never calls
-/// [`DcatRdfConfig::with_document_base_iri`], so the only IRI check this type has would run
-/// for a Rust caller using the builder and never for the configuration DOCUMENT `purrdf
-/// project --config` hands it. `VoidConfig` and `SkosConfig` route their raw mirror through
-/// the same builder for exactly this reason; this type did not, and was the one
-/// `document_base_iri` in the workspace a config file could set to anything at all.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(deny_unknown_fields)]
+/// The JSON reader routes `document_base_iri` through
+/// [`DcatRdfConfig::with_document_base_iri`], and that is load-bearing: reading it
+/// straight into the field would run this type's only IRI check for a Rust caller using
+/// the builder and never for the configuration DOCUMENT `purrdf project --config` hands
+/// it. `VoidConfig` and `SkosConfig` route their readers through the same builder for
+/// exactly this reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DcatRdfConfig {
     format: NativeRdfFormat,
     source: DcatRdfSource,
     /// The IRI the emitted DCAT document is published at, when the caller named one.
-    #[serde(default)]
     document_base_iri: Option<String>,
 }
 
-/// The deserialization mirror of [`DcatRdfConfig`], routed through its validating builder.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawDcatRdfConfig {
-    format: NativeRdfFormat,
-    source: DcatRdfSource,
-    #[serde(default)]
-    document_base_iri: Option<String>,
+/// The `mode` spellings of [`DcatRdfSource`].
+const DCAT_RDF_SOURCE_MODES: &[&str] = &["mapped", "construct"];
+
+impl FromJson for DcatRdfSource {
+    /// `{"mode": "mapped" | "construct", "config": …}`, and no other member.
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "adjacently tagged enum DcatRdfSource")?;
+        let mode = fields.tag("mode", DCAT_RDF_SOURCE_MODES)?;
+        let config = fields
+            .raw("config")?
+            .ok_or_else(|| JsonError::missing_field("config"))?;
+        fields.deny_unknown()?;
+        Ok(if mode == "mapped" {
+            Self::Mapped(FromJson::from_json(config)?)
+        } else {
+            Self::Construct(FromJson::from_json(config)?)
+        })
+    }
 }
 
-impl<'de> Deserialize<'de> for DcatRdfConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawDcatRdfConfig::deserialize(deserializer)?;
-        Self::new(raw.format, raw.source)
-            .with_document_base_iri(raw.document_base_iri)
-            .map_err(serde::de::Error::custom)
+impl ToJson for DcatRdfSource {
+    fn to_json(&self) -> Value {
+        let (mode, config) = match self {
+            Self::Mapped(config) => ("mapped", config.to_json()),
+            Self::Construct(config) => ("construct", config.to_json()),
+        };
+        Value::Object(Object::new().with("mode", mode).with("config", config))
+    }
+}
+
+impl FromJson for DcatRdfConfig {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct RawDcatRdfConfig")?;
+        let format = format_from_json(&mut fields, "format")?;
+        let source = fields.required("source")?;
+        let document_base_iri = fields.optional("document_base_iri")?;
+        fields.deny_unknown()?;
+        Ok(Self::new(format, source).with_document_base_iri(document_base_iri)?)
+    }
+}
+
+impl ToJson for DcatRdfConfig {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("format", format_to_json(self.format))
+                .with("source", self.source.to_json())
+                .with("document_base_iri", self.document_base_iri.to_json()),
+        )
     }
 }
 
@@ -566,22 +587,21 @@ fn validate_record_bound(value: usize, field: &str) -> Result<(), ProjectionErro
 
 #[cfg(test)]
 mod tests {
-    use purrdf_core::{RdfDatasetBuilder, datasets_isomorphic};
-    use serde_json::Value;
-
+    use super::super::json_codec::{from_slice, to_vec};
     use super::*;
     use crate::native_codecs::parse_dataset;
     use crate::projections::{DCAT_ARTIFACT, project_dcat};
+    use purrdf_core::{RdfDatasetBuilder, datasets_isomorphic};
 
     const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
     const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
     fn dcat_config() -> DcatConfig {
-        let value: Value = serde_json::from_slice(include_bytes!(
+        let value: Value = from_slice(include_bytes!(
             "../../tests/fixtures/research-objects/carrier/dcat-3.json"
         ))
         .expect("fixture JSON");
-        serde_json::from_value(value["config"].clone()).expect("DCAT config")
+        DcatConfig::from_json(&value["config"]).expect("DCAT config")
     }
 
     fn mapping() -> DcatRdfMappingConfig {
@@ -671,8 +691,8 @@ mod tests {
     #[test]
     fn mapped_configuration_revalidates_and_output_bound_hard_fails() {
         let mapping = mapping();
-        let json = serde_json::to_vec(&mapping).expect("serialize");
-        assert!(serde_json::from_slice::<DcatRdfMappingConfig>(&json).is_ok());
+        let json = to_vec(&mapping);
+        assert!(from_slice::<DcatRdfMappingConfig>(&json).is_ok());
         assert!(DcatRdfMappingConfig::new(dcat_config(), RDF_TYPE, RDF_TYPE, 10).is_err());
 
         let source = minimal_source(mapping.dcat());

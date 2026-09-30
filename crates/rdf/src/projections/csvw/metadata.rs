@@ -5,9 +5,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use purrdf_lex::json::{Object, Value};
 use purrdf_xsd::{XsdDatatype, parse as parse_xsd, value_cmp};
 use regex::Regex;
-use serde_json::{Map, Value};
 
 use purrdf_core::RdfTextDirection;
 use purrdf_iri::BaseIri;
@@ -84,7 +84,7 @@ struct MetadataLoader<'a> {
 impl MetadataLoader<'_> {
     fn parse_root_context(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         resource: &str,
     ) -> Result<DocumentContext, ProjectionError> {
         let context_value = object.get("@context").ok_or_else(|| {
@@ -162,7 +162,7 @@ impl MetadataLoader<'_> {
 
     fn parse_inherited(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         resource: &str,
         location: &str,
         parent: &CsvwInheritedProperties,
@@ -275,8 +275,8 @@ impl MetadataLoader<'_> {
                 let bytes = self.input.get(&iri).ok_or_else(|| {
                     ProjectionError::package(format!("CSVW schema resource `{iri}` is absent"))
                 })?;
-                let value: Value = crate::json_number::read_json(|| serde_json::from_slice(bytes))
-                    .map_err(|error| {
+                let value: Value =
+                    super::super::json_codec::read_document(bytes).map_err(|error| {
                         ProjectionError::syntax(format!("invalid CSVW schema JSON: {error}"))
                             .at_path(&iri)
                     })?;
@@ -306,7 +306,7 @@ impl MetadataLoader<'_> {
 
     fn parse_schema(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         resource: &str,
         context: &DocumentContext,
         inherited: &CsvwInheritedProperties,
@@ -410,7 +410,7 @@ impl MetadataLoader<'_> {
 
     fn parse_column(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         resource: &str,
         context: &DocumentContext,
         inherited: &CsvwInheritedProperties,
@@ -661,8 +661,8 @@ impl MetadataLoader<'_> {
                 let bytes = self.input.get(&iri).ok_or_else(|| {
                     ProjectionError::package(format!("CSVW dialect resource `{iri}` is absent"))
                 })?;
-                let value: Value = crate::json_number::read_json(|| serde_json::from_slice(bytes))
-                    .map_err(|error| {
+                let value: Value =
+                    super::super::json_codec::read_document(bytes).map_err(|error| {
                         ProjectionError::syntax(format!("invalid CSVW dialect JSON: {error}"))
                             .at_path(&iri)
                     })?;
@@ -685,7 +685,7 @@ impl MetadataLoader<'_> {
 
     fn parse_dialect(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         resource: &str,
         location: &str,
     ) -> Result<CsvwDialect, ProjectionError> {
@@ -1009,7 +1009,7 @@ impl MetadataLoader<'_> {
 
     fn parse_annotations(
         &self,
-        object: &Map<String, Value>,
+        object: &Object,
         known: &[&str],
         resource: &str,
         location: &str,
@@ -1035,7 +1035,7 @@ impl MetadataLoader<'_> {
 
     fn warn_unknown(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         known: &[&str],
         resource: &str,
         location: &str,
@@ -1065,7 +1065,7 @@ impl MetadataLoader<'_> {
         let bytes = self.input.get(iri).ok_or_else(|| {
             ProjectionError::package(format!("CSVW metadata resource `{iri}` is absent"))
         })?;
-        let value: Value = crate::json_number::read_json(|| serde_json::from_slice(bytes))
+        let value: Value = super::super::json_codec::read_document(bytes)
             .map_err(|error| {
                 ProjectionError::syntax(format!("invalid CSVW metadata JSON: {error}"))
             })
@@ -1121,7 +1121,7 @@ impl MetadataLoader<'_> {
 
     fn parse_group(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         resource: &str,
         context: &DocumentContext,
         inherited: &CsvwInheritedProperties,
@@ -1186,7 +1186,7 @@ impl MetadataLoader<'_> {
 
     fn parse_table(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         resource: &str,
         context: &DocumentContext,
         inherited: &CsvwInheritedProperties,
@@ -1398,18 +1398,14 @@ const TRANSFORMATION_PROPERTIES: &[&str] = &[
     "url",
 ];
 
-fn type_is(object: &Map<String, Value>, expected: &str) -> bool {
+fn type_is(object: &Object, expected: &str) -> bool {
     object
         .get("@type")
         .and_then(Value::as_str)
         .is_some_and(|value| value == expected || value.ends_with(&format!("#{expected}")))
 }
 
-fn check_type(
-    object: &Map<String, Value>,
-    expected: &str,
-    resource: &str,
-) -> Result<(), ProjectionError> {
+fn check_type(object: &Object, expected: &str, resource: &str) -> Result<(), ProjectionError> {
     if let Some(value) = object.get("@type") {
         let Some(actual) = value.as_str() else {
             return Err(ProjectionError::integrity(format!(
@@ -1430,7 +1426,7 @@ fn check_type(
 }
 
 fn ensure_only_properties(
-    object: &Map<String, Value>,
+    object: &Object,
     allowed: &[&str],
     resource: &str,
     role: &str,
@@ -1459,7 +1455,7 @@ fn ensure_unique_table_urls(tables: &[CsvwTable], resource: &str) -> Result<(), 
 }
 
 fn parse_context_object(
-    map: &Map<String, Value>,
+    map: &Object,
     resource: &str,
     base_iri: &mut BaseIri,
     language: &mut Option<String>,
@@ -1584,7 +1580,7 @@ fn document_base(resource: &str) -> Result<BaseIri, ProjectionError> {
 }
 
 fn parse_optional_id(
-    object: &Map<String, Value>,
+    object: &Object,
     resource: &str,
     context: &DocumentContext,
     location: &str,
@@ -1620,7 +1616,7 @@ fn parse_id_value(
 }
 
 fn array_property<'a>(
-    object: &'a Map<String, Value>,
+    object: &'a Object,
     key: &str,
     resource: &str,
     location: &str,
@@ -1645,7 +1641,7 @@ fn array_property<'a>(
 }
 
 fn optional_array_property<'a>(
-    object: &'a Map<String, Value>,
+    object: &'a Object,
     key: &str,
     resource: &str,
     location: &str,
@@ -2601,7 +2597,7 @@ fn parse_facet_value(
 ) -> Result<purrdf_xsd::XsdValue, ProjectionError> {
     let lexical = match value {
         Value::String(value) => value.clone(),
-        Value::Number(value) => value.to_string(),
+        Value::Number(value) => value.lexeme().to_owned(),
         Value::Bool(value) => value.to_string(),
         _ => {
             return Err(
@@ -2653,7 +2649,7 @@ fn validate_annotation_value(
                 .at_path(resource));
             }
             if let Some(value) = object.get("@value") {
-                if !(value.is_string() || value.is_number() || value.is_boolean()) {
+                if !matches!(value, Value::String(_) | Value::Number(_) | Value::Bool(_)) {
                     return Err(ProjectionError::integrity(
                         "CSVW @value must be a string, number, or boolean",
                     )
@@ -2772,10 +2768,12 @@ fn validate_jsonld_iri(
 
 fn normalize_annotation_value(value: &Value, context: &DocumentContext) -> Value {
     match value {
-        Value::String(value) if context.language.is_some() => serde_json::json!({
-            "@value": value,
-            "@language": context.language,
-        }),
+        // Members in name order, the order every carried value keeps.
+        Value::String(value) if context.language.is_some() => Value::Object(
+            Object::new()
+                .with("@language", context.language.as_deref())
+                .with("@value", value.as_str()),
+        ),
         Value::Array(values) => Value::Array(
             values
                 .iter()
@@ -2881,7 +2879,7 @@ mod tests {
     /// and not the other is how a "normalization" turns into a silent miss.
     #[test]
     fn canonical_case_still_finds_a_language_mapped_title() {
-        let titles = serde_json::json!({"en-US": "Title", "fr": "Titre"});
+        let titles = Value::object([("en-US", "Title"), ("fr", "Titre")]);
         let mut warnings = Vec::new();
         let mapped = natural_language_property(
             Some(&titles),

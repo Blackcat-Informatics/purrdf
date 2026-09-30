@@ -3,6 +3,9 @@
 
 //! Caller-declared, deterministic RDF term inventories in CSVW.
 
+use crate::projections::source_rows::{
+    SourceAnnotation, SourceQuad, SourceReifier, source_identifier,
+};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -17,8 +20,9 @@ use purrdf_core::{
     DatasetView, LossEntry, LossLedger, RdfLocation, RdfTextDirection, check_ledger_sound,
     rdf_to_csvw_terms_loss_ledger,
 };
-use serde::{Deserialize, Deserializer, Serialize};
+use purrdf_lex::json::{Object, Value};
 
+use super::super::json_codec::{Fields, FromJson, JsonError, ToJson};
 use super::config::CsvwConfig;
 use super::input::CsvwInput;
 use super::model::{
@@ -29,15 +33,14 @@ use super::model::{
 use super::writer::{CsvwWritePlan, write_csvw};
 use crate::projections::{
     ProjectionDirection, ProjectionError, ProjectionLimits, ProjectionPackage, ProjectionTerm,
-    stable_identifier, validate_absolute_iri,
+    validate_absolute_iri,
 };
 
 /// Stable loss-contract target for the curated terms profile.
 pub const CSVW_TERMS_PROFILE: &str = "csvw-terms";
 
 /// Explicit RDF graph scope used to discover rows and column values.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", tag = "kind", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CsvwTermsGraphSelection {
     /// Read the default graph and every declared named graph.
     All,
@@ -88,8 +91,7 @@ impl CsvwTermsGraphSelection {
 }
 
 /// Caller-supplied RDF-type and subject-namespace membership test for one table.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwTermsSelector {
     type_predicate: Option<String>,
     any_types: BTreeSet<String>,
@@ -189,8 +191,7 @@ impl CsvwTermsSelector {
 }
 
 /// Visible subject-identity column shared by every row in one table.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwTermsIdentityColumn {
     name: String,
     titles: CsvwNaturalLanguage,
@@ -240,8 +241,7 @@ impl CsvwTermsIdentityColumn {
 }
 
 /// Exact RDF object kind accepted by a curated column.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", tag = "kind", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CsvwTermsValueMode {
     /// Accept IRI objects and preserve them through CSVW `valueUrl`.
     Iri {
@@ -319,8 +319,7 @@ impl CsvwTermsValueMode {
 }
 
 /// Cardinality and deterministic multi-value encoding for one column.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", tag = "kind", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CsvwTermsCardinality {
     /// Zero or one matching value; more than one is a hard error.
     One,
@@ -358,8 +357,7 @@ impl CsvwTermsCardinality {
 }
 
 /// One caller-owned RDF predicate mapped to one ordered CSVW column.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwTermsColumn {
     name: String,
     titles: CsvwNaturalLanguage,
@@ -437,8 +435,7 @@ impl CsvwTermsColumn {
 }
 
 /// One curated entity table and its complete mapping policy.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwTermsTable {
     name: String,
     table_url: String,
@@ -538,14 +535,10 @@ impl CsvwTermsTable {
 }
 
 /// Portable execution ceilings specific to curated wide tables.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CsvwTermsLimits {
-    #[serde(rename = "max_rows")]
     rows: usize,
-    #[serde(rename = "max_values")]
     values: usize,
-    #[serde(rename = "max_values_per_cell")]
     values_per_cell: usize,
 }
 
@@ -595,7 +588,7 @@ impl CsvwTermsLimits {
 }
 
 /// Complete mandatory configuration for the write-only `csvw-terms` profile.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwTermsConfig {
     csvw: CsvwConfig,
     metadata_path: String,
@@ -718,36 +711,283 @@ impl CsvwTermsConfig {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawCsvwTermsConfig {
-    csvw: CsvwConfig,
-    metadata_path: String,
-    graph_selection: CsvwTermsGraphSelection,
-    tables: Vec<CsvwTermsTable>,
-    execution_limits: CsvwTermsLimits,
+/// The tags of [`CsvwTermsGraphSelection`].
+const GRAPH_SELECTION_KINDS: &[&str] = &["all", "include"];
+
+impl FromJson for CsvwTermsGraphSelection {
+    /// `{"kind": "all"}` or `{"kind": "include", …}`; any other member is refused.
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "internally tagged enum CsvwTermsGraphSelection")?;
+        let selection = if fields.tag("kind", GRAPH_SELECTION_KINDS)? == "all" {
+            Self::All
+        } else {
+            Self::Include {
+                default_graph: fields.required("default_graph")?,
+                named_graphs: fields.required("named_graphs")?,
+            }
+        };
+        fields.deny_unknown()?;
+        Ok(selection)
+    }
 }
 
-impl<'de> Deserialize<'de> for CsvwTermsConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawCsvwTermsConfig::deserialize(deserializer)?;
-        Self::new(
-            raw.csvw,
-            raw.metadata_path,
-            raw.graph_selection,
-            raw.tables,
-            raw.execution_limits,
+impl ToJson for CsvwTermsGraphSelection {
+    fn to_json(&self) -> Value {
+        Value::Object(match self {
+            Self::All => Object::new().with("kind", "all"),
+            Self::Include {
+                default_graph,
+                named_graphs,
+            } => Object::new()
+                .with("kind", "include")
+                .with("default_graph", *default_graph)
+                .with("named_graphs", named_graphs.to_json()),
+        })
+    }
+}
+
+impl FromJson for CsvwTermsSelector {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct CsvwTermsSelector")?;
+        let selector = Self {
+            type_predicate: fields.optional("type_predicate")?,
+            any_types: fields.required("any_types")?,
+            all_types: fields.required("all_types")?,
+            none_types: fields.required("none_types")?,
+            iri_prefixes: fields.required("iri_prefixes")?,
+        };
+        fields.deny_unknown()?;
+        Ok(selector)
+    }
+}
+
+impl ToJson for CsvwTermsSelector {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("type_predicate", self.type_predicate.to_json())
+                .with("any_types", self.any_types.to_json())
+                .with("all_types", self.all_types.to_json())
+                .with("none_types", self.none_types.to_json())
+                .with("iri_prefixes", self.iri_prefixes.to_json()),
         )
-        .map_err(serde::de::Error::custom)
+    }
+}
+
+impl FromJson for CsvwTermsIdentityColumn {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct CsvwTermsIdentityColumn")?;
+        let column = Self {
+            name: fields.required("name")?,
+            titles: fields.required("titles")?,
+            datatype: fields.required("datatype")?,
+        };
+        fields.deny_unknown()?;
+        Ok(column)
+    }
+}
+
+impl ToJson for CsvwTermsIdentityColumn {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("name", self.name.as_str())
+                .with("titles", self.titles.to_json())
+                .with("datatype", self.datatype.to_json()),
+        )
+    }
+}
+
+/// The tags of [`CsvwTermsValueMode`].
+const VALUE_MODE_KINDS: &[&str] = &["iri", "literal"];
+
+impl FromJson for CsvwTermsValueMode {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "internally tagged enum CsvwTermsValueMode")?;
+        let mode = if fields.tag("kind", VALUE_MODE_KINDS)? == "iri" {
+            Self::Iri {
+                datatype: fields.required("datatype")?,
+            }
+        } else {
+            Self::Literal {
+                datatype: fields.required("datatype")?,
+                language: fields.optional("language")?,
+                direction: fields.optional("direction")?,
+            }
+        };
+        fields.deny_unknown()?;
+        Ok(mode)
+    }
+}
+
+impl ToJson for CsvwTermsValueMode {
+    fn to_json(&self) -> Value {
+        Value::Object(match self {
+            Self::Iri { datatype } => Object::new()
+                .with("kind", "iri")
+                .with("datatype", datatype.to_json()),
+            Self::Literal {
+                datatype,
+                language,
+                direction,
+            } => Object::new()
+                .with("kind", "literal")
+                .with("datatype", datatype.to_json())
+                .with("language", language.to_json())
+                .with("direction", direction.to_json()),
+        })
+    }
+}
+
+/// The tags of [`CsvwTermsCardinality`].
+const CARDINALITY_KINDS: &[&str] = &["one", "many"];
+
+impl FromJson for CsvwTermsCardinality {
+    /// `{"kind": "one"}` or `{"kind": "many", "separator": …}`; any other member
+    /// is refused.
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "internally tagged enum CsvwTermsCardinality")?;
+        let cardinality = if fields.tag("kind", CARDINALITY_KINDS)? == "one" {
+            Self::One
+        } else {
+            Self::Many {
+                separator: fields.required("separator")?,
+            }
+        };
+        fields.deny_unknown()?;
+        Ok(cardinality)
+    }
+}
+
+impl ToJson for CsvwTermsCardinality {
+    fn to_json(&self) -> Value {
+        Value::Object(match self {
+            Self::One => Object::new().with("kind", "one"),
+            Self::Many { separator } => Object::new()
+                .with("kind", "many")
+                .with("separator", separator.as_str()),
+        })
+    }
+}
+
+impl FromJson for CsvwTermsColumn {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct CsvwTermsColumn")?;
+        let column = Self {
+            name: fields.required("name")?,
+            titles: fields.required("titles")?,
+            predicate: fields.required("predicate")?,
+            value_mode: fields.required("value_mode")?,
+            cardinality: fields.required("cardinality")?,
+            required: fields.required("required")?,
+        };
+        fields.deny_unknown()?;
+        Ok(column)
+    }
+}
+
+impl ToJson for CsvwTermsColumn {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("name", self.name.as_str())
+                .with("titles", self.titles.to_json())
+                .with("predicate", self.predicate.as_str())
+                .with("value_mode", self.value_mode.to_json())
+                .with("cardinality", self.cardinality.to_json())
+                .with("required", self.required),
+        )
+    }
+}
+
+impl FromJson for CsvwTermsTable {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct CsvwTermsTable")?;
+        let table = Self {
+            name: fields.required("name")?,
+            table_url: fields.required("table_url")?,
+            artifact_path: fields.required("artifact_path")?,
+            selector: fields.required("selector")?,
+            identity: fields.required("identity")?,
+            columns: fields.required("columns")?,
+        };
+        fields.deny_unknown()?;
+        Ok(table)
+    }
+}
+
+impl ToJson for CsvwTermsTable {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("name", self.name.as_str())
+                .with("table_url", self.table_url.as_str())
+                .with("artifact_path", self.artifact_path.as_str())
+                .with("selector", self.selector.to_json())
+                .with("identity", self.identity.to_json())
+                .with("columns", self.columns.to_json()),
+        )
+    }
+}
+
+impl FromJson for CsvwTermsLimits {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct CsvwTermsLimits")?;
+        let limits = Self {
+            rows: fields.required("max_rows")?,
+            values: fields.required("max_values")?,
+            values_per_cell: fields.required("max_values_per_cell")?,
+        };
+        fields.deny_unknown()?;
+        Ok(limits)
+    }
+}
+
+impl ToJson for CsvwTermsLimits {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("max_rows", self.rows)
+                .with("max_values", self.values)
+                .with("max_values_per_cell", self.values_per_cell),
+        )
+    }
+}
+
+impl FromJson for CsvwTermsConfig {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct CsvwTermsConfig")?;
+        let csvw = fields.required("csvw")?;
+        let metadata_path: String = fields.required("metadata_path")?;
+        let graph_selection = fields.required("graph_selection")?;
+        let tables = fields.required("tables")?;
+        let execution_limits = fields.required("execution_limits")?;
+        fields.deny_unknown()?;
+        Ok(Self::new(
+            csvw,
+            metadata_path,
+            graph_selection,
+            tables,
+            execution_limits,
+        )?)
+    }
+}
+
+impl ToJson for CsvwTermsConfig {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("csvw", self.csvw.to_json())
+                .with("metadata_path", self.metadata_path.as_str())
+                .with("graph_selection", self.graph_selection.to_json())
+                .with("tables", self.tables.to_json())
+                .with("execution_limits", self.execution_limits.to_json()),
+        )
     }
 }
 
 /// Deterministic execution counts for one curated terms projection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CsvwTermsReport {
     /// Source named-graph, quad, reifier, and annotation rows examined.
     pub source_records: usize,
@@ -774,29 +1014,6 @@ pub struct CsvwTermsProjection {
     pub report: CsvwTermsReport,
     /// Located losses for every source row not carried exactly by the tables.
     pub loss_ledger: LossLedger,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-struct SourceQuad {
-    subject: ProjectionTerm,
-    predicate: String,
-    object: ProjectionTerm,
-    graph: Option<ProjectionTerm>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-struct SourceReifier {
-    reifier: ProjectionTerm,
-    statement: ProjectionTerm,
-    graph: Option<ProjectionTerm>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-struct SourceAnnotation {
-    reifier: ProjectionTerm,
-    predicate: String,
-    object: ProjectionTerm,
-    graph: Option<ProjectionTerm>,
 }
 
 struct TermsProjector<'a> {
@@ -1593,13 +1810,6 @@ fn resolve_term<D: DatasetView>(
     Ok(term)
 }
 
-fn source_identifier(prefix: &str, value: &impl Serialize) -> Result<String, ProjectionError> {
-    let bytes = serde_json::to_vec(value).map_err(|error| {
-        ProjectionError::integrity(format!("serialize CSVW terms source location: {error}"))
-    })?;
-    stable_identifier(prefix, &bytes)
-}
-
 fn reject_duplicates<T: Ord>(values: &[T], description: &str) -> Result<(), ProjectionError> {
     if values.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err(ProjectionError::integrity(format!(
@@ -2213,8 +2423,9 @@ mod tests {
             CsvwTermsLimits::new(1_000, 10_000, 100).expect("execution limits"),
         )
         .expect("config");
-        let bytes = serde_json::to_vec(&config).expect("serialize");
-        let reparsed: CsvwTermsConfig = serde_json::from_slice(&bytes).expect("parse");
+        let bytes = crate::projections::json_codec::to_vec(&config);
+        let reparsed: CsvwTermsConfig =
+            crate::projections::json_codec::from_slice(&bytes).expect("parse");
         assert_eq!(config, reparsed);
     }
 
@@ -2247,6 +2458,33 @@ mod tests {
         );
     }
 
+    /// A field-less policy variant is its tag alone: a member beside the tag is an
+    /// unknown field like any other, and the bare tag beside it is still read.
+    #[test]
+    fn a_field_less_policy_variant_refuses_members_beside_its_tag() {
+        let read = |text: &str| purrdf_lex::json::read(text).expect("JSON");
+        assert_eq!(
+            CsvwTermsGraphSelection::from_json(&read(r#"{"kind":"all"}"#)),
+            Ok(CsvwTermsGraphSelection::All)
+        );
+        assert_eq!(
+            CsvwTermsGraphSelection::from_json(&read(r#"{"kind":"all","named_graphs":[]}"#))
+                .expect_err("member beside a field-less tag")
+                .to_string(),
+            "unknown field `named_graphs`, expected `kind`"
+        );
+        assert_eq!(
+            CsvwTermsCardinality::from_json(&read(r#"{"kind":"one"}"#)),
+            Ok(CsvwTermsCardinality::One)
+        );
+        assert!(
+            CsvwTermsCardinality::from_json(&read(r#"{"kind":"one","separator":";"}"#)).is_err()
+        );
+        assert!(
+            CsvwTermsCardinality::from_json(&read(r#"{"kind":"many","separator":";"}"#)).is_ok()
+        );
+    }
+
     #[test]
     fn strict_config_rejects_unknown_nested_fields() {
         let config = CsvwTermsConfig::new(
@@ -2257,9 +2495,9 @@ mod tests {
             CsvwTermsLimits::new(10, 20, 5).expect("limits"),
         )
         .expect("config");
-        let mut value = serde_json::to_value(config).expect("value");
-        value["tables"][0]["mystery"] = serde_json::json!(true);
-        assert!(serde_json::from_value::<CsvwTermsConfig>(value).is_err());
+        let mut value = config.to_json();
+        value["tables"][0]["mystery"] = Value::Bool(true);
+        assert!(CsvwTermsConfig::from_json(&value).is_err());
     }
 
     #[test]

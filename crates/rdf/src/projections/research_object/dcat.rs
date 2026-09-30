@@ -8,9 +8,11 @@ use purrdf_core::loss::{
     LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED,
 };
 use purrdf_core::{DatasetView, LossLedger, research_object_to_rdf_loss_ledger};
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Map, Value};
+use purrdf_lex::json::{Object, Value};
 
+use super::super::json_codec::{
+    Fields, FromJson, JsonError, Owned, ToJson, into_owned, json_string_enum,
+};
 use super::super::{ProjectionError, ProjectionPackage, stable_identifier, validate_absolute_iri};
 use super::json::{
     ResearchObjectPackageProjection, ResearchObjectReadOutcome, canonical_json, ensure_sound,
@@ -28,8 +30,7 @@ pub const DCAT_PROFILE: &str = "dcat-3";
 pub const DCAT_ARTIFACT: &str = "dcat.jsonld";
 
 /// Semantic compact term required by the DCAT 3 application-profile adapter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DcatRole {
     /// Dataset class.
     DatasetClass,
@@ -113,6 +114,49 @@ pub enum DcatRole {
     Workflow,
 }
 
+json_string_enum!(DcatRole {
+    DatasetClass => "dataset-class",
+    DistributionClass => "distribution-class",
+    AgentClass => "agent-class",
+    ActivityClass => "activity-class",
+    RecordSetClass => "record-set-class",
+    FieldClass => "field-class",
+    ChecksumClass => "checksum-class",
+    Title => "title",
+    AgentName => "agent-name",
+    Description => "description",
+    Identifier => "identifier",
+    Version => "version",
+    Issued => "issued",
+    Modified => "modified",
+    LandingPage => "landing-page",
+    Keyword => "keyword",
+    License => "license",
+    Creator => "creator",
+    Publisher => "publisher",
+    Distribution => "distribution",
+    Activity => "activity",
+    RecordSet => "record-set",
+    ConformsTo => "conforms-to",
+    Path => "path",
+    DownloadUrl => "download-url",
+    MediaType => "media-type",
+    Format => "format",
+    ByteSize => "byte-size",
+    Checksum => "checksum",
+    ChecksumAlgorithm => "checksum-algorithm",
+    ChecksumValue => "checksum-value",
+    Field => "field",
+    DataType => "data-type",
+    Records => "records",
+    Instrument => "instrument",
+    Agent => "agent",
+    Object => "object",
+    Result => "result",
+    EndTime => "end-time",
+    Workflow => "workflow",
+});
+
 /// Every mandatory DCAT role in deterministic configuration order.
 pub const DCAT_ROLES: &[DcatRole] = &[
     DcatRole::DatasetClass,
@@ -158,8 +202,7 @@ pub const DCAT_ROLES: &[DcatRole] = &[
 ];
 
 /// Complete caller-owned compact-term binding for the DCAT application profile.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DcatVocabulary(BTreeMap<DcatRole, String>);
 
 impl DcatVocabulary {
@@ -211,18 +254,21 @@ impl DcatVocabulary {
     }
 }
 
-impl<'de> Deserialize<'de> for DcatVocabulary {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let terms = BTreeMap::<DcatRole, String>::deserialize(deserializer)?;
-        Self::new(terms).map_err(serde::de::Error::custom)
+impl FromJson for DcatVocabulary {
+    /// The role map itself, revalidated by [`DcatVocabulary::new`].
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        Ok(Self::new(BTreeMap::from_json(value)?)?)
+    }
+}
+
+impl ToJson for DcatVocabulary {
+    fn to_json(&self) -> Value {
+        self.0.to_json()
     }
 }
 
 /// Mandatory caller-owned DCAT 3 configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DcatConfig {
     common: ResearchObjectConfig,
     context: OfflineJsonLdContext,
@@ -278,23 +324,27 @@ impl DcatConfig {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawDcatConfig {
-    common: ResearchObjectConfig,
-    context: OfflineJsonLdContext,
-    vocabulary: DcatVocabulary,
-    profile_iri: String,
+impl FromJson for DcatConfig {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct DcatConfig")?;
+        let common: ResearchObjectConfig = fields.required("common")?;
+        let context: OfflineJsonLdContext = fields.required("context")?;
+        let vocabulary: DcatVocabulary = fields.required("vocabulary")?;
+        let profile_iri: String = fields.required("profile_iri")?;
+        fields.deny_unknown()?;
+        Ok(Self::new(common, context, vocabulary, profile_iri)?)
+    }
 }
 
-impl<'de> Deserialize<'de> for DcatConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawDcatConfig::deserialize(deserializer)?;
-        Self::new(raw.common, raw.context, raw.vocabulary, raw.profile_iri)
-            .map_err(serde::de::Error::custom)
+impl ToJson for DcatConfig {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("common", self.common.to_json())
+                .with("context", self.context.to_json())
+                .with("vocabulary", self.vocabulary.to_json())
+                .with("profile_iri", self.profile_iri.to_json()),
+        )
     }
 }
 
@@ -376,7 +426,7 @@ fn encode_document(
         );
     }
     graph.sort_by(|left, right| graph_id(left).cmp(graph_id(right)));
-    Ok(Value::Object(Map::from_iter([
+    Ok(Value::Object(Object::from_iter([
         ("@context".to_owned(), config.context().value().clone()),
         ("@graph".to_owned(), Value::Array(graph)),
     ])))
@@ -649,29 +699,29 @@ fn encode_field(field: &ResearchField, config: &DcatConfig) -> Value {
     Value::Object(object)
 }
 
-fn typed_object(id: &str, class: &str) -> Map<String, Value> {
-    Map::from_iter([
+fn typed_object(id: &str, class: &str) -> Object {
+    Object::from_iter([
         ("@id".to_owned(), Value::String(id.to_owned())),
         ("@type".to_owned(), Value::String(class.to_owned())),
     ])
 }
 
 fn id_object(id: &str) -> Value {
-    Value::Object(Map::from_iter([(
+    Value::Object(Object::from_iter([(
         "@id".to_owned(),
         Value::String(id.to_owned()),
     )]))
 }
 
 fn plain_value(value: &str) -> Value {
-    Value::Object(Map::from_iter([(
+    Value::Object(Object::from_iter([(
         "@value".to_owned(),
         Value::String(value.to_owned()),
     )]))
 }
 
 fn typed_value(value: &str, datatype: &str) -> Value {
-    Value::Object(Map::from_iter([
+    Value::Object(Object::from_iter([
         ("@value".to_owned(), Value::String(value.to_owned())),
         ("@type".to_owned(), Value::String(datatype.to_owned())),
     ]))
@@ -693,7 +743,7 @@ fn encode_value(value: &ResearchValue) -> Value {
 }
 
 fn encode_text(value: &ResearchText) -> Value {
-    let mut object = Map::from_iter([("@value".to_owned(), Value::String(value.value.clone()))]);
+    let mut object = Object::from_iter([("@value".to_owned(), Value::String(value.value.clone()))]);
     if let Some(language) = &value.language {
         object.insert("@language".to_owned(), Value::String(language.clone()));
     } else {
@@ -712,7 +762,7 @@ fn encode_text(value: &ResearchText) -> Value {
     Value::Object(object)
 }
 
-fn insert_values(object: &mut Map<String, Value>, term: &str, values: Vec<Value>) {
+fn insert_values(object: &mut Object, term: &str, values: Vec<Value>) {
     if !values.is_empty() {
         object.insert(term.to_owned(), Value::Array(values));
     }
@@ -740,7 +790,7 @@ fn validate_semantic_jsonld(value: &Value, config: &DcatConfig) -> Result<(), Pr
 
 struct RawNode {
     id: String,
-    object: Map<String, Value>,
+    object: Object,
     pointer: String,
 }
 
@@ -768,7 +818,7 @@ fn decode_document(
 
 impl DcatDecoder<'_> {
     fn decode(mut self, value: Value) -> Result<ResearchObjectModel, ProjectionError> {
-        let Value::Object(mut document) = value else {
+        let Owned::Object(mut document) = into_owned(value) else {
             return Err(
                 ProjectionError::syntax("DCAT document root must be a JSON object")
                     .at_path(DCAT_ARTIFACT),
@@ -786,7 +836,7 @@ impl DcatDecoder<'_> {
         let graph = document.remove("@graph").ok_or_else(|| {
             ProjectionError::integrity("DCAT document is missing @graph").at_path(DCAT_ARTIFACT)
         })?;
-        let Value::Array(graph) = graph else {
+        let Owned::Array(graph) = into_owned(graph) else {
             return Err(
                 ProjectionError::integrity("DCAT @graph must be an array").at_path(DCAT_ARTIFACT)
             );
@@ -799,7 +849,7 @@ impl DcatDecoder<'_> {
         let mut nodes = BTreeMap::<String, RawNode>::new();
         for (index, value) in graph.into_iter().enumerate() {
             let pointer = format!("/@graph/{index}");
-            let Value::Object(mut object) = value else {
+            let Owned::Object(mut object) = into_owned(value) else {
                 self.unsupported(&pointer);
                 continue;
             };
@@ -807,7 +857,7 @@ impl DcatDecoder<'_> {
                 self.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, &pointer);
                 continue;
             }
-            let Some(Value::String(id)) = object.remove("@id") else {
+            let Some(Owned::String(id)) = object.remove("@id").map(into_owned) else {
                 return Err(ProjectionError::integrity(
                     "every DCAT graph entity requires a string @id",
                 )
@@ -1138,30 +1188,25 @@ impl DcatDecoder<'_> {
         })
     }
 
-    fn take_items(
-        &mut self,
-        object: &mut Map<String, Value>,
-        role: DcatRole,
-        parent: &str,
-    ) -> Vec<Value> {
+    fn take_items(&mut self, object: &mut Object, role: DcatRole, parent: &str) -> Vec<Value> {
         let term = self.config.vocabulary().term(role).to_owned();
         let Some(value) = object.remove(&term) else {
             return Vec::new();
         };
-        match value {
-            Value::Array(values) => {
+        match into_owned(value) {
+            Owned::Array(values) => {
                 if values.len() > 1 {
                     self.loss(LOSS_RESEARCH_ORDER_DROPPED, &json_pointer(parent, &term));
                 }
                 values
             }
-            value => vec![value],
+            other => vec![Value::from(other)],
         }
     }
 
     fn take_texts(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         role: DcatRole,
         parent: &str,
     ) -> Result<Vec<ResearchText>, ProjectionError> {
@@ -1185,16 +1230,16 @@ impl DcatDecoder<'_> {
         value: Value,
         pointer: &str,
     ) -> Result<Option<ResearchText>, ProjectionError> {
-        let Value::Object(mut object) = value else {
+        let Owned::Object(mut object) = into_owned(value) else {
             self.unsupported(pointer);
             return Ok(None);
         };
-        let Some(Value::String(value)) = object.remove("@value") else {
+        let Some(Owned::String(value)) = object.remove("@value").map(into_owned) else {
             self.unsupported(pointer);
             return Ok(None);
         };
-        let language = match object.remove("@language") {
-            Some(Value::String(language)) => Some(language),
+        let language = match object.remove("@language").map(into_owned) {
+            Some(Owned::String(language)) => Some(language),
             Some(_) => {
                 self.unsupported(&json_pointer(pointer, "@language"));
                 return Ok(None);
@@ -1216,8 +1261,8 @@ impl DcatDecoder<'_> {
                 }
             }
         };
-        let explicit_datatype = match object.remove("@type") {
-            Some(Value::String(datatype)) => Some(datatype),
+        let explicit_datatype = match object.remove("@type").map(into_owned) {
+            Some(Owned::String(datatype)) => Some(datatype),
             Some(_) => {
                 self.unsupported(&json_pointer(pointer, "@type"));
                 return Ok(None);
@@ -1251,7 +1296,7 @@ impl DcatDecoder<'_> {
 
     fn take_values(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         role: DcatRole,
         parent: &str,
     ) -> Result<Vec<ResearchValue>, ProjectionError> {
@@ -1294,7 +1339,7 @@ impl DcatDecoder<'_> {
 
     fn take_refs(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         role: DcatRole,
         parent: &str,
         require_known: bool,
@@ -1352,7 +1397,7 @@ impl DcatDecoder<'_> {
 
     fn take_paths(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         parent: &str,
     ) -> Result<Vec<String>, ProjectionError> {
         let values = self.take_texts(object, DcatRole::Path, parent)?;
@@ -1378,7 +1423,7 @@ impl DcatDecoder<'_> {
 
     fn take_byte_size(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         parent: &str,
     ) -> Result<Option<u64>, ProjectionError> {
         let values = self.take_texts(object, DcatRole::ByteSize, parent)?;
@@ -1413,7 +1458,7 @@ impl DcatDecoder<'_> {
 
     fn take_rows(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         parent: &str,
     ) -> Result<Vec<Value>, ProjectionError> {
         let values = self.take_texts(object, DcatRole::Records, parent)?;
@@ -1440,17 +1485,13 @@ impl DcatDecoder<'_> {
         Ok(rows)
     }
 
-    fn take_type(
-        &mut self,
-        object: &mut Map<String, Value>,
-        parent: &str,
-    ) -> Result<String, ProjectionError> {
+    fn take_type(&mut self, object: &mut Object, parent: &str) -> Result<String, ProjectionError> {
         let value = object.remove("@type").ok_or_else(|| {
             ProjectionError::integrity("DCAT graph entity is missing @type").at_path(DCAT_ARTIFACT)
         })?;
-        match value {
-            Value::String(value) => Ok(value),
-            Value::Array(mut values) => {
+        match into_owned(value) {
+            Owned::String(value) => Ok(value),
+            Owned::Array(mut values) => {
                 if values.len() > 1 {
                     self.loss(LOSS_RESEARCH_ORDER_DROPPED, &json_pointer(parent, "@type"));
                 }
@@ -1477,7 +1518,7 @@ impl DcatDecoder<'_> {
 
     fn require_type(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         parent: &str,
         expected: &str,
     ) -> Result<(), ProjectionError> {
@@ -1491,7 +1532,7 @@ impl DcatDecoder<'_> {
         Ok(())
     }
 
-    fn record_unknowns(&mut self, object: &Map<String, Value>, parent: &str) {
+    fn record_unknowns(&mut self, object: &Object, parent: &str) {
         for member in object.keys() {
             self.loss(
                 LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
@@ -1555,7 +1596,6 @@ mod tests {
         ProjectionLimits, RESEARCH_ROLES, ResearchObjectIdentity, ResearchObjectPolicy,
         ResearchObjectRoles,
     };
-    use serde_json::json;
 
     const INPUT: &[u8] =
         include_bytes!("../../../tests/fixtures/research-objects/dcat-3/input.jsonld");
@@ -1596,9 +1636,11 @@ mod tests {
                 )
             })
             .collect();
-        let context =
-            OfflineJsonLdContext::new(json!({"@vocab": "https://example.org/dcat/"}), definitions)
-                .expect("offline context");
+        let context = OfflineJsonLdContext::new(
+            Value::from(Object::new().with("@vocab", "https://example.org/dcat/")),
+            definitions,
+        )
+        .expect("offline context");
         DcatConfig::new(
             common,
             context,
@@ -1690,7 +1732,8 @@ mod tests {
             "actual golden bytes: {}",
             String::from_utf8_lossy(actual)
         );
-        let canonical: Value = serde_json::from_slice(actual).expect("canonical JSON-LD");
+        let canonical = purrdf_lex::json::read_slice(actual, purrdf_lex::json::Limits::DEFAULT)
+            .expect("canonical JSON-LD");
         validate_semantic_jsonld(&canonical, &config).expect("native JSON-LD semantics");
 
         let reread = read_dcat(&projected.package, &config).expect("read canonical output");

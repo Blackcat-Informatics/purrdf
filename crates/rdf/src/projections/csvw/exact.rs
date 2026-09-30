@@ -12,8 +12,9 @@ use purrdf_core::{
     BlankScope, DatasetView, LossLedger, RdfDataset, RdfDatasetBuilder, RdfLiteral,
     RdfTextDirection, TermId,
 };
-use serde::Serialize;
+use purrdf_lex::json::{Object, Value};
 
+use super::super::json_codec::ToJson;
 use super::super::util::canonical_json_bounded;
 use super::super::{
     ProjectionDirection, ProjectionError, ProjectionLimits, ProjectionPackage, ProjectionTerm,
@@ -75,7 +76,7 @@ pub struct CsvwExactReadOutcome {
     pub loss_ledger: LossLedger,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ExactQuad {
     subject: ProjectionTerm,
     predicate: ProjectionTerm,
@@ -83,19 +84,54 @@ struct ExactQuad {
     graph: Option<ProjectionTerm>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ExactReifier {
     reifier: ProjectionTerm,
     statement: ProjectionTerm,
     graph: Option<ProjectionTerm>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ExactAnnotation {
     reifier: ProjectionTerm,
     predicate: ProjectionTerm,
     object: ProjectionTerm,
     graph: Option<ProjectionTerm>,
+}
+
+impl ToJson for ExactQuad {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("subject", self.subject.to_json())
+                .with("predicate", self.predicate.to_json())
+                .with("object", self.object.to_json())
+                .with("graph", self.graph.to_json()),
+        )
+    }
+}
+
+impl ToJson for ExactReifier {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("reifier", self.reifier.to_json())
+                .with("statement", self.statement.to_json())
+                .with("graph", self.graph.to_json()),
+        )
+    }
+}
+
+impl ToJson for ExactAnnotation {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("reifier", self.reifier.to_json())
+                .with("predicate", self.predicate.to_json())
+                .with("object", self.object.to_json())
+                .with("graph", self.graph.to_json()),
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -637,59 +673,113 @@ fn write_annotations(
     )
 }
 
-#[derive(Serialize)]
 struct ExactMetadata<'a> {
-    #[serde(rename = "@context")]
     context: (String, LocalContext<'a>),
-    #[serde(rename = "@id")]
     id: &'a str,
     tables: Vec<TableMetadata>,
 }
 
-#[derive(Serialize)]
 struct LocalContext<'a> {
-    #[serde(rename = "@base")]
     base: &'a str,
 }
 
-#[derive(Serialize)]
 struct TableMetadata {
     url: &'static str,
-    #[serde(rename = "tableSchema")]
     table_schema: SchemaMetadata,
 }
 
-#[derive(Serialize)]
 struct SchemaMetadata {
     columns: Vec<ColumnMetadata>,
-    #[serde(rename = "primaryKey")]
     primary_key: &'static str,
-    #[serde(rename = "foreignKeys", skip_serializing_if = "Vec::is_empty")]
     foreign_keys: Vec<ForeignKeyMetadata>,
 }
 
-#[derive(Serialize)]
 struct ColumnMetadata {
     name: &'static str,
     titles: &'static str,
     datatype: &'static str,
     required: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
     null: Option<&'static str>,
 }
 
-#[derive(Serialize)]
 struct ForeignKeyMetadata {
-    #[serde(rename = "columnReference")]
     column_reference: &'static str,
     reference: ForeignKeyReference,
 }
 
-#[derive(Serialize)]
 struct ForeignKeyReference {
     resource: &'static str,
-    #[serde(rename = "columnReference")]
     column_reference: &'static str,
+}
+
+impl ToJson for ExactMetadata<'_> {
+    /// `{"@context": [context, {"@base": …}], "@id": …, "tables": […]}`.
+    fn to_json(&self) -> Value {
+        let (context, local) = &self.context;
+        Value::Object(
+            Object::new()
+                .with(
+                    "@context",
+                    Value::Array(vec![
+                        Value::from(context.as_str()),
+                        Value::Object(Object::new().with("@base", local.base)),
+                    ]),
+                )
+                .with("@id", self.id)
+                .with("tables", self.tables.to_json()),
+        )
+    }
+}
+
+impl ToJson for TableMetadata {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("url", self.url)
+                .with("tableSchema", self.table_schema.to_json()),
+        )
+    }
+}
+
+impl ToJson for SchemaMetadata {
+    fn to_json(&self) -> Value {
+        let mut object = Object::new()
+            .with("columns", self.columns.to_json())
+            .with("primaryKey", self.primary_key);
+        if !self.foreign_keys.is_empty() {
+            object.insert("foreignKeys", self.foreign_keys.to_json());
+        }
+        Value::Object(object)
+    }
+}
+
+impl ToJson for ColumnMetadata {
+    fn to_json(&self) -> Value {
+        let mut object = Object::new()
+            .with("name", self.name)
+            .with("titles", self.titles)
+            .with("datatype", self.datatype)
+            .with("required", self.required);
+        if let Some(null) = self.null {
+            object.insert("null", null);
+        }
+        Value::Object(object)
+    }
+}
+
+impl ToJson for ForeignKeyMetadata {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("columnReference", self.column_reference)
+                .with(
+                    "reference",
+                    Object::new()
+                        .with("resource", self.reference.resource)
+                        .with("columnReference", self.reference.column_reference),
+                ),
+        )
+    }
 }
 
 fn exact_metadata(config: &CsvwConfig) -> Result<Vec<u8>, ProjectionError> {
@@ -1323,7 +1413,7 @@ fn term_identifier(
     stable_identifier("CsvwTerm", &term.to_canonical_json(limits)?)
 }
 
-fn row_identifier<T: Serialize>(
+fn row_identifier<T: ToJson>(
     prefix: &str,
     row: &T,
     limits: ProjectionLimits,
@@ -1709,11 +1799,14 @@ mod tests {
         let projected = project_csvw_exact(dataset.as_ref(), &config).expect("project");
         assert!(projected.loss_ledger.is_empty());
         assert_eq!(projected.package.len(), 5);
-        let metadata: serde_json::Value = serde_json::from_slice(
-            projected
-                .package
-                .get(METADATA_PATH)
-                .expect("metadata artifact"),
+        let metadata = purrdf_lex::json::read(
+            std::str::from_utf8(
+                projected
+                    .package
+                    .get(METADATA_PATH)
+                    .expect("metadata artifact"),
+            )
+            .expect("metadata UTF-8"),
         )
         .expect("metadata JSON");
         assert_eq!(metadata["tables"].as_array().expect("tables").len(), 4);

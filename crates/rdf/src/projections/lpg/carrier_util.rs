@@ -1,21 +1,45 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use purrdf_lex::json::{Object, Value};
 
+use super::super::json_codec::{Fields, FromJson, JsonError, ToJson};
 use super::super::util::canonical_json_bounded;
 use super::super::{ProjectionError, ProjectionLimits, ProjectionPackage};
 use super::{LpgConfig, LpgGraph};
 
 const PROFILE_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CarrierManifest {
-    profile: String,
-    profile_version: u32,
-    lpg_schema_version: u32,
+/// The versioned manifest every LPG carrier package writes beside its artifacts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CarrierManifest {
+    pub(super) profile: String,
+    pub(super) profile_version: u32,
+    pub(super) lpg_schema_version: u32,
+}
+
+impl FromJson for CarrierManifest {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct CarrierManifest")?;
+        let manifest = Self {
+            profile: fields.required("profile")?,
+            profile_version: fields.required("profile_version")?,
+            lpg_schema_version: fields.required("lpg_schema_version")?,
+        };
+        fields.deny_unknown()?;
+        Ok(manifest)
+    }
+}
+
+impl ToJson for CarrierManifest {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("profile", self.profile.as_str())
+                .with("profile_version", self.profile_version)
+                .with("lpg_schema_version", self.lpg_schema_version),
+        )
+    }
 }
 
 pub(super) fn write_manifest(
@@ -51,7 +75,7 @@ pub(super) fn read_manifest(
     Ok(manifest.lpg_schema_version)
 }
 
-pub(super) fn json_string<T: Serialize>(
+pub(super) fn json_string<T: ToJson + ?Sized>(
     value: &T,
     config: &LpgConfig,
     description: &str,
@@ -61,7 +85,7 @@ pub(super) fn json_string<T: Serialize>(
     )
 }
 
-pub(super) fn parse_json<T: DeserializeOwned + Serialize>(
+pub(super) fn parse_json<T: FromJson + ToJson>(
     bytes: &[u8],
     config: &LpgConfig,
     description: &str,
@@ -73,7 +97,7 @@ pub(super) fn parse_json<T: DeserializeOwned + Serialize>(
         ))
         .at_path(path));
     }
-    let value: T = serde_json::from_slice(bytes).map_err(|error| {
+    let value: T = super::super::json_codec::from_slice(bytes).map_err(|error| {
         ProjectionError::syntax(format!("parse {description}: {error}")).at_path(path)
     })?;
     if canonical_json_bounded(&value, config.limits(), description)? != bytes {

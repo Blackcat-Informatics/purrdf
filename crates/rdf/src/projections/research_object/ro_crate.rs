@@ -10,9 +10,11 @@ use purrdf_core::loss::{
     LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED,
 };
 use purrdf_core::{DatasetView, LossLedger, research_object_to_rdf_loss_ledger};
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Map, Value};
+use purrdf_lex::json::{Object, Value};
 
+use super::super::json_codec::{
+    Fields, FromJson, JsonError, Owned, ToJson, into_owned, json_string_enum,
+};
 use super::super::{
     ProjectionError, ProjectionLimits, ProjectionPackage, escape_xml_attribute, escape_xml_text,
     validate_absolute_iri,
@@ -37,14 +39,18 @@ pub const RO_CRATE_PREVIEW_ARTIFACT: &str = "ro-crate-preview.html";
 pub const RO_CRATE_PREVIEW_FILES_PREFIX: &str = "ro-crate-preview_files/";
 
 /// Explicit RO-Crate package shape selected by the caller.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RoCratePackaging {
     /// Metadata descriptor only, preserving the original codec contract.
     MetadataOnly,
     /// Metadata, self-contained preview, and caller-supplied payload artifacts.
     Attached,
 }
+
+json_string_enum!(RoCratePackaging {
+    MetadataOnly => "metadata-only",
+    Attached => "attached",
+});
 
 /// Bounded payload artifacts supplied by reference to the RO-Crate engine.
 ///
@@ -193,8 +199,7 @@ fn reject_reserved_asset_path(path: &str) -> Result<(), ProjectionError> {
 }
 
 /// Semantic compact term required by the RO-Crate 1.3 adapter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RoCrateRole {
     /// Root dataset class.
     RootDatasetClass,
@@ -278,6 +283,49 @@ pub enum RoCrateRole {
     Workflow,
 }
 
+json_string_enum!(RoCrateRole {
+    RootDatasetClass => "root-dataset-class",
+    MetadataDescriptorClass => "metadata-descriptor-class",
+    FileClass => "file-class",
+    AgentClass => "agent-class",
+    ActivityClass => "activity-class",
+    RecordSetClass => "record-set-class",
+    FieldClass => "field-class",
+    Name => "name",
+    Description => "description",
+    Identifier => "identifier",
+    Version => "version",
+    DatePublished => "date-published",
+    DateModified => "date-modified",
+    Url => "url",
+    Keywords => "keywords",
+    License => "license",
+    Creator => "creator",
+    Publisher => "publisher",
+    HasPart => "has-part",
+    Mentions => "mentions",
+    ConformsTo => "conforms-to",
+    About => "about",
+    Path => "path",
+    ContentUrl => "content-url",
+    EncodingFormat => "encoding-format",
+    Format => "format",
+    ContentSize => "content-size",
+    Checksum => "checksum",
+    ChecksumAlgorithm => "checksum-algorithm",
+    ChecksumValue => "checksum-value",
+    InlineContent => "inline-content",
+    Field => "field",
+    DataType => "data-type",
+    Records => "records",
+    Instrument => "instrument",
+    Agent => "agent",
+    Object => "object",
+    Result => "result",
+    EndTime => "end-time",
+    Workflow => "workflow",
+});
+
 /// Every mandatory RO-Crate role in deterministic configuration order.
 pub const RO_CRATE_ROLES: &[RoCrateRole] = &[
     RoCrateRole::RootDatasetClass,
@@ -323,8 +371,7 @@ pub const RO_CRATE_ROLES: &[RoCrateRole] = &[
 ];
 
 /// Complete caller-owned compact-term binding for RO-Crate.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoCrateVocabulary(BTreeMap<RoCrateRole, String>);
 
 impl RoCrateVocabulary {
@@ -376,18 +423,21 @@ impl RoCrateVocabulary {
     }
 }
 
-impl<'de> Deserialize<'de> for RoCrateVocabulary {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let terms = BTreeMap::<RoCrateRole, String>::deserialize(deserializer)?;
-        Self::new(terms).map_err(serde::de::Error::custom)
+impl FromJson for RoCrateVocabulary {
+    /// The role map itself, revalidated by [`RoCrateVocabulary::new`].
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        Ok(Self::new(BTreeMap::from_json(value)?)?)
+    }
+}
+
+impl ToJson for RoCrateVocabulary {
+    fn to_json(&self) -> Value {
+        self.0.to_json()
     }
 }
 
 /// Mandatory caller-owned configuration for RO-Crate 1.3.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoCrateConfig {
     common: ResearchObjectConfig,
     context: OfflineJsonLdContext,
@@ -482,34 +532,44 @@ impl RoCrateConfig {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawRoCrateConfig {
-    common: ResearchObjectConfig,
-    context: OfflineJsonLdContext,
-    vocabulary: RoCrateVocabulary,
-    profile_iri: String,
-    metadata_descriptor_id: String,
-    root_dataset_id: String,
-    packaging: RoCratePackaging,
+impl FromJson for RoCrateConfig {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct RoCrateConfig")?;
+        let common: ResearchObjectConfig = fields.required("common")?;
+        let context: OfflineJsonLdContext = fields.required("context")?;
+        let vocabulary: RoCrateVocabulary = fields.required("vocabulary")?;
+        let profile_iri: String = fields.required("profile_iri")?;
+        let metadata_descriptor_id: String = fields.required("metadata_descriptor_id")?;
+        let root_dataset_id: String = fields.required("root_dataset_id")?;
+        let packaging: RoCratePackaging = fields.required("packaging")?;
+        fields.deny_unknown()?;
+        Ok(Self::new(
+            common,
+            context,
+            vocabulary,
+            profile_iri,
+            metadata_descriptor_id,
+            root_dataset_id,
+            packaging,
+        )?)
+    }
 }
 
-impl<'de> Deserialize<'de> for RoCrateConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawRoCrateConfig::deserialize(deserializer)?;
-        Self::new(
-            raw.common,
-            raw.context,
-            raw.vocabulary,
-            raw.profile_iri,
-            raw.metadata_descriptor_id,
-            raw.root_dataset_id,
-            raw.packaging,
+impl ToJson for RoCrateConfig {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("common", self.common.to_json())
+                .with("context", self.context.to_json())
+                .with("vocabulary", self.vocabulary.to_json())
+                .with("profile_iri", self.profile_iri.to_json())
+                .with(
+                    "metadata_descriptor_id",
+                    self.metadata_descriptor_id.to_json(),
+                )
+                .with("root_dataset_id", self.root_dataset_id.to_json())
+                .with("packaging", self.packaging.to_json()),
         )
-        .map_err(serde::de::Error::custom)
     }
 }
 
@@ -865,7 +925,7 @@ fn encode_document(
     }
     graph.sort_by(|left, right| graph_id(left).cmp(graph_id(right)));
 
-    Ok(Value::Object(Map::from_iter([
+    Ok(Value::Object(Object::from_iter([
         ("@context".to_owned(), config.context().value().clone()),
         ("@graph".to_owned(), Value::Array(graph)),
     ])))
@@ -1034,7 +1094,7 @@ fn encode_resource(resource: &ResearchResource, config: &RoCrateConfig) -> Value
 
 fn encode_checksum(checksum: &ResearchChecksum, config: &RoCrateConfig) -> Value {
     let terms = config.vocabulary();
-    Value::Object(Map::from_iter([
+    Value::Object(Object::from_iter([
         (
             terms.term(RoCrateRole::ChecksumAlgorithm).to_owned(),
             encode_value(&checksum.algorithm, config),
@@ -1154,15 +1214,15 @@ fn encode_field(field: &ResearchField, config: &RoCrateConfig) -> Value {
     Value::Object(object)
 }
 
-fn typed_object(id: &str, class: &str) -> Map<String, Value> {
-    Map::from_iter([
+fn typed_object(id: &str, class: &str) -> Object {
+    Object::from_iter([
         ("@id".to_owned(), Value::String(id.to_owned())),
         ("@type".to_owned(), Value::String(class.to_owned())),
     ])
 }
 
 fn id_object(id: &str) -> Value {
-    Value::Object(Map::from_iter([(
+    Value::Object(Object::from_iter([(
         "@id".to_owned(),
         Value::String(id.to_owned()),
     )]))
@@ -1194,7 +1254,7 @@ fn encode_text(value: &ResearchText, config: &RoCrateConfig) -> Value {
     if value.datatype == xsd_string && value.language.is_none() && value.direction.is_none() {
         return Value::String(value.value.clone());
     }
-    let mut object = Map::from_iter([("@value".to_owned(), Value::String(value.value.clone()))]);
+    let mut object = Object::from_iter([("@value".to_owned(), Value::String(value.value.clone()))]);
     if let Some(language) = &value.language {
         object.insert("@language".to_owned(), Value::String(language.clone()));
     } else {
@@ -1213,7 +1273,7 @@ fn encode_text(value: &ResearchText, config: &RoCrateConfig) -> Value {
     Value::Object(object)
 }
 
-fn insert_values(object: &mut Map<String, Value>, term: &str, values: Vec<Value>) {
+fn insert_values(object: &mut Object, term: &str, values: Vec<Value>) {
     if !values.is_empty() {
         object.insert(term.to_owned(), Value::Array(values));
     }
@@ -1228,7 +1288,7 @@ fn graph_id(value: &Value) -> &str {
 
 struct RawNode {
     native_id: String,
-    object: Map<String, Value>,
+    object: Object,
     pointer: String,
 }
 
@@ -1255,8 +1315,8 @@ fn decode_document(
 }
 
 impl RoDecoder<'_> {
-    fn decode(mut self, value: Value) -> Result<ResearchObjectModel, ProjectionError> {
-        let Value::Object(mut document) = value else {
+    fn decode(mut self, mut value: Value) -> Result<ResearchObjectModel, ProjectionError> {
+        let Some(mut document) = value.as_object_mut().map(std::mem::take) else {
             return Err(
                 ProjectionError::syntax("RO-Crate document root must be a JSON object")
                     .at_path(RO_CRATE_ARTIFACT),
@@ -1272,11 +1332,11 @@ impl RoDecoder<'_> {
             )
             .at_path(RO_CRATE_ARTIFACT));
         }
-        let graph = document.remove("@graph").ok_or_else(|| {
+        let mut graph = document.remove("@graph").ok_or_else(|| {
             ProjectionError::integrity("RO-Crate document is missing @graph")
                 .at_path(RO_CRATE_ARTIFACT)
         })?;
-        let Value::Array(graph) = graph else {
+        let Some(graph) = graph.as_array_mut().map(std::mem::take) else {
             return Err(
                 ProjectionError::integrity("RO-Crate @graph must be an array")
                     .at_path(RO_CRATE_ARTIFACT),
@@ -1288,13 +1348,13 @@ impl RoDecoder<'_> {
         self.record_unknowns(&document, "");
 
         let mut nodes = BTreeMap::<String, RawNode>::new();
-        for (index, value) in graph.into_iter().enumerate() {
+        for (index, mut value) in graph.into_iter().enumerate() {
             let pointer = format!("/@graph/{index}");
-            let Value::Object(mut object) = value else {
+            let Some(mut object) = value.as_object_mut().map(std::mem::take) else {
                 self.unsupported(&pointer);
                 continue;
             };
-            let Some(Value::String(native_id)) = object.remove("@id") else {
+            let Some(Owned::String(native_id)) = object.remove("@id").map(into_owned) else {
                 return Err(ProjectionError::integrity(
                     "every RO-Crate graph entity requires a string @id",
                 )
@@ -1604,30 +1664,25 @@ impl RoDecoder<'_> {
         })
     }
 
-    fn take_items(
-        &mut self,
-        object: &mut Map<String, Value>,
-        role: RoCrateRole,
-        parent: &str,
-    ) -> Vec<Value> {
+    fn take_items(&mut self, object: &mut Object, role: RoCrateRole, parent: &str) -> Vec<Value> {
         let term = self.config.vocabulary().term(role).to_owned();
         let Some(value) = object.remove(&term) else {
             return Vec::new();
         };
-        match value {
-            Value::Array(values) => {
+        match into_owned(value) {
+            Owned::Array(values) => {
                 if values.len() > 1 {
                     self.loss(LOSS_RESEARCH_ORDER_DROPPED, &json_pointer(parent, &term));
                 }
                 values
             }
-            value => vec![value],
+            other => vec![Value::from(other)],
         }
     }
 
     fn take_texts(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         role: RoCrateRole,
         parent: &str,
     ) -> Result<Vec<ResearchText>, ProjectionError> {
@@ -1657,15 +1712,15 @@ impl RoDecoder<'_> {
             .roles()
             .iri(super::ResearchRole::XsdString)
             .to_owned();
-        match value {
-            Value::String(value) => ResearchText::plain(value, xsd_string).map(Some),
-            Value::Object(mut object) => {
-                let Some(Value::String(value)) = object.remove("@value") else {
+        match into_owned(value) {
+            Owned::String(value) => ResearchText::plain(value, xsd_string).map(Some),
+            Owned::Object(mut object) => {
+                let Some(Owned::String(value)) = object.remove("@value").map(into_owned) else {
                     self.unsupported(pointer);
                     return Ok(None);
                 };
-                let language = match object.remove("@language") {
-                    Some(Value::String(language)) => Some(language),
+                let language = match object.remove("@language").map(into_owned) {
+                    Some(Owned::String(language)) => Some(language),
                     Some(_) => {
                         self.unsupported(&json_pointer(pointer, "@language"));
                         return Ok(None);
@@ -1689,8 +1744,8 @@ impl RoDecoder<'_> {
                         }
                     }
                 };
-                let explicit_datatype = match object.remove("@type") {
-                    Some(Value::String(datatype)) => Some(datatype),
+                let explicit_datatype = match object.remove("@type").map(into_owned) {
+                    Some(Owned::String(datatype)) => Some(datatype),
                     Some(_) => {
                         self.unsupported(&json_pointer(pointer, "@type"));
                         return Ok(None);
@@ -1726,7 +1781,7 @@ impl RoDecoder<'_> {
 
     fn take_values(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         role: RoCrateRole,
         parent: &str,
     ) -> Result<Vec<ResearchValue>, ProjectionError> {
@@ -1764,7 +1819,7 @@ impl RoDecoder<'_> {
 
     fn take_single_native_ref(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         role: RoCrateRole,
         parent: &str,
         require_known: bool,
@@ -1781,7 +1836,7 @@ impl RoDecoder<'_> {
 
     fn take_entity_refs(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         role: RoCrateRole,
         parent: &str,
     ) -> Result<Vec<String>, ProjectionError> {
@@ -1793,7 +1848,7 @@ impl RoDecoder<'_> {
 
     fn take_native_refs(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         role: RoCrateRole,
         parent: &str,
         require_known: bool,
@@ -1868,7 +1923,7 @@ impl RoDecoder<'_> {
 
     fn take_paths(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         parent: &str,
     ) -> Result<Vec<String>, ProjectionError> {
         let term = self.config.vocabulary().term(RoCrateRole::Path).to_owned();
@@ -1879,7 +1934,7 @@ impl RoDecoder<'_> {
             .enumerate()
         {
             let pointer = item_pointer(parent, &term, index);
-            let Value::String(path) = value else {
+            let Owned::String(path) = into_owned(value) else {
                 self.unsupported(&pointer);
                 continue;
             };
@@ -1889,7 +1944,7 @@ impl RoDecoder<'_> {
         Ok(paths)
     }
 
-    fn take_byte_size(&mut self, object: &mut Map<String, Value>, parent: &str) -> Option<u64> {
+    fn take_byte_size(&mut self, object: &mut Object, parent: &str) -> Option<u64> {
         let term = self
             .config
             .vocabulary()
@@ -1905,7 +1960,7 @@ impl RoDecoder<'_> {
 
     fn take_checksums(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         parent: &str,
     ) -> Result<Vec<ResearchChecksum>, ProjectionError> {
         let term = self
@@ -1920,7 +1975,7 @@ impl RoDecoder<'_> {
             .enumerate()
         {
             let pointer = item_pointer(parent, &term, index);
-            let Value::Object(mut checksum) = value else {
+            let Owned::Object(mut checksum) = into_owned(value) else {
                 self.unsupported(&pointer);
                 continue;
             };
@@ -1960,18 +2015,14 @@ impl RoDecoder<'_> {
         Ok(checksums)
     }
 
-    fn take_type(
-        &mut self,
-        object: &mut Map<String, Value>,
-        parent: &str,
-    ) -> Result<String, ProjectionError> {
+    fn take_type(&mut self, object: &mut Object, parent: &str) -> Result<String, ProjectionError> {
         let value = object.remove("@type").ok_or_else(|| {
             ProjectionError::integrity("RO-Crate graph entity is missing @type")
                 .at_path(RO_CRATE_ARTIFACT)
         })?;
-        match value {
-            Value::String(value) => Ok(value),
-            Value::Array(mut values) => {
+        match into_owned(value) {
+            Owned::String(value) => Ok(value),
+            Owned::Array(mut values) => {
                 if values.len() > 1 {
                     self.loss(LOSS_RESEARCH_ORDER_DROPPED, &json_pointer(parent, "@type"));
                 }
@@ -1996,7 +2047,7 @@ impl RoDecoder<'_> {
 
     fn require_type(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         parent: &str,
         expected: &str,
     ) -> Result<(), ProjectionError> {
@@ -2010,7 +2061,7 @@ impl RoDecoder<'_> {
         Ok(())
     }
 
-    fn record_unknowns(&mut self, object: &Map<String, Value>, parent: &str) {
+    fn record_unknowns(&mut self, object: &Object, parent: &str) {
         for member in object.keys() {
             self.loss(
                 LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
@@ -2134,16 +2185,19 @@ mod tests {
         let input = String::from_utf8(INPUT.to_vec())
             .expect("fixture UTF-8")
             .replace("files/train.csv", "data/train.csv");
-        let mut value: Value = serde_json::from_str(&input).expect("fixture JSON");
+        let mut value = purrdf_lex::json::read(&input).expect("fixture JSON");
         let graph = value["@graph"].as_array_mut().expect("graph");
         for node in graph {
             if node["@id"] == "data/train.csv" {
                 node["contentSize"] = Value::Number(3_u64.into());
             }
         }
-        read_ro_crate(&package(serde_json::to_vec(&value).expect("JSON")), &config)
-            .expect("attached source")
-            .dataset
+        read_ro_crate(
+            &package(purrdf_lex::json::write_compact(&value).into_bytes()),
+            &config,
+        )
+        .expect("attached source")
+        .dataset
     }
 
     fn test_term(role: RoCrateRole) -> &'static str {
@@ -2233,7 +2287,8 @@ mod tests {
             "actual golden bytes: {}",
             String::from_utf8_lossy(actual)
         );
-        let value: Value = serde_json::from_slice(actual).expect("canonical JSON");
+        let value = purrdf_lex::json::read_slice(actual, purrdf_lex::json::Limits::DEFAULT)
+            .expect("canonical JSON");
         let ids: Vec<&str> = value["@graph"]
             .as_array()
             .expect("graph")
@@ -2284,14 +2339,20 @@ mod tests {
     #[test]
     fn reader_rejects_duplicate_entities_dangling_refs_and_descriptor_drift() {
         let config = config();
-        let mut value: Value = serde_json::from_slice(INPUT).expect("fixture JSON");
+        let mut value = purrdf_lex::json::read_slice(INPUT, purrdf_lex::json::Limits::DEFAULT)
+            .expect("fixture JSON");
         let graph = value["@graph"].as_array_mut().expect("graph");
         graph[0]["@id"] = Value::String("files/train.csv".to_owned());
         assert!(
-            read_ro_crate(&package(serde_json::to_vec(&value).expect("JSON")), &config).is_err()
+            read_ro_crate(
+                &package(purrdf_lex::json::write_compact(&value).into_bytes()),
+                &config
+            )
+            .is_err()
         );
 
-        let mut value: Value = serde_json::from_slice(INPUT).expect("fixture JSON");
+        let mut value = purrdf_lex::json::read_slice(INPUT, purrdf_lex::json::Limits::DEFAULT)
+            .expect("fixture JSON");
         let root = value["@graph"]
             .as_array_mut()
             .expect("graph")
@@ -2300,7 +2361,11 @@ mod tests {
             .expect("root");
         root["hasPart"] = id_object("missing.csv");
         assert!(
-            read_ro_crate(&package(serde_json::to_vec(&value).expect("JSON")), &config).is_err()
+            read_ro_crate(
+                &package(purrdf_lex::json::write_compact(&value).into_bytes()),
+                &config
+            )
+            .is_err()
         );
 
         let input = String::from_utf8(INPUT.to_vec()).expect("UTF-8 fixture");

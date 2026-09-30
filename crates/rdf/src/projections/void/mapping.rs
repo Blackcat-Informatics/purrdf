@@ -705,7 +705,9 @@ fn iri(term: &ProjectionTerm) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use purrdf_core::{PackBuilder, PackView, datasets_isomorphic};
-    use serde_json::Value;
+    use purrdf_lex::json::Value;
+
+    use super::super::super::json_codec::{FromJson, from_slice};
 
     use super::*;
     use crate::native_codecs::{NativeRdfFormat, parse_dataset};
@@ -721,9 +723,9 @@ mod tests {
     }
 
     fn config_for(format: NativeRdfFormat) -> VoidConfig {
-        let mut value: Value = serde_json::from_slice(CONFIG).expect("VoID fixture JSON");
+        let mut value: Value = from_slice(CONFIG).expect("VoID fixture JSON");
         value["config"]["format"] = Value::String(format.id().to_owned());
-        serde_json::from_value(value["config"].clone()).expect("VoID config")
+        VoidConfig::from_json(&value["config"]).expect("VoID config")
     }
 
     fn count_value(dataset: &RdfDataset, predicate: &str) -> u64 {
@@ -881,30 +883,28 @@ mod tests {
 
     #[test]
     fn void_config_and_source_ambiguity_fail_closed() {
-        let mut duplicate: Value = serde_json::from_slice(CONFIG).expect("fixture JSON");
+        let mut duplicate: Value = from_slice(CONFIG).expect("fixture JSON");
         let repeated = duplicate["config"]["local_datasets"][0].clone();
         duplicate["config"]["external_datasets"]
             .as_array_mut()
             .expect("external array")
             .push(repeated);
-        assert!(serde_json::from_value::<VoidConfig>(duplicate["config"].clone()).is_err());
+        assert!(VoidConfig::from_json(&duplicate["config"]).is_err());
 
-        let mut overlapping_graphs: Value = serde_json::from_slice(CONFIG).expect("fixture JSON");
+        let mut overlapping_graphs: Value = from_slice(CONFIG).expect("fixture JSON");
         overlapping_graphs["config"]["metadata_graph"] =
             overlapping_graphs["config"]["alignment_graph"].clone();
-        assert!(
-            serde_json::from_value::<VoidConfig>(overlapping_graphs["config"].clone()).is_err()
-        );
+        assert!(VoidConfig::from_json(&overlapping_graphs["config"]).is_err());
 
-        let mut tiny: Value = serde_json::from_slice(CONFIG).expect("fixture JSON");
+        let mut tiny: Value = from_slice(CONFIG).expect("fixture JSON");
         tiny["config"]["execution_limits"]["max_output_records"] = Value::from(1);
-        let tiny: VoidConfig = serde_json::from_value(tiny["config"].clone()).expect("tiny config");
+        let tiny: VoidConfig = VoidConfig::from_json(&tiny["config"]).expect("tiny config");
         assert!(project_void(source().as_ref(), &tiny).is_err());
 
-        let mut tiny_input: Value = serde_json::from_slice(CONFIG).expect("fixture JSON");
+        let mut tiny_input: Value = from_slice(CONFIG).expect("fixture JSON");
         tiny_input["config"]["execution_limits"]["max_input_records"] = Value::from(1);
         let tiny_input: VoidConfig =
-            serde_json::from_value(tiny_input["config"].clone()).expect("tiny input config");
+            VoidConfig::from_json(&tiny_input["config"]).expect("tiny input config");
         let input_error =
             project_void(source().as_ref(), &tiny_input).expect_err("input bound must fail");
         assert_eq!(input_error.kind(), ProjectionErrorKind::ResourceLimit);

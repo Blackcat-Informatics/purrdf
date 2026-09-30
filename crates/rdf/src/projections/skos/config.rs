@@ -3,13 +3,13 @@
 
 use std::collections::BTreeSet;
 
-use serde::{Deserialize, Deserializer, Serialize};
+use purrdf_lex::json::{Object, Value};
 
+use super::super::json_codec::{Fields, FromJson, JsonError, ToJson};
 use super::super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
 
 /// Caller-owned RDF type and SKOS class roles.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkosClassRoles {
     rdf_type: String,
     concept: String,
@@ -57,8 +57,7 @@ impl SkosClassRoles {
 }
 
 /// Caller-owned SKOS lexical-label and notation roles.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkosLabelRoles {
     pref_label: String,
     alt_label: String,
@@ -115,8 +114,7 @@ impl SkosLabelRoles {
 }
 
 /// Caller-owned SKOS documentation-property roles.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkosDocumentationRoles {
     note: String,
     change_note: String,
@@ -198,8 +196,7 @@ impl SkosDocumentationRoles {
 }
 
 /// Caller-owned SKOS hierarchy, mapping, membership, and top-concept roles.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkosRelationRoles {
     broader: String,
     narrower: String,
@@ -315,8 +312,7 @@ impl SkosRelationRoles {
 macro_rules! role_set {
     ($name:ident, $description:literal) => {
         #[doc = $description]
-        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-        #[serde(deny_unknown_fields)]
+        #[derive(Debug, Clone, PartialEq, Eq)]
         pub struct $name {
             classes: SkosClassRoles,
             labels: SkosLabelRoles,
@@ -383,6 +379,33 @@ macro_rules! role_set {
                     .collect()
             }
         }
+
+        impl FromJson for $name {
+            /// The four role groups; [`SkosConfig`] cross-checks them.
+            fn from_json(value: &Value) -> Result<Self, JsonError> {
+                let mut fields = Fields::new(value, concat!("struct ", stringify!($name)))?;
+                let roles = Self {
+                    classes: fields.required("classes")?,
+                    labels: fields.required("labels")?,
+                    documentation: fields.required("documentation")?,
+                    relations: fields.required("relations")?,
+                };
+                fields.deny_unknown()?;
+                Ok(roles)
+            }
+        }
+
+        impl ToJson for $name {
+            fn to_json(&self) -> Value {
+                Value::Object(
+                    Object::new()
+                        .with("classes", self.classes.to_json())
+                        .with("labels", self.labels.to_json())
+                        .with("documentation", self.documentation.to_json())
+                        .with("relations", self.relations.to_json()),
+                )
+            }
+        }
     };
 }
 
@@ -396,8 +419,7 @@ role_set!(
 );
 
 /// Source graph selection for one SKOS concept-scheme view.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "mode", rename_all = "kebab-case", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SkosGraphSelection {
     /// Read only default-graph statements.
     DefaultGraph,
@@ -420,7 +442,7 @@ impl SkosGraphSelection {
 }
 
 /// Mandatory identity, vocabulary, graph, and resource policy for RDF→SKOS.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkosConfig {
     source: SkosSourceRoles,
     target: SkosTargetRoles,
@@ -519,42 +541,162 @@ impl SkosConfig {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawSkosConfig {
-    source: SkosSourceRoles,
-    target: SkosTargetRoles,
-    scheme_iri: String,
-    graph_selection: SkosGraphSelection,
-    limits: ProjectionLimits,
-    max_records: usize,
-    #[serde(default)]
-    document_base_iri: Option<String>,
-}
-
-impl<'de> Deserialize<'de> for SkosConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawSkosConfig::deserialize(deserializer)?;
-        Self::new(
-            raw.source,
-            raw.target,
-            raw.scheme_iri,
-            raw.graph_selection,
-            raw.limits,
-            raw.max_records,
-        )
-        .map_err(serde::de::Error::custom)?
-        .with_document_base_iri(raw.document_base_iri)
-        .map_err(serde::de::Error::custom)
+impl FromJson for SkosConfig {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct SkosConfig")?;
+        let source = fields.required("source")?;
+        let target = fields.required("target")?;
+        let scheme_iri: String = fields.required("scheme_iri")?;
+        let graph_selection = fields.required("graph_selection")?;
+        let limits = fields.required("limits")?;
+        let max_records = fields.required("max_records")?;
+        let document_base_iri = fields.optional("document_base_iri")?;
+        fields.deny_unknown()?;
+        Ok(Self::new(
+            source,
+            target,
+            scheme_iri,
+            graph_selection,
+            limits,
+            max_records,
+        )?
+        .with_document_base_iri(document_base_iri)?)
     }
 }
+
+impl ToJson for SkosConfig {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("source", self.source.to_json())
+                .with("target", self.target.to_json())
+                .with("scheme_iri", self.scheme_iri.as_str())
+                .with("graph_selection", self.graph_selection.to_json())
+                .with("limits", self.limits.to_json())
+                .with("max_records", self.max_records)
+                .with("document_base_iri", self.document_base_iri.to_json()),
+        )
+    }
+}
+
+/// The `mode` tags of [`SkosGraphSelection`].
+const GRAPH_SELECTION_MODES: &[&str] = &["default-graph", "named-graph", "union"];
+
+impl FromJson for SkosGraphSelection {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "internally tagged enum SkosGraphSelection")?;
+        let selection = match fields.tag("mode", GRAPH_SELECTION_MODES)? {
+            "default-graph" => Self::DefaultGraph,
+            "named-graph" => Self::NamedGraph {
+                graph_iri: fields.required("graph_iri")?,
+            },
+            _ => Self::Union,
+        };
+        fields.deny_unknown()?;
+        Ok(selection)
+    }
+}
+
+impl ToJson for SkosGraphSelection {
+    fn to_json(&self) -> Value {
+        let object = match self {
+            Self::DefaultGraph => Object::new().with("mode", "default-graph"),
+            Self::NamedGraph { graph_iri } => Object::new()
+                .with("mode", "named-graph")
+                .with("graph_iri", graph_iri.as_str()),
+            Self::Union => Object::new().with("mode", "union"),
+        };
+        Value::Object(object)
+    }
+}
+
+/// A role group: every member a mandatory IRI string, named as the field.
+/// The group's own constructor and [`SkosConfig::new`] validate the IRIs.
+macro_rules! role_group_json {
+    ($name:ident { $($field:ident),+ $(,)? }) => {
+        impl FromJson for $name {
+            fn from_json(value: &Value) -> Result<Self, JsonError> {
+                let mut fields = Fields::new(value, concat!("struct ", stringify!($name)))?;
+                let roles = Self {
+                    $($field: fields.required(stringify!($field))?,)+
+                };
+                fields.deny_unknown()?;
+                Ok(roles)
+            }
+        }
+
+        impl ToJson for $name {
+            fn to_json(&self) -> Value {
+                Value::Object(
+                    Object::new()$(.with(stringify!($field), self.$field.as_str()))+,
+                )
+            }
+        }
+    };
+}
+
+role_group_json!(SkosClassRoles {
+    rdf_type,
+    concept,
+    concept_scheme
+});
+role_group_json!(SkosLabelRoles {
+    pref_label,
+    alt_label,
+    hidden_label,
+    notation,
+});
+role_group_json!(SkosDocumentationRoles {
+    note,
+    change_note,
+    definition,
+    editorial_note,
+    example,
+    history_note,
+    scope_note,
+});
+role_group_json!(SkosRelationRoles {
+    broader,
+    narrower,
+    related,
+    close_match,
+    exact_match,
+    broad_match,
+    narrow_match,
+    related_match,
+    in_scheme,
+    has_top_concept,
+    top_concept_of,
+});
 
 fn validate_named_iris<const N: usize>(iris: [(&str, &str); N]) -> Result<(), ProjectionError> {
     for (name, iri) in iris {
         validate_absolute_iri(iri, &format!("SKOS vocabulary role `{name}`"))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read(text: &str) -> Result<SkosGraphSelection, JsonError> {
+        SkosGraphSelection::from_json(&purrdf_lex::json::read(text).expect("JSON"))
+    }
+
+    /// A field-less graph selection is exactly its tag: a member beside the tag
+    /// is an unknown field, while the bare tag and the named-graph variant's own
+    /// member are read.
+    #[test]
+    fn a_field_less_graph_selection_refuses_an_extra_member() {
+        assert!(read(r#"{"mode":"union","graph_iri":"https://example.org/g"}"#).is_err());
+        assert_eq!(read(r#"{"mode":"union"}"#), Ok(SkosGraphSelection::Union));
+        assert_eq!(
+            read(r#"{"mode":"named-graph","graph_iri":"https://example.org/g"}"#),
+            Ok(SkosGraphSelection::NamedGraph {
+                graph_iri: "https://example.org/g".to_owned()
+            })
+        );
+        assert!(read(r#"{"mode":"named-graph","graph_iri":"x","extra":1}"#).is_err());
+    }
 }

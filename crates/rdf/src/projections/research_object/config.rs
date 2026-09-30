@@ -3,16 +3,16 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Deserializer, Serialize};
+use purrdf_lex::json::{Object, Value};
 
+use super::super::json_codec::{Fields, FromJson, JsonError, ToJson, json_string_enum};
 use super::super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
 
 /// Semantic RDF role understood by the format-neutral research-object pivot.
 ///
 /// The enum names roles, not vocabulary terms. A caller must bind every role to
 /// an absolute IRI in [`ResearchObjectRoles`]; PurRDF supplies no vocabulary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ResearchRole {
     /// `rdf:type`-equivalent predicate.
     RdfType,
@@ -120,6 +120,61 @@ pub enum ResearchRole {
     XsdDateTime,
 }
 
+json_string_enum!(ResearchRole {
+    RdfType => "rdf-type",
+    DatasetClass => "dataset-class",
+    Title => "title",
+    Description => "description",
+    Identifier => "identifier",
+    Version => "version",
+    Issued => "issued",
+    Modified => "modified",
+    LandingPage => "landing-page",
+    Keyword => "keyword",
+    License => "license",
+    Creator => "creator",
+    Publisher => "publisher",
+    HasResource => "has-resource",
+    HasActivity => "has-activity",
+    HasRecordSet => "has-record-set",
+    AgentClass => "agent-class",
+    AgentName => "agent-name",
+    ResourceClass => "resource-class",
+    ResourceName => "resource-name",
+    ResourceDescription => "resource-description",
+    ResourcePath => "resource-path",
+    ResourceUrl => "resource-url",
+    MediaType => "media-type",
+    Format => "format",
+    ByteSize => "byte-size",
+    Checksum => "checksum",
+    ChecksumClass => "checksum-class",
+    ChecksumAlgorithm => "checksum-algorithm",
+    ChecksumValue => "checksum-value",
+    ActivityClass => "activity-class",
+    ActivityName => "activity-name",
+    Instrument => "instrument",
+    Actor => "actor",
+    Object => "object",
+    Result => "result",
+    EndTime => "end-time",
+    Workflow => "workflow",
+    RecordSetClass => "record-set-class",
+    RecordSetName => "record-set-name",
+    RecordSetDescription => "record-set-description",
+    HasField => "has-field",
+    HasRow => "has-row",
+    FieldClass => "field-class",
+    FieldName => "field-name",
+    FieldDataType => "field-data-type",
+    JsonDatatype => "json-datatype",
+    RdfLangString => "rdf-lang-string",
+    RdfDirLangString => "rdf-dir-lang-string",
+    XsdString => "xsd-string",
+    XsdNonNegativeInteger => "xsd-non-negative-integer",
+    XsdDateTime => "xsd-date-time",
+});
+
 /// Every mandatory research-object role, in stable configuration order.
 pub const RESEARCH_ROLES: &[ResearchRole] = &[
     ResearchRole::RdfType,
@@ -178,10 +233,9 @@ pub const RESEARCH_ROLES: &[ResearchRole] = &[
 
 /// Complete caller-owned RDF vocabulary binding for research objects.
 ///
-/// There is deliberately no `Default`. Construction and deserialization reject
+/// There is deliberately no `Default`. Construction and JSON reading reject
 /// a missing role, a relative IRI, or two semantic roles bound to the same IRI.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResearchObjectRoles(BTreeMap<ResearchRole, String>);
 
 impl ResearchObjectRoles {
@@ -229,18 +283,21 @@ impl ResearchObjectRoles {
     }
 }
 
-impl<'de> Deserialize<'de> for ResearchObjectRoles {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = BTreeMap::<ResearchRole, String>::deserialize(deserializer)?;
-        Self::new(raw).map_err(serde::de::Error::custom)
+impl FromJson for ResearchObjectRoles {
+    /// The role map itself, revalidated by [`ResearchObjectRoles::new`].
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        Ok(Self::new(BTreeMap::from_json(value)?)?)
+    }
+}
+
+impl ToJson for ResearchObjectRoles {
+    fn to_json(&self) -> Value {
+        self.0.to_json()
     }
 }
 
 /// Caller-owned data identity policy shared by all research-object profiles.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResearchObjectIdentity {
     dataset_iri: String,
     entity_base_iri: String,
@@ -297,25 +354,28 @@ impl ResearchObjectIdentity {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawResearchObjectIdentity {
-    dataset_iri: String,
-    entity_base_iri: String,
+impl FromJson for ResearchObjectIdentity {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct ResearchObjectIdentity")?;
+        let dataset_iri: String = fields.required("dataset_iri")?;
+        let entity_base_iri: String = fields.required("entity_base_iri")?;
+        fields.deny_unknown()?;
+        Ok(Self::new(dataset_iri, entity_base_iri)?)
+    }
 }
 
-impl<'de> Deserialize<'de> for ResearchObjectIdentity {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawResearchObjectIdentity::deserialize(deserializer)?;
-        Self::new(raw.dataset_iri, raw.entity_base_iri).map_err(serde::de::Error::custom)
+impl ToJson for ResearchObjectIdentity {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("dataset_iri", self.dataset_iri.as_str())
+                .with("entity_base_iri", self.entity_base_iri.as_str()),
+        )
     }
 }
 
 /// Mandatory resource policy for common research-object interpretation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResearchObjectPolicy {
     limits: ProjectionLimits,
     max_records: usize,
@@ -385,36 +445,40 @@ impl ResearchObjectPolicy {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawResearchObjectPolicy {
-    limits: ProjectionLimits,
-    max_records: usize,
-    max_entities: usize,
-    max_values: usize,
-    max_json_depth: usize,
+impl FromJson for ResearchObjectPolicy {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct ResearchObjectPolicy")?;
+        let limits = fields.required("limits")?;
+        let max_records = fields.required("max_records")?;
+        let max_entities = fields.required("max_entities")?;
+        let max_values = fields.required("max_values")?;
+        let max_json_depth = fields.required("max_json_depth")?;
+        fields.deny_unknown()?;
+        Ok(Self::new(
+            limits,
+            max_records,
+            max_entities,
+            max_values,
+            max_json_depth,
+        )?)
+    }
 }
 
-impl<'de> Deserialize<'de> for ResearchObjectPolicy {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawResearchObjectPolicy::deserialize(deserializer)?;
-        Self::new(
-            raw.limits,
-            raw.max_records,
-            raw.max_entities,
-            raw.max_values,
-            raw.max_json_depth,
+impl ToJson for ResearchObjectPolicy {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("limits", self.limits.to_json())
+                .with("max_records", self.max_records)
+                .with("max_entities", self.max_entities)
+                .with("max_values", self.max_values)
+                .with("max_json_depth", self.max_json_depth),
         )
-        .map_err(serde::de::Error::custom)
     }
 }
 
 /// Shared source-vocabulary, identity, and resource policy.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResearchObjectConfig {
     roles: ResearchObjectRoles,
     identity: ResearchObjectIdentity,
@@ -453,6 +517,30 @@ impl ResearchObjectConfig {
     }
 }
 
+impl FromJson for ResearchObjectConfig {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct ResearchObjectConfig")?;
+        let config = Self {
+            roles: fields.required("roles")?,
+            identity: fields.required("identity")?,
+            policy: fields.required("policy")?,
+        };
+        fields.deny_unknown()?;
+        Ok(config)
+    }
+}
+
+impl ToJson for ResearchObjectConfig {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("roles", self.roles.to_json())
+                .with("identity", self.identity.to_json())
+                .with("policy", self.policy.to_json()),
+        )
+    }
+}
+
 fn validate_relative_identifier(value: &str) -> Result<(), ProjectionError> {
     if value.is_empty()
         || value.starts_with('/')
@@ -487,9 +575,10 @@ mod tests {
     #[test]
     fn roles_are_complete_unique_absolute_and_revalidated() {
         let roles = ResearchObjectRoles::new(role_map()).expect("roles");
-        let json = serde_json::to_vec(&roles).expect("serialize");
+        let json = super::super::super::json_codec::to_vec(&roles);
         assert_eq!(
-            serde_json::from_slice::<ResearchObjectRoles>(&json).expect("deserialize"),
+            super::super::super::json_codec::from_slice::<ResearchObjectRoles>(&json)
+                .expect("deserialize"),
             roles
         );
 

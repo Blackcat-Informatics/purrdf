@@ -11,11 +11,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use purrdf_lex::json::{self, Limits, Value};
 use purrdf_rdf::{
     CsvwAction, CsvwConfig, CsvwContext, CsvwInput, CsvwMode, CsvwVocabulary, ProjectionLimits,
     canonicalize, datasets_isomorphic, parse_dataset, read_csvw,
 };
-use serde_json::Value;
 
 const CORPUS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/csvw-w3c");
 const BASE: &str = "http://www.w3.org/2013/csvw/tests/";
@@ -25,8 +25,9 @@ const XFAIL: &[(&str, &str)] = &[];
 
 #[test]
 fn upstream_csvw_rdf_manifest() {
-    let manifest: Value = serde_json::from_slice(
+    let manifest = json::read_slice(
         &fs::read(Path::new(CORPUS).join("manifest-rdf.jsonld")).expect("manifest"),
+        Limits::DEFAULT,
     )
     .expect("manifest JSON");
     let mut failures = Vec::new();
@@ -66,8 +67,9 @@ fn upstream_csvw_rdf_manifest() {
 
 #[test]
 fn upstream_csvw_validation_manifest() {
-    let manifest: Value = serde_json::from_slice(
+    let manifest = json::read_slice(
         &fs::read(Path::new(CORPUS).join("manifest-validation.jsonld")).expect("manifest"),
+        Limits::DEFAULT,
     )
     .expect("manifest JSON");
     let mut failures = Vec::new();
@@ -415,7 +417,7 @@ fn metadata_describes(path: &str, action_iri: &str) -> bool {
     let Ok(bytes) = fs::read(Path::new(CORPUS).join(path)) else {
         return false;
     };
-    let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+    let Ok(value) = json::read_slice(&bytes, Limits::DEFAULT) else {
         return false;
     };
     let base = resolve(BASE, path).unwrap_or_else(|_| BASE.to_owned());

@@ -7,7 +7,6 @@ use std::collections::BTreeSet;
 use std::io;
 
 use purrdf_core::LossLedger;
-use serde::{Deserialize, Serialize};
 
 use super::super::package::validate_artifact_path;
 use super::super::{ProjectionArtifactSink, ProjectionError, ProjectionLimits};
@@ -19,8 +18,7 @@ const PROGRESS_BYTE_STRIDE: usize = 64 * 1_024;
 const SINK_CHUNK_BYTES: usize = 16 * 1_024;
 
 /// Stable phase for one RDF-to-LPG mapping/package operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LpgProgressPhase {
     /// Reading and selecting RDF 1.2 records.
     Scanning,
@@ -48,8 +46,7 @@ impl LpgProgressPhase {
 }
 
 /// Exact counters from one RDF-to-LPG mapping.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LpgProjectionReport {
     /// Logical named-graph declarations/statements/reifiers/annotations scanned.
     pub input_records: usize,
@@ -100,8 +97,7 @@ pub(super) fn graph_report(graph: &LpgGraph) -> Result<LpgProjectionReport, Proj
 }
 
 /// Monotonic progress snapshot for mapping and artifact emission.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LpgProgress {
     /// Current operation phase.
     pub phase: LpgProgressPhase,
