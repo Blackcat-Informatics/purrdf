@@ -401,7 +401,7 @@ fn budget_exhaustion_mid_traversal_still_reports_the_work_done() {
 #[test]
 fn a_rejected_payload_is_a_construction_failure_not_a_search() {
     let fixture = purremb::Fixture::new(16, 4, Params::new(4, 8, 16, 8).expect("valid"));
-    let error = HnswSpace::from_artifact(
+    let error = HnswSpace::<Exact>::from_artifact(
         &fixture.tampered_payload(),
         fixture.target_set,
         fixture.vector_space,

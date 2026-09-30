@@ -51,7 +51,7 @@ use purrdf_sparql_eval::{
 /// unrelated to D0.
 fn case_aggregates(case: &SparqlTestCase) -> Option<AggregateRegistry> {
     case.aggregate_namespace.as_ref().map(|namespace| {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register_statistical_aggregates(namespace);
         registry
     })

@@ -428,7 +428,7 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
     // Evaluate `right` once per left row with μ substituted in; accumulate the
     // per-row results and the union of their schemas (stable across rows for the
     // SERVICE ?var use, but computed generally).
-    let mut right_schema = VarSchema::new();
+    let mut right_schema = VarSchema::default();
     // Each left row μ paired with the per-row `right` result it drives.
     type LateralPerRow<I> = Vec<(Solution<I>, SolutionSeq<I>)>;
     let mut per_row: LateralPerRow<D::Id> = Vec::with_capacity(l.rows.len());
@@ -641,7 +641,7 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
             .map(|branch| core::mem::take(&mut branch.witness)),
     );
 
-    let mut out = VarSchema::new();
+    let mut out = VarSchema::default();
     for branch in &branches {
         for v in branch.schema.vars() {
             out.push(v.clone());
@@ -704,7 +704,7 @@ fn concat_union<D: DatasetView + Sync>(
     if arms.len() == 1 {
         return arms.remove(0);
     }
-    let mut out = VarSchema::new();
+    let mut out = VarSchema::default();
     for arm in &arms {
         for v in arm.schema.vars() {
             out.push(v.clone());
@@ -1690,7 +1690,7 @@ mod tests {
     }
 
     fn render(ds: &RdfDataset, seq: &SolutionSeq, vars: &[&str]) -> Vec<Vec<Option<String>>> {
-        let scratch = crate::scratch::ScratchInterner::new();
+        let scratch = crate::scratch::ScratchInterner::default();
         let cols: Vec<usize> = vars
             .iter()
             .map(|v| seq.schema.index_of(&Variable::new(*v)).expect("var"))
@@ -2054,7 +2054,7 @@ mod tests {
     /// Render `(?s, ?a)` rows as `(iri, lexical)` string pairs, sorted for a
     /// multiset comparison.
     fn s_a_rows(ds: &RdfDataset, seq: &SolutionSeq) -> Vec<(String, String)> {
-        let scratch = crate::scratch::ScratchInterner::new();
+        let scratch = crate::scratch::ScratchInterner::default();
         let s_col = seq.schema.index_of(&Variable::new("s")).expect("s");
         let a_col = seq.schema.index_of(&Variable::new("a")).expect("a");
         let render_cell = |t: SolutionTerm| match scratch.value_of(ds, t) {
@@ -2496,7 +2496,7 @@ mod tests {
     type UnionObservation = (bool, Option<String>, Vec<String>, Vec<Vec<Option<String>>>);
 
     fn observe(ds: &RdfDataset, evaluated: &Evaluated<TermId>) -> UnionObservation {
-        let scratch = crate::scratch::ScratchInterner::new();
+        let scratch = crate::scratch::ScratchInterner::default();
         let seq = evaluated.rows();
         let truncated = match evaluated {
             Evaluated::Complete(_) => None,

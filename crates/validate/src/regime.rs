@@ -642,7 +642,7 @@ pub fn regime_plan(regime: Regime, rules: &RuleSet) -> Materialization<'_> {
 pub fn regime_rule_set(regime: Regime, spelling: &str, program: &str) -> Result<RuleSet, String> {
     if regime != Regime::Rif {
         return if program.trim().is_empty() {
-            Ok(RuleSet::new())
+            Ok(RuleSet::default())
         } else {
             Err(format!(
                 "entailment regime \"{spelling}\" takes no rule document, and one was \
@@ -3517,7 +3517,7 @@ pub type ImportList<'a> = [(&'a str, &'a str)];
 /// never applies; or one ontology IRI declared twice, where keeping either document would be a
 /// choice this boundary made on the caller's behalf.
 fn build_import_map(imports: &ImportList<'_>) -> Result<ImportMap, String> {
-    let mut map = ImportMap::new();
+    let mut map = ImportMap::default();
     for (iri, document) in imports {
         if iri.is_empty() {
             return Err(

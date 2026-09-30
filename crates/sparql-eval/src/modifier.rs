@@ -3507,7 +3507,7 @@ mod tests {
     }
 
     fn ints(ds: &RdfDataset, seq: &SolutionSeq, var: &str) -> Vec<String> {
-        let scratch = crate::scratch::ScratchInterner::new();
+        let scratch = crate::scratch::ScratchInterner::default();
         let col = seq.schema.index_of(&Variable::new(var)).unwrap();
         seq.rows
             .iter()
@@ -3661,7 +3661,7 @@ mod tests {
         assert_eq!(seq.len(), 2);
         let ncol = seq.schema.index_of(&Variable::new("n")).unwrap();
         let ccol = seq.schema.index_of(&Variable::new("c")).unwrap();
-        let scratch = crate::scratch::ScratchInterner::new();
+        let scratch = crate::scratch::ScratchInterner::default();
         let mut pairs: Vec<(String, String)> = seq
             .rows
             .iter()
@@ -3713,7 +3713,7 @@ mod tests {
         assert_eq!(seq.len(), 2);
         let tcol = seq.schema.index_of(&Variable::new("t")).unwrap();
         let ccol = seq.schema.index_of(&Variable::new("c")).unwrap();
-        let scratch = crate::scratch::ScratchInterner::new();
+        let scratch = crate::scratch::ScratchInterner::default();
         let mut pairs: Vec<(String, String)> = seq
             .rows
             .iter()
@@ -4092,7 +4092,7 @@ mod tests {
         assert_eq!(seq.len(), 2);
         let who_col = seq.schema.index_of(&Variable::new("who")).unwrap();
         let total_col = seq.schema.index_of(&Variable::new("total")).unwrap();
-        let scratch = crate::scratch::ScratchInterner::new();
+        let scratch = crate::scratch::ScratchInterner::default();
         let mut pairs: Vec<(String, String)> = seq
             .rows
             .iter()
@@ -5817,7 +5817,7 @@ mod tests {
         }
         let ds = b.freeze().expect("freeze");
 
-        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
         registry.register(LIST_COLLECTOR_IRI, Arc::new(ListCollectorAggregate));
 
         let inner = GraphPattern::Bgp {
@@ -5884,7 +5884,7 @@ mod tests {
         }
         let ds = b.freeze().expect("freeze");
 
-        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
         registry.register_statistical_aggregates(NS);
 
         let inner = GraphPattern::Bgp {
@@ -6004,7 +6004,7 @@ mod tests {
         const NS: &str = "http://example.org/agg/";
 
         let ds = stat_agg_integer_sequence_dataset(ROWS);
-        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
         registry.register_statistical_aggregates(NS);
 
         let (sequential, forced_parallel) =
@@ -6059,7 +6059,7 @@ mod tests {
         const NS: &str = "http://example.org/agg/";
 
         let ds = stat_agg_dt_duration_sequence_dataset(ROWS);
-        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
         registry.register_statistical_aggregates(NS);
 
         let (sequential, forced_parallel) =
@@ -6089,7 +6089,7 @@ mod tests {
         const NS: &str = "http://example.org/agg/";
 
         let ds = stat_agg_integer_sequence_dataset(ROWS);
-        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
         registry.register_statistical_aggregates(NS);
 
         let (sequential, forced_parallel) =
@@ -6132,7 +6132,7 @@ mod tests {
         }
         let ds = b.freeze().expect("freeze");
 
-        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
         registry.register_statistical_aggregates(NS);
 
         let (sequential, forced_parallel) =
@@ -6181,7 +6181,7 @@ mod tests {
         }
         let ds = b.freeze().expect("freeze");
 
-        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
         registry.register_statistical_aggregates(NS);
 
         let (var_sequential, var_forced_parallel) =
@@ -6221,7 +6221,7 @@ mod tests {
         const NS: &str = "http://example.org/agg/";
 
         let ds = stat_agg_integer_sequence_dataset(ROWS);
-        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
         registry.register_statistical_aggregates(NS);
 
         let inner = GraphPattern::Bgp {

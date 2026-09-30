@@ -79,8 +79,9 @@ inline-sequentially on wasm, so that build is slower but not different.
 ## The reassociated index
 
 `HnswIndex` is generic over its distance arithmetic, `HnswIndex<A = Exact>`, and
-everything above describes the exact default. `HnswIndex::build_reassociated`
-(or `purrdf_hnsw::build_reassociated`) builds the same algorithm as a separate
+everything above describes the exact default. Every constructor is generic over
+the sealed `IndexArithmetic` family: `purrdf_hnsw::build::<Reassociated>` (or its
+named spelling `HnswIndex::build_reassociated`) builds the same algorithm as a separate
 type, `HnswIndex<Reassociated>`, whose distances run through
 `purrdf_core::distance::Reassociated`: sums may be reassociated and contracted to
 fused multiply-add along the dispatch path the build resolves, the widest this
@@ -93,7 +94,7 @@ process runs.
   index's and between dispatch paths or builds, so near-tied candidates may link
   or rank differently. The image header records the path's code, the guard names
   the `hnsw-reassociated-v2` implementation with evidence that names the path,
-  and `decode_reassociated`, `verify_rebuild` and every search run the recorded
+  and `HnswIndex::<Reassociated>::decode`, `verify_rebuild` and every search run the recorded
   path, whichever path is widest here: an image built on `x86_64`'s SSE2 or
   AVX2+FMA path runs on that path on an AVX-512F processor. Only a process that
   cannot run the recorded path (another target's compilation, or a processor

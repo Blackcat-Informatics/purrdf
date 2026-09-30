@@ -678,7 +678,7 @@ pub fn query_eval_engine() -> NativeSparqlEngine {
 /// Returns a message if the declarations do not read as one environment.
 pub fn query_eval_env(case: &SparqlTestCase) -> Result<purrdf_sparql_eval::ExtensionEnv, String> {
     let aggregates = case.aggregate_namespace.as_ref().map(|namespace| {
-        let mut registry = purrdf_sparql_eval::AggregateRegistry::new();
+        let mut registry = purrdf_sparql_eval::AggregateRegistry::default();
         registry.register_statistical_aggregates(namespace);
         registry
     });
@@ -826,7 +826,7 @@ fn build_rif_ruleset(
         ));
     }
 
-    let mut ruleset = purrdf_entail::RuleSet::new();
+    let mut ruleset = purrdf_entail::RuleSet::default();
     for name in basenames {
         let rif_path = dir.join(&name);
         ruleset.extend(load_rif_ruleset(&rif_path)?);

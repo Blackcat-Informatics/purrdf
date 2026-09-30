@@ -103,20 +103,26 @@ pub struct LossEntry {
 ///
 /// Entries are kept sorted by `code` so every render is byte-identical regardless
 /// of construction order. Codes are unique within a ledger.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LossLedger {
     entries: Vec<LossEntry>,
 }
 
-purrdf_lex::constructors! {
-    impl LossLedger {
-        /// An empty **runtime** ledger, ready to accumulate losses via
-        /// [`Self::record`] as a conversion proceeds.
-        pub fn new() -> Self::default();
-    }
-}
+purrdf_hash::default_from_new!(LossLedger);
 
 impl LossLedger {
+    /// An empty **runtime** ledger, ready to accumulate losses via
+    /// [`Self::record`] as a conversion proceeds.
+    ///
+    /// `const`, so an empty ledger can initialise a `const` or `static` and sit in a
+    /// struct literal evaluated at compile time; [`Default`] delegates here.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
     /// Build a **contract** ledger from static entries, sorting by `code` for
     /// determinism.
     ///

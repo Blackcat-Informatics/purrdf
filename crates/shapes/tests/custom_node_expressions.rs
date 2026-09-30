@@ -88,7 +88,7 @@ fn expression_of(shapes_ttl: &str) -> NodeExpr {
 fn outputs(data_ttl: &str, shapes_ttl: &str, focus: &str) -> Vec<String> {
     let expr = expression_of(shapes_ttl);
     let store = store_of(data_ttl);
-    let mut guard = RecursionGuard::new();
+    let mut guard = RecursionGuard::default();
     eval_node_expr(&store, &ex_term(focus), &expr, &mut guard)
         .expect("node expression evaluates")
         .iter()
@@ -100,7 +100,7 @@ fn outputs(data_ttl: &str, shapes_ttl: &str, focus: &str) -> Vec<String> {
 fn eval_error(data_ttl: &str, shapes_ttl: &str, focus: &str) -> String {
     let expr = expression_of(shapes_ttl);
     let store = store_of(data_ttl);
-    let mut guard = RecursionGuard::new();
+    let mut guard = RecursionGuard::default();
     eval_node_expr(&store, &ex_term(focus), &expr, &mut guard)
         .expect_err("the expression must be refused")
 }

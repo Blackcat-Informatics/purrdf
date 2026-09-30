@@ -1408,12 +1408,12 @@ the fixed-point BM25F text relation, declares `RankArithmetic::FloatFree` there
 instead; the field has no absent state, so every producer states which it is.
 
 The reassociated HNSW relation, `HnswRelation<Reassociated>` over an index built by
-`HnswIndex::build_reassociated`, says the same thing on both of its axes. Its
+`purrdf_hnsw::build::<Reassociated>`, says the same thing on both of its axes. Its
 completeness axis is `Lossy` as every HNSW relation's is, and the evidence occupying
 it is the reassociated profile's own revision: the exact profile's sentence, then the
 arithmetic's evidence for the dispatch path the index was built on, then the sentence
 that its canonical image is reproducible only by the compiled build that made it,
-running that path (`profile::loss_evidence_reassociated`), byte for byte. Its order axis composes the
+running that path (`profile::loss_evidence_for::<Reassociated>`), byte for byte. Its order axis composes the
 derived value with `Perturbed` carrying the arithmetic's own evidence for that path,
 the words the reassociated kNN relation carries, and then with the host's
 `OrderFidelity`, through the same `composed_order_fidelity`. It declares

@@ -129,7 +129,7 @@ fn vocab() -> GeoVocab {
 
 /// The `geof:` family, registered against the host's vocabulary.
 fn registry() -> UserFunctionRegistry {
-    let mut registry = UserFunctionRegistry::new();
+    let mut registry = UserFunctionRegistry::default();
     functions::register(&mut registry, &vocab());
     registry
 }

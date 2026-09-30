@@ -66,7 +66,7 @@ fn outputs(data_ttl: &str, shapes_ttl: &str, focus: &str) -> Vec<String> {
     let focus_term = Term::NamedNode(purrdf_shapes::term::NamedNode::new_unchecked(format!(
         "http://example.org/ns#{focus}"
     )));
-    let mut guard = RecursionGuard::new();
+    let mut guard = RecursionGuard::default();
     eval_node_expr(&store, &focus_term, &expr, &mut guard)
         .expect("node expression evaluates")
         .iter()
@@ -95,7 +95,7 @@ fn triple_term_expression_yields_a_triple_term() {
     let focus = Term::NamedNode(purrdf_shapes::term::NamedNode::new_unchecked(
         "http://example.org/ns#a",
     ));
-    let mut guard = RecursionGuard::new();
+    let mut guard = RecursionGuard::default();
     let out = eval_node_expr(&store, &focus, &expr, &mut guard).expect("triple term evaluates");
     assert_eq!(
         out.len(),
@@ -129,7 +129,7 @@ fn a_triple_term_flows_through_the_expression_language_as_a_value() {
     let focus = Term::NamedNode(purrdf_shapes::term::NamedNode::new_unchecked(
         "http://example.org/ns#a",
     ));
-    let mut guard = RecursionGuard::new();
+    let mut guard = RecursionGuard::default();
     let out = eval_node_expr(&store, &focus, &expr, &mut guard).expect("triple-term value flows");
     assert_eq!(
         out.len(),
@@ -283,7 +283,7 @@ fn path_values_multi_valued_focus_is_a_failure() {
     let focus = Term::NamedNode(purrdf_shapes::term::NamedNode::new_unchecked(
         "http://example.org/ns#a",
     ));
-    let mut guard = RecursionGuard::new();
+    let mut guard = RecursionGuard::default();
     let err = eval_node_expr(&store, &focus, &expr, &mut guard)
         .expect_err("a multi-valued shnex:focusNode is an evaluation failure");
     assert!(err.contains("shnex:focusNode"), "got: {err}");
@@ -1214,7 +1214,7 @@ fn a_computed_shape_argument_that_names_no_shape_is_an_error() {
     let focus = Term::NamedNode(purrdf_shapes::term::NamedNode::new_unchecked(
         "http://example.org/ns#a",
     ));
-    let mut guard = RecursionGuard::new();
+    let mut guard = RecursionGuard::default();
     let err = eval_node_expr(&store, &focus, &expr, &mut guard)
         .expect_err("an unresolvable computed shape must be an error, never a vacuous true");
     assert!(
@@ -1258,7 +1258,7 @@ fn a_computed_shape_argument_must_produce_exactly_one_iri() {
         let focus = Term::NamedNode(purrdf_shapes::term::NamedNode::new_unchecked(
             "http://example.org/ns#a",
         ));
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let err = eval_node_expr(&store, &focus, &expr, &mut guard)
             .expect_err("a shape argument that is not exactly one IRI must be an error");
         assert!(
@@ -1282,7 +1282,7 @@ fn try_outputs(data_ttl: &str, shapes_ttl: &str, focus: &str) -> Result<Vec<Stri
     let focus_term = Term::NamedNode(purrdf_shapes::term::NamedNode::new_unchecked(format!(
         "http://example.org/ns#{focus}"
     )));
-    let mut guard = RecursionGuard::new();
+    let mut guard = RecursionGuard::default();
     eval_node_expr(&store, &focus_term, &expr, &mut guard)
         .map(|out| out.iter().map(ToString::to_string).collect())
 }

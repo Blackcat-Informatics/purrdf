@@ -1225,6 +1225,7 @@ impl UpdateOutcome {
 /// after the JavaScript handle that started the job has been freed, and so the
 /// synchronous methods can run on it while a job is suspended.
 #[wasm_bindgen]
+#[derive(Default)]
 pub struct QueryEngine {
     inner: Rc<NativeSparqlEngine>,
 }
@@ -1240,9 +1241,7 @@ impl QueryEngine {
     /// Create a reusable offline SPARQL engine.
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
-        Self {
-            inner: Rc::new(NativeSparqlEngine::new()),
-        }
+        Self::default()
     }
 
     /// Run any SPARQL query and return a typed raw wasm result wrapper.
@@ -1687,12 +1686,6 @@ impl QueryEngine {
     }
 }
 
-impl Default for QueryEngine {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl QueryEngine {
     /// The shared engine, for an asynchronous job to hold for its own lifetime.
     pub(crate) const fn engine(&self) -> &Rc<NativeSparqlEngine> {
@@ -1851,7 +1844,7 @@ pub(crate) fn aggregate_env_message(
 
 pub(crate) fn build_aggregates(namespace: Option<String>) -> Option<AggregateRegistry> {
     let namespace = namespace?;
-    let mut registry = AggregateRegistry::new();
+    let mut registry = AggregateRegistry::default();
     registry.register_statistical_aggregates(&namespace);
     Some(registry)
 }

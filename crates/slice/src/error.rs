@@ -58,8 +58,6 @@ impl std::error::Error for SliceError {
     }
 }
 
-impl From<std::io::Error> for SliceError {
-    fn from(e: std::io::Error) -> Self {
-        Self::Io(e)
-    }
-}
+purrdf_lex::variant_from!(SliceError {
+    Io(std::io::Error),
+});

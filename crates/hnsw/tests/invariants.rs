@@ -10,6 +10,7 @@
 //! graphs on every target.
 
 use purrdf_core::DistanceMetric;
+use purrdf_core::distance::Exact;
 #[path = "support/corpus.rs"]
 mod corpus;
 
@@ -143,7 +144,7 @@ fn degree_bounds_hold_at_every_layer() {
 #[test]
 fn the_entry_point_is_the_minimum_row_at_the_maximum_level() {
     for params in parameter_sets() {
-        let index = build(
+        let index = build::<Exact>(
             fixture(128, 6, 0xE11E),
             &DistanceMetric::SquaredEuclidean,
             params,
@@ -168,7 +169,7 @@ fn the_entry_point_is_the_minimum_row_at_the_maximum_level() {
 #[test]
 fn levels_are_exactly_the_fixed_formula() {
     for params in parameter_sets() {
-        let index = build(
+        let index = build::<Exact>(
             fixture(256, 4, 0xF00D),
             &DistanceMetric::SquaredEuclidean,
             params,
@@ -190,9 +191,9 @@ fn the_canonical_image_round_trips_through_decode_byte_for_byte() {
     for params in parameter_sets() {
         for metric in kernels() {
             let matrix = fixture(64, 8, 0x5EED);
-            let index = build(matrix.clone(), &metric, params).expect("builds");
+            let index = build::<Exact>(matrix.clone(), &metric, params).expect("builds");
             let image = index.canonical_image();
-            let decoded = HnswIndex::decode(matrix, &image).expect("decodes");
+            let decoded = HnswIndex::<Exact>::decode(matrix, &image).expect("decodes");
             assert_eq!(
                 decoded.canonical_image(),
                 image,
@@ -208,8 +209,8 @@ fn an_index_is_a_pure_function_of_its_inputs() {
     // is reproduced by a second call, including the entry point and every layer.
     for params in parameter_sets() {
         for metric in kernels() {
-            let first = build(fixture(200, 8, 0x1DEA), &metric, params).expect("builds");
-            let second = build(fixture(200, 8, 0x1DEA), &metric, params).expect("builds");
+            let first = build::<Exact>(fixture(200, 8, 0x1DEA), &metric, params).expect("builds");
+            let second = build::<Exact>(fixture(200, 8, 0x1DEA), &metric, params).expect("builds");
             assert_eq!(first.canonical_image(), second.canonical_image());
             assert!(first.verify_rebuild().expect("rebuilds"));
         }
@@ -398,13 +399,13 @@ fn a_narrow_matrix_builds_the_identical_graph_to_its_widened_copy() {
 
     for params in parameter_sets() {
         for metric in kernels() {
-            let from_f32 = build(
+            let from_f32 = build::<Exact>(
                 VectorMatrix::from_f32(rows, dims, narrow.clone()).expect("valid"),
                 &metric,
                 params,
             )
             .expect("builds");
-            let from_f64 = build(
+            let from_f64 = build::<Exact>(
                 VectorMatrix::new(rows, dims, widened.clone()).expect("valid"),
                 &metric,
                 params,

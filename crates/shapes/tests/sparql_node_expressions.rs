@@ -68,7 +68,7 @@ fn outputs(data_ttl: &str, shapes_ttl: &str, focus: &str) -> Vec<String> {
     let focus_term = Term::NamedNode(NamedNode::new_unchecked(format!(
         "http://example.org/ns#{focus}"
     )));
-    let mut guard = RecursionGuard::new();
+    let mut guard = RecursionGuard::default();
     eval_node_expr(&store, &focus_term, &expr, &mut guard)
         .expect("node expression evaluates")
         .iter()
@@ -403,7 +403,7 @@ fn sparql_triple_constructs_an_rdf12_triple_term() {
     let data: Arc<_> = parse_turtle_to_dataset(PREFIXES, None).expect("data parse");
     let store = ShaclData::new(Arc::clone(&data), data, None);
     let focus = Term::NamedNode(NamedNode::new_unchecked("http://example.org/ns#a"));
-    let mut guard = RecursionGuard::new();
+    let mut guard = RecursionGuard::default();
     let out = eval_node_expr(&store, &focus, &expr, &mut guard).expect("sparql:triple evaluates");
 
     let [Term::Triple(triple)] = out.as_slice() else {

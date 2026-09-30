@@ -310,14 +310,17 @@ identity rather than tuning.
 ### 3.1 The reassociated index
 
 The index is generic over its distance arithmetic: `HnswIndex<A: Arithmetic = Exact>`,
-with `HnswSpace<A>` and `HnswRelation<A>` over it. `HnswIndex::build` and
-`HnswIndex::decode` (and `hnsw::build`) are unchanged and exact.
-`HnswIndex::build_reassociated` (and `hnsw::build_reassociated`) builds the same
-algorithm under `purrdf_core::distance::Reassociated`, whose sums may be reassociated
-and contracted to fused multiply-add along the dispatch path the build resolves, the
-widest this process runs;
-`HnswIndex::decode_reassociated`, `guard::load_reassociated` and
-`HnswSpace::from_artifact_reassociated` read it back. It is a second type, not a mode:
+with `HnswSpace<A>` and `HnswRelation<A>` over it. Every constructor is generic over
+the sealed `IndexArithmetic` family (`Exact` and `Reassociated`), whose members carry
+what differs between them: the implementation identifier the profile publishes, and
+the walks this crate compiled for the arithmetic, taken from a non-generic function
+of this crate so the instantiation the asm gate measures is the one every caller runs.
+`hnsw::build::<Reassociated>` (and its named spelling `HnswIndex::build_reassociated`)
+builds the same algorithm under `purrdf_core::distance::Reassociated`, whose sums may
+be reassociated and contracted to fused multiply-add along the dispatch path the build
+resolves, the widest this process runs; `HnswIndex::build` is the default, exact one.
+`HnswIndex::<Reassociated>::decode`, `guard::load::<Reassociated>` and
+`HnswSpace::<Reassociated>::from_artifact` read it back. It is a second type, not a mode:
 neither index ever computes a distance under the other's law, and there is no runtime
 branch per distance.
 
@@ -343,7 +346,7 @@ index's pinned recall on every regime.
 | image header `arithmetic` field | `1` | the code of the dispatch path the build resolved: `2` sse2, `3` avx2+fma, `4` avx512f, `5` neon, `6` wasm-simd128, `7` wasm-scalar, `8` portable (every target other than x86-64, aarch64 and wasm) |
 | image header `shape` and `identity` fields | absent | the build's `BuildShape`: target architecture and the target features that decide the reassociated body's code, then its `BuildIdentity` digest (compiler, target CPU, optimisation level, debug assertions, codegen flags) |
 | implementation identifier | `hnsw-v2` | `hnsw-reassociated-v2` |
-| evidence revision | `LOSS_EVIDENCE` | `LOSS_EVIDENCE`, `"; "`, the reassociated evidence for the path, and "Its canonical image is reproducible only by a build of the shape that made it, running the same dispatch path: the image records that build's target architecture and features and the identity of its compiler, target CPU, optimisation level and codegen flags, and a build of another shape refuses it." (`profile::loss_evidence_reassociated`) |
+| evidence revision | `LOSS_EVIDENCE` | `LOSS_EVIDENCE`, `"; "`, the reassociated evidence for the path, and "Its canonical image is reproducible only by a build of the shape that made it, running the same dispatch path: the image records that build's target architecture and features and the identity of its compiler, target CPU, optimisation level and codegen flags, and a build of another shape refuses it." (`profile::loss_evidence_for::<Reassociated>`) |
 | profile declaration | `arithmetic=binary64-lane16-tree-v1` | `arithmetic=binary64-reassociated-v1`, the path's revision, `build-shape=<bits>` and `build-identity=<digest>` |
 | `IndexLossContract` | `transforms_vectors: false` | `transforms_vectors: false` |
 | ranked declaration | `RankArithmetic::float_distance::<Exact>()` | `RankArithmetic::float_distance::<Reassociated>()` |
@@ -359,7 +362,7 @@ identifier with the exact revision, and a reassociated revision naming another p
 than the payload records are each a `GuardProfile` failure.
 
 **Bound to its build and its path.** A reassociated image is reproducible only on the
-dispatch path that built it, so `decode_reassociated`, `verify_rebuild` and every search
+dispatch path that built it, so `decode`, `verify_rebuild` and every search
 resolve *the recorded path* through `Arithmetic::resolve_recorded`, not the widest one
 this process runs. A processor runs every compilation its binary holds whose features it
 reports: an image built on `x86_64`'s SSE2 or AVX2+FMA path is decoded, searched and
@@ -388,8 +391,8 @@ feature, and neither the compiler release nor the optimisation level is a `cfg`,
 version (`rustc -vV` on `RUSTC`, never through a wrapper), the resolved target CPU,
 every `-C target-feature` (tuning features included), any `-C llvm-args`,
 `codegen-units`, `lto` or `overflow-checks` in the rustflags, and the optimisation level,
-with the crate's own `cfg(debug_assertions)` appended. `decode_reassociated`,
-`guard::load_reassociated`, `verify_rebuild` and `guard::verify_rebuild` refuse another
+with the crate's own `cfg(debug_assertions)` appended. `decode`,
+`guard::load`, `verify_rebuild` and `guard::verify_rebuild` refuse another
 build's shape, bits or identity, with `HnswError::ArithmeticBuildMismatch { recorded,
 here }`, whose message lists both feature sets and both identities and says which half
 differs. The path is checked first, so an image of another target reads as the

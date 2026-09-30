@@ -26,6 +26,7 @@
 //! covered by the PURREMB round-trip suite that ships with the guard adapter.
 
 use purrdf_core::DistanceMetric;
+use purrdf_core::distance::Exact;
 use purrdf_hnsw::{HnswError, HnswIndex, Params, VectorMatrix};
 
 /// A deterministic fixture, generated from a splitmix64 integer stream.
@@ -56,7 +57,7 @@ fn baseline() -> (VectorMatrix, Vec<u8>) {
 /// Assert that `bytes` decode against `matrix` to a typed error and do not panic.
 fn assert_rejected(matrix: VectorMatrix, bytes: &[u8]) -> HnswError {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        HnswIndex::decode(matrix, bytes)
+        HnswIndex::<Exact>::decode(matrix, bytes)
     })) {
         Ok(Ok(_)) => panic!("a hostile payload decoded successfully; it must be rejected"),
         Ok(Err(error)) => error,
@@ -205,7 +206,7 @@ fn a_header_naming_another_arithmetic_is_refused_by_name() {
         );
     }
     // The valid neighbour: the baseline itself, carrying code 1, decodes.
-    assert!(HnswIndex::decode(matrix, &image).is_ok());
+    assert!(HnswIndex::<Exact>::decode(matrix, &image).is_ok());
 }
 
 #[test]

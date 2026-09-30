@@ -1289,7 +1289,7 @@ impl<'a> ShapesProductView<'a> {
         // exists to rule out. The value built here is not redundant either way: it
         // is what the restored `Shapes` must carry for identity row 6 to be the row
         // a parse of this graph would have produced.
-        let mut functions = UserFunctionRegistry::new();
+        let mut functions = UserFunctionRegistry::default();
         let native_list = crate::shapes::register_declared_sparql_functions(
             &dataset,
             &self.provenance,
@@ -1338,7 +1338,7 @@ impl<'a> ShapesProductView<'a> {
             rules: parts.rules,
             box_role_vocab: parts.box_role_vocab,
             functions: Arc::new(functions),
-            aggregates: Arc::new(AggregateRegistry::new()),
+            aggregates: Arc::new(AggregateRegistry::default()),
             validation_options: crate::engine::ValidationOptions::default(),
             target_types: parts.target_types,
             shapes_graph: parts.shapes_graph,

@@ -335,20 +335,15 @@ impl Drop for PlanCache {
     }
 }
 
-impl Default for PlanCache {
-    fn default() -> Self {
-        Self::with_limits(CacheLimits::default())
-    }
-}
-
-purrdf_lex::constructors! {
-    impl PlanCache {
-        /// A fresh, empty cache.
-        pub fn new() -> Self::default();
-    }
-}
+purrdf_hash::default_from_new!(PlanCache);
 
 impl PlanCache {
+    /// A fresh, empty cache under the default [`CacheLimits`]; [`Default`] delegates here.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::with_limits(CacheLimits::default())
+    }
+
     /// The number of memoized plans held.
     ///
     /// Retention is bounded by both entry and byte ceilings. Pass changing data
@@ -725,7 +720,6 @@ impl PlanCacheKey<'_> {
 /// - [`Self::with_loss_vocabulary`] supplies the `ProjectionLoss` vocabulary IRIs
 ///   emitted by loss-aware `CONSTRUCT` when a reifier is dropped. Without it,
 ///   loss declarations stay inactive.
-#[derive(Default)]
 pub struct NativeSparqlEngine {
     cache: RefCell<PlanCache>,
     /// The dataset-aware BGP join-order cache, shared across this engine's queries so
@@ -767,14 +761,23 @@ impl std::fmt::Debug for NativeSparqlEngine {
     }
 }
 
-purrdf_lex::constructors! {
-    impl NativeSparqlEngine {
-        /// A fresh engine with an empty plan cache and no `LOAD` resolver.
-        pub fn new() -> Self::default();
-    }
-}
+purrdf_hash::default_from_new!(NativeSparqlEngine);
 
 impl NativeSparqlEngine {
+    /// A fresh engine with an empty plan cache and no `LOAD` resolver; [`Default`]
+    /// delegates here.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            cache: RefCell::new(PlanCache::new()),
+            order_cache: BoundedOrderCache::default(),
+            resolver: None,
+            standpoint_predicates: None,
+            loss_vocabulary: None,
+            eval_options: EvalOptions::default(),
+        }
+    }
+
     /// Configure prepared-plan retention on a new engine. Existing plans held by
     /// callers remain valid; replacing cache policy drops only cache ownership.
     #[must_use]
@@ -5456,7 +5459,7 @@ mod tests {
 
         // Registered in the reverse of their sorted order, so a receipt that echoed
         // registration order would disagree with one that sorted.
-        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
         registry.register(
             "http://example.org/agg/second",
             Arc::new(ExplainTestSumAggregate),
@@ -5543,7 +5546,7 @@ mod tests {
                 .expect("a one-row two-column table"),
             ),
         );
-        let mut aggregates = crate::agg_fn::AggregateRegistry::new();
+        let mut aggregates = crate::agg_fn::AggregateRegistry::default();
         aggregates.register(
             "http://example.org/agg/dual",
             Arc::new(ExplainTestSumAggregate),
@@ -6833,7 +6836,7 @@ mod tests {
         );
 
         let fresh_relations = crate::property_fn::PropertyFunctionRegistry::new();
-        let fresh_aggregates = crate::agg_fn::AggregateRegistry::new();
+        let fresh_aggregates = crate::agg_fn::AggregateRegistry::default();
         assert!(
             check_plan_matches_relations(
                 &prepared,

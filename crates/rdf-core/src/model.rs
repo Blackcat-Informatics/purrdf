@@ -195,16 +195,13 @@ purrdf_lex::constructors! {
         /// An IRI term from its full string.
         #[must_use]
         pub fn iri(value) -> Self::Iri;
+        /// A blank-node term from its label (without the `_:` prefix).
+        #[must_use]
+        pub fn blank_node(value) -> Self::BlankNode;
     }
 }
 
 impl RdfTerm {
-    /// A blank-node term from its label (without the `_:` prefix).
-    #[must_use]
-    pub fn blank_node(value: impl Into<String>) -> Self {
-        Self::BlankNode(value.into())
-    }
-
     /// A literal term.
     #[must_use]
     pub fn literal(literal: RdfLiteral) -> Self {

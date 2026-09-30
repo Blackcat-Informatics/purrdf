@@ -423,7 +423,7 @@ pub fn query_with_entailment<D: DatasetView>(
     // The import table is EMPTY here: this entry point takes none, so a dataset that
     // imports a document it does not already hold is refused by name rather than closed as a
     // smaller premise. `query_with_entailment_closure_governed` is the one that takes one.
-    let imports = ImportMap::new();
+    let imports = ImportMap::default();
     let Closed {
         dataset: prepared,
         report,
@@ -924,7 +924,7 @@ pub fn query_with_entailment_governed<D: DatasetView>(
     relations: &ClosureRelations<'_>,
     governors: &QueryGovernors,
 ) -> Result<GovernedEntailment, ReasoningError> {
-    let imports = ImportMap::new();
+    let imports = ImportMap::default();
     query_with_entailment_closure_governed(
         engine,
         dataset,
@@ -1929,7 +1929,7 @@ mod tests {
 
     #[test]
     fn every_regime_maps_to_its_own_query_plan_and_only_rif_reads_the_rules() {
-        let rules = RuleSet::new();
+        let rules = RuleSet::default();
         let plan = |regime| QueryEntailment::for_regime(regime, &rules);
         assert!(matches!(plan(Regime::Simple), QueryEntailment::Simple));
         assert!(matches!(plan(Regime::Rdf), QueryEntailment::Rdf));
@@ -2224,7 +2224,7 @@ mod tests {
     /// EVERY MODE CARRIES ITS CERTIFICATE OUT, and each names its own regime.
     #[test]
     fn every_mode_returns_the_report_of_the_run_it_made() {
-        let rules = RuleSet::new();
+        let rules = RuleSet::default();
         for (mode, regime) in [
             (QueryEntailment::Simple, Regime::Simple),
             (QueryEntailment::Rdf, Regime::Rdf),
@@ -2263,7 +2263,7 @@ mod tests {
         let dataset = purrdf_rdf::parse_dataset(VALUES_TTL.as_bytes(), "text/turtle", None)
             .expect("the fixture parses");
 
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register_statistical_aggregates("https://example.org/agg#");
 
         let query = "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
@@ -2366,7 +2366,7 @@ mod tests {
 
     #[test]
     fn rif_query_sees_rule_derived_fact() {
-        let mut rules = RuleSet::new();
+        let mut rules = RuleSet::default();
         rules.push_rule(Rule {
             body: vec![Atom {
                 s: RifTerm::Var("subject".to_owned()),

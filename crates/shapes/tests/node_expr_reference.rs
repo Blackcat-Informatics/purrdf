@@ -989,8 +989,8 @@ fn production(world: &World) -> Result<Output, String> {
         .map_err(|e| format!("the generated shapes graph did not parse: {}", e.join("; ")))?;
     let store = ShaclData::new(Arc::clone(&data), shapes_ds, None);
     let focus = iri(&format!("n{}", world.focus));
-    let first = eval_node_expr(&store, &focus, &expr, &mut RecursionGuard::new());
-    let second = eval_node_expr(&store, &focus, &expr, &mut RecursionGuard::new());
+    let first = eval_node_expr(&store, &focus, &expr, &mut RecursionGuard::default());
+    let second = eval_node_expr(&store, &focus, &expr, &mut RecursionGuard::default());
     if first != second {
         return Err(format!(
             "two evaluations of one expression disagree: {first:?} then {second:?}"

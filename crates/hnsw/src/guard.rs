@@ -25,7 +25,7 @@
 //!    ([`verify_payload_commitment`]) — a substituted payload is rejected even when the
 //!    container's own verification was never asked to run;
 //! 3. the canonical image decodes over the matrix under the arithmetic the guard names
-//!    ([`load`] for the exact index, [`load_reassociated`] for the reassociated one), its
+//!    ([`load`], generic over the arithmetic), its
 //!    header records a code that implementation publishes -- and for the reassociated one,
 //!    this build's shape, identity included -- and its embedded parameters agree with the guard's parameter
 //!    block.
@@ -48,13 +48,14 @@ use purrdf_core::{
     IndexUseRole, TargetSetId, TlvEntryRef, TlvWireType, VectorDtype, VectorSpaceId, canonical_tlv,
 };
 
-use purrdf_core::distance::{Arithmetic, Exact, Reassociated, Resolved};
+use purrdf_core::distance::{Exact, Reassociated, Resolved};
 
 use crate::error::{HnswError, Result};
 use crate::graph::VectorMatrix;
 use crate::profile::{Published, profile_error};
 use crate::{
-    HnswIndex, IMPLEMENTATION_ID, IMPLEMENTATION_ID_REASSOCIATED, INDEX_MEDIA_TYPE, Params, profile,
+    HnswIndex, IMPLEMENTATION_ID, IMPLEMENTATION_ID_REASSOCIATED, INDEX_MEDIA_TYPE,
+    IndexArithmetic, Params, profile,
 };
 
 // ---------------------------------------------------------------------------
@@ -100,7 +101,7 @@ pub fn guard_contract(params: Params, role: IndexUseRole) -> IndexGuardContract 
 /// arithmetic on the dispatch path its image records, and the same loss contract,
 /// parameter encoding and payload media type under either arithmetic.
 #[must_use]
-pub fn guard_contract_for<A: Arithmetic>(
+pub fn guard_contract_for<A: IndexArithmetic>(
     index: &HnswIndex<A>,
     role: IndexUseRole,
 ) -> IndexGuardContract {
@@ -140,7 +141,7 @@ fn contract(
 ///
 /// [`HnswError`] wrapping any [`purrdf_core::EmbeddingError`] — an empty payload, a
 /// non-deterministic inline payload, or a guard whose contract is malformed.
-pub fn derived_index<A: Arithmetic>(
+pub fn derived_index<A: IndexArithmetic>(
     coordinates: IndexCoordinates,
     index: &HnswIndex<A>,
     role: IndexUseRole,
@@ -521,7 +522,7 @@ pub fn verify_payload_commitment(guard: &IndexGuardView<'_>, bytes: &[u8]) -> Re
     Ok(())
 }
 
-/// Verify the guard profile, the payload commitment, and decode the exact index over
+/// Verify the guard profile, the payload commitment, and decode the index under `A` over
 /// `matrix`.
 ///
 /// The decoded graph must have one node per matrix row, and its embedded identity
@@ -530,35 +531,16 @@ pub fn verify_payload_commitment(guard: &IndexGuardView<'_>, bytes: &[u8]) -> Re
 ///
 /// # Errors
 ///
-/// [`HnswError::GuardProfile`] (a guard naming the reassociated implementation among
-/// them: load it with [`load_reassociated`]), [`HnswError::PayloadUnavailable`],
-/// [`HnswError::PayloadCommitment`], or any decoder error from [`HnswIndex::decode`].
-pub fn load(guard: &IndexGuardView<'_>, matrix: VectorMatrix) -> Result<HnswIndex> {
-    load_as(guard, matrix, HnswIndex::decode)
-}
-
-/// [`load`] for a guard naming the reassociated implementation, decoding the index with
-/// [`HnswIndex::decode_reassociated`].
-///
-/// # Errors
-///
-/// As [`load`], with [`HnswError::GuardProfile`] for a guard naming the exact
-/// implementation or one whose revision names another dispatch path than the payload
-/// records, [`HnswError::ArithmeticPathUnavailable`] for a payload recorded on a path
-/// this process cannot run, and [`HnswError::ArithmeticBuildMismatch`] for one recorded by
-/// a build of another shape.
-pub fn load_reassociated(
+/// [`HnswError::GuardProfile`] (a guard naming the implementation of another arithmetic
+/// among them, or one whose revision names another dispatch path than the payload
+/// records), [`HnswError::PayloadUnavailable`], [`HnswError::PayloadCommitment`], or any
+/// decoder error from [`HnswIndex::decode`] -- for a reassociated payload,
+/// [`HnswError::ArithmeticPathUnavailable`] for one recorded on a path this process cannot
+/// run and [`HnswError::ArithmeticBuildMismatch`] for one recorded by a build of another
+/// shape among them.
+pub fn load<A: IndexArithmetic>(
     guard: &IndexGuardView<'_>,
     matrix: VectorMatrix,
-) -> Result<HnswIndex<Reassociated>> {
-    load_as(guard, matrix, HnswIndex::decode_reassociated)
-}
-
-/// [`load`] under arithmetic `A`, decoding with `decode`.
-fn load_as<A: Arithmetic>(
-    guard: &IndexGuardView<'_>,
-    matrix: VectorMatrix,
-    decode: fn(VectorMatrix, &[u8]) -> Result<HnswIndex<A>>,
 ) -> Result<HnswIndex<A>> {
     let (params, row) = validate_profile(guard)?;
     if row.arithmetic != A::ID {
@@ -572,7 +554,7 @@ fn load_as<A: Arithmetic>(
     }
     let bytes = payload_bytes(guard)?;
     verify_payload_commitment(guard, bytes)?;
-    let index = decode(matrix, bytes)?;
+    let index = HnswIndex::<A>::decode(matrix, bytes)?;
     let recorded = index.arithmetic().image_code();
     if !row.codes.contains(&recorded) {
         return Err(profile_error(format!(
@@ -721,9 +703,9 @@ pub fn verify_rebuild(
         .ok()
         .and_then(|entries| find(&entries, 1))
         .and_then(|identity| identity_block_identifier(identity.value).ok())
-        .is_some_and(|identifier| identifier == profile::implementation_id_for::<Reassociated>());
+        .is_some_and(|identifier| identifier == Reassociated::IMPLEMENTATION_ID);
     let verdict = if reassociated {
-        HnswIndex::verify_bytes_against_reassociated(source_matrix, bytes)?
+        HnswIndex::<Reassociated>::verify_bytes_against(source_matrix, bytes)?
     } else {
         HnswIndex::<Exact>::verify_bytes_against(source_matrix, bytes)?
     };

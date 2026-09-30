@@ -1287,7 +1287,7 @@ mod tests {
     }
 
     fn registry_of(vocab: &GeoVocab) -> UserFunctionRegistry {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         register(&mut registry, vocab);
         registry
     }

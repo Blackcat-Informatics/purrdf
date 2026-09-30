@@ -276,7 +276,7 @@ impl ViewOp for QueryOp<'_> {
 /// binary does not attempt to expose it.
 pub(crate) fn build_aggregate_registry(namespace: Option<&str>) -> Option<AggregateRegistry> {
     let namespace = namespace?;
-    let mut registry = AggregateRegistry::new();
+    let mut registry = AggregateRegistry::default();
     registry.register_statistical_aggregates(namespace);
     Some(registry)
 }

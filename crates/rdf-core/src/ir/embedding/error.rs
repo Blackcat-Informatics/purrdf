@@ -312,17 +312,10 @@ impl std::error::Error for EmbeddingWriteError {
     }
 }
 
-impl From<EmbeddingError> for EmbeddingWriteError {
-    fn from(error: EmbeddingError) -> Self {
-        Self::Format(error)
-    }
-}
-
-impl From<std::io::Error> for EmbeddingWriteError {
-    fn from(error: std::io::Error) -> Self {
-        Self::Io(error)
-    }
-}
+purrdf_lex::variant_from!(EmbeddingWriteError {
+    Format(EmbeddingError),
+    Io(std::io::Error),
+});
 
 #[cfg(test)]
 mod tests {

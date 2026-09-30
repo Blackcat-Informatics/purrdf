@@ -763,7 +763,7 @@ fn collect_candidates() -> Vec<Candidate> {
 
     // Every language binding's OWN rustdoc — `bindings/**/src/**/*.rs` — e.g.
     // the Python extension's `#[pyfunction]`/struct doc comments
-    // (`bindings/python/src/py_store/{store,query}.rs`), which live outside
+    // (`bindings/python/src/py_store/{quad_store,query}.rs`), which live outside
     // `crates/` and so sat entirely outside the sweep above.
     for binding_dir in walk(&root.join("bindings")) {
         if binding_dir.extension().and_then(|e| e.to_str()) == Some("rs")
@@ -960,7 +960,7 @@ fn every_shipped_sparql_example_parses() {
     const REQUIRED_SURFACES: &[&str] = &[
         "crates/rdf-capi/include/purrdf.h",
         "crates/rdf-wasm/js/index.mjs",
-        "bindings/python/src/py_store/store.rs",
+        "bindings/python/src/py_store/quad_store.rs",
         "bindings/python/src/py_store/query.rs",
         "docs/playground/examples/gallery.mjs",
     ];

@@ -67,13 +67,6 @@ pub struct Subst {
     meta_sort: Vec<Option<NodeId>>,
 }
 
-purrdf_lex::constructors! {
-    impl Subst {
-        /// An empty substitution: nothing bound, nothing sorted.
-        pub fn new() -> Self::default();
-    }
-}
-
 impl Subst {
     /// Grow both backing vectors to hold index `idx`.
     fn ensure(&mut self, idx: usize) {
@@ -799,18 +792,18 @@ mod tests {
     /// binding it to an application that does NOT contain it is `Ok`.
     #[test]
     fn occurs_check_rejects_cyclic_and_accepts_well_founded() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let (_, meta) = dag.fresh_meta();
         let a = dag.intern_leaf("a");
         let cyclic = app1(&mut dag, "f", meta);
-        let mut s = Subst::new();
+        let mut s = Subst::default();
         assert!(matches!(
             unify(&mut dag, meta, cyclic, &mut s),
             Unified::Occurs { .. }
         ));
         assert_eq!(s.bound_count(), 0);
 
-        let mut s2 = Subst::new();
+        let mut s2 = Subst::default();
         let acyclic = app1(&mut dag, "f", a);
         assert_eq!(unify(&mut dag, meta, acyclic, &mut s2), Unified::Ok);
     }
@@ -820,10 +813,10 @@ mod tests {
     /// existing binding rather than by direct syntactic containment alone.
     #[test]
     fn occurs_check_is_sound_through_substitution() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let (_, meta_a) = dag.fresh_meta();
         let (meta_b_id, meta_b) = dag.fresh_meta();
-        let mut s = Subst::new();
+        let mut s = Subst::default();
         // a := f(b)
         let f_b = app1(&mut dag, "f", meta_b);
         assert_eq!(unify(&mut dag, meta_a, f_b, &mut s), Unified::Ok);
@@ -844,14 +837,14 @@ mod tests {
     /// application leaves NO bindings behind.
     #[test]
     fn failed_unification_after_partial_bind_leaves_no_bindings() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let (_, meta) = dag.fresh_meta();
         let a = dag.intern_leaf("a");
         let b = dag.intern_leaf("b");
         let c = dag.intern_leaf("c");
         let left = app2(&mut dag, "f", meta, b);
         let right = app2(&mut dag, "f", a, c);
-        let mut s = Subst::new();
+        let mut s = Subst::default();
         assert!(matches!(
             unify(&mut dag, left, right, &mut s),
             Unified::Clash { .. }
@@ -867,7 +860,7 @@ mod tests {
     /// succeeds three nested unifications before the outer clash.
     #[test]
     fn deep_nested_clash_after_partial_bind_leaves_no_bindings() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let (_, meta) = dag.fresh_meta();
         let h_x = app1(&mut dag, "h", meta);
         let g_h_x = app1(&mut dag, "g", h_x);
@@ -880,7 +873,7 @@ mod tests {
         let c = dag.intern_leaf("c");
         let right = app2(&mut dag, "f", g_h_a, c);
 
-        let mut s = Subst::new();
+        let mut s = Subst::default();
         assert!(matches!(
             unify(&mut dag, left, right, &mut s),
             Unified::Clash { .. }
@@ -893,11 +886,11 @@ mod tests {
     /// A term with no metavariables is unchanged by `apply`.
     #[test]
     fn apply_is_identity_on_ground_terms() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let a = dag.intern_leaf("a");
         let b = dag.intern_leaf("b");
         let ground = app2(&mut dag, "f", a, b);
-        let s = Subst::new();
+        let s = Subst::default();
         assert_eq!(apply(&mut dag, &s, ground), ground);
     }
 
@@ -907,7 +900,7 @@ mod tests {
     /// shift; a `Bound{1,_}` referring PAST the binder must shift.
     #[test]
     fn shift_lifts_only_free_bound_occurrences() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let sort = dag.intern_leaf("s");
         let bound0 = dag.intern_bound(0, 0); // bound by the binder itself
         let bound1 = dag.intern_bound(1, 0); // refers past the binder
@@ -943,10 +936,10 @@ mod tests {
     /// does not accidentally refer to the new binder.
     #[test]
     fn apply_under_binders_avoids_capture() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let a = dag.intern_leaf("a");
         let (m, meta) = dag.fresh_meta();
-        let mut s = Subst::new();
+        let mut s = Subst::default();
         s.bind_renaming(m, a); // meta := a (a ground constant, at home depth 0)
 
         // Build `binder[sort]. pair(Bound{0,0}, meta)`: the meta occurs one
@@ -988,7 +981,7 @@ mod tests {
     /// hash-cons to the SAME `NodeId` and unify trivially.
     #[test]
     fn alpha_equivalent_binders_unify_trivially() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let op = dag.intern_leaf("forall");
         let sort = dag.intern_leaf("s");
         let body1 = dag.intern_bound(0, 0);
@@ -1001,7 +994,7 @@ mod tests {
             first, second,
             "alpha-equivalent binders hash-cons to one node"
         );
-        let mut s = Subst::new();
+        let mut s = Subst::default();
         assert_eq!(unify(&mut dag, first, second, &mut s), Unified::Ok);
         assert_eq!(s.bound_count(), 0, "no metas involved, nothing to bind");
     }
@@ -1010,7 +1003,7 @@ mod tests {
     /// a ground leaf, binding the meta (after whnf/shift handling).
     #[test]
     fn binder_with_metavar_body_unifies_by_binding() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let op = dag.intern_leaf("forall");
         let sort = dag.intern_leaf("s");
         let (m, meta) = dag.fresh_meta();
@@ -1019,7 +1012,7 @@ mod tests {
         let leaf = dag.intern_leaf("c");
         let right = dag.intern_binder(op, vec![sort], leaf);
 
-        let mut s = Subst::new();
+        let mut s = Subst::default();
         assert_eq!(unify(&mut dag, left, right, &mut s), Unified::Ok);
         assert_eq!(s.get(m), Some(leaf));
     }
@@ -1030,7 +1023,7 @@ mod tests {
     /// (scope-escape), via `bind_meta`'s `shift_down` failure path.
     #[test]
     fn binder_body_capturing_bound_var_clashes() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let op = dag.intern_leaf("forall");
         let sort = dag.intern_leaf("s");
         let (_, meta) = dag.fresh_meta();
@@ -1040,7 +1033,7 @@ mod tests {
         let bound = dag.intern_bound(0, 0);
         let right = dag.intern_binder(op, vec![sort], bound);
 
-        let mut s = Subst::new();
+        let mut s = Subst::default();
         assert!(matches!(
             unify(&mut dag, left, right, &mut s),
             Unified::Clash { .. }
@@ -1054,7 +1047,7 @@ mod tests {
     /// leaf, but not a leaf of an unrelated (incomparable) sort.
     #[test]
     fn subsort_metavar_binds_a_narrower_term_but_not_a_wider_one() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let cat = dag.intern_leaf("Cat");
         let animal = dag.intern_leaf("Animal");
         let thing = dag.intern_leaf("Thing");
@@ -1069,14 +1062,14 @@ mod tests {
         let ctx = SortContext::new(order, term_sorts, BTreeMap::new());
 
         let (m, meta) = dag.fresh_meta();
-        let mut s = Subst::new();
+        let mut s = Subst::default();
         s.declare_meta_sort(m, animal);
         assert_eq!(
             unify_sorted(&mut dag, meta, felix, &mut s, &ctx),
             Unified::Ok
         );
 
-        let mut s2 = Subst::new();
+        let mut s2 = Subst::default();
         s2.declare_meta_sort(m, animal);
         assert!(matches!(
             unify_sorted(&mut dag, meta, pebble, &mut s2, &ctx),
@@ -1088,7 +1081,7 @@ mod tests {
     /// unique `meet`; two sorts with no common declared subsort have no meet.
     #[test]
     fn sort_order_closure_and_meet() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let cat = dag.intern_leaf("Cat");
         let dog = dag.intern_leaf("Dog");
         let animal = dag.intern_leaf("Animal");
@@ -1110,7 +1103,7 @@ mod tests {
     /// clash rather than silently binding.
     #[test]
     fn incomparable_sorts_clash() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let cat = dag.intern_leaf("Cat");
         let rock = dag.intern_leaf("Rock");
         let order = SortOrder::from_subclass_edges(&[]); // no relation at all
@@ -1118,7 +1111,7 @@ mod tests {
 
         let (m1, meta1) = dag.fresh_meta();
         let (m2, meta2) = dag.fresh_meta();
-        let mut s = Subst::new();
+        let mut s = Subst::default();
         s.declare_meta_sort(m1, cat);
         s.declare_meta_sort(m2, rock);
         assert!(matches!(
@@ -1133,7 +1126,7 @@ mod tests {
     /// pair sharing no subsort at all is NOT a violation.
     #[test]
     fn validate_flags_a_non_meet_semilattice_pair() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let a = dag.intern_leaf("A");
         let b = dag.intern_leaf("B");
         let c1 = dag.intern_leaf("C1");
@@ -1163,7 +1156,7 @@ mod tests {
     /// [`SortOrder::validate`]); ambiguity is deliberately a clash, not a guess.
     #[test]
     fn ambiguous_meet_clashes_like_disjoint_sorts() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let a = dag.intern_leaf("A");
         let b = dag.intern_leaf("B");
         let c1 = dag.intern_leaf("C1");
@@ -1173,7 +1166,7 @@ mod tests {
 
         let (m1, meta1) = dag.fresh_meta();
         let (m2, meta2) = dag.fresh_meta();
-        let mut s = Subst::new();
+        let mut s = Subst::default();
         s.declare_meta_sort(m1, a);
         s.declare_meta_sort(m2, b);
         assert!(matches!(
@@ -1186,23 +1179,23 @@ mod tests {
     /// `unify` across a representative ok/clash/occurs case each.
     #[test]
     fn empty_sort_context_matches_the_unsorted_path() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let ctx = SortContext::default();
         let a = dag.intern_leaf("a");
         let b = dag.intern_leaf("b");
 
         // ok
         let (_, meta) = dag.fresh_meta();
-        let mut plain = Subst::new();
-        let mut sorted = Subst::new();
+        let mut plain = Subst::default();
+        let mut sorted = Subst::default();
         assert_eq!(
             unify(&mut dag, meta, a, &mut plain),
             unify_sorted(&mut dag, meta, a, &mut sorted, &ctx)
         );
 
         // clash
-        let mut plain2 = Subst::new();
-        let mut sorted2 = Subst::new();
+        let mut plain2 = Subst::default();
+        let mut sorted2 = Subst::default();
         let r1 = unify(&mut dag, a, b, &mut plain2);
         let r2 = unify_sorted(&mut dag, a, b, &mut sorted2, &ctx);
         assert_eq!(r1, r2);
@@ -1210,8 +1203,8 @@ mod tests {
         // occurs
         let (_, meta2) = dag.fresh_meta();
         let cyclic = app1(&mut dag, "f", meta2);
-        let mut plain3 = Subst::new();
-        let mut sorted3 = Subst::new();
+        let mut plain3 = Subst::default();
+        let mut sorted3 = Subst::default();
         let r3 = unify(&mut dag, meta2, cyclic, &mut plain3);
         let r4 = unify_sorted(&mut dag, meta2, cyclic, &mut sorted3, &ctx);
         assert_eq!(r3, r4);

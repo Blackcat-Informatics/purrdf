@@ -62,6 +62,10 @@ purrdf = { workspace = true }
 # second renderer described as equivalent; `regime_name` is the same regime
 # vocabulary `--regime`/`--entailment` accept.
 purrdf-validate = { workspace = true }
+# `variant_from!`: the one spelling of the `From` impls that carry a library error's
+# rendered message into `CliError::Runtime`. The integration tests also read the JSON
+# the binary prints (runtime ledgers, SARIF, SPARQL results) with its reader.
+purrdf-lex = { workspace = true }
 # Command-tree argument parsing (`Parser`/`Subcommand`/`ValueEnum`).
 clap = { workspace = true }
 
@@ -98,9 +102,6 @@ purrdf-gts = { workspace = true }
 # Both are already workspace-pinned (purrdf-gts links them); test-only here.
 purrdf-deflate = { workspace = true }
 structured-zstd = { workspace = true }
-# Reads the JSON the binary prints (runtime ledgers, SARIF, SPARQL results) in
-# the integration tests.
-purrdf-lex = { workspace = true }
 # The integration tests recompute the SHA-256 identities the binary prints, in
 # lowercase hex.
 sha2 = { workspace = true }

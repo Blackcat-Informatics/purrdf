@@ -366,7 +366,7 @@ pub(crate) fn refuse_unreached_pairs(
         purrdf_rdf::parse_dataset(document.as_bytes(), "application/n-quads", None)
             .map_err(|diagnostic| CliError::Runtime(format!("{what}: {diagnostic}")))
     };
-    let mut map = purrdf_entail::ImportMap::new();
+    let mut map = purrdf_entail::ImportMap::default();
     for (iri, document) in imports {
         map.insert(iri.clone(), parse(document, &format!("--import {iri}"))?);
     }

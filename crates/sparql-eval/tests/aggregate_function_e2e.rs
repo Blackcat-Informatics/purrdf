@@ -158,7 +158,7 @@ impl CustomAggregate for WeightedSumAggregate {
 }
 
 fn registry() -> ExtensionEnv {
-    let mut registry = AggregateRegistry::new();
+    let mut registry = AggregateRegistry::default();
     registry.register(
         SUM_IRI,
         Arc::new(SumAggregate {
@@ -454,14 +454,14 @@ fn unregistered_property_function_still_reports_the_property_function_code() {
 /// `Option<&AggregateRegistry>` — there is no separate "no registry
 /// configured" spelling for a query to distinguish from "an empty registry was
 /// configured". A `None`-shaped call and a
-/// `Some(&AggregateRegistry::new())`-shaped call answering differently is
+/// `Some(&AggregateRegistry::default())`-shaped call answering differently is
 /// therefore structurally impossible to even state: `None` does not
 /// type-check as a `QueryOptions::aggregates` value at all. What remains
 /// meaningful, and is what this test pins, is the weaker but still real
 /// property that motivated `AggregateRegistry::EMPTY` being one canonical
 /// shared constant rather than every call site minting its own empty registry:
 /// [`QueryOptions::EMPTY`] (which carries `&AggregateRegistry::EMPTY`) and an
-/// explicitly supplied, freshly built, still-empty [`AggregateRegistry::new`]
+/// explicitly supplied, freshly built, still-empty [`AggregateRegistry::default`]
 /// must answer identically, because both resolve every `AGG(<iri>, …)` IRI to
 /// nothing.
 #[test]
@@ -469,7 +469,7 @@ fn the_canonical_empty_registry_and_a_freshly_built_empty_registry_answer_identi
     let ds = dataset();
     let query = format!("SELECT ?s WHERE {{ ?s <{EX}val> ?v }} ORDER BY ?s");
     let canonical_empty_options = QueryOptions::EMPTY;
-    let fresh_empty_env = env_of(AggregateRegistry::new());
+    let fresh_empty_env = env_of(AggregateRegistry::default());
     let fresh_empty_options = with_aggregates(&fresh_empty_env);
 
     let via_canonical = run(&ds, &query, canonical_empty_options);
@@ -561,7 +561,7 @@ fn volatile_custom_aggregate_is_still_correct_and_deterministic_at_scale() {
 const STAT_NS: &str = "http://example.org/agg/";
 
 fn statistical_registry() -> ExtensionEnv {
-    let mut registry = AggregateRegistry::new();
+    let mut registry = AggregateRegistry::default();
     registry.register_statistical_aggregates(STAT_NS);
     ExtensionEnv::over_aggregates(registry).expect("the fixture declarations read cleanly")
 }
@@ -955,7 +955,7 @@ impl CustomAggregate for ZeroArityAggregate {
 #[test]
 fn zero_arity_custom_aggregate_cannot_be_constructed_and_therefore_never_row_counts() {
     const ZERO_ARITY_IRI: &str = "http://example.org/agg#zeroArity";
-    let mut declarations = AggregateRegistry::new();
+    let mut declarations = AggregateRegistry::default();
     declarations.register(ZERO_ARITY_IRI, Arc::new(ZeroArityAggregate));
     // The registry itself is untroubled by the zero-arity declaration.
     assert!(declarations.resolve(ZERO_ARITY_IRI).is_some());
@@ -1068,14 +1068,14 @@ impl CustomAggregate for ProductAggregate {
 #[test]
 fn a_plan_prepared_under_one_registry_refuses_to_execute_under_a_different_registry_with_identical_declarations()
  {
-    let mut registry_a = AggregateRegistry::new();
+    let mut registry_a = AggregateRegistry::default();
     registry_a.register(
         SUM_IRI,
         Arc::new(SumAggregate {
             volatility: Volatility::Stable,
         }),
     );
-    let mut registry_b = AggregateRegistry::new();
+    let mut registry_b = AggregateRegistry::default();
     registry_b.register(SUM_IRI, Arc::new(ProductAggregate));
 
     // The reproduction only means what it claims if the two registries' DECLARED

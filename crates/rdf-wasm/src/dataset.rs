@@ -149,17 +149,10 @@ struct VisualRoleRule {
     role: String,
 }
 
-impl FromJson for VisualRoleRule {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut record = Record::new(value, "a role rule object")?;
-        let rule = Self {
-            predicate_iri: record.required("predicateIri")?,
-            role: record.required("role")?,
-        };
-        record.deny_unknown()?;
-        Ok(rule)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for VisualRoleRule as "a role rule object" {
+    "predicateIri" => predicate_iri: required,
+    "role" => role: required,
+});
 
 #[derive(Debug, Default)]
 struct VisualLayoutOptions {
@@ -172,22 +165,15 @@ struct VisualLayoutOptions {
     max_node_width: Option<i32>,
 }
 
-impl FromJson for VisualLayoutOptions {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut record = Record::new(value, "a layout options object")?;
-        let layout = Self {
-            margin: record.optional("margin")?,
-            rank_spacing: record.optional("rankSpacing")?,
-            node_spacing: record.optional("nodeSpacing")?,
-            component_spacing: record.optional("componentSpacing")?,
-            component_wrap_width: record.optional("componentWrapWidth")?,
-            crossing_sweeps: record.optional("crossingSweeps")?,
-            max_node_width: record.optional("maxNodeWidth")?,
-        };
-        record.deny_unknown()?;
-        Ok(layout)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for VisualLayoutOptions as "a layout options object" {
+    "margin" => margin: optional,
+    "rankSpacing" => rank_spacing: optional,
+    "nodeSpacing" => node_spacing: optional,
+    "componentSpacing" => component_spacing: optional,
+    "componentWrapWidth" => component_wrap_width: optional,
+    "crossingSweeps" => crossing_sweeps: optional,
+    "maxNodeWidth" => max_node_width: optional,
+});
 
 #[derive(Debug, Default)]
 struct VisualSvgOptions {
@@ -196,18 +182,26 @@ struct VisualSvgOptions {
     title: Option<String>,
 }
 
-impl FromJson for VisualSvgOptions {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut record = Record::new(value, "an SVG options object")?;
-        let svg = Self {
-            embed_metadata: record.optional("embedMetadata")?,
-            include_styles: record.optional("includeStyles")?,
-            title: record.optional("title")?,
-        };
-        record.deny_unknown()?;
-        Ok(svg)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for VisualSvgOptions as "an SVG options object" {
+    "embedMetadata" => embed_metadata: optional,
+    "includeStyles" => include_styles: optional,
+    "title" => title: optional,
+});
+
+purrdf_lex::json_record!(impl FromJson for VisualOptions as "an object" {
+    "mode" => mode: optional,
+    "focus" => focus: optional,
+    "roleRules" => role_rules: defaulted,
+    "vocabulary" => vocabulary: defaulted,
+    "graph" => graph: optional,
+    "graphs" => graphs: defaulted,
+    "labelPolicy" => label_policy: optional,
+    "maxStatements" => max_statements: optional,
+    "maxTerms" => max_terms: optional,
+    "tableFields" => table_fields: optional,
+    "layout" => layout: defaulted,
+    "svg" => svg: defaulted,
+});
 
 impl VisualOptions {
     fn parse(json: Option<String>) -> Result<Self, JsError> {
@@ -223,27 +217,8 @@ impl VisualOptions {
 
     /// The options record, a refusal named `visualization options: …`.
     fn from_json(value: &Value) -> Result<Self, String> {
-        Self::read(value).map_err(|error| format!("visualization options: {error}"))
-    }
-
-    fn read(value: &Value) -> Result<Self, DecodeError> {
-        let mut record = Record::new(value, "an object")?;
-        let options = Self {
-            mode: record.optional("mode")?,
-            focus: record.optional("focus")?,
-            role_rules: record.defaulted("roleRules")?,
-            vocabulary: record.defaulted("vocabulary")?,
-            graph: record.optional("graph")?,
-            graphs: record.defaulted("graphs")?,
-            label_policy: record.optional("labelPolicy")?,
-            max_statements: record.optional("maxStatements")?,
-            max_terms: record.optional("maxTerms")?,
-            table_fields: record.optional("tableFields")?,
-            layout: record.defaulted("layout")?,
-            svg: record.defaulted("svg")?,
-        };
-        record.deny_unknown()?;
-        Ok(options)
+        <Self as FromJson>::from_json(value)
+            .map_err(|error| format!("visualization options: {error}"))
     }
 
     fn into_engine_options(self) -> Result<(VizSpec, VizRenderOptions), JsError> {

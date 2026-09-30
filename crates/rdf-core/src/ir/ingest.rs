@@ -126,14 +126,19 @@ pub struct DatasetSink {
     builder: Option<RdfDatasetBuilder>,
 }
 
-impl Default for DatasetSink {
-    /// The default sink is identical to [`new`](Self::new): the default scope
-    /// ([`ScopeId::DEFAULT`]) is open from the start. This is implemented MANUALLY
-    /// (rather than `#[derive]`d) because a derived `Default` would leave
-    /// `open_scopes` empty, so `ScopeId::DEFAULT` would not be considered open — a
-    /// latent bug. Keeping `new`/`default` in lock-step (one delegates to the other)
-    /// ensures the two initial states can never diverge.
-    fn default() -> Self {
+purrdf_hash::default_from_new!(
+    /// The default sink is [`DatasetSink::new`]'s: the default scope is open.
+    DatasetSink
+);
+
+impl DatasetSink {
+    /// A fresh sink with the default scope ([`ScopeId::DEFAULT`]) open from the start.
+    ///
+    /// Written out rather than `#[derive]`d: a derived `Default` would leave
+    /// `open_scopes` empty, so `ScopeId::DEFAULT` would not be considered open. The
+    /// [`Default`] impl delegates here, so the two initial states cannot diverge.
+    #[must_use]
+    pub fn new() -> Self {
         Self {
             raw_terms: FastMap::default(),
             declared_in: FastMap::default(),
@@ -150,17 +155,7 @@ impl Default for DatasetSink {
             builder: None,
         }
     }
-}
 
-purrdf_lex::constructors! {
-    impl DatasetSink {
-        /// A fresh sink with the default scope open. Delegates to [`Default`] so the two
-        /// can never diverge.
-        pub fn new() -> Self::default();
-    }
-}
-
-impl DatasetSink {
     /// The frozen dataset produced by a successful [`finish`](RdfEventSink::finish).
     /// `None` before `finish` or after a cancelled drive.
     pub fn into_dataset(self) -> Option<Arc<RdfDataset>> {

@@ -252,7 +252,7 @@ fn an_unreached_ceiling_answers_exactly_as_the_ungoverned_lane_does() {
 #[test]
 fn the_ungoverned_lane_is_byte_for_byte_unchanged() {
     let dataset = hierarchy();
-    let rules = purrdf::entail::RuleSet::new();
+    let rules = purrdf::entail::RuleSet::default();
     for (mode, regime) in [
         (QueryEntailment::Simple, Regime::Simple),
         (QueryEntailment::Rdf, Regime::Rdf),
@@ -324,7 +324,7 @@ fn a_custom_aggregate_registry_reaches_the_governed_entailed_closure() {
     }
     let dataset = b.freeze().expect("the fixture freezes");
 
-    let mut registry = AggregateRegistry::new();
+    let mut registry = AggregateRegistry::default();
     registry.register_statistical_aggregates("https://example.org/agg#");
 
     let query = "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
@@ -469,7 +469,7 @@ fn a_cancellation_stops_the_closure_and_names_itself() {
 #[test]
 fn every_regime_honours_a_signal_that_is_already_firing() {
     let dataset = hierarchy();
-    let rules = purrdf::entail::RuleSet::new();
+    let rules = purrdf::entail::RuleSet::default();
     for (mode, regime) in [
         (QueryEntailment::Simple, Regime::Simple),
         (QueryEntailment::Rdf, Regime::Rdf),
@@ -523,7 +523,7 @@ fn every_regime_honours_a_signal_that_is_already_firing() {
 #[test]
 fn a_signal_that_never_fires_changes_no_closure() {
     let dataset = hierarchy();
-    let rules = purrdf::entail::RuleSet::new();
+    let rules = purrdf::entail::RuleSet::default();
     for mode in [
         QueryEntailment::Simple,
         QueryEntailment::Rdf,
@@ -878,7 +878,7 @@ fn an_entailment_query_closes_over_the_import_table() {
         "{refused:?}"
     );
 
-    let mut imports = purrdf::entail::ImportMap::new();
+    let mut imports = purrdf::entail::ImportMap::default();
     imports.insert(format!("{NS}schema"), imported_schema());
     let GovernedEntailment::Answered {
         outcome: GovernedOutcome::Complete { result, .. },
@@ -910,7 +910,7 @@ fn an_entailment_query_closes_over_the_import_table() {
     let GovernedEntailment::Answered {
         outcome: GovernedOutcome::Complete { result, .. },
         ..
-    } = over_imports(&hierarchy(), &purrdf::entail::ImportMap::new()).expect("imports nothing")
+    } = over_imports(&hierarchy(), &purrdf::entail::ImportMap::default()).expect("imports nothing")
     else {
         panic!("an unbounded run completes");
     };

@@ -5423,7 +5423,7 @@ mod tests {
 
     /// A fresh registry with [`AggSum`] registered under [`AGG_IRI`].
     fn sum_aggregate_registry() -> purrdf_sparql_eval::AggregateRegistry {
-        let mut registry = purrdf_sparql_eval::AggregateRegistry::new();
+        let mut registry = purrdf_sparql_eval::AggregateRegistry::default();
         registry.register(AGG_IRI, Arc::new(AggSum));
         registry
     }

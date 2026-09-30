@@ -367,8 +367,8 @@ fn public_constructors_keep_their_signatures() {
     let profile = ShapesProfile::CORE;
     assert_eq!(profile.id(), ShapesProfile::CORE.id());
 
-    let functions = UserFunctionRegistry::new();
-    let aggregates = AggregateRegistry::new();
+    let functions = UserFunctionRegistry::default();
+    let aggregates = AggregateRegistry::default();
     let relations = PropertyFunctionRegistry::new();
     let empty = HostBindings::empty();
     let bound =

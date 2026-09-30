@@ -95,7 +95,7 @@ fn a_directed_rayon_worker_refuses_its_share_and_a_clean_one_answers_the_single_
     let (exact, fast) = clean.install(|| {
         (
             HnswIndex::build(data.clone(), &metric, params()).expect("builds on clean workers"),
-            HnswIndex::build_reassociated(data.clone(), &metric, params())
+            purrdf_hnsw::build::<Reassociated>(data.clone(), &metric, params())
                 .expect("builds on clean workers"),
         )
     });

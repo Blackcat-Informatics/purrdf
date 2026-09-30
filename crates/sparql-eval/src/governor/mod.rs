@@ -161,7 +161,7 @@ pub trait StopSignal: Send + Sync + std::fmt::Debug {
 ///
 /// Latching is by construction — the bit only ever moves from clear to set, and nothing
 /// clears it. Build a new flag for a new query rather than resetting one.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CancellationFlag {
     /// The shared monotone bit. `Relaxed` on both sides is sufficient: it carries no
     /// accompanying data that a reader must see, so there is nothing for an
@@ -169,15 +169,17 @@ pub struct CancellationFlag {
     cancelled: Arc<AtomicBool>,
 }
 
-purrdf_lex::constructors! {
-    impl CancellationFlag {
-        /// A fresh, uncancelled flag.
-        #[must_use]
-        pub fn new() -> Self::default();
-    }
-}
+purrdf_hash::default_from_new!(CancellationFlag);
 
 impl CancellationFlag {
+    /// A fresh, uncancelled flag; [`Default`] delegates here.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
     /// Cancel every clone of this flag. Idempotent, and never reversible.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Relaxed);

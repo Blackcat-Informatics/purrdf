@@ -701,7 +701,7 @@ fn resolve_end<D: DatasetView + Sync>(
 /// The output schema: the visible variable endpoints in subject-then-object order,
 /// deduplicated (a repeated variable is one column).
 fn path_schema(subject: &TermPattern, object: &TermPattern) -> VarSchema {
-    let mut schema = VarSchema::new();
+    let mut schema = VarSchema::default();
     if let Some(v) = visible_var(subject) {
         schema.push(v);
     }

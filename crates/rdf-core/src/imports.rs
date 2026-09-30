@@ -198,7 +198,7 @@ use purrdf_iri::vocab::owl::VERSION_IRI as OWL_VERSIONIRI;
 /// let graph = b.freeze().expect("freeze");
 ///
 /// // An import nobody supplied is named.
-/// let closure = ImportMap::new().closure(&graph);
+/// let closure = ImportMap::default().closure(&graph);
 /// assert_eq!(closure.unresolved(), ["http://example.org/other".to_owned()]);
 /// ```
 #[derive(Debug, Clone, Default)]
@@ -209,14 +209,6 @@ pub struct ImportMap {
     /// IRI or base. Each is an anchor of the importing graph, and an import of one of these
     /// names a document already in hand.
     loaded: BTreeSet<String>,
-}
-
-purrdf_lex::constructors! {
-    impl ImportMap {
-        /// An import map that resolves nothing and declares no loaded document.
-        #[must_use]
-        pub fn new() -> Self::default();
-    }
 }
 
 impl ImportMap {
@@ -310,13 +302,13 @@ impl ImportMap {
     /// b.push_quad(node, imports, lib, None);
     /// let graph = b.freeze().expect("freeze");
     ///
-    /// let listed = ImportMap::new().unanchored_imports(&graph);
+    /// let listed = ImportMap::default().unanchored_imports(&graph);
     /// assert_eq!(listed.len(), 1);
     /// assert_eq!(listed[0].document, None);
     /// assert_eq!(listed[0].subject, TermValue::iri("http://example.org/node"));
     ///
     /// // Read under the node's IRI, the same triple is an import, and nothing is listed.
-    /// let mut map = ImportMap::new();
+    /// let mut map = ImportMap::default();
     /// map.declare_loaded("http://example.org/node");
     /// assert!(map.unanchored_imports(&graph).is_empty());
     /// ```
@@ -432,14 +424,14 @@ impl ImportMap {
     /// let graph = b.freeze().expect("freeze");
     ///
     /// // Read under `ex:o`, the graph imports `ex:other`, and nothing supplies it.
-    /// let mut map = ImportMap::new();
+    /// let mut map = ImportMap::default();
     /// map.declare_loaded("http://example.org/o");
     /// assert_eq!(
     ///     map.unresolved_imports(&graph),
     ///     vec!["http://example.org/other".to_owned()]
     /// );
     /// // Read under no IRI, `ex:o` is no anchor and the triple imports nothing.
-    /// assert!(ImportMap::new().unresolved_imports(&graph).is_empty());
+    /// assert!(ImportMap::default().unresolved_imports(&graph).is_empty());
     /// ```
     #[must_use]
     pub fn unresolved_imports(&self, graph: &RdfDataset) -> Vec<String> {
@@ -806,7 +798,7 @@ impl ImportClosure {
 /// map that supplies no document.
 #[must_use]
 pub fn unresolved_imports(graph: &RdfDataset, loaded: &[&str]) -> Vec<String> {
-    let mut map = ImportMap::new();
+    let mut map = ImportMap::default();
     for iri in loaded {
         map.declare_loaded(*iri);
     }
@@ -1228,10 +1220,10 @@ mod tests {
         );
 
         // A document the map supplies.
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.insert(LIB, triples(&[]));
         assert_eq!(map.closure(&importer(&[])).unresolved(), NONE);
-        let mut other = ImportMap::new();
+        let mut other = ImportMap::default();
         other.insert(OTHER, triples(&[]));
         assert_eq!(other.closure(&importer(&[])).unresolved(), [LIB.to_owned()]);
     }
@@ -1243,7 +1235,7 @@ mod tests {
     #[test]
     fn an_import_on_a_loaded_iri_counts_and_one_on_another_node_is_data() {
         let loaded = triples(&[(SHAPES, OWL_IMPORTS, LIB)]);
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.declare_loaded(SHAPES);
         assert_eq!(imported_iris(loaded.as_ref(), &[SHAPES]), [LIB]);
         assert_eq!(map.closure(&loaded).unresolved(), [LIB.to_owned()]);
@@ -1260,7 +1252,7 @@ mod tests {
 
         // A graph read under no IRI at all: the loaded anchor is absent, so the very triple
         // that was an import above is data here.
-        assert_eq!(ImportMap::new().closure(&loaded).unresolved(), NONE);
+        assert_eq!(ImportMap::default().closure(&loaded).unresolved(), NONE);
     }
 
     /// An `owl:Ontology` header's import counts: unsupplied it is refused, supplied it is
@@ -1276,12 +1268,12 @@ mod tests {
         ]);
         assert_eq!(imported_iris(graph.as_ref(), &[]), [LIB]);
         assert_eq!(
-            ImportMap::new().closure(&graph).unresolved(),
+            ImportMap::default().closure(&graph).unresolved(),
             [LIB.to_owned()],
             "only the header's import is named; the other triple is data"
         );
 
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.insert(
             LIB,
             triples(&[(LIB, "http://example.org/said", "http://example.org/v")]),
@@ -1322,11 +1314,15 @@ mod tests {
             b.freeze().expect("freeze")
         };
         assert_eq!(
-            ImportMap::new().closure(&with_header(true)).unresolved(),
+            ImportMap::default()
+                .closure(&with_header(true))
+                .unresolved(),
             [LIB.to_owned()]
         );
         assert_eq!(
-            ImportMap::new().closure(&with_header(false)).unresolved(),
+            ImportMap::default()
+                .closure(&with_header(false))
+                .unresolved(),
             NONE
         );
     }
@@ -1343,7 +1339,7 @@ mod tests {
                 (SERIES, OWL_IMPORTS, LIB),
             ])
         };
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.declare_loaded(SHAPES);
         assert_eq!(map.closure(&graph(SHAPES)).unresolved(), [LIB.to_owned()]);
         assert_eq!(
@@ -1361,7 +1357,7 @@ mod tests {
         const DEEP: &str = "http://example.org/deep";
         let root = triples(&[(SHAPES, RDF_TYPE, OWL_ONTOLOGY), (SHAPES, OWL_IMPORTS, LIB)]);
         let walk = |lib: Arc<RdfDataset>| {
-            let mut map = ImportMap::new();
+            let mut map = ImportMap::default();
             map.insert(LIB, lib);
             map.closure(&root).unresolved().to_vec()
         };
@@ -1397,7 +1393,7 @@ mod tests {
     /// it.
     #[test]
     fn an_entry_nothing_imports_is_unreached() {
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.insert(LIB, triples(&[]));
 
         let imports_nothing = triples(&[(SHAPES, RDF_TYPE, OWL_ONTOLOGY)]);
@@ -1415,7 +1411,7 @@ mod tests {
     #[test]
     fn the_merge_is_transitive_cycle_safe_and_standardized_apart() {
         let graph = document("b", "http://example.org/o", &["http://example.org/a"]);
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.insert(
             "http://example.org/a",
             document("b", "http://example.org/a-said", &["http://example.org/c"]),
@@ -1483,11 +1479,11 @@ mod tests {
             let graph = triples(&rows);
             assert_eq!(imported_iris(graph.as_ref(), &[]), [LIB], "{class}");
             assert_eq!(
-                ImportMap::new().closure(&graph).unresolved(),
+                ImportMap::default().closure(&graph).unresolved(),
                 [LIB.to_owned()],
                 "{class}: refused unsupplied"
             );
-            let mut map = ImportMap::new();
+            let mut map = ImportMap::default();
             map.insert(
                 LIB,
                 triples(&[(LIB, "http://example.org/said", "http://example.org/v")]),
@@ -1507,12 +1503,15 @@ mod tests {
                 ),
                 "{class}: merged supplied"
             );
-            assert_eq!(ImportMap::new().unanchored_imports(&graph), NO_UNANCHORED);
+            assert_eq!(
+                ImportMap::default().unanchored_imports(&graph),
+                NO_UNANCHORED
+            );
         }
         let control = triples(&[(NODE, RDF_TYPE, THING), (NODE, OWL_IMPORTS, LIB)]);
         assert_eq!(imported_iris(control.as_ref(), &[]), NONE);
-        assert_eq!(ImportMap::new().closure(&control).unresolved(), NONE);
-        let listed = ImportMap::new().unanchored_imports(&control);
+        assert_eq!(ImportMap::default().closure(&control).unresolved(), NONE);
+        let listed = ImportMap::default().unanchored_imports(&control);
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].subject, TermValue::iri(NODE));
         assert_eq!(listed[0].object, TermValue::iri(LIB));
@@ -1531,7 +1530,7 @@ mod tests {
         ]);
         assert_eq!(imported_iris(graph.as_ref(), &[]), [LIB, DEEP]);
         assert_eq!(
-            ImportMap::new().closure(&graph).unresolved(),
+            ImportMap::default().closure(&graph).unresolved(),
             [LIB.to_owned(), DEEP.to_owned()]
         );
     }
@@ -1545,8 +1544,8 @@ mod tests {
         const NODE: &str = "http://example.org/data";
         let data_only = triples(&[(NODE, RDF_TYPE, SH_DATA_GRAPH), (NODE, OWL_IMPORTS, LIB)]);
         assert_eq!(imported_iris(data_only.as_ref(), &[]), NONE);
-        assert_eq!(ImportMap::new().closure(&data_only).unresolved(), NONE);
-        let listed = ImportMap::new().unanchored_imports(&data_only);
+        assert_eq!(ImportMap::default().closure(&data_only).unresolved(), NONE);
+        let listed = ImportMap::default().unanchored_imports(&data_only);
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].subject, TermValue::iri(NODE));
 
@@ -1556,17 +1555,17 @@ mod tests {
             (NODE, OWL_IMPORTS, LIB),
         ]);
         assert_eq!(
-            ImportMap::new().closure(&with_header).unresolved(),
+            ImportMap::default().closure(&with_header).unresolved(),
             [LIB.to_owned()]
         );
         assert_eq!(
-            ImportMap::new().unanchored_imports(&with_header),
+            ImportMap::default().unanchored_imports(&with_header),
             NO_UNANCHORED
         );
 
         // A document LOADED under the node's IRI is in the loading role whatever it types
         // itself: the loaded IRI stays an anchor.
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.declare_loaded(NODE);
         assert_eq!(map.closure(&data_only).unresolved(), [LIB.to_owned()]);
     }
@@ -1583,13 +1582,13 @@ mod tests {
             ])
         };
         assert_eq!(
-            ImportMap::new()
+            ImportMap::default()
                 .closure(&importer(SH_SHAPES_GRAPH))
                 .unresolved(),
             NONE
         );
         assert_eq!(
-            ImportMap::new()
+            ImportMap::default()
                 .closure(&importer(SH_DATA_GRAPH))
                 .unresolved(),
             [LIB.to_owned()]
@@ -1605,7 +1604,7 @@ mod tests {
             (SHAPES, OWL_IMPORTS, LIB),
             (OTHER_NODE, OWL_IMPORTS, "http://example.org/root-data"),
         ]);
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.insert(
             LIB,
             triples(&[
@@ -1638,7 +1637,7 @@ mod tests {
             (SHAPES, OWL_IMPORTS, LIB),
             (LIB, RDF_TYPE, OWL_ONTOLOGY),
         ]);
-        let closure = ImportMap::new().closure(&graph);
+        let closure = ImportMap::default().closure(&graph);
         assert_eq!(closure.unresolved(), NONE);
         assert!(closure.merge(&graph).expect("freeze").is_none());
         assert_eq!(imported_iris(graph.as_ref(), &[]), vec![LIB.to_owned()]);
@@ -1664,7 +1663,7 @@ mod tests {
         };
         let first = triples(&[(LIB, OWL_VERSIONIRI, LIB_1)]);
         let conflicts = |second: &str, rows: &[(&str, &str, &str)]| {
-            let mut map = ImportMap::new();
+            let mut map = ImportMap::default();
             map.insert(LIB_1, Arc::clone(&first));
             map.insert(second, triples(rows));
             let closure = map.closure(&importer(second));
@@ -1751,7 +1750,7 @@ mod tests {
             (SHAPES, OWL_VERSIONIRI, V2),
             (SHAPES, OWL_IMPORTS, V1),
         ]);
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.insert(V1, triples(&[(SHAPES, OWL_VERSIONIRI, V1)]));
         let closure = map.closure(&graph);
         assert_eq!(
@@ -1773,7 +1772,7 @@ mod tests {
              <http://example.org/shapes/2> and <http://example.org/shapes/1>)"
         );
         // Neighbour: the imported document is the same version.
-        let mut same = ImportMap::new();
+        let mut same = ImportMap::default();
         same.insert(V1, triples(&[(SHAPES, OWL_VERSIONIRI, V2)]));
         assert_eq!(same.closure(&graph).conflicts(), []);
     }

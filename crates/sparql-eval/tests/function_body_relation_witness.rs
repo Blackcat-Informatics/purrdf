@@ -132,7 +132,7 @@ fn dataset() -> Arc<RdfDataset> {
 
 /// A registry holding one SPARQL-bodied function whose body names `predicate`.
 fn functions(predicate: &str) -> UserFunctionRegistry {
-    let mut registry = UserFunctionRegistry::new();
+    let mut registry = UserFunctionRegistry::default();
     registry.insert(
         FN_IRI,
         UserFunction {
@@ -304,7 +304,7 @@ fn an_expression_body_s_relation_attests_on_the_calling_query_s_receipt() {
         .expect("the declarations read cleanly");
     let body: purrdf_sparql_eval::ExprFnBody = Arc::new(move |call: &ExprFnCall<'_>| {
         let bound = NativeSparqlEngine::new()
-            .bind_functions(UserFunctionRegistry::new(), &nested_env)
+            .bind_functions(UserFunctionRegistry::default(), &nested_env)
             .expect("an empty registry has no body to bind");
         let inner = NativeSparqlEngine::new();
         let state = Arc::new(GovernorState::new(&QueryGovernors::UNBOUNDED));
@@ -329,7 +329,7 @@ fn an_expression_body_s_relation_attests_on_the_calling_query_s_receipt() {
         Ok(Some(TermValue::iri(format!("{EX}done"))))
     });
 
-    let mut functions = UserFunctionRegistry::new();
+    let mut functions = UserFunctionRegistry::default();
     functions.register_expr(FN_IRI, purrdf_sparql_eval::Arity::Exact(0), body);
     let bound = engine
         .bind_functions(functions, &env)
@@ -382,7 +382,7 @@ fn an_expression_body_that_invokes_no_relation_attests_nothing() {
 
     let body: purrdf_sparql_eval::ExprFnBody =
         Arc::new(|_call: &ExprFnCall<'_>| Ok(Some(TermValue::iri(format!("{EX}done")))));
-    let mut functions = UserFunctionRegistry::new();
+    let mut functions = UserFunctionRegistry::default();
     functions.register_expr(FN_IRI, purrdf_sparql_eval::Arity::Exact(0), body);
     let bound = engine
         .bind_functions(functions, &env)

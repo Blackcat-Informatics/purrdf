@@ -285,18 +285,12 @@ impl OkfConfig {
 ///
 /// Paths are normalized POSIX-relative `.md` names and iteration is lexical by
 /// path. Documents are UTF-8 [`String`] values, so invalid body/frontmatter bytes
-/// cannot enter the codec. Construction enforces the public resource limits.
+/// cannot enter the codec. Construction enforces the public resource limits. The
+/// [`Default`] bundle is empty.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OkfBundle {
     documents: BTreeMap<String, String>,
     total_bytes: usize,
-}
-
-purrdf_lex::constructors! {
-    impl OkfBundle {
-        /// Construct an empty bundle.
-        pub fn new() -> Self::default();
-    }
 }
 
 impl OkfBundle {
@@ -311,7 +305,7 @@ impl OkfBundle {
         P: Into<String>,
         D: Into<String>,
     {
-        let mut bundle = Self::new();
+        let mut bundle = Self::default();
         for (path, document) in documents {
             bundle.insert(path, document)?;
         }

@@ -5387,14 +5387,14 @@ mod tests {
     /// Evaluate a constant expression (empty solution) and return the EBV.
     fn ebv(ds: &RdfDataset, expr: &Expression) -> Option<bool> {
         let mut ctx = EvalCtx::new(ds);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         eval_ebv(expr, &[], &schema, &mut ctx).expect("eval")
     }
 
     /// Evaluate a constant expression to a string lexical form, if it is a literal.
     fn lex(ds: &RdfDataset, expr: &Expression) -> Option<String> {
         let mut ctx = EvalCtx::new(ds);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let term = eval_expr(expr, &[], &schema, &mut ctx).expect("eval")?;
         match value_of(&ctx, term) {
             TermValue::Literal { lexical_form, .. } => Some(lexical_form),
@@ -5526,7 +5526,7 @@ mod tests {
     #[test]
     fn string_predicates_do_not_mint_nested_str_terms() {
         let ds = empty_ds();
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let mut ctx = EvalCtx::new(&ds);
         let expr = Expression::FunctionCall(
             Function::StrStarts,
@@ -5624,7 +5624,7 @@ mod tests {
     #[test]
     fn regex_cache_reuses_compiled_pattern_and_failures() {
         let ds = empty_ds();
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let mut ctx = EvalCtx::new(&ds);
         let re = Expression::FunctionCall(
             Function::Regex,
@@ -5670,7 +5670,7 @@ mod tests {
     #[test]
     fn regex_q_flag_compiles_and_caches_like_any_other() {
         let ds = empty_ds();
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let mut ctx = EvalCtx::new(&ds);
         let re = Expression::FunctionCall(
             Function::Regex,
@@ -6081,7 +6081,7 @@ mod tests {
         // "a" + 1 → type error → Ok(None) (a FILTER drops the row; no hard Err).
         let expr = Expression::arithmetic(lit("a"), ArithmeticOperator::Add, typed_lit("1", XINT));
         let mut ctx = EvalCtx::new(&ds);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let result = eval_expr(&expr, &[], &schema, &mut ctx).expect("no hard error");
         assert!(
             result.is_none(),
@@ -6099,7 +6099,7 @@ mod tests {
             typed_lit("0", XINT),
         );
         let mut ctx = EvalCtx::new(&ds);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let result = eval_expr(&expr, &[], &schema, &mut ctx).expect("no hard error");
         assert!(result.is_none(), "divide-by-zero must be Ok(None)");
     }
@@ -6346,7 +6346,7 @@ mod tests {
     }
 
     fn subjects(ds: &RdfDataset, seq: &SolutionSeq, var: &str) -> Vec<String> {
-        let scratch = crate::scratch::ScratchInterner::new();
+        let scratch = crate::scratch::ScratchInterner::default();
         let col = seq.schema.index_of(&Variable::new(var)).unwrap();
         let mut out: Vec<String> = seq
             .rows
@@ -6963,7 +6963,7 @@ mod tests {
     /// The (lexical, datatype) pair of an evaluated constant expression.
     fn lex_and_dt(ds: &RdfDataset, expr: &Expression) -> Option<(String, String)> {
         let mut ctx = EvalCtx::new(ds);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let term = eval_expr(expr, &[], &schema, &mut ctx).expect("eval")?;
         match value_of(&ctx, term) {
             TermValue::Literal {
@@ -7332,7 +7332,7 @@ mod tests {
         // Override now with a known value for deterministic testing.
         let known_dt = purrdf_xsd::datetime_from_unix_seconds(0);
         let mut ctx = EvalCtx::new(&ds).with_now(XsdValue::DateTime(known_dt));
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let expr = Expression::FunctionCall(Function::Now, vec![].into());
         let term = eval_expr(&expr, &[], &schema, &mut ctx)
             .expect("NOW()")
@@ -7460,7 +7460,7 @@ mod tests {
     fn rand_deterministic_with_fixed_seed() {
         let ds = empty_ds();
         let mut ctx = EvalCtx::new(&ds).with_rng_seed(12345);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let expr = Expression::FunctionCall(Function::Rand, vec![].into());
         // First call
         let t1 = eval_expr(&expr, &[], &schema, &mut ctx)
@@ -7502,7 +7502,7 @@ mod tests {
         let ds = empty_ds();
         let mut ctx = EvalCtx::new(&ds);
         ctx.rng_state = 0xDEAD_BEEF_CAFE_BABEu64;
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let expr = Expression::FunctionCall(Function::Uuid, vec![].into());
         let term = eval_expr(&expr, &[], &schema, &mut ctx)
             .expect("UUID")
@@ -7539,7 +7539,7 @@ mod tests {
         let ds = empty_ds();
         let mut ctx = EvalCtx::new(&ds);
         ctx.rng_state = 0x1234_5678_9ABC_DEF0u64;
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let expr = Expression::FunctionCall(Function::StrUuid, vec![].into());
         let term = eval_expr(&expr, &[], &schema, &mut ctx)
             .expect("STRUUID")
@@ -8698,7 +8698,7 @@ mod tests {
     fn held_in(ds: &RdfDataset, arg0: Expression, arg1: Expression) -> Option<bool> {
         let expr = Expression::FunctionCall(held_in_fn(), vec![arg0, arg1].into());
         let mut ctx = EvalCtx::new(ds).with_standpoint_predicates(ex_standpoints());
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         eval_ebv(&expr, &[], &schema, &mut ctx).expect("eval")
     }
 
@@ -8712,7 +8712,7 @@ mod tests {
             vec![iri("http://ex/r"), iri("http://ex/T1")].into(),
         );
         let mut ctx = EvalCtx::new(&ds);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let err = eval_ebv(&expr, &[], &schema, &mut ctx)
             .expect_err("heldIn without a predicate table must hard-error");
         assert!(
@@ -9590,7 +9590,7 @@ mod tests {
     /// expression is unbound (a SPARQL expression error).
     fn str_lang(ds: &RdfDataset, lexical: &str, tag: &str) -> Option<TermValue> {
         let mut ctx = EvalCtx::new(ds);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let expr = Expression::FunctionCall(Function::StrLang, vec![lit(lexical), lit(tag)].into());
         let term = eval_expr(&expr, &[], &schema, &mut ctx).expect("eval")?;
         Some(value_of(&ctx, term))
@@ -9599,7 +9599,7 @@ mod tests {
     /// `STRLANGDIR(lexical, tag, dir)` as a whole [`TermValue`], or `None`.
     fn str_lang_dir(ds: &RdfDataset, lexical: &str, tag: &str, dir: &str) -> Option<TermValue> {
         let mut ctx = EvalCtx::new(ds);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let expr = Expression::FunctionCall(
             Function::StrLangDir,
             vec![lit(lexical), lit(tag), lit(dir)].into(),
@@ -9697,7 +9697,7 @@ mod tests {
     /// expression is unbound (a SPARQL expression error).
     fn str_dt(ds: &RdfDataset, lexical: &str, dt: &str) -> Option<TermValue> {
         let mut ctx = EvalCtx::new(ds);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let expr = Expression::FunctionCall(Function::StrDt, vec![lit(lexical), iri(dt)].into());
         let term = eval_expr(&expr, &[], &schema, &mut ctx).expect("eval")?;
         Some(value_of(&ctx, term))
@@ -9875,7 +9875,7 @@ mod tests {
                 "https://example.org/accordingTo",
                 "https://example.org/sharpens",
             ));
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         matches!(eval_expr(expr, &[], &schema, &mut ctx), Ok(Some(_)))
     }
 
@@ -10173,7 +10173,7 @@ mod tests {
         // parameter is optional — so the planner may not call any position strict.
         const HOST_FN: &str = "https://example.org/fn/host";
         let custom = Function::Custom(NamedNode::new_unchecked(HOST_FN));
-        let mut registry = crate::user_fn::UserFunctionRegistry::new();
+        let mut registry = crate::user_fn::UserFunctionRegistry::default();
         registry.insert(
             HOST_FN,
             crate::user_fn::UserFunction {
@@ -10192,7 +10192,7 @@ mod tests {
         let answer = eval_expr(
             &Expression::FunctionCall(custom.clone(), vec![unbound()].into()),
             &[],
-            &VarSchema::new(),
+            &VarSchema::default(),
             &mut ctx,
         );
         // The failure names which way the call went rather than printing its value:
@@ -10341,7 +10341,7 @@ mod tests {
         };
         let run = |expr: &Expression| {
             let mut ctx = EvalCtx::new(&*ds);
-            eval_ebv(expr, &[], &VarSchema::new(), &mut ctx)
+            eval_ebv(expr, &[], &VarSchema::default(), &mut ctx)
         };
         let or = Expression::Or(
             Chain::try_from(vec![truth(Some(true)), truth(None), hard()])
@@ -10398,7 +10398,8 @@ mod tests {
         ];
         let term = |expr: &Expression| {
             let mut ctx = EvalCtx::new(&*ds);
-            let term = eval_expr(expr, &[], &VarSchema::new(), &mut ctx).expect("no hard error");
+            let term =
+                eval_expr(expr, &[], &VarSchema::default(), &mut ctx).expect("no hard error");
             term.map(|t| value_of(&ctx, t))
         };
         // A fixed linear congruential sequence: the cases are the same on every run.
@@ -10441,7 +10442,7 @@ mod tests {
         let ds = empty_ds();
         let run = |expr: &Expression| {
             let mut ctx = EvalCtx::new(&*ds);
-            eval_expr(expr, &[], &VarSchema::new(), &mut ctx).map(|term| term.is_some())
+            eval_expr(expr, &[], &VarSchema::default(), &mut ctx).map(|term| term.is_some())
         };
         let hard = Expression::FunctionCall(
             Function::Custom(NamedNode::new_unchecked(

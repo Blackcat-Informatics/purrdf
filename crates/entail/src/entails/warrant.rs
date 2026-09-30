@@ -751,7 +751,7 @@ fn replay(
 /// let conclusion = c.freeze().expect("freeze");
 ///
 /// let certificate =
-///     entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new()).expect("a consistent run");
+///     entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::default()).expect("a consistent run");
 /// let EntailmentOutcome::Entailed(warrant) = certificate.outcome() else {
 ///     panic!("cax-sco derives it");
 /// };

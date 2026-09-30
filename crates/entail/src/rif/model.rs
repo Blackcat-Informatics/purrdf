@@ -57,14 +57,6 @@ pub struct RuleSet {
     pub rules: Vec<Rule>,
 }
 
-purrdf_lex::constructors! {
-    impl RuleSet {
-        /// An empty rule set.
-        #[must_use]
-        pub fn new() -> Self::default();
-    }
-}
-
 impl RuleSet {
     /// Append a ground fact.
     pub fn push_fact(&mut self, fact: Fact) {

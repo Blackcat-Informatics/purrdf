@@ -851,13 +851,15 @@ fn stream_cmp_ids(resolver: &dyn TermResolve, left: TermId, right: TermId) -> Or
     CanonicalBytes::of_id(resolver, left).cmp(CanonicalBytes::of_id(resolver, right))
 }
 
-impl Term {
-    /// Construct a blank-node term from its label.
-    #[inline]
-    pub fn blank(label: impl Into<String>) -> Self {
-        Self::BlankNode(label.into())
+purrdf_lex::constructors! {
+    impl Term {
+        /// Construct a blank-node term from its label.
+        #[inline]
+        pub fn blank(label) -> Self::BlankNode;
     }
+}
 
+impl Term {
     /// The blank-node label, if this term is a blank node.
     #[inline]
     pub fn blank_label(&self) -> Option<&str> {

@@ -122,7 +122,7 @@ pub use purrdf_core::imports::{ImportClosure, ImportMap, imported_iris, unresolv
 /// b.push_quad(s, p, o, None);
 /// let document = b.freeze().expect("freeze");
 ///
-/// let mut map = ImportMap::new();
+/// let mut map = ImportMap::default();
 /// map.insert("http://example.org/lib", document);
 /// let mut resolve = rif_resolver(&map);
 ///
@@ -243,7 +243,7 @@ mod tests {
     fn a_premise_that_imports_nothing_is_not_copied() {
         let premise = document("b", "http://example.org/o", &[]);
         assert!(
-            resolve(&premise, &ImportMap::new())
+            resolve(&premise, &ImportMap::default())
                 .expect("no import to resolve")
                 .is_none()
         );
@@ -263,7 +263,7 @@ mod tests {
             b.push_quad(lib, version_iri, v, None);
             b.freeze().expect("freeze")
         };
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.insert(V1, version(V1));
         map.insert(V2, version(V2));
         let Err(EntailError::IncompatibleImports(conflicts)) =
@@ -274,7 +274,7 @@ mod tests {
         assert_eq!(conflicts.len(), 1);
         assert_eq!(conflicts[0].first.as_deref(), Some(V1));
         assert_eq!(conflicts[0].second.as_deref(), Some(V2));
-        let mut one = ImportMap::new();
+        let mut one = ImportMap::default();
         one.insert(V2, version(V2));
         assert!(
             resolve(&document("b", "http://example.org/o", &[V2]), &one)
@@ -322,7 +322,7 @@ mod tests {
             triple(&mut b, "http://example.org/A", SUB, "http://example.org/B");
             b.freeze().expect("freeze")
         };
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.insert(LIB, schema);
         let options = purrdf_datalog::seminaive::EvalOptions::default();
         let run = |premise: &RdfDataset, map: &ImportMap| {
@@ -354,7 +354,7 @@ mod tests {
         );
 
         assert!(matches!(
-            run(&premise(true), &ImportMap::new()),
+            run(&premise(true), &ImportMap::default()),
             Err(EntailError::UnresolvedImport(iri)) if iri == LIB
         ));
         assert!(matches!(
@@ -362,7 +362,7 @@ mod tests {
             Err(EntailError::UnreachedImport { iris, .. }) if iris == [LIB]
         ));
         // The import-free neighbour with no table is `materialize_with` exactly.
-        let plain = run(&premise(false), &ImportMap::new()).expect("nothing to resolve");
+        let plain = run(&premise(false), &ImportMap::default()).expect("nothing to resolve");
         let direct = crate::materialize_with(
             premise(false).as_ref(),
             crate::Materialization::Rdfs,
@@ -393,7 +393,7 @@ mod tests {
             }
             b.freeze().expect("freeze")
         };
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.insert(LIB, document("b", "http://example.org/lib-said", &[]));
 
         let Err(refusal) = resolve(&premise(false), &map) else {
@@ -431,7 +431,8 @@ mod tests {
     #[test]
     fn an_unresolvable_import_names_the_document() {
         let premise = document("b", "http://example.org/o", &["http://example.org/a"]);
-        let Err(EntailError::UnresolvedImport(iri)) = resolve(&premise, &ImportMap::new()) else {
+        let Err(EntailError::UnresolvedImport(iri)) = resolve(&premise, &ImportMap::default())
+        else {
             panic!("an import nobody supplied must refuse");
         };
         assert_eq!(iri, "http://example.org/a");
@@ -442,7 +443,7 @@ mod tests {
         // a imports b imports a: OWL 2 permits the cycle, so the merge must terminate and
         // must carry BOTH documents.
         let premise = document("b", "http://example.org/o", &["http://example.org/a"]);
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.insert(
             "http://example.org/a",
             document("b", "http://example.org/a-said", &["http://example.org/c"]),
@@ -477,7 +478,7 @@ mod tests {
     #[test]
     fn an_imported_document_is_itself_checked_for_imports() {
         let premise = document("b", "http://example.org/o", &["http://example.org/a"]);
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.insert(
             "http://example.org/a",
             document(
@@ -514,7 +515,7 @@ mod tests {
     /// The map serves the RIF lane too, so a caller declares its documents ONCE.
     #[test]
     fn the_map_resolves_a_rif_import_the_same_way() {
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.insert(
             "http://example.org/lib",
             document("b", "http://example.org/o", &[]),
@@ -587,7 +588,7 @@ mod tests {
         b.push_quad(cat, sub, animal, None);
         let schema = b.freeze().expect("freeze");
 
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.insert("http://example.org/schema", schema);
 
         // `ex:tom a ex:Animal` — reachable ONLY through the imported schema, so an entailed
@@ -674,7 +675,7 @@ mod tests {
         };
 
         // The imported document names its own `_:r`, in the DEFAULT scope.
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.insert(
             "http://example.org/a",
             document("r", "http://example.org/a-said", &[]),
@@ -707,7 +708,7 @@ mod tests {
         // Every document calls its blank node `_:b`. They are three different nodes, and the
         // premise's keeps the scope the caller gave it.
         let premise = document("b", "http://example.org/o", &["http://example.org/a"]);
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.insert(
             "http://example.org/a",
             document("b", "http://example.org/a-said", &["http://example.org/c"]),
@@ -783,7 +784,7 @@ mod tests {
         );
         assert_eq!(unresolved_imports(&merged, &[]), Vec::<String>::new());
         // …and `entails` takes the same verdict, with no import map at all.
-        resolve(&merged, &ImportMap::new()).expect("an in-graph ontology resolves its import");
+        resolve(&merged, &ImportMap::default()).expect("an in-graph ontology resolves its import");
     }
 
     /// The neighbour of the test above: `shnex.ttl` without `shacl.ttl` imports an ontology
@@ -792,7 +793,7 @@ mod tests {
     fn absent_import_is_unresolved() {
         let shnex = triples(&shnex_header());
         assert_eq!(unresolved_imports(&shnex, &[]), vec![SH.to_owned()]);
-        let Err(EntailError::UnresolvedImport(iri)) = resolve(&shnex, &ImportMap::new()) else {
+        let Err(EntailError::UnresolvedImport(iri)) = resolve(&shnex, &ImportMap::default()) else {
             panic!("an import of an absent ontology must refuse");
         };
         assert_eq!(iri, SH);
@@ -816,7 +817,7 @@ mod tests {
         );
 
         // `entails` takes the same verdict once the map knows where the premise came from.
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         assert!(resolve(&graph, &map).is_err());
         map.declare_loaded(DOC);
         assert!(
@@ -880,7 +881,7 @@ mod tests {
             (ROOT, OWL_IMPORTS, EARLY),
             (ROOT, OWL_IMPORTS, SUPPLIED),
         ]);
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.insert(
             SUPPLIED,
             triples(&[
@@ -927,7 +928,7 @@ mod tests {
             RDF_TYPE,
             "http://example.org/Animal",
         )]);
-        let certificate = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new())
+        let certificate = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::default())
             .expect("the import is resolved in place");
         let constructs: Vec<Construct> = certificate
             .report()
@@ -964,7 +965,7 @@ mod tests {
 
     /// The map supplying `ex:Cat rdfs:subClassOf ex:Animal` as [`LIB`].
     fn schema_map() -> ImportMap {
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.insert(LIB, triples(&[(CAT, SUB_CLASS_OF, ANIMAL)]));
         map
     }
@@ -996,9 +997,12 @@ mod tests {
         use crate::report::Construct;
 
         let data = premise_with(&[(OTHER_NODE, OWL_IMPORTS, LIB)]);
-        let (entailed, constructs) =
-            run(&data, &[(OTHER_NODE, OWL_IMPORTS, LIB)], &ImportMap::new())
-                .expect("a non-anchor owl:imports is not refused");
+        let (entailed, constructs) = run(
+            &data,
+            &[(OTHER_NODE, OWL_IMPORTS, LIB)],
+            &ImportMap::default(),
+        )
+        .expect("a non-anchor owl:imports is not refused");
         assert!(entailed, "the triple is still in the premise, as data");
         assert!(
             !constructs.contains(&Construct::UnresolvedOntologyImport)
@@ -1011,7 +1015,7 @@ mod tests {
             (OTHER_NODE, OWL_IMPORTS, LIB),
         ]);
         let Err(EntailError::UnresolvedImport(iri)) =
-            run(&header, &[(TOM, RDF_TYPE, CAT)], &ImportMap::new())
+            run(&header, &[(TOM, RDF_TYPE, CAT)], &ImportMap::default())
         else {
             panic!("an ontology header's unsupplied import is refused");
         };
@@ -1032,7 +1036,7 @@ mod tests {
         use crate::report::Construct;
 
         let premise = premise_with(&[(DOC, OWL_IMPORTS, LIB)]);
-        let mut loaded = ImportMap::new();
+        let mut loaded = ImportMap::default();
         loaded.declare_loaded(DOC);
         let Err(EntailError::UnresolvedImport(iri)) =
             run(&premise, &[(TOM, RDF_TYPE, CAT)], &loaded)
@@ -1063,14 +1067,15 @@ mod tests {
             (iris, unanchored),
             (vec![LIB.to_owned()], vec![LIB.to_owned()])
         );
-        let (entailed, constructs) = run(&premise, &[(TOM, RDF_TYPE, ANIMAL)], &ImportMap::new())
-            .expect("with no loaded IRI and no table the triple is data");
+        let (entailed, constructs) =
+            run(&premise, &[(TOM, RDF_TYPE, ANIMAL)], &ImportMap::default())
+                .expect("with no loaded IRI and no table the triple is data");
         assert!(
             !entailed,
             "the schema was not imported, so its axiom took no part"
         );
         assert!(!constructs.contains(&Construct::ResolvedOntologyImport));
-        let (entailed, _) = run(&premise, &[(DOC, OWL_IMPORTS, LIB)], &ImportMap::new())
+        let (entailed, _) = run(&premise, &[(DOC, OWL_IMPORTS, LIB)], &ImportMap::default())
             .expect("with no loaded IRI the triple is data");
         assert!(entailed, "the triple is still in the premise");
     }
@@ -1092,13 +1097,13 @@ mod tests {
             b.freeze().expect("freeze")
         };
         let Err(EntailError::UnresolvedImport(iri)) =
-            resolve(&blank(OWL_ONTOLOGY), &ImportMap::new())
+            resolve(&blank(OWL_ONTOLOGY), &ImportMap::default())
         else {
             panic!("an anonymous ontology's import is refused unsupplied");
         };
         assert_eq!(iri, LIB);
         assert!(
-            resolve(&blank("http://example.org/Thing"), &ImportMap::new())
+            resolve(&blank("http://example.org/Thing"), &ImportMap::default())
                 .expect("an untyped blank node imports nothing")
                 .is_none()
         );
@@ -1110,7 +1115,7 @@ mod tests {
                 (SERIES, OWL_IMPORTS, LIB),
             ])
         };
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         map.declare_loaded(DOC);
         let Err(EntailError::UnresolvedImport(iri)) = resolve(&versioned(DOC), &map) else {
             panic!("a node versioning the loaded IRI stands for the premise");
@@ -1151,7 +1156,7 @@ mod tests {
             rows.extend(axiom);
             let premise = premise_with(&rows);
             let Err(EntailError::UnresolvedImport(iri)) =
-                run(&premise, &[(TOM, RDF_TYPE, CAT)], &ImportMap::new())
+                run(&premise, &[(TOM, RDF_TYPE, CAT)], &ImportMap::default())
             else {
                 panic!("{class}: an unsupplied import of a shapes graph is refused");
             };
@@ -1187,15 +1192,16 @@ mod tests {
             (iris, unanchored),
             (vec![LIB.to_owned()], vec![LIB.to_owned()])
         );
-        let (entailed, constructs) = run(&premise, &[(TOM, RDF_TYPE, ANIMAL)], &ImportMap::new())
-            .expect("a data-graph import is not refused");
+        let (entailed, constructs) =
+            run(&premise, &[(TOM, RDF_TYPE, ANIMAL)], &ImportMap::default())
+                .expect("a data-graph import is not refused");
         assert!(!entailed, "the schema was not imported");
         assert!(!constructs.contains(&Construct::ResolvedOntologyImport));
         assert!(!constructs.contains(&Construct::UnresolvedOntologyImport));
         let (entailed, _) = run(
             &premise,
             &[(OTHER_NODE, OWL_IMPORTS, LIB)],
-            &ImportMap::new(),
+            &ImportMap::default(),
         )
         .expect("a data-graph import is not refused");
         assert!(entailed, "the triple is premise data");

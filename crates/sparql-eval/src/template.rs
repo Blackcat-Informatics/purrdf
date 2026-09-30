@@ -674,7 +674,7 @@ mod term_walk_tests {
 
     /// The schema `?a ?b` and the row binding `?a` to `bound`, leaving `?b` unbound.
     fn row_for(bound: TermId) -> (VarSchema, Solution<TermId>) {
-        let mut schema = VarSchema::new();
+        let mut schema = VarSchema::default();
         schema.push(Variable::new("a"));
         schema.push(Variable::new("b"));
         let row: Solution<TermId> =
@@ -770,7 +770,7 @@ mod term_walk_tests {
             drop(ground);
 
             let (dataset, _) = fixture();
-            let schema = VarSchema::new();
+            let schema = VarSchema::default();
             let row: Solution<TermId> = purrdf_core::smallvec![];
             let mut ctx = EvalCtx::new(&*dataset);
             let ordinal = resolve_term(&pattern, &schema);

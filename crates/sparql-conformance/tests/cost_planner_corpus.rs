@@ -75,7 +75,7 @@ fn eval_case(
         substitutions: &[],
     };
     let aggregates = case.aggregate_namespace.as_ref().map(|namespace| {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register_statistical_aggregates(namespace);
         registry
     });

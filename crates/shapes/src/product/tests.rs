@@ -319,7 +319,7 @@ impl CustomAggregate for SumAggregate {
 
 /// A registry with [`SumAggregate`] registered under [`AGG_IRI`].
 fn sum_aggregates() -> AggregateRegistry {
-    let mut registry = AggregateRegistry::new();
+    let mut registry = AggregateRegistry::default();
     registry.register(AGG_IRI, Arc::new(SumAggregate));
     registry
 }
@@ -426,7 +426,7 @@ fn admit_installs_host_aggregates() {
         .to_product_with_implementation_identity(&ShapesProfile::CORE, IMPLEMENTATION_ID)
         .expect("representable");
 
-    let functions = UserFunctionRegistry::new();
+    let functions = UserFunctionRegistry::default();
     let property_functions = PropertyFunctionRegistry::new();
     let host = HostBindings::without_declarations(
         &functions,
@@ -512,8 +512,8 @@ impl PropertyFunction for EmptyRelation {
 /// `to_product_for_host` was prepared against something, and says so.
 #[test]
 fn a_product_written_for_a_host_restores_under_that_host_s_relations() {
-    let functions = UserFunctionRegistry::new();
-    let aggregates = AggregateRegistry::new();
+    let functions = UserFunctionRegistry::default();
+    let aggregates = AggregateRegistry::default();
     let mut wired = PropertyFunctionRegistry::new();
     wired.register(
         "http://example.org/ns#rel",
@@ -566,8 +566,8 @@ fn a_product_written_for_a_host_restores_under_that_host_s_relations() {
 /// predicates are calls.
 #[test]
 fn a_product_written_under_a_declared_namespace_restores_only_under_it() {
-    let functions = UserFunctionRegistry::new();
-    let aggregates = AggregateRegistry::new();
+    let functions = UserFunctionRegistry::default();
+    let aggregates = AggregateRegistry::default();
     let relations = PropertyFunctionRegistry::new();
     let declared = crate::product::ParserOptions {
         property_fn_namespaces: vec!["http://example.org/rel/".to_owned()],
@@ -594,8 +594,8 @@ fn a_product_written_under_a_declared_namespace_restores_only_under_it() {
 #[test]
 fn core_profile_binds_the_empty_property_function_registry() {
     let bytes = product_of(PLAIN_SHAPES);
-    let functions = UserFunctionRegistry::new();
-    let aggregates = AggregateRegistry::new();
+    let functions = UserFunctionRegistry::default();
+    let aggregates = AggregateRegistry::default();
 
     let mut wired = PropertyFunctionRegistry::new();
     wired.register(
@@ -643,9 +643,9 @@ fn admit_refuses_a_different_aggregate_registry() {
         .to_product_with_implementation_identity(&ShapesProfile::CORE, IMPLEMENTATION_ID)
         .expect("representable");
 
-    let functions = UserFunctionRegistry::new();
+    let functions = UserFunctionRegistry::default();
     let property_functions = PropertyFunctionRegistry::new();
-    let none = AggregateRegistry::new();
+    let none = AggregateRegistry::default();
     let error = ShapesProduct::open(&bytes)
         .expect("opens")
         .admit(
@@ -1008,7 +1008,7 @@ fn a_declaration_the_model_does_not_reach_is_carried() {
 #[test]
 fn a_restore_that_loses_a_declaration_is_refused() {
     let parsed = shapes_of(EXPRESSION_FN_SHAPES);
-    let lost = UserFunctionRegistry::new();
+    let lost = UserFunctionRegistry::default();
     let error = super::certified::verify_declared_functions(&parsed.functions, &lost)
         .expect_err("a restore that lost the declaration must be refused");
     assert_eq!(error.dimension(), ProductDimension::UnsupportedCapability);

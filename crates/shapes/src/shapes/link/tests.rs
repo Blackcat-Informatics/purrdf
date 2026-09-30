@@ -159,7 +159,7 @@ fn link_refuses_unshared_index() {
     let mut shape = leaf_shape("A");
     shape.constraints = vec![node_by_expression(&index), node_by_expression(&stray)];
 
-    let mut registry = UserFunctionRegistry::new();
+    let mut registry = UserFunctionRegistry::default();
     let error = link_shapes(
         &[shape],
         &index,
@@ -193,7 +193,7 @@ fn link_accepts_correctly_shared_index() {
         conforms_to_computed(&index),
     ];
 
-    let mut registry = UserFunctionRegistry::new();
+    let mut registry = UserFunctionRegistry::default();
     link_shapes(
         std::slice::from_ref(&shape),
         &index,
@@ -213,7 +213,7 @@ fn link_accepts_correctly_shared_index() {
 #[test]
 fn link_accepts_a_graph_with_no_shape_index_site() {
     let index: ShapeIndex = Arc::new(OnceLock::new());
-    let mut registry = UserFunctionRegistry::new();
+    let mut registry = UserFunctionRegistry::default();
     link_shapes(
         &[leaf_shape("A")],
         &index,
@@ -237,7 +237,7 @@ fn link_accepts_a_graph_with_no_shape_index_site() {
 fn link_refuses_unfilled_custom_function_body() {
     let index: ShapeIndex = Arc::new(OnceLock::new());
     let func = declaration();
-    let mut registry = UserFunctionRegistry::new();
+    let mut registry = UserFunctionRegistry::default();
 
     let error = link_shapes(
         &[leaf_shape("A")],
@@ -270,7 +270,7 @@ fn link_accepts_a_supplied_custom_function_body() {
         func.iri.as_str().to_owned(),
         NodeExpr::Arg(ArgKey::Index(0)),
     );
-    let mut registry = UserFunctionRegistry::new();
+    let mut registry = UserFunctionRegistry::default();
 
     link_shapes(
         &[leaf_shape("A")],
@@ -303,7 +303,7 @@ fn link_accepts_a_body_installed_before_linking() {
         })
         .expect("the fixture installs once");
 
-    let mut registry = UserFunctionRegistry::new();
+    let mut registry = UserFunctionRegistry::default();
     link_shapes(
         &[leaf_shape("A")],
         &index,
@@ -326,7 +326,7 @@ fn link_refuses_a_body_with_no_declaration() {
     let index: ShapeIndex = Arc::new(OnceLock::new());
     let mut bodies = BTreeMap::new();
     bodies.insert(ex("ghost").as_str().to_owned(), NodeExpr::This);
-    let mut registry = UserFunctionRegistry::new();
+    let mut registry = UserFunctionRegistry::default();
 
     let error = link_shapes(
         &[leaf_shape("A")],
@@ -434,7 +434,7 @@ fn list_function(local: &str) -> Arc<CustomFunction> {
 #[test]
 fn a_native_registration_is_not_redefined() {
     use purrdf_sparql_eval::{Arity, Volatility};
-    let mut registry = UserFunctionRegistry::new();
+    let mut registry = UserFunctionRegistry::default();
     registry.register_native(
         ex("f").as_str(),
         Arity::Exact(1),
@@ -451,7 +451,7 @@ fn a_native_registration_is_not_redefined() {
 #[test]
 fn a_custom_sparql_function_is_redefined() {
     use purrdf_sparql_eval::{TypeConstraint, UserFnBody, UserFunction};
-    let mut registry = UserFunctionRegistry::new();
+    let mut registry = UserFunctionRegistry::default();
     registry.insert(
         ex("f").as_str(),
         UserFunction {
@@ -473,7 +473,7 @@ fn a_custom_sparql_function_is_redefined() {
 /// The neighbour: with nothing registered, the declaration registers.
 #[test]
 fn an_unregistered_declaration_registers() {
-    let mut registry = UserFunctionRegistry::new();
+    let mut registry = UserFunctionRegistry::default();
     super::register_expression_bodied_functions(&[list_function("f")], &mut registry);
     assert!(registry.resolve_expr(ex("f").as_str()).is_some());
 }

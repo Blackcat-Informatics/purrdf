@@ -958,8 +958,8 @@ impl Default for Shapes {
             node_shapes: Vec::new(),
             rules: crate::rules::RuleGraph::default(),
             box_role_vocab: None,
-            functions: Arc::new(UserFunctionRegistry::new()),
-            aggregates: Arc::new(AggregateRegistry::new()),
+            functions: Arc::new(UserFunctionRegistry::default()),
+            aggregates: Arc::new(AggregateRegistry::default()),
             validation_options: crate::engine::ValidationOptions::default(),
             target_types: std::collections::BTreeMap::new(),
             shapes_graph: None,
@@ -1774,7 +1774,7 @@ impl<'s> Parser<'s> {
         let custom_fns = self.custom_fns.clone();
         let bodies = self.parse_custom_function_bodies(&custom_fns)?;
 
-        let mut functions = UserFunctionRegistry::new();
+        let mut functions = UserFunctionRegistry::default();
         self.parse_sparql_functions(&mut functions)?;
 
         // The post-tree linking pass: install the bodies, fill the one shared
@@ -1802,7 +1802,7 @@ impl<'s> Parser<'s> {
             rules,
             box_role_vocab: self.box_role_vocab.clone(),
             functions: Arc::new(functions),
-            aggregates: Arc::new(AggregateRegistry::new()),
+            aggregates: Arc::new(AggregateRegistry::default()),
             validation_options: crate::engine::ValidationOptions::default(),
             target_types: self
                 .target_types

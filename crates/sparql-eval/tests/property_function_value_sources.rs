@@ -1433,7 +1433,7 @@ fn run_with_host_function(variant: Variant, body: &str) -> Outcome {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(EXPAND.to_owned(), relation);
     let env = ExtensionEnv::over_relations(registry).expect("the fixture declarations read");
-    let mut functions = UserFunctionRegistry::new();
+    let mut functions = UserFunctionRegistry::default();
     functions.insert(
         HOST_FN,
         UserFunction {
@@ -1707,7 +1707,7 @@ impl CustomAggregate for FirstLiteral {
 
 /// The environment `relation`, registered at `iri`, runs in beside [`FirstLiteral`].
 fn aggregating_env(iri: &str, relation: Arc<dyn PropertyFunction>) -> ExtensionEnv {
-    let mut aggregates = AggregateRegistry::new();
+    let mut aggregates = AggregateRegistry::default();
     aggregates.register(FIRST_LITERAL, Arc::new(FirstLiteral));
     let mut relations = PropertyFunctionRegistry::new();
     relations.register(iri.to_owned(), relation);

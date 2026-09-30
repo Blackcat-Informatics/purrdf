@@ -1092,51 +1092,20 @@ purrdf_lex::json_record!(OkfIndexConfig as "struct OkfIndexConfig" {
     "loss_declaration" => loss_declaration: required,
 });
 
-impl FromJson for OkfGenerationConfig {
-    /// Every member, then [`OkfGenerationConfig::new`]'s whole-profile checks.
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct OkfGenerationConfig")?;
-        let graph_selection = fields.required("graph_selection")?;
-        let categories = fields.required("categories")?;
-        let path_strategy = fields.required("path_strategy")?;
-        let frontmatter = fields.required("frontmatter")?;
-        let body_sections = fields.required("body_sections")?;
-        let link_sections = fields.required("link_sections")?;
-        let index = fields.required("index")?;
-        let limits = fields.required("limits")?;
-        let max_records = fields.required("max_records")?;
-        let max_concepts = fields.required("max_concepts")?;
-        let max_values_per_field = fields.required("max_values_per_field")?;
-        fields.deny_unknown()?;
-        Ok(Self::new(
-            graph_selection,
-            categories,
-            path_strategy,
-            frontmatter,
-            body_sections,
-            link_sections,
-            index,
-            limits,
-            max_records,
-            max_concepts,
-            max_values_per_field,
-        )?)
-    }
-}
-
-purrdf_lex::json_record!(impl ToJson for OkfGenerationConfig {
-    "graph_selection" => graph_selection,
-    "categories" => categories,
-    "path_strategy" => path_strategy,
-    "frontmatter" => frontmatter,
-    "body_sections" => body_sections,
-    "link_sections" => link_sections,
-    "index" => index,
-    "limits" => limits,
-    "max_records" => max_records,
-    "max_concepts" => max_concepts,
-    "max_values_per_field" => max_values_per_field,
-});
+// Every member, then [`OkfGenerationConfig::new`]'s whole-profile checks.
+purrdf_lex::json_record!(OkfGenerationConfig as "struct OkfGenerationConfig" {
+    "graph_selection" => graph_selection: required,
+    "categories" => categories: required,
+    "path_strategy" => path_strategy: required,
+    "frontmatter" => frontmatter: required,
+    "body_sections" => body_sections: required,
+    "link_sections" => link_sections: required,
+    "index" => index: required,
+    "limits" => limits: required,
+    "max_records" => max_records: required,
+    "max_concepts" => max_concepts: required,
+    "max_values_per_field" => max_values_per_field: required,
+} => OkfGenerationConfig::new);
 
 pub(crate) fn validate_frontmatter_key(key: &str) -> Result<(), ProjectionError> {
     let mut chars = key.chars();

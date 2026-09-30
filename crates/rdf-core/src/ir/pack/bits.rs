@@ -405,21 +405,24 @@ const WORDS_PER_SUPERBLOCK: usize = SUPERBLOCK_BITS / 64;
 /// A growable bit sequence, backed by `Vec<u64>` words (bit `i` lives in word
 /// `i / 64` at position `i % 64`, LSB-first) — the builder for a frozen
 /// [`RankSelect`].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct BitVec {
     words: Vec<u64>,
     len: usize,
 }
 
-purrdf_lex::constructors! {
-    impl BitVec {
-        /// An empty bit sequence.
-        #[must_use]
-        pub fn new() -> Self::default();
-    }
-}
+purrdf_hash::default_from_new!(BitVec);
 
 impl BitVec {
+    /// An empty bit sequence; [`Default`] delegates here.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            words: Vec::new(),
+            len: 0,
+        }
+    }
+
     /// Append one bit.
     pub fn push(&mut self, bit: bool) {
         let word_index = self.len / 64;

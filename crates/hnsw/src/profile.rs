@@ -155,7 +155,7 @@
 //! | arithmetic | identifier | evidence revision | image codes |
 //! |---|---|---|---|
 //! | [`Exact`] | [`IMPLEMENTATION_ID`] | [`LOSS_EVIDENCE`] | `Exact::IMAGE_CODES` (`1`) |
-//! | [`Reassociated`] | [`IMPLEMENTATION_ID_REASSOCIATED`] | [`loss_evidence_reassociated`] of the path | that path's one code (`2`..=`8`) |
+//! | [`Reassociated`] | [`IMPLEMENTATION_ID_REASSOCIATED`] | [`loss_evidence_for`] of the path | that path's one code (`2`..=`8`) |
 //!
 //! The exact arithmetic returns the same bits on every path, so it has one revision and
 //! one code. The reassociated arithmetic's bits depend on the dispatch path, so its
@@ -170,6 +170,7 @@ use purrdf_core::{
     canonical_tlv, push_tlv,
 };
 
+use crate::IndexArithmetic;
 use crate::error::{HnswError, Result};
 use crate::params::Params;
 
@@ -208,19 +209,6 @@ const REASSOCIATED_REPRODUCIBILITY: &str = "Its canonical image is reproducible 
      build's target architecture and features and the identity of its compiler, target CPU, \
      optimisation level and codegen flags, and a build of another shape refuses it.";
 
-/// The approximation evidence of an index whose distances are computed under the
-/// [`Reassociated`] arithmetic along `path`: [`LOSS_EVIDENCE`], then the arithmetic's
-/// own evidence for the path, then the sentence saying that only the compiled build that
-/// made the image reproduces it.
-///
-/// It is carried as that implementation's revision, so a guard over a reassociated index
-/// publishes, in the artifact, both what the graph does not promise and what its last
-/// bits do not.
-#[must_use]
-pub fn loss_evidence_reassociated(path: Path) -> String {
-    loss_evidence_for::<Reassociated>(path)
-}
-
 /// The approximation evidence of an index computed under arithmetic `A` along `path`.
 ///
 /// [`LOSS_EVIDENCE`] for an arithmetic whose bits are the same on every path (it has no
@@ -234,29 +222,6 @@ pub fn loss_evidence_for<A: Arithmetic>(path: Path) -> String {
         |evidence| format!("{LOSS_EVIDENCE}; {evidence}. {REASSOCIATED_REPRODUCIBILITY}"),
     )
 }
-
-/// The implementation identifier of the index whose distances arithmetic `A` computes.
-///
-/// # Panics
-///
-/// Never: `Arithmetic` is sealed, and every implementation of it is a row of the table
-/// this reads.
-#[must_use]
-pub fn implementation_id_for<A: Arithmetic>() -> &'static str {
-    IMPLEMENTATIONS
-        .iter()
-        .find(|(law, _)| *law == A::ID)
-        .map_or_else(
-            || unreachable!("{} is an arithmetic this profile publishes", A::ID),
-            |(_, identifier)| *identifier,
-        )
-}
-
-/// The implementation identifier each arithmetic's index publishes, by law.
-const IMPLEMENTATIONS: [(&str, &str); 2] = [
-    (Exact::ID, IMPLEMENTATION_ID),
-    (Reassociated::ID, IMPLEMENTATION_ID_REASSOCIATED),
-];
 
 /// Every dispatch path an arithmetic resolves to, so the published rows can be derived
 /// from each arithmetic's own `image_code`.
@@ -300,7 +265,7 @@ pub(crate) fn published() -> Vec<Published> {
 }
 
 /// Append arithmetic `A`'s rows: its paths grouped by the revision each publishes.
-fn publish<A: Arithmetic>(rows: &mut Vec<Published>) {
+fn publish<A: IndexArithmetic>(rows: &mut Vec<Published>) {
     for path in PATHS {
         let Some(code) = A::image_code(path) else {
             continue;
@@ -317,7 +282,7 @@ fn publish<A: Arithmetic>(rows: &mut Vec<Published>) {
                 }
             }
             None => rows.push(Published {
-                implementation: implementation_id_for::<A>(),
+                implementation: A::IMPLEMENTATION_ID,
                 arithmetic: A::ID,
                 revision,
                 codes: vec![code],
@@ -373,7 +338,7 @@ pub fn implementation() -> ArtifactIdentity {
 }
 
 /// The implementation identity of an index computed under arithmetic `A` along `path`:
-/// [`implementation_id_for`], the digest of [`profile_declaration_for`], and
+/// [`IndexArithmetic::IMPLEMENTATION_ID`], the digest of [`profile_declaration_for`], and
 /// [`loss_evidence_for`] as the revision.
 ///
 /// `path` decides nothing for an arithmetic whose bits are the same on every path.
@@ -383,9 +348,9 @@ pub fn implementation() -> ArtifactIdentity {
 /// Panics only if the profile declaration is malformed, which the compile-time constants
 /// rule out; callers cannot reach a panic.
 #[must_use]
-pub fn implementation_for<A: Arithmetic>(path: Path) -> ArtifactIdentity {
+pub fn implementation_for<A: IndexArithmetic>(path: Path) -> ArtifactIdentity {
     ArtifactIdentity::new(
-        implementation_id_for::<A>(),
+        A::IMPLEMENTATION_ID,
         IMPLEMENTATION_MEDIA_TYPE,
         ContentDigest::of(profile_declaration_for::<A>(path).as_bytes()),
         Some(loss_evidence_for::<A>(path).into_bytes()),
@@ -415,10 +380,10 @@ pub fn profile_declaration() -> String {
 /// build that computed the distances as the image header does; an exact declaration has
 /// neither line.
 #[must_use]
-pub fn profile_declaration_for<A: Arithmetic>(path: Path) -> String {
+pub fn profile_declaration_for<A: IndexArithmetic>(path: Path) -> String {
     let declaration = format!(
         "{}\n{PARAMETER_ENCODING}\n{}\n{}\narithmetic={}\n{}",
-        implementation_id_for::<A>(),
+        A::IMPLEMENTATION_ID,
         crate::INDEX_MEDIA_TYPE,
         "approximate=true;transforms_vectors=false",
         A::ID,
@@ -678,7 +643,7 @@ mod tests {
         // Literal, so a change to any of its three parts is a visible edit of an
         // artifact-bound sentence and not a silent consequence of one.
         assert_eq!(
-            loss_evidence_reassociated(Path::Avx2Fma),
+            loss_evidence_for::<Reassociated>(Path::Avx2Fma),
             "approximate: recall measured against the exact oracle on synthetic corpora up \
              to 50,000 rows, and UNMEASURED at the 10^6 scale this index exists for; an offer \
              of candidates is never a proof of absence; reassociated binary64 arithmetic: \
@@ -696,7 +661,7 @@ mod tests {
                 panic!("the reassociated arithmetic names its evidence along {path}");
             };
             assert_eq!(
-                loss_evidence_reassociated(path),
+                loss_evidence_for::<Reassociated>(path),
                 format!("{LOSS_EVIDENCE}; {evidence}. {REASSOCIATED_REPRODUCIBILITY}")
             );
         }
@@ -747,7 +712,7 @@ mod tests {
         assert_eq!(lines.len(), 8);
         assert_eq!(lines[0], IMPLEMENTATION_ID_REASSOCIATED);
         assert_eq!(lines[4], "arithmetic=binary64-reassociated-v1");
-        assert_eq!(lines[5], loss_evidence_reassociated(Path::Sse2));
+        assert_eq!(lines[5], loss_evidence_for::<Reassociated>(Path::Sse2));
         // The build is bound too, as its shape's bits and its identity's digest.
         let here = BuildShape::here();
         assert_eq!(lines[6], format!("build-shape={:016x}", here.bits()));
@@ -780,9 +745,9 @@ mod tests {
             implementation_for::<Reassociated>(Path::Sse2).digest,
             implementation().digest
         );
-        assert_eq!(implementation_id_for::<Exact>(), IMPLEMENTATION_ID);
+        assert_eq!(Exact::IMPLEMENTATION_ID, IMPLEMENTATION_ID);
         assert_eq!(
-            implementation_id_for::<Reassociated>(),
+            Reassociated::IMPLEMENTATION_ID,
             IMPLEMENTATION_ID_REASSOCIATED
         );
     }

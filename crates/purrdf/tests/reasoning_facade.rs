@@ -115,7 +115,7 @@ fn the_umbrella_names_every_type_the_reasoning_surface_carries() {
     // umbrella-visible entry point, each carrying its own input.
     for plan in [
         Materialization::OwlDirect(&[]),
-        Materialization::Rif(&RuleSet::new()),
+        Materialization::Rif(&RuleSet::default()),
     ] {
         let (_, report) = materialize(&dataset, plan).expect("a served regime");
         assert_eq!(report.regime(), plan.regime());

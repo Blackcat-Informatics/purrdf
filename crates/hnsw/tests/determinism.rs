@@ -196,8 +196,9 @@ fn exact_image_golden_unchanged_by_reassociated_surface() {
     let params = Params::new(8, 16, 32, 8).expect("valid parameters");
     let exact = HnswIndex::build(matrix.clone(), &DistanceMetric::SquaredEuclidean, params)
         .expect("builds");
-    let fast = HnswIndex::build_reassociated(matrix, &DistanceMetric::SquaredEuclidean, params)
-        .expect("builds");
+    let fast =
+        purrdf_hnsw::build::<Reassociated>(matrix, &DistanceMetric::SquaredEuclidean, params)
+            .expect("builds");
     let (exact_image, fast_image) = (exact.canonical_image(), fast.canonical_image());
     let code = |image: &[u8]| u32::from_le_bytes(image[60..64].try_into().expect("four bytes"));
     assert_eq!(code(&exact_image), Exact::IMAGE_CODE);

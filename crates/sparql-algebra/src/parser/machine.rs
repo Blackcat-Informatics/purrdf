@@ -409,7 +409,7 @@ impl GroupState {
         Self {
             g: GraphPattern::Bgp { patterns: vec![] },
             filters: Vec::new(),
-            scope: VarScope::new(),
+            scope: VarScope::default(),
             open_bgp: None,
             intro: false,
             union: None,
@@ -1456,7 +1456,7 @@ impl Parser<'_, '_> {
                     version, self.version,
                     "a sub-SELECT copies the request's one prologue VERSION"
                 );
-                let mut scope = VarScope::new();
+                let mut scope = VarScope::default();
                 collect_vars(&pattern, &mut scope);
                 GroupValue {
                     pattern,

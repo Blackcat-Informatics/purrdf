@@ -200,7 +200,7 @@ struct TableMark {
 /// Term ids are append-order during ingestion (process-unstable), then re-id'd
 /// by content in `Self::canonical_tables` so the emitted bytes are a pure
 /// function of the inputs.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SnapshotBuilder {
     terms: Vec<TermRow>,
     /// Hash-consed intern index over NON-blank term rows, holding `terms`
@@ -233,14 +233,26 @@ pub struct SnapshotBuilder {
     totals: IngestReport,
 }
 
-purrdf_lex::constructors! {
-    impl SnapshotBuilder {
-        /// A fresh, empty builder.
-        pub fn new() -> Self::default();
-    }
-}
+purrdf_hash::default_from_new!(SnapshotBuilder);
 
 impl SnapshotBuilder {
+    /// A fresh, empty builder; [`Default`] delegates here.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            terms: Vec::new(),
+            index: HashTable::new(),
+            bnode_keys: Vec::new(),
+            bnode_index: HashTable::new(),
+            bnode_wire: HashTable::new(),
+            quads: Vec::new(),
+            reifies: Vec::new(),
+            annot: Vec::new(),
+            poison: None,
+            totals: IngestReport::default(),
+        }
+    }
+
     /// Append a freshly built non-blank term row and index it. The insertion
     /// path owns its strings; that is the dictionary, not scratch.
     fn push_term_row(&mut self, row: TermRow) -> usize {

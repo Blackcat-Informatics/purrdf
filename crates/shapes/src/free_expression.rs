@@ -135,7 +135,7 @@ pub fn evaluate(request: &FreeExpression<'_>) -> Result<NodeExprEvaluation, Shap
     let _function_scope =
         crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(&shapes.functions)?);
     let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
-    let mut guard = RecursionGuard::new();
+    let mut guard = RecursionGuard::default();
     let outputs = eval_bound(
         &data,
         request.focus,

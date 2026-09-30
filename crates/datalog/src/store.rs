@@ -133,13 +133,6 @@ pub struct TermInterner {
     bytes: usize,
 }
 
-purrdf_lex::constructors! {
-    impl TermInterner {
-        /// A fresh, empty dictionary.
-        pub fn new() -> Self::default();
-    }
-}
-
 impl TermInterner {
     /// Intern `surface`, minting a new insertion-ordered id if it is new, else
     /// returning the existing id.
@@ -986,7 +979,7 @@ impl<'a> Iterator for Partitions<'a> {
 /// them through [`Self::term_id`]. See the module docs for how the partitioning keeps a
 /// constant-predicate atom exactly as fast as it was when predicates were relation
 /// symbols.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct RelationStore {
     /// The store's term dictionary, shared by every position of every partition. This is
     /// the persistent term arena: never reset within the store's lifetime, because a
@@ -1017,14 +1010,24 @@ pub struct RelationStore {
     empty: Relation,
 }
 
-purrdf_lex::constructors! {
-    impl RelationStore {
-        /// A fresh, empty store.
-        pub fn new() -> Self::default();
-    }
-}
+purrdf_hash::default_from_new!(RelationStore);
 
 impl RelationStore {
+    /// A fresh, empty store; [`Default`] delegates here.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            interner: TermInterner::default(),
+            relations: Vec::new(),
+            keys: Vec::new(),
+            by_key: BTreeMap::new(),
+            order: Vec::new(),
+            row_count: 0,
+            row_log: Vec::new(),
+            empty: Relation::default(),
+        }
+    }
+
     /// The lexical surface of the DEFAULT GRAPH: the EMPTY surface.
     ///
     /// RDF's default graph has no name, and PurRDF mints no vocabulary, so the store says

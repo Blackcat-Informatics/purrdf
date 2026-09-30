@@ -885,7 +885,7 @@ const DEPTH: usize = 100_000;
 fn evaluate(expr: &Expression) -> Option<TermValue> {
     let ds = RdfDatasetBuilder::new().freeze().expect("an empty dataset");
     let mut ctx = EvalCtx::new(&ds);
-    let schema = VarSchema::new();
+    let schema = VarSchema::default();
     let program = Arc::new(ExprProgram::compile(expr));
     let mut linked = Linked::link(program, expr, &schema, &mut ctx);
     let term = linked.term(&[], &schema, &mut ctx).expect("no hard error");
@@ -926,7 +926,7 @@ fn a_deep_triple_constructor_chain_interns_its_outermost_term_once() {
         }
         let ds = RdfDatasetBuilder::new().freeze().expect("an empty dataset");
         let mut ctx = EvalCtx::new(&ds);
-        let schema = VarSchema::new();
+        let schema = VarSchema::default();
         let program = Arc::new(ExprProgram::compile(&expr));
         let mut linked = Linked::link(program, &expr, &schema, &mut ctx);
         let term = linked.term(&[], &schema, &mut ctx).expect("no hard error");

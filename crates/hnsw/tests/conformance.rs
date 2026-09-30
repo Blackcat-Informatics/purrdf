@@ -48,8 +48,8 @@ use purrdf_core::distance::{Arithmetic, Exact, Reassociated};
 use purrdf_hash::fnv::fnv1a64;
 use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{
-    HnswIndex, IMPLEMENTATION_ID, IMPLEMENTATION_ID_REASSOCIATED, INDEX_MEDIA_TYPE, Params,
-    VectorMatrix, profile,
+    HnswIndex, IMPLEMENTATION_ID, IMPLEMENTATION_ID_REASSOCIATED, INDEX_MEDIA_TYPE,
+    IndexArithmetic, Params, VectorMatrix, profile,
 };
 use purrdf_sparql_eval::knn::{Kernel, Ranked, best};
 use std::fmt::Write as _;
@@ -271,7 +271,7 @@ fn run_regime(fixture: &Fixture, index: &HnswIndex, norms: &[f64], ef: usize, k:
 /// [`run_regime`] for an index under any arithmetic, whose reported distances must equal
 /// `oracle`'s bits. Recall is always counted against the EXACT top-`k`: the approximation
 /// is graded against the exact answer whatever arithmetic the index ranks under.
-fn run_regime_under<A: Arithmetic>(
+fn run_regime_under<A: IndexArithmetic>(
     fixture: &Fixture,
     index: &HnswIndex<A>,
     norms: &[f64],
@@ -390,7 +390,7 @@ fn run_regime_under<A: Arithmetic>(
             .with(
                 "index_identity",
                 Object::new()
-                    .with("implementation", profile::implementation_id_for::<A>())
+                    .with("implementation", A::IMPLEMENTATION_ID)
                     .with("parameter_encoding", profile::PARAMETER_ENCODING)
                     .with("payload_media_type", INDEX_MEDIA_TYPE)
                     .with(
@@ -848,7 +848,7 @@ fn reassociated_distances_match_reassociated_kernel() {
     for fixture in &family() {
         let norms = norms_of(&fixture.matrix);
         for regime in regimes() {
-            let index = HnswIndex::build_reassociated(fixture.matrix.clone(), &METRIC, regime)
+            let index = purrdf_hnsw::build::<Reassociated>(fixture.matrix.clone(), &METRIC, regime)
                 .expect("the fixture builds");
             assert_eq!(
                 index.arithmetic(),
@@ -868,7 +868,7 @@ fn reassociated_distances_match_reassociated_kernel() {
             }
         }
     }
-    let evidence = profile::loss_evidence_reassociated(resolved.path());
+    let evidence = profile::loss_evidence_for::<Reassociated>(resolved.path());
     let path = emit(
         "reassociated-conformance",
         &receipt_for(
@@ -902,7 +902,7 @@ fn reassociated_recall_meets_exact_floor() {
     for fixture in &family() {
         let norms = norms_of(&fixture.matrix);
         for (ordinal, regime) in regimes().into_iter().enumerate() {
-            let index = HnswIndex::build_reassociated(fixture.matrix.clone(), &METRIC, regime)
+            let index = purrdf_hnsw::build::<Reassociated>(fixture.matrix.clone(), &METRIC, regime)
                 .expect("the fixture builds");
             for &k in &KS {
                 let run = run_regime_under(fixture, &index, &norms, regime.ef_search(), k, &oracle);

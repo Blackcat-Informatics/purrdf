@@ -507,20 +507,14 @@ impl ServiceProfile {
 /// A catalog is the whole per-service policy in one value, so what a resolver will do is
 /// inspectable in one place rather than spread across the resolver, the query text, and
 /// the environment.
+///
+/// The [`Default`] catalog is empty: every service is denied.
 #[derive(Debug, Clone, Default)]
 pub struct ServiceCatalog {
     /// Per-endpoint profiles.
     profiles: DetHashMap<String, ServiceProfile>,
     /// The profile applied to a service with no entry of its own, when one is configured.
     fallback: Option<ServiceProfile>,
-}
-
-purrdf_lex::constructors! {
-    impl ServiceCatalog {
-        /// An empty catalog: every service is denied.
-        #[must_use]
-        pub fn new() -> Self::default();
-    }
 }
 
 impl ServiceCatalog {
@@ -625,7 +619,7 @@ impl ServiceCatalog {
 /// the catalog is consulted for every resolution, **including the nested ones** a
 /// `SERVICE` inside a forwarded body performs, because a nested body is resolved by
 /// threading `self` — the gated resolver — back into the forwarded evaluation.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct InProcessServiceResolver {
     /// Endpoint IRI → the dataset that answers it.
     datasets: DetHashMap<String, Arc<RdfDataset>>,
@@ -633,15 +627,18 @@ pub struct InProcessServiceResolver {
     catalog: Option<ServiceCatalog>,
 }
 
-purrdf_lex::constructors! {
-    impl InProcessServiceResolver {
-        /// An empty resolver with no endpoints and no catalog.
-        #[must_use]
-        pub fn new() -> Self::default();
-    }
-}
+purrdf_hash::default_from_new!(InProcessServiceResolver);
 
 impl InProcessServiceResolver {
+    /// An empty resolver with no endpoints and no catalog; [`Default`] delegates here.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            datasets: DetHashMap::default(),
+            catalog: None,
+        }
+    }
+
     /// Register `dataset` as the contents of `endpoint`.
     #[must_use]
     pub fn with_endpoint(mut self, endpoint: impl Into<String>, dataset: Arc<RdfDataset>) -> Self {
@@ -888,7 +885,7 @@ mod tests {
 
     #[test]
     fn an_uncatalogued_service_is_denied_and_a_listed_one_is_not() {
-        let catalog = ServiceCatalog::new();
+        let catalog = ServiceCatalog::default();
         let denial = catalog
             .authorize(
                 "https://example.org/sparql",
@@ -909,7 +906,7 @@ mod tests {
 
         // …and the neighbouring VALID case: the same catalog with the service listed
         // authorizes it. A denial that fired for everything would prove nothing.
-        let catalog = ServiceCatalog::new().with_service(
+        let catalog = ServiceCatalog::default().with_service(
             "https://example.org/sparql",
             ServiceProfile::new(ServiceCapabilities::granting([ServiceCapability::Query])),
         );
@@ -924,7 +921,7 @@ mod tests {
 
     #[test]
     fn a_fallback_profile_is_the_explicit_opt_out_of_deny_by_default() {
-        let catalog = ServiceCatalog::new().with_fallback(ServiceProfile::new(
+        let catalog = ServiceCatalog::default().with_fallback(ServiceProfile::new(
             ServiceCapabilities::granting([ServiceCapability::Query]),
         ));
         catalog
@@ -949,7 +946,7 @@ mod tests {
 
     #[test]
     fn a_credential_without_its_capability_is_refused_rather_than_dropped() {
-        let catalog = ServiceCatalog::new().with_service(
+        let catalog = ServiceCatalog::default().with_service(
             "https://example.org/sparql",
             ServiceProfile::new(ServiceCapabilities::granting([
                 ServiceCapability::Query,
@@ -970,7 +967,7 @@ mod tests {
 
         // The neighbouring VALID case: grant the capability and the same profile
         // authorizes, and its request headers carry the credential.
-        let catalog = ServiceCatalog::new().with_service(
+        let catalog = ServiceCatalog::default().with_service(
             "https://example.org/sparql",
             ServiceProfile::new(ServiceCapabilities::granting([
                 ServiceCapability::Query,

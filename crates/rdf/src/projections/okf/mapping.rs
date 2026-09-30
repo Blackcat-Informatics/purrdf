@@ -711,7 +711,7 @@ impl<'a> Projector<'a> {
     }
 
     fn render_bundle(&self, documents: &[ConceptDocument]) -> Result<OkfBundle, ProjectionError> {
-        let mut bundle = OkfBundle::new();
+        let mut bundle = OkfBundle::default();
         for document in documents {
             let markdown = render_document(&document.frontmatter, &document.body)?;
             bundle

@@ -906,7 +906,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
 
         Self {
             dataset,
-            scratch: ScratchInterner::new(),
+            scratch: ScratchInterner::default(),
             active_graph: GraphMatch::Default,
             active_dataset: ActiveDataset::store_default(),
             bnode_counter: 0,
@@ -2250,7 +2250,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // Fresh: the body is an independent query that mints its own computed
             // terms; its parameter inputs ride in as ground substitutions, not
             // scratch ids, so no parent scratch state is needed.
-            scratch: ScratchInterner::new(),
+            scratch: ScratchInterner::default(),
             // The body evaluates as a root query; `evaluate_query` re-installs the
             // body's own FROM/base, so seed the default graph here.
             active_graph: GraphMatch::Default,
@@ -2879,7 +2879,7 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
         match step {
             Step::Derive(pattern) => match pattern {
                 GraphPattern::Bgp { patterns } => {
-                    let mut schema = VarSchema::new();
+                    let mut schema = VarSchema::default();
                     for pattern in patterns {
                         push_triple(pattern, &mut schema);
                     }
@@ -2890,7 +2890,7 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
                     path: _,
                     object,
                 } => {
-                    let mut schema = VarSchema::new();
+                    let mut schema = VarSchema::default();
                     push_term(subject, &mut schema);
                     push_term(object, &mut schema);
                     schemas.push(schema);
@@ -2977,7 +2977,7 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
                 // flattened first-seen order, subject side then object side, which is the
                 // order the dispatch fills them in.
                 GraphPattern::PropertyFunction(call) => {
-                    let mut schema = VarSchema::new();
+                    let mut schema = VarSchema::default();
                     for term in call.subject_args.iter().chain(&call.object_args) {
                         push_term(term, &mut schema);
                     }
@@ -3014,7 +3014,7 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
                 let first = schemas.len() - count;
                 let union = schemas
                     .drain(first..)
-                    .fold(VarSchema::new(), |schema, arm| schema.union(&arm));
+                    .fold(VarSchema::default(), |schema, arm| schema.union(&arm));
                 schemas.push(union);
             }
         }
@@ -4426,7 +4426,7 @@ mod syntactic_schema_tests {
     fn reference(pattern: &GraphPattern) -> VarSchema {
         match pattern {
             GraphPattern::Bgp { patterns } => {
-                let mut schema = VarSchema::new();
+                let mut schema = VarSchema::default();
                 for pattern in patterns {
                     reference_triple(pattern, &mut schema);
                 }
@@ -4435,7 +4435,7 @@ mod syntactic_schema_tests {
             GraphPattern::Path {
                 subject, object, ..
             } => {
-                let mut schema = VarSchema::new();
+                let mut schema = VarSchema::default();
                 reference_term(subject, &mut schema);
                 reference_term(object, &mut schema);
                 schema
@@ -4443,9 +4443,11 @@ mod syntactic_schema_tests {
             GraphPattern::Join { left, right }
             | GraphPattern::LeftJoin { left, right, .. }
             | GraphPattern::Lateral { left, right } => reference(left).union(&reference(right)),
-            GraphPattern::Union { arms } => arms.iter().fold(VarSchema::new(), |schema, arm| {
-                schema.union(&reference(arm))
-            }),
+            GraphPattern::Union { arms } => {
+                arms.iter().fold(VarSchema::default(), |schema, arm| {
+                    schema.union(&reference(arm))
+                })
+            }
             GraphPattern::Minus { left, .. } => reference(left),
             GraphPattern::Filter { inner, .. }
             | GraphPattern::OrderBy { inner, .. }
@@ -4495,7 +4497,7 @@ mod syntactic_schema_tests {
                 schema
             }
             GraphPattern::PropertyFunction(call) => {
-                let mut schema = VarSchema::new();
+                let mut schema = VarSchema::default();
                 for term in call.subject_args.iter().chain(&call.object_args) {
                     reference_term(term, &mut schema);
                 }

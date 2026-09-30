@@ -4061,17 +4061,10 @@ struct CredentialJson {
     value: String,
 }
 
-impl FromJson for CredentialJson {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut record = Record::new(value, "a credential object")?;
-        let credential = Self {
-            header: record.required("header")?,
-            value: record.required("value")?,
-        };
-        record.deny_unknown()?;
-        Ok(credential)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for CredentialJson as "a credential object" {
+    "header" => header: required,
+    "value" => value: required,
+});
 
 // Hand-written so the secret never reaches a log.
 impl fmt::Debug for CredentialJson {

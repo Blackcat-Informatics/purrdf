@@ -579,7 +579,7 @@ fn deep_fn() -> String {
 
 /// A bound registry holding [`deep_fn`].
 fn deep_functions() -> BoundFunctionRegistry {
-    let mut functions = UserFunctionRegistry::new();
+    let mut functions = UserFunctionRegistry::default();
     functions.register_native(
         deep_fn(),
         Arity::Exact(1),
@@ -832,7 +832,7 @@ fn a_term_built_on_a_worker_answers_every_row() {
             let data = builder.freeze().expect("freezes");
             let evaluating = std::thread::current().id();
             let elsewhere = Arc::new(AtomicUsize::new(0));
-            let mut functions = UserFunctionRegistry::new();
+            let mut functions = UserFunctionRegistry::default();
             let counted = Arc::clone(&elsewhere);
             functions.register_native(
                 deep_fn(),

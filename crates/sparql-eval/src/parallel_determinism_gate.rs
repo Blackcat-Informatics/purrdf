@@ -813,7 +813,7 @@ impl crate::agg_fn::CustomAggregate for ListCollectorAggregate {
 fn custom_aggregate_single_huge_group_parallel_and_sequential_agree() {
     let ds = people_dataset();
     let engine = NativeSparqlEngine::new();
-    let mut registry = crate::agg_fn::AggregateRegistry::new();
+    let mut registry = crate::agg_fn::AggregateRegistry::default();
     registry.register(
         "https://example.org/agg/listCollector",
         Arc::new(ListCollectorAggregate),

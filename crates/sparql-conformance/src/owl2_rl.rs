@@ -946,7 +946,7 @@ pub fn discover(root: &Path) -> Result<Vec<RlCase>, String> {
 /// if a document does not declare exactly one named ontology.
 pub fn vendored_imports(root: &Path) -> Result<purrdf_entail::ImportMap, String> {
     let dir = root.join("imports");
-    let mut map = purrdf_entail::ImportMap::new();
+    let mut map = purrdf_entail::ImportMap::default();
     if !dir.is_dir() {
         return Ok(map);
     }
@@ -1100,7 +1100,7 @@ pub fn certify(
     // exactly the ones its own `owl:imports` closure reaches. Handing every case the whole
     // pool would be supplying documents its premise never names, which the service
     // refuses (`EntailError::UnreachedImport`) rather than silently ignoring.
-    let mut own = purrdf_entail::ImportMap::new();
+    let mut own = purrdf_entail::ImportMap::default();
     for (iri, document) in imports.closure(&premise).documents() {
         own.insert(iri.clone(), std::sync::Arc::clone(document));
     }

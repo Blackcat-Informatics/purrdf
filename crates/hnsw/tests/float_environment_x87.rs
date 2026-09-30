@@ -144,9 +144,12 @@ fn a_directed_x87_worker_is_refused_by_name_and_a_clean_worker_answers_the_same_
     let matrix = fixture.matrix.clone();
     let exact = HnswIndex::build(matrix.clone(), &DistanceMetric::SquaredEuclidean, params())
         .expect("builds in the default environment");
-    let fast =
-        HnswIndex::build_reassociated(matrix.clone(), &DistanceMetric::SquaredEuclidean, params())
-            .expect("builds in the default environment");
+    let fast = purrdf_hnsw::build::<Reassociated>(
+        matrix.clone(),
+        &DistanceMetric::SquaredEuclidean,
+        params(),
+    )
+    .expect("builds in the default environment");
     let space = Arc::new(
         EmbeddingSpace::from_artifact(
             &fixture.without_index,

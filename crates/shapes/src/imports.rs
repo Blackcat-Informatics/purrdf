@@ -169,7 +169,7 @@ pub use purrdf_iri::vocab::sh::SHAPES_GRAPH_PROPERTY as SH_SHAPES_GRAPH_LINK;
 ///     .expect("every import resolves");
 /// assert_eq!(parsed.node_shapes.len(), 1);
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ShapesImports {
     /// The kernel's table: ontology IRI → document, plus the loaded IRIs.
     map: ImportMap,
@@ -181,15 +181,20 @@ pub struct ShapesImports {
     links: Vec<String>,
 }
 
-purrdf_lex::constructors! {
-    impl ShapesImports {
-        /// A table that supplies no document and declares no loaded IRI.
-        #[must_use]
-        pub fn new() -> Self::default();
-    }
-}
+purrdf_hash::default_from_new!(ShapesImports);
 
 impl ShapesImports {
+    /// A table that supplies no document and declares no loaded IRI; [`Default`]
+    /// delegates here.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            map: ImportMap::default(),
+            prefixes: BTreeMap::new(),
+            links: Vec::new(),
+        }
+    }
+
     /// Build a table from `(ontology IRI, Turtle document)` pairs — the spelling every
     /// host binding passes across its boundary. Each document is parsed with its ontology
     /// IRI as its base (see [`insert_turtle`](Self::insert_turtle)).

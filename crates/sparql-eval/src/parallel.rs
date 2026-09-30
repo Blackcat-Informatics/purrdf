@@ -1803,7 +1803,7 @@ mod tests {
 
     #[test]
     fn native_stable_custom_is_parallel_safe() {
-        let mut reg = UserFunctionRegistry::new();
+        let mut reg = UserFunctionRegistry::default();
         reg.register_native(
             CUSTOM_NATIVE_IRI,
             crate::user_fn::Arity::Exact(0),
@@ -1815,7 +1815,7 @@ mod tests {
 
     #[test]
     fn native_volatile_custom_is_parallel_unsafe() {
-        let mut reg = UserFunctionRegistry::new();
+        let mut reg = UserFunctionRegistry::default();
         reg.register_native(
             CUSTOM_NATIVE_IRI,
             crate::user_fn::Arity::Exact(0),
@@ -1830,7 +1830,7 @@ mod tests {
 
     #[test]
     fn sparql_bodied_custom_is_parallel_unsafe() {
-        let mut reg = UserFunctionRegistry::new();
+        let mut reg = UserFunctionRegistry::default();
         reg.insert(CUSTOM_SPARQL_IRI, trivial_sparql_function());
         assert!(!is_parallel_safe(
             &custom_call(CUSTOM_SPARQL_IRI),
@@ -1842,7 +1842,7 @@ mod tests {
     fn unknown_custom_without_registry_stays_safe() {
         assert!(is_parallel_safe(&custom_call(CUSTOM_UNKNOWN_IRI), NONE));
 
-        let reg = UserFunctionRegistry::new();
+        let reg = UserFunctionRegistry::default();
         assert!(is_parallel_safe(
             &custom_call(CUSTOM_UNKNOWN_IRI),
             fns(&reg)
@@ -2127,7 +2127,7 @@ mod tests {
     }
 
     fn agg_registry_with(volatility: Volatility) -> AggregateRegistry {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register(
             AGG_IRI,
             std::sync::Arc::new(DeclaredAggregate { volatility }),
@@ -2150,10 +2150,10 @@ mod tests {
     /// `aggregate_is_unsafe` takes `&AggregateRegistry`, never
     /// `Option<&AggregateRegistry>` — there is no "absent registry" call this could
     /// exercise as a case DISTINCT from an empty one, which makes "a `None`-shaped
-    /// call and a `Some(&AggregateRegistry::new())`-shaped call behave identically"
+    /// call and a `Some(&AggregateRegistry::default())`-shaped call behave identically"
     /// structurally impossible to violate rather than merely tested: the type
     /// system admits only the one spelling. [`AggregateRegistry::EMPTY`]
-    /// and a freshly built, still-empty [`AggregateRegistry::new`] both resolve
+    /// and a freshly built, still-empty [`AggregateRegistry::default`] both resolve
     /// `AGG_IRI` to nothing, so the gate refuses under either — the SAME
     /// conservative treatment an unresolved property function gets
     /// (`property_function_without_a_registry_is_parallel_unsafe`), never the
@@ -2161,7 +2161,7 @@ mod tests {
     #[test]
     fn custom_aggregate_without_a_registry_is_parallel_unsafe() {
         assert!(aggregate_is_unsafe(AGG_IRI, &AggregateRegistry::EMPTY));
-        let empty = AggregateRegistry::new();
+        let empty = AggregateRegistry::default();
         assert!(aggregate_is_unsafe(AGG_IRI, &empty));
     }
 
@@ -2580,7 +2580,7 @@ mod walk_tests {
     }
 
     fn functions() -> UserFunctionRegistry {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_native(
             NATIVE_STABLE,
             crate::user_fn::Arity::Exact(0),

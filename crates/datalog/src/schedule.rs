@@ -1754,7 +1754,7 @@ mod tests {
         )
         .expect_err("refused");
         assert!(refusal.is_guarded());
-        let mut arena = crate::proof::ProofArena::new();
+        let mut arena = crate::proof::ProofArena::default();
         let premise = arena.axiom(Fact {
             subject: surface("a"),
             predicate: surface("p"),

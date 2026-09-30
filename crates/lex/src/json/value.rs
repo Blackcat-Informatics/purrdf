@@ -646,23 +646,12 @@ impl IndexMut<usize> for Value {
 
 // ── Construction ───────────────────────────────────────────────────────────
 
-impl From<bool> for Value {
-    fn from(value: bool) -> Self {
-        Self::Bool(value)
-    }
-}
-
-impl From<Number> for Value {
-    fn from(value: Number) -> Self {
-        Self::Number(value)
-    }
-}
-
-impl From<String> for Value {
-    fn from(value: String) -> Self {
-        Self::String(value)
-    }
-}
+crate::variant_from!(Value {
+    Bool(bool),
+    Number(Number),
+    String(String),
+    Object(Object),
+});
 
 impl From<&str> for Value {
     fn from(value: &str) -> Self {
@@ -679,12 +668,6 @@ impl From<&String> for Value {
 impl From<Cow<'_, str>> for Value {
     fn from(value: Cow<'_, str>) -> Self {
         Self::String(value.into_owned())
-    }
-}
-
-impl From<Object> for Value {
-    fn from(value: Object) -> Self {
-        Self::Object(value)
     }
 }
 

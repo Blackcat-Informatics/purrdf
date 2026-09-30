@@ -1042,7 +1042,7 @@ mod tests {
     }
 
     fn decide(premise: &RdfDataset, conclusion: &RdfDataset) -> EntailmentOutcome {
-        entails(premise, conclusion, Regime::OwlRl, &ImportMap::new())
+        entails(premise, conclusion, Regime::OwlRl, &ImportMap::default())
             .expect("a consistent premise")
             .into_parts()
             .0
@@ -1327,7 +1327,7 @@ mod tests {
         for regime in [Regime::Simple, Regime::Rdf, Regime::Rdfs, Regime::D] {
             assert!(
                 !matches!(
-                    entails(&premise, &conclusion, regime, &ImportMap::new())
+                    entails(&premise, &conclusion, regime, &ImportMap::default())
                         .expect("consistent")
                         .outcome(),
                     EntailmentOutcome::Entailed(_)

@@ -611,13 +611,6 @@ pub struct SkolemRegistry {
     witnesses: BTreeMap<String, WitnessAddress>,
 }
 
-purrdf_lex::constructors! {
-    impl SkolemRegistry {
-        /// A fresh, empty registry.
-        pub fn new() -> Self::default();
-    }
-}
-
 impl SkolemRegistry {
     /// Mint — or recover — the witness for `address`, returning its blank-node surface.
     fn mint(&mut self, address: WitnessAddress) -> String {
@@ -1379,7 +1372,7 @@ pub fn chase_with(
     let mut state = ChaseState {
         store: edb,
         derivations: Vec::new(),
-        witnesses: SkolemRegistry::new(),
+        witnesses: SkolemRegistry::default(),
         meter: StepMeter::new(options.max_join_steps()),
         options: *options,
     };
@@ -2455,7 +2448,7 @@ mod tests {
             ordinal: 1,
             frontier: vec![iri("a"), iri("b")],
         };
-        let mut registry = SkolemRegistry::new();
+        let mut registry = SkolemRegistry::default();
         assert!(registry.is_empty());
         let first = registry.mint(address.clone());
         let second = registry.mint(address.clone());

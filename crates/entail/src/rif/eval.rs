@@ -711,7 +711,7 @@ mod tests {
     #[test]
     fn an_already_stopped_rif_run_refuses_before_preparation() {
         let stop: Arc<dyn StopSignal> = Arc::new(AlreadyStopped);
-        let result = materialize_rif_until(&empty_ds(), &RuleSet::new(), Some(&stop));
+        let result = materialize_rif_until(&empty_ds(), &RuleSet::default(), Some(&stop));
         assert!(matches!(result, Err(EntailError::Stopped)));
     }
 

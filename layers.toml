@@ -373,6 +373,7 @@ deps = [
     "purrdf-core",
     "purrdf-entail",
     "purrdf-iri",
+    "purrdf-lex",
     "purrdf-rdf",
     "purrdf-sparql-eval",
     "purrdf-sparql-results",

@@ -957,7 +957,7 @@ impl CustomAggregate for CorpusSumAggregate {
 /// per-observation construction: a governed run must never carry state left over from a
 /// previous one.
 fn registered_custom_aggregate() -> AggregateRegistry {
-    let mut registry = AggregateRegistry::new();
+    let mut registry = AggregateRegistry::default();
     registry.register(AGGREGATE_IRI, Arc::new(CorpusSumAggregate));
     registry
 }

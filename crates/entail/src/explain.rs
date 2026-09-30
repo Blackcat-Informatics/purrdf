@@ -620,7 +620,7 @@ pub fn explain_conclusion(
                     conclusion: format!("{} {} {}", goal.subject, goal.predicate, goal.object),
                 });
             }
-            let mut arena = ProofArena::new();
+            let mut arena = ProofArena::default();
             let root = arena.axiom(goal.clone());
             (arena, root)
         }
@@ -1472,7 +1472,7 @@ mod tests {
         .expect("derived");
         assert!(honest.check().is_ok(), "the honest proof must check");
 
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let premises: Vec<ProofId> = honest
             .arena
             .premises(honest.root)
@@ -1498,7 +1498,7 @@ mod tests {
         );
 
         // The circular forgery: claim the DERIVED conclusion as a given.
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let root = arena.axiom(honest.arena.goal(honest.root).clone());
         let circular = ChaseProof {
             arena,

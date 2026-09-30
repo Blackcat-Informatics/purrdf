@@ -5643,7 +5643,7 @@ mod iterative_walk_tests {
     }
 
     fn aggregates() -> AggregateRegistry {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register(AGG_SUMMARY, Arc::new(Summary));
         registry
     }

@@ -50,24 +50,20 @@ pub struct VerifyOptions {
     pub trust_policy: TrustPolicy,
 }
 
-impl Default for VerifyOptions {
-    fn default() -> Self {
+purrdf_hash::default_from_new!(VerifyOptions);
+
+impl VerifyOptions {
+    /// Release-style defaults, and the [`Default`]: embedded key lookup and signatures
+    /// required.
+    #[must_use]
+    pub fn new() -> Self {
         Self {
             armored_key: None,
             require_signatures: true,
             trust_policy: TrustPolicy::default(),
         }
     }
-}
 
-purrdf_lex::constructors! {
-    impl VerifyOptions {
-        /// Release-style defaults: embedded key lookup and signatures required.
-        pub fn strict() -> Self::default();
-    }
-}
-
-impl VerifyOptions {
     /// Use an out-of-band trusted public key instead of embedded metadata.
     #[must_use]
     pub fn with_armored_key(mut self, armored: impl Into<String>) -> Self {
@@ -167,7 +163,7 @@ pub fn extract_transport_key(graph: &Graph) -> Option<EmbeddedTransportKey> {
 
 /// Verify a GTS file with strict defaults: embedded key lookup and signatures required.
 pub fn verify_file(data: &[u8]) -> VerificationResult {
-    verify_file_with_options(data, &VerifyOptions::strict())
+    verify_file_with_options(data, &VerifyOptions::new())
 }
 
 /// Verify a GTS file's embedded signatures with explicit options.

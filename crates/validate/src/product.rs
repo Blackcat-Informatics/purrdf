@@ -1281,7 +1281,7 @@ mod tests {
     fn native_registry() -> purrdf_shapes::product::UserFunctionRegistry {
         use purrdf_sparql_eval::{Arity, Volatility};
 
-        let mut registry = purrdf_shapes::product::UserFunctionRegistry::new();
+        let mut registry = purrdf_shapes::product::UserFunctionRegistry::default();
         registry.register_native(
             NATIVE_FN,
             Arity::Exact(1),
@@ -1302,7 +1302,7 @@ mod tests {
     ) {
         (
             native_registry(),
-            purrdf_shapes::product::AggregateRegistry::new(),
+            purrdf_shapes::product::AggregateRegistry::default(),
             purrdf_shapes::product::PropertyFunctionRegistry::new(),
         )
     }

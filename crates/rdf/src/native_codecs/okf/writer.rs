@@ -770,7 +770,7 @@ impl<'a> Projector<'a> {
         &self,
         documents: BTreeMap<String, FinalDocument>,
     ) -> Result<OkfBundle, OkfError> {
-        let mut bundle = OkfBundle::new();
+        let mut bundle = OkfBundle::default();
         for (path, document) in documents {
             validate_yaml_fields(&document.fields, &path)?;
             let yaml = yaml::write(&YamlValue::Object(

@@ -745,11 +745,9 @@ impl std::fmt::Display for RulesError {
 
 impl std::error::Error for RulesError {}
 
-impl From<String> for RulesError {
-    fn from(message: String) -> Self {
-        Self::Failed(message)
-    }
-}
+purrdf_lex::variant_from!(RulesError {
+    Failed(String),
+});
 
 impl From<RulesError> for String {
     fn from(error: RulesError) -> Self {
@@ -1353,7 +1351,7 @@ fn triple_rule_execution(
     let governors = crate::sparql::current_governors();
     for focus in focus_nodes {
         crate::sparql::poll_between_evaluations(governors.as_deref())?;
-        let mut guard = RecursionGuard::new();
+        let mut guard = RecursionGuard::default();
         let mut sets: Vec<Vec<Term>> = Vec::with_capacity(3);
         for plan in &plans {
             sets.push(match plan {
@@ -1390,7 +1388,7 @@ fn global_triple_rule(
         return Ok(());
     };
     let absent = Term::blank(format!("g-x{execution}_focus"));
-    let mut guard = RecursionGuard::new();
+    let mut guard = RecursionGuard::default();
     let mut sets: Vec<Vec<Term>> = Vec::with_capacity(3);
     for expr in [subject, predicate, object] {
         let mut values = ExprPlan::of(data, expr).eval(data, &absent, &mut guard)?;

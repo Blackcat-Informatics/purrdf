@@ -31,6 +31,7 @@
 ))]
 
 use purrdf_core::DistanceMetric;
+use purrdf_core::distance::Reassociated;
 use purrdf_core::distance::{FloatEnvironmentError, FloatEnvironmentEvidence};
 use purrdf_hnsw::{HnswError, HnswIndex, Params, Ranked, VectorMatrix};
 
@@ -136,7 +137,7 @@ fn a_flushing_rayon_worker_refuses_its_share_and_a_clean_one_answers_the_single_
     let (exact, fast) = clean.install(|| {
         (
             HnswIndex::build(data.clone(), &metric, params()).expect("builds on clean workers"),
-            HnswIndex::build_reassociated(data.clone(), &metric, params())
+            purrdf_hnsw::build::<Reassociated>(data.clone(), &metric, params())
                 .expect("builds on clean workers"),
         )
     });

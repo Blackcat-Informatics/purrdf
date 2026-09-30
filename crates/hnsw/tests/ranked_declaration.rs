@@ -427,7 +427,7 @@ fn a_search_within_the_beam_is_still_served() {
 /// A reassociated space over the same vectors [`space`] builds its exact index over.
 fn reassociated_space(rows: usize) -> Arc<HnswSpace<Reassociated>> {
     let exact = space(rows);
-    let index = HnswIndex::build_reassociated(
+    let index = purrdf_hnsw::build::<Reassociated>(
         exact.index().matrix().clone(),
         &DistanceMetric::SquaredEuclidean,
         params(),
@@ -441,7 +441,7 @@ fn reassociated_space(rows: usize) -> Arc<HnswSpace<Reassociated>> {
 fn reassociated_hnsw_declares_its_evidence_perturbed_order_and_law() {
     let fast = reassociated_space(16);
     let path = fast.index().arithmetic().path();
-    let evidence = profile::loss_evidence_reassociated(path);
+    let evidence = profile::loss_evidence_for::<Reassociated>(path);
     assert_eq!(
         fast.evidence(),
         evidence,

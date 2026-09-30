@@ -83,7 +83,7 @@ iri_role_group! {
 }
 
 macro_rules! role_set {
-    ($name:ident, $description:literal) => {
+    ($name:ident, $expecting:literal, $description:literal) => {
         #[doc = $description]
         #[derive(Debug, Clone, PartialEq, Eq)]
         pub struct $name {
@@ -140,41 +140,24 @@ macro_rules! role_set {
             }
         }
 
-        impl FromJson for $name {
-            /// The four role groups; [`SkosConfig`] cross-checks them.
-            fn from_json(value: &Value) -> Result<Self, DecodeError> {
-                let mut fields = Record::new(value, concat!("struct ", stringify!($name)))?;
-                let roles = Self {
-                    classes: fields.required("classes")?,
-                    labels: fields.required("labels")?,
-                    documentation: fields.required("documentation")?,
-                    relations: fields.required("relations")?,
-                };
-                fields.deny_unknown()?;
-                Ok(roles)
-            }
-        }
-
-        impl ToJson for $name {
-            fn to_json(&self) -> Value {
-                Value::Object(
-                    Object::new()
-                        .with("classes", self.classes.to_json())
-                        .with("labels", self.labels.to_json())
-                        .with("documentation", self.documentation.to_json())
-                        .with("relations", self.relations.to_json()),
-                )
-            }
-        }
+        // The four role groups, read without cross-checking: [`SkosConfig`] does that.
+        purrdf_lex::json_record!($name as $expecting {
+            "classes" => classes: required,
+            "labels" => labels: required,
+            "documentation" => documentation: required,
+            "relations" => relations: required,
+        });
     };
 }
 
 role_set!(
     SkosSourceRoles,
+    "struct SkosSourceRoles",
     "Complete caller-owned source interpretation for the RDF→SKOS projection."
 );
 role_set!(
     SkosTargetRoles,
+    "struct SkosTargetRoles",
     "Complete caller-owned target vocabulary for the emitted SKOS view."
 );
 

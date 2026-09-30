@@ -147,7 +147,7 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
 
     // Pass 1: collect every slot variable (real + synthetic blank) in first-seen
     // (subject, predicate, object) order — the working column layout.
-    let mut working = VarSchema::new();
+    let mut working = VarSchema::default();
     for pattern in patterns {
         for key in slot_keys(pattern) {
             working.push(key);
@@ -1837,7 +1837,7 @@ fn survey_bgp<D: DatasetView>(
         return Ok(());
     }
     let scope = active_dataset.scope_for(active_graph);
-    let mut working = VarSchema::new();
+    let mut working = VarSchema::default();
     for pattern in patterns {
         for key in slot_keys(pattern) {
             working.push(key);
@@ -2105,7 +2105,7 @@ mod tests {
                     .expect("var present")
             })
             .collect();
-        let scratch = ScratchInterner::new();
+        let scratch = ScratchInterner::default();
         let mut out: Vec<Vec<Option<TermValue>>> = seq
             .rows
             .iter()
@@ -2829,7 +2829,7 @@ mod tests {
         ];
 
         // Compile the patterns and derive both orders.
-        let mut working = VarSchema::new();
+        let mut working = VarSchema::default();
         for p in &patterns {
             for key in slot_keys(p) {
                 working.push(key);

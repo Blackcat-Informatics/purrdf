@@ -151,13 +151,6 @@ pub struct ArtifactIndex {
     by_unit: FastMap<UnitId, Vec<usize>>,
 }
 
-purrdf_lex::constructors! {
-    impl ArtifactIndex {
-        /// A fresh, empty index.
-        pub fn new() -> Self::default();
-    }
-}
-
 impl ArtifactIndex {
     /// Append an artifact record. Duplicate logical paths and duplicate
     /// `ArtifactId`s are *not* rejected here — the loader enforces those rules so
@@ -232,13 +225,6 @@ pub struct SegmentUnitMap {
     seg_to_units: FastMap<usize, Vec<UnitId>>,
     /// unit -> set of segment indices (sorted, deduped).
     unit_to_segs: FastMap<UnitId, Vec<usize>>,
-}
-
-purrdf_lex::constructors! {
-    impl SegmentUnitMap {
-        /// A fresh, empty map.
-        pub fn new() -> Self::default();
-    }
 }
 
 impl SegmentUnitMap {
@@ -402,9 +388,9 @@ impl RdfBundle {
             dataset,
             provenance,
             units: UnitCatalog::new(),
-            artifacts: ArtifactIndex::new(),
+            artifacts: ArtifactIndex::default(),
             blobs: ContentStore::new(),
-            segments: SegmentUnitMap::new(),
+            segments: SegmentUnitMap::default(),
         }
     }
 
@@ -618,7 +604,7 @@ mod tests {
         // exclusive unit — a packaging choice).
         let mut resegmented = sample_bundle();
         let unit = resegmented.provenance.units.intern("slices/core/sample"); // idempotent: existing id
-        resegmented.segments = SegmentUnitMap::new();
+        resegmented.segments = SegmentUnitMap::default();
         resegmented.associate_segment(0, unit);
         resegmented.associate_segment(1, unit);
 

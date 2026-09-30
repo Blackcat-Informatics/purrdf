@@ -682,7 +682,7 @@ mod tests {
     }
 
     fn decide(premise: &RdfDataset, conclusion: &RdfDataset) -> EntailmentOutcome {
-        entails(premise, conclusion, Regime::OwlRl, &ImportMap::new())
+        entails(premise, conclusion, Regime::OwlRl, &ImportMap::default())
             .expect("a consistent premise")
             .into_parts()
             .0
@@ -859,7 +859,7 @@ mod tests {
             &premise,
             &graph(&[(PETER, OWL_DIFFERENTFROM, LOIS)]),
             Regime::OwlRl,
-            &ImportMap::new(),
+            &ImportMap::default(),
         ) else {
             panic!("cax-dw already refuses this premise on its own");
         };

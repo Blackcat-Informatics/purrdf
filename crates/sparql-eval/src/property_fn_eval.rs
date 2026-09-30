@@ -2932,7 +2932,7 @@ pub(crate) fn open_call_cursor(
             call.iri
         ))
     })?;
-    let plan = CallPlan::compile(call, &VarSchema::new())?;
+    let plan = CallPlan::compile(call, &VarSchema::default())?;
     let declared =
         crate::property_fn::declaration_contained(&call.iri, "arity", || relation.arity())?;
     let supplied = PfArity::new(plan.subject_len, plan.args.len() - plan.subject_len);
@@ -5898,7 +5898,7 @@ mod walk_tests {
     }
 
     fn input_schema(choices: &mut Choices) -> VarSchema {
-        let mut schema = VarSchema::new();
+        let mut schema = VarSchema::default();
         for n in 0..4 {
             if choices.choose(2) == 0 {
                 schema.push(Variable::new(format!("v{n}")));
@@ -6269,7 +6269,7 @@ mod walk_tests {
     fn a_hundred_thousand_level_argument_is_compiled_and_matched_on_a_128_kib_thread() {
         let (depth, ground, value_depth, unified, unobserved) =
             purrdf_stack::on_stack(SMALL_STACK, || {
-                let input = VarSchema::new();
+                let input = VarSchema::default();
                 let term = deep_term(DEPTH, TermPattern::Variable(Variable::new("x")));
                 let TermPattern::Triple(triple) = &term else {
                     unreachable!("the deep term is a triple")

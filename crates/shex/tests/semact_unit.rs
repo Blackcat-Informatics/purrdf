@@ -168,7 +168,7 @@ fn custom_extension_can_veto() {
     )
     .expect("schema parses");
     let data = data();
-    let mut registry = SemActRegistry::new();
+    let mut registry = SemActRegistry::default();
     registry.register(
         "http://example.org/Veto",
         Box::new(
@@ -218,7 +218,7 @@ fn custom_extension_fires_once_per_matched_arc_with_value_and_predicate() {
     .expect("schema parses");
 
     let calls: RefCell<Vec<(Option<String>, Option<TermValue>)>> = RefCell::new(Vec::new());
-    let mut registry = SemActRegistry::new();
+    let mut registry = SemActRegistry::default();
     registry.register(
         EXT,
         Box::new(

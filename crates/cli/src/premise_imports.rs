@@ -186,7 +186,7 @@ impl PremiseImports {
         let pairs = parse_pairs(specs)?;
         let paths: Vec<&str> = premises.iter().map(|(path, _)| *path).collect();
         refuse_two_stdins(&paths, &pairs)?;
-        let mut map = ImportMap::new();
+        let mut map = ImportMap::default();
         for (iri, path) in &pairs {
             let document_format = format::resolve(from, path)?;
             let document = source::load_dataset(path, document_format, base)?;

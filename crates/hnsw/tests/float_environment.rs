@@ -173,14 +173,14 @@ fn every_distance_entry_point_refuses_a_flushing_environment_and_answers_the_def
     {
         let flushed = Flushed::new();
         let build = HnswIndex::build(matrix.clone(), &DistanceMetric::SquaredEuclidean, params());
-        let decode = HnswIndex::decode(matrix.clone(), &image);
+        let decode = HnswIndex::<Exact>::decode(matrix.clone(), &image);
         let verify = index.verify_rebuild();
         let rows = index.search_rows(3, 4);
         let rows_work = index.search_rows_work(3, 4);
         let vector = index.search_vector(&query, 4);
         let vector_work = index.search_vector_work(&query, 4);
         let guard_verify = guard::verify_rebuild(&selected, &matrix, &params());
-        let hnsw_space = HnswSpace::from_artifact(
+        let hnsw_space = HnswSpace::<Exact>::from_artifact(
             &fixture.bytes,
             fixture.target_set,
             fixture.vector_space,
@@ -237,14 +237,14 @@ fn every_distance_entry_point_refuses_a_flushing_environment_and_answers_the_def
     // The valid neighbour: the same calls, on the same thread, after the register was
     // restored, all answer.
     assert!(HnswIndex::build(matrix.clone(), &DistanceMetric::SquaredEuclidean, params()).is_ok());
-    let decoded = HnswIndex::decode(matrix.clone(), &image).expect("decodes");
+    let decoded = HnswIndex::<Exact>::decode(matrix.clone(), &image).expect("decodes");
     assert_eq!(decoded.canonical_image(), image);
     assert!(index.verify_rebuild().expect("rebuilds"));
     assert_eq!(index.search_rows(3, 4).expect("searches").len(), 4);
     assert_eq!(index.search_vector(&query, 4).expect("searches").len(), 4);
     assert!(guard::verify_rebuild(&selected, &matrix, &params()).expect("verifies"));
     assert!(
-        HnswSpace::from_artifact(
+        HnswSpace::<Exact>::from_artifact(
             &fixture.bytes,
             fixture.target_set,
             fixture.vector_space,
@@ -265,16 +265,19 @@ fn every_reassociated_entry_point_refuses_a_flushing_environment_and_answers_the
     // refusal from every entry point, and the same answers once the register is restored.
     let fixture = purremb::Fixture::new_reassociated(40, 20, params());
     let matrix = fixture.matrix.clone();
-    let index =
-        HnswIndex::build_reassociated(matrix.clone(), &DistanceMetric::SquaredEuclidean, params())
-            .expect("builds in the default environment");
+    let index = purrdf_hnsw::build::<Reassociated>(
+        matrix.clone(),
+        &DistanceMetric::SquaredEuclidean,
+        params(),
+    )
+    .expect("builds in the default environment");
     let image = index.canonical_image();
     let query = matrix.row_to_vec(3);
     let mut view = purrdf_core::EmbeddingView::from_bytes(&fixture.bytes).expect("opens");
     purrdf_core::verify_embedding(&mut view).expect("verifies");
     let selected = guard::select(&view).expect("one HNSW guard");
     let open = || {
-        HnswSpace::from_artifact_reassociated(
+        HnswSpace::<Reassociated>::from_artifact(
             &fixture.bytes,
             fixture.target_set,
             fixture.vector_space,
@@ -285,12 +288,12 @@ fn every_reassociated_entry_point_refuses_a_flushing_environment_and_answers_the
 
     {
         let flushed = Flushed::new();
-        let build = HnswIndex::build_reassociated(
+        let build = purrdf_hnsw::build::<Reassociated>(
             matrix.clone(),
             &DistanceMetric::SquaredEuclidean,
             params(),
         );
-        let decode = HnswIndex::decode_reassociated(matrix.clone(), &image);
+        let decode = HnswIndex::<Reassociated>::decode(matrix.clone(), &image);
         let verify = index.verify_rebuild();
         let rows = index.search_rows(3, 4);
         let vector = index.search_vector(&query, 4);
@@ -315,15 +318,19 @@ fn every_reassociated_entry_point_refuses_a_flushing_environment_and_answers_the
         );
         assert!(
             is_ftz_eval(&space.expect_err("refuses")),
-            "HnswSpace::from_artifact_reassociated keeps the named variant"
+            "HnswSpace::<Reassociated>::from_artifact keeps the named variant"
         );
     }
 
     assert!(
-        HnswIndex::build_reassociated(matrix.clone(), &DistanceMetric::SquaredEuclidean, params())
-            .is_ok()
+        purrdf_hnsw::build::<Reassociated>(
+            matrix.clone(),
+            &DistanceMetric::SquaredEuclidean,
+            params()
+        )
+        .is_ok()
     );
-    let decoded = HnswIndex::decode_reassociated(matrix.clone(), &image).expect("decodes");
+    let decoded = HnswIndex::<Reassociated>::decode(matrix.clone(), &image).expect("decodes");
     assert_eq!(decoded.canonical_image(), image);
     assert!(index.verify_rebuild().expect("rebuilds"));
     assert_eq!(index.search_rows(3, 4).expect("searches").len(), 4);
@@ -402,9 +409,12 @@ fn a_worker_thread_is_checked_where_it_computes_not_where_the_index_was_built() 
     let matrix = fixture.matrix.clone();
     let exact = HnswIndex::build(matrix.clone(), &DistanceMetric::SquaredEuclidean, params())
         .expect("builds in the default environment");
-    let fast =
-        HnswIndex::build_reassociated(matrix.clone(), &DistanceMetric::SquaredEuclidean, params())
-            .expect("builds in the default environment");
+    let fast = purrdf_hnsw::build::<Reassociated>(
+        matrix.clone(),
+        &DistanceMetric::SquaredEuclidean,
+        params(),
+    )
+    .expect("builds in the default environment");
     let space = Arc::new(
         EmbeddingSpace::from_artifact(
             &fixture.without_index,

@@ -259,8 +259,8 @@ fn the_image_records_the_path_and_shape_this_build_was_made_for() {
     );
 
     for (metric, kernel) in metrics() {
-        let index =
-            HnswIndex::build_reassociated(matrix(), &metric, params()).expect("the fixture builds");
+        let index = purrdf_hnsw::build::<Reassociated>(matrix(), &metric, params())
+            .expect("the fixture builds");
         let image = index.canonical_image();
         assert_eq!(
             recorded_code(&image),
@@ -279,13 +279,13 @@ fn the_image_records_the_path_and_shape_this_build_was_made_for() {
 fn the_image_decodes_verifies_and_searches_as_the_kernel_ranks() {
     let arithmetic = resolved();
     for (metric, kernel) in metrics() {
-        let built =
-            HnswIndex::build_reassociated(matrix(), &metric, params()).expect("the fixture builds");
+        let built = purrdf_hnsw::build::<Reassociated>(matrix(), &metric, params())
+            .expect("the fixture builds");
         assert_searches_match_oracle(&built, kernel, arithmetic, "built");
 
         let image = built.canonical_image();
         let decoded =
-            HnswIndex::decode_reassociated(matrix(), &image).expect("the image decodes here");
+            HnswIndex::<Reassociated>::decode(matrix(), &image).expect("the image decodes here");
         assert_eq!(
             decoded.canonical_image(),
             image,
@@ -304,11 +304,11 @@ fn the_image_decodes_verifies_and_searches_as_the_kernel_ranks() {
 
 fn a_payload_one_distance_bit_away_does_not_verify() {
     let index =
-        HnswIndex::build_reassociated(matrix(), &DistanceMetric::SquaredEuclidean, params())
+        purrdf_hnsw::build::<Reassociated>(matrix(), &DistanceMetric::SquaredEuclidean, params())
             .expect("the fixture builds");
     let mut image = index.canonical_image();
     image[FIRST_DISTANCE_AT] ^= 1;
-    let tampered = HnswIndex::decode_reassociated(matrix(), &image)
+    let tampered = HnswIndex::<Reassociated>::decode(matrix(), &image)
         .expect("a finite distance one bit away still decodes");
     assert_ne!(tampered.canonical_image(), index.canonical_image());
     // The perturbed payload records this build's path and shape, so its rebuild compiles to
@@ -331,17 +331,17 @@ fn a_payload_one_distance_bit_away_does_not_verify() {
 fn an_image_recorded_on_another_wasm_path_is_refused_by_name() {
     let here = code_of(resolved().path());
     let index =
-        HnswIndex::build_reassociated(matrix(), &DistanceMetric::SquaredEuclidean, params())
+        purrdf_hnsw::build::<Reassociated>(matrix(), &DistanceMetric::SquaredEuclidean, params())
             .expect("the fixture builds");
     let image = index.canonical_image();
     // The valid neighbour: the unaltered image, which differs from each refused one only
     // in its recorded code, decodes.
-    assert!(HnswIndex::decode_reassociated(matrix(), &image).is_ok());
+    assert!(HnswIndex::<Reassociated>::decode(matrix(), &image).is_ok());
 
     for &(foreign, name) in foreign_wasm_codes() {
         let mut other = image.clone();
         other[CODE_AT..CODE_AT + 4].copy_from_slice(&foreign.to_le_bytes());
-        let refusal = HnswIndex::decode_reassociated(matrix(), &other)
+        let refusal = HnswIndex::<Reassociated>::decode(matrix(), &other)
             .err()
             .unwrap_or_else(|| panic!("an image recorded on {name} decoded on {here}"));
         assert!(

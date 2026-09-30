@@ -277,22 +277,20 @@ pub struct SparqlParser {
     base: core::result::Result<BaseScope, ParseError>,
 }
 
-impl Default for SparqlParser {
-    fn default() -> Self {
+purrdf_hash::default_from_new!(SparqlParser);
+
+impl SparqlParser {
+    /// Construct a parser with no implicit base IRI; [`Default`] delegates here.
+    ///
+    /// Written out rather than derived: the default base scope is an empty
+    /// [`BaseScope`], not an error, and `Result` has no `Default`.
+    #[must_use]
+    pub fn new() -> Self {
         Self {
             base: Ok(BaseScope::empty()),
         }
     }
-}
 
-purrdf_lex::constructors! {
-    impl SparqlParser {
-        /// Construct a parser with no implicit base IRI.
-        pub fn new() -> Self::default();
-    }
-}
-
-impl SparqlParser {
     /// Set an implicit base IRI used to resolve relative IRI references that
     /// appear before any in-query `BASE` declaration, and against which a
     /// relative in-query `BASE` itself resolves (SPARQL 1.1 §4.1.1 → RFC-3986
@@ -866,7 +864,7 @@ impl<'a> Parser<'a, '_> {
     /// pre-existing non-call for its local `VarScope`).
     fn note_exists_scope(&mut self, pattern: &GraphPattern) {
         if self.exists_scope_stack.is_open() {
-            let mut noted = VarScope::new();
+            let mut noted = VarScope::default();
             collect_vars(pattern, &mut noted);
             for v in noted.as_slice() {
                 self.exists_scope_stack.note(v);
@@ -2904,12 +2902,6 @@ struct VarScope {
     seen: std::collections::BTreeSet<Variable>,
 }
 
-purrdf_lex::constructors! {
-    impl VarScope {
-        fn new() -> Self::default();
-    }
-}
-
 impl VarScope {
     /// Record `v` as in scope; a no-op if it already is (first-appearance
     /// order is preserved, so a later re-mention never moves it).
@@ -3035,7 +3027,7 @@ impl ExistsScopes {
 /// `SELECT` clause that has no real `Project` to read a variable list from
 /// (see `fmt_subselect`'s `no_project_vars`).
 pub(crate) fn visible_variables(p: &GraphPattern) -> Vec<Variable> {
-    let mut scope = VarScope::new();
+    let mut scope = VarScope::default();
     collect_vars(p, &mut scope);
     scope.into_vec()
 }

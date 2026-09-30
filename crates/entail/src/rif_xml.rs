@@ -138,7 +138,7 @@ fn parse_document(text: &str, base: &BaseScope) -> Result<ParsedRifDocument, Str
     require(&root, "Document")?;
     // `xml:base` on the document element scopes the whole document.
     let base = enter(&root, base)?;
-    let mut ruleset = RuleSet::new();
+    let mut ruleset = RuleSet::default();
     let mut imports = Vec::new();
     for child in root.element_children() {
         let base = enter(&child, &base)?;

@@ -5162,7 +5162,7 @@ mod iterative_walks {
 
         /// An outer schema over the variable pool.
         fn schema(&mut self) -> VarSchema {
-            let mut schema = VarSchema::new();
+            let mut schema = VarSchema::default();
             for variable in self.variables(4) {
                 schema.push(variable);
             }
@@ -5329,7 +5329,7 @@ mod iterative_walks {
     }
 
     fn schema_of(names: &[&str]) -> VarSchema {
-        let mut schema = VarSchema::new();
+        let mut schema = VarSchema::default();
         for &name in names {
             schema.push(var(name));
         }

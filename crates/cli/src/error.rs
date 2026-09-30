@@ -182,29 +182,19 @@ pub(crate) fn argv_iri_refusal(
     CliError::Usage(format!("{value}: {code}: {detail}{error}"))
 }
 
-/// `From` impls that carry a library error's rendered message as a
-/// [`CliError::Runtime`] (exit 1). Every library failure the pipeline propagates with
-/// `?` maps the same way, so the one conversion is written once and instantiated per
-/// source error type.
-macro_rules! runtime_from {
-    ($($source:ty),+ $(,)?) => {$(
-        impl From<$source> for CliError {
-            fn from(error: $source) -> Self {
-                Self::Runtime(error.to_string())
-            }
-        }
-    )+};
-}
-
-runtime_from!(
-    RdfDiagnostic,
-    PackError,
-    purrdf_rdf::ProjectionError,
-    purrdf_rdf::TransportError,
-    std::io::Error,
-    purrdf_sparql_results::Error,
-    EntailError,
-);
+// Every library failure the pipeline propagates with `?` is a runtime failure (exit 1)
+// carrying the library error's rendered message.
+purrdf_lex::variant_from!(CliError {
+    Runtime(
+        RdfDiagnostic,
+        PackError,
+        purrdf_rdf::ProjectionError,
+        purrdf_rdf::TransportError,
+        std::io::Error,
+        purrdf_sparql_results::Error,
+        EntailError,
+    ) as ToString::to_string
+});
 
 #[cfg(test)]
 mod tests {

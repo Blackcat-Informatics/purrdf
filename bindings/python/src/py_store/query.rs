@@ -710,7 +710,7 @@ fn build_relation(
 /// IRI, refused at prepare time exactly as any other unregistered `AGG(<iri>, …)` call.
 pub(super) fn build_aggregates(namespace: Option<String>) -> Option<AggregateRegistry> {
     let namespace = namespace?;
-    let mut registry = AggregateRegistry::new();
+    let mut registry = AggregateRegistry::default();
     registry.register_statistical_aggregates(&namespace);
     Some(registry)
 }

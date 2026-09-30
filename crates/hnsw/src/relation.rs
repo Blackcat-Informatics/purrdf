@@ -71,10 +71,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use purrdf_core::binding_pattern::BindingPattern;
-use purrdf_core::distance::{Arithmetic, Exact, Reassociated};
+use purrdf_core::distance::{Arithmetic, Exact};
 use purrdf_core::{
-    ContentDigest, EmbeddingView, IndexGuardView, IndexLossContract, Iri, TargetId, TargetSetId,
-    TermValue, VectorSpaceId, verify_embedding,
+    ContentDigest, EmbeddingView, IndexLossContract, Iri, TargetId, TargetSetId, TermValue,
+    VectorSpaceId, verify_embedding,
 };
 use purrdf_sparql_eval::knn::{
     KNN_ARITY, KNN_COUNT, KNN_DISTANCE, KNN_MEMBERSHIP_MODE, KNN_MODE, KNN_NEIGHBOUR, KNN_QUERY,
@@ -88,8 +88,7 @@ use purrdf_sparql_eval::{
 };
 
 use crate::error::HnswError;
-use crate::graph::VectorMatrix;
-use crate::{HnswIndex, profile};
+use crate::{HnswIndex, IndexArithmetic, profile};
 
 /// An HNSW failure as the evaluator's error, under `context`.
 ///
@@ -115,7 +114,7 @@ fn eval_error(context: &str, error: HnswError) -> EvalError {
 /// distinct RDF term. An invocation therefore fails only on things about the invocation.
 ///
 /// `A` is the index's [`Arithmetic`], [`Exact`] by default; a space over a
-/// [`HnswIndex::build_reassociated`] index is `HnswSpace<Reassociated>`, and its evidence
+/// [`build::<Reassociated>`](crate::build) index is `HnswSpace<Reassociated>`, and its evidence
 /// says so.
 #[derive(Debug, Clone)]
 pub struct HnswSpace<A: Arithmetic = Exact> {
@@ -133,12 +132,9 @@ pub struct HnswSpace<A: Arithmetic = Exact> {
     generation: Arc<str>,
 }
 
-/// The guard adapter that decodes a space's payload under arithmetic `A`.
-type Loader<A> = fn(&IndexGuardView<'_>, VectorMatrix) -> crate::Result<HnswIndex<A>>;
-
-impl HnswSpace {
+impl<A: IndexArithmetic> HnswSpace<A> {
     /// Build a queryable space from a PURREMB artifact's `(target_set, vector_space)` HNSW
-    /// index.
+    /// index, decoded under `A` with [`crate::guard::load`].
     ///
     /// # Errors
     ///
@@ -152,6 +148,9 @@ impl HnswSpace {
     /// commitment fails, an unreadable row, or a decoded kernel that disagrees with the
     /// family contract.
     ///
+    /// A guard naming the implementation of another arithmetic, or a payload recorded on a
+    /// dispatch path this process cannot run, is [`EvalError::Data`].
+    ///
     /// [`EvalError::FloatEnvironment`] when the calling thread's float environment is not
     /// the IEEE one the distance arithmetic defines.
     pub fn from_artifact(
@@ -160,104 +159,6 @@ impl HnswSpace {
         vector_space: VectorSpaceId,
         bindings: Vec<(TargetId, TermValue)>,
         guard: KnnGuard,
-    ) -> Result<Self, EvalError> {
-        Self::from_artifact_as(
-            artifact,
-            target_set,
-            vector_space,
-            bindings,
-            guard,
-            crate::guard::load,
-        )
-    }
-}
-
-impl HnswSpace<Reassociated> {
-    /// [`HnswSpace::from_artifact`] for an artifact whose HNSW guard names the
-    /// reassociated implementation, decoded with [`crate::guard::load_reassociated`].
-    ///
-    /// # Errors
-    ///
-    /// As [`HnswSpace::from_artifact`]; a guard naming the exact implementation, or a
-    /// payload recorded on a dispatch path this process cannot run, is
-    /// [`EvalError::Data`].
-    pub fn from_artifact_reassociated(
-        artifact: &[u8],
-        target_set: TargetSetId,
-        vector_space: VectorSpaceId,
-        bindings: Vec<(TargetId, TermValue)>,
-        guard: KnnGuard,
-    ) -> Result<Self, EvalError> {
-        Self::from_artifact_as(
-            artifact,
-            target_set,
-            vector_space,
-            bindings,
-            guard,
-            crate::guard::load_reassociated,
-        )
-    }
-}
-
-impl<A: Arithmetic> HnswSpace<A> {
-    /// Assemble a space directly from a decoded index and its row terms.
-    ///
-    /// # Errors
-    ///
-    /// [`EvalError::Config`] if the term count differs from the graph's row count, one
-    /// term is claimed by two rows, or the graph holds more rows than the guard admits.
-    ///
-    /// The candidate bound is checked here and not only in [`Self::from_artifact`],
-    /// which delegates to this function: it is a property of the space, and a space
-    /// assembled straight from an index is still a space the guard promised to bound.
-    pub fn from_index(
-        index: HnswIndex<A>,
-        terms: Vec<TermValue>,
-        guard: KnnGuard,
-    ) -> Result<Self, EvalError> {
-        if terms.len() != index.rows() {
-            return Err(EvalError::config(format!(
-                "the HNSW graph holds {} row(s) but {} term(s) were bound; every row must \
-                 stand for exactly one RDF term",
-                index.rows(),
-                terms.len()
-            )));
-        }
-        if index.rows() as u64 > guard.max_candidates() {
-            return Err(EvalError::config(format!(
-                "this space holds {} row(s), which is more than the {} candidate(s) the \
-                 configured guard admits",
-                index.rows(),
-                guard.max_candidates()
-            )));
-        }
-        let rows = TermRows::new(terms)?;
-        // Derived once, here, so BOTH constructors carry it: `from_artifact`
-        // delegates to this function, and a field present on one construction
-        // path and absent on the other is precisely the modal optionality this
-        // workspace refuses.
-        let generation = space_generation(&index, rows.terms());
-        // The evidence the guard of this index publishes: the profile's statement, and for
-        // an arithmetic whose bits depend on the path, that arithmetic's evidence along the
-        // path the image records.
-        let evidence = profile::loss_evidence_for::<A>(index.arithmetic().path());
-        Ok(Self {
-            index: Arc::new(index),
-            rows,
-            guard,
-            evidence,
-            generation,
-        })
-    }
-
-    /// Build a space from an artifact, loading its payload with `load`.
-    fn from_artifact_as(
-        artifact: &[u8],
-        target_set: TargetSetId,
-        vector_space: VectorSpaceId,
-        bindings: Vec<(TargetId, TermValue)>,
-        guard: KnnGuard,
-        load: Loader<A>,
     ) -> Result<Self, EvalError> {
         // The float environment first: verifying a normalized projection and reading its
         // rows are exact arithmetic, and a refused environment must be reported as one,
@@ -321,8 +222,8 @@ impl<A: Arithmetic> HnswSpace<A> {
 
         let matrix = crate::guard::read_effective_matrix(&effective, exact)
             .map_err(|e| EvalError::data(format!("the effective matrix is unreadable: {e}")))?;
-        let index =
-            load(&guard_view, matrix).map_err(|e| eval_error("the HNSW payload is unusable", e))?;
+        let index = crate::guard::load::<A>(&guard_view, matrix)
+            .map_err(|e| eval_error("the HNSW payload is unusable", e))?;
         if index.kernel() != kernel {
             return Err(EvalError::data(format!(
                 "the HNSW payload was built under a different distance kernel than the \
@@ -339,6 +240,58 @@ impl<A: Arithmetic> HnswSpace<A> {
 
         let rows = TermRows::bind(&set, bindings)?;
         Self::from_index(index, rows.terms().to_vec(), guard)
+    }
+}
+
+impl<A: Arithmetic> HnswSpace<A> {
+    /// Assemble a space directly from a decoded index and its row terms.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::Config`] if the term count differs from the graph's row count, one
+    /// term is claimed by two rows, or the graph holds more rows than the guard admits.
+    ///
+    /// The candidate bound is checked here and not only in [`Self::from_artifact`],
+    /// which delegates to this function: it is a property of the space, and a space
+    /// assembled straight from an index is still a space the guard promised to bound.
+    pub fn from_index(
+        index: HnswIndex<A>,
+        terms: Vec<TermValue>,
+        guard: KnnGuard,
+    ) -> Result<Self, EvalError> {
+        if terms.len() != index.rows() {
+            return Err(EvalError::config(format!(
+                "the HNSW graph holds {} row(s) but {} term(s) were bound; every row must \
+                 stand for exactly one RDF term",
+                index.rows(),
+                terms.len()
+            )));
+        }
+        if index.rows() as u64 > guard.max_candidates() {
+            return Err(EvalError::config(format!(
+                "this space holds {} row(s), which is more than the {} candidate(s) the \
+                 configured guard admits",
+                index.rows(),
+                guard.max_candidates()
+            )));
+        }
+        let rows = TermRows::new(terms)?;
+        // Derived once, here, so BOTH constructors carry it: `from_artifact`
+        // delegates to this function, and a field present on one construction
+        // path and absent on the other is precisely the modal optionality this
+        // workspace refuses.
+        let generation = space_generation(&index, rows.terms());
+        // The evidence the guard of this index publishes: the profile's statement, and for
+        // an arithmetic whose bits depend on the path, that arithmetic's evidence along the
+        // path the image records.
+        let evidence = profile::loss_evidence_for::<A>(index.arithmetic().path());
+        Ok(Self {
+            index: Arc::new(index),
+            rows,
+            guard,
+            evidence,
+            generation,
+        })
     }
 
     /// How many candidate rows this space holds.

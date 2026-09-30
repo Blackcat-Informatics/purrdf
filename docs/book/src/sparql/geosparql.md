@@ -66,7 +66,7 @@ use purrdf::geo::functions;
 use purrdf::sparql::{ExtensionEnv, NativeSparqlEngine, QueryOptions, UserFunctionRegistry};
 use purrdf::SparqlRequest;
 
-let mut functions_registry = UserFunctionRegistry::new();
+let mut functions_registry = UserFunctionRegistry::default();
 functions::register(&mut functions_registry, &vocab);
 
 let engine = NativeSparqlEngine::new();

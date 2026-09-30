@@ -1638,7 +1638,7 @@ mod tests {
         };
         let denying = InProcessServiceResolver::new()
             .with_endpoint("http://example.org/ep", endpoint())
-            .with_catalog(ServiceCatalog::new().with_service(
+            .with_catalog(ServiceCatalog::default().with_service(
                 "http://example.org/ep",
                 ServiceProfile::new(ServiceCapabilities::granting([])),
             ));
@@ -1665,7 +1665,7 @@ mod tests {
         // A catalog that grants the service: the clause answers, nothing silenced.
         let granting = InProcessServiceResolver::new()
             .with_endpoint("http://example.org/ep", endpoint())
-            .with_catalog(ServiceCatalog::new().with_service(
+            .with_catalog(ServiceCatalog::default().with_service(
                 "http://example.org/ep",
                 ServiceProfile::new(ServiceCapabilities::granting([ServiceCapability::Query])),
             ));

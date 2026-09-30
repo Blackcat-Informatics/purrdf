@@ -572,23 +572,15 @@ impl fmt::Debug for Value {
     }
 }
 
-impl From<Integer> for Value {
-    fn from(value: Integer) -> Self {
-        Self::Integer(value)
-    }
-}
-
-impl From<bool> for Value {
-    fn from(value: bool) -> Self {
-        Self::Bool(value)
-    }
-}
-
-impl From<f64> for Value {
-    fn from(value: f64) -> Self {
-        Self::Float(value)
-    }
-}
+crate::variant_from!(Value {
+    Integer(Integer),
+    Bool(bool),
+    Float(f64),
+    Text(String),
+    Bytes(Vec<u8>),
+    Array(Vec<Value>),
+    Map(Vec<(Value, Value)>),
+});
 
 impl From<f32> for Value {
     fn from(value: f32) -> Self {
@@ -602,32 +594,8 @@ impl From<&str> for Value {
     }
 }
 
-impl From<String> for Value {
-    fn from(value: String) -> Self {
-        Self::Text(value)
-    }
-}
-
-impl From<Vec<u8>> for Value {
-    fn from(value: Vec<u8>) -> Self {
-        Self::Bytes(value)
-    }
-}
-
 impl From<&[u8]> for Value {
     fn from(value: &[u8]) -> Self {
         Self::Bytes(value.to_vec())
-    }
-}
-
-impl From<Vec<Self>> for Value {
-    fn from(value: Vec<Self>) -> Self {
-        Self::Array(value)
-    }
-}
-
-impl From<Vec<(Self, Self)>> for Value {
-    fn from(value: Vec<(Self, Self)>) -> Self {
-        Self::Map(value)
     }
 }

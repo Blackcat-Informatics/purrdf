@@ -244,7 +244,7 @@ impl Regime {
 /// ```
 /// use purrdf_entail::{Materialization, Regime, RuleSet};
 ///
-/// let rules = RuleSet::new();
+/// let rules = RuleSet::default();
 /// assert_eq!(Materialization::Rdfs.regime(), Regime::Rdfs);
 /// // The two query-directed lanes carry their input, so naming them is not enough —
 /// // and once it is supplied there is nothing left to refuse.
@@ -1025,7 +1025,7 @@ mod tests {
     #[test]
     fn every_materialization_plan_answers() {
         let ds = dataset(&[(X, RDF_TYPE, A)]);
-        let rules = RuleSet::new();
+        let rules = RuleSet::default();
         for (plan, regime) in [
             (Materialization::Simple, Regime::Simple),
             (Materialization::Rdf, Regime::Rdf),

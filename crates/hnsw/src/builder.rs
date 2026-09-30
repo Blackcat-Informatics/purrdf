@@ -63,7 +63,7 @@ use crate::level::{level_cap, level_from_index};
 use crate::params::Params;
 use crate::search::{DistanceCache, Query, Visited, greedy_descend, norm_of, search_layer};
 use crate::select::select_neighbors;
-use crate::{Compiled, HnswIndex, resolve_recorded};
+use crate::{HnswIndex, IndexArithmetic, resolve_recorded};
 
 /// One node's proposal: per layer, the selected neighbours in rank order.
 type NodeProposal = Vec<(u32, Vec<Ranked>)>;
@@ -94,7 +94,7 @@ struct Round<'a> {
 /// the capped doubling schedule when `batch` is `None`.
 ///
 /// Every distance runs under arithmetic `A`, resolved on the calling thread; the path it
-/// resolves is the one the image records. The graph is built by `compiled`'s build walk,
+/// resolves is the one the image records. The graph is built by `A::compiled()`'s build walk,
 /// the copy this crate compiled for `A`, which is also the copy every later rebuild
 /// verification runs.
 ///
@@ -110,15 +110,14 @@ struct Round<'a> {
 /// a norm and a row's is zero; [`HnswError::NonFiniteDistance`] if a kernel result leaves
 /// the finite range; [`HnswError::FloatEnvironment`] if the calling thread, or a worker
 /// thread the build runs on, is not in the IEEE environment the arithmetic defines.
-pub(crate) fn build_with_batch<A: Arithmetic>(
+pub(crate) fn build_with_batch<A: IndexArithmetic>(
     matrix: VectorMatrix,
     kernel: Kernel,
     params: Params,
     batch: Option<usize>,
-    compiled: Compiled<A>,
 ) -> Result<HnswIndex<A>> {
     let arithmetic = A::resolve()?;
-    let (graph, norms) = (compiled.build_graph)(&matrix, arithmetic, kernel, params, batch)?;
+    let (graph, norms) = (A::compiled().build_graph)(&matrix, arithmetic, kernel, params, batch)?;
     // The index keeps the thread-free selection, never this thread's handle: it outlives
     // the build and is searched on whatever thread its caller runs.
     Ok(HnswIndex::new(
@@ -128,7 +127,6 @@ pub(crate) fn build_with_batch<A: Arithmetic>(
         graph,
         norms,
         arithmetic.selected(),
-        compiled,
     ))
 }
 
@@ -445,7 +443,7 @@ fn propose_node<A: Arithmetic>(
     // already seen at the layer above -- and worth bounding: two nodes in a batch almost
     // never need the same pair, so a shared cache buys little and costs a lock in the
     // innermost loop of the parallel phase.
-    let cache = DistanceCache::new();
+    let cache = DistanceCache::default();
     let query = Query::new(
         round.matrix,
         round.kernel,
@@ -498,7 +496,7 @@ mod tests {
     use purrdf_core::distance::Exact;
 
     fn build(matrix: VectorMatrix, kernel: Kernel, params: Params) -> Result<HnswIndex> {
-        build_with_batch(matrix, kernel, params, None, Compiled::<Exact>::here())
+        build_with_batch::<Exact>(matrix, kernel, params, None)
     }
 
     fn fixture(rows: usize, dims: usize) -> VectorMatrix {

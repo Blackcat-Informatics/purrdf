@@ -158,7 +158,7 @@ unsafe fn decode_aggregate_namespace(
         let Some(namespace) = opt_cstr_to_str(aggregate_namespace)? else {
             return Ok(None);
         };
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register_statistical_aggregates(namespace);
         Ok(Some(registry))
     }

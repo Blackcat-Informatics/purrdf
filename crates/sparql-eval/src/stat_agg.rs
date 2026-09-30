@@ -1318,7 +1318,7 @@ impl AggregateRegistry {
     /// as a host that never configures
     /// [`purrdf_sparql_algebra::ParserOptions::extension_fn_namespaces`] gets
     /// none of [`purrdf_sparql_algebra::PurrdfFn`]'s scalar functions. Typically
-    /// called once, right after [`AggregateRegistry::new`], before registering
+    /// called once, right after [`AggregateRegistry::default`], before registering
     /// any host-specific aggregate of the caller's own.
     ///
     /// # Panics
@@ -1374,7 +1374,7 @@ mod tests {
     }
 
     fn registry() -> AggregateRegistry {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register_statistical_aggregates(NS);
         registry
     }
@@ -1457,7 +1457,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "already registered as a custom aggregate")]
     fn registering_twice_under_the_same_namespace_panics() {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register_statistical_aggregates(NS);
         registry.register_statistical_aggregates(NS);
     }

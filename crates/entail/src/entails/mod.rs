@@ -638,7 +638,7 @@ pub(crate) fn resolved_imports_error(error: EntailError) -> EntailError {
 ///     p: QNode::Term(TermValue::iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")),
 ///     o: QNode::Var("c".to_owned()),
 /// }];
-/// let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new())
+/// let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
 ///     .expect("a consistent premise");
 /// assert_eq!(answers.vars(), ["c"]);
 /// assert!(answers.rows().iter().any(|row| row == &[TermValue::iri("http://example.org/Animal")]));
@@ -1067,7 +1067,7 @@ fn decide(
 /// c.push_quad(x, p, z, None);
 /// let conclusion = c.freeze().expect("freeze");
 ///
-/// let certificate = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new())
+/// let certificate = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::default())
 ///     .expect("a consistent premise");
 /// assert!(matches!(certificate.outcome(), EntailmentOutcome::Entailed(_)));
 /// // …and the certificate names the run that answered it.
@@ -1315,7 +1315,7 @@ mod tests {
     /// The outcome of one question, with its certificate discarded — for the assertions
     /// that are about the verdict alone.
     fn outcome(premise: &RdfDataset, conclusion: &RdfDataset, regime: Regime) -> EntailmentOutcome {
-        entails(premise, conclusion, regime, &ImportMap::new())
+        entails(premise, conclusion, regime, &ImportMap::default())
             .expect("consistent")
             .into_parts()
             .0
@@ -1388,7 +1388,7 @@ mod tests {
         ]);
         let conclusion = graph(&[("http://example.org/anything", TYPE, "http://example.org/At")]);
         let Err(EntailError::Inconsistent(run)) =
-            entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new())
+            entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::default())
         else {
             panic!("two disjoint classes with a shared instance is `cax-dw`");
         };
@@ -1427,7 +1427,7 @@ mod tests {
         let conclusion = graph(&[("http://example.org/x", TYPE, "http://example.org/B")]);
         for regime in [Regime::OwlDirect, Regime::Rif] {
             let Err(EntailError::UnsupportedRegime(refused)) =
-                entails(&premise, &conclusion, regime, &ImportMap::new())
+                entails(&premise, &conclusion, regime, &ImportMap::default())
             else {
                 panic!("{regime:?} is defined by an input this signature does not carry");
             };
@@ -1441,7 +1441,7 @@ mod tests {
             Regime::OwlRl,
             Regime::D,
         ] {
-            entails(&premise, &conclusion, regime, &ImportMap::new())
+            entails(&premise, &conclusion, regime, &ImportMap::default())
                 .unwrap_or_else(|e| panic!("{regime:?}: {e}"));
         }
     }
@@ -1489,7 +1489,8 @@ mod tests {
             o: QNode::Var("c".to_owned()),
         }];
         let answers: CertainAnswers =
-            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
+            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
+                .expect("consistent");
         assert_eq!(answers.vars(), ["c"]);
         assert!(answers.is_complete(), "{:?}", answers.limits());
         for class in ["http://example.org/A", "http://example.org/B"] {
@@ -1503,8 +1504,8 @@ mod tests {
             );
         }
         // The rows are deduplicated and ordered by the row itself, so two runs agree.
-        let again =
-            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
+        let again = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
+            .expect("consistent");
         assert_eq!(answers.rows(), again.rows());
     }
 
@@ -2017,13 +2018,13 @@ mod tests {
         );
 
         for (name, premise, conclusion, expected) in cases {
-            let certificate = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new())
+            let certificate = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::default())
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
             let answers = certain_answers(
                 &premise,
                 &patterns_of(&conclusion),
                 Regime::OwlRl,
-                &ImportMap::new(),
+                &ImportMap::default(),
             )
             .unwrap_or_else(|e| panic!("{name}: {e}"));
 
@@ -2065,13 +2066,13 @@ mod tests {
                 "http://example.org/Never",
             ] {
                 let conclusion = graph(&[("http://example.org/x", TYPE, object)]);
-                let certificate = entails(&premise, &conclusion, regime, &ImportMap::new())
+                let certificate = entails(&premise, &conclusion, regime, &ImportMap::default())
                     .expect("a consistent premise");
                 let answers = certain_answers(
                     &premise,
                     &patterns_of(&conclusion),
                     regime,
-                    &ImportMap::new(),
+                    &ImportMap::default(),
                 )
                 .expect("a consistent premise");
                 assert_eq!(
@@ -2125,8 +2126,8 @@ mod tests {
             p: QNode::Term(TermValue::iri(DIFFERENTFROM)),
             o: QNode::Term(TermValue::iri(PETER)),
         }];
-        let answers =
-            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
+        let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
+            .expect("consistent");
         assert_eq!(answers.vars(), ["x"]);
         assert!(
             answers.rows().is_empty(),
@@ -2186,7 +2187,7 @@ mod tests {
             &premise("http://example.org/b"),
             &bgp,
             Regime::Simple,
-            &ImportMap::new(),
+            &ImportMap::default(),
         )
         .expect("consistent");
         assert_eq!(answers.vars(), ["x"]);
@@ -2201,7 +2202,7 @@ mod tests {
             &premise("http://example.org/a"),
             &bgp,
             Regime::Simple,
-            &ImportMap::new(),
+            &ImportMap::default(),
         )
         .expect("consistent");
         assert_eq!(
@@ -2244,7 +2245,7 @@ mod tests {
                 }],
             ),
         ] {
-            let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new())
+            let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
                 .expect("consistent");
             assert!(
                 answers.is_complete(),
@@ -2275,8 +2276,8 @@ mod tests {
             p: QNode::Var("p".to_owned()),
             o: QNode::Var("o".to_owned()),
         }];
-        let answers =
-            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
+        let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
+            .expect("consistent");
         assert!(!answers.rows().is_empty(), "the closure is enumerated");
         assert_eq!(answers.mechanism(), EntailmentMechanism::StrictTable);
 
@@ -2334,8 +2335,8 @@ mod tests {
                 o: QNode::Term(TermValue::iri(STEWIE)),
             },
         ];
-        let answers =
-            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
+        let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
+            .expect("consistent");
         assert!(
             answers
                 .limits()
@@ -2381,8 +2382,8 @@ mod tests {
                 o: QNode::Term(TermValue::iri(STEWIE)),
             },
         ];
-        let answers =
-            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
+        let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
+            .expect("consistent");
         // The blank predicate is reported as open, naming the triple the caller wrote…
         let open: Vec<&Vec<String>> = answers
             .limits()
@@ -2435,8 +2436,8 @@ mod tests {
                 o: QNode::Term(TermValue::iri(BOY)),
             },
         ];
-        let answers =
-            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
+        let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
+            .expect("consistent");
         assert!(answers.vars().is_empty(), "nothing is projected");
         assert!(
             answers.rows().is_empty(),
@@ -2523,7 +2524,7 @@ mod tests {
             ),
         ];
         for (name, premise, bgp, lane) in cases {
-            let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new())
+            let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::default())
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(
                 answers

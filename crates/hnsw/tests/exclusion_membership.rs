@@ -107,7 +107,7 @@ const WIDE: usize = 150;
 /// components per row, at the widest beam the fixture admits, beside its matrix.
 fn reassociated_space() -> (VectorMatrix, Arc<HnswSpace<Reassociated>>) {
     let vectors = matrix(ROWS, WIDE);
-    let index = HnswIndex::build_reassociated(
+    let index = purrdf_hnsw::build::<Reassociated>(
         vectors.clone(),
         &DistanceMetric::SquaredEuclidean,
         Params::new(4, 8, 16, ROWS).expect("the fixture beam is valid"),

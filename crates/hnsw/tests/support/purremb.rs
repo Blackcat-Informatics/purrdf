@@ -15,6 +15,7 @@
 #![allow(dead_code, unreachable_pub)]
 
 use purrdf_core::IndexGuardView;
+use purrdf_core::distance::Reassociated;
 use purrdf_core::distance::{Arithmetic, Exact};
 use purrdf_core::{
     AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
@@ -26,7 +27,7 @@ use purrdf_core::{
     TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId, derive_artifact_root,
     verify_embedding,
 };
-use purrdf_hnsw::{HnswIndex, Params, VectorMatrix, guard, level::splitmix64};
+use purrdf_hnsw::{HnswIndex, IndexArithmetic, Params, VectorMatrix, guard, level::splitmix64};
 
 /// Directory entry length in the PURREMB v1 framing.
 const DIRECTORY_ENTRY_LENGTH: usize = 64;
@@ -101,13 +102,13 @@ impl Fixture {
             dims,
             dims,
             params,
-            HnswIndex::build_reassociated,
-            guard::load_reassociated,
+            purrdf_hnsw::build::<Reassociated>,
+            guard::load::<Reassociated>,
         )
     }
 
     /// The two-pass construction, with the index built by `build` and read back by `load`.
-    fn assemble<A: Arithmetic>(
+    fn assemble<A: IndexArithmetic>(
         rows: usize,
         dims: usize,
         prefix: usize,

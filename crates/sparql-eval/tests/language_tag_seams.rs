@@ -83,7 +83,7 @@ fn tagged_by_a_native_function(tag: &str) -> Option<TermValue> {
         language: Some(tag.to_owned()),
         direction: None,
     };
-    let mut functions = UserFunctionRegistry::new();
+    let mut functions = UserFunctionRegistry::default();
     functions.register_native(
         format!("{EX}tagged"),
         Arity::Exact(0),
@@ -158,7 +158,7 @@ fn a_refused_tag_costs_the_binding_and_nothing_else() {
         language: Some("en us".to_owned()),
         direction: None,
     };
-    let mut functions = UserFunctionRegistry::new();
+    let mut functions = UserFunctionRegistry::default();
     functions.register_native(
         format!("{EX}tagged"),
         Arity::Exact(0),

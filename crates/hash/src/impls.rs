@@ -51,11 +51,15 @@ macro_rules! debug_non_exhaustive {
 
 /// Implement `Default` as the type's own no-argument `new`.
 ///
-/// A type whose empty value is a `const fn new` — a hasher's initial state, an
-/// empty builder — also answers `Default`, which cannot be `const`: this is that
-/// impl, spelled once. The invocation names the type, with its generic
-/// parameters and their bounds in brackets when it has any; attributes before
-/// the type are kept on the generated `default`.
+/// The workspace's one constructor convention: a type whose default is what
+/// `#[derive(Default)]` produces derives it and has no `new`; a type whose empty
+/// value must be a `const fn`, or differs from the derived one — a hasher's
+/// initial state, a sink with its default scope open — writes that value once, in
+/// `new`, and answers `Default` through this impl, so the two can never diverge.
+/// The invocation names the type, with its generic parameters and their bounds in
+/// brackets when it has any; attributes before the type are kept on the generated
+/// `default`. A type whose no-argument constructor carries a more specific name
+/// than `new` names it after `=>`.
 ///
 /// ```rust
 /// struct Counter {
@@ -71,19 +75,42 @@ macro_rules! debug_non_exhaustive {
 /// purrdf_hash::default_from_new!(Counter);
 ///
 /// assert_eq!(Counter::default().count, 1);
+///
+/// struct Filter {
+///     narrowed: bool,
+/// }
+///
+/// impl Filter {
+///     const fn unconstrained() -> Self {
+///         Self { narrowed: false }
+///     }
+/// }
+///
+/// purrdf_hash::default_from_new!(Filter => unconstrained);
+///
+/// assert!(!Filter::default().narrowed);
 /// ```
 #[macro_export]
 macro_rules! default_from_new {
     (
         $(#[$meta:meta])*
-        $([$($generics:tt)*])? $name:ident $(<$($arg:tt),+>)?
+        $([$($generics:tt)*])? $name:ident $(<$($arg:tt),+>)? => $constructor:ident
     ) => {
         impl $(<$($generics)*>)? ::core::default::Default for $name $(<$($arg),+>)? {
             $(#[$meta])*
             fn default() -> Self {
-                Self::new()
+                Self::$constructor()
             }
         }
+    };
+    (
+        $(#[$meta:meta])*
+        $([$($generics:tt)*])? $name:ident $(<$($arg:tt),+>)?
+    ) => {
+        $crate::default_from_new!(
+            $(#[$meta])*
+            $([$($generics)*])? $name $(<$($arg),+>)? => new
+        );
     };
 }
 
@@ -141,6 +168,21 @@ mod tests {
     #[test]
     fn default_is_the_types_new() {
         assert_eq!(Start::<3>::default().0, 3);
+    }
+
+    struct Named(u8);
+
+    impl Named {
+        const fn unconstrained() -> Self {
+            Self(7)
+        }
+    }
+
+    crate::default_from_new!(Named => unconstrained);
+
+    #[test]
+    fn default_is_the_named_constructor() {
+        assert_eq!(Named::default().0, 7);
     }
 
     #[test]

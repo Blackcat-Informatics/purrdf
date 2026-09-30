@@ -7,10 +7,11 @@
 //! term's lexical form, a label — takes it the same way: as
 //! `impl Into<String>`, so a `&str`, a `String` and a `format!` all work and
 //! at most one allocation is made, converted once more into whatever the
-//! field stores (`String`, `Arc<str>`, `Box<str>`). A type whose empty value is
-//! its [`Default`] spells `new` as that default. A `From` impl that wraps a
+//! field stores (`String`, `Arc<str>`, `Box<str>`). A `From` impl that wraps a
 //! lower layer's error into one of this layer's variants is that variant's
-//! constructor and nothing else.
+//! constructor and nothing else. (A type's empty value is not one of these: it
+//! is `#[derive(Default)]`, or a `new` that `purrdf_hash::default_from_new!`
+//! answers `Default` from.)
 //!
 //! These bodies are the same code whatever type they build, so they are
 //! written once, here, as [`constructors!`](crate::constructors) and
@@ -33,7 +34,6 @@
 /// | `fn name(text, at: usize) -> Self::Variant { .. };` | `Self::Variant { text: text.into().into(), at }` |
 /// | `fn name(text) -> Self;` | `Self(text.into().into())` |
 /// | `fn name(text) -> Self { .. };` | `Self { text: text.into().into() }` |
-/// | `fn name() -> Self::default();` | `<Self as Default>::default()` |
 ///
 /// In the brace forms the text parameter's name is its field's name, and every
 /// further `name: Type` parameter is moved into the field of the same name.
@@ -56,7 +56,7 @@
 ///     }
 /// }
 ///
-/// #[derive(Debug, Default, PartialEq, Eq)]
+/// #[derive(Debug, PartialEq, Eq)]
 /// struct Label {
 ///     text: Arc<str>,
 /// }
@@ -65,8 +65,6 @@
 ///     impl Label {
 ///         /// Wrap a label.
 ///         pub fn new(text) -> Self { .. };
-///         /// The empty label.
-///         pub fn empty() -> Self::default();
 ///     }
 /// }
 ///
@@ -76,7 +74,6 @@
 ///     Refusal::Syntax { reason: "unexpected }".to_owned(), at: 7 },
 /// );
 /// assert_eq!(&*Label::new("a").text, "a");
-/// assert_eq!(Label::empty(), Label::default());
 /// ```
 #[macro_export]
 macro_rules! constructors {
@@ -91,16 +88,6 @@ macro_rules! constructors {
         }
     };
     (@items) => {};
-    (@items
-        $(#[$meta:meta])* $vis:vis fn $name:ident() -> Self::default();
-        $($rest:tt)*
-    ) => {
-        $(#[$meta])*
-        $vis fn $name() -> Self {
-            <Self as ::core::default::Default>::default()
-        }
-        $crate::constructors!(@items $($rest)*);
-    };
     (@items
         $(#[$meta:meta])* $vis:vis fn $name:ident($text:ident) -> Self;
         $($rest:tt)*
@@ -166,6 +153,11 @@ macro_rules! __text_field {
 /// whose body is `Self::Variant(value)`: the conversion `?` applies when a
 /// lower layer's error crosses into this layer's.
 ///
+/// A variant that holds a rendering of its sources rather than the sources
+/// themselves takes them as one group, `Variant(Source, ..) as convert`, and
+/// each body is `Self::Variant(convert(&value))` — `ToString::to_string` for a
+/// variant that carries the source's message.
+///
 /// ```rust
 /// #[derive(Debug, PartialEq, Eq)]
 /// enum Outer {
@@ -184,9 +176,30 @@ macro_rules! __text_field {
 ///
 /// assert!(matches!(read("x"), Err(Outer::Parse(_))));
 /// assert_eq!(read("7"), Ok(7));
+///
+/// #[derive(Debug, PartialEq, Eq)]
+/// enum Rendered {
+///     Message(String),
+/// }
+///
+/// purrdf_lex::variant_from!(Rendered {
+///     Message(core::num::ParseIntError, core::str::Utf8Error) as ToString::to_string
+/// });
+///
+/// let error = "x".parse::<u8>().unwrap_err();
+/// assert_eq!(Rendered::from(error.clone()), Rendered::Message(error.to_string()));
 /// ```
 #[macro_export]
 macro_rules! variant_from {
+    ($type:ty { $variant:ident($($source:ty),+ $(,)?) as $convert:path }) => {
+        $(
+            impl ::core::convert::From<$source> for $type {
+                fn from(value: $source) -> Self {
+                    Self::$variant($convert(&value))
+                }
+            }
+        )+
+    };
     ($type:ty { $($variant:ident($source:ty)),+ $(,)? }) => {
         $(
             impl ::core::convert::From<$source> for $type {
@@ -226,10 +239,10 @@ mod tests {
         }
     }
 
-    #[derive(Debug, Default, PartialEq, Eq)]
+    #[derive(Debug, PartialEq, Eq)]
     struct Tuple(String);
 
-    #[derive(Debug, Default, PartialEq, Eq)]
+    #[derive(Debug, PartialEq, Eq)]
     struct Named {
         label: Arc<str>,
     }
@@ -237,7 +250,6 @@ mod tests {
     crate::constructors! {
         impl Tuple {
             fn new(text) -> Self;
-            fn empty() -> Self::default();
         }
     }
 
@@ -247,21 +259,15 @@ mod tests {
         }
     }
 
-    struct Borrowing<'a> {
-        items: Vec<&'a str>,
-    }
-
-    impl Default for Borrowing<'_> {
-        fn default() -> Self {
-            Self {
-                items: vec!["seed"],
-            }
-        }
+    #[derive(Debug, PartialEq, Eq)]
+    enum Borrowing<'a> {
+        Owned(String),
+        Borrowed(&'a str),
     }
 
     crate::constructors! {
         impl<'a> Borrowing<'a> {
-            fn new() -> Self::default();
+            fn owned(text) -> Self::Owned;
         }
     }
 
@@ -274,6 +280,15 @@ mod tests {
     crate::variant_from!(Wrapped {
         Int(core::num::ParseIntError),
         Text(String),
+    });
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum Rendered {
+        Message(String),
+    }
+
+    crate::variant_from!(Rendered {
+        Message(core::num::ParseIntError, core::fmt::Error) as ToString::to_string
     });
 
     #[test]
@@ -315,9 +330,12 @@ mod tests {
     }
 
     #[test]
-    fn a_default_constructor_is_the_default() {
-        assert_eq!(Tuple::empty(), Tuple::default());
-        assert_eq!(Borrowing::new().items, vec!["seed"]);
+    fn a_type_with_lifetime_parameters_takes_constructors() {
+        assert_eq!(
+            Borrowing::owned("seed"),
+            Borrowing::Owned("seed".to_owned())
+        );
+        assert_ne!(Borrowing::owned("seed"), Borrowing::Borrowed("seed"));
     }
 
     #[test]
@@ -325,5 +343,18 @@ mod tests {
         let error = "z".parse::<u8>().unwrap_err();
         assert_eq!(Wrapped::from(error.clone()), Wrapped::Int(error));
         assert_eq!(Wrapped::from("t".to_owned()), Wrapped::Text("t".to_owned()));
+    }
+
+    #[test]
+    fn variant_from_renders_each_grouped_source() {
+        let error = "z".parse::<u8>().unwrap_err();
+        assert_eq!(
+            Rendered::from(error.clone()),
+            Rendered::Message(error.to_string())
+        );
+        assert_eq!(
+            Rendered::from(core::fmt::Error),
+            Rendered::Message(core::fmt::Error.to_string())
+        );
     }
 }

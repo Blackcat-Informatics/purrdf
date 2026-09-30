@@ -249,13 +249,6 @@ pub(crate) fn language_tags_well_formed(value: &TermValue) -> bool {
     true
 }
 
-purrdf_lex::constructors! {
-    impl ScratchInterner {
-        /// A fresh, empty interner.
-        pub fn new() -> Self::default();
-    }
-}
-
 impl ScratchInterner {
     /// Empty this interner while KEEPING the tables it has already grown.
     ///
@@ -582,7 +575,7 @@ mod tests {
     #[test]
     fn existing_value_is_promoted_not_computed() {
         let ds = dataset_with_one_iri();
-        let mut scratch = ScratchInterner::new();
+        let mut scratch = ScratchInterner::default();
         let term = scratch.intern(&ds, TermValue::Iri("https://example.org/s".to_owned()));
         // The value is in the dataset → it MUST resolve to an Existing id, and the
         // scratch table stays empty (the promotion rule).
@@ -593,7 +586,7 @@ mod tests {
     #[test]
     fn novel_value_is_computed_and_deduped() {
         let ds = dataset_with_one_iri();
-        let mut scratch = ScratchInterner::new();
+        let mut scratch = ScratchInterner::default();
         let novel = TermValue::Literal {
             lexical_form: "hello world".to_owned(),
             datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
@@ -611,7 +604,7 @@ mod tests {
     #[test]
     fn existing_and_computed_are_never_equal() {
         let ds = dataset_with_one_iri();
-        let mut scratch = ScratchInterner::new();
+        let mut scratch = ScratchInterner::default();
         let existing = scratch.intern(&ds, TermValue::Iri("https://example.org/s".to_owned()));
         let computed = scratch.intern(
             &ds,
@@ -626,7 +619,7 @@ mod tests {
     #[test]
     fn value_of_round_trips_existing_and_computed() {
         let ds = dataset_with_one_iri();
-        let mut scratch = ScratchInterner::new();
+        let mut scratch = ScratchInterner::default();
 
         let iri = TermValue::Iri("https://example.org/s".to_owned());
         let existing = scratch.intern(&ds, iri.clone());
@@ -658,7 +651,7 @@ mod tests {
         b.push_quad(s, p, o, None);
         let ds = b.freeze().expect("freeze");
 
-        let scratch = ScratchInterner::new();
+        let scratch = ScratchInterner::default();
         let value = scratch.value_of(&ds, SolutionTerm::Existing(o));
         assert_eq!(
             value,
@@ -701,7 +694,7 @@ mod tests {
             "abcdefgh",
             "en-x-cantbethislong",
         ] {
-            let mut scratch = ScratchInterner::new();
+            let mut scratch = ScratchInterner::default();
             assert!(
                 scratch.intern_checked(&ds, tagged(tag)).is_some(),
                 "{tag} is a tag real data carries and must still bind"
@@ -720,7 +713,7 @@ mod tests {
             "abcdefghi",
             "",
         ] {
-            let mut scratch = ScratchInterner::new();
+            let mut scratch = ScratchInterner::default();
             assert!(
                 scratch.intern_checked(&ds, tagged(tag)).is_none(),
                 "{tag:?} must not become a solution term"
@@ -747,7 +740,7 @@ mod tests {
                 direction: None,
             }),
         };
-        let mut scratch = ScratchInterner::new();
+        let mut scratch = ScratchInterner::default();
         assert!(scratch.intern_checked(&ds, quoted("en-US")).is_some());
         assert!(scratch.intern_checked(&ds, quoted("en us")).is_none());
     }

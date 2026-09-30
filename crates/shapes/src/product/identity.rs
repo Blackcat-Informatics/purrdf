@@ -1281,7 +1281,7 @@ mod tests {
     /// A registry carrying one expression-bodied function — the DECLARED population,
     /// which a restore rebuilds by re-parsing the shapes graph.
     fn declared_functions() -> UserFunctionRegistry {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_expr(EX_FN, Arity::Exact(1), Arc::new(|_call| Ok(None)));
         registry
     }
@@ -1289,7 +1289,7 @@ mod tests {
     /// A registry carrying one native function — the INJECTED population, which only
     /// a host can wire.
     fn injected_functions() -> UserFunctionRegistry {
-        let mut registry = UserFunctionRegistry::new();
+        let mut registry = UserFunctionRegistry::default();
         registry.register_native(
             EX_FN,
             Arity::Exact(1),
@@ -1349,7 +1349,7 @@ mod tests {
 
     /// A FRESH registry instance carrying [`NullAggregate`] under [`EX_AGG`].
     fn aggregate_registry() -> AggregateRegistry {
-        let mut registry = AggregateRegistry::new();
+        let mut registry = AggregateRegistry::default();
         registry.register(EX_AGG, Arc::new(NullAggregate));
         registry
     }

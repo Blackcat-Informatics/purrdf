@@ -93,7 +93,7 @@ impl EntailmentPlan {
                     path.display()
                 )));
             }
-            (_, None) => RuleSet::new(),
+            (_, None) => RuleSet::default(),
         };
         Ok(Self { regime, rules })
     }

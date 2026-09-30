@@ -1183,13 +1183,13 @@ impl CustomAggregate for ProductAggregate {
 }
 
 fn sum_registry() -> AggregateRegistry {
-    let mut registry = AggregateRegistry::new();
+    let mut registry = AggregateRegistry::default();
     registry.register(SUM_IRI, Arc::new(SumAggregate));
     registry
 }
 
 fn product_registry() -> AggregateRegistry {
-    let mut registry = AggregateRegistry::new();
+    let mut registry = AggregateRegistry::default();
     registry.register(SUM_IRI, Arc::new(ProductAggregate));
     registry
 }

@@ -139,13 +139,6 @@ pub struct TermDag {
     next_meta: u32,
 }
 
-purrdf_lex::constructors! {
-    impl TermDag {
-        /// A fresh, empty arena.
-        pub fn new() -> Self::default();
-    }
-}
-
 impl TermDag {
     /// The number of interned nodes.
     pub fn len(&self) -> usize {
@@ -303,7 +296,7 @@ mod tests {
     /// Interning the same leaf symbol twice yields the same `NodeId`.
     #[test]
     fn hash_consing_collapses_identical_leaves() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let a = dag.intern_leaf("https://example.org/a");
         let b = dag.intern_leaf("https://example.org/a");
         assert_eq!(a, b);
@@ -314,7 +307,7 @@ mod tests {
     /// differently-shaped application is a distinct node.
     #[test]
     fn hash_consing_collapses_identical_applications() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let f = dag.intern_leaf("f");
         let a = dag.intern_leaf("a");
         let b = dag.intern_leaf("b");
@@ -328,7 +321,7 @@ mod tests {
     /// Interning the same binder twice yields the same `NodeId`.
     #[test]
     fn hash_consing_collapses_identical_binders() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let forall = dag.intern_leaf("forall");
         let sort = dag.intern_leaf("thing");
         let body = dag.intern_bound(0, 0);
@@ -341,7 +334,7 @@ mod tests {
     /// calls to `fresh_meta` ever mint the same `MetaId`.
     #[test]
     fn fresh_meta_is_unique_and_self_free() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let (m1, n1) = dag.fresh_meta();
         let (m2, n2) = dag.fresh_meta();
         assert_ne!(m1, m2);
@@ -354,7 +347,7 @@ mod tests {
     /// children's — including the operator position.
     #[test]
     fn app_free_meta_is_the_union_of_children() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let f = dag.intern_leaf("f");
         let (m1, meta1) = dag.fresh_meta();
         let (m2, meta2) = dag.fresh_meta();
@@ -369,7 +362,7 @@ mod tests {
     /// the same rule an `App` follows.
     #[test]
     fn binder_free_meta_excludes_nothing() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let op = dag.intern_leaf("forall");
         let sort = dag.intern_leaf("thing");
         let (m, meta) = dag.fresh_meta();
@@ -381,7 +374,7 @@ mod tests {
     /// sets — none of them mentions a metavariable.
     #[test]
     fn leaves_free_variables_and_bound_occurrences_have_no_free_meta() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let leaf = dag.intern_leaf("a");
         let free = dag.intern_free("x");
         let bound = dag.intern_bound(0, 0);
@@ -394,7 +387,7 @@ mod tests {
     /// yields the same `SymId`.
     #[test]
     fn symbol_interning_round_trips() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let id = dag.intern_symbol("https://example.org/p");
         let again = dag.intern_symbol("https://example.org/p");
         assert_eq!(id, again);
@@ -405,7 +398,7 @@ mod tests {
     /// nodes: they occupy the same symbol interner but different `NodeData` shapes.
     #[test]
     fn free_and_leaf_over_the_same_symbol_are_distinct_nodes() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let leaf = dag.intern_leaf("x");
         let free = dag.intern_free("x");
         assert_ne!(leaf, free);
@@ -414,7 +407,7 @@ mod tests {
     /// `len`/`is_empty` track the number of DISTINCT interned nodes.
     #[test]
     fn len_and_is_empty_track_distinct_nodes() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         assert!(dag.is_empty());
         let a = dag.intern_leaf("a");
         assert_eq!(dag.len(), 1);
@@ -432,7 +425,7 @@ mod tests {
     /// internally consistent.
     #[test]
     fn fresh_meta_node_resolves_back_to_a_meta_shape() {
-        let mut dag = TermDag::new();
+        let mut dag = TermDag::default();
         let (meta, node) = dag.fresh_meta();
         assert_eq!(dag.data(node), &NodeData::Meta(meta));
     }

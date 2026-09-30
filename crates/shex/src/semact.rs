@@ -66,20 +66,12 @@ pub struct SemActRegistry<'a> {
     extensions: purrdf_core::FastMap<String, Box<SemActExtension<'a>>>,
 }
 
-purrdf_lex::constructors! {
-    impl<'a> SemActRegistry<'a> {
-        /// An empty registry (every action is inert / succeeds).
-        #[must_use]
-        pub fn new() -> Self::default();
-    }
-}
-
 impl<'a> SemActRegistry<'a> {
     /// A registry carrying the built-in `http://shex.io/extensions/Test/`
     /// extension.
     #[must_use]
     pub fn with_test() -> Self {
-        let mut registry = Self::new();
+        let mut registry = Self::default();
         registry.register(TEST_EXTENSION, Box::new(test_extension));
         registry
     }

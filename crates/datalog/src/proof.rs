@@ -415,13 +415,6 @@ pub struct ProofArena {
     by_content: HashTable<ProofId>,
 }
 
-purrdf_lex::constructors! {
-    impl ProofArena {
-        /// A fresh, empty arena.
-        pub fn new() -> Self::default();
-    }
-}
-
 impl ProofArena {
     /// The number of interned terms.
     pub fn len(&self) -> usize {
@@ -866,7 +859,7 @@ impl ProofArena {
             return Err(Self::malformed("a proof has at least one node"));
         }
 
-        let mut arena = Self::new();
+        let mut arena = Self::default();
         let mut ids: Vec<ProofId> = Vec::new();
         for position in 0..count {
             let kind = reader.byte()?;
@@ -944,7 +937,7 @@ impl EvaluationProofs {
                 .cmp(&(derivations[right].proof_height(), derivations[right].fact()))
         });
 
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let mut built: BTreeMap<&Fact, ProofId> = BTreeMap::new();
         for &index in &order {
             let derivation = &derivations[index];
@@ -1268,7 +1261,7 @@ mod tests {
 
     /// A hand-built, VALID proof of `t(a, c)` over [`chain_rules`], plus its arena.
     fn chain_proof() -> (ProofArena, ProofId) {
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let first = arena.axiom(fact("a", P, "b"));
         let second = arena.axiom(fact("b", P, "c"));
         let root = arena.by_rule(fact("a", T, "c"), 0, &[first, second]);
@@ -1395,7 +1388,7 @@ mod tests {
             DlClause::datalog(atom("?s", T, "?o"), vec![atom("?s", Q, "?o")]),
         ];
 
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let first = arena.axiom(fact("a", P, "b"));
         let second = arena.axiom(fact("b", P, "c"));
 
@@ -1450,7 +1443,7 @@ mod tests {
         let edb = chain_edb();
         let ctx = ProofContext::new(&rules, &edb, &edb);
 
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let first = arena.axiom(fact("a", P, "b"));
 
         // The second body atom has no premise at all.
@@ -1508,7 +1501,7 @@ mod tests {
         let edb = chain_edb();
         let ctx = ProofContext::new(&rules, &edb, &edb);
 
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let first = arena.axiom(fact("a", P, "b"));
         let second = arena.axiom(fact("b", P, "c"));
         let tampered = arena.by_rule(fact("a", T, "zzz"), 0, &[first, second]);
@@ -1663,7 +1656,7 @@ mod tests {
         let rules = chain_rules();
         let edb = chain_edb();
         let ctx = ProofContext::new(&rules, &edb, &edb);
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let first = arena.axiom(fact("a", P, "b"));
         let second = arena.axiom(fact("b", P, "c"));
         // `t(a, a)` is not in the least model; no permutation of the real premises yields it.
@@ -1702,7 +1695,7 @@ mod tests {
         let edb = store_of(&[("a", base, "b"), ("c", base, "d"), ("a", Q, "b")]);
         let ctx = ProofContext::new(&rules, &edb, &edb);
 
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         // `c base d` has no `q`, so the step holds.
         let allowed_premise = arena.axiom(fact("c", base, "d"));
         let allowed = arena.by_rule(fact("c", R, "d"), 0, &[allowed_premise]);
@@ -1736,7 +1729,7 @@ mod tests {
         let edb = store_of(&[("a", base, "b"), ("c", base, "d"), ("a", Q, "zzz")]);
         let ctx = ProofContext::new(&rules, &edb, &edb);
 
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let allowed_premise = arena.axiom(fact("c", base, "d"));
         let allowed = arena.by_rule(fact("c", R, "d"), 0, &[allowed_premise]);
         assert_eq!(arena.check(allowed, &ctx), Ok(fact("c", R, "d")));
@@ -1784,7 +1777,7 @@ mod tests {
     /// Structurally identical proofs intern to ONE id, so a shared subproof is stored once.
     #[test]
     fn structurally_identical_proofs_share_one_node() {
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let left = arena.axiom(fact("a", P, "b"));
         let right = arena.axiom(fact("a", P, "b"));
         assert_eq!(left, right, "identical axioms intern once");
@@ -1835,7 +1828,7 @@ mod tests {
 
         // The SAME proof built through a different interning sequence — an unrelated term
         // interned first, so every arena id moves — encodes to the same bytes.
-        let mut shifted = ProofArena::new();
+        let mut shifted = ProofArena::default();
         let _unrelated = shifted.axiom(fact("z", P, "z"));
         let second = shifted.axiom(fact("b", P, "c"));
         let first = shifted.axiom(fact("a", P, "b"));
@@ -1871,7 +1864,7 @@ mod tests {
     /// the DAG rather than in its paths.
     #[test]
     fn a_shared_subproof_is_emitted_once() {
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let shared = arena.axiom(fact("a", P, "a"));
         let root = arena.by_rule(fact("a", T, "a"), 0, &[shared, shared]);
         let (decoded, decoded_root) =
@@ -2008,7 +2001,7 @@ mod tests {
         let edb = store_of(&[("a", P, "a"), ("a", P, "b")]);
         let ctx = ProofContext::new(&rules, &edb, &edb);
 
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let diagonal = arena.axiom(fact("a", P, "a"));
         let ok = arena.by_rule(fact("a", T, "a"), 0, &[diagonal]);
         assert_eq!(arena.check(ok, &ctx), Ok(fact("a", T, "a")));
@@ -2126,7 +2119,7 @@ mod tests {
         )];
         let edb = RelationStore::new();
         let ctx = ProofContext::new(&rules, &edb, &edb);
-        let mut arena = ProofArena::new();
+        let mut arena = ProofArena::default();
         let expected = fact("https://example.org/a", T, "https://example.org/b");
         let root = arena.by_rule(expected.clone(), 0, &[]);
         assert_eq!(arena.check(root, &ctx), Ok(expected));
