@@ -63,7 +63,8 @@ natively and on wasm32):
 | `Domain` (crate root) | The registered hash domain-separation string (see [Hash domains](#hash-domains)) |
 | `fnv` | FNV-1a 64-bit: `BASIS`, `PRIME`, `fnv1a64`, and `fold` into a caller's state |
 | `mix` | SplitMix64 (`splitmix64_next`, the published counter stream; `splitmix64_step`, the self-composed stream; `splitmix64_finalize`; `GOLDEN_GAMMA`); the signed-unit draws that map a 64-bit draw onto an exact binary64 in `[-1, 1)` (`signed_unit`, `signed_unit_next`, `signed_unit_step` and their `_nonzero` forms); and the 64-bit linear congruential generator with Knuth's MMIX multiplier (`lcg64_next`, `LCG64_MULTIPLIER`, `LCG64_MMIX_INCREMENT`) |
-| `dispatch` | The `Backend` trait every family of named execution paths implements (`selected`, `is_available`, `all_available`, `name`) and `PURRDF_REQUIRE_SIMD_PATHS`, the one variable a test run sets to require paths: `1` for every path the host is expected to run, or a `family:path` list |
+| `dispatch` | The `Backend` trait every family of named execution paths implements (`selected`, `is_available`, `all_available`, `name`) and `PURRDF_REQUIRE_SIMD_PATHS`, the one variable a test run sets to require paths: `1` for every path the host is expected to run, or a `family:path` list; `vector_backend!`, which declares a family of named paths and its `Backend` impl from one list |
+| `default_from_new!`, `debug_non_exhaustive!` (crate root) | The impl macros every crate shares: a `Default` that is the type's `const` or non-derived `new` (or another named constructor, `T => name`), and a `Debug` that shows the named fields and elides the rest |
 
 ## Usage
 

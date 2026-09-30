@@ -27,7 +27,9 @@ and builds for `wasm32-unknown-unknown`.
 Its scope is the workspace's lexical foundations: byte-class scanning,
 grammar terminals, term syntax, literal and IRI escaping, percent encoding,
 JSON strings, JSON pointers, a JSON reader and writer, a YAML reader and
-writer, a CBOR codec, an XML reader and Unicode normalisation.
+writer, a CBOR codec, an XML reader and Unicode normalisation, with the
+general-purpose structures and constructor macros those homes and the rest of
+the workspace share.
 
 | Module | What it holds | Specification |
 |---|---|---|
@@ -42,6 +44,10 @@ writer, a CBOR codec, an XML reader and Unicode normalisation.
 | `json_pointer` | Reference-token escaping and unescaping, pointer parsing, the array-index token | RFC 6901 |
 | `percent` | `encode` over the specification-defined sets (`UNRESERVED`, `REG_NAME`, `PATH`, `FRAGMENT`, `URI_TEMPLATE_RESERVED`, `NON_ASCII`, …), strict `decode`, `decode_form`, `normalize` | RFC 3986 §2, §3, §6.2.2; RFC 3987 §3.1; RFC 6570 §3.2.3 |
 | `unicode` | The workspace's one normalization pipeline: `nfc`, `nfd`, `nfkc`, `nfkd`, `is_nfc` and `ccc`, and the streaming stages (`Decompose`, `Compose`, `drive`) a caller composes with its own stage, over tables generated from the vendored Unicode Character Database at `UNICODE_VERSION`, the version every Unicode table in the workspace is generated from | UAX 15; Unicode core specification §3.11–3.12 |
+| `json::record`, `json_record!` | The strict typed record reader (`Record`: required, optional, defaulted and tag members; unknown, repeated and non-object records refused), `FromJson`/`ToJson`, and `json_record!`, the one record codec that writes both impls from one member list, optionally building through a validating constructor | RFC 8259; RFC 6901 pointers in `DecodeError` |
+| `walk` | `WorkList`, the heap work list every whole-tree walk keeps; `Nested` and `Dismantle`, an owned child box whose drop takes the nesting apart without recursing; `write_debug` over `Tok`, a recursive type's `Debug` with the derive's exact bytes | — |
+| `assoc` | `get`, `get_mut` and `insert` over an ordered `[(K, V)]` association list, read by first match and written by replacing the first match or appending | — |
+| `constructors!`, `variant_from!`, `message_error!` | Constructors whose whole body is one conversion (text parameters are `impl Into<String>`); `From` impls that wrap a source into one enum variant, or a rendering of several sources (`Variant(A, B) as convert`); an error type whose whole content is one message | — |
 
 ## Why a scanner may not approximate
 

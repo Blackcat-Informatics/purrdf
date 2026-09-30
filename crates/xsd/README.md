@@ -17,9 +17,10 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 [![Repository](https://img.shields.io/badge/repo-Blackcat--Informatics%2Fpurrdf-181717.svg)](https://github.com/Blackcat-Informatics/purrdf)
 
 `purrdf-xsd` is the typed-value foundation of the PurRDF toolkit: a pure-Rust,
-wasm-clean crate with **no third-party dependency** — its one runtime
-dependency is the zero-dependency root
-[`purrdf-hash`](https://crates.io/crates/purrdf-hash) — implementing the **XSD 1.1**
+wasm-clean crate with **no third-party dependency** — its runtime
+dependencies are the zero-dependency root
+[`purrdf-hash`](https://crates.io/crates/purrdf-hash) and the lexical layer
+[`purrdf-lex`](https://crates.io/crates/purrdf-lex) — implementing the **XSD 1.1**
 value spaces — lexical parsing, value equality and ordering, canonical lexical
 forms, and SPARQL numeric promotion. It is the layer the SPARQL evaluator uses
 to compute `FILTER` / `ORDER BY` over typed values, while the RDF IR keeps
@@ -74,8 +75,8 @@ workspace — an RDF 1.2 toolkit with native codecs, SPARQL, SHACL, ShEx,
 entailment, and the GTS graph transport, carried into Python, WebAssembly, and
 C (the GTS container itself reaches Python and C, not the wasm package). Most applications should depend on the umbrella
 [`purrdf`](https://crates.io/crates/purrdf) crate, which re-exports this crate
-as `purrdf::xsd`; depend on `purrdf-xsd` directly when you just want a small,
-dependency-free XSD value library.
+as `purrdf::xsd`; depend on `purrdf-xsd` directly when you just want a small
+XSD value library with no third-party dependency.
 
 There are deliberately no Cargo feature flags anywhere in the workspace. MSRV
 follows the workspace `rust-version` (currently 1.98, stable toolchain only).

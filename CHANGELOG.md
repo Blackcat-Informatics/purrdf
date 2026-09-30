@@ -37,11 +37,12 @@ under Changed and Fixed where a longer account helps.
   as the one SHA-2 implementation.
 - **all crates:** no public type implements `serde::Serialize` or
   `serde::Deserialize`. Types that crossed JSON through derives cross it
-  through hand-written conversions over `purrdf_lex::json::Value`, writing the
-  same document shape: the projection configurations, sideband models and
-  reports; `NativeRdfFormat` and the visualization types (`viz::VizJson`); the
-  ShEx `Schema`; the slice catalog records; the SARIF model of
-  `purrdf-validate`; and the retrieval `Plan`.
+  through `purrdf_lex::json::record`'s `ToJson`/`FromJson` over
+  `purrdf_lex::json::Value` (most declared through `purrdf_lex::json_record!`),
+  writing the same document shape: the projection configurations, sideband
+  models and reports; `NativeRdfFormat` and the visualization types; the ShEx
+  `Schema`; the slice catalog records; the SARIF model of `purrdf-validate`;
+  and the retrieval `Plan`.
 
 **Public signatures**
 
@@ -92,6 +93,59 @@ under Changed and Fixed where a longer account helps.
   `family:path` list over the families `blake3`, `crc32`, `csv`, `deflate`,
   `distance`, `hex` and `sha1`; an unknown family or path fails the run.
 
+- **hnsw:** every constructor is one generic body over the sealed
+  `purrdf_hnsw::IndexArithmetic` family (`Exact`, the default, and
+  `Reassociated`): `build::<A>`, `HnswIndex::<A>::decode`, `guard::load::<A>`
+  and `HnswSpace::<A>::from_artifact`, with `guard_contract_for`,
+  `derived_index`, `profile::implementation_for` and
+  `profile::profile_declaration_for` bounded by `IndexArithmetic`. A call whose
+  context does not fix the arithmetic names it (`guard::load::<Exact>`,
+  `HnswIndex::<Exact>::decode`). `HnswIndex::build` and
+  `HnswIndex::build_reassociated` stay as named spellings of `build`.
+  `HnswIndex::decode_reassociated`, `guard::load_reassociated`,
+  `HnswSpace::from_artifact_reassociated`, the free `build_reassociated`,
+  `profile::loss_evidence_reassociated` (use
+  `profile::loss_evidence_for::<Reassociated>`) and
+  `profile::implementation_id_for` (use `IndexArithmetic::IMPLEMENTATION_ID`)
+  are removed. No image, identity or profile byte changes.
+- **datalog, entail, core, rdf, shapes, shex, sparql-eval:** a type whose empty
+  value is the derived one derives `Default` and has no `new()`; call
+  `T::default()`. This covers `SkolemRegistry`, `ProofArena`, `TermInterner`,
+  `TermDag` and `Subst` (datalog), `rif::RuleSet` (entail), `ArtifactIndex`,
+  `SegmentUnitMap` and `imports::ImportMap` (core), `OkfBundle` (rdf),
+  `RecursionGuard` (shapes), `SemActRegistry` (shex), and
+  `AggregateRegistry`, `ScratchInterner`, `ServiceCatalog`, `VarSchema` and
+  `UserFunctionRegistry` (sparql-eval).
+- **gts:** `VerifyOptions::strict()` is `VerifyOptions::new()`, the same value
+  (embedded key lookup, signatures required), which `Default` returns.
+- **sparql-eval:** `PartialAnswers` is generic over the carrier of its rows,
+  `PartialAnswers<R = PartialSparqlResult>`, with `as_ref` (the same
+  certificate over a borrow) and a generic `into_result`; `result` is no
+  longer a `const fn`.
+- **rdf:** each selection the curated projections share is one type:
+  `projections::GraphSelection` and `projections::SubjectSelector`, with
+  `CsvwTermsGraphSelection`/`OkfGraphSelection` and
+  `CsvwTermsSelector`/`OkfConceptSelector` as type aliases. `LpgIriSelection`
+  and `LpgNamedGraphSelection` are aliases of `LpgSelection<T>`, whose variant
+  fields are `include` and `exclude` (an IRI selection's fields were `allow`
+  and `deny`; its JSON still names them so). `CroissantConfig` and
+  `DcatConfig` are aliases of `research_object::JsonLdProfileConfig<V>`.
+- **rdf:** `viz::VizJson` is removed; the visualization types read and write
+  JSON through `purrdf_lex::json::record`'s `FromJson`/`ToJson`.
+- **core:** `ir::pack::PackSideError` and `PackTriplesError` are aliases of
+  `PackBitsError`, so their messages start `pack:` rather than `pack-side:` and
+  `pack-triples:`. `EffectiveF32Row` and `EffectiveF64Row` are aliases of
+  `EffectiveRow<R, N>`, and `TermBox` is an alias of `purrdf_lex::walk::Nested`
+  (as is `purrdf_sparql_algebra::tree::Child`).
+- **cdt, events:** `purrdf_cdt::TextDirection` re-exports
+  `purrdf_events::TextDirection`, the one RDF 1.2 base-direction type (with
+  `as_str` and `from_str_token`), so the two are no longer separate enums.
+- **shapes:** `json_schema::local_name` returns `&str`: it is a re-export of
+  `purrdf_iri::local_name`.
+- **sparql-conformance:** `owl2::ledger_lookup` and `owl2_rl::ledger_lookup`
+  are removed; `ledger::lookup` reads either ledger, and each module's
+  `LedgerEntry` is an alias of `ledger::LedgerEntry<G>`.
+
 **New refusals**
 
 - **gts:** COSE_Sign1 verification is strict: a non-canonical `S`, an
@@ -125,6 +179,11 @@ under Changed and Fixed where a longer account helps.
   a `DOCTYPE` and a root `<sparql>` element in a namespace other than the SPARQL
   results namespace.
 - **shapes:** a SHACL list cell with two `rdf:rest` edges is refused.
+- **rdf:** visualization JSON refuses an unknown member, a repeated member and
+  a member of another tagged variant. `GraphSelection` and `SubjectSelector`
+  are validated as they are read from JSON (an empty graph scope, a relative
+  IRI, a type constraint without a type predicate), and so are the SKOS and
+  OBO Graphs role groups (a relative or shared role IRI).
 
 **Changed output**
 
@@ -207,6 +266,39 @@ under Changed and Fixed where a longer account helps.
   changed case anywhere.
 - **wasm:** a blank node outside the default scope crosses into JS as its scope
   envelope rather than its bare label (see Fixed).
+- **gts:** the writer encodes term ids as CBOR unsigned integers; the bytes are
+  identical for every id up to `i64::MAX`.
+- **slice:** `Dataset::canonical_nquads_flat` writes a graph-scoped reifier and
+  its annotations into their graph rather than the default graph, so its output
+  changes for such datasets (see Fixed).
+- **rdf:** the GTS import sink reports a bad literal base direction as
+  `gts-invalid-direction` and `gts-direction-without-language` (it used
+  `native-codec-invalid-direction` and
+  `native-codec-direction-without-language`), the codes the GTS reader uses.
+- **rdf:** projection refusal wording: selection errors no longer name the
+  projection (`graph selection must include at least one graph`), a CSVW
+  fragment IRI failure reads `invalid CSVW fragment URL`, a research-object
+  role map that binds two roles to one term reads "research-object vocabulary
+  binds roles … both to …" (it read "research-object roles … both bind …"), and
+  a visualization JSON decode failure is `purrdf_lex::json::record`'s
+  (`missing field`, `unknown field`, `duplicate field … at <pointer>`) rather
+  than `missing member` or `expected …, found …`.
+- **core:** a malformed PURREMB target field reads `required field has wrong
+  type or criticality`, like every other required field.
+- **hnsw:** a space row with no bound term is refused in the exact relation's
+  words, naming the row's target and saying the top-k would be a subset's.
+- **validate:** `explain_shapes_product` renders an empty identity component as
+  `""` rather than `0x`, through `purrdf_core::artifact::identity::render_value`.
+- **capi:** a null string array with a non-zero count passed to
+  `purrdf_shacl_eval_node_expr` is refused naming the parameter (`null scope
+  array …`, `null expr_via array …`).
+- **python:** a store snapshot failure reads `store snapshot failed: …`
+  (`Store` and `MutableDataset` said `snapshot failed` or `dataset snapshot
+  failed`), and `gts_from_rdf12_bytes` is the same function object as
+  `gts_from_quads`.
+- **sparql-conformance:** a result-kind mismatch names the query form
+  (`select`, `ask`, `construct`) rather than `SELECT solutions`,
+  `ASK boolean` or `graph`.
 
 ### Added
 
@@ -321,6 +413,56 @@ under Changed and Fixed where a longer account helps.
   frozen-vector suites, differentials and benches of `purrdf-hash` on
   testkit's runner and harness, natively and on wasm32, so `purrdf-hash` has
   no dev-dependency on testkit.
+- **lex:** `purrdf_lex::walk`, the heap-backed structures every whole-tree
+  walk shares: `WorkList` (a work list with an inline prefix), `Nested` and
+  `Dismantle` (an owned child box whose drop takes the nesting apart over a
+  work list), and `write_debug` over `Tok` (a recursive type's `Debug`,
+  byte-identical to the derive's, without recursion). `purrdf_lex::assoc`:
+  `get`, `get_mut` and `insert` over an ordered `[(K, V)]` association list,
+  read by first match.
+- **lex:** the constructor and record macros: `constructors!` (constructors
+  whose whole body is one conversion, text parameters as `impl Into<String>`),
+  `variant_from!` (`From` impls that wrap a source into one variant, and
+  `Variant(A, B) as convert` for a variant holding a rendering of its sources),
+  `message_error!` (an error type whose whole content is one message, with an
+  optional `detail` accessor) and `json_record!` (the `ToJson`/`FromJson` pair
+  of a record from one member list, optionally built through a validating
+  constructor).
+- **hash:** `default_from_new!` (a `Default` that returns the type's `new`, or
+  another no-argument constructor named with `T => name`),
+  `debug_non_exhaustive!` (a `Debug` that shows the named fields and elides
+  the rest), `vector_backend!` (a family of named dispatch paths with its
+  `Backend` impl) and `fixed::hash_one`.
+- **hnsw:** `IndexArithmetic`, the sealed family of arithmetics an index can be
+  built, decoded, loaded and verified under, with its `IMPLEMENTATION_ID`.
+- **sparql-eval:** `knn::{KnnInvocation, KnnAnswer, TermRows, RankSource,
+  RankedCursor, neighbour_count, universe_size}` and the `KNN_*` position and
+  mode constants: the nearest-neighbour call protocol the exact relation and
+  the HNSW relation both run, each supplying only its ranking.
+  `HostStopWatch`, a host's cancellation bit and wall deadline composed into
+  the one latching `StopSignal` (a cancellation ranks ahead of a deadline), and
+  `chunk_len_for_threads`, the fork-join chunk geometry.
+- **core:** `SparqlResult::query_form` (`select`, `ask`, `construct`);
+  `GraphSelector` with `resolve`, the one dataset-independent graph selector,
+  which `purrdf_text` and `purrdf_geo::relation` re-export;
+  `artifact::identity::render_value`, the one rendering of an identity
+  component; `TermRef::map_ids`, `map_ids_scoped` and `QuadIds::map_ids`;
+  `IntVector::from_values` and `RankSelectRef::mark_last_range`.
+- **purrdf:** `QueryEntailment::for_regime`, the one mapping from a `Regime` to
+  its query plan, and `GovernedEntailment::answered`.
+- **rdf:** `flat_rdf_quads` is exported at the crate root beside
+  `flat_rdf_quads_from_dataset`.
+- **python:** `Store` and `MutableDataset` extend one native base class,
+  `QuadStore` (not exported on the module), which holds the query, update,
+  iteration and validation-capsule methods they share; each subclass keeps its
+  own `load` and mutation surface.
+- **sparql-conformance:** `ledger`, the one xfail-ledger reader
+  (`LedgeredCase`, `LedgerEntry<G>`, `lookup`, `agreed`, `ledgered`,
+  `unledgered`, `stale`, `tally`).
+- **xsd, events, lex, sparql-algebra:** `purrdf_xsd::temporal::duration_result_datatype`
+  (the duration tag join); `purrdf_events::CONTINUE`;
+  `purrdf_lex::xml::Node::element_children`; `GraphPattern::empty_bgp`,
+  `is_empty_bgp`, `as_property_function` and `as_property_function_mut`.
 - **gates:** `helpers-ledger.toml` names the one home of every job, its
   specification, frozen vectors and sanctioned variants;
   `scripts/check-shared-helpers.py` runs the unpublished `helper-census` (a
@@ -355,8 +497,8 @@ under Changed and Fixed where a longer account helps.
   conversions from the algebra's terms to `TermValue` (`named_node_to_value`,
   `literal_to_value`, `ground_term_to_value`, `ground_term_pattern_to_value`,
   `ground_triple_pattern_to_value`). The algebra and the IR share one
-  base-direction type, `purrdf_cdt::TextDirection`, so no direction mapping
-  exists.
+  base-direction type, `purrdf_events::TextDirection` (re-exported as
+  `purrdf_cdt::TextDirection`), so no direction mapping exists.
 - **purrdf:** `purrdf::reasoning::query_bgp`, every basic-graph-pattern triple
   of a parsed query as the `QTriple`s OWL 2 Direct-Semantics augmentation reads.
 - **entail:** `EntailError::ForeignTerm`, for an input view that hands back an
@@ -454,7 +596,7 @@ under Changed and Fixed where a longer account helps.
   their `NS`/`*_NS` constants; a multi-line literal holding a Turtle or SPARQL
   keyword is an embedded document and exempt. `rule:home-literal` (job
   `text-direction`) refuses the `ltr`/`rtl` tokens outside
-  `purrdf_cdt::TextDirection`, the one base-direction type.
+  `purrdf_events::TextDirection`, the one base-direction type.
 - **hash:** `purrdf_hash::hex` is the workspace's base16 (RFC 4648 §8) codec.
   Rendering: `Lower` and `Upper` (`Display`, no allocation), `encode` /
   `encode_upper` (an owned `String`), `encode_into` / `encode_upper_into`
@@ -1280,10 +1422,12 @@ under Changed and Fixed where a longer account helps.
   `composed_order_fidelity` has one implementation, here, and `purrdf-hnsw`
   re-exports it at its old path.
 
-- **hnsw:** a reassociated HNSW index. `HnswIndex::build_reassociated`,
-  `HnswIndex::decode_reassociated`, `HnswSpace::from_artifact_reassociated`,
-  `guard::load_reassociated` and the crate-level `build_reassociated` construct
-  it. Each one refuses the other arithmetic's image codes. The image records the
+- **hnsw:** a reassociated HNSW index, `HnswIndex<Reassociated>`. The generic
+  constructors build, decode and load it under `Reassociated`
+  (`build::<Reassociated>` or `HnswIndex::build_reassociated`,
+  `HnswIndex::<Reassociated>::decode`, `guard::load::<Reassociated>`,
+  `HnswSpace::<Reassociated>::from_artifact`), and each one refuses the other
+  arithmetic's image codes. The image records the
   dispatch path that built it, and decode, rebuild verification and search run
   that path, not the widest one: an image built on the sse2 or avx2+fma path runs
   on that path on an avx512f processor. Only a path the process cannot run
@@ -1564,6 +1708,15 @@ under Changed and Fixed where a longer account helps.
 
 ### Changed
 
+- **core, text:** `LossLedger::new`, `BitVec::new` and
+  `PartitionFilter::unconstrained` are `const fn`; each type's `Default`
+  returns that constructor (`purrdf_hash::default_from_new!`).
+- **rdf:** `VizDialect` and `VizLabelPolicy` are `Copy`.
+- **hnsw:** the relation's neighbour count accepts any literal whose value is
+  an XSD integer, `xsd:int` and the other derived integer types included, as
+  the exact relation does; a negative count, a count past the guard's
+  `max_neighbours` and a non-integer are still refused.
+
 - **cli (BREAKING):** a governed `query`, `update` or `validate` run starts from
   `QueryGovernors::METERED` instead of `QueryGovernors::UNBOUNDED`, through
   `purrdf_validate::governors::from_parts`, the decoder the C ABI, the wasm
@@ -1676,7 +1829,7 @@ under Changed and Fixed where a longer account helps.
   `Ltr`/`Rtl` rather than `LeftToRight`/`RightToLeft`, and it gains
   `from_str_token`. `as_str` and the JSON-LD bytes are unchanged.
 - **core, sparql-algebra:** `RdfTextDirection` and `BaseDirection` are
-  re-exports of `purrdf_cdt::TextDirection`, the one RDF 1.2 base-direction
+  re-exports of `purrdf_events::TextDirection`, the one RDF 1.2 base-direction
   type; `as_str` is a `const fn`, `from_str_token` reads the `ltr`/`rtl`
   token, and `BaseDirection` gains `PartialOrd`/`Ord`.
 - **deflate, core:** the common-prefix length of two byte strings has one
@@ -2238,6 +2391,18 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Fixed
 
+- **rdf, entail:** the RDF/XML, TriX and RIF-XML readers read a document type
+  declaration as XML 1.0 requires of a non-validating processor: internal
+  entities (such as `<!ENTITY xsd "http://www.w3.org/2001/XMLSchema#">` used as
+  `&xsd;integer`) expand under the reader's expansion budget, and an external
+  subset, an external entity or a parameter entity is refused, so no document
+  causes a fetch. Such well-formed RDF/XML was refused for its DTD. GraphML,
+  DataCite and SPARQL Results XML still refuse any DTD.
+- **rdf:** the JSON-LD serializer folds a list of lists however deep without
+  recursing: a 2 000-level list of lists serializes on a 128 KiB thread.
+- **slice:** `Dataset::canonical_nquads_flat` flattens through
+  `purrdf_rdf::flat_rdf_quads`, so a reifier declared or annotated inside a
+  `GRAPH` block keeps its graph; it was written into the default graph.
 - **rdf:** DataCite element text is trimmed by XML whitespace (SPACE, TAB, CR,
   LF) only; a NO-BREAK SPACE at either end is content.
 - **jsonschema:** `OutputUnit`'s `Clone`, `PartialEq` and `Debug` walk the unit

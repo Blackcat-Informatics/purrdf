@@ -441,12 +441,13 @@ ORDER BY ?rank
   SSSOM 映射 TSV 支持与一个 FnO 函数目录编解码器（二者都位于 `purrdf-core` 中，而非
   slice crate）。
 - **第一方基础层**——`purrdf-hash`（BLAKE3、MD5、SHA-1、SHA-3 与 CRC-32 摘要，base16、
-  分帧与表哈希器）与 `purrdf-events`（对象安全的摄入扩展点）没有运行时依赖；`purrdf-lex`
-  （每个 crate 共享的语法终结符、字节类扫描器、转义器，以及 JSON、YAML、CBOR 与 XML
-  编解码器）与 `purrdf-xsd`（XSD 1.1 值空间）仅依赖 `purrdf-hash`，`purrdf-iri`
-  （RFC 3987/3986）依赖 `purrdf-lex` 与 `purrdf-hash`，`purrdf-ed25519`（RFC 8032 签名）
-  依赖 `purrdf-hash` 与 `sha2`，而 `purrdf-cdt` 是建立在 `purrdf-iri`、`purrdf-xsd`、
-  `purrdf-lex` 与 `purrdf-hash` 之上的 `no_std` 封闭叶。
+  分帧与表哈希器）与 `purrdf-events`（对象安全的摄入扩展点，以及唯一的 RDF 1.2
+  基础方向类型）没有运行时依赖；`purrdf-lex`（每个 crate 共享的语法终结符、字节类扫描器、转义器，
+  以及 JSON、YAML、CBOR 与 XML 编解码器）仅依赖 `purrdf-hash`，`purrdf-xsd`（XSD 1.1
+  值空间）与 `purrdf-iri`（RFC 3987/3986）依赖 `purrdf-lex` 与 `purrdf-hash`，
+  `purrdf-ed25519`（RFC 8032 签名）依赖 `purrdf-hash` 与 `sha2`，而 `purrdf-cdt` 是建立在
+  `purrdf-events`、`purrdf-iri`、`purrdf-xsd`、`purrdf-lex` 与 `purrdf-hash` 之上的
+  `no_std` 封闭叶。
 
 ## 快速入门
 
@@ -573,7 +574,7 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 | [`purrdf-sparql-algebra`](./crates/sparql-algebra/) | SPARQL 1.1/1.2 解析器 → 查询代数 AST。 |
 | [`purrdf-sparql-eval`](./crates/sparql-eval/) | 驻留 `TermId` 空间中的多重集 SPARQL 求值器，带有以调用方为键的扩展点（标量函数、属性函数——含路径见证与嵌入 k 近邻关系——自定义聚合，以及逐服务的 `ServiceResolver`）与执行 governor。 |
 | [`purrdf-sparql-results`](./crates/sparql-results/) | SPARQL 结果的 JSON/XML/CSV/TSV，外加一个携带溯源的扩展。 |
-| [`purrdf-cdt`](./crates/cdt/) | SEP-0009 SPARQL 复合数据类型（`cdt:List`/`cdt:Map`）：值空间、一个迭代式的有界词法扫描器、规范拼写，以及十五个函数的函数库。建立在 `purrdf-iri`、`purrdf-xsd`、`purrdf-lex` 与 `purrdf-hash` 之上的 `no_std` 封闭叶；经由求值器访问，不由门面 crate 重新导出。 |
+| [`purrdf-cdt`](./crates/cdt/) | SEP-0009 SPARQL 复合数据类型（`cdt:List`/`cdt:Map`）：值空间、一个迭代式的有界词法扫描器、规范拼写，以及十五个函数的函数库。建立在 `purrdf-events`、`purrdf-iri`、`purrdf-xsd`、`purrdf-lex` 与 `purrdf-hash` 之上的 `no_std` 封闭叶；经由求值器访问，不由门面 crate 重新导出。 |
 | [`purrdf-stack`](./crates/stack/) | 当前线程还剩多少栈空间——原生平台读取操作系统给出的线程栈上限（通过按目标启用的 `libc`/`windows-sys` 声明，无需构建期 C 工具链），wasm32 则以宿主可安装的栈底衡量影子栈——以及 SPARQL 求值器据以拒绝请求（返回带类型的错误）而不致栈溢出的余量。 |
 | [`purrdf-shapes`](./crates/shapes/) | SHACL 1.2 验证与规则引擎（Core、SPARQL 扩展、节点表达式、推理规则、SPARQL 1.2 RL）。 |
 | [`purrdf-shex`](./crates/shex/) | ShEx 2.1：ShExC/ShExJ 模式与验证。 |
@@ -589,7 +590,7 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 | [`purrdf-lex`](./crates/lex/) | 由每种语法共享的词法基础层，仅依赖 `purrdf-hash`：精确的 Turtle/SPARQL/XML 终结符字符类、降低为打包比较指令的分块字节类扫描器、字面量与 IRI 转义器、RDF 1.2 词项语法、百分号编码、Unicode 规范化，以及唯一的 JSON 读取器/写出器、YAML 1.2 读取器/输出器（emitter）、CBOR 编解码器与 XML 读取器。 |
 | [`purrdf-ed25519`](./crates/ed25519/) | Ed25519 签名（RFC 8032）：确定性签名与严格的无余因子（cofactorless）验证，建立在 `purrdf-hash` 与 `sha2` 之上。 |
 | [`purrdf-iri`](./crates/iri/) | IRI/URI 解析、规范化、CURIE，以及工作区唯一的 RFC 3986 基础解析层（`BaseIri`/`BaseScope`）。 |
-| [`purrdf-xsd`](./crates/xsd/) | XSD 1.1 值空间，带 SPARQL 数值提升；唯一的运行时依赖是 `purrdf-hash`。 |
+| [`purrdf-xsd`](./crates/xsd/) | XSD 1.1 值空间，带 SPARQL 数值提升；运行时依赖为 `purrdf-lex` 与 `purrdf-hash`。 |
 | [`purrdf-events`](./crates/rdf-events/) | 零依赖、对象安全的 RDF 事件汇/源扩展点。 |
 | [`purrdf-hash`](./crates/hash/) | 零依赖的 BLAKE3、MD5、SHA-1、SHA-3 与 CRC-32 摘要，支持流式与一次性计算，另含 base16、长度分帧与已登记的哈希域；处理器具备 SHA 与 CRC 指令时，SHA-1 与 CRC-32 直接使用这些指令。 |
 | [`purrdf-deflate`](./crates/deflate/) | 原生 DEFLATE 与 gzip：推送式流解码器逐一解码每个 gzip 成员、校验每个尾部，并拒绝尾随垃圾字节或超出调用方上限的输出；确定性编码器的输出只取决于输入与压缩级别。匹配复制与比较在 SSE2/AVX2、NEON 与 wasm simd128 上向量化；仅依赖 `purrdf-hash`。 |

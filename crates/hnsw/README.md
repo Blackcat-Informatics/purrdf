@@ -220,7 +220,7 @@ let nearest = index.search_rows(0, 2)?; // row 0's two nearest neighbours
 ```
 
 The crate depends on `purrdf-core`, `purrdf-sparql-eval`, `purrdf-xsd`,
-`purrdf-hash` and `rayon`.
+`purrdf-lex`, `purrdf-hash` and `rayon`.
 
 ## PURREMB integration
 

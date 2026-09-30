@@ -989,3 +989,41 @@ DTD. Pinned by `internal_entities_expand_in_rdfxml_and_external_ones_are_refused
 (`crates/rdf/src/nesting.rs`) and
 `an_external_entity_is_refused_and_an_internal_one_is_read`
 (`crates/lex/src/xml/tests.rs`).
+
+### `purrdf-xsd`'s one runtime dependency is `purrdf-hash`
+
+**Was stated in** `crates/xsd/README.md`, the root `README.md` crate table and
+`AGENTS.md` (`purrdf-xsd` | Foundation over `purrdf-hash` alone):
+
+> its one runtime dependency is the zero-dependency root `purrdf-hash`
+
+**Why it was believed.** The XSD value space needed only the hex-digit reader of the
+root; its lexical checks were written in the crate.
+
+**What changed.** The whitespace facets' chunked prechecks classify each byte with
+`purrdf_lex::scan::in_runs`, the one byte-run membership test, so `purrdf-xsd`
+depends on `purrdf-lex`.
+
+**The rule now.** `purrdf-xsd`'s runtime dependencies are `purrdf-lex` and
+`purrdf-hash`, both first-party and with no third-party dependency; `layers.toml`
+holds the edge.
+
+### `purrdf_cdt::TextDirection` is the one RDF 1.2 base-direction type
+
+**Was stated in** `helpers-ledger.toml` (`home = "purrdf_cdt::TextDirection"` for the
+`text-direction` job) and the `AGENTS.md` crate map:
+
+> `purrdf-cdt` … and `TextDirection`, the one RDF 1.2 base-direction type
+
+**Why it was believed.** `purrdf-cdt` was the lowest crate every direction-carrying
+layer (the IR, the query algebra, the composite datatypes) reached.
+
+**What changed.** The event protocol carries a directional literal's direction too,
+and `purrdf-events` sits below `purrdf-cdt`. It held an enum of its own, agreeing with
+the `purrdf-cdt` one variant for variant, and `purrdf-core`'s ingest mapped between
+the two. One type in the lowest layer that carries a direction needs no mapping.
+
+**The rule now.** `purrdf_events::TextDirection` is the one type (`as_str`,
+`from_str_token`); `purrdf_cdt::TextDirection`, `purrdf_core::RdfTextDirection` and
+`purrdf_sparql_algebra::ast::BaseDirection` re-export it, and `helpers-ledger.toml`
+names it as the job's home.

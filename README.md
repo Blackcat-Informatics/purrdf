@@ -570,12 +570,14 @@ triple pattern.
   `purrdf-core`, not the slice crate).
 - **First-party foundations** — `purrdf-hash` (BLAKE3, MD5, SHA-1, SHA-3 and CRC-32
   digests, base16, framing and the table hasher) and `purrdf-events` (the object-safe
-  ingestion seam) have no runtime dependencies; `purrdf-lex` (the grammar terminals,
-  byte-class scanners, escapers, and the JSON, YAML, CBOR and XML codecs every crate
-  shares) and `purrdf-xsd` (XSD 1.1 value space) depend on `purrdf-hash` alone,
-  `purrdf-iri` (RFC 3987/3986) on `purrdf-lex` and `purrdf-hash`, `purrdf-ed25519`
-  (RFC 8032 signatures) on `purrdf-hash` and `sha2`, and `purrdf-cdt` is a `no_std`
-  closed leaf over `purrdf-iri`, `purrdf-xsd`, `purrdf-lex` and `purrdf-hash`.
+  ingestion seam and the one RDF 1.2 base-direction type) have no runtime
+  dependencies; `purrdf-lex` (the grammar terminals, byte-class scanners, escapers,
+  and the JSON, YAML, CBOR and XML codecs every crate shares) depends on
+  `purrdf-hash` alone, `purrdf-xsd` (XSD 1.1 value space) and `purrdf-iri`
+  (RFC 3987/3986) on `purrdf-lex` and `purrdf-hash`, `purrdf-ed25519` (RFC 8032
+  signatures) on `purrdf-hash` and `sha2`, and `purrdf-cdt` is a `no_std` closed
+  leaf over `purrdf-events`, `purrdf-iri`, `purrdf-xsd`, `purrdf-lex` and
+  `purrdf-hash`.
 
 ## Quickstart
 
@@ -710,7 +712,7 @@ for drift. Built with cargo-c: `make capi-build`.
 | [`purrdf-sparql-algebra`](./crates/sparql-algebra/) | SPARQL 1.1/1.2 parser → query algebra AST. |
 | [`purrdf-sparql-eval`](./crates/sparql-eval/) | Multiset SPARQL evaluator in interned `TermId` space, with the caller-keyed extension seams (scalar functions, property functions — including the path-witness and embedding-kNN relations — custom aggregates, and the per-service `ServiceResolver`) and the execution governors. |
 | [`purrdf-sparql-results`](./crates/sparql-results/) | SPARQL results JSON/XML/CSV/TSV, plus a provenance-carrying extension. |
-| [`purrdf-cdt`](./crates/cdt/) | SEP-0009 SPARQL composite datatypes (`cdt:List`/`cdt:Map`): the value space, an iterative bounded lexical scanner, canonical spelling, and the fifteen-function library. A `no_std` closed leaf over `purrdf-iri`, `purrdf-xsd`, `purrdf-lex` and `purrdf-hash`; reached through the evaluator, not re-exported by the umbrella. |
+| [`purrdf-cdt`](./crates/cdt/) | SEP-0009 SPARQL composite datatypes (`cdt:List`/`cdt:Map`): the value space, an iterative bounded lexical scanner, canonical spelling, and the fifteen-function library. A `no_std` closed leaf over `purrdf-events`, `purrdf-iri`, `purrdf-xsd`, `purrdf-lex` and `purrdf-hash`; reached through the evaluator, not re-exported by the umbrella. |
 | [`purrdf-stack`](./crates/stack/) | How much stack the running thread has left — natively the operating system's thread limit, read via target-gated `libc`/`windows-sys` declarations with no build-time C toolchain, on wasm32 the shadow stack against a floor the host can install — and the margin the SPARQL evaluator refuses at, typed, instead of overflowing. |
 | [`purrdf-shapes`](./crates/shapes/) | SHACL 1.2 validation and rules engine (Core, SPARQL Extensions, Node Expressions, Inference Rules, SPARQL 1.2 RL). |
 | [`purrdf-shex`](./crates/shex/) | ShEx 2.1: ShExC/ShExJ schemas and validation. |
@@ -726,7 +728,7 @@ for drift. Built with cargo-c: `make capi-build`.
 | [`purrdf-lex`](./crates/lex/) | Lexical foundations shared by every grammar, over `purrdf-hash` alone: the exact Turtle/SPARQL/XML terminal classes, chunked byte-class scanners that lower to packed compares, literal and IRI escapers, RDF 1.2 term syntax, percent-encoding, Unicode normalization, and the one JSON reader/writer, YAML 1.2 reader/emitter, CBOR codec and XML reader. |
 | [`purrdf-ed25519`](./crates/ed25519/) | Ed25519 signatures (RFC 8032): deterministic signing and strict cofactorless verification, over `purrdf-hash` and `sha2`. |
 | [`purrdf-iri`](./crates/iri/) | IRI/URI parsing, normalization, CURIEs, and the workspace's single RFC 3986 base-resolution layer (`BaseIri`/`BaseScope`). |
-| [`purrdf-xsd`](./crates/xsd/) | XSD 1.1 value space with SPARQL numeric promotion; sole runtime dependency is `purrdf-hash`. |
+| [`purrdf-xsd`](./crates/xsd/) | XSD 1.1 value space with SPARQL numeric promotion; runtime dependencies are `purrdf-lex` and `purrdf-hash`. |
 | [`purrdf-events`](./crates/rdf-events/) | Zero-dependency object-safe RDF event sink/source seam. |
 | [`purrdf-hash`](./crates/hash/) | Zero-dependency BLAKE3, MD5, SHA-1, SHA-3 and CRC-32 digests, streaming and one-shot, plus base16, length framing and the registered hash domains; SHA-1 and CRC-32 run on the processor's SHA and CRC instructions when it has them. |
 | [`purrdf-deflate`](./crates/deflate/) | Native DEFLATE and gzip: a push-based streaming decoder that decodes every gzip member, verifies each trailer and refuses trailing garbage or output past a caller's limit, and a deterministic encoder whose bytes depend only on the input and level. Vector match copies and compares on SSE2/AVX2, NEON and wasm simd128; depends on `purrdf-hash` alone. |
