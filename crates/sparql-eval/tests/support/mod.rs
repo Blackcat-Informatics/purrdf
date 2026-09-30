@@ -172,7 +172,7 @@ pub fn solutions(result: SparqlResult) -> (Vec<String>, Vec<Vec<Option<TermValue
 pub fn row_count(result: &SparqlResult) -> usize {
     match result {
         SparqlResult::Solutions { rows, .. } => rows.len(),
-        other => panic!("expected SELECT solutions, got {other:?}"),
+        other => panic!("expected SELECT solutions, got {}", shape(other)),
     }
 }
 
