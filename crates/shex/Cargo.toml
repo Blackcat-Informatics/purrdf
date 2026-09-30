@@ -33,6 +33,9 @@ name = "purrdf_shex"
 [dependencies]
 purrdf-core = { workspace = true }
 purrdf-iri = { workspace = true }
+# The RDF 1.2 term syntax and literal/IRI escapers the ShExC writer and the
+# result shape map spell terms with.
+purrdf-lex = { workspace = true }
 purrdf-xsd = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }

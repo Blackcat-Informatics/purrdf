@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use ::purrdf::RdfDataset;
 
 use super::FunctionClass;
-use crate::data::{GraphFilter, native_quads};
+use crate::data::{GraphFilter, native_quads, objects_of as objects};
 use crate::model::{rdf, sh};
 use crate::term::{NamedNode, Term};
 
@@ -193,20 +193,6 @@ fn params_of(dataset: &RdfDataset, iri: &str, name: &str) -> Result<Vec<Declared
     }
     params.sort();
     Ok(params)
-}
-
-fn objects(dataset: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
-    let predicate = Term::NamedNode(NamedNode::from(predicate));
-    native_quads(
-        dataset,
-        Some(subject),
-        Some(&predicate),
-        None,
-        GraphFilter::AnyGraph,
-    )
-    .into_iter()
-    .map(|(_, _, object)| object)
-    .collect()
 }
 
 /// Whether `node` states `predicate true`.

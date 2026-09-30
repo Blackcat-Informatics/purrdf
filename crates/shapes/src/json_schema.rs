@@ -251,10 +251,11 @@ const BUILTIN_PREFIXES: &[(&str, &str)] = &[
 /// ```
 #[derive(Debug, Clone)]
 pub struct Namespaces {
-    /// `(prefix, namespace)` pairs sorted longest-namespace-first so the most
-    /// specific namespace always wins compaction (prefix name breaks ties
-    /// deterministically).
+    /// Every `(prefix, namespace)` pair, builtins merged, in prefix order.
     prefixes: Vec<(String, String)>,
+    /// `prefixes` as the compaction table of [`purrdf_iri::contract`]: the
+    /// longest matching namespace wins, the prefix name breaking ties.
+    curies: purrdf_iri::PrefixMap,
     /// The prefix whose classes key `$defs` by bare local name.
     primary_prefix: String,
     /// The namespace `primary_prefix` resolves to.
@@ -293,13 +294,10 @@ impl Namespaces {
                  doc_prefixes (the shapes document's @prefix declarations) or use a W3C builtin"
             ));
         };
-        let mut prefixes: Vec<(String, String)> = merged.into_iter().collect();
-        // Longest-namespace-first so the most specific namespace is matched
-        // before any shorter one that prefixes it; tie-break on prefix name for
-        // run-to-run determinism.
-        prefixes.sort_by(|(pa, na), (pb, nb)| nb.len().cmp(&na.len()).then_with(|| pa.cmp(pb)));
+        let curies = merged.iter().collect();
         Ok(Self {
-            prefixes,
+            prefixes: merged.into_iter().collect(),
+            curies,
             primary_prefix: primary_prefix.to_owned(),
             primary_ns,
             declared_prefixes: declared.into_iter().collect(),
@@ -313,12 +311,7 @@ impl Namespaces {
     /// emitter and the instance projector ([`crate::instance`]).
     #[must_use]
     pub fn compact_iri(&self, iri: &str) -> String {
-        for (prefix, ns) in &self.prefixes {
-            if let Some(local) = iri.strip_prefix(ns.as_str()) {
-                return format!("{prefix}:{local}");
-            }
-        }
-        iri.to_owned()
+        purrdf_iri::contract(iri, &self.curies).unwrap_or_else(|| iri.to_owned())
     }
 
     /// Whether an IRI is in the primary namespace (object refs to primary

@@ -60,14 +60,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::data::{GraphFilter, native_quads};
-use purrdf::RdfDataset;
+use crate::data::{GraphFilter, native_quads, resolve_id};
+use purrdf::{DatasetView as _, GraphMatch, RdfDataset};
 
 pub mod node_expr_grading;
 pub mod report_grading;
 pub mod shacl12;
 use crate::model::{BoxRoleVocab, rdf, sh};
-use crate::term::{NamedNode, Term};
+use crate::term::{NamedNode, Term, term_id_to_native};
 
 // ── Corpus locations ──────────────────────────────────────────────────────────
 
@@ -170,7 +170,7 @@ mod sht {
     pub(crate) const FAILURE: &str = "http://www.w3.org/ns/shacl-test#Failure";
 }
 
-use purrdf_iri::vocab::rdf::{FIRST as RDF_FIRST, NIL as RDF_NIL, REST as RDF_REST};
+use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
 
 // ── The discovered case models ────────────────────────────────────────────────
 
@@ -275,18 +275,10 @@ pub fn named(iri: &str) -> Term {
     Term::NamedNode(NamedNode::new_unchecked(iri))
 }
 
-/// All objects of `(subject, predicate, ?)`.
+/// The distinct objects of `(subject, predicate, ?)` in any graph:
+/// [`DatasetView::objects`](purrdf::DatasetView::objects), lifted to native terms.
 pub fn objects(g: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
-    native_quads(
-        g,
-        Some(subject),
-        Some(&named(predicate)),
-        None,
-        GraphFilter::AnyGraph,
-    )
-    .into_iter()
-    .map(|(_, _, object)| object)
-    .collect()
+    crate::data::objects_of(g, subject, predicate)
 }
 
 /// The first object of `(subject, predicate, ?)`, if any.
@@ -294,7 +286,8 @@ pub fn object(g: &RdfDataset, subject: &Term, predicate: &str) -> Option<Term> {
     objects(g, subject, predicate).into_iter().next()
 }
 
-/// Walk an RDF collection (`rdf:first`/`rdf:rest`) into a vec, in list order.
+/// Walk an RDF collection (`rdf:first`/`rdf:rest`) into a vec, in list order,
+/// through the strict walker [`DatasetView::rdf_list_strict`].
 ///
 /// The corpora are frozen, so a malformed list — a cell with no `rdf:first`, no
 /// `rdf:rest`, more than one of either, or a `rdf:rest` chain that revisits a
@@ -302,31 +295,18 @@ pub fn object(g: &RdfDataset, subject: &Term, predicate: &str) -> Option<Term> {
 /// hand every consumer a SHORTER list (fewer entries, fewer expected results),
 /// and a shorter list is a greener harness. It panics instead.
 pub fn list_items(g: &RdfDataset, head: &Term) -> Vec<Term> {
-    let mut items = Vec::new();
-    let mut visited: BTreeSet<String> = BTreeSet::new();
-    let mut node = head.clone();
-    loop {
-        if matches!(&node, Term::NamedNode(n) if n.as_str() == RDF_NIL) {
-            break;
-        }
+    let Some(id) = resolve_id(g, head) else {
         assert!(
-            visited.insert(node.to_string()),
-            "malformed RDF list: the rdf:rest chain from {head} revisits {node}"
+            matches!(head, Term::NamedNode(n) if n.as_str() == RDF_NIL),
+            "malformed RDF list: its head {head} is not in the manifest"
         );
-        let firsts = objects(g, &node, RDF_FIRST);
-        let rests = objects(g, &node, RDF_REST);
-        let ([first], [rest]) = (firsts.as_slice(), rests.as_slice()) else {
-            panic!(
-                "malformed RDF list: cell {node} (from {head}) has {} rdf:first and {} \
-                 rdf:rest values, exactly one of each is required",
-                firsts.len(),
-                rests.len()
-            );
-        };
-        items.push(first.clone());
-        node = rest.clone();
-    }
-    items
+        return Vec::new();
+    };
+    g.rdf_list_strict(id, GraphMatch::Any)
+        .unwrap_or_else(|error| panic!("the RDF list from {head} is malformed: {error}"))
+        .into_iter()
+        .map(|member| term_id_to_native(g, member))
+        .collect()
 }
 
 /// Normalize a term for comparison: blank nodes (incl. complex-path bnodes)

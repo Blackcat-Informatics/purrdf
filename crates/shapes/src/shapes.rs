@@ -20,7 +20,7 @@ use ::purrdf::RdfDataset;
 use purrdf_sparql_eval::{AggregateRegistry, UserFunctionRegistry};
 
 use crate::components::{ComponentRegistry, severity_from_term};
-use crate::data::{GraphFilter, native_quads};
+use crate::data::{GraphFilter, native_quads, objects_of};
 use crate::error::ShapesError;
 use crate::expression::NodeExpr;
 use crate::imports::{ShapesImports, resolve_shapes_imports};
@@ -1458,24 +1458,6 @@ pub(crate) struct Parser<'s> {
 
 // ── Graph read helper (used by the parser's free functions and `prefixes`) ─────
 
-/// Return all objects for `(subject, predicate, ?)`.
-fn objects_of(data: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
-    if !subject.is_subject() {
-        return vec![];
-    }
-    let pred = Term::NamedNode(NamedNode::from(predicate));
-    native_quads(
-        data,
-        Some(subject),
-        Some(&pred),
-        None,
-        GraphFilter::AnyGraph,
-    )
-    .into_iter()
-    .map(|(_, _, object)| object)
-    .collect()
-}
-
 /// Record a SHACL-JS refusal in `slot` unless one is already recorded.
 pub(crate) fn record_shacl_js(
     slot: &std::cell::RefCell<Option<crate::error::ShaclJsRefusal>>,
@@ -2117,25 +2099,9 @@ impl<'s> Parser<'s> {
         .is_empty()
     }
 
-    /// Return all objects for `(subject, predicate, ?)`.
+    /// The distinct objects of `(subject, predicate, ?)` in any graph.
     fn objects_of(&self, subject: &Term, predicate: &str) -> Vec<Term> {
-        let Some(subject_id) = crate::data::resolve_id(self.data, subject) else {
-            return vec![];
-        };
-        let Some(predicate_id) = self.data.term_id_by_iri(predicate) else {
-            return vec![];
-        };
-        let mut seen = ::purrdf::IdSet::default();
-        crate::data::quads_for_pattern_ids(
-            self.data,
-            Some(subject_id),
-            Some(predicate_id),
-            None,
-            GraphFilter::AnyGraph,
-        )
-        .filter(|quad| seen.insert(quad.o))
-        .map(|quad| crate::term::term_id_to_native(self.data, quad.o))
-        .collect()
+        objects_of(self.data, subject, predicate)
     }
 
     /// Return the first object for `(subject, predicate, ?)`, if any.
@@ -2990,49 +2956,34 @@ impl<'s> Parser<'s> {
     /// rdf:first or rdf:rest), or has exactly one value for the property rdf:first
     /// in G and exactly one value for the property rdf:rest in G that is also a
     /// SHACL list in G, and the list does not have itself as a value of the
-    /// property path rdf:rest+ in G." Every clause is enforced: a cell without
-    /// `rdf:first` or `rdf:rest`, with two of either, a literal cell, or a cycle is
-    /// refused rather than read as a shorter list.
+    /// property path rdf:rest+ in G." That is the strict walker's contract
+    /// ([`DatasetView::rdf_list_strict`](::purrdf::DatasetView::rdf_list_strict)):
+    /// a cell without `rdf:first` or `rdf:rest`, with two of either, a literal
+    /// cell, or a cycle is refused rather than read as a shorter list.
     fn walk_rdf_list(&self, head: &Term, shape_id: &Term) -> Result<Vec<Term>, String> {
-        let nil = Term::NamedNode(NamedNode::from(rdf::NIL));
-        let mut items = Vec::new();
-        let mut current = head.clone();
-        let mut seen: FastSet<Term> = FastSet::default();
-
-        loop {
-            if !matches!(current, Term::NamedNode(_) | Term::BlankNode(_)) {
-                return Err(format!(
-                    "the RDF list at {head} on {shape_id} is not a well-formed SHACL list: \
-                     {current} is not an IRI or a blank node"
-                ));
-            }
-            let firsts = self.objects_of(&current, rdf::FIRST);
-            let rests = self.objects_of(&current, rdf::REST);
-            if current == nil {
-                if !firsts.is_empty() || !rests.is_empty() {
-                    return Err(format!(
-                        "the RDF list at {head} on {shape_id} is not a well-formed SHACL list: \
-                         rdf:nil has an rdf:first or rdf:rest value"
-                    ));
-                }
-                break;
-            }
-            if !seen.insert(current.clone()) {
-                return Err(format!("cyclic RDF list on shape {shape_id}"));
-            }
-            let ([first], [rest]) = (firsts.as_slice(), rests.as_slice()) else {
-                return Err(format!(
-                    "the RDF list at {head} on {shape_id} is not a well-formed SHACL list: the \
-                     cell {current} has {} rdf:first and {} rdf:rest values, where a list cell \
-                     has exactly one of each",
-                    firsts.len(),
-                    rests.len()
-                ));
-            };
-            items.push(first.clone());
-            current = rest.clone();
+        let malformed = |why: &dyn std::fmt::Display| {
+            format!("the RDF list at {head} on {shape_id} is not a well-formed SHACL list: {why}")
+        };
+        if !head.is_subject() {
+            return Err(malformed(&"it is not an IRI or a blank node"));
         }
-        Ok(items)
+        let Some(head_id) = crate::data::resolve_id(self.data, head) else {
+            // A node the shapes graph never mentions is the subject of nothing:
+            // a list only as `rdf:nil`.
+            return if matches!(head, Term::NamedNode(n) if n.as_str() == rdf::NIL) {
+                Ok(Vec::new())
+            } else {
+                Err(malformed(&"it has no rdf:first"))
+            };
+        };
+        ::purrdf::DatasetView::rdf_list_strict(self.data, head_id, ::purrdf::GraphMatch::Any)
+            .map(|members| {
+                members
+                    .into_iter()
+                    .map(|member| crate::term::term_id_to_native(self.data, member))
+                    .collect()
+            })
+            .map_err(|error| malformed(&error))
     }
 
     /// Walk an RDF list of shape nodes, parsing each as an anonymous shape.
@@ -3998,6 +3949,93 @@ mod tests {
         });
         assert!(in_constraint.is_some(), "expected In constraint");
         assert_eq!(in_constraint.unwrap().len(), 3);
+    }
+
+    /// The `sh:in` members of the one node shape a Turtle fixture declares.
+    fn in_members(body: &str) -> Result<Vec<Term>, String> {
+        let store = load_store(&format!("{PREFIXES}\n{body}"));
+        let shapes = from_store(&store)?;
+        Ok(shapes.node_shapes[0]
+            .constraints
+            .iter()
+            .find_map(|c| match c {
+                Constraint::In(items) => Some(items.clone()),
+                _ => None,
+            })
+            .expect("an sh:in constraint"))
+    }
+
+    /// A list cell with two `rdf:rest` edges is no SHACL list (SHACL 1.2 Core
+    /// §1.4, "exactly one value for the property rdf:rest"), so the shape is
+    /// refused rather than read as either branch.
+    #[test]
+    fn a_list_cell_with_two_rdf_rest_edges_is_refused() {
+        let error = in_members(
+            r#"ex:S a sh:NodeShape ; sh:targetNode ex:x ; sh:in _:l1 .
+               _:l1 rdf:first "a" ; rdf:rest _:l2 , rdf:nil .
+               _:l2 rdf:first "b" ; rdf:rest rdf:nil ."#,
+        )
+        .expect_err("a branching list is refused");
+        assert!(error.contains("more than one rdf:rest"), "{error}");
+    }
+
+    /// The valid neighbour of the refusal above: the same cells with one
+    /// `rdf:rest` each walk in list order.
+    #[test]
+    fn a_well_formed_list_walks_in_order() {
+        let members = in_members(
+            r#"ex:S a sh:NodeShape ; sh:targetNode ex:x ; sh:in _:l1 .
+               _:l1 rdf:first "a" ; rdf:rest _:l2 .
+               _:l2 rdf:first "b" ; rdf:rest rdf:nil ."#,
+        )
+        .expect("a well-formed list parses");
+        assert_eq!(
+            members,
+            [
+                Term::Literal(Literal::new_simple_literal("a")),
+                Term::Literal(Literal::new_simple_literal("b"))
+            ]
+        );
+    }
+
+    /// `rdf:nil` is the empty SHACL list.
+    #[test]
+    fn an_rdf_nil_list_head_is_the_empty_list() {
+        let store = load_store(&format!(
+            "{PREFIXES}\nex:S a sh:NodeShape ; sh:targetNode ex:x ; sh:and rdf:nil ."
+        ));
+        let shapes = from_store(&store).expect("an empty sh:and list parses");
+        assert!(
+            shapes.node_shapes[0]
+                .constraints
+                .iter()
+                .any(|c| matches!(c, Constraint::And(members) if members.is_empty()))
+        );
+    }
+
+    /// A cell may carry `rdf:type rdf:List`: only its `rdf:first` and `rdf:rest`
+    /// are constrained.
+    #[test]
+    fn a_list_cell_typed_rdf_list_still_walks() {
+        let members = in_members(
+            r#"ex:S a sh:NodeShape ; sh:targetNode ex:x ; sh:in _:l1 .
+               _:l1 a rdf:List ; rdf:first "a" ; rdf:rest rdf:nil ."#,
+        )
+        .expect("a typed cell is still a list cell");
+        assert_eq!(members, [Term::Literal(Literal::new_simple_literal("a"))]);
+    }
+
+    /// A member may be any term: a literal and a triple term included.
+    #[test]
+    fn literal_and_triple_term_members_walk() {
+        let members = in_members(
+            r#"ex:S a sh:NodeShape ; sh:targetNode ex:x ;
+                   sh:in ( "a" <<( ex:s ex:p ex:o )>> ) ."#,
+        )
+        .expect("literal and triple-term members parse");
+        assert_eq!(members.len(), 2);
+        assert!(matches!(members[0], Term::Literal(_)));
+        assert!(matches!(members[1], Term::Triple(_)));
     }
 
     // ── Test 8: sh:nodeKind ────────────────────────────────────────────────────

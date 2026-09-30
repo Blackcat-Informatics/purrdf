@@ -423,13 +423,13 @@ impl Dataset {
             .subject_terms_of_type(type_iri)
     }
 
-    /// All object terms of `<subject> <pred> ?o` in the default graph, where the
+    /// The distinct object terms of `<subject> <pred> ?o` in the default graph, where the
     /// subject is named.
     pub fn objects(&self, subject_iri: &str, pred: &str) -> Result<Vec<Object>, SliceError> {
         self.graph(GraphSel::Default).objects(subject_iri, pred)
     }
 
-    /// All object terms of `<subject> <pred> ?o` in the default graph (subject may be
+    /// The distinct object terms of `<subject> <pred> ?o` in the default graph (subject may be
     /// a blank node).
     pub fn objects_of_subject(
         &self,
@@ -659,14 +659,15 @@ impl GraphView<'_> {
         Ok(out)
     }
 
-    /// All object terms of `<subject> <pred> ?o` in this graph, where the subject is
+    /// The distinct object terms of `<subject> <pred> ?o` in this graph, where the subject is
     /// named.
     pub fn objects(&self, subject_iri: &str, pred: &str) -> Result<Vec<Object>, SliceError> {
         self.objects_of_subject(&Subject::Named(subject_iri.to_owned()), pred)
     }
 
-    /// All object terms of `<subject> <pred> ?o` in this graph (subject may be a
-    /// blank node).
+    /// The distinct object terms of `<subject> <pred> ?o` in this graph (subject may
+    /// be a blank node), in [`DatasetView::objects`] order: a statement asserted in
+    /// several graphs of an `Any` view is one object.
     pub fn objects_of_subject(
         &self,
         subject: &Subject,
@@ -679,11 +680,12 @@ impl GraphView<'_> {
         ) else {
             return Ok(Vec::new());
         };
-        let mut out = Vec::new();
-        for q in self.ds.quads_for_pattern(Some(s), Some(p), None, graph) {
-            out.push(object_of(self.ds, q.o));
-        }
-        Ok(out)
+        Ok(self
+            .ds
+            .objects(s, p, graph)
+            .into_iter()
+            .map(|o| object_of(self.ds, o))
+            .collect())
     }
 
     /// The first object of `<subject> <pred> ?o` in this graph, or `None`.

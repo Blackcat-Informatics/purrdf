@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ::purrdf::RdfDataset;
 
-use crate::data::{GraphFilter, native_quads};
+use crate::data::{GraphFilter, native_quads, objects_of};
 use crate::json_schema::{
     MAX_OWL_EXPRESSION_DEPTH, MAX_SCHEMA_CLASSES, MAX_SCHEMA_PROPERTIES, MAX_SCHEMA_RELATIONS,
     SchemaClassPropertyCoverage, SchemaCompileError, SchemaCompileRequest, SchemaCoveragePrecision,
@@ -235,8 +235,6 @@ impl ShapeClassInfo {
     }
 }
 
-type ObjectIndex = BTreeMap<String, BTreeMap<String, Vec<Term>>>;
-
 #[derive(Debug, Clone)]
 struct TripleRow {
     subject: Term,
@@ -277,7 +275,6 @@ pub(crate) fn build(
             && left.predicate == right.predicate
             && left.object == right.object
     });
-    let objects = object_index(&rows);
 
     let shape_classes = shape_class_info(request.shapes());
     let mut properties: BTreeMap<String, PropertyFacts> = BTreeMap::new();
@@ -385,7 +382,7 @@ pub(crate) fn build(
                 });
             }
             RDFS_DOMAIN | rdfs::RANGE => {
-                let expression = parse_expression(&row.object, &objects, 0)?;
+                let expression = parse_expression(&row.object, &union, 0)?;
                 let predicate = row.predicate.as_str();
                 let provenance = SchemaCoverageProvenance {
                     subject: subject_iri.to_owned(),
@@ -468,25 +465,6 @@ fn dataset_rows(dataset: &RdfDataset) -> Vec<TripleRow> {
         .collect()
 }
 
-fn object_index(rows: &[TripleRow]) -> ObjectIndex {
-    let mut index: ObjectIndex = BTreeMap::new();
-    for row in rows {
-        index
-            .entry(row.subject_key.clone())
-            .or_default()
-            .entry(row.predicate.clone())
-            .or_default()
-            .push(row.object.clone());
-    }
-    for predicates in index.values_mut() {
-        for values in predicates.values_mut() {
-            values.sort_by_cached_key(ToString::to_string);
-            values.dedup();
-        }
-    }
-    index
-}
-
 fn named_iri(term: &Term) -> Option<&str> {
     match term {
         Term::NamedNode(node) => Some(node.as_str()),
@@ -555,7 +533,7 @@ fn coverage_cell_count(
 
 fn parse_expression(
     term: &Term,
-    objects: &ObjectIndex,
+    objects: &RdfDataset,
     depth: usize,
 ) -> Result<OntologyExpression, SchemaCompileError> {
     if depth > MAX_OWL_EXPRESSION_DEPTH {
@@ -569,8 +547,8 @@ fn parse_expression(
         Term::NamedNode(node) => Ok(OntologyExpression::Named(node.as_str().to_owned())),
         Term::BlankNode(_) => {
             let key = term.to_string();
-            let unions = indexed_objects(objects, &key, OWL_UNION_OF);
-            let intersections = indexed_objects(objects, &key, OWL_INTERSECTION_OF);
+            let unions = objects_of(objects, term, OWL_UNION_OF);
+            let intersections = objects_of(objects, term, OWL_INTERSECTION_OF);
             match (unions.len(), intersections.len()) {
                 (1, 0) => Ok(OntologyExpression::Union(parse_expression_list(
                     &unions[0],
@@ -604,51 +582,44 @@ fn parse_expression(
     }
 }
 
+/// The members of an `owl:unionOf`/`owl:intersectionOf` list, each parsed as
+/// an expression. The list is read by the strict walker
+/// ([`DatasetView::rdf_list_strict`](::purrdf::DatasetView::rdf_list_strict)):
+/// OWL 2 Mapping to RDF Graphs §3.1 reads a sequence only from a well-formed
+/// collection, so a malformed one is refused rather than read short.
 fn parse_expression_list(
     head: &Term,
-    objects: &ObjectIndex,
+    objects: &RdfDataset,
     depth: usize,
     owner: &str,
 ) -> Result<Vec<OntologyExpression>, SchemaCompileError> {
-    let mut cursor = head.clone();
-    let mut visited = BTreeSet::new();
-    let mut members = Vec::new();
-    loop {
-        if matches!(&cursor, Term::NamedNode(node) if node.as_str() == rdf::NIL) {
-            break;
+    let malformed = |reason: String| SchemaCompileError::InvalidOntology {
+        subject: owner.to_owned(),
+        reason,
+    };
+    let items = match crate::data::resolve_id(objects, head) {
+        Some(head_id) => {
+            ::purrdf::DatasetView::rdf_list_strict(objects, head_id, ::purrdf::GraphMatch::Any)
+                .map_err(|error| malformed(format!("OWL expression list at {head}: {error}")))?
         }
-        let Term::BlankNode(_) = &cursor else {
-            return Err(SchemaCompileError::InvalidOntology {
-                subject: owner.to_owned(),
-                reason: format!("OWL expression list must terminate at rdf:nil; found {cursor}"),
-            });
-        };
-        let key = cursor.to_string();
-        if !visited.insert(key.clone()) {
-            return Err(SchemaCompileError::InvalidOntology {
-                subject: owner.to_owned(),
-                reason: format!("OWL expression list contains a cycle at {key}"),
-            });
+        None => {
+            return Err(malformed(format!(
+                "OWL expression list must be an RDF list; found {head}"
+            )));
         }
-        enforce_limit(
-            "OWL expression list members",
-            visited.len(),
-            MAX_SCHEMA_CLASSES,
-        )?;
-        let first = indexed_objects(objects, &key, rdf::FIRST);
-        let rest = indexed_objects(objects, &key, rdf::REST);
-        if first.len() != 1 || rest.len() != 1 {
-            return Err(SchemaCompileError::InvalidOntology {
-                subject: key,
-                reason: format!(
-                    "RDF list cell requires exactly one rdf:first and rdf:rest; found {} and {}",
-                    first.len(),
-                    rest.len()
-                ),
-            });
-        }
-        members.push(parse_expression(&first[0], objects, depth)?);
-        cursor = rest[0].clone();
+    };
+    enforce_limit(
+        "OWL expression list members",
+        items.len(),
+        MAX_SCHEMA_CLASSES,
+    )?;
+    let mut members = Vec::with_capacity(items.len());
+    for item in items {
+        members.push(parse_expression(
+            &crate::term::term_id_to_native(objects, item),
+            objects,
+            depth,
+        )?);
     }
     if members.len() < 2 {
         return Err(SchemaCompileError::InvalidOntology {
@@ -665,13 +636,6 @@ fn parse_expression_list(
         });
     }
     Ok(members)
-}
-
-fn indexed_objects<'a>(objects: &'a ObjectIndex, subject: &str, predicate: &str) -> &'a [Term] {
-    objects
-        .get(subject)
-        .and_then(|predicates| predicates.get(predicate))
-        .map_or(&[], Vec::as_slice)
 }
 
 fn shape_class_info(shapes: &crate::shapes::Shapes) -> BTreeMap<String, ShapeClassInfo> {
@@ -922,7 +886,7 @@ fn propagate_sets_with_limit<T: Clone + Ord>(
     if graph.is_empty() {
         return Ok(Vec::new());
     }
-    let components = strongly_connected_components(graph);
+    let components = purrdf_core::graph::scc_component_index(graph);
     let component_count = components.iter().copied().max().map_or(0, |max| max + 1);
     let mut values = vec![BTreeSet::new(); component_count];
     let mut materialized = 0_usize;
@@ -1002,58 +966,6 @@ fn insert_propagated_fact<T: Ord>(
         *materialized = observed;
     }
     Ok(())
-}
-
-/// Iterative Kosaraju decomposition. Iteration avoids recursion depth depending
-/// on caller graph shape; lexical node/edge order keeps component assignment
-/// deterministic even though only membership affects semantics.
-fn strongly_connected_components(graph: &[BTreeSet<usize>]) -> Vec<usize> {
-    let mut seen = vec![false; graph.len()];
-    let mut finish = Vec::with_capacity(graph.len());
-    for root in 0..graph.len() {
-        if seen[root] {
-            continue;
-        }
-        seen[root] = true;
-        let mut stack = vec![(root, graph[root].iter())];
-        while let Some((node, edges)) = stack.last_mut() {
-            if let Some(&next) = edges.next() {
-                if !seen[next] {
-                    seen[next] = true;
-                    stack.push((next, graph[next].iter()));
-                }
-            } else {
-                finish.push(*node);
-                stack.pop();
-            }
-        }
-    }
-
-    let mut reverse = vec![BTreeSet::new(); graph.len()];
-    for (source, destinations) in graph.iter().enumerate() {
-        for &destination in destinations {
-            reverse[destination].insert(source);
-        }
-    }
-    let mut components = vec![usize::MAX; graph.len()];
-    let mut component = 0_usize;
-    while let Some(root) = finish.pop() {
-        if components[root] != usize::MAX {
-            continue;
-        }
-        components[root] = component;
-        let mut stack = vec![root];
-        while let Some(node) = stack.pop() {
-            for &next in reverse[node].iter().rev() {
-                if components[next] == usize::MAX {
-                    components[next] = component;
-                    stack.push(next);
-                }
-            }
-        }
-        component += 1;
-    }
-    components
 }
 
 fn assemble_surface(

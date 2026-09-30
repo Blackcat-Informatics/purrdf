@@ -57,7 +57,7 @@
 
 use std::collections::BTreeMap;
 
-use ::purrdf::{FastMap, FastSet, RdfDataset, TermId, TermRef};
+use ::purrdf::{DatasetView as _, FastMap, FastSet, GraphMatch, RdfDataset, TermId, TermRef};
 use serde_json::{Map, Value, json};
 
 use crate::data::{GraphFilter, native_quads, quads_for_pattern_ids, resolve_id};
@@ -368,9 +368,6 @@ pub(crate) fn is_canonical_integer(lexical: &str) -> bool {
 pub(crate) struct ListIndex {
     /// The cells carried inside some `@list`.
     cells: FastSet<TermId>,
-    first: Option<TermId>,
-    rest: Option<TermId>,
-    nil: Option<TermId>,
 }
 
 /// How often, and from where, a blank node is referenced.
@@ -387,9 +384,6 @@ impl ListIndex {
     fn empty() -> Self {
         Self {
             cells: FastSet::default(),
-            first: None,
-            rest: None,
-            nil: None,
         }
     }
 
@@ -480,12 +474,7 @@ impl ListIndex {
                 node = subject;
             }
         }
-        Self {
-            cells,
-            first: Some(first),
-            rest: Some(rest),
-            nil: Some(nil),
-        }
+        Self { cells }
     }
 
     /// Whether `term` is a list cell carried inside a `@list`.
@@ -498,29 +487,16 @@ impl ListIndex {
     /// The members, in order, of the list whose head is `term`, when `term` is a
     /// converted list's head; `None` otherwise (including for `rdf:nil`, which
     /// [`project_value`] projects on its own).
+    ///
+    /// Every cell from a converted cell to `rdf:nil` is itself converted, and
+    /// so has exactly one `rdf:first` and one `rdf:rest` in the default graph:
+    /// the strict walker reads that chain as it is.
     fn members(&self, data: &RdfDataset, term: &Term) -> Option<Vec<TermId>> {
         if !self.is_cell(data, term) {
             return None;
         }
-        let (first, rest, nil) = (self.first?, self.rest?, self.nil?);
-        let mut cell = resolve_id(data, term)?;
-        let mut members = Vec::new();
-        while cell != nil && members.len() <= self.cells.len() {
-            let single = |predicate: TermId| {
-                quads_for_pattern_ids(
-                    data,
-                    Some(cell),
-                    Some(predicate),
-                    None,
-                    GraphFilter::DefaultGraph,
-                )
-                .next()
-                .map(|quad| quad.o)
-            };
-            members.push(single(first)?);
-            cell = single(rest)?;
-        }
-        Some(members)
+        let head = resolve_id(data, term)?;
+        data.rdf_list_strict(head, GraphMatch::Default).ok()
     }
 }
 

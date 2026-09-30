@@ -400,6 +400,21 @@ pub fn quads_for_pattern_ids(
     ds.quads_for_pattern(s, p, o, graph.as_graph_match())
 }
 
+/// The distinct objects of `(subject, predicate, ?)` in any graph, as native
+/// terms: [`DatasetView::objects`](::purrdf::DatasetView::objects), lifted from
+/// the native term and IRI a cold-path reader holds. Empty when `subject` or
+/// `predicate` is not interned, so neither can have a statement.
+pub(crate) fn objects_of(ds: &impl ShaclRead, subject: &Term, predicate: &str) -> Vec<Term> {
+    let (Some(subject), Some(predicate)) = (resolve_id(ds, subject), ds.term_id_by_iri(predicate))
+    else {
+        return Vec::new();
+    };
+    ds.objects(subject, predicate, GraphMatch::Any)
+        .into_iter()
+        .map(|object| term_id_to_native(ds, object))
+        .collect()
+}
+
 /// A cold-path (parser / report / JSON-projection) pattern lookup that
 /// materializes matched quads into the native [`Term`] value model.
 ///
