@@ -635,87 +635,12 @@ class QuadIter:
     def __iter__(self) -> QuadIter: ...
     def __next__(self) -> Quad: ...
 
-class Store:
-    def __init__(self) -> None: ...
+class _QuadStore:
+    # The copy-on-write quad store `Store` and `MutableDataset` both extend: the one
+    # home of the query, UPDATE, iteration, length, loss-counting dump and validation
+    # capsule surface the two share. The extension does not export it by name; it is
+    # reachable only as the base of those two classes.
     def __iter__(self) -> QuadIter: ...
-    # Returns the document's prefix map from the same parse: the `@prefix` / `PREFIX`
-    # bindings a Turtle or TriG document left in force at its end, as
-    # `(prefix, namespace)` pairs sorted by prefix, each namespace resolved. Empty for
-    # every other format. It is the parser's own record, so a `PREFIX` line quoted
-    # inside a string literal is never reported.
-    def load(
-        self,
-        input: bytes | str | None = ...,
-        format: RdfFormat | None = ...,
-        *,
-        path: str | None = ...,
-        base: str | None = ...,
-    ) -> list[tuple[str, str]]: ...
-    def bulk_load(
-        self,
-        input: bytes | str | None = ...,
-        format: RdfFormat | None = ...,
-        *,
-        path: str | None = ...,
-        base: str | None = ...,
-    ) -> list[tuple[str, str]]: ...
-    def add(self, quad: Quad) -> None: ...
-    def remove(self, quad: Quad) -> None: ...
-    # Fold everything mutated so far into this store's BASE, leaving the copy-on-write
-    # delta empty. The store's CONTENTS are unchanged; what changes is what counts as a
-    # "change". A freshly constructed `Store` has an EMPTY base, so without this the
-    # delta of a store a million triples were loaded into IS those million triples and
-    # `shapes.PreparedShapes.validate_store_changes` re-validates the whole graph.
-    # Checkpoint after loading, mutate, and the delta is exactly the mutation.
-    #
-    # A real compaction (the base is rebuilt), so it is cheap once after a bulk load and
-    # expensive in a tight mutation loop — which is why it is an explicit act rather than
-    # something `add` does behind your back. Raises `ValueError` if the store cannot be
-    # frozen.
-    def checkpoint(self) -> None: ...
-    # `(added, removed)`: how many quads this store has added since the last
-    # `checkpoint`, and how many it has removed. The size of the change
-    # `shapes.PreparedShapes.validate_store_changes` expands, readable without
-    # validating anything.
-    def change_size(self) -> tuple[int, int]: ...
-    # Prepare a SPARQL query once, to be bound and run many times: `query` parses and
-    # admits its text on every call, so a caller running one query per row pays that
-    # cost per row for the same plan. `parameters` names the variables `run` will
-    # bind, without the `?`/`$` sigil — each behaves exactly as a `query`
-    # `substitutions` entry, so a parameter reaches inside `OPTIONAL`, `MINUS`,
-    # `EXISTS` and sub-`SELECT`s by ordinary correlation.
-    #
-    # The returned `PreparedQuery` holds a reference to THIS store and re-reads its
-    # current contents on every `run` rather than freezing a snapshot now, so a later
-    # mutation is visible to the next run. It is not thread-safe — see
-    # `PreparedQuery`.
-    #
-    # Engine configuration and relation/aggregate registration behave exactly as on
-    # `query` below — `extension_namespaces`, `property_fn_namespaces`,
-    # `standpoint_predicates`, `relations`, `relations_from_graph`, `path_relations`
-    # and `aggregate_namespace` all admit the plan and are then CARRIED by the
-    # returned `PreparedQuery`, so `PreparedQuery.run` evaluates under the SAME
-    # registries the plan was admitted under. The two axes that read the store's own
-    # graph — `relations_from_graph`, which reads a table written in it, and
-    # `path_relations`, which traverses its edges — are REBUILT from each run's
-    # dataset and the plan re-admitted under them, so a relation's rows are as fresh
-    # as an ordinary triple pattern's and one answer is never assembled from two
-    # points in time. `substitutions` has no seat here: a prepared query's whole point
-    # is that the values that change between runs arrive per-run through `parameters`
-    # / `PreparedQuery.run`'s bindings.
-    def prepare(
-        self,
-        query: str,
-        *,
-        parameters: list[str] | None = ...,
-        extension_namespaces: list[str] | None = ...,
-        property_fn_namespaces: list[str] | None = ...,
-        standpoint_predicates: tuple[str, str] | None = ...,
-        relations: dict[str, _Relation] | None = ...,
-        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
-        path_relations: dict[str, _PathRelation] | None = ...,
-        aggregate_namespace: str | None = ...,
-    ) -> PreparedQuery: ...
     # Engine configuration kwargs (unset = engine defaults): `extension_namespaces`
     # enables the closed extension-function set under the caller's namespaces (OFF
     # by default), `property_fn_namespaces` does the same for property-function
@@ -873,6 +798,101 @@ class Store:
         max_remote_requests: int | None = ...,
         cancel: CancellationToken | None = ...,
     ) -> UpdateOutcome: ...
+    # The counting twin of `dump`: same bytes, plus the realized loss of producing
+    # them. No `from_graph` and no JSON-LD configuration — a graph selection would make
+    # the named-graph count meaningless, and the JSON-LD family loses nothing.
+    def dump_with_loss(self, format: RdfFormat) -> SerializeLoss: ...
+    def __len__(self) -> int: ...
+    # INTERNAL cross-package protocol, not a caller surface: a capsule exposing a
+    # frozen snapshot of this store by address, which `purrdf.shapes.Shapes`
+    # (`purrdf_shapes`) calls BY STRING so the SHACL engine validates natively with no
+    # N-Triples round-trip. Declared because it is live — the underscore is the whole
+    # of its "do not call this" — and because a member the stub omits is a member a
+    # checked caller cannot see at all, including to see that it is private. The
+    # snapshot is immutable: a later `add`/`remove`/`update` leaves a capsule already
+    # handed out untouched.
+    def _store_capsule(self) -> CapsuleType: ...
+
+class Store(_QuadStore):
+    def __init__(self) -> None: ...
+    # Returns the document's prefix map from the same parse: the `@prefix` / `PREFIX`
+    # bindings a Turtle or TriG document left in force at its end, as
+    # `(prefix, namespace)` pairs sorted by prefix, each namespace resolved. Empty for
+    # every other format. It is the parser's own record, so a `PREFIX` line quoted
+    # inside a string literal is never reported.
+    def load(
+        self,
+        input: bytes | str | None = ...,
+        format: RdfFormat | None = ...,
+        *,
+        path: str | None = ...,
+        base: str | None = ...,
+    ) -> list[tuple[str, str]]: ...
+    def bulk_load(
+        self,
+        input: bytes | str | None = ...,
+        format: RdfFormat | None = ...,
+        *,
+        path: str | None = ...,
+        base: str | None = ...,
+    ) -> list[tuple[str, str]]: ...
+    def add(self, quad: Quad) -> None: ...
+    def remove(self, quad: Quad) -> None: ...
+    # Fold everything mutated so far into this store's BASE, leaving the copy-on-write
+    # delta empty. The store's CONTENTS are unchanged; what changes is what counts as a
+    # "change". A freshly constructed `Store` has an EMPTY base, so without this the
+    # delta of a store a million triples were loaded into IS those million triples and
+    # `shapes.PreparedShapes.validate_store_changes` re-validates the whole graph.
+    # Checkpoint after loading, mutate, and the delta is exactly the mutation.
+    #
+    # A real compaction (the base is rebuilt), so it is cheap once after a bulk load and
+    # expensive in a tight mutation loop — which is why it is an explicit act rather than
+    # something `add` does behind your back. Raises `ValueError` if the store cannot be
+    # frozen.
+    def checkpoint(self) -> None: ...
+    # `(added, removed)`: how many quads this store has added since the last
+    # `checkpoint`, and how many it has removed. The size of the change
+    # `shapes.PreparedShapes.validate_store_changes` expands, readable without
+    # validating anything.
+    def change_size(self) -> tuple[int, int]: ...
+    # Prepare a SPARQL query once, to be bound and run many times: `query` parses and
+    # admits its text on every call, so a caller running one query per row pays that
+    # cost per row for the same plan. `parameters` names the variables `run` will
+    # bind, without the `?`/`$` sigil — each behaves exactly as a `query`
+    # `substitutions` entry, so a parameter reaches inside `OPTIONAL`, `MINUS`,
+    # `EXISTS` and sub-`SELECT`s by ordinary correlation.
+    #
+    # The returned `PreparedQuery` holds a reference to THIS store and re-reads its
+    # current contents on every `run` rather than freezing a snapshot now, so a later
+    # mutation is visible to the next run. It is not thread-safe — see
+    # `PreparedQuery`.
+    #
+    # Engine configuration and relation/aggregate registration behave exactly as on
+    # the inherited `query` — `extension_namespaces`, `property_fn_namespaces`,
+    # `standpoint_predicates`, `relations`, `relations_from_graph`, `path_relations`
+    # and `aggregate_namespace` all admit the plan and are then CARRIED by the
+    # returned `PreparedQuery`, so `PreparedQuery.run` evaluates under the SAME
+    # registries the plan was admitted under. The two axes that read the store's own
+    # graph — `relations_from_graph`, which reads a table written in it, and
+    # `path_relations`, which traverses its edges — are REBUILT from each run's
+    # dataset and the plan re-admitted under them, so a relation's rows are as fresh
+    # as an ordinary triple pattern's and one answer is never assembled from two
+    # points in time. `substitutions` has no seat here: a prepared query's whole point
+    # is that the values that change between runs arrive per-run through `parameters`
+    # / `PreparedQuery.run`'s bindings.
+    def prepare(
+        self,
+        query: str,
+        *,
+        parameters: list[str] | None = ...,
+        extension_namespaces: list[str] | None = ...,
+        property_fn_namespaces: list[str] | None = ...,
+        standpoint_predicates: tuple[str, str] | None = ...,
+        relations: dict[str, _Relation] | None = ...,
+        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        path_relations: dict[str, _PathRelation] | None = ...,
+        aggregate_namespace: str | None = ...,
+    ) -> PreparedQuery: ...
     # `base` is the document base the dump is WRITTEN under — the egress mirror of
     # `load(base=...)`, which this surface previously lacked. A syntax that can express
     # a base writes it and relativizes against it; one that cannot emits absolute IRIs.
@@ -904,24 +924,9 @@ class Store:
         yaml_schema_url: str | None = ...,
         base: str | None = ...,
     ) -> bytes: ...
-    # The counting twin of `dump`: same bytes, plus the realized loss of producing
-    # them. No `from_graph` and no JSON-LD configuration — a graph selection would make
-    # the named-graph count meaningless, and the JSON-LD family loses nothing.
-    def dump_with_loss(self, format: RdfFormat) -> SerializeLoss: ...
-    def __len__(self) -> int: ...
-    # INTERNAL cross-package protocol, not a caller surface: a capsule exposing a
-    # frozen snapshot of this store by address, which `purrdf.shapes.Shapes`
-    # (`purrdf_shapes`) calls BY STRING so the SHACL engine validates natively with no
-    # N-Triples round-trip. Declared because it is live — the underscore is the whole
-    # of its "do not call this" — and because a member the stub omits is a member a
-    # checked caller cannot see at all, including to see that it is private. The
-    # snapshot is immutable: a later `add`/`remove`/`update` leaves a capsule already
-    # handed out untouched.
-    def _store_capsule(self) -> CapsuleType: ...
 
-class MutableDataset:
+class MutableDataset(_QuadStore):
     def __init__(self) -> None: ...
-    def __iter__(self) -> QuadIter: ...
     # Returns the document's prefix map exactly as `Store.load` does.
     def load(
         self,
@@ -970,117 +975,7 @@ class MutableDataset:
         yaml_schema_url: str | None = ...,
         base: str | None = ...,
     ) -> bytes: ...
-    # The counting twin of `dump`; see `Store.dump_with_loss`.
-    def dump_with_loss(self, format: RdfFormat) -> SerializeLoss: ...
-    # Engine configuration kwargs: as on `Store.query` / `Store.update`, including
-    # `aggregate_namespace` (see `Store.query`).
-    def query(
-        self,
-        query: str,
-        *,
-        substitutions: dict[Variable, _Term] | None = ...,
-        extension_namespaces: list[str] | None = ...,
-        property_fn_namespaces: list[str] | None = ...,
-        standpoint_predicates: tuple[str, str] | None = ...,
-        relations: dict[str, _Relation] | None = ...,
-        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
-        path_relations: dict[str, _PathRelation] | None = ...,
-        aggregate_namespace: str | None = ...,
-    ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean: ...
-    # Governed siblings: keywords, outcome, and Ctrl-C interaction exactly as on
-    # `Store.query_governed` / `Store.update_governed`.
-    def query_governed(
-        self,
-        query: str,
-        *,
-        substitutions: dict[Variable, _Term] | None = ...,
-        extension_namespaces: list[str] | None = ...,
-        property_fn_namespaces: list[str] | None = ...,
-        standpoint_predicates: tuple[str, str] | None = ...,
-        relations: dict[str, _Relation] | None = ...,
-        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
-        path_relations: dict[str, _PathRelation] | None = ...,
-        aggregate_namespace: str | None = ...,
-        fuel: int | None = ...,
-        deadline_ms: int | None = ...,
-        max_answers: int | None = ...,
-        max_intermediate_cells: int | None = ...,
-        max_scratch_bytes: int | None = ...,
-        max_remote_requests: int | None = ...,
-        cancel: CancellationToken | None = ...,
-    ) -> QueryOutcome: ...
-    # `property_fn_namespaces` / `relations` / `relations_from_graph` / `path_relations`
-    # behave exactly as on `query_governed` above: a registered relation is reachable
-    # from the closure query exactly as it is from an ordinary one.
-    # `relations_from_graph` reads its table — and `path_relations` snapshots its edges —
-    # from the CLOSURE the regime materializes, exactly as `Store.query_entailment_governed`
-    # does, including its one refused `owl-direct` pairing.
-    def query_entailment_governed(
-        self,
-        query: str,
-        entailment: str,
-        *,
-        program: str = ...,
-        imports: Sequence[tuple[str, str]] | None = ...,
-        premise_iris: Sequence[str] | None = ...,
-        max_stored_facts: int | None = ...,
-        max_join_steps: int | None = ...,
-        substitutions: dict[Variable, _Term] | None = ...,
-        extension_namespaces: list[str] | None = ...,
-        property_fn_namespaces: list[str] | None = ...,
-        standpoint_predicates: tuple[str, str] | None = ...,
-        relations: dict[str, _Relation] | None = ...,
-        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
-        path_relations: dict[str, _PathRelation] | None = ...,
-        aggregate_namespace: str | None = ...,
-        fuel: int | None = ...,
-        deadline_ms: int | None = ...,
-        max_answers: int | None = ...,
-        max_intermediate_cells: int | None = ...,
-        max_scratch_bytes: int | None = ...,
-        max_remote_requests: int | None = ...,
-        cancel: CancellationToken | None = ...,
-    ) -> EntailmentQueryOutcome: ...
-    def update(
-        self,
-        update: str,
-        *,
-        extension_namespaces: list[str] | None = ...,
-        property_fn_namespaces: list[str] | None = ...,
-        standpoint_predicates: tuple[str, str] | None = ...,
-        relations: dict[str, _Relation] | None = ...,
-        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
-        path_relations: dict[str, _PathRelation] | None = ...,
-        aggregate_namespace: str | None = ...,
-    ) -> None: ...
-    def update_governed(
-        self,
-        update: str,
-        *,
-        extension_namespaces: list[str] | None = ...,
-        property_fn_namespaces: list[str] | None = ...,
-        standpoint_predicates: tuple[str, str] | None = ...,
-        relations: dict[str, _Relation] | None = ...,
-        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
-        path_relations: dict[str, _PathRelation] | None = ...,
-        aggregate_namespace: str | None = ...,
-        fuel: int | None = ...,
-        deadline_ms: int | None = ...,
-        max_intermediate_cells: int | None = ...,
-        max_scratch_bytes: int | None = ...,
-        max_remote_requests: int | None = ...,
-        cancel: CancellationToken | None = ...,
-    ) -> UpdateOutcome: ...
     def compact(self) -> None: ...
-    def __len__(self) -> int: ...
-    # The same INTERNAL cross-package protocol `Store._store_capsule` is, under the
-    # same name and with the same pointee type: a capsule carrying a frozen snapshot
-    # of this dataset by address, which `purrdf.shapes.Shapes.validate_store` reaches
-    # BY STRING. Declared for the reason `Store`'s is — a member the stub omits is a
-    # member a checked caller cannot see at all, including to see that it is private.
-    # The snapshot is taken at the call and is immutable: a later `add`/`remove`/
-    # `update` on this dataset leaves a capsule already handed out untouched.
-    def _store_capsule(self) -> CapsuleType: ...
 
 class Dataset:
     def __init__(self, quads: object | None = ...) -> None: ...

@@ -1249,11 +1249,10 @@ impl Value {
         annotations: impl Iterator<Item = JsonValue>,
     ) -> JsonValue {
         if !self.annotations.is_empty() {
-            let mut annotations: Vec<JsonValue> = annotations.collect();
-            let annotation = if annotations.len() == 1 {
-                annotations.pop().expect("one annotation")
-            } else {
-                JsonValue::Array(annotations)
+            let annotations: Vec<JsonValue> = annotations.collect();
+            let annotation = match <[JsonValue; 1]>::try_from(annotations) {
+                Ok([one]) => one,
+                Err(several) => JsonValue::Array(several),
             };
             json.as_object_mut()
                 .expect("every typed carrier term emits a JSON object")

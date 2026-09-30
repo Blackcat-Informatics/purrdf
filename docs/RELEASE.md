@@ -78,6 +78,7 @@ workflow, the bootstrap script and the crates.io preflight all source, and which
 `scripts/check-doc-claims.py` checks this list against:
 
 - `purrdf-hash`
+- `purrdf-stack`
 - `purrdf-lex`
 - `purrdf-events`
 - `purrdf-iri`
@@ -85,7 +86,6 @@ workflow, the bootstrap script and the crates.io preflight all source, and which
 - `purrdf-cdt`
 - `purrdf-jsonschema`
 - `purrdf-deflate`
-- `purrdf-stack`
 - `purrdf-ed25519`
 - `purrdf-gts`
 - `purrdf-core`
@@ -177,12 +177,12 @@ first tagged run can publish the complete workspace in dependency order.
    records; deleting a crate would undo the setup. Yank can be reversed with
    `cargo yank --undo --version 0.0.0 "$new_crate"`.
 
-### Outstanding bootstrap: `purrdf-hash`, `purrdf-lex`, `purrdf-jsonschema`, `purrdf-deflate`, `purrdf-stack`, `purrdf-ed25519`, `purrdf-hnsw` and `purrdf-retrieval`
+### Outstanding bootstrap: `purrdf-hash`, `purrdf-stack`, `purrdf-lex`, `purrdf-jsonschema`, `purrdf-deflate`, `purrdf-ed25519`, `purrdf-hnsw` and `purrdf-retrieval`
 
 Eight crates are in the release set above without a crates.io record yet.
-`purrdf-hash` is the **first** in publish order, `purrdf-lex` the **second**,
-`purrdf-jsonschema` the **seventh**, `purrdf-deflate` the **eighth**,
-`purrdf-stack` the **ninth**, `purrdf-ed25519` the **tenth**, `purrdf-hnsw` the
+`purrdf-hash` is the **first** in publish order, `purrdf-stack` the **second**,
+`purrdf-lex` the **third**, `purrdf-jsonschema` the **eighth**, `purrdf-deflate`
+the **ninth**, `purrdf-ed25519` the **tenth**, `purrdf-hnsw` the
 **nineteenth** and `purrdf-retrieval` the **twenty-first**. Each record must be
 created by a token publish (a create-new-crate publish is the only thing an API
 token does in this process — every existing record is locked to Trusted
@@ -215,10 +215,13 @@ same reason; its token bootstrap also precedes the tag.
 
 `purrdf-lex` is a normal dependency of `purrdf-iri`, and through it of every
 crate that parses an IRI, so it blocks nearly the whole release set the same
-way. Its token bootstrap follows `purrdf-hash`'s and precedes every other,
-before the tag.
+way. Its token bootstrap follows `purrdf-hash`'s and `purrdf-stack`'s and
+precedes every other, before the tag.
 
-`purrdf-stack` is a normal dependency of the SPARQL algebra, evaluator and wasm binding. Its token bootstrap also precedes the tag.
+`purrdf-stack` is a normal dependency of the SPARQL evaluator and the wasm
+binding, and a dev-dependency of most of the release set, `purrdf-lex` among
+them. It depends on no other crate, so it is published second, ahead of every
+crate whose verification resolves it. Its token bootstrap follows `purrdf-hash`'s, before the tag.
 
 Before publishing, every crate in the release set must have the Trusted
 Publisher configuration above and the *Require trusted publishing* lock.
@@ -323,8 +326,8 @@ git push origin rust-v0.1.5
 The workflow first refuses outright if any crate in the release set has no
 crates.io record and is not in the bootstrap ledger, or has a record that is
 not locked to Trusted Publishing (see
-[bootstrap status](#outstanding-bootstrap-purrdf-hash-purrdf-lex-purrdf-jsonschema-purrdf-deflate-purrdf-stack-purrdf-ed25519-purrdf-hnsw-and-purrdf-retrieval)).
-The ledger names `purrdf-hash`, `purrdf-lex`, `purrdf-jsonschema`, `purrdf-deflate`, `purrdf-stack`, `purrdf-ed25519`, `purrdf-hnsw` and `purrdf-retrieval`, so
+[bootstrap status](#outstanding-bootstrap-purrdf-hash-purrdf-stack-purrdf-lex-purrdf-jsonschema-purrdf-deflate-purrdf-ed25519-purrdf-hnsw-and-purrdf-retrieval)).
+The ledger names `purrdf-hash`, `purrdf-stack`, `purrdf-lex`, `purrdf-jsonschema`, `purrdf-deflate`, `purrdf-ed25519`, `purrdf-hnsw` and `purrdf-retrieval`, so
 every other release crate must have its record and lock before packaging. The lane publishes crates
 in dependency order and skips any
 crate/version already present on crates.io. A partially completed release

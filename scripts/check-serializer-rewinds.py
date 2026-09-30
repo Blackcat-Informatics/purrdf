@@ -94,10 +94,6 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "open",
     ): "The SPARQL-JSON READER's stacks of containers and triple terms still open while a document is parsed or a binding decoded; popping one closes it. The reader emits nothing.",
     (
-        "crates/sparql-results/src/json_read.rs",
-        "pending",
-    ): "The SPARQL-JSON READER's work list of parsed values still to drop, so a deep document is freed without recursion. The reader emits nothing.",
-    (
         "crates/sparql-results/src/xml.rs",
         "held",
     ): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
@@ -121,6 +117,37 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "self.remote_stack",
     ): "The JSON-LD context compiler's remote-context stack, which exists to "
     "detect cyclic `@context` IRIs. It holds IRIs under consideration, not output.",
+    (
+        "crates/rdf/src/native_codecs/jsonld/carrier.rs",
+        "stack",
+    ): "The JSON-LD carrier's list-fold frames: `fold_lists` walks nested `@list` "
+    "values over a heap stack of open lists and pops a frame once every item is "
+    "folded. It holds in-memory values under construction, not output.",
+    (
+        "crates/rdf/src/native_codecs/jsonld/carrier.rs",
+        "work",
+    ): "The carrier value's `Drop` work list: nested `@list` values are freed over "
+    "a heap list so depth costs no stack. Nothing here is emitted.",
+    (
+        "crates/rdf/src/native_codecs/jsonld/carrier.rs",
+        "self.work",
+    ): "The `Parts` iterator's pre-order work list over a carrier value's terms and "
+    "annotation nodes. It is a read-only tree walk; nothing popped was written.",
+    (
+        "crates/rdf/src/native_codecs/jsonld/context/mod.rs",
+        "work",
+    ): "The context canonicalizer's work list over a parsed JSON context, checking "
+    "every object for a repeated member. It walks input values, not output.",
+    (
+        "crates/rdf/src/native_codecs/jsonld.rs",
+        "work",
+    ): "The folded-list rewrite's work list over the in-memory carrier tree, so a "
+    "list of lists costs no stack. It mutates values before any are written.",
+    (
+        "crates/rdf/src/native_codecs/okf/reader.rs",
+        "work",
+    ): "The OKF number normalizer's work list over a cloned JSON value, respelling "
+    "each number in place. It walks an in-memory value, not an emitted document.",
     (
         "crates/rdf/src/native_codecs/okf/reader.rs",
         "components",

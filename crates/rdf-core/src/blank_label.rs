@@ -40,18 +40,16 @@
 //! Egress is exact for a second, independent reason: a label this workspace
 //! writes must be re-readable by every external conforming parser, which
 //! implements the grammar's exact Unicode ranges and owes this workspace no
-//! latitude at all. This module is that exact egress contract for label syntax
-//! -- the ranges below are transcribed verbatim from the W3C Turtle/SPARQL
-//! `PN_CHARS_BASE`/`PN_CHARS` productions and the XML 1.0
-//! `NameStartChar`/`NameChar`/`Char` productions, not approximated.
+//! latitude at all. This module is that exact egress contract for label syntax:
+//! it decides the W3C Turtle/SPARQL `PN_CHARS_BASE`/`PN_CHARS` productions and
+//! the XML 1.0 `NameStartChar`/`NameChar`/`Char` productions exactly, not
+//! approximately.
 //!
-//! The shared scanner-side transcription of the same Turtle/SPARQL productions
-//! lives in [`purrdf_iri::terminals`], in the zero-dependency leaf every parser
-//! in the workspace already depends on. The two transcriptions are deliberately
-//! independent: this module keeps its own tables (it also owes the XML
-//! alphabets, which the terminal grammar has nothing to say about), and the
-//! agreement between them is a test, so a typo in either is caught by the
-//! other rather than believed by both.
+//! It transcribes none of those ranges itself. Every class is read from
+//! [`purrdf_lex::terminals`], the one transcription every parser in the
+//! workspace scans names with, so a label this module writes verbatim is by
+//! construction one those parsers read back. The unit tests hold that shared
+//! table to an independent in-test transcription of the productions.
 //!
 //! # Two rules, and nothing else
 //!
@@ -498,12 +496,12 @@ pub fn is_valid_blank_node_label_prefix(prefix: &str) -> bool {
 /// Implements the exact production `NCName ::= NCNameStartChar NCNameChar*`,
 /// where `NCNameStartChar = NameStartChar - ':'` and `NCNameChar` is
 /// `NCNameStartChar` plus `'-' | '.' | [0-9] | #xB7 | [#x0300-#x036F] |
-/// [#x203F-#x2040]`, decided by [`purrdf_iri::terminals::is_ncname`]. Unlike
+/// [#x203F-#x2040]`, decided by [`purrdf_lex::terminals::is_ncname`]. Unlike
 /// a blank-node label, an `NCName` MAY end in `.`: the grammar places no
 /// restriction on the final character.
 #[must_use]
 pub fn is_valid_ncname(label: &str) -> bool {
-    purrdf_iri::terminals::is_ncname(label)
+    purrdf_lex::terminals::is_ncname(label)
 }
 
 /// Whether `label` survives XML 1.0 character data unchanged.
@@ -528,7 +526,7 @@ pub fn is_valid_xml_text(label: &str) -> bool {
 /// whitespace. `#x9`/`#xA`/`#xD` are legal `Char`s but are whitespace, so the
 /// whitespace test alone removes them from the `[#x20-…]` gap below.
 fn is_xml_text_char(c: char) -> bool {
-    !c.is_whitespace() && purrdf_iri::terminals::is_xml_char(c)
+    !c.is_whitespace() && purrdf_lex::terminals::is_xml_char(c)
 }
 
 /// The Turtle/SPARQL name classes (`PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`),

@@ -175,12 +175,6 @@ SCANNERS: dict[str, str] = {
         "separate audits reached the same conclusion here independently, and a "
         "third would too unless it is written down"
     ),
-    "crates/sparql-conformance/src/rif_xml.rs": (
-        "decides where an XML element name ends while walking a manifest. Harness "
-        "support rather than a shipped codec, but a harness that mis-reads a "
-        "manifest moves a scoreboard, and the scoreboard is this repository's "
-        "conformance claim"
-    ),
     "crates/retrieval/src/render.rs": (
         "reads a caller's canonical term lexical back through a `Cursor` whose "
         "position is `position` but which exposes no `fn peek`; it decides where "
@@ -196,18 +190,13 @@ SCANNERS: dict[str, str] = {
         "pattern misses it; its whitespace and string scans decide RFC 8259 token "
         "boundaries"
     ),
-    "crates/rdf/src/json_value.rs": (
-        "a JSON reader whose position is `self.at`; its whitespace skip is RFC "
-        "8259's `ws`"
-    ),
     "crates/rdf/src/native_codecs/trix.rs": (
         "trims TriX element text by XML `S`, which decides the IRI or literal a "
         "`<uri>`/`<plainLiteral>` names; it walks a DOM, so it holds no cursor"
     ),
     "crates/entail/src/rif_xml.rs": (
-        "reads RIF-XML text content and trims it by XML `S`; the same job as "
-        "crates/sparql-conformance/src/rif_xml.rs, in a shipped crate, over a DOM "
-        "rather than a cursor"
+        "reads RIF-XML text content and trims it by XML `S`, over a DOM rather "
+        "than a cursor"
     ),
     "crates/slice/src/fix_deps.rs": (
         "edits Turtle source in place and decides where a term ends by `WS` and "
@@ -350,19 +339,6 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "token boundary: a prefix arrives as a whole, already-delimited JSON key, "
         "so this is a membership test, which is the one thing a liberal class may "
         "safely be."
-    ),
-    ("crates/rdf-core/src/blank_label.rs", TERMINAL_FN_RULE): (
-        "deliberately a SECOND, independent transcription, retained as the "
-        "oracle the shared module is checked against. The two are not derived "
-        "from each other -- one is a binary-searched range table sized for "
-        "egress (once per label), the other a `matches!` tree sized for a "
-        "tokenizer's inner loop -- so agreement between them is evidence about "
-        "the W3C tables themselves, which a single spelling checked against "
-        "itself could never provide. The duplication is safe ONLY because "
-        "`egress_tables_agree_with_the_shared_scanner_terminals` proves the two "
-        "agree on all 1,114,112 scalars; delete that test and this exemption is "
-        "void, because a divergence would mint blank node labels the scanner "
-        "cannot read back."
     ),
 }
 

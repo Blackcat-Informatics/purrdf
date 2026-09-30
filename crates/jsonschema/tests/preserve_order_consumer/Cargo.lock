@@ -150,6 +150,7 @@ name = "purrdf-xsd"
 version = "2.0.2"
 dependencies = [
  "purrdf-hash",
+ "purrdf-lex",
 ]
 
 [[package]]

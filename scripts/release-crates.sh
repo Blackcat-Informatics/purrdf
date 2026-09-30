@@ -46,6 +46,7 @@
 # shellcheck disable=SC2034  # consumed by the sourcing script.
 PURRDF_RELEASE_CRATES=(
   purrdf-hash
+  purrdf-stack
   purrdf-lex
   purrdf-events
   purrdf-iri
@@ -53,7 +54,6 @@ PURRDF_RELEASE_CRATES=(
   purrdf-cdt
   purrdf-jsonschema
   purrdf-deflate
-  purrdf-stack
   purrdf-ed25519
   purrdf-gts
   purrdf-core
@@ -101,10 +101,10 @@ PURRDF_RELEASE_CRATES=(
 # shellcheck disable=SC2034  # consumed by the sourcing script.
 PURRDF_UNBOOTSTRAPPED_CRATES=(
   purrdf-hash
+  purrdf-stack
   purrdf-lex
   purrdf-jsonschema
   purrdf-deflate
-  purrdf-stack
   purrdf-ed25519
   purrdf-hnsw
   purrdf-retrieval
