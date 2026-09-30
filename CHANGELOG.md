@@ -2692,10 +2692,6 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `geojson_json`/`geojson_literal`, `core_escape_scan`/`core_pack_dict_prefix`
   and the `hex` group at 1 MiB.
 
-### Fixed
-
-- **sparql-eval, wasm:** nested `FILTER NOT EXISTS` answers 181 levels deep on
-  the synchronous wasm lane, up from 75; nested `FILTER EXISTS` answers 203, up
 - Timings for XSD patterns, SPARQL `REGEX` and `sh:pattern` since `regex` lost
   its literal prefilter; report-only, taken on a host at load 5.4-14.4 (the
   one-minute average, read before every run) as 10 interleaved
@@ -2713,23 +2709,34 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   cases are 0.54 [0.48, 0.57] (`needle`, 1.0 us to 0.5 us), 0.61 [0.58, 0.64],
   0.77 [0.74, 0.78], 0.56 [0.52, 0.57] and 0.31 [0.30, 0.31] (`NEEDLE` under
   `i`, 3.4 us to 1.1 us) of main, and SPARQL `REGEX` 0.90 [0.86, 0.93], 0.84
-  [0.74, 0.88] and 0.79 [0.77, 0.81]. `sh:pattern` is 1.16 to 1.25, which is
-  the branch's validation and not its matching: `^[a-z]`, which runs no
-  prefilter, is 1.21 [1.16, 1.23] of main on the branch with and without it.
-  The no-literal controls are unchanged (`[a-z]{25}` 0.98 [0.97, 1.03]), and
-  the start- and end-anchored IRI patterns, left to the engine, are 1.08.
-  `example\.org` over 70-byte IRIs stays slower, 2.05 [2.01, 2.11] (36.5 us
-  to 74.3 us per 4,096): a haystack shorter than one sixty-four-byte block
-  pays the pair search's chunk walk and verification per call. A cold
-  `xsd_regex::compile` now also parses the translated source once more to read
-  the window: 3.8 us to 5.4 us for `^[a-z0-9]+$` (1.37 [1.15, 1.71]), 4.6 us
-  to 5.9 us for `needle` and 37 us to 49 us for `^\i\c*$` (1.23 [1.04, 1.77];
-  4 interleaved rounds at load 13-16 against the branch before the fix), paid
-  once per pattern behind each call site's compile cache. The benches are
+  [0.74, 0.88] and 0.79 [0.77, 0.81]. Final numbers against main (report-only,
+  taken on a heavily loaded shared host; indicative, not a gate):
+  `example\.org` over 70-byte IRIs (a plain-text pattern search, a one-word test of a clean tail,
+  the hit offset from a bitmask) is 0.855 [0.846, 0.882], was 2.05; anchored
+  literal prefixes and suffixes are compared directly, `^http://example\.org/`
+  0.227 [0.221, 0.238] and `[0-9]{3}$` 0.406 [0.382, 0.413], were 1.08; compile
+  no longer parses twice, `needle` 0.271 [0.259, 0.278], `^[a-z0-9]+$` 0.994
+  [0.985, 1.017] and `^\i\c*$` 0.993 [0.980, 1.001], at parity within noise,
+  the engine build itself being 0.996-1.015 of main; `sh:pattern "^[a-z]"` is
+  0.958 [0.895, 1.021], was 1.21, at parity within noise on a loaded host
+  (loads 4-11). The no-literal controls are unchanged (`[a-z]{25}` 0.98 [0.97,
+  1.03]). The shared first-mismatch helper in `purrdf-deflate` works in
+  16-byte steps: 0.77 of main at 256 B and up, parity at 40 B. The benches are
   `xsd_regex_match` and `xsd_regex_compile` in `xsd_regex`,
   `regex_long_literals` in `regex_eval` and `shacl_pattern_long_values` in
   `pattern_validate`.
 
+### Fixed
+
+- **shapes:** the canonical IRI comparison behind the focus-node sort compares
+  from the first differing byte again; since the helper centralization it
+  scanned both IRIs end to end on every comparison, making `sh:pattern`
+  validation about 1.2x slower than before. It uses the one first-mismatch
+  helper in `purrdf-deflate`, now 16 bytes a step, and checks only the scalars
+  at the difference for bytes the rendering escapes (checked against full
+  rendering over 20,000 pairs).
+- **sparql-eval, wasm:** nested `FILTER NOT EXISTS` answers 181 levels deep on
+  the synchronous wasm lane, up from 75; nested `FILTER EXISTS` answers 203, up
   from 117, and nested `LATERAL` 282, up from 193, where the query-height
   admission now ends it before the evaluator's stack does. One operator serving
   both `DISTINCT` and `REDUCED` had been inlined into the evaluator's recursive

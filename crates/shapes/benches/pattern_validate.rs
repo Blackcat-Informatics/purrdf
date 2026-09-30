@@ -32,8 +32,10 @@
 //! `CompiledPattern::is_match` runs in front of the `regex` engine (built
 //! without its own literal prefilter): `needle` (a literal), `foo.*bar` (a
 //! literal prefix), `\d{4}-\d{2}` (a required `-` a bounded distance into the
-//! match), `NEEDLE` under `sh:flags "i"`, and `[0-9][a-z][0-9]` (no literal:
-//! the control).
+//! match), `NEEDLE` under `sh:flags "i"`, `[0-9][a-z][0-9]` (no literal:
+//! the control), and `^[a-z]`, answered by a check of each value's first byte,
+//! which leaves the row as the cost of validation itself (target discovery, the
+//! focus-node sort's canonical IRI comparisons, value-node collection).
 //!
 //! Report-only, `cargo bench -p purrdf-shapes --bench pattern_validate` (the
 //! `make bench` lane) — excluded from `make check`. No timing is asserted.
@@ -177,6 +179,7 @@ const LONG_CASES: &[(&str, &str, &str)] = &[
     ("inner_bounded", r"\\d{4}-\\d{2}", ""),
     ("literal_i", "NEEDLE", "i"),
     ("control_no_literal", "[0-9][a-z][0-9]", ""),
+    ("anchored_class", "^[a-z]", ""),
 ];
 
 fn bench_pattern_long_values(c: &mut Bench) {

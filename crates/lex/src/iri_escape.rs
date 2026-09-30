@@ -165,6 +165,26 @@ pub fn find_first_candidate(bytes: &[u8]) -> Option<usize> {
     CANDIDATES.find_first(bytes)
 }
 
+/// Whether `b` is a byte [`find_first_candidate`] stops at: one that can begin
+/// a scalar an `IRIREF` writer must escape.
+///
+/// The one-byte form of the same class, for a caller that has already found
+/// the one position that matters (the first byte at which two IRIs differ) and
+/// asks only about the bytes of its scalar, where a scan's set-up would cost
+/// more than the question.
+///
+/// ```
+/// use purrdf_lex::iri_escape::is_candidate;
+///
+/// assert!(is_candidate(b' ') && is_candidate(b'>') && is_candidate(0xC2));
+/// assert!(!is_candidate(b'a') && !is_candidate(0xC3));
+/// ```
+#[inline]
+#[must_use]
+pub const fn is_candidate(b: u8) -> bool {
+    CANDIDATE_TABLE[b as usize] != 0
+}
+
 /// Append the `UCHAR` of `ch`, a scalar [`is_iriref_escape_required`] answers
 /// `true` for and hence at most U+009F: `\u00XX` in upper-case hex, the bytes
 /// `write!(out, "\\u{:04X}", ch as u32)` produces.

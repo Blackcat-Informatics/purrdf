@@ -56,6 +56,30 @@
 //! tries offset zero and stops at its first dead state, which no search can
 //! beat. Nor does one anchored at its end (`…$` without `m`): the engine
 //! matches it backward from the last byte.
+//!
+//! # Anchored patterns
+//!
+//! What such a pattern gets instead is an [`Affix`]: the single-byte positions
+//! directly after its `^` must be the haystack's first bytes, and those
+//! directly before its `$` its last, so a haystack whose ends do not hold them
+//! is refused by a slice compare, and one that does is decided without the
+//! engine when those positions are the whole pattern (`^http://example\.org/`,
+//! `[0-9]{3}$`, `^[a-z]`). The engine's own start-up per call (its cache,
+//! its search configuration) is most of the cost on a short haystack, and a
+//! compare does not pay it.
+//!
+//! # When the plan is read
+//!
+//! A [`Plan`] (window, literal, affix, or the engine alone) is read from the
+//! parsed syntax when a match first needs it, not when the pattern is
+//! compiled, so compiling costs one parse, the engine's: a first match against
+//! a short haystack is the engine's alone, and the plan is read by the next
+//! match, or by a first one against a haystack long enough for a search to pay
+//! for the parse. The translation pass decides the common plans without any
+//! parse: a pattern that is literal text is its own syntax tree, and one with
+//! no token that can be a single-byte position, or anchored with only
+//! repeated or non-ASCII atoms next to its anchors (`^[a-z0-9]+$`), has no
+//! plan beyond the engine.
 
 use purrdf_lex::scan::{ByteRun, find_byte, find_byte_pair, find_byte2, find_range_pair};
 use regex_syntax::hir::{Class, Hir, HirKind, Look};
@@ -131,29 +155,64 @@ impl ByteSet {
             + self.0[3].count_ones()
     }
 
+    /// The set's one byte, when it holds exactly one.
+    fn only(self) -> Option<u8> {
+        if self.len() == 1 {
+            self.members().next()
+        } else {
+            None
+        }
+    }
+
+    /// The set's bytes in ascending order, read off its words' set bits.
+    fn members(self) -> impl Iterator<Item = u8> {
+        self.0.into_iter().enumerate().flat_map(|(word, mut bits)| {
+            std::iter::from_fn(move || {
+                (bits != 0).then(|| {
+                    let low = bits.trailing_zeros() as usize;
+                    bits &= bits - 1;
+                    // `word < 4` and `low < 64`: the byte value.
+                    u8::try_from(word * 64 + low).unwrap_or(u8::MAX)
+                })
+            })
+        })
+    }
+
+    /// Whether the set shares a byte with `other`.
+    const fn meets(self, other: Self) -> bool {
+        (self.0[0] & other.0[0])
+            | (self.0[1] & other.0[1])
+            | (self.0[2] & other.0[2])
+            | (self.0[3] & other.0[3])
+            != 0
+    }
+
     /// How the search tests the set, when it can: one or two bytes by
     /// equality, one or two runs of at most [`MAX_PROBE_BYTES`] bytes by range.
     fn probe(self) -> Option<Probe> {
-        let members = || (0..=u8::MAX).filter(|&b| self.contains(b));
         if self.len() <= 2 {
-            let mut bytes = members();
+            let mut bytes = self.members();
             let first = bytes.next()?;
             return Some(Probe::Bytes([first, bytes.next().unwrap_or(first)]));
         }
         if self.len() > MAX_PROBE_BYTES {
             return None;
         }
-        let mut runs: Vec<ByteRun> = Vec::new();
-        for b in members() {
-            match runs.last_mut() {
-                Some((_, hi)) if hi.checked_add(1) == Some(b) => *hi = b,
-                _ => runs.push((b, b)),
+        let mut runs: [ByteRun; 2] = [(0, 0); 2];
+        let mut count = 0;
+        for b in self.members() {
+            match count {
+                1 | 2 if runs[count - 1].1.checked_add(1) == Some(b) => runs[count - 1].1 = b,
+                0 | 1 => {
+                    runs[count] = (b, b);
+                    count += 1;
+                }
+                _ => return None,
             }
         }
-        match runs[..] {
-            [run] => Some(Probe::Runs([run, run])),
-            [first, second] => Some(Probe::Runs([first, second])),
-            _ => None,
+        match count {
+            1 => Some(Probe::Runs([runs[0], runs[0]])),
+            _ => Some(Probe::Runs(runs)),
         }
     }
 
@@ -170,21 +229,54 @@ impl ByteSet {
 
     /// How common the set's bytes are in ordinary text, lower is rarer: the
     /// search tests the rarest positions, so a common byte stops it less often.
-    /// A heuristic only; any choice gives the same answers.
+    /// A heuristic only; any choice gives the same answers. The commonest
+    /// class any member falls in, each class tested as one mask.
     fn commonness(self) -> u8 {
-        (0..=u8::MAX)
-            .filter(|&b| self.contains(b))
-            .map(|b| match b {
-                b' ' | b'e' | b't' | b'a' | b'o' | b'i' | b'n' | b's' | b'r' | b'h' | b'l' => 4,
-                b'a'..=b'z' | b'0'..=b'9' | b'/' | b'.' | b':' | b'-' | b'_' => 3,
-                0x80..=0xFF => 2,
-                b'A'..=b'Z' => 1,
-                _ => 0,
-            })
-            .max()
-            .unwrap_or(0)
+        if self.meets(COMMONEST) {
+            4
+        } else if self.meets(COMMON) {
+            3
+        } else if self.meets(HIGH) {
+            2
+        } else {
+            u8::from(self.meets(UPPER))
+        }
     }
 }
+
+/// The set of the bytes in `lo..=hi`, for the commonness masks.
+const fn byte_range(mut set: ByteSet, lo: u8, hi: u8) -> ByteSet {
+    let mut b = lo;
+    loop {
+        set.insert(b);
+        if b == hi {
+            return set;
+        }
+        b += 1;
+    }
+}
+
+/// The set of `bytes`, for the commonness masks.
+const fn byte_list(mut set: ByteSet, bytes: &[u8]) -> ByteSet {
+    let mut i = 0;
+    while i < bytes.len() {
+        set.insert(bytes[i]);
+        i += 1;
+    }
+    set
+}
+
+/// The commonest bytes of ordinary text: commonness 4.
+const COMMONEST: ByteSet = byte_list(ByteSet::EMPTY, b" etaoinsrhl");
+/// Lowercase letters, digits and IRI punctuation: commonness 3.
+const COMMON: ByteSet = byte_list(
+    byte_range(byte_range(ByteSet::EMPTY, b'a', b'z'), b'0', b'9'),
+    b"/.:-_",
+);
+/// Bytes of multi-byte UTF-8 sequences: commonness 2.
+const HIGH: ByteSet = byte_range(ByteSet::EMPTY, 0x80, 0xFF);
+/// Uppercase letters: commonness 1.
+const UPPER: ByteSet = byte_range(ByteSet::EMPTY, b'A', b'Z');
 
 /// One member of a match before its window, as the backward bound reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -251,6 +343,9 @@ impl Run {
 #[derive(Debug, Clone)]
 pub(super) struct Prefilter {
     window: Box<[ByteSet]>,
+    /// The window as bytes when each position is one byte, so a candidate is
+    /// verified by one slice compare.
+    literal: Option<Box<[u8]>>,
     /// The window position the search tests, and how it tests it.
     lead: (usize, Probe),
     /// A second, later position tested together with `lead`.
@@ -320,8 +415,13 @@ impl Prefilter {
             .map(|after| window.len().saturating_add(after))
             .filter(|&tail| forward_blind && tail <= MAX_TAIL);
         let exact = looks.is_empty() && positions(hir).is_some_and(|sets| *sets == *window);
+        let literal = window
+            .iter()
+            .map(|set| set.only())
+            .collect::<Option<Box<[u8]>>>();
         Some(Self {
             window,
+            literal,
             lead,
             trail,
             reach: run.reach.map(Vec::into_boxed_slice),
@@ -332,6 +432,11 @@ impl Prefilter {
 
     /// Whether `regex`, the engine this prefilter was built for, matches
     /// anywhere in `haystack`: exactly `regex.is_match(haystack)`.
+    ///
+    /// Out of line: inlined into [`Plan::is_match`], its window loop gave every
+    /// plan's call the large frame it needs, and the literal and anchored plans
+    /// answer in a few dozen cycles.
+    #[inline(never)]
     pub(super) fn is_match(&self, regex: &regex::Regex, haystack: &str) -> bool {
         let bytes = haystack.as_bytes();
         let mut from = 0;
@@ -397,6 +502,7 @@ impl Prefilter {
     }
 
     /// The first window beginning at or after `from`.
+    #[inline]
     fn next_window(&self, bytes: &[u8], mut from: usize, misses: &mut usize) -> Candidate {
         let (lead_at, lead) = self.lead;
         loop {
@@ -418,12 +524,16 @@ impl Prefilter {
                 return Candidate::None;
             };
             let at = from + offset;
-            let verified = bytes.get(at..at + self.window.len()).is_some_and(|slice| {
-                slice
-                    .iter()
-                    .zip(&self.window)
-                    .all(|(&b, set)| set.contains(b))
-            });
+            let verified =
+                bytes
+                    .get(at..at + self.window.len())
+                    .is_some_and(|slice| match &self.literal {
+                        Some(literal) => same_bytes(slice, literal),
+                        None => slice
+                            .iter()
+                            .zip(&self.window)
+                            .all(|(&b, set)| set.contains(b)),
+                    });
             if verified {
                 return Candidate::Window(at);
             }
@@ -434,6 +544,361 @@ impl Prefilter {
             from = at + 1;
         }
     }
+}
+
+/// What a pattern anchored at the start or the end of the haystack must match
+/// there: the single-byte positions directly after its `^` and directly before
+/// its `$` (both only without `m`, where they are [`Look::Start`] and
+/// [`Look::End`]).
+///
+/// Every match of `^…` begins at offset zero, so its leading positions are the
+/// haystack's first bytes; every match of `…$` ends at the last byte, so its
+/// trailing positions are the haystack's last bytes. A haystack whose ends do
+/// not hold them has no match, and is refused before the engine runs. When the
+/// positions are the whole pattern (`^http://example\.org/`, `[0-9]{3}$`,
+/// `^[a-z]`) the check is the answer, and the engine never runs at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Affix {
+    /// The positions the haystack must begin with (empty unless `^`-anchored).
+    prefix: Positions,
+    /// The positions the haystack must end with (empty unless `$`-anchored).
+    suffix: Positions,
+    /// How the checks decide a haystack that passes them.
+    rest: Rest,
+}
+
+/// The positions of one end of an anchored pattern: none, bytes when each
+/// position is one byte, compared as one slice, and sets otherwise.
+///
+/// No positions is its own arm rather than an empty slice: comparing an empty
+/// slice still calls `memcmp` with the slice's dangling pointer, and the C
+/// library's masked-load `memcmp` takes a fault-suppression assist on it, which
+/// was measured at 40 ns a call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Positions {
+    None,
+    Bytes(Box<[u8]>),
+    Sets(Box<[ByteSet]>),
+}
+
+impl Positions {
+    fn of(sets: Vec<ByteSet>) -> Self {
+        if sets.is_empty() {
+            return Self::None;
+        }
+        match sets
+            .iter()
+            .map(|set| set.only())
+            .collect::<Option<Vec<u8>>>()
+        {
+            Some(bytes) => Self::Bytes(bytes.into_boxed_slice()),
+            None => Self::Sets(sets.into_boxed_slice()),
+        }
+    }
+
+    const fn len(&self) -> usize {
+        match self {
+            Self::None => 0,
+            Self::Bytes(bytes) => bytes.len(),
+            Self::Sets(sets) => sets.len(),
+        }
+    }
+
+    /// Whether `slice`, exactly [`len`](Self::len) bytes, holds the positions.
+    fn hold(&self, slice: &[u8]) -> bool {
+        match self {
+            Self::None => true,
+            Self::Bytes(bytes) => same_bytes(slice, bytes),
+            Self::Sets(sets) => slice.iter().zip(sets).all(|(&b, set)| set.contains(b)),
+        }
+    }
+}
+
+/// What decides a haystack whose ends hold an [`Affix`]'s positions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rest {
+    /// The pattern is the positions and its anchors: every such haystack
+    /// matches.
+    Matches,
+    /// The pattern is `^`, its positions and `$`: a haystack matches when it
+    /// is the positions, byte for byte.
+    Whole,
+    /// The engine decides.
+    Engine,
+}
+
+impl Affix {
+    /// The affix of `hir`, the syntax the engine compiled, or `None` when the
+    /// pattern is anchored at neither end or has no position next to an
+    /// anchor.
+    pub(super) fn build(hir: &Hir) -> Option<Self> {
+        let members = match hir.kind() {
+            HirKind::Concat(members) => members.as_slice(),
+            _ => std::slice::from_ref(hir),
+        };
+        let is = |member: Option<&Hir>, want: Look| {
+            member.is_some_and(|m| matches!(m.kind(), HirKind::Look(look) if *look == want))
+        };
+        let start = is(members.first(), Look::Start);
+        let body = &members[usize::from(start)..];
+        let end = is(body.last(), Look::End);
+        let body = &body[..body.len() - usize::from(end)];
+        let mut taken = 0;
+        let mut prefix = Vec::new();
+        if start {
+            for member in body {
+                let Some(sets) = positions(member) else { break };
+                prefix.extend(sets);
+                taken += 1;
+            }
+        }
+        let mut suffix = Vec::new();
+        if end {
+            for member in body[taken..].iter().rev() {
+                let Some(mut sets) = positions(member) else {
+                    break;
+                };
+                sets.extend(suffix);
+                suffix = sets;
+                taken += 1;
+            }
+        }
+        if prefix.is_empty() && suffix.is_empty() {
+            return None;
+        }
+        let rest = match (taken == body.len(), start, end) {
+            (true, true, true) => Rest::Whole,
+            (true, _, _) => Rest::Matches,
+            (false, _, _) => Rest::Engine,
+        };
+        Some(Self {
+            prefix: Positions::of(prefix),
+            suffix: Positions::of(suffix),
+            rest,
+        })
+    }
+
+    /// Whether the haystack's ends hold the positions, so that the pattern may
+    /// match it; `false` proves it cannot.
+    #[inline]
+    pub(super) fn may_match(&self, haystack: &str) -> bool {
+        let bytes = haystack.as_bytes();
+        let (head, tail) = (self.prefix.len(), self.suffix.len());
+        bytes.len() >= head.max(tail)
+            && self.prefix.hold(&bytes[..head])
+            && self.suffix.hold(&bytes[bytes.len() - tail..])
+    }
+
+    /// Whether `regex`, the engine this affix was built for, matches
+    /// `haystack`: exactly `regex.is_match(haystack)`.
+    #[inline]
+    pub(super) fn is_match(&self, regex: &regex::Regex, haystack: &str) -> bool {
+        if !self.may_match(haystack) {
+            return false;
+        }
+        match self.rest {
+            Rest::Matches => true,
+            Rest::Whole => haystack.len() == self.prefix.len(),
+            Rest::Engine => regex.is_match(haystack),
+        }
+    }
+}
+
+/// A pattern that is literal bytes and nothing else (`example\.org`, a `q`
+/// literal): a match is an occurrence of the bytes, so the search answers
+/// without the engine.
+///
+/// Two of the bytes its [`Prefilter`] window tests are searched for together
+/// with [`find_byte_pair`] (one with [`find_byte`] when the window has one
+/// searchable byte), and a candidate is verified against the whole literal by
+/// a word compare, however long it is: the engine's automaton for a literal is
+/// as long as the literal, so it is never handed one to confirm.
+/// On a haystack shorter than one sixty-four-byte block, the case of an IRI or
+/// a short literal, the general window loop's per-call set-up was measured to
+/// cost more than the search itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Needle {
+    bytes: Box<[u8]>,
+    /// The needle offset and byte the search tests first.
+    lead: (usize, u8),
+    /// A second, later offset and byte tested together with `lead`.
+    trail: Option<(usize, u8)>,
+}
+
+impl Needle {
+    /// The needle of `hir` when it is literal bytes and nothing else, searched
+    /// for by the positions `prefilter`, its window's, tests. A literal longer
+    /// than the window ([`MAX_WINDOW`]) is searched by the window's positions
+    /// and verified whole.
+    fn of(prefilter: &Prefilter, hir: &Hir) -> Option<Self> {
+        let HirKind::Literal(literal) = hir.kind() else {
+            return None;
+        };
+        let byte = |(at, probe): (usize, Probe)| match probe {
+            Probe::Bytes([a, b]) if a == b => Some((at, a)),
+            _ => None,
+        };
+        let bytes = literal.0.clone();
+        let lead = byte(prefilter.lead)?;
+        let trail = match prefilter.trail {
+            Some(trail) => Some(byte(trail)?),
+            None => None,
+        };
+        Some(Self { bytes, lead, trail })
+    }
+
+    /// The first offset at or after `from` where `haystack` holds the needle.
+    #[allow(
+        clippy::inline_always,
+        reason = "the whole search of a short haystack is a few dozen cycles; a call frame \
+                  around it was measured as a fifth of them"
+    )]
+    #[inline(always)]
+    fn find(&self, haystack: &[u8], mut from: usize, misses: &mut usize) -> Found {
+        let n = self.bytes.len();
+        let Some(last) = haystack.len().checked_sub(n) else {
+            return Found::None;
+        };
+        let (lead_at, lead) = self.lead;
+        while from <= last {
+            // Candidates `p` run over `from..=last`, so every byte the search
+            // and the verification read is in bounds.
+            let found = match self.trail {
+                Some((trail_at, trail)) => find_byte_pair(
+                    &haystack[from + lead_at..=last + trail_at],
+                    [lead; 2],
+                    [trail; 2],
+                    trail_at - lead_at,
+                ),
+                None => find_byte(&haystack[from + lead_at..=last + lead_at], lead),
+            };
+            let Some(offset) = found else {
+                return Found::None;
+            };
+            let at = from + offset;
+            if same_bytes(&haystack[at..at + n], &self.bytes) {
+                return Found::Needle;
+            }
+            *misses += 1;
+            // Only a needle as short as a window gives way: the engine's
+            // automaton for a longer literal is as long as the literal, and
+            // is far slower on it than the search restarted per candidate.
+            if n <= MAX_WINDOW && *misses > MAX_DENSE_MISSES && *misses * MISS_DENSITY > at {
+                return Found::GiveWay(at);
+            }
+            from = at + 1;
+        }
+        Found::None
+    }
+
+    /// Whether `regex`, the engine this needle was built for, matches anywhere
+    /// in `haystack`: exactly `regex.is_match(haystack)`. A haystack dense with
+    /// candidates that are not the needle gives way to the engine where the
+    /// search stopped, as the general window does.
+    #[allow(
+        clippy::inline_always,
+        reason = "the whole search of a short haystack is a few dozen cycles; a call frame \
+                  around it was measured as a fifth of them"
+    )]
+    #[inline(always)]
+    pub(super) fn is_match<'r>(
+        &self,
+        engine: impl FnOnce() -> &'r regex::Regex,
+        haystack: &str,
+    ) -> bool {
+        match self.find(haystack.as_bytes(), 0, &mut 0) {
+            Found::Needle => true,
+            Found::None => false,
+            Found::GiveWay(at) => engine().is_match_at(haystack, haystack.floor_char_boundary(at)),
+        }
+    }
+
+    /// Whether `haystack` may hold the needle; `false` proves it cannot.
+    fn may_match(&self, haystack: &str) -> bool {
+        !matches!(self.find(haystack.as_bytes(), 0, &mut 0), Found::None)
+    }
+}
+
+/// Where [`Needle::find`] stopped.
+enum Found {
+    /// The haystack holds the needle.
+    Needle,
+    /// The search gave way to the engine here: the needle does not begin
+    /// before it.
+    GiveWay(usize),
+    /// The haystack does not hold the needle.
+    None,
+}
+
+/// How [`CompiledPattern::is_match`](super::CompiledPattern::is_match) answers
+/// for one pattern, read from the syntax the engine compiled.
+#[derive(Debug, Clone)]
+pub(super) enum Plan {
+    /// The engine alone: no window every match contains, and no position next
+    /// to an anchor.
+    Engine,
+    /// A window searched for before the engine runs.
+    Window(Prefilter),
+    /// Literal bytes, searched for without the engine.
+    Literal(Needle),
+    /// Positions checked at the anchored ends before the engine runs.
+    Anchored(Affix),
+}
+
+impl Plan {
+    /// The plan for `hir`, the syntax the engine compiled.
+    pub(super) fn build(hir: &Hir) -> Self {
+        if let Some(prefilter) = Prefilter::build(hir) {
+            Needle::of(&prefilter, hir).map_or(Self::Window(prefilter), Self::Literal)
+        } else if let Some(affix) = Affix::build(hir) {
+            Self::Anchored(affix)
+        } else {
+            Self::Engine
+        }
+    }
+
+    /// Whether `regex` matches anywhere in `haystack`: exactly
+    /// `regex.is_match(haystack)`.
+    #[inline]
+    pub(super) fn is_match(&self, regex: &regex::Regex, haystack: &str) -> bool {
+        match self {
+            Self::Engine => regex.is_match(haystack),
+            Self::Window(prefilter) => prefilter.is_match(regex, haystack),
+            Self::Literal(needle) => needle.is_match(|| regex, haystack),
+            Self::Anchored(affix) => affix.is_match(regex, haystack),
+        }
+    }
+
+    /// Whether the pattern may match in `haystack`; `false` proves it cannot.
+    pub(super) fn may_match(&self, haystack: &str) -> bool {
+        match self {
+            Self::Engine => true,
+            Self::Window(prefilter) => prefilter.may_match(haystack),
+            Self::Literal(needle) => needle.may_match(haystack),
+            Self::Anchored(affix) => affix.may_match(haystack),
+        }
+    }
+}
+
+/// Whether `a` and `b`, of equal length, hold the same bytes: in eight-byte
+/// words, the last one overlapping the one before it, rather than through the
+/// C library's `memcmp`, whose call and masked loads cost more than the compare
+/// on the few bytes a window or an anchored end holds.
+#[allow(
+    clippy::inline_always,
+    reason = "a verification of a few bytes: a call frame costs more than the compare"
+)]
+#[inline(always)]
+fn same_bytes(a: &[u8], b: &[u8]) -> bool {
+    debug_assert_eq!(a.len(), b.len());
+    let n = a.len().min(b.len());
+    if n < 8 {
+        return a.iter().zip(b).all(|(x, y)| x == y);
+    }
+    let word = |s: &[u8], at: usize| {
+        u64::from_ne_bytes(*s[at..].first_chunk::<8>().expect("eight bytes from here"))
+    };
+    (0..n / 8).all(|k| word(a, k * 8) == word(b, k * 8)) && word(a, n - 8) == word(b, n - 8)
 }
 
 /// The ASCII bytes `class` matches, when it matches ASCII only: one byte per
@@ -569,7 +1034,46 @@ fn offer(mut sets: Vec<ByteSet>, reach: Reach, after: Option<usize>, best: &mut 
 #[cfg(test)]
 mod tests {
     use super::super::{CompiledPattern, compile};
+    use super::{Affix, Plan, Prefilter};
     use purrdf_testkit::rng::SplitMix64;
+
+    /// The window a compiled pattern searches for, if its plan has one.
+    fn prefilter_of(pattern: &CompiledPattern) -> Option<Prefilter> {
+        match pattern.plan() {
+            Plan::Window(prefilter) => Some(prefilter.clone()),
+            Plan::Literal(_) => {
+                // The needle is the exact window of the same syntax.
+                let hir = regex_syntax::ParserBuilder::new()
+                    .build()
+                    .parse(pattern.as_regex().as_str())
+                    .expect("the engine's source parses");
+                Prefilter::build(&hir)
+            }
+            Plan::Engine | Plan::Anchored(_) => None,
+        }
+    }
+
+    /// The anchored-end checks of a compiled pattern, if its plan has them.
+    fn affix_of(pattern: &CompiledPattern) -> Option<&Affix> {
+        match pattern.plan() {
+            Plan::Anchored(affix) => Some(affix),
+            Plan::Engine | Plan::Window(_) | Plan::Literal(_) => None,
+        }
+    }
+
+    /// The plan read from a parse of the engine's own source, as `compile`
+    /// reads it for a pattern whose translation did not decide it.
+    fn parsed_plan(pattern: &CompiledPattern, flags: &str) -> String {
+        let quoted = flags.contains('q');
+        let hir = regex_syntax::ParserBuilder::new()
+            .case_insensitive(flags.contains('i'))
+            .dot_matches_new_line(!quoted && flags.contains('s'))
+            .multi_line(!quoted && flags.contains('m'))
+            .build()
+            .parse(pattern.as_regex().as_str())
+            .expect("the engine's source parses");
+        format!("{:?}", Plan::build(&hir))
+    }
 
     /// The answers the prefilter must not change: `is_match` and
     /// `replace_all` against the engine alone.
@@ -720,6 +1224,7 @@ mod tests {
         let mut rng = SplitMix64::new(0x0047_2600_5EED_0001);
         let (mut patterns, mut filtered, mut tailed, mut exact, mut class_runs, mut cases) =
             (0, 0, 0, 0, 0, 0);
+        let mut anchored = 0;
         let mut answers = [0_usize; 2];
         while patterns < 4000 {
             let source = random_pattern(&mut rng, 0);
@@ -728,7 +1233,15 @@ mod tests {
                 continue;
             };
             patterns += 1;
-            if let Some(prefilter) = &pattern.prefilter {
+            // The plan the translation pass decided without a parse is the
+            // plan the parsed syntax gives.
+            assert_eq!(
+                format!("{:?}", pattern.plan()),
+                parsed_plan(&pattern, flags),
+                "plan of /{source}/{flags}"
+            );
+            anchored += usize::from(affix_of(&pattern).is_some());
+            if let Some(prefilter) = prefilter_of(&pattern) {
                 filtered += 1;
                 tailed += usize::from(prefilter.tail.is_some());
                 exact += usize::from(prefilter.exact);
@@ -743,6 +1256,10 @@ mod tests {
             }
         }
         assert!(filtered > patterns / 4, "{filtered} of {patterns} filtered");
+        assert!(
+            anchored > patterns / 50,
+            "{anchored} of {patterns} anchored"
+        );
         assert!(tailed > filtered / 4, "{tailed} of {filtered} with a tail");
         assert!(exact > filtered / 20, "{exact} of {filtered} exact");
         assert!(
@@ -813,6 +1330,21 @@ mod tests {
         let unbounded = compile("ab.*z", "").expect("compiles");
         assert!(!unbounded.is_match(&dense));
         assert!(unbounded.is_match(&format!("{dense}z")));
+        // A literal needle among dense candidates that fail verification.
+        let literal = compile("abcab", "").expect("compiles");
+        assert!(matches!(literal.plan(), Plan::Literal(_)));
+        let near = "abzab".repeat(2000);
+        for (haystack, expected) in [
+            (near.clone(), false),
+            (format!("{near}abcab"), true),
+            (format!("{near}\u{e9}abcab"), true),
+            (format!("abcab{near}"), true),
+            ("abca".to_owned(), false),
+            (String::new(), false),
+        ] {
+            assert_agrees(&literal, "abcab", "", &haystack);
+            assert_eq!(literal.is_match(&haystack), expected);
+        }
     }
 
     /// Which patterns get a prefilter, where it searches, and what it knows
@@ -821,17 +1353,15 @@ mod tests {
     fn windows_are_the_required_single_byte_runs() {
         use super::{Back, ByteSet};
         let window = |source: &str, flags: &str| {
-            compile(source, flags)
-                .expect("compiles")
-                .prefilter
-                .map(|p| {
-                    (
-                        p.window.len(),
-                        p.reach.map(|reach| reach.to_vec()),
-                        p.tail,
-                        p.exact,
-                    )
-                })
+            let pattern = compile(source, flags).expect("compiles");
+            prefilter_of(&pattern).map(|p| {
+                (
+                    p.window.len(),
+                    p.reach.as_ref().map(|reach| reach.to_vec()),
+                    p.tail,
+                    p.exact,
+                )
+            })
         };
         let none: Option<Vec<Back>> = Some(Vec::new());
         assert_eq!(window("needle", ""), Some((6, none.clone(), Some(6), true)));
@@ -880,10 +1410,8 @@ mod tests {
             window("[0-9][a-z][0-9]", ""),
             Some((3, none.clone(), Some(3), true))
         );
-        let probes = compile("[0-9][a-z][0-9]", "")
-            .expect("compiles")
-            .prefilter
-            .map(|p| (p.lead, p.trail));
+        let control = compile("[0-9][a-z][0-9]", "").expect("compiles");
+        let probes = prefilter_of(&control).map(|p| (p.lead, p.trail));
         let digits = super::Probe::Runs([(b'0', b'9'); 2]);
         assert_eq!(probes, Some(((0, digits), Some((2, digits)))));
         // A position as wide as `[a-z]` is verified, never searched for.
@@ -897,6 +1425,128 @@ mod tests {
         // under `m` the `$` is a line end, and the window stays.
         assert_eq!(window("x$", ""), None);
         assert_eq!(window("x$", "m"), Some((1, none, None, false)));
+    }
+
+    /// The anchored-end checks against the engine alone: patterns anchored at
+    /// one end, the other or both, over haystacks short enough, and drawn from
+    /// an alphabet small enough, that they often match.
+    #[test]
+    fn anchored_answers_equal_the_engine_on_random_patterns() {
+        const FLAGS: &[&str] = &["", "", "", "i", "s", "m", "x", "is"];
+        const PIECES: &[&str] = &[
+            "a", "b", "n", "e", "E", "-", "@", ".", "k", "K", "\u{212a}", "s", "\u{17f}", "\u{e9}",
+            "\u{c9}", "\u{4e2d}", "0", "7", "\n", "ne", "ab",
+        ];
+        let mut rng = SplitMix64::new(0x0047_2600_5EED_0002);
+        let (mut patterns, mut anchored, mut decided, mut cases) = (0, 0, 0, 0);
+        // Patterns whose plan the translation pass decided without a parse.
+        let mut unparsed = 0;
+        let mut answers = [0_usize; 2];
+        while patterns < 3000 {
+            let body = random_pattern(&mut rng, 0);
+            let source = match rng.below_usize(3) {
+                0 => format!("^{body}"),
+                1 => format!("{body}$"),
+                _ => format!("^{body}$"),
+            };
+            let flags = pick(&mut rng, FLAGS);
+            let Ok(pattern) = compile(&source, flags) else {
+                continue;
+            };
+            patterns += 1;
+            unparsed += usize::from(pattern.plan.get().is_some());
+            assert_eq!(
+                format!("{:?}", pattern.plan()),
+                parsed_plan(&pattern, flags),
+                "plan of /{source}/{flags}"
+            );
+            if let Some(affix) = affix_of(&pattern) {
+                anchored += 1;
+                decided += usize::from(affix.rest != super::Rest::Engine);
+            }
+            for _ in 0..24 {
+                let haystack: String = (0..rng.below_usize(7))
+                    .map(|_| pick(&mut rng, PIECES))
+                    .collect();
+                answers[usize::from(assert_agrees(&pattern, &source, flags, &haystack))] += 1;
+                cases += 1;
+            }
+        }
+        assert!(anchored > patterns / 4, "{anchored} of {patterns} anchored");
+        assert!(decided > anchored / 8, "{decided} of {anchored} decided");
+        assert!(
+            unparsed > patterns / 10,
+            "{unparsed} of {patterns} planned without a parse"
+        );
+        assert!(
+            answers.iter().all(|&n| n > cases / 50),
+            "{answers:?} of {cases}"
+        );
+    }
+
+    /// Which anchored patterns get end checks, and the neighbours of every
+    /// rule they rely on.
+    #[test]
+    fn anchored_ends_are_checked_before_the_engine() {
+        use super::Rest;
+        let rest = |source: &str, flags: &str| {
+            let pattern = compile(source, flags).expect("compiles");
+            affix_of(&pattern).map(|affix| (affix.prefix.len(), affix.suffix.len(), affix.rest))
+        };
+        assert_eq!(
+            rest(r"^http://example\.org/", ""),
+            Some((19, 0, Rest::Matches))
+        );
+        assert_eq!(rest("[0-9]{3}$", ""), Some((0, 3, Rest::Matches)));
+        assert_eq!(rest("^[a-z]", ""), Some((1, 0, Rest::Matches)));
+        assert_eq!(rest("^ab$", ""), Some((2, 0, Rest::Whole)));
+        assert_eq!(rest("^ab.*cd$", ""), Some((2, 2, Rest::Engine)));
+        assert_eq!(rest("^[a-z]+$", ""), None);
+        // Under `m` the anchors are line ends: no end checks.
+        assert_eq!(rest("^ab", "m"), None);
+        assert_eq!(rest("ab$", "m").map(|r| r.2), None);
+        // `k` under `i` also matches U+212A KELVIN SIGN: the check stops
+        // before it rather than approximating it.
+        assert_eq!(rest("^ak", "i"), Some((1, 0, Rest::Engine)));
+        // An alternation is anchored per branch, not as a whole.
+        assert_eq!(rest("^ab|cd", ""), None);
+        let cases: &[(&str, &str, &[&str])] = &[
+            (
+                r"^http://example\.org/",
+                "",
+                &[
+                    "http://example.org/x",
+                    "http://example.org",
+                    "https://example.org/",
+                    "",
+                ],
+            ),
+            (
+                "[0-9]{3}$",
+                "",
+                &["a123", "12", "123\n", "\u{0663}23", "1234"],
+            ),
+            ("^[a-z]", "", &["a", "", "A", "\u{e9}", "-a"]),
+            ("^ab$", "", &["ab", "ab\n", "abc", "a", ""]),
+            ("^ab.*cd$", "", &["abcd", "abxcd", "ab\ncd", "abc", "abd"]),
+            ("^ab.*cd$", "s", &["ab\ncd"]),
+            ("^ak", "i", &["A\u{212a}", "AK", "ax", "\u{212a}"]),
+            (
+                "^\u{e9}t\u{e9}$",
+                "",
+                &["\u{e9}t\u{e9}", "ete", "\u{e9}t\u{e9}x"],
+            ),
+            ("^\u{e9}t\u{e9}$", "i", &["\u{c9}T\u{c9}", "\u{e9}t\u{e9}"]),
+            ("x\u{4e2d}$", "", &["ax\u{4e2d}", "x\u{4e2d}a", "\u{4e2d}"]),
+            ("^ab", "m", &["x\nab", "ab", "xab"]),
+            ("ab$", "m", &["ab\nx", "abx"]),
+        ];
+        for &(source, flags, haystacks) in cases {
+            let pattern = compile(source, flags).expect("an edge-case pattern compiles");
+            for haystack in haystacks {
+                assert_agrees(&pattern, source, flags, haystack);
+            }
+        }
     }
 
     /// The backward bound over an unbounded class run starts the engine at the

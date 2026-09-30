@@ -74,12 +74,17 @@ pub(crate) fn copy_match_portable(buf: &mut [u8], dst: usize, dist: usize, len: 
 /// byte at which they differ, or the shorter length when one is a prefix of
 /// the other.
 ///
-/// Word-parallel: both slices are walked in eight-byte words, and a word pair
-/// is compared as one `u64` XOR. A zero XOR is eight shared bytes; the first
-/// non-zero XOR ends the prefix, and because the words are read little-endian
-/// the first differing byte is the lowest non-zero byte of the XOR, so its
-/// offset in the word is the XOR's trailing-zero count over 8. The bytes after
-/// the last whole word pair are compared one at a time.
+/// Word-parallel: both slices are walked in sixteen-byte words, and a word
+/// pair is compared as one `u128` XOR. A zero XOR is sixteen shared bytes; the
+/// first non-zero XOR ends the prefix, and because the words are read
+/// little-endian the first differing byte is the lowest non-zero byte of the
+/// XOR, so its offset in the word is the XOR's trailing-zero count over 8. The
+/// bytes after the last whole word pair are one more word pair ending at the
+/// shorter length, overlapping the one before it; a key shorter than sixteen
+/// bytes is two overlapping eight-byte words, and only one shorter than eight
+/// is compared one byte at a time. Sixteen-byte words were measured against
+/// eight on the canonical order of 40-byte IRIs, where the comparison's loop
+/// overhead, not its loads, was the difference.
 ///
 /// This is the workspace's one first-mismatch index. It is `#[inline]` with no
 /// dispatch, so a short key (a front-coded dictionary record, a few dozen
@@ -91,20 +96,44 @@ pub(crate) fn copy_match_portable(buf: &mut [u8], dst: usize, dist: usize, len: 
 pub fn common_prefix_len(a: &[u8], b: &[u8]) -> usize {
     let len = a.len().min(b.len());
     let (a, b) = (&a[..len], &b[..len]);
-    let (a_words, a_tail) = a.as_chunks::<8>();
-    let (b_words, b_tail) = b.as_chunks::<8>();
+    let (a_words, _) = a.as_chunks::<16>();
+    let (b_words, _) = b.as_chunks::<16>();
     for (k, (x, y)) in a_words.iter().zip(b_words).enumerate() {
-        let diff = u64::from_le_bytes(*x) ^ u64::from_le_bytes(*y);
+        let diff = u128::from_le_bytes(*x) ^ u128::from_le_bytes(*y);
         if diff != 0 {
-            return k * 8 + (diff.trailing_zeros() / u8::BITS) as usize;
+            return k * 16 + (diff.trailing_zeros() / u8::BITS) as usize;
         }
     }
-    a_words.len() * 8
-        + a_tail
-            .iter()
-            .zip(b_tail)
-            .take_while(|(x, y)| x == y)
-            .count()
+    let done = a_words.len() * 16;
+    if done == len {
+        return len;
+    }
+    // The bytes after the last whole word are the end of one more word ending
+    // at `len`, overlapping the one before it: the bytes it shares with the
+    // words before it are equal, so its first difference is the first
+    // difference. A key shorter than sixteen bytes takes the eight-byte form.
+    if len >= 16 {
+        let last = len - 16;
+        let word = |s: &[u8]| u128::from_le_bytes(*s[last..].first_chunk().expect("sixteen bytes"));
+        let diff = word(a) ^ word(b);
+        return if diff == 0 {
+            len
+        } else {
+            last + (diff.trailing_zeros() / u8::BITS) as usize
+        };
+    }
+    let word =
+        |s: &[u8], at: usize| u64::from_le_bytes(*s[at..].first_chunk().expect("eight bytes"));
+    if len >= 8 {
+        for at in [0, len - 8] {
+            let diff = word(a, at) ^ word(b, at);
+            if diff != 0 {
+                return at + (diff.trailing_zeros() / u8::BITS) as usize;
+            }
+        }
+        return len;
+    }
+    a.iter().zip(b).take_while(|(x, y)| x == y).count()
 }
 
 /// Portable match length: [`common_prefix_len`] out of line, at the stable
@@ -125,5 +154,32 @@ pub(crate) fn hash_windows_portable(data: &[u8], start: usize, out: &mut [u32]) 
         let p = start + i;
         let w = u32::from_le_bytes(*data[p..].first_chunk().expect("four bytes"));
         *slot = hash4(w);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::common_prefix_len;
+
+    /// Every length through three sixteen-byte words, a single difference at
+    /// every position (and none), both argument orders and unequal lengths:
+    /// the sixteen-byte words, the overlapping last word, the two eight-byte
+    /// words of a short key and the byte walk of a shorter one all answer the
+    /// first differing index.
+    #[test]
+    fn every_path_answers_the_first_difference() {
+        for len in 0..=48_usize {
+            let base: Vec<u8> = (0..len).map(|i| (i * 7 % 251) as u8).collect();
+            for at in 0..=len {
+                let mut other = base.clone();
+                if at < len {
+                    other[at] ^= 0x5A;
+                }
+                assert_eq!(common_prefix_len(&base, &other), at, "len {len} at {at}");
+                assert_eq!(common_prefix_len(&other, &base), at, "len {len} at {at}");
+                let longer = [other.as_slice(), &[1, 2, 3]].concat();
+                assert_eq!(common_prefix_len(&base, &longer), at, "len {len} at {at}");
+            }
+        }
     }
 }

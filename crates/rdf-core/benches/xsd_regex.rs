@@ -20,6 +20,9 @@
 //!
 //! * `plain_ascii` — `^[a-z0-9]+$`, the common real-world case. This is the
 //!   row that must not have regressed: the translator should merely copy it.
+//! * `literal` — `needle`, a pattern that is literal text: its match plan is
+//!   the literal's, found without the engine, so the engine is not built until
+//!   a caller asks for it.
 //! * `unicode_category` — `^\p{L}+$`, a general-category escape passed
 //!   through to `regex-syntax` after an allowlist membership test.
 //! * `xml_name_escape` — `^\i\c*$`, the expansion-heavy construct: `\i`/`\c`
@@ -52,9 +55,11 @@
 //!   literal case-folded), and `[a-z]{25}` (no literal at all: the control,
 //!   and a pattern the filler never matches, so the engine walks every byte).
 //! * `short_*` — 4,096 IRIs of about 70 bytes, half under
-//!   `http://example.org/`: `^http://example\.org/` (start-anchored, which the
-//!   prefilter leaves to the engine), `example\.org` unanchored, and
-//!   `[0-9]{3}$` (the control).
+//!   `http://example.org/`: `^http://example\.org/` (start-anchored: its
+//!   literal prefix is compared with the IRI's first bytes and the engine never
+//!   runs), `example\.org` unanchored (a haystack shorter than one sixty-four-
+//!   byte block, where the search's per-call cost shows), and `[0-9]{3}$`
+//!   (end-anchored: three digit positions compared with the last bytes).
 //!
 //! Report-only, `cargo bench -p purrdf-core --bench xsd_regex` (the
 //! `make bench` lane) — excluded from `make check`. No timing is asserted.
@@ -67,6 +72,7 @@ use purrdf_testkit::text::lowercase_filler as filler;
 /// `(case name, pattern source, flag string)` for every measured shape.
 const CASES: &[(&str, &str, &str)] = &[
     ("plain_ascii", r"^[a-z0-9]+$", ""),
+    ("literal", "needle", ""),
     ("unicode_category", r"^\p{L}+$", ""),
     ("xml_name_escape", r"^\i\c*$", ""),
     ("xml_name_escape_i", r"^\i\c*$", "i"),

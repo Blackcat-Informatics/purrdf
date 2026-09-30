@@ -62,6 +62,10 @@ purrdf-xsd = { workspace = true }
 # codec (`yaml`) the canonical LinkML 1.11 reader and writer use.
 # Zero-dependency lexical layer.
 purrdf-lex = { workspace = true }
+# The workspace's one first-mismatch index (`common_prefix_len`): the canonical
+# order of two IRIs is decided where their bytes first differ. Already in the
+# graph through `purrdf-core`.
+purrdf-deflate = { workspace = true }
 # Validate caller-supplied schema and prefix IRIs with the workspace's
 # zero-dependency RFC 3987 implementation.
 purrdf-iri = { workspace = true }

@@ -779,6 +779,7 @@ dependencies = [
  "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-datalog",
+ "purrdf-deflate",
  "purrdf-gts",
  "purrdf-hash",
  "purrdf-iri",

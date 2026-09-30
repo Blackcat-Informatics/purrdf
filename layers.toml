@@ -291,6 +291,7 @@ name = "purrdf-shapes"
 deps = [
     "purrdf-core",
     "purrdf-datalog",
+    "purrdf-deflate",
     "purrdf-hash",
     "purrdf-iri",
     "purrdf-lex",

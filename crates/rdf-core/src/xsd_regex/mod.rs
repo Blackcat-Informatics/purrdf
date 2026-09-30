@@ -136,6 +136,8 @@ pub use error::{ReplacementError, XsdRegexError};
 
 use std::borrow::Cow;
 use std::fmt;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Maximum size, in bytes, of a pattern source string accepted by [`compile`].
 ///
@@ -215,9 +217,56 @@ pub const MAX_FOLDED_CLASS_ESCAPES: usize = 32;
 /// with the `q` flag and XPath replacement syntax dropped.
 #[derive(Debug, Clone)]
 pub struct CompiledPattern {
-    regex: regex::Regex,
+    /// The engine: built by [`compile`], except for a pattern that is literal
+    /// text, whose matches the plan finds without it; that one is built from
+    /// `deferred` the first time a caller needs it.
+    regex: OnceLock<regex::Regex>,
+    /// The engine source of a pattern whose engine was not built at compile.
+    deferred: Option<Box<str>>,
     is_literal: bool,
-    prefilter: Option<prefilter::Prefilter>,
+    /// How [`is_match`](Self::is_match) answers: decided at [`compile`] when
+    /// the translation pass already knows it (a literal, or a pattern with no
+    /// plan beyond the engine), and otherwise read from the engine's source
+    /// when a match first needs it, so compiling never parses the source a
+    /// second time.
+    plan: OnceLock<prefilter::Plan>,
+    /// Whether `is_match` has answered once without reading the plan.
+    first_use: FirstUse,
+    /// The engine's modes, for reading the plan from [`regex::Regex::as_str`].
+    modes: Modes,
+}
+
+/// The haystack length from which a first match reads the plan rather than
+/// asking the engine alone: reading it (a parse of the engine's source) costs
+/// about what the engine spends walking this many bytes without a window.
+const PLAN_AFTER_BYTES: usize = 1024;
+
+/// Set by the first [`CompiledPattern::is_match`] that answered without the
+/// plan, so every later one reads it: a pattern matched once against a short
+/// haystack (a SPARQL `REGEX` whose pattern differs per row) never pays the
+/// parse, and one matched again pays it once.
+#[derive(Debug, Default)]
+struct FirstUse(AtomicBool);
+
+impl FirstUse {
+    /// `true` exactly once: for the first caller to ask.
+    fn claim(&self) -> bool {
+        !self.0.swap(true, Ordering::Relaxed)
+    }
+}
+
+impl Clone for FirstUse {
+    fn clone(&self) -> Self {
+        Self(AtomicBool::new(self.0.load(Ordering::Relaxed)))
+    }
+}
+
+/// The engine modes a pattern's source was compiled under.
+#[derive(Debug, Clone, Copy)]
+struct Modes {
+    case_insensitive: bool,
+    dot_all: bool,
+    multi_line: bool,
 }
 
 impl CompiledPattern {
@@ -231,7 +280,13 @@ impl CompiledPattern {
     /// which runs the required-literal prefilter in front of the engine.
     #[must_use]
     pub fn as_regex(&self) -> &regex::Regex {
-        &self.regex
+        self.regex.get_or_init(|| {
+            // Only a literal of at most `MAX_SOURCE_BYTES` is deferred, and
+            // the longest one is pinned to build by
+            // `the_longest_deferred_literal_builds`.
+            engine(self.deferred.as_deref().unwrap_or_default(), self.modes)
+                .expect("a deferred literal engine builds")
+        })
     }
 
     /// `fn:matches` semantics: whether this pattern matches anywhere in
@@ -245,7 +300,14 @@ impl CompiledPattern {
     /// under `i`), the haystack is searched for that window with
     /// `purrdf_lex::scan`'s packed compares first. A haystack without one is
     /// refused without entering the engine, and the engine is started where
-    /// the first window's match could begin rather than at offset zero.
+    /// the first window's match could begin rather than at offset zero. A
+    /// pattern that is literal text is answered by that search alone, and one
+    /// anchored at an end of the haystack (`^http://example\.org/`,
+    /// `[0-9]{3}$`, without `m`) has the positions next to its anchor compared
+    /// with the haystack's first or last bytes, which answer it outright when
+    /// they are the whole pattern. The first match against a haystack shorter
+    /// than a kilobyte is the engine's alone, so a pattern used once pays for
+    /// no more than the engine does.
     ///
     /// # Examples
     ///
@@ -257,11 +319,55 @@ impl CompiledPattern {
     /// assert!(!pattern.is_match("no date here, only 2026"));
     /// ```
     #[must_use]
+    #[inline]
     pub fn is_match(&self, haystack: &str) -> bool {
-        match &self.prefilter {
-            Some(prefilter) => prefilter.is_match(&self.regex, haystack),
-            None => self.regex.is_match(haystack),
+        // A pattern whose plan is the engine calls it from here, as a caller
+        // holding the `regex::Regex` would: routed through the plan's own
+        // dispatch, the engine's search was measured 16% slower on 70-byte
+        // IRIs (`^[a-z]+://`), its inner search loop no longer inlined.
+        match self.plan.get() {
+            Some(prefilter::Plan::Engine) => self.as_regex().is_match(haystack),
+            Some(plan) => self.is_match_by(plan, haystack),
+            None => self.is_match_unplanned(haystack),
         }
+    }
+
+    /// [`is_match`](Self::is_match) before the plan is read: a first match
+    /// against a short haystack is the engine's alone, and any other reads
+    /// the plan.
+    #[inline(never)]
+    fn is_match_unplanned(&self, haystack: &str) -> bool {
+        if haystack.len() < PLAN_AFTER_BYTES && self.first_use.claim() {
+            return self.as_regex().is_match(haystack);
+        }
+        self.is_match_by(self.plan(), haystack)
+    }
+
+    /// [`is_match`](Self::is_match) by `plan`.
+    fn is_match_by(&self, plan: &prefilter::Plan, haystack: &str) -> bool {
+        match plan {
+            prefilter::Plan::Literal(needle) => needle.is_match(|| self.as_regex(), haystack),
+            plan => plan.is_match(self.as_regex(), haystack),
+        }
+    }
+
+    /// The match plan, read from the engine's source the first time it is
+    /// asked for when [`compile`] did not decide it.
+    fn plan(&self) -> &prefilter::Plan {
+        self.plan.get_or_init(|| {
+            // The prefilter reads the syntax the engine compiled, parsed with
+            // the same modes, so its window is the engine's language (case
+            // folding included) rather than a second reading of the XSD
+            // source. The engine accepted the source, so the parse cannot
+            // fail; if it did, the pattern simply runs on the engine alone.
+            regex_syntax::ParserBuilder::new()
+                .case_insensitive(self.modes.case_insensitive)
+                .dot_matches_new_line(self.modes.dot_all)
+                .multi_line(self.modes.multi_line)
+                .build()
+                .parse(self.as_regex().as_str())
+                .map_or(prefilter::Plan::Engine, |hir| prefilter::Plan::build(&hir))
+        })
     }
 
     /// `fn:replace` semantics: replace every match of this pattern in
@@ -293,10 +399,7 @@ impl CompiledPattern {
         // which is what the engine would return, without entering it. The
         // non-`q` replacement is still parsed first, so a malformed one is
         // [err:FORX0004] whether or not the haystack matches.
-        let unmatched = self
-            .prefilter
-            .as_ref()
-            .is_some_and(|prefilter| !prefilter.may_match(haystack));
+        let unmatched = !self.plan().may_match(haystack);
         if self.is_literal {
             if unmatched {
                 return Ok(Cow::Borrowed(haystack));
@@ -305,18 +408,20 @@ impl CompiledPattern {
             // `q`, `$` and `\` in the replacement are ordinary characters,
             // exactly `NoExpand`'s contract, and [err:FORX0004] cannot apply.
             return Ok(self
-                .regex
+                .as_regex()
                 .replace_all(haystack, regex::NoExpand(replacement)));
         }
         // `captures_len` counts group 0 (the whole match); F&O's `S` is the
         // explicit capture-group count, so subtract it once, here.
-        let template =
-            replace::Template::parse(replacement, self.regex.captures_len().saturating_sub(1))?;
+        let template = replace::Template::parse(
+            replacement,
+            self.as_regex().captures_len().saturating_sub(1),
+        )?;
         if unmatched {
             return Ok(Cow::Borrowed(haystack));
         }
         Ok(self
-            .regex
+            .as_regex()
             .replace_all(haystack, |caps: &regex::Captures<'_>| template.expand(caps)))
     }
 }
@@ -418,29 +523,53 @@ impl fmt::Display for Ecma262Divergence {
 /// translation or the underlying `regex` compile to fail.
 pub fn compile(pattern: &str, flags: &str) -> Result<CompiledPattern, XsdRegexError> {
     let prepared = prepare(pattern, flags)?;
-    let regex = regex::RegexBuilder::new(&prepared.source)
-        .case_insensitive(prepared.case_insensitive)
-        .dot_matches_new_line(prepared.dot_all)
-        .multi_line(prepared.multi_line)
-        .build()?;
-    // The prefilter reads the syntax the engine just compiled, parsed with the
-    // same modes, so its window is the engine's language (case folding
-    // included) rather than a second reading of the source. The engine
-    // accepted the source, so the parse cannot fail; if it did, the pattern
-    // simply runs without a prefilter.
-    let prefilter = regex_syntax::ParserBuilder::new()
-        .case_insensitive(prepared.case_insensitive)
-        .dot_matches_new_line(prepared.dot_all)
-        .multi_line(prepared.multi_line)
-        .build()
-        .parse(&prepared.source)
-        .ok()
-        .and_then(|hir| prefilter::Prefilter::build(&hir));
+    let modes = Modes {
+        case_insensitive: prepared.case_insensitive,
+        dot_all: prepared.dot_all,
+        multi_line: prepared.multi_line,
+    };
+    let is_literal = prepared.mode == PatternMode::Literal;
+    // The translation pass decides the plan of a literal (whose syntax is the
+    // literal itself, built without a parse) and of a pattern with no plan
+    // beyond the engine; any other is read from the engine's source when a
+    // match first needs it. A literal's engine is built only when a caller
+    // needs it: its matches are the literal's occurrences, which the plan
+    // finds, and building the engine was measured at ten times the rest of
+    // compiling `needle` (3.1 us of 3.4 us).
+    let (regex, deferred, plan) = match prepared.shape {
+        emit::Shape::Literal(text) => (
+            OnceLock::new(),
+            Some(prepared.source.into_boxed_str()),
+            OnceLock::from(prefilter::Plan::build(&regex_syntax::hir::Hir::literal(
+                text.into_bytes(),
+            ))),
+        ),
+        shape => (
+            OnceLock::from(engine(&prepared.source, modes)?),
+            None,
+            match shape {
+                emit::Shape::Engine => OnceLock::from(prefilter::Plan::Engine),
+                _ => OnceLock::new(),
+            },
+        ),
+    };
     Ok(CompiledPattern {
         regex,
-        is_literal: prepared.mode == PatternMode::Literal,
-        prefilter,
+        deferred,
+        is_literal,
+        plan,
+        first_use: FirstUse::default(),
+        modes,
     })
+}
+
+/// Build the engine for a translated `source` under `modes`.
+fn engine(source: &str, modes: Modes) -> Result<regex::Regex, regex::Error> {
+    regex::RegexBuilder::new(source)
+        .case_insensitive(modes.case_insensitive)
+        .dot_matches_new_line(modes.dot_all)
+        .multi_line(modes.multi_line)
+        .build()
 }
 
 struct PreparedPattern {
@@ -449,6 +578,8 @@ struct PreparedPattern {
     dot_all: bool,
     multi_line: bool,
     mode: PatternMode,
+    /// What the translation saw of the pattern, for its match plan.
+    shape: emit::Shape,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -535,6 +666,13 @@ fn prepare_with(
             dot_all: false,
             multi_line: false,
             mode: PatternMode::Literal,
+            // Under `i` the pattern's text is not its language: the plan is
+            // read from the case-folded syntax.
+            shape: if case_insensitive {
+                emit::Shape::Other
+            } else {
+                emit::Shape::Literal(pattern.to_owned())
+            },
         });
     }
 
@@ -552,7 +690,10 @@ fn prepare_with(
         (true, false) => emit::CaseMode::EngineFold,
         (true, true) => emit::CaseMode::XPathVariants,
     };
-    let translated = emit::translate_with(&source, dot_all, case)?;
+    let emit::Translated {
+        source: translated,
+        shape,
+    } = emit::translate_with(&source, dot_all, multi_line, case)?;
     if translated.len() > MAX_TRANSLATED_BYTES {
         return Err(XsdRegexError::TooLarge {
             bytes: translated.len(),
@@ -560,6 +701,7 @@ fn prepare_with(
         });
     }
     Ok(PreparedPattern {
+        shape,
         source: translated,
         case_insensitive: case_insensitive && !xpath_case,
         dot_all,
@@ -589,6 +731,93 @@ pub fn ecma_262_divergences(pattern: &str, flags: &str) -> Vec<Ecma262Divergence
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The translation pass decides the plan of the common shapes, so neither
+    /// compiling nor the first match parses the source a second time; the rest
+    /// are read from the parse on first use.
+    #[test]
+    fn common_shapes_are_planned_without_a_parse() {
+        let decided = |source: &str, flags: &str| {
+            compile(source, flags)
+                .expect("compiles")
+                .plan
+                .get()
+                .map(|plan| format!("{plan:?}"))
+        };
+        let engine = Some(format!("{:?}", prefilter::Plan::Engine));
+        for (source, flags) in [
+            (r"^[a-z0-9]+$", ""),
+            (r"^\i\c*$", ""),
+            (r"^\i\c*$", "i"),
+            (r"^\p{L}+$", ""),
+            (r"^[a-z-[aeiou]]+$", ""),
+            (r"\w+\d", ""),
+            (r"^(ab)*$", ""),
+            (r"^\d{4}", ""),
+        ] {
+            assert_eq!(decided(source, flags), engine, "/{source}/{flags}");
+        }
+        for (source, flags) in [("needle", ""), ("a b", "x"), ("a.c", "q")] {
+            assert!(
+                decided(source, flags).is_some_and(|plan| plan.starts_with("Literal")),
+                "/{source}/{flags}"
+            );
+        }
+        // Read from the parse: a position next to an anchor, a window, an
+        // anchor that `m` makes a line end, and a top-level alternation.
+        for (source, flags) in [
+            (r"^http://example\.org/", ""),
+            (r"[0-9]{3}$", ""),
+            (r"[a-z]+@example\.org", ""),
+            (r"^[a-z0-9]+$", "m"),
+            (r"^a+|b$", ""),
+        ] {
+            assert_eq!(decided(source, flags), None, "/{source}/{flags}");
+        }
+    }
+
+    /// A literal pattern's engine is built on first use, never at compile, so
+    /// compile's answer for it cannot depend on the engine: every literal up
+    /// to [`MAX_SOURCE_BYTES`] must build. The longest ones of each kind (one-
+    /// and four-byte characters, escapes, the `q` flag's escaped source) do,
+    /// and the deferred engine is the one compile would have built.
+    #[test]
+    fn the_longest_deferred_literal_builds() {
+        let wide = "\u{10000}".repeat(MAX_SOURCE_BYTES / 4);
+        let escaped = "\\.".repeat(MAX_SOURCE_BYTES / 2);
+        let dots = ".".repeat(MAX_SOURCE_BYTES);
+        let ascii = "a".repeat(MAX_SOURCE_BYTES);
+        for (source, flags) in [
+            (ascii.as_str(), ""),
+            (wide.as_str(), ""),
+            (escaped.as_str(), ""),
+            (dots.as_str(), "q"),
+            (ascii.as_str(), "smx"),
+        ] {
+            assert_eq!(source.len(), MAX_SOURCE_BYTES);
+            let pattern = compile(source, flags).expect("a maximal literal compiles");
+            assert!(
+                pattern.deferred.is_some() && pattern.regex.get().is_none(),
+                "a literal's engine is deferred ({flags:?})"
+            );
+            let prepared = prepare(source, flags).expect("prepares");
+            let eager = engine(&prepared.source, pattern.modes).expect("the engine builds");
+            assert_eq!(pattern.as_regex().as_str(), eager.as_str());
+            let text = if flags == "q" {
+                dots.clone()
+            } else {
+                source.replace('\\', "")
+            };
+            // The literal's plan answers without the engine; the engine alone
+            // takes seconds on a literal this long (its automaton is as long
+            // as the literal), which is why the plan never hands it one.
+            assert!(pattern.is_match(&text));
+            assert!(!pattern.is_match(&text[..text.floor_char_boundary(text.len() - 1)]));
+        }
+        // Any other pattern builds its engine at compile, as before.
+        let pattern = compile("a+", "").expect("compiles");
+        assert!(pattern.deferred.is_none() && pattern.regex.get().is_some());
+    }
 
     #[test]
     fn unsupported_flag_character_is_named() {

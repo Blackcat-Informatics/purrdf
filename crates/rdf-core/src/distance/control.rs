@@ -3,7 +3,8 @@
 
 //! The one place the thread's floating-point control register is read and written.
 //!
-//! The probe in [`super::env`] reads the register to name it in a refusal; the float
+//! The float-environment probe reads the register to name it in a refusal (as
+//! [`crate::distance::FloatEnvironmentEvidence::Register`]); the float
 //! environment tests write it to prove the refusal. Both go through these functions, so
 //! the inline assembly, its `options(...)` and its safety argument exist once. The
 //! register is per-thread state; a caller that changes it restores the value it read.

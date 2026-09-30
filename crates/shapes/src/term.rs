@@ -687,30 +687,71 @@ impl Iterator for CanonicalBytes<'_> {
 
 /// Order two IRIs by their `<iri>` renderings, from the IRI bytes alone.
 ///
-/// `None` means the answer is not decidable from the raw bytes: either IRI holds
-/// a byte that can begin a scalar [`iri_escape`] rewrites, which a valid IRI
-/// never does but an unchecked hand-built term can. The caller falls back to
-/// streaming both renderings, preserving exact behaviour there. Otherwise the
-/// renderings are the raw bytes between `<` and `>`, and `>` sorts against a
-/// longer IRI's next byte, which is never `>` itself (it is escaped).
+/// Raw bytes render verbatim except at a scalar [`iri_escape`] rewrites, which
+/// a valid IRI never holds but an unchecked hand-built term can. Identical
+/// bytes render identically, so the two renderings agree through the IRIs'
+/// common prefix and are decided at its end: at the first differing byte, or
+/// at a longer IRI's next byte against the shorter one's closing `>`. Only the
+/// scalars there can change the answer, so only they are checked: when either
+/// holds a byte that can begin an escaped scalar the answer is `None`, and the
+/// caller streams both renderings, preserving exact behaviour there. A longer
+/// IRI's next byte is never `>` itself (it is escaped).
+///
+/// Checking the whole of both IRIs instead was measured to cost `sh:pattern`
+/// validation of 1,024 focus nodes a fifth of its time, spent in the focus-node
+/// sort's comparisons.
 #[inline]
 fn cmp_rendered_iri(left: &[u8], right: &[u8]) -> Option<Ordering> {
-    if find_first_candidate(left).is_some() || find_first_candidate(right).is_some() {
+    let shared = purrdf_deflate::common_prefix_len(left, right);
+    let (Some(&l), Some(&r)) = (left.get(shared), right.get(shared)) else {
+        // One IRI is a prefix of the other, which ends at a scalar boundary of
+        // the longer one: the longer one's next scalar sorts against `>`.
+        let order = match (left.len() > shared, right.len() > shared) {
+            (false, false) => return Some(Ordering::Equal),
+            (false, true) => next_rendered_byte(&right[shared..]).map(|b| b'>'.cmp(&b)),
+            (true, _) => next_rendered_byte(&left[shared..]).map(|b| b.cmp(&b'>')),
+        };
+        return order.filter(|&order| order != Ordering::Equal);
+    };
+    if !is_utf8_continuation(l) {
+        // Both differing bytes begin a scalar (the scalars before them are
+        // shared and complete), which rides verbatim unless it is escaped.
+        if iri_escape::is_candidate(l) || iri_escape::is_candidate(r) {
+            return None;
+        }
+        return Some(l.cmp(&r));
+    }
+    // The scalar holding the first difference begins at the last non-
+    // continuation byte before it, shared by both IRIs.
+    let scalar = left[..shared]
+        .iter()
+        .rposition(|&b| !is_utf8_continuation(b))
+        .unwrap_or(0);
+    if left[scalar..=shared]
+        .iter()
+        .chain(&right[scalar..=shared])
+        .any(|&b| iri_escape::is_candidate(b))
+    {
         return None;
     }
-    let shared = left.len().min(right.len());
-    match left[..shared].cmp(&right[..shared]) {
-        Ordering::Equal if left.len() == right.len() => Some(Ordering::Equal),
-        Ordering::Equal if left.len() < right.len() => match b'>'.cmp(&right[shared]) {
-            Ordering::Equal => None,
-            order => Some(order),
-        },
-        Ordering::Equal => match left[shared].cmp(&b'>') {
-            Ordering::Equal => None,
-            order => Some(order),
-        },
-        order => Some(order),
-    }
+    Some(l.cmp(&r))
+}
+
+/// The first byte `rest`'s rendering begins with, when its first scalar rides
+/// verbatim; `None` when that scalar can be escaped. `rest` begins at a scalar
+/// boundary.
+#[inline]
+fn next_rendered_byte(rest: &[u8]) -> Option<u8> {
+    rest.first()
+        .copied()
+        .filter(|&first| !iri_escape::is_candidate(first))
+}
+
+/// Whether `b` continues a UTF-8 sequence (`10xxxxxx`) rather than beginning a
+/// scalar.
+#[inline]
+const fn is_utf8_continuation(b: u8) -> bool {
+    b & 0xC0 == 0x80
 }
 
 /// The rendering's LEADING byte, which alone settles every cross-kind order.
@@ -810,8 +851,11 @@ pub(crate) fn canonical_cmp_ids(dataset: &impl ShaclRead, left: TermId, right: T
     if left == right {
         return Ordering::Equal;
     }
+    // The two ids are resolved through the dataset's own type, which inlines
+    // into this comparator (the focus-node sort's, called O(n log n) times);
+    // only the rare streamed fallback goes through the `dyn` resolver.
+    let (left_ref, right_ref) = (dataset.resolve_id(left), dataset.resolve_id(right));
     let resolver: &dyn TermResolve = dataset;
-    let (left_ref, right_ref) = (resolver.resolve_id(left), resolver.resolve_id(right));
     match (&left_ref, &right_ref) {
         (TermRef::Blank { .. }, TermRef::Blank { .. }) => {
             // Both render as `_:` plus the qualified label, and the shared prefix
@@ -1242,6 +1286,57 @@ mod tests {
 
     fn nn(iri: &str) -> Term {
         Term::NamedNode(NamedNode::new_unchecked(iri))
+    }
+
+    /// The IRI order read from the raw bytes at their first difference agrees
+    /// with the order of the full renderings, over IRIs that share long
+    /// prefixes and hold scalars the rendering escapes (`' '`, `>`, U+0085)
+    /// or keeps (U+00A0, `é`) at, before and after the difference.
+    #[test]
+    fn iri_order_from_the_first_difference_is_the_rendered_order() {
+        const PIECES: &[&str] = &[
+            "a",
+            "b",
+            "/",
+            "-",
+            " ",
+            ">",
+            "<",
+            "\u{85}",
+            "\u{a0}",
+            "\u{e9}",
+            "\u{ea}",
+            "\u{1f408}",
+            "http://example.org/",
+        ];
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(0x0047_2600_1A1B_0001);
+        let iri = |rng: &mut purrdf_testkit::rng::SplitMix64| -> String {
+            (0..rng.below_usize(6))
+                .map(|_| PIECES[rng.below_usize(PIECES.len())])
+                .collect()
+        };
+        let mut undecided = 0;
+        for _ in 0..20_000 {
+            let stem = iri(&mut rng);
+            let (left, right) = (
+                format!("{stem}{}", iri(&mut rng)),
+                format!("{stem}{}", iri(&mut rng)),
+            );
+            let rendered = nn(&left).to_string().cmp(&nn(&right).to_string());
+            assert_eq!(
+                canonical_cmp(&nn(&left), &nn(&right)),
+                rendered,
+                "{left:?} against {right:?}"
+            );
+            match cmp_rendered_iri(left.as_bytes(), right.as_bytes()) {
+                Some(order) => assert_eq!(order, rendered, "{left:?} against {right:?}"),
+                None => undecided += 1,
+            }
+        }
+        assert!(
+            (1_000..19_000).contains(&undecided),
+            "{undecided} of 20000 left to the rendering"
+        );
     }
 
     #[test]
