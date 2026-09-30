@@ -35,10 +35,20 @@
 //! literal and folded scalars, explicit (`?`) keys, and anchors and aliases
 //! (expanded, and counted against [`Limits::max_nodes`]; refused when
 //! [`Limits::aliases`] is off, as YAML-LD's JSON profile requires). What JSON
-//! cannot hold is refused with a typed [`Error`] at a byte offset: a tag, a key
-//! that is not a string, a repeated key (YAML 1.2 §3.2.1.1 requires mapping keys
-//! to be unique), `.inf` and `.nan`, and a second document. Plain scalars
-//! resolve by the core schema as `serde_yaml` applies it, except that a number
+//! cannot hold is refused with a typed [`Error`] at a byte offset: a tag other
+//! than the core schema's, a key that is not a string (a number, boolean or null
+//! key is accepted, as its source text, only under [`Limits::scalar_keys`]; a
+//! collection key never is), a repeated key (YAML 1.2 §3.2.1.1 requires mapping
+//! keys to be unique), `.inf` and `.nan`, and a second document. A stream with
+//! no document reads as `null`.
+//!
+//! The reader is graded against the official yaml-test-suite
+//! (`crates/lex/tests/yaml_test_suite.rs`, over the vendored
+//! `vectors/yaml-test-suite`): every valid case inside the subset reads as the
+//! suite's JSON, every invalid case is refused, and every valid case outside it
+//! is refused by one of the kinds above, never read wrongly.
+//!
+//! Plain scalars resolve by the core schema as `serde_yaml` applies it, except that a number
 //! keeps its lexeme where the lexeme is a JSON number (`1.50` stays `1.50`) and
 //! is otherwise respelt as the JSON number it denotes (`0x1F` is `31`, `+.5` is
 //! `0.5`), and that a float spelling beyond the binary64 range is a number, not

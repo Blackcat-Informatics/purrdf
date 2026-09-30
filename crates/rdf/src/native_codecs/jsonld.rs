@@ -1995,7 +1995,12 @@ pub fn jsonld_to_statement_metadata_nquads(
 /// statement-metadata downcast. The document is read by [`purrdf_lex::yaml`] under
 /// YAML-LD's JSON profile: anchors and aliases, tags beyond the core schema, keys that
 /// are not strings, repeated keys, `.inf`/`.nan` and a second document are refused.
-/// Mapping keys keep their document order and numbers their lexemes.
+/// The key refusal is the specification's: "every mapping key MUST be a YAML scalar
+/// whose resolved node tag in the representation graph is `tag:yaml.org,2002:str`.
+/// Otherwise, a mapping-key-error MUST be detected, and processing aborted" (YAML-LD,
+/// "Mapping Key Types"), so `1: a`, `true: a` and `null: a` are refused while `'1': a`
+/// and `!!str 1: a` are read. Mapping keys keep their document order and numbers their
+/// lexemes.
 pub fn yamlld_to_jsonld(yaml_bytes: &[u8]) -> Result<String, RdfDiagnostic> {
     let text = std::str::from_utf8(yaml_bytes)
         .map_err(|e| decode(format!("YAML-LD-star bytes are not UTF-8: {e}")))?;

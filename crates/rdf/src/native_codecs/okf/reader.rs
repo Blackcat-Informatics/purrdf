@@ -313,13 +313,16 @@ fn parse_frontmatter(path: &str, markdown: &str) -> Result<Option<ParsedFrontmat
             }
             // The frontmatter is bounded while it is read: collections open at once,
             // and nodes with every alias expansion counted. A repeated key, a key that
-            // is not a string, a tag and `.inf`/`.nan` are refused.
+            // is a collection, a tag and `.inf`/`.nan` are refused. A number, boolean
+            // or null key is read as its source text (`1: a` is the key `1`), and
+            // uniqueness is checked on that text (`1: a` with `"1": b` repeats a key).
             let value = yaml::read_with(
                 yaml,
                 yaml::Limits {
                     max_depth: MAX_OKF_YAML_DEPTH,
                     max_nodes: MAX_OKF_YAML_NODES as u64,
                     aliases: true,
+                    scalar_keys: true,
                 },
             )
             .map_err(|error| document_error(path, format!("invalid YAML frontmatter: {error}")))?;
@@ -898,8 +901,23 @@ mod tests {
                 "---\ntype: Concept\nproducer:\n  \"1\": one\n---\nbody\n",
                 None,
             ),
+            ("---\ntype: Concept\nproducer:\n  1: one\n---\nbody\n", None),
             (
-                "---\ntype: Concept\nproducer:\n  1: one\n---\nbody\n",
+                "---\ntype: Concept\nproducer:\n  true: yes\n---\nbody\n",
+                None,
+            ),
+            ("---\ntype: Concept\nproducer:\n  1.5: x\n---\nbody\n", None),
+            (
+                "---\ntype: Concept\nproducer:\n  null: x\n---\nbody\n",
+                None,
+            ),
+            ("---\ntype: Concept\nproducer:\n  ~: x\n---\nbody\n", None),
+            (
+                "---\ntype: Concept\nproducer:\n  1: one\n  \"1\": two\n---\nbody\n",
+                Some("repeats a key"),
+            ),
+            (
+                "---\ntype: Concept\nproducer:\n  [x]: one\n---\nbody\n",
                 Some("must be a string"),
             ),
         ] {

@@ -25,14 +25,23 @@ pub struct Limits {
     /// Whether anchors and aliases are accepted. YAML-LD's JSON profile
     /// refuses them.
     pub aliases: bool,
+    /// Whether a mapping key written as a number, a boolean or `null` (or left
+    /// empty) is accepted, keeping its source text as the key (`1.50: a` is the
+    /// key `1.50`, `True: a` the key `True`). JSON object names are strings, so
+    /// a reader that feeds JSON refuses them by default; YAML-LD requires the
+    /// refusal (`mapping-key-error`, "Mapping Key Types"). A collection key is
+    /// refused either way.
+    pub scalar_keys: bool,
 }
 
 impl Limits {
-    /// 128 open collections, 1,048,576 nodes, aliases accepted.
+    /// 128 open collections, 1,048,576 nodes, aliases accepted, scalar keys
+    /// refused.
     pub const DEFAULT: Self = Self {
         max_depth: 128,
         max_nodes: 1 << 20,
         aliases: true,
+        scalar_keys: false,
     };
 }
 
@@ -58,7 +67,7 @@ pub enum ErrorKind {
     /// An alias names no anchor defined before it.
     UnknownAlias,
     /// A mapping key that is not a string: a number, a boolean, `null`, an
-    /// empty key, or a collection.
+    /// empty key (all accepted under [`Limits::scalar_keys`]), or a collection.
     NonStringKey,
     /// A mapping repeats a key (§3.2.1.1).
     DuplicateKey,
@@ -250,6 +259,9 @@ struct Parser<'a> {
     anchors: HashMap<String, (Value, u64), FixedState>,
     stack: Vec<Frame>,
     pending: Option<Properties>,
+    /// Properties that start a later line than `pending`: on an implicit key's
+    /// line they are the key's, and `pending` the mapping's.
+    later: Option<Properties>,
     /// The last position located: its offset, line start and column, so
     /// locating the cursor as it advances costs the bytes it crossed.
     located: Cell<(usize, usize, usize)>,
@@ -384,14 +396,34 @@ impl Parser<'_> {
         }
     }
 
-    /// Refuse a tab in the indentation of the line the cursor's node starts.
-    fn check_indentation(&self) -> Result<(), Error> {
-        let start = self.line_start(self.pos);
-        let prefix = &self.bytes[start..self.pos];
-        if prefix.iter().all(|&b| b == b' ' || b == b'\t') && prefix.contains(&b'\t') {
+    /// Refuse a tab in the indentation of the line holding `at`. Only block
+    /// structure (an entry, an indicator, an implicit key) is indented by
+    /// spaces alone (§6.1); a tab before a flow node or a scalar is
+    /// separation white space, which is why this is asked only where block
+    /// structure starts.
+    fn check_indentation(&self, at: usize) -> Result<(), Error> {
+        let start = self.line_start(at);
+        let indent = self.bytes[start..]
+            .iter()
+            .take_while(|&&b| b == b' ' || b == b'\t')
+            .count();
+        if self.bytes[start..start + indent].contains(&b'\t') {
             return Err(self.error(ErrorKind::Tab, start));
         }
         Ok(())
+    }
+
+    /// Whether the white space between the block indicator (`-`, `?`, `:`)
+    /// before `at` and `at` holds a tab: a block collection or implicit key
+    /// that starts there is indented by spaces only.
+    fn tab_after_indicator(&self, at: usize) -> bool {
+        let mut start = at;
+        let mut tab = false;
+        while start > 0 && matches!(self.bytes[start - 1], b' ' | b'\t') {
+            tab |= self.bytes[start - 1] == b'\t';
+            start -= 1;
+        }
+        tab && start > 0 && matches!(self.bytes[start - 1], b'-' | b'?' | b':')
     }
 
     fn count(&mut self, nodes: u64, at: usize) -> Result<(), Error> {
@@ -434,16 +466,20 @@ impl Parser<'_> {
         })
     }
 
-    /// A plain scalar key: its text, refused unless it denotes a string.
+    /// A plain scalar key: its text, refused unless it denotes a string or
+    /// [`Limits::scalar_keys`] accepts what it denotes.
     fn plain_key(&self, text: &str, at: usize) -> Result<String, Error> {
         match resolve(text) {
             Plain::String => Ok(text.to_owned()),
+            _ if self.limits.scalar_keys => Ok(text.to_owned()),
             _ => Err(self.error(ErrorKind::NonStringKey, at)),
         }
     }
 
     /// A key's text, refused unless it denotes a string: a plain key resolves
-    /// by the core schema unless a tag says `!!str` or `!`.
+    /// by the core schema unless a tag says `!!str` or `!`. Under
+    /// [`Limits::scalar_keys`] a number, boolean or null key (plain, or tagged
+    /// with the core tag it matches) keeps its source text.
     fn key_text(
         &self,
         text: String,
@@ -454,8 +490,38 @@ impl Parser<'_> {
         match tag {
             None if plain => self.plain_key(&text, at),
             None | Some((Tag::Str | Tag::NonSpecific, _)) => Ok(text),
+            Some((tag @ (Tag::Int | Tag::Float | Tag::Bool | Tag::Null), tag_at))
+                if self.limits.scalar_keys =>
+            {
+                let denoted = resolve(&text);
+                let matches = match (tag, &denoted) {
+                    (Tag::Int, Plain::Number(lexeme)) => {
+                        Number::from_lexeme(lexeme.as_str()).is_ok_and(|number| number.is_integer())
+                    }
+                    (Tag::Float, Plain::Number(_) | Plain::NonFinite)
+                    | (Tag::Bool, Plain::Bool(_))
+                    | (Tag::Null, Plain::Null) => true,
+                    _ => false,
+                };
+                if matches {
+                    Ok(text)
+                } else {
+                    Err(self.error(ErrorKind::Tag, tag_at))
+                }
+            }
             Some(_) => Err(self.error(ErrorKind::NonStringKey, at)),
         }
+    }
+
+    /// The node an anchor on a key names: the key's string, or under
+    /// [`Limits::scalar_keys`] the number, boolean or null the key denotes.
+    fn key_node(&self, text: String, plain: bool, tag: Option<(Tag, usize)>, at: usize) -> Value {
+        if self.limits.scalar_keys
+            && let Ok(value) = self.scalar(text.clone(), plain, tag, at)
+        {
+            return value;
+        }
+        Value::String(text)
     }
 
     /// The value of a scalar: a plain one resolves by the core schema, a
@@ -539,6 +605,62 @@ impl Parser<'_> {
             "map" => Ok(Tag::Map),
             _ => Err(self.error(ErrorKind::Tag, at)),
         }
+    }
+
+    /// The properties waiting for their node, those of several lines joined
+    /// (§6.9: the separation between properties may cross lines).
+    fn take_props(&mut self) -> Result<Option<Properties>, Error> {
+        match (self.pending.take(), self.later.take()) {
+            (properties, None) => Ok(properties),
+            (None, later) => Ok(later),
+            (Some(mut first), Some(later)) => {
+                if later.anchor.is_some() {
+                    if first.anchor.is_some() {
+                        return Err(self.error(ErrorKind::Syntax("one anchor per node"), later.at));
+                    }
+                    first.anchor = later.anchor;
+                }
+                if later.tag.is_some() {
+                    if first.tag.is_some() {
+                        return Err(self.error(ErrorKind::Syntax("one tag per node"), later.at));
+                    }
+                    first.tag = later.tag;
+                }
+                Ok(Some(first))
+            }
+        }
+    }
+
+    /// Add the block-context property at the cursor to the properties waiting
+    /// for their node: those on the line of an earlier property extend its set,
+    /// and those on a new line start the set an implicit key on that line owns.
+    fn add_property(&mut self) -> Result<(), Error> {
+        let line = self.line_start(self.pos);
+        if let Some(later) = &self.later
+            && self.line_start(later.at) != line
+        {
+            // Three lines of properties: the first two are one set.
+            let joined = self.take_props()?;
+            self.pending = joined;
+        }
+        match (&self.pending, &self.later) {
+            (Some(first), None) if self.line_start(first.at) != line => {
+                let mut fresh = None;
+                self.property(&mut fresh)?;
+                self.later = fresh;
+            }
+            (_, Some(_)) => {
+                let mut later = self.later.take();
+                self.property(&mut later)?;
+                self.later = later;
+            }
+            _ => {
+                let mut pending = self.pending.take();
+                self.property(&mut pending)?;
+                self.pending = pending;
+            }
+        }
+        Ok(())
     }
 
     /// Add the property at the cursor (an `&anchor` or a `!tag`) to
@@ -677,9 +799,15 @@ impl Parser<'_> {
                 breaks += 1;
                 self.skip_inline_space();
             }
+            // The line continues the scalar only when its indentation SPACES pass
+            // the block's (a tab is separation, not indentation).
+            let spaces = self.bytes[self.line_start(self.pos)..]
+                .iter()
+                .take_while(|&&b| b == b' ')
+                .count();
             if self.pos >= self.bytes.len()
                 || self.at_marker()
-                || self.column(self.pos) as isize <= owner
+                || spaces as isize <= owner
                 || self.at_comment()
             {
                 self.pos = save;
@@ -732,7 +860,7 @@ impl Parser<'_> {
     }
 
     /// A plain scalar in flow context, possibly over several lines.
-    fn plain_flow(&mut self) -> String {
+    fn plain_flow(&mut self, owner: isize) -> Result<String, Error> {
         let (start, end) = self.plain_flow_line();
         let mut text = self.text[start..end].to_owned();
         loop {
@@ -752,8 +880,9 @@ impl Parser<'_> {
                         || is_flow_indicator(self.peek_at(self.pos + 1))));
             if stop {
                 self.pos = save;
-                return text;
+                return Ok(text);
             }
+            self.check_flow_line(self.pos, owner)?;
             let (start, end) = self.plain_flow_line();
             if breaks == 1 {
                 text.push(' ');
@@ -780,9 +909,36 @@ impl Parser<'_> {
         }
     }
 
+    /// Refuse the line a multi-line quoted scalar continues on when it is a
+    /// document marker or is indented no more than the block `owner` that holds
+    /// the scalar (§7.3.1: each line is prefixed by the block's indentation).
+    fn check_continuation(&self, owner: isize) -> Result<(), Error> {
+        let start = self.line_start(self.pos);
+        if self.pos == start && self.at_marker() {
+            return Err(self.error(
+                ErrorKind::Syntax("no document marker inside a quoted scalar"),
+                self.pos,
+            ));
+        }
+        let spaces = self.bytes[start..self.pos]
+            .iter()
+            .take_while(|&&b| b == b' ')
+            .count();
+        if (spaces as isize) <= owner {
+            return Err(self.error(
+                ErrorKind::Syntax(
+                    "a quoted scalar line indented more than the block that holds it",
+                ),
+                self.pos,
+            ));
+        }
+        Ok(())
+    }
+
     /// A single- or double-quoted scalar, the cursor on its opening quote: its
-    /// text, and whether it spans lines.
-    fn quoted(&mut self) -> Result<(String, bool), Error> {
+    /// text, and whether it spans lines. `owner` is the indentation of the
+    /// block that holds it, or -1 at the top of a document.
+    fn quoted(&mut self, owner: isize) -> Result<(String, bool), Error> {
         let start = self.pos;
         let quote = self.bytes[start];
         self.pos += 1;
@@ -818,6 +974,7 @@ impl Parser<'_> {
                         out.truncate(from);
                     }
                     self.fold_quoted_break(&mut out);
+                    self.check_continuation(owner)?;
                 }
                 Some(b'\\') if quote == b'"' => {
                     blank_from = None;
@@ -831,6 +988,7 @@ impl Parser<'_> {
                             out.push('\n');
                             self.skip_inline_space();
                         }
+                        self.check_continuation(owner)?;
                         continue;
                     }
                     let (c, width) = self.escape()?;
@@ -936,15 +1094,23 @@ impl Parser<'_> {
             ));
         }
         let mut indent = match (increment, usize::try_from(owner)) {
-            (0, _) => 0,
-            (increment, Ok(owner)) => owner + increment,
-            (increment, Err(_)) => increment,
+            (0, _) => None,
+            (increment, Ok(owner)) => Some(owner + increment),
+            (increment, Err(_)) => Some(increment),
         };
         let (mut out, mut leading_break, mut trailing_breaks) =
             (String::new(), String::new(), String::new());
         let mut leading_blank = false;
         self.block_breaks(&mut indent, &mut trailing_breaks, owner)?;
-        while self.pos < self.bytes.len() && self.column(self.pos) == indent {
+        while let Some(content) = indent {
+            // A zero-indented scalar (a document's only node) ends at a
+            // document marker.
+            if self.pos >= self.bytes.len()
+                || self.column(self.pos) != content
+                || (content == 0 && self.at_marker())
+            {
+                break;
+            }
             let trailing_blank = matches!(self.peek(), Some(b' ' | b'\t'));
             if !literal && leading_break == "\n" && !leading_blank && !trailing_blank {
                 if trailing_breaks.is_empty() {
@@ -960,7 +1126,15 @@ impl Parser<'_> {
             let start = self.pos;
             self.skip_to_line_end();
             out.push_str(&self.text[start..self.pos]);
-            if self.take_break() {
+            // A last line of white space alone is closed by the end of the stream
+            // as by a line break (the suite's `L24T`); a last line with text is
+            // not, so `k: |\n  x` at the end of a stream stays `x`, as `serde_yaml`
+            // read it.
+            let blank_last_line = self.pos >= self.bytes.len()
+                && self.text[start..self.pos]
+                    .bytes()
+                    .all(|b| b == b' ' || b == b'\t');
+            if self.take_break() || blank_last_line {
                 leading_break.push('\n');
             }
             self.block_breaks(&mut indent, &mut trailing_breaks, owner)?;
@@ -976,31 +1150,55 @@ impl Parser<'_> {
 
     /// Consume the indentation and empty lines before a block scalar's next
     /// content line, fixing the content indentation when it is still to be
-    /// detected (`indent == 0`).
+    /// detected (`indent` is `None`): the first content line's own spaces, and
+    /// no leading empty line may hold more (§8.1.1.1).
     fn block_breaks(
         &mut self,
-        indent: &mut usize,
+        indent: &mut Option<usize>,
         breaks: &mut String,
         owner: isize,
     ) -> Result<(), Error> {
-        let mut max_indent = 0;
+        let floor = usize::try_from(owner + 1).unwrap_or(0);
+        let mut widest_empty = 0;
         loop {
-            while (*indent == 0 || self.column(self.pos) < *indent) && self.peek() == Some(b' ') {
+            while indent.is_none_or(|width| self.column(self.pos) < width)
+                && self.peek() == Some(b' ')
+            {
                 self.pos += 1;
             }
-            max_indent = max_indent.max(self.column(self.pos));
-            if (*indent == 0 || self.column(self.pos) < *indent) && self.peek() == Some(b'\t') {
+            let column = self.column(self.pos);
+            // A tab is content once the indentation spaces are all there
+            // (§6.1); short of them it stands where a space must.
+            if self.peek() == Some(b'\t') && column < indent.unwrap_or(floor) {
                 return Err(self.error(ErrorKind::Tab, self.pos));
             }
-            if !self.take_break() {
-                break;
+            if self.take_break() {
+                widest_empty = widest_empty.max(column);
+                breaks.push('\n');
+                continue;
             }
-            breaks.push('\n');
+            if self.pos >= self.bytes.len() {
+                // White space alone on the last line is an empty line.
+                if column > 0 {
+                    breaks.push('\n');
+                }
+            } else if indent.is_none() && column >= floor && widest_empty > column {
+                return Err(self.error(
+                    ErrorKind::Syntax(
+                        "no empty line before the first content line with more spaces than it",
+                    ),
+                    self.pos,
+                ));
+            }
+            break;
         }
-        if *indent == 0 {
-            *indent = max_indent
-                .max(usize::try_from(owner + 1).unwrap_or(0))
-                .max(1);
+        if indent.is_none() {
+            let column = self.column(self.pos);
+            *indent = Some(if self.pos >= self.bytes.len() {
+                floor
+            } else {
+                column.max(floor)
+            });
         }
         Ok(())
     }
@@ -1020,17 +1218,108 @@ impl Parser<'_> {
         }
     }
 
+    /// Refuse a document marker, or a line indented no more than its block,
+    /// where a token of a flow collection starts a line: `owner` is the
+    /// indentation of the block that holds the collection, or -1 at the top.
+    fn check_flow_line(&self, at: usize, owner: isize) -> Result<(), Error> {
+        let start = self.line_start(at);
+        if !self.bytes[start..at]
+            .iter()
+            .all(|&b| b == b' ' || b == b'\t')
+        {
+            return Ok(());
+        }
+        if at == start && self.bytes[at..].starts_with(b"---") && self.blank_at(at + 3)
+            || at == start && self.bytes[at..].starts_with(b"...") && self.blank_at(at + 3)
+        {
+            return Err(self.error(
+                ErrorKind::Syntax("no document marker inside a flow collection"),
+                at,
+            ));
+        }
+        let spaces = self.bytes[start..at]
+            .iter()
+            .take_while(|&&b| b == b' ')
+            .count();
+        if (spaces as isize) <= owner {
+            return Err(self.error(
+                ErrorKind::Syntax("a flow line indented more than the block that holds it"),
+                at,
+            ));
+        }
+        Ok(())
+    }
+
+    /// A scalar node of a flow collection: the value to hand the collection.
+    /// In a mapping's key position it is the key's string; either way its
+    /// anchor names what it denotes.
+    fn flow_scalar(
+        &mut self,
+        text: String,
+        plain: bool,
+        properties: Option<Properties>,
+        key_position: bool,
+        at: usize,
+    ) -> Result<Value, Error> {
+        let (anchor, tag) = split(properties);
+        let (value, named) = if key_position {
+            let key = self.key_text(text.clone(), plain, tag, at)?;
+            let named = self.key_node(text, plain, tag, at);
+            (Value::String(key), named)
+        } else {
+            let value = self.scalar(text, plain, tag, at)?;
+            (value.clone(), value)
+        };
+        self.count(1, at)?;
+        self.register(anchor, &named);
+        Ok(value)
+    }
+
     /// A flow collection, the cursor on its `[` or `{`, however deep, over a
-    /// heap stack.
-    fn flow(&mut self, properties: Option<Properties>) -> Result<Value, Error> {
+    /// heap stack. `owner` is the indentation of the block that holds it, or
+    /// -1 at the top of a document.
+    fn flow(&mut self, properties: Option<Properties>, owner: isize) -> Result<Value, Error> {
+        let scalar_keys = self.limits.scalar_keys;
         let mut stack: Vec<Flow> = Vec::new();
         let mut pending = properties;
+        // An entry that began with `?`, and whether its node is still to come.
+        let (mut explicit, mut fresh) = (false, false);
         loop {
+            let before = self.pos;
             self.skip_flow_space();
             let at = self.pos;
+            let crossed_break = self.text[before..at].contains(['\n', '\r']);
             let Some(byte) = self.peek() else {
                 return Err(self.error(ErrorKind::Syntax("the end of a flow collection"), at));
             };
+            self.check_flow_line(at, owner)?;
+            // A node with properties and no content (`!!str ,`), or the empty
+            // node after `?`, where the collection expects a node.
+            let terminator = matches!(byte, b',' | b']' | b'}')
+                || (byte == b':'
+                    && (self.blank_at(at + 1) || is_flow_indicator(self.peek_at(at + 1))));
+            let expects_node = match stack.last() {
+                Some(Flow::Sequence { after_item, .. }) => !after_item,
+                Some(Flow::Mapping { state, .. }) => matches!(state, FlowMap::Key | FlowMap::Value),
+                Some(Flow::Pair { .. }) => true,
+                None => false,
+            };
+            if terminator && expects_node && (pending.is_some() || (explicit && fresh)) {
+                let key_position = matches!(
+                    stack.last(),
+                    Some(Flow::Mapping {
+                        state: FlowMap::Key,
+                        ..
+                    })
+                );
+                let value =
+                    self.flow_scalar(String::new(), true, pending.take(), key_position, at)?;
+                fresh = false;
+                if let Some(done) = self.attach_flow(&mut stack, value, at)? {
+                    return Ok(done);
+                }
+                continue;
+            }
             // Separators and closers, where the innermost collection expects one.
             match stack.last_mut() {
                 Some(Flow::Sequence { after_item, .. }) => match byte {
@@ -1045,19 +1334,27 @@ impl Parser<'_> {
                     b',' if *after_item => {
                         self.pos += 1;
                         *after_item = false;
+                        explicit = false;
                         continue;
                     }
                     b':' if *after_item => {
+                        if crossed_break && !explicit {
+                            return Err(
+                                self.error(ErrorKind::Syntax("an implicit key on one line"), at)
+                            );
+                        }
                         // `[key: value]`: the last item is the key of a
                         // single-pair mapping.
                         self.pos += 1;
+                        explicit = false;
                         let Some(Flow::Sequence {
                             items, after_item, ..
                         }) = stack.last_mut()
                         else {
                             unreachable!("the innermost collection is a sequence");
                         };
-                        let Some(key) = items.pop().and_then(string) else {
+                        let Some(key) = items.pop().and_then(|item| key_of(item, scalar_keys))
+                        else {
                             return Err(self.error(ErrorKind::NonStringKey, at));
                         };
                         *after_item = false;
@@ -1098,6 +1395,7 @@ impl Parser<'_> {
                     (FlowMap::Separator, b',') => {
                         self.pos += 1;
                         *state = FlowMap::Key;
+                        explicit = false;
                         continue;
                     }
                     (FlowMap::Colon | FlowMap::Value, b',') => {
@@ -1108,11 +1406,13 @@ impl Parser<'_> {
                         object.push(name, Value::Null);
                         self.pos += 1;
                         *state = FlowMap::Key;
+                        explicit = false;
                         continue;
                     }
                     (FlowMap::Colon, b':') => {
                         self.pos += 1;
                         *state = FlowMap::Value;
+                        explicit = false;
                         continue;
                     }
                     (FlowMap::Colon | FlowMap::Separator, _) => {
@@ -1147,6 +1447,7 @@ impl Parser<'_> {
                     self.collection_tag(tag, if byte == b'[' { Tag::Seq } else { Tag::Map })?;
                     self.enter(at)?;
                     self.pos += 1;
+                    fresh = false;
                     stack.push(if byte == b'[' {
                         Flow::Sequence {
                             items: Vec::new(),
@@ -1171,17 +1472,24 @@ impl Parser<'_> {
                         );
                     }
                     let value = self.alias()?;
+                    fresh = false;
                     if let Some(done) = self.attach_flow(&mut stack, value, at)? {
                         return Ok(done);
                     }
                 }
-                b'?' if self.blank_at(at + 1) => self.pos += 1,
+                b'?' if self.blank_at(at + 1) => {
+                    self.pos += 1;
+                    explicit = true;
+                    fresh = true;
+                }
                 b'|' | b'>' | b'%' | b'@' | b'`' | b'#' => {
                     return Err(self.error(ErrorKind::Syntax("a flow node"), at));
                 }
-                b'-' if self.blank_at(at + 1) => {
+                b'-' | b'?' if self.blank_at(at + 1) || is_flow_indicator(self.peek_at(at + 1)) => {
                     return Err(self.error(
-                        ErrorKind::Syntax("a flow node; `- ` is a block sequence entry"),
+                        ErrorKind::Syntax(
+                            "a flow node; `-` before a blank or a flow indicator is not a plain scalar",
+                        ),
                         at,
                     ));
                 }
@@ -1189,9 +1497,9 @@ impl Parser<'_> {
                     // A quoted key may be followed by `:` directly (§7.4.1);
                     // a plain one stops before `:` and a blank or indicator.
                     let (text, plain) = if matches!(byte, b'"' | b'\'') {
-                        (self.quoted()?.0, false)
+                        (self.quoted(owner)?.0, false)
                     } else {
-                        (self.plain_flow(), true)
+                        (self.plain_flow(owner)?, true)
                     };
                     let key_position = matches!(
                         stack.last(),
@@ -1200,14 +1508,8 @@ impl Parser<'_> {
                             ..
                         })
                     );
-                    let (anchor, tag) = split(pending.take());
-                    let value = if key_position {
-                        Value::String(self.key_text(text, plain, tag, at)?)
-                    } else {
-                        self.scalar(text, plain, tag, at)?
-                    };
-                    self.count(1, at)?;
-                    self.register(anchor, &value);
+                    let value = self.flow_scalar(text, plain, pending.take(), key_position, at)?;
+                    fresh = false;
                     if let Some(done) = self.attach_flow(&mut stack, value, at)? {
                         return Ok(done);
                     }
@@ -1256,7 +1558,7 @@ impl Parser<'_> {
                 }) => {
                     match *state {
                         FlowMap::Key => {
-                            let Some(name) = string(value) else {
+                            let Some(name) = key_of(value, self.limits.scalar_keys) else {
                                 return Err(self.error(ErrorKind::NonStringKey, at));
                             };
                             *key = Some((name, at));
@@ -1317,6 +1619,7 @@ impl Parser<'_> {
 
     /// Fill the innermost open slot with a complete node.
     fn fill(&mut self, value: Value, at: usize) -> Result<(), Error> {
+        let scalar_keys = self.limits.scalar_keys;
         let refused = match self.stack.last_mut().expect("the root frame stays") {
             Frame::Root(slot) => {
                 *slot = Some(value);
@@ -1338,7 +1641,7 @@ impl Parser<'_> {
                         Some((ErrorKind::DuplicateKey, key_at))
                     }
                 }
-                Slot::ExplicitKey => match string(value) {
+                Slot::ExplicitKey => match key_of(value, scalar_keys) {
                     Some(key) => {
                         *slot = Slot::KeyDone(key, at);
                         None
@@ -1360,10 +1663,39 @@ impl Parser<'_> {
         at: usize,
     ) -> Result<(), Error> {
         let (anchor, tag) = split(properties);
+        let explicit_key = matches!(
+            self.stack.last(),
+            Some(Frame::Mapping {
+                slot: Slot::ExplicitKey,
+                ..
+            })
+        );
+        if explicit_key && self.limits.scalar_keys {
+            // A scalar after `?` is a key; a number, boolean or null one keeps
+            // its source text, as an implicit key does.
+            let key = self.key_text(text.clone(), plain, tag, at)?;
+            let value = match self.scalar(text, plain, tag, at) {
+                Ok(value) => value,
+                Err(error) if error.kind == ErrorKind::NonFinite => Value::String(key.clone()),
+                Err(error) => return Err(error),
+            };
+            self.count(1, at)?;
+            self.register(anchor, &value);
+            return self.fill_key(key, at);
+        }
         let value = self.scalar(text, plain, tag, at)?;
         self.count(1, at)?;
         self.register(anchor, &value);
         self.fill(value, at)
+    }
+
+    /// Complete the explicit key the open slot waits for.
+    fn fill_key(&mut self, key: String, at: usize) -> Result<(), Error> {
+        let Some(Frame::Mapping { slot, .. }) = self.stack.last_mut() else {
+            unreachable!("an explicit key fills a mapping's slot");
+        };
+        *slot = Slot::KeyDone(key, at);
+        Ok(())
     }
 
     /// Close the innermost block collection and fill its parent's slot.
@@ -1429,17 +1761,33 @@ impl Parser<'_> {
         // Properties on the key's line belong to the key, and the mapping
         // starts where they do; properties on an earlier line belong to the
         // mapping.
-        let (mapping, key_properties, indent) = match self.pending.take() {
-            Some(properties) if self.line_start(properties.at) == self.line_start(key_at) => {
+        self.check_indentation(key_at)?;
+        if line == Line::Compact && self.tab_after_indicator(key_at) {
+            return Err(self.error(ErrorKind::Tab, key_at));
+        }
+        let key_line = self.line_start(key_at);
+        let (mapping, key_properties, indent) = match (self.pending.take(), self.later.take()) {
+            (Some(mapping), Some(key)) if self.line_start(key.at) == key_line => {
+                let indent = key.column;
+                (Some(mapping), Some(key), indent)
+            }
+            (Some(first), Some(later)) => {
+                self.pending = Some(first);
+                self.later = Some(later);
+                (self.take_props()?, None, column)
+            }
+            (Some(properties), None) if self.line_start(properties.at) == key_line => {
                 let indent = properties.column;
                 (None, Some(properties), indent)
             }
-            other => (other, None, column),
+            (other, None) => (other, None, column),
+            (None, Some(_)) => unreachable!("a later property follows an earlier one"),
         };
         let (key_anchor, key_tag) = split(key_properties);
-        let key = self.key_text(text, plain, key_tag, key_at)?;
+        let key = self.key_text(text.clone(), plain, key_tag, key_at)?;
         if let Some(name) = key_anchor {
-            self.anchor(name, Value::String(key.clone()));
+            let node = self.key_node(text, plain, key_tag, key_at);
+            self.anchor(name, node);
         }
         let (anchor, tag) = split(mapping);
         self.collection_tag(tag, Tag::Map)?;
@@ -1469,13 +1817,13 @@ impl Parser<'_> {
                 if properties.is_some() {
                     return Err(self.error(ErrorKind::Syntax("an alias without properties"), at));
                 }
-                let Some(key) = string(self.alias()?) else {
+                let Some(key) = key_of(self.alias()?, self.limits.scalar_keys) else {
                     return Err(self.error(ErrorKind::NonStringKey, at));
                 };
                 (key, false)
             }
             Some(b'"' | b'\'') => {
-                let (key, multiline) = self.quoted()?;
+                let (key, multiline) = self.quoted(-1)?;
                 if multiline {
                     return Err(self.error(ErrorKind::Syntax("an implicit key on one line"), at));
                 }
@@ -1497,13 +1845,14 @@ impl Parser<'_> {
             _ => (self.plain_line().to_owned(), true),
         };
         let (anchor, tag) = split(properties);
-        let key = self.key_text(text, plain, tag, at)?;
+        let key = self.key_text(text.clone(), plain, tag, at)?;
         if !self.take_value_indicator() {
             return Err(self.error(ErrorKind::Syntax("`:` after a mapping key"), self.pos));
         }
         self.count(1, at)?;
         if let Some(name) = anchor {
-            self.anchor(name, Value::String(key.clone()));
+            let node = self.key_node(text, plain, tag, at);
+            self.anchor(name, node);
         }
         Ok((key, at))
     }
@@ -1514,22 +1863,29 @@ impl Parser<'_> {
         let at = self.pos;
         let column = self.column(at);
         match self.bytes[at] {
-            b'&' | b'!' => {
-                let mut properties = self.pending.take();
-                self.property(&mut properties)?;
-                self.pending = properties;
-            }
+            b'&' | b'!' => self.add_property()?,
             b'*' => {
-                if self.pending.is_some() {
+                // Properties of an earlier line belong to the mapping this
+                // alias keys; properties on its own line would be the alias's.
+                let own_line =
+                    self.pending
+                        .as_ref()
+                        .or(self.later.as_ref())
+                        .is_some_and(|properties| {
+                            self.line_start(properties.at) == self.line_start(at)
+                        });
+                if own_line || self.later.is_some() {
                     return Err(self.error(ErrorKind::Syntax("an alias without properties"), at));
                 }
                 let value = self.alias()?;
                 if self.take_value_indicator() {
-                    let Some(key) = string(value) else {
+                    let Some(key) = key_of(value, self.limits.scalar_keys) else {
                         return Err(self.error(ErrorKind::NonStringKey, at));
                     };
                     self.open_mapping(column, key, false, at, *line)?;
                     *line = Line::Inline;
+                } else if self.pending.is_some() {
+                    return Err(self.error(ErrorKind::Syntax("an alias without properties"), at));
                 } else {
                     self.fill(value, at)?;
                 }
@@ -1543,8 +1899,22 @@ impl Parser<'_> {
                         at,
                     ));
                 }
+                self.check_indentation(at)?;
+                if self.tab_after_indicator(at) {
+                    return Err(self.error(ErrorKind::Tab, at));
+                }
                 let sequence = self.bytes[at] == b'-';
-                let (anchor, tag) = split(self.pending.take());
+                let properties = self.take_props()?;
+                if properties
+                    .as_ref()
+                    .is_some_and(|p| self.line_start(p.at) == self.line_start(at))
+                {
+                    return Err(self.error(
+                        ErrorKind::Syntax("a line break between properties and a block collection"),
+                        at,
+                    ));
+                }
+                let (anchor, tag) = split(properties);
                 self.collection_tag(tag, if sequence { Tag::Seq } else { Tag::Map })?;
                 self.enter(at)?;
                 self.stack.push(if sequence {
@@ -1568,10 +1938,33 @@ impl Parser<'_> {
                 self.pos += 1;
                 *line = Line::Compact;
             }
-            b':' if self.blank_at(at + 1) => return Err(self.error(ErrorKind::NonStringKey, at)),
+            b':' if self.blank_at(at + 1) => {
+                // An empty key is a key only with properties on its line (`!!null : a`)
+                // and only where scalar keys are accepted.
+                let line_start = self.line_start(at);
+                let propertied = self
+                    .pending
+                    .iter()
+                    .chain(self.later.iter())
+                    .any(|properties| self.line_start(properties.at) == line_start);
+                if !(self.limits.scalar_keys && propertied) {
+                    return Err(self.error(ErrorKind::NonStringKey, at));
+                }
+                self.pos += 1;
+                self.open_mapping(column, String::new(), true, at, *line)?;
+                *line = Line::Inline;
+            }
             b'[' | b'{' => {
-                let properties = self.pending.take();
-                let value = self.flow(properties)?;
+                // Two sets of properties before a flow collection are a
+                // mapping's and an implicit key's; JSON holds no such key.
+                let properties = match self.take_props() {
+                    Err(error) if matches!(error.kind, ErrorKind::Syntax(what) if what.starts_with("one ")) =>
+                    {
+                        return Err(self.error(ErrorKind::NonStringKey, at));
+                    }
+                    other => other?,
+                };
+                let value = self.flow(properties, owner)?;
                 if self.take_value_indicator() {
                     return Err(self.error(ErrorKind::NonStringKey, at));
                 }
@@ -1579,7 +1972,7 @@ impl Parser<'_> {
             }
             b'|' | b'>' => {
                 let text = self.block_scalar(owner)?;
-                let properties = self.pending.take();
+                let properties = self.take_props()?;
                 self.fill_scalar(text, false, properties, at)?;
                 *line = Line::Fresh;
             }
@@ -1591,7 +1984,7 @@ impl Parser<'_> {
             }
             quote => {
                 let (text, plain, multiline) = if matches!(quote, b'"' | b'\'') {
-                    let (text, multiline) = self.quoted()?;
+                    let (text, multiline) = self.quoted(owner)?;
                     (text, false, multiline)
                 } else {
                     (self.plain_line().to_owned(), true, false)
@@ -1610,7 +2003,7 @@ impl Parser<'_> {
                     } else {
                         text
                     };
-                    let properties = self.pending.take();
+                    let properties = self.take_props()?;
                     self.fill_scalar(text, plain, properties, at)?;
                 }
             }
@@ -1622,6 +2015,7 @@ impl Parser<'_> {
     /// the cursor's column: `-` of a sequence, or a mapping's key, `?` or `:`.
     fn entry(&mut self, line: &mut Line) -> Result<(), Error> {
         let at = self.pos;
+        self.check_indentation(at)?;
         let column = self.column(at);
         loop {
             match self.stack.last() {
@@ -1709,12 +2103,73 @@ impl Parser<'_> {
         Ok(())
     }
 
+    /// A directive line (§6.8), the cursor on its `%`: `%YAML` names one
+    /// `1.x` version and appears once, `%TAG` names a handle (once) and a
+    /// prefix, and any other directive is reserved and ignored.
+    fn directive(
+        &mut self,
+        yaml_seen: &mut bool,
+        handles: &mut HashSet<String, FixedState>,
+    ) -> Result<(), Error> {
+        let at = self.pos;
+        self.skip_to_line_end();
+        let line = &self.text[at + 1..self.pos];
+        // A comment starts at a `#` that white space precedes.
+        let body = line
+            .char_indices()
+            .find(|&(index, c)| c == '#' && line[..index].ends_with([' ', '\t']))
+            .map_or(line, |(index, _)| &line[..index]);
+        let mut words = body.split([' ', '\t']).filter(|word| !word.is_empty());
+        let refuse = |what: &'static str| self.error(ErrorKind::Syntax(what), at);
+        match words.next() {
+            None => Err(refuse("a directive name after `%`")),
+            Some("YAML") => {
+                let version = words.next().ok_or_else(|| refuse("a `%YAML` version"))?;
+                let digits =
+                    |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+                let supported = version
+                    .split_once('.')
+                    .is_some_and(|(major, minor)| digits(major) && digits(minor) && major == "1");
+                if !supported || words.next().is_some() {
+                    return Err(refuse("one `%YAML` version, `1.` and a minor number"));
+                }
+                if mem::replace(yaml_seen, true) {
+                    return Err(refuse("one `%YAML` directive per document"));
+                }
+                Ok(())
+            }
+            Some("TAG") => {
+                let (Some(handle), Some(_prefix), None) =
+                    (words.next(), words.next(), words.next())
+                else {
+                    return Err(refuse("a `%TAG` handle and a prefix"));
+                };
+                let word_handle = handle.len() > 2
+                    && handle.starts_with('!')
+                    && handle.ends_with('!')
+                    && handle[1..handle.len() - 1]
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-');
+                if !(handle == "!" || handle == "!!" || word_handle) {
+                    return Err(refuse("a tag handle: `!`, `!!` or `!name!`"));
+                }
+                if !handles.insert(handle.to_owned()) {
+                    return Err(refuse("one `%TAG` directive per handle"));
+                }
+                Ok(())
+            }
+            Some(_) => Ok(()),
+        }
+    }
+
     fn document(&mut self) -> Result<Value, Error> {
         if self.text.starts_with('\u{feff}') {
             self.pos = 3;
         }
         // The prologue: comments, directives, and the document start marker.
         let mut directives = false;
+        let mut yaml_directive = false;
+        let mut tag_handles: HashSet<String, FixedState> = HashSet::with_hasher(FixedState::new());
         let mut line = Line::Fresh;
         loop {
             self.skip_separation();
@@ -1723,7 +2178,7 @@ impl Parser<'_> {
                 && self.pos == self.line_start(self.pos)
             {
                 directives = true;
-                self.skip_to_line_end();
+                self.directive(&mut yaml_directive, &mut tag_handles)?;
                 continue;
             }
             if self.at_marker() && self.bytes[self.pos] == b'-' {
@@ -1741,7 +2196,6 @@ impl Parser<'_> {
             if self.pos >= self.bytes.len() || self.at_marker() {
                 break;
             }
-            self.check_indentation()?;
             if let Some((owner, mapping_value)) = self.open_slot() {
                 let column = self.column(self.pos) as isize;
                 let here = line != Line::Fresh
@@ -1750,7 +2204,7 @@ impl Parser<'_> {
                 if here {
                     self.node(owner, &mut line)?;
                 } else {
-                    let properties = self.pending.take();
+                    let properties = self.take_props()?;
                     self.fill_scalar(String::new(), true, properties, self.pos)?;
                 }
             } else {
@@ -1767,7 +2221,7 @@ impl Parser<'_> {
         let end = self.pos;
         loop {
             if self.open_slot().is_some() {
-                let properties = self.pending.take();
+                let properties = self.take_props()?;
                 self.fill_scalar(String::new(), true, properties, end)?;
             }
             if self.stack.len() == 1 {
@@ -1793,10 +2247,15 @@ impl Parser<'_> {
     }
 }
 
-/// The text of a string value.
-fn string(mut value: Value) -> Option<String> {
+/// The key a resolved node stands for: a string is its own text, and with
+/// `scalar_keys` a number, boolean or null is the JSON text of its value. A
+/// collection is never a key.
+fn key_of(mut value: Value, scalar_keys: bool) -> Option<String> {
     match &mut value {
         Value::String(text) => Some(mem::take(text)),
+        Value::Number(number) if scalar_keys => Some(number.lexeme().to_owned()),
+        Value::Bool(flag) if scalar_keys => Some(flag.to_string()),
+        Value::Null if scalar_keys => Some("null".to_owned()),
         _ => None,
     }
 }
@@ -1837,6 +2296,7 @@ pub fn read_with(text: &str, limits: Limits) -> Result<Value, Error> {
         anchors: HashMap::with_hasher(FixedState::new()),
         stack: vec![Frame::Root(None)],
         pending: None,
+        later: None,
         located: Cell::new((0, 0, 0)),
     };
     parser.document()

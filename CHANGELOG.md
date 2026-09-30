@@ -437,6 +437,41 @@ under Changed and Fixed where a longer account helps.
   (`read`, `read_with`, `write`), with numbers kept as lexemes; a duplicate
   key, a non-string key, a non-core tag, `.inf`/`.nan` and a second document
   are refused with typed errors.
+- **lex:** the official yaml-test-suite (`data-2022-01-17`, 402 cases),
+  vendored byte-frozen in `vectors/yaml-test-suite/` by
+  `scripts/vendor-yaml-test-suite.py` (pinned commit, tree digest and licence
+  digest; registered in `scripts/check-corpus-frozen.py`), grades the YAML
+  reader in `tests/yaml_test_suite.rs`: 244 valid cases read as the suite's
+  JSON, 5 empty streams read as `null`, 94 invalid cases are refused, and 59
+  valid cases outside the JSON subset (15 second documents, 27 non-string keys,
+  17 non-core tags) are refused by their own error kind, each shown against the
+  suite (a refused key has no JSON in the suite, a refused stream has two
+  documents); none is read wrongly. The classification comes from the reader's
+  error kinds, not from a skip list. The grading found 38 defects, all fixed:
+  20 invalid inputs read (a tab after a block indicator, a document marker
+  inside a quoted scalar or flow collection, a quoted or flow line indented no
+  more than its block, `[-]`, a multi-line implicit key in a flow sequence, a
+  duplicate or malformed `%YAML`/`%TAG` directive, an anchor before `- ` on its
+  line, and a block scalar whose empty lines hold more spaces than its first
+  content line), 15 valid inputs refused (a tab as separation before a flow
+  node or inside a block scalar, a zero-indented top-level block scalar, an
+  anchor on both a mapping and its first key, an alias key after the mapping's
+  anchor, a flow entry of only properties), 2 values read wrongly (a
+  whitespace-only last line of a block scalar at the end of the stream), and 1
+  entry silently dropped (the empty key after `?` in a flow mapping, now a
+  refused null key).
+- **lex:** `yaml::Limits::scalar_keys` (off by default): a number, boolean or
+  null mapping key is accepted as its source text (`1: a` is the key `1`,
+  `True: a` the key `True`, `? 1` and `!!int 1: a` likewise); a collection key
+  is refused either way. OKF frontmatter sets it, so it reads scalar keys as
+  their source text as before (uniqueness is checked on that text: `1: a` with
+  `"1": b` repeats a key). YAML-LD does not: it requires the refusal ("every
+  mapping key MUST be a YAML scalar whose resolved node tag ... is
+  `tag:yaml.org,2002:str`, otherwise a mapping-key-error MUST be detected",
+  "Mapping Key Types"), so `1: a`, `true: a`, `1.5: a` are refused there where
+  the `serde_yaml` to `serde_json` bridge had written them as string keys
+  (`null: a` and `~: a` were refused on both), while `'1': a` and `!!str 1: a`
+  are read. LinkML refuses every non-string key, as before.
 - **lex:** `purrdf_lex::cbor`, the RFC 8949 codec: `Value`, the shortest-form
   head writers and readers (`cbor::head`), as-is and core deterministic
   encoding (`encode`, `canonical`, `write_canonical_map`, `encoded_len`), and

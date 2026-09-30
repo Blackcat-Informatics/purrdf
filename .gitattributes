@@ -34,3 +34,7 @@ crates/shapes/spec/** -text -diff
 # verbatim: its documents deliberately carry CRLF, bare CR, BOMs, and non-UTF-8
 # encodings, which no end-of-line or encoding conversion may touch.
 vectors/xmlconf/** -text -diff
+
+# The vendored yaml-test-suite is frozen by digest; its inputs deliberately carry
+# tabs and trailing white space, and no conversion may touch them.
+vectors/yaml-test-suite/** -text -diff
