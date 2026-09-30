@@ -166,7 +166,10 @@ under Changed and Fixed where a longer account helps.
 - **shex:** a shape map refuses `<< s p o >>` as a node selector, with an
   error naming `<<( s p o )>>`. It is RDF 1.2 reifier syntax, not a triple
   term, and a shape map has no reifier form; the reader used to accept it as a
-  triple term. `<<( s p o )>>`, nested or not, is unchanged.
+  triple term. `<<( s p o )>>`, nested or not, is unchanged. A ShExC schema
+  has no triple-term value either: `<<` in a value set or node constraint is
+  refused with an error saying so (and its byte offset), not a generic
+  "not allowed in an IRI reference" lex error.
 
 - **validate, cli, sparql-conformance:** an import list or `--import` table
   refuses a key that is not an absolute IRI (not only the empty one) with the

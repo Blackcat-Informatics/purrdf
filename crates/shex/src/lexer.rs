@@ -311,6 +311,14 @@ impl<'a> Lexer<'a> {
 
     fn lex_one(&mut self, c: char, start: usize) -> Result<Token> {
         match c {
+            // `<<` opens no ShExC token: an IRIREF body cannot contain `<`, so the
+            // only thing this can be is RDF 1.2 triple-term / reifier syntax,
+            // which ShExC (ShEx 2.x) has no value form for.
+            '<' if self.peek(1) == Some('<') => Err(ShexError::lex(
+                "a ShExC schema has no triple-term value: `<<( s p o )>>` / `<< s p o >>` \
+                 cannot appear in a value set or node constraint",
+                start,
+            )),
             '<' => self.lex_iriref(start),
             '"' | '\'' => self.lex_string(c, start),
             '@' => Ok(self.lex_at(start)?),

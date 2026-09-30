@@ -543,9 +543,8 @@ impl MapParser {
                 _ => {
                     return match self.peek_prefixed_name() {
                         Some(name) => Err(self.prefixed_name_err(&name, "a node must be an IRI")),
-                        None => Err(self.err(
-                            "expected a term (<iri>, _:blank, \"literal\" or <<( s p o )>>)",
-                        )),
+                        None => Err(self
+                            .err("expected a term (<iri>, _:blank, \"literal\" or <<( s p o )>>)")),
                     };
                 }
             };
