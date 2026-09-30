@@ -879,7 +879,9 @@ fn an_entailment_query_closes_over_the_import_table() {
     );
 
     let mut imports = purrdf::entail::ImportMap::default();
-    imports.try_insert(format!("{NS}schema"), imported_schema()).expect("a fresh absolute key");
+    imports
+        .try_insert(format!("{NS}schema"), imported_schema())
+        .expect("a fresh absolute key");
     let GovernedEntailment::Answered {
         outcome: GovernedOutcome::Complete { result, .. },
         report,

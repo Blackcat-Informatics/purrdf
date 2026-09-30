@@ -375,10 +375,7 @@ fn encode_slice<'o, const UPPER: bool>(
     let needed = bytes.len().saturating_mul(2);
     let available = out.len();
     let Some(window) = out.get_mut(..needed) else {
-        return Err(HexError::OutputTooShort {
-            needed,
-            available,
-        });
+        return Err(HexError::OutputTooShort { needed, available });
     };
     Ok(crate::arch::encode_text::<UPPER>(bytes, window))
 }
