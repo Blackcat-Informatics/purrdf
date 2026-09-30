@@ -236,7 +236,7 @@ fn write_provenance_body<W: TextOut + ?Sized>(
     out.push_str("{\"namespace\":");
     json_string(namespace.iri(), out);
     out.push_str(",\"queryForm\":");
-    json_string(query_form(result), out);
+    json_string(result.query_form(), out);
     if let Some(query_hash) = &provenance.query_hash {
         out.push_str(",\"queryHash\":");
         json_string(query_hash, out);
@@ -281,15 +281,6 @@ fn output_size_hint(result: &SparqlResult) -> usize {
             SKELETON.saturating_add(dataset.quad_count().saturating_mul(64))
         }
         SparqlResult::Boolean(_) => SKELETON,
-    }
-}
-
-/// The `queryForm` discriminator for a result kind.
-fn query_form(result: &SparqlResult) -> &'static str {
-    match result {
-        SparqlResult::Solutions { .. } => "select",
-        SparqlResult::Boolean(_) => "ask",
-        SparqlResult::Graph(_) => "construct",
     }
 }
 

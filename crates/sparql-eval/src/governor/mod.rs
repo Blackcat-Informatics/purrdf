@@ -338,6 +338,76 @@ impl StopSignal for WallDeadline {
     }
 }
 
+/// A host's cancellation bit and wall deadline, composed into the one [`StopSignal`] a
+/// governed call takes.
+///
+/// `QueryGovernors::with_stop_signal` takes one signal, and every host surface (the C
+/// ABI, the WebAssembly binding) offers its caller both sources, so the composition is
+/// written here once rather than per host. A simultaneous fire resolves the way the
+/// kernel ranks the causes: a cancellation (an explicit decision) ahead of a deadline (an
+/// elapsed measurement).
+///
+/// # Latching
+///
+/// The first resolved cause is written once into a `OnceLock`, and every later poll
+/// returns it without consulting a source again, which is the [`StopSignal`] contract.
+#[derive(Debug)]
+pub struct HostStopWatch {
+    /// The resolved cause, written once.
+    latched: OnceLock<StopCause>,
+    /// The caller's cancellation bit, when one was supplied.
+    cancellation: Option<CancellationFlag>,
+    /// The caller's wall deadline, when one was supplied.
+    deadline: Option<WallDeadline>,
+}
+
+impl HostStopWatch {
+    /// A watch over the caller's `cancellation` bit and `deadline`, either of which may be
+    /// absent.
+    #[must_use]
+    pub const fn new(
+        cancellation: Option<CancellationFlag>,
+        deadline: Option<WallDeadline>,
+    ) -> Self {
+        Self {
+            latched: OnceLock::new(),
+            cancellation,
+            deadline,
+        }
+    }
+
+    /// The watch as a shareable signal, or `None` when the caller supplied neither
+    /// source: an unarmed watch can never fire, so a governed call is handed no signal
+    /// to poll.
+    #[must_use]
+    pub fn into_signal(self) -> Option<Arc<dyn StopSignal>> {
+        (self.cancellation.is_some() || self.deadline.is_some())
+            .then(|| Arc::new(self) as Arc<dyn StopSignal>)
+    }
+
+    /// Poll every source once, the cancellation ahead of the deadline.
+    fn observe(&self) -> Option<StopCause> {
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(CancellationFlag::is_cancelled)
+        {
+            return Some(StopCause::Cancelled);
+        }
+        self.deadline.as_ref().and_then(StopSignal::poll)
+    }
+}
+
+impl StopSignal for HostStopWatch {
+    fn poll(&self) -> Option<StopCause> {
+        if let Some(&cause) = self.latched.get() {
+            return Some(cause);
+        }
+        let cause = self.observe()?;
+        Some(*self.latched.get_or_init(|| cause))
+    }
+}
+
 /// A millisecond source a test can step forwards and backwards at will.
 #[cfg(test)]
 #[derive(Debug)]
@@ -1917,6 +1987,46 @@ pub const GOVERNOR_CORPUS_DIGEST: &str =
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn a_host_stop_watch_with_no_source_is_no_signal() {
+        assert!(HostStopWatch::new(None, None).into_signal().is_none());
+        let armed = HostStopWatch::new(Some(CancellationFlag::new()), None).into_signal();
+        let armed = armed.expect("a watch with a cancellation bit is a signal");
+        assert_eq!(armed.poll(), None, "an uncancelled bit has not fired");
+    }
+
+    #[test]
+    fn a_host_stop_watch_ranks_cancellation_ahead_of_deadline_and_latches() {
+        let flag = CancellationFlag::new();
+        let watch = HostStopWatch::new(
+            Some(flag.clone()),
+            Some(WallDeadline::after(Duration::ZERO)),
+        );
+        flag.cancel();
+        assert_eq!(watch.poll(), Some(StopCause::Cancelled));
+        assert_eq!(
+            watch.poll(),
+            Some(StopCause::Cancelled),
+            "a fired watch stays fired"
+        );
+    }
+
+    #[test]
+    fn a_host_stop_watch_reports_an_expired_deadline_while_uncancelled() {
+        let flag = CancellationFlag::new();
+        let watch = HostStopWatch::new(
+            Some(flag.clone()),
+            Some(WallDeadline::after(Duration::ZERO)),
+        );
+        assert_eq!(watch.poll(), Some(StopCause::Deadline));
+        flag.cancel();
+        assert_eq!(
+            watch.poll(),
+            Some(StopCause::Deadline),
+            "the latched cause is not re-ranked by a later cancellation"
+        );
+    }
 
     /// Compile-time proof that the state can be shared across evaluation workers, which
     /// the evaluation context's own `Send + Sync` proof requires of everything it holds.

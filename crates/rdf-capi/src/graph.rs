@@ -8,6 +8,7 @@ use purrdf_core::{DatasetMut, MutableDataset, QuadValues};
 
 use crate::error::PurrdfError;
 use crate::handles::PurrdfDataset;
+use crate::handles::{free_handle, into_handle};
 use crate::status::PurrdfStatus;
 use crate::term::{PurrdfTermView, view_to_value};
 
@@ -55,7 +56,7 @@ pub unsafe extern "C" fn purrdf_graph_from_dataset(
                 return PurrdfStatus::NullPointer as i32;
             }
             let base = PurrdfDataset::arc(dataset).clone();
-            *out_graph = Box::into_raw(Box::new(PurrdfGraph(MutableDataset::new(base))));
+            *out_graph = into_handle(PurrdfGraph(MutableDataset::new(base)));
             PurrdfStatus::Ok as i32
         })
     }
@@ -162,7 +163,7 @@ pub unsafe extern "C" fn purrdf_graph_freeze(
             let frozen = (*graph).0.freeze().map_err(|diagnostic| {
                 PurrdfError::from_diagnostic(PurrdfStatus::FreezeError, &diagnostic)
             })?;
-            *out_dataset = PurrdfDataset::into_raw(frozen);
+            *out_dataset = into_handle(PurrdfDataset(frozen));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -174,11 +175,5 @@ pub unsafe extern "C" fn purrdf_graph_freeze(
 /// `graph` must be null or a live graph handle not already freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_graph_free(graph: *mut PurrdfGraph) {
-    unsafe {
-        ffi_guard!((), {
-            if !graph.is_null() {
-                drop(Box::from_raw(graph));
-            }
-        });
-    }
+    unsafe { free_handle::<PurrdfGraph>(graph) }
 }

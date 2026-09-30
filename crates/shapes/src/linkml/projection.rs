@@ -19,8 +19,8 @@ use super::{
 };
 use crate::json_schema::CompiledSchema;
 use crate::schema_catalog::{
-    CompiledSchemaCatalog, definition_path, pointer_escape, reference_key, schema_array_keywords,
-    schema_map_keywords, schema_single_keywords,
+    CompiledSchemaCatalog, definition_path, is_annotation_keyword, pointer_escape, reference_key,
+    schema_array_keywords, schema_map_keywords, schema_single_keywords,
 };
 
 const LOSS_FROM: &str = "json-schema";
@@ -395,7 +395,7 @@ fn slot_name_seed(config: &LinkmlConfig, source: &str) -> Result<SlotNameSeed, L
 
     if config.slot_rehomes().contains(source) {
         let mut reasons = vec![LinkmlSlotReason::CallerRehome];
-        let local = sanitized_local(trailing_local(source), &mut reasons);
+        let local = sanitized_local(purrdf_iri::local_name(source), &mut reasons);
         let direct_name = bounded_curie(
             config.default_prefix(),
             local.as_ref(),
@@ -463,7 +463,7 @@ fn slot_name_seed(config: &LinkmlConfig, source: &str) -> Result<SlotNameSeed, L
             (prefix, local)
         } else {
             reasons.push(LinkmlSlotReason::UnmatchedNamespace);
-            (config.default_prefix(), trailing_local(source))
+            (config.default_prefix(), purrdf_iri::local_name(source))
         };
         let local = sanitized_local(local, &mut reasons);
         let direct_name = bounded_curie(prefix, local.as_ref(), source, &mut reasons)?;
@@ -491,7 +491,7 @@ fn slot_name_seed(config: &LinkmlConfig, source: &str) -> Result<SlotNameSeed, L
     }
 
     let mut reasons = vec![LinkmlSlotReason::BareName];
-    let local = sanitized_local(trailing_local(source), &mut reasons);
+    let local = sanitized_local(purrdf_iri::local_name(source), &mut reasons);
     let direct_name = bounded_curie(
         config.default_prefix(),
         local.as_ref(),
@@ -520,10 +520,6 @@ fn longest_namespace_match<'a>(
     let (prefix, local) = curie.split_once(':')?;
     let (prefix, _) = config.prefixes().get_key_value(prefix)?;
     (!local.is_empty()).then(|| (prefix.as_str(), &source[source.len() - local.len()..]))
-}
-
-fn trailing_local(source: &str) -> &str {
-    purrdf_iri::local_name(source)
 }
 
 fn sanitized_local<'a>(source: &'a str, reasons: &mut Vec<LinkmlSlotReason>) -> Cow<'a, str> {
@@ -2474,26 +2470,6 @@ fn known_schema_keyword(keyword: &str) -> bool {
             | "maxProperties"
             | "format"
     )
-}
-
-fn is_annotation_keyword(keyword: &str) -> bool {
-    keyword.starts_with("x-")
-        || matches!(
-            keyword,
-            "$schema"
-                | "$id"
-                | "$anchor"
-                | "$dynamicAnchor"
-                | "$vocabulary"
-                | "$comment"
-                | "title"
-                | "description"
-                | "default"
-                | "examples"
-                | "deprecated"
-                | "readOnly"
-                | "writeOnly"
-        )
 }
 
 fn conjoin_expression(target: &mut Map<String, Value>, key: &str, values: Vec<Value>) {

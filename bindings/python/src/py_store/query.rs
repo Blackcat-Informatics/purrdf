@@ -73,6 +73,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyString};
 
 use super::io::{PyRdfFormat, serialize_quads, serialize_triples};
+use super::store::next_quad;
 use super::term::{PyQuad, PyTriple, PyVariable, extract_term_value, term_to_py};
 use crate::attestation::Attestation;
 use crate::{GovernedEntailment, RdfDataset, RdfQuad, RdfTerm, RdfTriple, SparqlResult, TermValue};
@@ -897,12 +898,8 @@ impl PyQueryQuads {
     }
 
     fn __next__(mut slf: PyRefMut<'_, Self>, py: Python<'_>) -> PyResult<Option<Py<PyQuad>>> {
-        if slf.pos >= slf.quads.len() {
-            return Ok(None);
-        }
-        let quad = slf.quads[slf.pos].clone();
-        slf.pos += 1;
-        Ok(Some(Py::new(py, PyQuad { inner: quad })?))
+        let slf = &mut *slf;
+        next_quad(py, &slf.quads, &mut slf.pos)
     }
 
     fn __len__(&self) -> usize {
@@ -1779,10 +1776,7 @@ impl PyQueryOutcome {
     }
 
     fn __repr__(&self) -> String {
-        match &self.tripped {
-            None => "<QueryOutcome complete>".to_owned(),
-            Some(tripped) => format!("<QueryOutcome tripped={}>", tripped.get().label()),
-        }
+        outcome_repr("QueryOutcome", "complete", self.tripped.as_ref())
     }
 }
 
@@ -1883,10 +1877,16 @@ impl PyUpdateOutcome {
     }
 
     fn __repr__(&self) -> String {
-        match &self.tripped {
-            None => "<UpdateOutcome applied>".to_owned(),
-            Some(tripped) => format!("<UpdateOutcome tripped={}>", tripped.get().label()),
-        }
+        outcome_repr("UpdateOutcome", "applied", self.tripped.as_ref())
+    }
+}
+
+/// A governed outcome's `repr`: `<Kind finished>` when no governor tripped, else
+/// `<Kind tripped=dimension>`. The one rendering the query and update outcomes share.
+fn outcome_repr(kind: &str, finished: &str, tripped: Option<&Py<PyTrippedGovernor>>) -> String {
+    match tripped {
+        None => format!("<{kind} {finished}>"),
+        Some(tripped) => format!("<{kind} tripped={}>", tripped.get().label()),
     }
 }
 

@@ -243,6 +243,16 @@ pub struct ShapesProductError {
     message: String,
 }
 
+/// Refuse on [`ProductDimension::Malformed`]: the structure is invalid in a way no
+/// other dimension names.
+///
+/// The one constructor for that dimension, shared by the product codec and the
+/// linking pass because both admit a candidate model and a caller discarding on
+/// `Malformed` has to see every such refusal through one arm.
+pub(crate) fn malformed(message: impl Into<String>) -> ShapesProductError {
+    ShapesProductError::new(ProductDimension::Malformed, message)
+}
+
 impl ShapesProductError {
     /// Refuse on `dimension`, with a message that names the fix.
     ///

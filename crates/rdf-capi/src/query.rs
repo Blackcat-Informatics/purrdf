@@ -22,6 +22,7 @@ use crate::governor::{
     decode_update_governors, encode_evidence, encode_trip,
 };
 use crate::handles::PurrdfDataset;
+use crate::handles::into_handle;
 use crate::rowcursor::PurrdfRowCursor;
 use crate::status::PurrdfStatus;
 use crate::term::PurrdfStr;
@@ -233,7 +234,7 @@ unsafe fn store_result(
                     ));
                 }
                 *out_kind = KIND_SOLUTIONS;
-                *out_rows = PurrdfRowCursor::new(variables, rows).into_raw();
+                *out_rows = into_handle(PurrdfRowCursor::new(variables, rows));
             }
             SparqlResult::Graph(graph) => {
                 if out_graph.is_null() {
@@ -243,7 +244,7 @@ unsafe fn store_result(
                     ));
                 }
                 *out_kind = KIND_GRAPH;
-                *out_graph = PurrdfDataset::into_raw(graph);
+                *out_graph = into_handle(PurrdfDataset(graph));
             }
             SparqlResult::Boolean(value) => {
                 *out_kind = KIND_BOOLEAN;
@@ -361,7 +362,7 @@ pub unsafe extern "C" fn purrdf_query(
                         ));
                     }
                     *out_kind = KIND_SOLUTIONS;
-                    *out_rows = PurrdfRowCursor::new(variables, rows).into_raw();
+                    *out_rows = into_handle(PurrdfRowCursor::new(variables, rows));
                 }
                 SparqlResult::Graph(graph) => {
                     if out_graph.is_null() {
@@ -371,7 +372,7 @@ pub unsafe extern "C" fn purrdf_query(
                         ));
                     }
                     *out_kind = KIND_GRAPH;
-                    *out_graph = PurrdfDataset::into_raw(graph);
+                    *out_graph = into_handle(PurrdfDataset(graph));
                 }
                 SparqlResult::Boolean(value) => {
                     *out_kind = KIND_BOOLEAN;
@@ -506,7 +507,7 @@ pub unsafe extern "C" fn purrdf_query_json(
                         format!("SPARQL results JSON serialization failed: {e}"),
                     )
                 })?;
-            *out_buffer = PurrdfBuffer::into_raw(outcome.bytes);
+            *out_buffer = into_handle(PurrdfBuffer(outcome.bytes));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -702,9 +703,10 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
                 import_count,
                 "purrdf_query_entailment_governed",
             )?;
-            let premise_iris = crate::entail::premise_iri_list(
+            let premise_iris = crate::cstr_array(
                 premise_iris,
                 premise_iri_count,
+                "premise_iris",
                 "purrdf_query_entailment_governed",
             )?;
             let imports = purrdf_validate::premise_import_map(&imports, &premise_iris)
@@ -776,9 +778,9 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
                         query: query_evidence,
                         closure_trip: PurrdfGovernorTrip::NONE,
                     };
-                    *out_report = PurrdfBuffer::into_raw(
+                    *out_report = into_handle(PurrdfBuffer(
                         purrdf_validate::render_reasoning_report(&report).into_bytes(),
-                    );
+                    ));
                 }
                 GovernedEntailment::ClosureStopped { tripped } => {
                     *out_outcome = PurrdfEntailmentQueryOutcomeKind::ClosureStopped as i32;
@@ -965,7 +967,7 @@ mod tests {
             let object = builder.intern_iri(&format!("http://example.org/o{index}"));
             builder.push_quad(subject, predicate, object, None);
         }
-        PurrdfDataset::into_raw(builder.freeze().expect("freeze"))
+        into_handle(PurrdfDataset(builder.freeze().expect("freeze")))
     }
 
     fn entailment_dataset() -> *mut PurrdfDataset {
@@ -977,7 +979,7 @@ mod tests {
         let tom = builder.intern_iri("http://example.org/tom");
         builder.push_quad(cat, subclass, animal, None);
         builder.push_quad(tom, rdf_type, cat, None);
-        PurrdfDataset::into_raw(builder.freeze().expect("freeze"))
+        into_handle(PurrdfDataset(builder.freeze().expect("freeze")))
     }
 
     #[test]
@@ -1136,7 +1138,7 @@ mod tests {
         builder.push_quad(ontology, rdf_type, owl_ontology, None);
         builder.push_quad(ontology, imports, schema, None);
         builder.push_quad(tom, rdf_type, cat, None);
-        PurrdfDataset::into_raw(builder.freeze().expect("freeze"))
+        into_handle(PurrdfDataset(builder.freeze().expect("freeze")))
     }
 
     /// Run `ASK { ex:tom a ex:Animal }` under `rdfs` over `dataset` with a one-entry import
@@ -1382,7 +1384,7 @@ mod tests {
             ));
             builder.push_quad(subject, weight, literal, None);
         }
-        PurrdfDataset::into_raw(builder.freeze().expect("freeze"))
+        into_handle(PurrdfDataset(builder.freeze().expect("freeze")))
     }
 
     /// End-to-end: `purrdf_query_entailment_governed`'s `aggregate_namespace` parameter
@@ -1570,7 +1572,7 @@ mod tests {
             ));
             builder.push_quad(subject, predicate, object, None);
         }
-        PurrdfDataset::into_raw(builder.freeze().expect("freeze"))
+        into_handle(PurrdfDataset(builder.freeze().expect("freeze")))
     }
 
     /// End-to-end: `purrdf_query_governed`'s `aggregate_namespace` parameter actually

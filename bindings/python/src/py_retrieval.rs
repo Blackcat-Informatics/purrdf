@@ -396,6 +396,7 @@ use pyo3::types::{PyBytes, PyDict, PyList, PyString};
 use crate::attestation::Attestation;
 use crate::hnsw::relation::{HnswRelation, HnswSpace};
 use crate::hnsw::{HnswIndex, Params as HnswGraphParams, VectorMatrix};
+use crate::py_shex::data_media_type;
 use crate::retrieval::{
     AdmissionEnvironment, ClassWidth, CompiledRetrieval, CounterReading, CrossingRank, DecayRule,
     DepthCause, Fixed, FusionProfile, Iri, Metric, Plan, PlanError, PlanId, PlannedResolution,
@@ -404,7 +405,7 @@ use crate::retrieval::{
     UnservedReason,
 };
 use crate::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
-use crate::{NativeRdfFormat, RdfDataset, TermValue, parse_dataset};
+use crate::{RdfDataset, TermValue, parse_dataset};
 use purrdf_core::DistanceMetric;
 use purrdf_sparql_eval::{
     CandidateDomains, Completeness, DomainTag, EmbeddingKnnRelation, EmbeddingSpace,
@@ -664,18 +665,6 @@ struct Call {
 }
 
 // ── pure-Rust cores (PyO3-free, exercised through the pytest suite) ──────────
-
-/// Map the Python-surface data format name onto the native codec's media type.
-fn data_media_type(format: &str) -> Result<&'static str, String> {
-    match format {
-        "turtle" => Ok(NativeRdfFormat::Turtle.media_type()),
-        "ntriples" => Ok(NativeRdfFormat::NTriples.media_type()),
-        "nquads" => Ok(NativeRdfFormat::NQuads.media_type()),
-        other => Err(format!(
-            "unknown data format `{other}` (expected \"turtle\", \"ntriples\", or \"nquads\")"
-        )),
-    }
-}
 
 /// Parse one caller-supplied IRI through the layer's own validator.
 fn retrieval_iri(role: &str, text: &str) -> Result<Iri, String> {

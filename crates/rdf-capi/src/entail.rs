@@ -65,9 +65,10 @@ use purrdf_validate::regime::{
 };
 
 use crate::buffer::PurrdfBuffer;
-use crate::cstr_to_str;
 use crate::error::PurrdfError;
+use crate::handles::{free_handle, into_handle};
 use crate::status::PurrdfStatus;
+use crate::{cstr_array, cstr_to_str};
 
 /// Close `document` (N-Quads, which accepts N-Triples) under the regime spelled
 /// `regime`, returning the canonical N-Quads closure and the rendered reasoning
@@ -198,9 +199,10 @@ pub unsafe extern "C" fn purrdf_entail_materialize_to_nquads(
                 import_count,
                 "purrdf_entail_materialize_to_nquads",
             )?;
-            let premise_iris = premise_iri_list(
+            let premise_iris = cstr_array(
                 premise_iris,
                 premise_iri_count,
+                "premise_iris",
                 "purrdf_entail_materialize_to_nquads",
             )?;
             let (nquads, report) = materialize_to_nquads_bytes(
@@ -215,8 +217,8 @@ pub unsafe extern "C" fn purrdf_entail_materialize_to_nquads(
                 max_join_steps.as_ref().copied(),
             )
             .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
-            *out_nquads = PurrdfBuffer::into_raw(nquads);
-            *out_report = PurrdfBuffer::into_raw(report);
+            *out_nquads = into_handle(PurrdfBuffer(nquads));
+            *out_report = into_handle(PurrdfBuffer(report));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -262,7 +264,7 @@ pub unsafe extern "C" fn purrdf_entail_rules(
             let regime = cstr_to_str(regime)?;
             let bytes = rules_bytes(regime)
                 .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
-            *out_buffer = PurrdfBuffer::into_raw(bytes);
+            *out_buffer = into_handle(PurrdfBuffer(bytes));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -302,7 +304,7 @@ pub unsafe extern "C" fn purrdf_entail_implemented_rules(
             let regime = cstr_to_str(regime)?;
             let bytes = implemented_rules_bytes(regime)
                 .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
-            *out_buffer = PurrdfBuffer::into_raw(bytes);
+            *out_buffer = into_handle(PurrdfBuffer(bytes));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -345,7 +347,7 @@ pub unsafe extern "C" fn purrdf_entail_extensions(
             let regime = cstr_to_str(regime)?;
             let bytes = extensions_bytes(regime)
                 .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
-            *out_buffer = PurrdfBuffer::into_raw(bytes);
+            *out_buffer = into_handle(PurrdfBuffer(bytes));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -384,8 +386,8 @@ unsafe fn store_answer(
     // SAFETY: the caller's contract above — both pointers are non-null and
     // writable, and nothing fallible remains between here and the two writes.
     unsafe {
-        *out_answer = PurrdfBuffer::into_raw(answer.into_bytes());
-        *out_certificate = PurrdfBuffer::into_raw(certificate.into_bytes());
+        *out_answer = into_handle(PurrdfBuffer(answer.into_bytes()));
+        *out_certificate = into_handle(PurrdfBuffer(certificate.into_bytes()));
     }
     Ok(PurrdfStatus::Ok)
 }
@@ -465,8 +467,12 @@ pub unsafe extern "C" fn purrdf_entail_consistency(
                 import_count,
                 "purrdf_entail_consistency",
             )?;
-            let premise_iris =
-                premise_iri_list(premise_iris, premise_iri_count, "purrdf_entail_consistency")?;
+            let premise_iris = cstr_array(
+                premise_iris,
+                premise_iri_count,
+                "premise_iris",
+                "purrdf_entail_consistency",
+            )?;
             store_answer(
                 consistency_to_string(document, &imports, &premise_iris, step_cap, work_cap),
                 out_answer,
@@ -912,35 +918,6 @@ pub(crate) unsafe fn import_pairs<'a>(
     Ok(pairs)
 }
 
-/// Read the caller's `premise_iris` array: `count` C strings, or none.
-///
-/// # Safety
-/// When `count` is non-zero, `premise_iris` must address at least `count` readable
-/// `*const c_char`, every one of which is null (refused here) or a NUL-terminated C
-/// string that outlives the returned borrows.
-pub(crate) unsafe fn premise_iri_list<'a>(
-    premise_iris: *const *const c_char,
-    count: usize,
-    entry: &str,
-) -> Result<Vec<&'a str>, PurrdfError> {
-    if count == 0 {
-        return Ok(Vec::new());
-    }
-    if premise_iris.is_null() {
-        return Err(PurrdfError::new(
-            PurrdfStatus::NullPointer,
-            format!("null premise_iris array with a non-zero count ({count}) passed to {entry}"),
-        ));
-    }
-    let mut iris = Vec::with_capacity(count);
-    for index in 0..count {
-        // SAFETY: the caller's contract above — the array is non-null (checked) and holds
-        // at least `count` readable elements; `cstr_to_str` refuses a null element.
-        iris.push(unsafe { cstr_to_str(*premise_iris.add(index))? });
-    }
-    Ok(iris)
-}
-
 /// The certain answers of a basic graph pattern under an entailment regime.
 ///
 /// A certain answer is a substitution the knowledge base ENTAILS the pattern under —
@@ -1058,9 +1035,10 @@ pub unsafe extern "C" fn purrdf_entail_certain_answers(
                 import_count,
                 "purrdf_entail_certain_answers",
             )?;
-            let premise_iris = premise_iri_list(
+            let premise_iris = cstr_array(
                 premise_iris,
                 premise_iri_count,
+                "premise_iris",
                 "purrdf_entail_certain_answers",
             )?;
             store_answer(
@@ -1161,9 +1139,10 @@ pub unsafe extern "C" fn purrdf_entail_graph_entails(
                 import_count,
                 "purrdf_entail_graph_entails",
             )?;
-            let premise_iris = premise_iri_list(
+            let premise_iris = cstr_array(
                 premise_iris,
                 premise_iri_count,
+                "premise_iris",
                 "purrdf_entail_graph_entails",
             )?;
             store_answer(
@@ -1255,9 +1234,10 @@ pub unsafe extern "C" fn purrdf_entail_verify_entailment(
                 import_count,
                 "purrdf_entail_verify_entailment",
             )?;
-            let premise_iris = premise_iri_list(
+            let premise_iris = cstr_array(
                 premise_iris,
                 premise_iri_count,
+                "premise_iris",
                 "purrdf_entail_verify_entailment",
             )?;
             store_answer(
@@ -1295,9 +1275,9 @@ unsafe fn store_proved_answer(
     // SAFETY: the caller's contract above — all three pointers are non-null and writable,
     // and nothing fallible remains between here and the three writes.
     unsafe {
-        *out_answer = PurrdfBuffer::into_raw(answer.into_bytes());
-        *out_certificate = PurrdfBuffer::into_raw(certificate.into_bytes());
-        *out_proof = PurrdfBuffer::into_raw(proof.into_bytes());
+        *out_answer = into_handle(PurrdfBuffer(answer.into_bytes()));
+        *out_certificate = into_handle(PurrdfBuffer(certificate.into_bytes()));
+        *out_proof = into_handle(PurrdfBuffer(proof.into_bytes()));
     }
     Ok(PurrdfStatus::Ok)
 }
@@ -1432,7 +1412,7 @@ pub unsafe extern "C" fn purrdf_entail_check_proof(
                 cstr_to_str(proof)?,
             )
             .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
-            *out_report = PurrdfBuffer::into_raw(report.into_bytes());
+            *out_report = into_handle(PurrdfBuffer(report.into_bytes()));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -1512,7 +1492,7 @@ pub unsafe extern "C" fn purrdf_reasoner_open(
             let document = cstr_to_str(document)?;
             let session = ReasonerSession::open(document, step_cap, work_cap)
                 .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
-            *out_reasoner = Box::into_raw(Box::new(PurrdfReasoner(session)));
+            *out_reasoner = into_handle(PurrdfReasoner(session));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -1524,13 +1504,7 @@ pub unsafe extern "C" fn purrdf_reasoner_open(
 /// `reasoner` must be null or a live session handle not already freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_reasoner_free(reasoner: *mut PurrdfReasoner) {
-    unsafe {
-        ffi_guard!((), {
-            if !reasoner.is_null() {
-                drop(Box::from_raw(reasoner));
-            }
-        });
-    }
+    unsafe { free_handle::<PurrdfReasoner>(reasoner) }
 }
 
 // Written out one by one, NOT generated by a macro: cbindgen does not expand macros,

@@ -164,6 +164,24 @@ pub enum SparqlResult {
     Boolean(bool),
 }
 
+impl SparqlResult {
+    /// The query form this result answers, as the lowercase SPARQL keyword the result
+    /// formats record it under: `select` for a solution sequence, `ask` for a boolean,
+    /// `construct` for a graph (a DESCRIBE graph included, since it has the same shape).
+    ///
+    /// The one mapping from a result's shape to its query form: the SPARQL Results
+    /// serializers' `queryForm` discriminator and every diagnostic that names a result's
+    /// kind read it here.
+    #[must_use]
+    pub const fn query_form(&self) -> &'static str {
+        match self {
+            Self::Solutions { .. } => "select",
+            Self::Boolean(_) => "ask",
+            Self::Graph(_) => "construct",
+        }
+    }
+}
+
 /// SPARQL query/update seam. The dataset type is associated so a store-backed
 /// engine can operate on its store while a future native engine can operate on the
 /// IR/native query store.
@@ -241,6 +259,19 @@ mod tests {
 
     fn iri(value: &str) -> TermValue {
         TermValue::Iri(value.to_owned())
+    }
+
+    #[test]
+    fn each_result_shape_names_its_query_form() {
+        let empty = || RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        let solutions = SparqlResult::Solutions {
+            variables: Vec::new(),
+            rows: Vec::new(),
+            aux: empty(),
+        };
+        assert_eq!(solutions.query_form(), "select");
+        assert_eq!(SparqlResult::Boolean(true).query_form(), "ask");
+        assert_eq!(SparqlResult::Graph(empty()).query_form(), "construct");
     }
 
     #[test]

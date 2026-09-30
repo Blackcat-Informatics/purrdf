@@ -341,13 +341,13 @@ impl Namespaces {
             // and `class_iri_for_def_key` reverses it via `expand_iri`. Falls back to
             // the bare local name if the primary namespace has no declared prefix to
             // compact with (then the reserved-key guard in `compile` still fires).
-            if RESERVED_DEF_KEYS.contains(&local.as_str()) {
+            if RESERVED_DEF_KEYS.contains(&local) {
                 let curie = self.compact_iri(iri);
                 if curie.contains(':') {
                     return curie;
                 }
             }
-            local
+            local.to_owned()
         } else {
             self.compact_iri(iri)
         }
@@ -453,10 +453,8 @@ impl Namespaces {
     }
 }
 
-/// The bare local name of an IRI ([`purrdf_iri::local_name`]).
-pub fn local_name(iri: &str) -> String {
-    purrdf_iri::local_name(iri).to_owned()
-}
+/// The bare local name of an IRI: the text after its last `#`, `/` or `:`.
+pub use purrdf_iri::local_name;
 
 /// Build a runtime SHACL→JSON-Schema [`LossEntry`]: `from` is `"shacl"`, `to`
 /// is `"json-schema"`, and `location` carries `subject` — the shape/class IRI
@@ -1927,7 +1925,7 @@ fn members_of(
         .map(|iri| VocabMember {
             iri: iri.clone(),
             curie: ns.compact_iri(iri),
-            varname: local_name(iri),
+            varname: local_name(iri).to_owned(),
             description: member_description(datasets, iri),
         })
         .collect();
@@ -6069,11 +6067,6 @@ mod tests {
         assert_eq!(
             ns.compact_iri("http://example.org/Foo"),
             "http://example.org/Foo"
-        );
-        assert_eq!(local_name("https://example.org/meta/Person"), "Person");
-        assert_eq!(
-            local_name("http://www.w3.org/2001/XMLSchema#integer"),
-            "integer"
         );
     }
 

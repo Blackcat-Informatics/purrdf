@@ -170,8 +170,8 @@ pub fn compare_results(
         }
         (l, r) => Err(format!(
             "result kind mismatch: {} vs {}",
-            result_kind(l),
-            result_kind(r)
+            l.query_form(),
+            r.query_form()
         )),
     }
 }
@@ -255,8 +255,8 @@ fn compare_eval(case: &SparqlTestCase, result: &SparqlResult, ordered: bool) -> 
         )),
         (ExpectedResult::None, _) => Err("evaluation case has no expected result".to_owned()),
         (expected, actual) => Err(format!(
-            "result-kind mismatch: expected {expected:?}, got a {}",
-            result_kind(actual)
+            "result-kind mismatch: expected {expected:?}, got a {} result",
+            actual.query_form()
         )),
     }
 }
@@ -464,15 +464,6 @@ fn media_type_of(path: &Path) -> &'static str {
         Some("nq") => "application/n-quads",
         Some("rdf") => "application/rdf+xml",
         _ => "text/turtle",
-    }
-}
-
-/// A short label for a result kind, for diagnostics.
-fn result_kind(result: &SparqlResult) -> &'static str {
-    match result {
-        SparqlResult::Solutions { .. } => "SELECT solutions",
-        SparqlResult::Boolean(_) => "ASK boolean",
-        SparqlResult::Graph(_) => "graph",
     }
 }
 

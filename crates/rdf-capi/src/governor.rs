@@ -3,18 +3,19 @@
 
 //! C-ABI carriers for SPARQL execution governors, receipts, and cancellation.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use purrdf_sparql_eval::{
-    CancellationFlag, GovernorEvidence, QueryGovernors, ResourceDimension, StopCause, StopSignal,
-    TrippedGovernor, WallDeadline,
+    CancellationFlag, GovernorEvidence, HostStopWatch, QueryGovernors, ResourceDimension,
+    StopCause, StopSignal, TrippedGovernor, WallDeadline,
 };
 use purrdf_validate::governors::{
     GovernorParts, GovernorPartsError, from_parts, from_update_parts,
 };
 
 use crate::error::PurrdfError;
+use crate::handles::{free_handle, into_handle};
 use crate::status::PurrdfStatus;
 
 /// Bit values for [`PurrdfQueryGovernors::enabled`].
@@ -127,7 +128,7 @@ pub unsafe extern "C" fn purrdf_cancellation_new(out: *mut *mut PurrdfCancellati
             if out.is_null() {
                 return PurrdfStatus::NullPointer as i32;
             }
-            *out = Box::into_raw(Box::new(PurrdfCancellation(CancellationFlag::new())));
+            *out = into_handle(PurrdfCancellation(CancellationFlag::new()));
             PurrdfStatus::Ok as i32
         })
     }
@@ -179,13 +180,7 @@ pub unsafe extern "C" fn purrdf_cancellation_is_cancelled(
 /// an active governed call must remain live until that call returns.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_cancellation_free(cancellation: *mut PurrdfCancellation) {
-    unsafe {
-        ffi_guard!((), {
-            if !cancellation.is_null() {
-                drop(Box::from_raw(cancellation));
-            }
-        });
-    }
+    unsafe { free_handle::<PurrdfCancellation>(cancellation) }
 }
 
 /// Stable C discriminants for governed resource dimensions.
@@ -384,11 +379,10 @@ unsafe fn decode_parts(
         let deadline = config
             .flag(PurrdfGovernorFlag::DeadlineMillis)
             .then(|| WallDeadline::after(Duration::from_millis(config.deadline_millis)));
-        let watch = CStopWatch::new(cancellation, deadline);
-        let stop = watch
-            .is_armed()
-            .then(|| Arc::new(watch) as Arc<dyn StopSignal>);
-        Ok((parts, stop))
+        Ok((
+            parts,
+            HostStopWatch::new(cancellation, deadline).into_signal(),
+        ))
     }
 }
 
@@ -498,49 +492,6 @@ pub(crate) fn encode_trip(tripped: Option<TrippedGovernor>) -> PurrdfGovernorTri
         Some(_) => out.kind = PurrdfGovernorTripKind::Unknown as i32,
     }
     out
-}
-
-/// One latched stop signal composed from the C cancellation and deadline sources.
-#[derive(Debug)]
-struct CStopWatch {
-    latched: OnceLock<StopCause>,
-    cancellation: Option<CancellationFlag>,
-    deadline: Option<WallDeadline>,
-}
-
-impl CStopWatch {
-    fn new(cancellation: Option<CancellationFlag>, deadline: Option<WallDeadline>) -> Self {
-        Self {
-            latched: OnceLock::new(),
-            cancellation,
-            deadline,
-        }
-    }
-
-    const fn is_armed(&self) -> bool {
-        self.cancellation.is_some() || self.deadline.is_some()
-    }
-
-    fn observe(&self) -> Option<StopCause> {
-        if self
-            .cancellation
-            .as_ref()
-            .is_some_and(CancellationFlag::is_cancelled)
-        {
-            return Some(StopCause::Cancelled);
-        }
-        self.deadline.as_ref().and_then(StopSignal::poll)
-    }
-}
-
-impl StopSignal for CStopWatch {
-    fn poll(&self) -> Option<StopCause> {
-        if let Some(&cause) = self.latched.get() {
-            return Some(cause);
-        }
-        let cause = self.observe()?;
-        Some(*self.latched.get_or_init(|| cause))
-    }
 }
 
 #[cfg(test)]

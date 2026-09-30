@@ -4,19 +4,13 @@
 //! The opaque owned-byte-buffer handle returned by serialize / query-json /
 //! term-to-ntriples / GTS-write entry points.
 
+use crate::handles::free_handle;
 use crate::status::PurrdfStatus;
 
 /// An owned byte buffer. Opaque to C; read via `purrdf_buffer_data`, release
 /// with `purrdf_buffer_free`.
 #[derive(Debug)]
 pub struct PurrdfBuffer(pub(crate) Vec<u8>);
-
-impl PurrdfBuffer {
-    /// Heap-allocate a buffer handle from owned bytes.
-    pub(crate) fn into_raw(bytes: Vec<u8>) -> *mut Self {
-        Box::into_raw(Box::new(Self(bytes)))
-    }
-}
 
 /// Expose the buffer's bytes as a borrowed pointer + length. The pointer is
 /// valid until `purrdf_buffer_free(buf)`; the C side must not free it. For an
@@ -49,22 +43,17 @@ pub unsafe extern "C" fn purrdf_buffer_data(
 /// `buf` must be null or a live buffer handle not already freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_buffer_free(buf: *mut PurrdfBuffer) {
-    unsafe {
-        ffi_guard!((), {
-            if !buf.is_null() {
-                drop(Box::from_raw(buf));
-            }
-        });
-    }
+    unsafe { free_handle::<PurrdfBuffer>(buf) }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::handles::into_handle;
 
     #[test]
     fn data_exposes_bytes() {
-        let raw = PurrdfBuffer::into_raw(b"hello".to_vec());
+        let raw = into_handle(PurrdfBuffer(b"hello".to_vec()));
         let mut ptr: *const u8 = std::ptr::null();
         let mut len: usize = 0;
         unsafe {

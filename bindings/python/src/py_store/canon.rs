@@ -13,6 +13,7 @@ use pyo3::prelude::*;
 
 use purrdf_core::{CanonError, Canonicalized, FastHasher, FastMap, TermRef, try_canonicalize};
 
+use super::term::quad_to_string;
 use crate::{RdfDataset, RdfQuad, RdfTerm, RdfTriple, flat_dataset_from_quads};
 
 /// The graph canonicalization algorithms, exposed to Python as
@@ -54,7 +55,7 @@ pub(super) fn canonicalize_quads(
     let canon = try_canonicalize(&ds)?;
     let map = label_map(&ds, &canon);
     let mut out: Vec<RdfQuad> = quads.iter().map(|q| relabel_quad(q, &map)).collect();
-    out.sort_by_key(quad_sort_key);
+    out.sort_by_key(quad_to_string);
     out.dedup();
     Ok(out)
 }
@@ -68,15 +69,6 @@ fn label_map(ds: &RdfDataset, c: &Canonicalized) -> FastMap<String, String> {
         }
     }
     map
-}
-
-/// The N-Quads-string sort key for a native quad (a deterministic ordering).
-fn quad_sort_key(quad: &RdfQuad) -> String {
-    let triple = format!("{} <{}> {}", quad.subject, quad.predicate, quad.object);
-    match &quad.graph_name {
-        None => triple,
-        Some(g) => format!("{triple} {g}"),
-    }
 }
 
 fn relabel_quad(quad: &RdfQuad, map: &FastMap<String, String>) -> RdfQuad {
@@ -110,26 +102,4 @@ fn relabel_term(term: &RdfTerm, map: &FastMap<String, String>) -> RdfTerm {
     }
 }
 
-// `skip_from_py_object` + this hand-written impl, rather than `from_py_object`.
-//
-// `#[pyclass(from_py_object)]` generates exactly this impl with
-// `Clone::clone(&*guard)` as the body. `PyCanonicalizationAlgorithm` is `Copy`, so that clone is a copy
-// wearing a `.clone()` -- a real `clippy::clone_on_copy`, and one no `#[allow]`
-// on the enum can reach, because the macro emits the impl as a SIBLING item
-// outside the enum's attribute scope. Writing the impl out and dereferencing
-// through `Copy` removes the clone at its source instead of hiding it.
-//
-// This is a transcription of the pyo3 0.29 expansion, not a redesign: same
-// `Error` type, same `PyClassGuard` extraction, same error path. The
-// `INPUT_TYPE` associated const the macro can also emit is gated on pyo3's
-// `experimental-inspect` feature, which is off here, so there is nothing else to
-// carry over. The Python-visible behaviour is unchanged.
-impl<'a, 'py> FromPyObject<'a, 'py> for PyCanonicalizationAlgorithm {
-    type Error = pyo3::pyclass::PyClassGuardError<'a, 'py>;
-
-    fn extract(
-        obj: Borrowed<'a, 'py, PyAny>,
-    ) -> Result<Self, <Self as FromPyObject<'a, 'py>>::Error> {
-        Ok(*obj.extract::<PyClassGuard<'_, Self>>()?)
-    }
-}
+copy_pyclass_from_py_object!(PyCanonicalizationAlgorithm);

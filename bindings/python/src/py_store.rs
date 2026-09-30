@@ -49,6 +49,7 @@ mod env;
 mod io;
 mod mutable;
 mod prepared;
+mod quad_store;
 mod query;
 mod results;
 mod store;

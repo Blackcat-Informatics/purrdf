@@ -63,13 +63,8 @@ pub struct PyNamedNode {
 impl PyNamedNode {
     #[new]
     fn new(value: &str) -> PyResult<Self> {
-        if value.is_empty() {
-            return Err(PyValueError::new_err(
-                "invalid IRI: an IRI must not be empty",
-            ));
-        }
         Ok(Self {
-            inner: value.to_owned(),
+            inner: non_empty(value, "invalid IRI: an IRI must not be empty")?,
         })
     }
 
@@ -107,13 +102,11 @@ pub struct PyBlankNode {
 impl PyBlankNode {
     #[new]
     fn new(value: &str) -> PyResult<Self> {
-        if value.is_empty() {
-            return Err(PyValueError::new_err(
-                "invalid blank node: a blank-node label must not be empty",
-            ));
-        }
         Ok(Self {
-            inner: value.to_owned(),
+            inner: non_empty(
+                value,
+                "invalid blank node: a blank-node label must not be empty",
+            )?,
         })
     }
 
@@ -331,13 +324,7 @@ impl PyTriple {
 
     #[getter]
     fn predicate(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        Py::new(
-            py,
-            PyNamedNode {
-                inner: self.inner.predicate.clone(),
-            },
-        )
-        .map(Py::into_any)
+        named_node_to_py(py, &self.inner.predicate)
     }
 
     #[getter]
@@ -395,13 +382,7 @@ impl PyQuad {
 
     #[getter]
     fn predicate(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        Py::new(
-            py,
-            PyNamedNode {
-                inner: self.inner.predicate.clone(),
-            },
-        )
-        .map(Py::into_any)
+        named_node_to_py(py, &self.inner.predicate)
     }
 
     #[getter]
@@ -508,7 +489,10 @@ fn triple_term_to_string(triple: &RdfTriple) -> String {
     RdfTerm::triple(triple.clone()).to_string()
 }
 
-fn quad_to_string(quad: &RdfQuad) -> String {
+/// A quad's N-Quads-style string form: `subject <predicate> object [graph]`. It is
+/// the Python `Quad`'s `str()` and the deterministic sort key canonicalization
+/// orders its output by, one form for both.
+pub(crate) fn quad_to_string(quad: &RdfQuad) -> String {
     let triple = format!("{} <{}> {}", quad.subject, quad.predicate, quad.object);
     match &quad.graph_name {
         None => triple,
@@ -597,7 +581,7 @@ pub(super) fn dataset_quads_to_py(
 
 pub(crate) fn term_to_py(py: Python<'_>, term: &RdfTerm) -> PyResult<Py<PyAny>> {
     Ok(match term {
-        RdfTerm::Iri(n) => Py::new(py, PyNamedNode { inner: n.clone() })?.into_any(),
+        RdfTerm::Iri(n) => named_node_to_py(py, n)?,
         RdfTerm::BlankNode(b) => Py::new(py, PyBlankNode { inner: b.clone() })?.into_any(),
         RdfTerm::Literal(l) => Py::new(py, PyLiteral { inner: l.clone() })?.into_any(),
         RdfTerm::Triple(t) => Py::new(
@@ -610,9 +594,31 @@ pub(crate) fn term_to_py(py: Python<'_>, term: &RdfTerm) -> PyResult<Py<PyAny>> 
     })
 }
 
+/// `value` owned, or `ValueError(message)` when it is empty: the one emptiness
+/// refusal the `NamedNode` and `BlankNode` constructors share (an IRI and a
+/// blank-node label are both non-empty by grammar).
+fn non_empty(value: &str, message: &'static str) -> PyResult<String> {
+    if value.is_empty() {
+        return Err(PyValueError::new_err(message));
+    }
+    Ok(value.to_owned())
+}
+
+/// A fresh Python `NamedNode` for `iri`: the one constructor every quad/triple
+/// accessor that hands out an IRI position uses.
+fn named_node_to_py(py: Python<'_>, iri: &str) -> PyResult<Py<PyAny>> {
+    Ok(Py::new(
+        py,
+        PyNamedNode {
+            inner: iri.to_owned(),
+        },
+    )?
+    .into_any())
+}
+
 fn subject_to_py(py: Python<'_>, subject: &RdfTerm) -> PyResult<Py<PyAny>> {
     match subject {
-        RdfTerm::Iri(n) => Ok(Py::new(py, PyNamedNode { inner: n.clone() })?.into_any()),
+        RdfTerm::Iri(n) => named_node_to_py(py, n),
         RdfTerm::BlankNode(b) => Ok(Py::new(py, PyBlankNode { inner: b.clone() })?.into_any()),
         _ => Err(PyTypeError::new_err(
             "a subject must be a NamedNode or BlankNode",
@@ -623,7 +629,7 @@ fn subject_to_py(py: Python<'_>, subject: &RdfTerm) -> PyResult<Py<PyAny>> {
 fn graph_name_to_py(py: Python<'_>, graph_name: Option<&RdfTerm>) -> PyResult<Py<PyAny>> {
     match graph_name {
         None => Ok(Py::new(py, PyDefaultGraph)?.into_any()),
-        Some(RdfTerm::Iri(n)) => Ok(Py::new(py, PyNamedNode { inner: n.clone() })?.into_any()),
+        Some(RdfTerm::Iri(n)) => named_node_to_py(py, n),
         Some(RdfTerm::BlankNode(b)) => {
             Ok(Py::new(py, PyBlankNode { inner: b.clone() })?.into_any())
         }

@@ -131,8 +131,20 @@ fn chunk_size_for(len: usize) -> usize {
     if let Some(forced) = FORCE_CHUNK_SIZE.with(std::cell::Cell::get) {
         return forced.max(1);
     }
-    let threads = rayon::current_num_threads().max(1);
-    (len / (threads * 4).max(1)).max(PARALLEL_MIN_CHUNK_ITEMS)
+    chunk_len_for_threads(len, rayon::current_num_threads(), PARALLEL_MIN_CHUNK_ITEMS)
+}
+
+/// The fork-join chunk geometry every parallel engine shares: about four chunks per
+/// worker of `threads`, so work-stealing can balance ragged per-item costs, and never
+/// fewer than `min_chunk` items per chunk, so a worker is not handed a sliver
+/// dominated by per-chunk overhead. `threads == 0` is read as one.
+///
+/// A pure function of its arguments: a caller that needs a host-independent plan
+/// passes a fixed `threads`, one that should track the pool passes
+/// `rayon::current_num_threads()`.
+#[must_use]
+pub fn chunk_len_for_threads(len: usize, threads: usize, min_chunk: usize) -> usize {
+    (len / (threads.max(1) * 4)).max(min_chunk)
 }
 
 /// The fixed reference parallelism [`aggregate_chunk_size_for`] assumes in place of
@@ -190,7 +202,11 @@ fn aggregate_chunk_size_for(len: usize) -> usize {
     if let Some(forced) = FORCE_CHUNK_SIZE.with(std::cell::Cell::get) {
         return forced.max(1);
     }
-    (len / (AGGREGATE_CHUNK_REFERENCE_THREADS * 4).max(1)).max(PARALLEL_MIN_CHUNK_ITEMS)
+    chunk_len_for_threads(
+        len,
+        AGGREGATE_CHUNK_REFERENCE_THREADS,
+        PARALLEL_MIN_CHUNK_ITEMS,
+    )
 }
 
 #[cfg(test)]
@@ -1520,6 +1536,21 @@ mod tests {
     use purrdf_sparql_algebra::{
         ArithmeticOperator, Literal, NamedNode, PurrdfCall, PurrdfFn, TriplePattern,
     };
+
+    // ---- chunk geometry ------------------------------------------------------
+
+    #[test]
+    fn chunk_len_aims_for_four_chunks_per_thread_above_the_floor() {
+        assert_eq!(chunk_len_for_threads(4_096, 8, 16), 128);
+        assert_eq!(chunk_len_for_threads(4_096, 8, 1_024), 1_024);
+        assert_eq!(chunk_len_for_threads(0, 8, 16), 16);
+        // No worker count is read as one worker, never as a division by zero.
+        assert_eq!(chunk_len_for_threads(400, 0, 1), 100);
+        assert_eq!(
+            chunk_len_for_threads(400, 0, 1),
+            chunk_len_for_threads(400, 1, 1)
+        );
+    }
 
     // ---- should_parallelize -------------------------------------------------
 

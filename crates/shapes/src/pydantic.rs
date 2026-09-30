@@ -41,14 +41,16 @@ use std::error::Error;
 use std::fmt::{self, Write as _};
 
 use crate::json_model::{Map, Object, Value, ValueKind};
+// A JSON string literal is a valid Python `str` literal with the same value.
+use crate::json_model::json_string as python_string;
 use ::purrdf::RdfLocation;
 use ::purrdf::loss::{LossEntry, LossLedger};
 use purrdf_hash::fnv::fnv1a64;
 
 use crate::json_schema::CompiledSchema;
 use crate::schema_catalog::{
-    CompiledSchemaCatalog, SchemaCatalogLimits, definition_path, pointer_escape, reference_key,
-    schema_array_keywords, schema_map_keywords, schema_single_keywords,
+    CompiledSchemaCatalog, SchemaCatalogLimits, definition_path, finish_text, pointer_escape,
+    reference_key, schema_array_keywords, schema_map_keywords, schema_single_keywords,
 };
 use crate::schema_import::{ImportedShapes, SchemaImportConfig, import_json_schema_from};
 
@@ -2347,10 +2349,6 @@ fn python_mapping(values: &BTreeMap<String, Value>) -> String {
     )
 }
 
-fn python_string(value: &str) -> String {
-    crate::json_model::json_string(value)
-}
-
 fn python_field_name(raw: &str) -> String {
     let mut candidate = String::new();
     for ch in local_token(raw).chars() {
@@ -2429,16 +2427,6 @@ fn join_union(types: Vec<String>) -> String {
         1 => unique.pop().expect("length checked"),
         _ => unique.join(" | "),
     }
-}
-
-fn finish_text(mut text: String) -> String {
-    while text.ends_with("\n\n") {
-        text.pop();
-    }
-    if !text.ends_with('\n') {
-        text.push('\n');
-    }
-    text
 }
 
 fn known_schema_keyword(keyword: &str) -> bool {

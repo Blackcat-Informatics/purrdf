@@ -62,7 +62,7 @@ use std::path::Path;
 use purrdf_rdf::{JsonLdSerializeOptions, SourceFormat};
 use purrdf_validate::regime::{ReasonerSession, ReasoningAnswer, check_dl_proof};
 
-use crate::cli::{CliRdfFormat, LedgerTarget};
+use crate::cli::{CliRdfFormat, LedgerTarget, refuse_document_flags};
 use crate::error::{CliError, CliOutcome};
 use crate::format;
 use crate::premise_imports;
@@ -108,7 +108,26 @@ pub(crate) fn run(
     ledger_target: &LedgerTarget,
     jsonld_options: Option<&JsonLdSerializeOptions>,
 ) -> Result<CliOutcome, CliError> {
-    refuse_document_flags(ledger_target, jsonld_options)?;
+    // Refuse the two global document flags, which name outputs this command does not produce.
+    //
+    // The same rationale as `entails`: `--loss-ledger` records what
+    // a CONVERSION dropped, and this command converts nothing for the operator — it decides a
+    // question and writes a verdict plus a certificate, neither of which is RDF, and its own
+    // crossing into the boundary's N-Quads is lossless by construction or the run is refused
+    // (see [`read_as_nquads`]), so there is no ledger. `--jsonld-options` configures a JSON-LD/
+    // YAML-LD serializer, and no serializer runs here. Both flags are GLOBAL — clap accepts
+    // them on every subcommand — so an unrefused one would be silently ignored, which is the
+    // no-op this repository refuses everywhere else.
+    refuse_document_flags(
+        ledger_target,
+        jsonld_options,
+        "--loss-ledger records what a conversion dropped, and `consistency` converts \
+             nothing for you: it decides a question and prints a verdict plus its \
+             certificate. The document it reads crosses into the boundary's N-Quads \
+             losslessly or the run is refused, so there is no ledger to surface",
+        "--jsonld-options configures a JSON-LD/YAML-LD serializer, and `consistency` \
+             runs none: its output is a line-oriented verdict and certificate, not RDF",
+    )?;
     // The `--import` ARGUMENTS are decided before a single document is opened, exactly as
     // `entails` decides them: a malformed pair is a defect in the command line.
     let import_pairs = premise_imports::parse_pairs(options.imports)?;
@@ -209,39 +228,6 @@ fn check_supplied_proof(
         &proof,
     )
     .map_err(|error| CliError::Runtime(format!("--check-proof {}: {error}", path.display())))
-}
-
-/// Refuse the two global document flags, which name outputs this command does not produce.
-///
-/// Identical rationale to `entails`'s `refuse_document_flags`: `--loss-ledger` records what
-/// a CONVERSION dropped, and this command converts nothing for the operator — it decides a
-/// question and writes a verdict plus a certificate, neither of which is RDF, and its own
-/// crossing into the boundary's N-Quads is lossless by construction or the run is refused
-/// (see [`read_as_nquads`]), so there is no ledger. `--jsonld-options` configures a JSON-LD/
-/// YAML-LD serializer, and no serializer runs here. Both flags are GLOBAL — clap accepts
-/// them on every subcommand — so an unrefused one would be silently ignored, which is the
-/// no-op this repository refuses everywhere else.
-fn refuse_document_flags(
-    ledger_target: &LedgerTarget,
-    jsonld_options: Option<&JsonLdSerializeOptions>,
-) -> Result<(), CliError> {
-    if !matches!(ledger_target, LedgerTarget::Silent) {
-        return Err(CliError::Usage(
-            "--loss-ledger records what a conversion dropped, and `consistency` converts \
-             nothing for you: it decides a question and prints a verdict plus its \
-             certificate. The document it reads crosses into the boundary's N-Quads \
-             losslessly or the run is refused, so there is no ledger to surface"
-                .to_owned(),
-        ));
-    }
-    if jsonld_options.is_some() {
-        return Err(CliError::Usage(
-            "--jsonld-options configures a JSON-LD/YAML-LD serializer, and `consistency` \
-             runs none: its output is a line-oriented verdict and certificate, not RDF"
-                .to_owned(),
-        ));
-    }
-    Ok(())
 }
 
 /// Read `options.input` through the CLI's own format resolution and re-serialize it as

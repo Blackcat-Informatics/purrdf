@@ -25,12 +25,15 @@ use std::error::Error;
 use std::fmt::{self, Write as _};
 
 use crate::json_model::{Map, NumberKind, Object, ToJson, Value, ValueKind, json};
+// A JSON string literal is a GraphQL `StringValue` with the same value.
+use crate::json_model::json_string as graphql_string;
 use ::purrdf::RdfLocation;
 use ::purrdf::loss::{LossEntry, LossLedger};
 
 use crate::json_schema::CompiledSchema;
 use crate::schema_catalog::{
-    CompiledSchemaCatalog, definition_path, pointer_escape, reference_key, schema_array_keywords,
+    CompiledSchemaCatalog, definition_path, finish_text, is_annotation_keyword,
+    known_schema_keyword, pointer_escape, reference_key, schema_array_keywords,
     schema_map_keywords, schema_single_keywords,
 };
 use crate::schema_import::{ImportedShapes, SchemaImportConfig, import_json_schema_from};
@@ -2863,76 +2866,6 @@ fn has_unknown_assertion(object: &Object) -> bool {
         || object.contains_key("additionalItems")
 }
 
-fn known_schema_keyword(keyword: &str) -> bool {
-    matches!(
-        keyword,
-        "$ref"
-            | "$defs"
-            | "type"
-            | "enum"
-            | "const"
-            | "allOf"
-            | "anyOf"
-            | "oneOf"
-            | "not"
-            | "if"
-            | "then"
-            | "else"
-            | "properties"
-            | "required"
-            | "patternProperties"
-            | "additionalProperties"
-            | "dependentRequired"
-            | "dependentSchemas"
-            | "propertyNames"
-            | "minProperties"
-            | "maxProperties"
-            | "items"
-            | "prefixItems"
-            | "additionalItems"
-            | "contains"
-            | "minContains"
-            | "maxContains"
-            | "uniqueItems"
-            | "minItems"
-            | "maxItems"
-            | "unevaluatedItems"
-            | "unevaluatedProperties"
-            | "minimum"
-            | "maximum"
-            | "exclusiveMinimum"
-            | "exclusiveMaximum"
-            | "multipleOf"
-            | "minLength"
-            | "maxLength"
-            | "pattern"
-            | "format"
-            | "contentEncoding"
-            | "contentMediaType"
-            | "contentSchema"
-    )
-}
-
-fn is_annotation_keyword(keyword: &str) -> bool {
-    keyword.starts_with("x-")
-        || matches!(
-            keyword,
-            "$schema"
-                | "$id"
-                | "$anchor"
-                | "$dynamicAnchor"
-                | "$vocabulary"
-                | "$comment"
-                | "title"
-                | "description"
-                | "default"
-                | "examples"
-                | "deprecated"
-                | "readOnly"
-                | "writeOnly"
-        )
-}
-
 fn schema_doc(schema: &Value) -> Result<Option<&str>, GraphqlError> {
     let Some(object) = schema.as_object() else {
         return Ok(None);
@@ -3045,10 +2978,6 @@ fn normalize_prose(label: &str, value: &str) -> Result<String, GraphqlError> {
     Ok(normalized)
 }
 
-fn graphql_string(value: &str) -> String {
-    crate::json_model::json_string(value)
-}
-
 fn write_comment(output: &mut String, value: &str) {
     for line in value.lines() {
         if line.is_empty() {
@@ -3095,16 +3024,6 @@ fn ensure_value_size(value: &Value) -> Result<(), GraphqlError> {
     } else {
         Ok(())
     }
-}
-
-fn finish_text(mut text: String) -> String {
-    while text.ends_with("\n\n") {
-        text.pop();
-    }
-    if !text.ends_with('\n') {
-        text.push('\n');
-    }
-    text
 }
 
 #[cfg(test)]

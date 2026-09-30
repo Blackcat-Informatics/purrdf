@@ -10,6 +10,7 @@ use purrdf_core::{GraphMatch, QuadIds, QuadPatternCursor, RdfDataset, TermId};
 
 use crate::error::PurrdfError;
 use crate::handles::PurrdfDataset;
+use crate::handles::{free_handle, into_handle};
 use crate::status::PurrdfStatus;
 use crate::term::{
     PurrdfGraphMatch, PurrdfGraphMatchKind, PurrdfTermView, render_term, view_to_value,
@@ -166,7 +167,7 @@ pub unsafe extern "C" fn purrdf_quads_for_pattern(
                 }
             };
 
-            *out_cursor = Box::into_raw(Box::new(PurrdfCursor { state }));
+            *out_cursor = into_handle(PurrdfCursor { state });
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -230,11 +231,5 @@ pub unsafe extern "C" fn purrdf_cursor_next(
 /// `cursor` must be null or a live cursor not already freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_cursor_free(cursor: *mut PurrdfCursor) {
-    unsafe {
-        ffi_guard!((), {
-            if !cursor.is_null() {
-                drop(Box::from_raw(cursor));
-            }
-        });
-    }
+    unsafe { free_handle::<PurrdfCursor>(cursor) }
 }

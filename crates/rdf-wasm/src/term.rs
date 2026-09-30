@@ -66,6 +66,16 @@ impl Term {
         Self { inner }
     }
 
+    /// The term at one position (`pick`) of a quoted triple, or `None` when this term is
+    /// not a quoted triple: the RDF/JS `subject` and `object` getters of a `Quad`-typed
+    /// term both read through here.
+    fn quoted_position(&self, pick: impl FnOnce(&RdfTriple) -> &RdfTerm) -> Option<Self> {
+        match &self.inner {
+            TermInner::Quoted(triple) => Some(Self::from_rdf_term(pick(triple))),
+            _ => None,
+        }
+    }
+
     /// Build a literal [`Term`], canonicalizing the literal (see [`canonicalize_literal`]).
     pub(crate) fn literal(lit: RdfLiteral) -> Self {
         Self {
@@ -182,10 +192,7 @@ impl Term {
     /// `subject` of a quoted-triple term (`termType: "Quad"`), else `undefined`.
     #[wasm_bindgen(getter)]
     pub fn subject(&self) -> Option<Self> {
-        match &self.inner {
-            TermInner::Quoted(t) => Some(Self::from_rdf_term(&t.subject)),
-            _ => None,
-        }
+        self.quoted_position(|triple| &triple.subject)
     }
 
     /// `predicate` of a quoted-triple term as a `NamedNode`, else `undefined`.
@@ -200,10 +207,7 @@ impl Term {
     /// `object` of a quoted-triple term, else `undefined`.
     #[wasm_bindgen(getter)]
     pub fn object(&self) -> Option<Self> {
-        match &self.inner {
-            TermInner::Quoted(t) => Some(Self::from_rdf_term(&t.object)),
-            _ => None,
-        }
+        self.quoted_position(|triple| &triple.object)
     }
 
     /// `graph` of a quoted-triple term — always the default graph (a quoted triple has

@@ -19,8 +19,11 @@ fn chunk_size_for(len: usize) -> usize {
     if let Some(forced) = FORCE_CHUNK_SIZE.with(std::cell::Cell::get) {
         return forced.max(1);
     }
-    let threads = rayon::current_num_threads().max(1);
-    (len / (threads * 4).max(1)).max(PARALLEL_MIN_CHUNK_ITEMS)
+    purrdf_sparql_eval::chunk_len_for_threads(
+        len,
+        rayon::current_num_threads(),
+        PARALLEL_MIN_CHUNK_ITEMS,
+    )
 }
 
 #[cfg(test)]

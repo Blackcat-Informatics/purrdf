@@ -348,7 +348,7 @@ impl Parser<'_> {
                     ));
                 }
             };
-            let var = crate::shapes::local_name(&predicate).to_owned();
+            let var = purrdf_iri::local_name(&predicate).to_owned();
             if var.is_empty() {
                 return Err((
                     Some("parameter-name-VARNAME"),

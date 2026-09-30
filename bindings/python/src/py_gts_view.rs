@@ -356,9 +356,14 @@ fn graph_from_parts(
 ) -> PyResult<Graph> {
     let term_count = terms.len();
     validate_terms(&terms, term_count)?;
-    validate_quads(&quads, term_count)?;
+    validate_rows(&quads, term_count, "quads", ["s", "p", "o", "g"])?;
     validate_reifiers(&reifiers, term_count)?;
-    validate_annotations(&annotations, term_count)?;
+    validate_rows(
+        &annotations,
+        term_count,
+        "annotations",
+        ["reifier", "predicate", "value", "g"],
+    )?;
     Ok(Graph {
         terms: terms
             .into_iter()
@@ -431,19 +436,6 @@ fn validate_terms(terms: &[PyTermRow], term_count: usize) -> PyResult<()> {
     Ok(())
 }
 
-fn validate_quads(
-    quads: &[(usize, usize, usize, Option<usize>)],
-    term_count: usize,
-) -> PyResult<()> {
-    for (idx, (s, p, o, g)) in quads.iter().enumerate() {
-        validate_term_id(*s, term_count, &format!("quads[{idx}].s"))?;
-        validate_term_id(*p, term_count, &format!("quads[{idx}].p"))?;
-        validate_term_id(*o, term_count, &format!("quads[{idx}].o"))?;
-        validate_optional_term_id(*g, term_count, &format!("quads[{idx}].g"))?;
-    }
-    Ok(())
-}
-
 fn validate_reifiers(reifiers: &[PyReifierRow], term_count: usize) -> PyResult<()> {
     for (idx, (r, (s, p, o), g)) in reifiers.iter().enumerate() {
         validate_term_id(*r, term_count, &format!("reifiers[{idx}].reifier"))?;
@@ -455,12 +447,21 @@ fn validate_reifiers(reifiers: &[PyReifierRow], term_count: usize) -> PyResult<(
     Ok(())
 }
 
-fn validate_annotations(annotations: &[PyAnnotationRow], term_count: usize) -> PyResult<()> {
-    for (idx, (r, p, v, g)) in annotations.iter().enumerate() {
-        validate_term_id(*r, term_count, &format!("annotations[{idx}].reifier"))?;
-        validate_term_id(*p, term_count, &format!("annotations[{idx}].predicate"))?;
-        validate_term_id(*v, term_count, &format!("annotations[{idx}].value"))?;
-        validate_optional_term_id(*g, term_count, &format!("annotations[{idx}].g"))?;
+/// Bounds-check every row of a four-column id table — three required term ids and
+/// an optional graph id — naming a failure `table[row].column`. The one checker the
+/// quad and annotation tables share: both are `(id, id, id, Option<id>)` rows and
+/// differ only in their column names.
+fn validate_rows(
+    rows: &[(usize, usize, usize, Option<usize>)],
+    term_count: usize,
+    table: &str,
+    [first, second, third, graph]: [&str; 4],
+) -> PyResult<()> {
+    for (idx, (a, b, c, g)) in rows.iter().enumerate() {
+        validate_term_id(*a, term_count, &format!("{table}[{idx}].{first}"))?;
+        validate_term_id(*b, term_count, &format!("{table}[{idx}].{second}"))?;
+        validate_term_id(*c, term_count, &format!("{table}[{idx}].{third}"))?;
+        validate_optional_term_id(*g, term_count, &format!("{table}[{idx}].{graph}"))?;
     }
     Ok(())
 }

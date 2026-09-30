@@ -1237,13 +1237,6 @@ impl Parser<'_> {
         self.parse_inline_shape(shape_ref)
     }
 
-    /// Whether `node` is a blank node that is the subject of no triple of the
-    /// shapes graph — the Turtle `[]`.
-    fn is_bare_blank_node(&self, node: &Term) -> bool {
-        matches!(node, Term::BlankNode(_))
-            && native_quads(self.data, Some(node), None, None, GraphFilter::AnyGraph).is_empty()
-    }
-
     /// Refuse a node-expression key that the SELECTED expression kind does not
     /// read, so an authored operand is never silently discarded.
     ///

@@ -93,8 +93,9 @@ use purrdf_validate::{
 use crate::buffer::PurrdfBuffer;
 use crate::entail::import_pairs;
 use crate::error::PurrdfError;
+use crate::handles::into_handle;
 use crate::status::PurrdfStatus;
-use crate::{cstr_to_str, opt_cstr_to_str};
+use crate::{cstr_array, cstr_to_str, opt_cstr_to_str};
 
 /// Validate `data_nt` (N-Triples) against `shapes_ttl` (Turtle) and render the
 /// report to SARIF 2.1.0 bytes. Native-testable, pointer-free core.
@@ -147,41 +148,6 @@ fn sarif_options(
         validation,
         ..SarifOptions::default()
     })
-}
-
-/// The `count` C strings at `array`, borrowed.
-///
-/// `count == 0` is accepted with a NULL array — there is nothing to dereference.
-/// A NULL array with a non-zero count, or a NULL element, is refused before any
-/// dereference.
-///
-/// # Safety
-/// When `count` is non-zero, `array` must address at least `count` readable
-/// `*const c_char`, each null (refused here) or a NUL-terminated C string that
-/// outlives the returned borrows.
-unsafe fn cstr_array<'a>(
-    array: *const *const c_char,
-    count: usize,
-    entry: &str,
-) -> Result<Vec<&'a str>, PurrdfError> {
-    if count == 0 {
-        return Ok(Vec::new());
-    }
-    if array.is_null() {
-        return Err(PurrdfError::new(
-            PurrdfStatus::NullPointer,
-            format!("null array with a non-zero count ({count}) passed to {entry}"),
-        ));
-    }
-    let mut out = Vec::with_capacity(count);
-    for index in 0..count {
-        // SAFETY: the caller's contract above — the array is non-null (checked) and
-        // holds at least `count` readable elements, so `index < count` is in bounds.
-        // Each element is handed to `cstr_to_str`, which refuses a null pointer rather
-        // than dereferencing it.
-        out.push(unsafe { cstr_to_str(*array.add(index))? });
-    }
-    Ok(out)
 }
 
 /// Validate a data graph (N-Triples) against a shapes graph (Turtle) and write
@@ -275,6 +241,7 @@ pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif(
             let disallows = cstr_array(
                 conformance_disallows,
                 conformance_disallows_count,
+                "conformance_disallows",
                 "purrdf_shacl_validate_to_sarif",
             )?;
             let imports = import_pairs(
@@ -294,7 +261,7 @@ pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif(
                 subclass_of_in_shapes_graph,
             )
             .map_err(PurrdfError::shapes)?;
-            *out_buffer = PurrdfBuffer::into_raw(bytes);
+            *out_buffer = into_handle(PurrdfBuffer(bytes));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -458,6 +425,7 @@ pub unsafe extern "C" fn purrdf_shacl_validate_changes_to_sarif(
             let disallows = cstr_array(
                 conformance_disallows,
                 conformance_disallows_count,
+                "conformance_disallows",
                 "purrdf_shacl_validate_changes_to_sarif",
             )?;
             let imports = import_pairs(
@@ -489,10 +457,10 @@ pub unsafe extern "C" fn purrdf_shacl_validate_changes_to_sarif(
                 ChangeScope::Everything { reason } => {
                     *out_scope = PurrdfShaclChangeScopeKind::Everything as i32;
                     *out_focus_nodes = 0;
-                    *out_reason = PurrdfBuffer::into_raw(reason.as_bytes().to_vec());
+                    *out_reason = into_handle(PurrdfBuffer(reason.as_bytes().to_vec()));
                 }
             }
-            *out_buffer = PurrdfBuffer::into_raw(bytes);
+            *out_buffer = into_handle(PurrdfBuffer(bytes));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -630,10 +598,11 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
             let outcome = entail_outcome(shapes, base, shapes_graph, data, &imports, limits)
                 .map_err(PurrdfError::shapes)?;
             if !out_diagnostics.is_null() {
-                *out_diagnostics =
-                    PurrdfBuffer::into_raw(diagnostic_text(&outcome.diagnostics).into_bytes());
+                *out_diagnostics = into_handle(PurrdfBuffer(
+                    diagnostic_text(&outcome.diagnostics).into_bytes(),
+                ));
             }
-            *out_buffer = PurrdfBuffer::into_raw(outcome.ntriples.into_bytes());
+            *out_buffer = into_handle(PurrdfBuffer(outcome.ntriples.into_bytes()));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -763,13 +732,14 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules(
             };
             let outcome = apply_rules_outcome(&request).map_err(PurrdfError::shapes)?;
             if let Some(proof) = outcome.proof {
-                *out_proof = PurrdfBuffer::into_raw(proof.into_bytes());
+                *out_proof = into_handle(PurrdfBuffer(proof.into_bytes()));
             }
             if !out_diagnostics.is_null() {
-                *out_diagnostics =
-                    PurrdfBuffer::into_raw(diagnostic_text(&outcome.diagnostics).into_bytes());
+                *out_diagnostics = into_handle(PurrdfBuffer(
+                    diagnostic_text(&outcome.diagnostics).into_bytes(),
+                ));
             }
-            *out_inferred = PurrdfBuffer::into_raw(outcome.inferred_ntriples.into_bytes());
+            *out_inferred = into_handle(PurrdfBuffer(outcome.inferred_ntriples.into_bytes()));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -879,7 +849,7 @@ pub unsafe extern "C" fn purrdf_shacl_check_rules(
                 &imports,
             )
             .map_err(PurrdfError::shapes)?;
-            *out_summary = PurrdfBuffer::into_raw(summary.into_bytes());
+            *out_summary = into_handle(PurrdfBuffer(summary.into_bytes()));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -992,8 +962,13 @@ pub unsafe extern "C" fn purrdf_shacl_eval_node_expr(
                     "null pointer argument to purrdf_shacl_eval_node_expr",
                 ));
             }
-            let bindings = cstr_array(scope, scope_count, "purrdf_shacl_eval_node_expr")?;
-            let via = cstr_array(expr_via, expr_via_count, "purrdf_shacl_eval_node_expr")?;
+            let bindings = cstr_array(scope, scope_count, "scope", "purrdf_shacl_eval_node_expr")?;
+            let via = cstr_array(
+                expr_via,
+                expr_via_count,
+                "expr_via",
+                "purrdf_shacl_eval_node_expr",
+            )?;
             let selector = ExprSelector::from_parts(
                 opt_cstr_to_str(expr)?,
                 opt_cstr_to_str(expr_at)?,
@@ -1019,9 +994,9 @@ pub unsafe extern "C" fn purrdf_shacl_eval_node_expr(
             .map_err(PurrdfError::shapes)?;
             if !out_diagnostics.is_null() {
                 *out_diagnostics =
-                    PurrdfBuffer::into_raw(diagnostic_text(&diagnostics).into_bytes());
+                    into_handle(PurrdfBuffer(diagnostic_text(&diagnostics).into_bytes()));
             }
-            *out_terms = PurrdfBuffer::into_raw(bytes);
+            *out_terms = into_handle(PurrdfBuffer(bytes));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -1116,7 +1091,7 @@ pub unsafe extern "C" fn purrdf_shacl_lint_shapes(
             .map_err(PurrdfError::shapes)?;
             *out_clean = i32::from(report.is_clean());
             *out_findings = report.findings();
-            *out_report = PurrdfBuffer::into_raw(report.render().into_bytes());
+            *out_report = into_handle(PurrdfBuffer(report.render().into_bytes()));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -1239,7 +1214,7 @@ pub unsafe extern "C" fn purrdf_shapes_product_encode(
             let graph = opt_cstr_to_str(shapes_graph_iri)?;
             let bytes = encode_product_bytes(shapes, base, graph, &imports)
                 .map_err(|refusal| product_error(&refusal))?;
-            *out_buffer = PurrdfBuffer::into_raw(bytes);
+            *out_buffer = into_handle(PurrdfBuffer(bytes));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -1287,7 +1262,7 @@ pub unsafe extern "C" fn purrdf_shapes_product_open(
             }
             let bytes = product_bytes(product, product_len, "purrdf_shapes_product_open")?;
             let described = open_product_bytes(bytes).map_err(|refusal| product_error(&refusal))?;
-            *out_buffer = PurrdfBuffer::into_raw(described);
+            *out_buffer = into_handle(PurrdfBuffer(described));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -1340,7 +1315,7 @@ pub unsafe extern "C" fn purrdf_shapes_product_admit(
             let data = cstr_to_str(data_nt)?;
             let sarif =
                 admit_product_bytes(bytes, data).map_err(|refusal| product_error(&refusal))?;
-            *out_buffer = PurrdfBuffer::into_raw(sarif);
+            *out_buffer = into_handle(PurrdfBuffer(sarif));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -1417,7 +1392,7 @@ pub unsafe extern "C" fn purrdf_shapes_product_admit_expecting(
                 .map_err(|message| PurrdfError::new(PurrdfStatus::InvalidArgument, message))?;
             let sarif = admit_product_bytes_expecting(bytes, data, &expected)
                 .map_err(|refusal| product_error(&refusal))?;
-            *out_buffer = PurrdfBuffer::into_raw(sarif);
+            *out_buffer = into_handle(PurrdfBuffer(sarif));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -1481,7 +1456,7 @@ pub unsafe extern "C" fn purrdf_shapes_product_rebuild(
             let data = cstr_to_str(data_nt)?;
             let sarif =
                 rebuild_product_bytes(bytes, data).map_err(|refusal| product_error(&refusal))?;
-            *out_buffer = PurrdfBuffer::into_raw(sarif);
+            *out_buffer = into_handle(PurrdfBuffer(sarif));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -1563,16 +1538,10 @@ pub unsafe extern "C" fn purrdf_shapes_product_rebuild_expecting(
                 .map_err(|message| PurrdfError::new(PurrdfStatus::InvalidArgument, message))?;
             let sarif = rebuild_product_bytes_expecting(bytes, data, &expected)
                 .map_err(|refusal| product_error(&refusal))?;
-            *out_buffer = PurrdfBuffer::into_raw(sarif);
+            *out_buffer = into_handle(PurrdfBuffer(sarif));
             Ok(PurrdfStatus::Ok)
         })
     }
-}
-
-/// Corroborate a prepared product's carried dataset against its claimed identity.
-/// Native-testable, pointer-free core.
-fn certify_product_bytes(product: &[u8]) -> Result<(), ShapesProductRefusal> {
-    purrdf_validate::certify_shapes_product(product).map_err(ShapesProductRefusal::from)
 }
 
 /// CERTIFY a prepared product: independently re-derive its shapes dataset's canonical
@@ -1600,7 +1569,8 @@ pub unsafe extern "C" fn purrdf_shapes_product_certify(
     unsafe {
         ffi_try!(out_error, {
             let bytes = product_bytes(product, product_len, "purrdf_shapes_product_certify")?;
-            certify_product_bytes(bytes).map_err(|refusal| product_error(&refusal))?;
+            purrdf_validate::certify_shapes_product(bytes)
+                .map_err(|error| product_error(&ShapesProductRefusal::from(error)))?;
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -2354,7 +2324,7 @@ ex:StatusShape a sh:NodeShape ;
     #[test]
     fn a_product_round_trips_to_the_same_verdict() {
         let product = encode_product_bytes(SHAPES, None, None, &[]).expect("product encoded");
-        certify_product_bytes(&product).expect("certified");
+        purrdf_validate::certify_shapes_product(&product).expect("certified");
         let described = String::from_utf8(open_product_bytes(&product).expect("opened"))
             .expect("the description is UTF-8");
         assert!(described.contains("stage-known true\n"));
@@ -2379,7 +2349,7 @@ ex:StatusShape a sh:NodeShape ;
         wrong_magic[0] = b'X';
 
         let refusal = admit_product_bytes(&wrong_magic, DATA).expect_err("a foreign magic refuses");
-        let error = Box::into_raw(Box::new(product_error(&refusal)));
+        let error = into_handle(product_error(&refusal));
         unsafe {
             assert_eq!(
                 purrdf_error_code(error),
@@ -2395,7 +2365,7 @@ ex:StatusShape a sh:NodeShape ;
         }
 
         // An error from another boundary names NO dimension — not an empty string.
-        let other = Box::into_raw(Box::new(PurrdfError::new(PurrdfStatus::ParseError, "boom")));
+        let other = into_handle(PurrdfError::new(PurrdfStatus::ParseError, "boom"));
         unsafe {
             assert!(purrdf_shapes_product_error_dimension(other).is_null());
             purrdf_error_free(other);
@@ -2436,7 +2406,7 @@ ex:StatusShape a sh:NodeShape ;
         let expected = purrdf_validate::parse_identity_digest(&wanted).expect("selector parses");
         let refusal = admit_product_bytes_expecting(&held, DATA, &expected)
             .expect_err("the product held is not the product required");
-        let error = Box::into_raw(Box::new(product_error(&refusal)));
+        let error = into_handle(product_error(&refusal));
         unsafe {
             let dimension = purrdf_shapes_product_error_dimension(error);
             assert!(!dimension.is_null());
@@ -2541,7 +2511,7 @@ ex:StatusShape a sh:NodeShape ;
         let expected = purrdf_validate::parse_identity_digest(&wanted).expect("selector parses");
         let refusal = rebuild_product_bytes_expecting(&held, DATA, &expected)
             .expect_err("the product held is not the product required");
-        let error = Box::into_raw(Box::new(product_error(&refusal)));
+        let error = into_handle(product_error(&refusal));
         unsafe {
             let dimension = purrdf_shapes_product_error_dimension(error);
             assert!(!dimension.is_null());

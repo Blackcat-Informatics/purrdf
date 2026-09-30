@@ -167,6 +167,7 @@ pub(crate) mod identity;
 #[cfg(test)]
 mod tests;
 
+use error::malformed;
 pub use error::{ProductDimension, ShapesProductError};
 
 // ---------------------------------------------------------------------------
@@ -503,12 +504,6 @@ impl HostBindings<'static> {
 // ---------------------------------------------------------------------------
 // Refusals
 // ---------------------------------------------------------------------------
-
-/// Refuse: the product's bytes are structurally invalid in a way no other
-/// dimension names.
-fn malformed(message: impl Into<String>) -> ShapesProductError {
-    ShapesProductError::new(ProductDimension::Malformed, message)
-}
 
 /// Map an [`ArtifactError`] onto the admission [`ProductDimension`] that names it.
 ///

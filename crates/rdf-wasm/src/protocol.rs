@@ -454,8 +454,10 @@ fn effective_text(request: &ProtocolRequest) -> Result<String, ProtocolError> {
     Ok(text)
 }
 
-/// Flatten `(name, value)` pairs into `[name, value, name, value, …]`.
-fn flatten_pairs(pairs: &[(String, String)]) -> Vec<String> {
+/// Flatten `(name, value)` pairs into `[name, value, name, value, …]`, the shape a
+/// JavaScript host reads a header or parameter list in. Every pair list the module
+/// hands to JavaScript (protocol parameters, effect headers) is flattened here.
+pub(crate) fn flatten_pairs(pairs: &[(String, String)]) -> Vec<String> {
     pairs
         .iter()
         .flat_map(|(name, value)| [name.clone(), value.clone()])

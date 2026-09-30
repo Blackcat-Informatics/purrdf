@@ -226,7 +226,7 @@ impl ComponentRegistry {
                 let param_names: Vec<String> = row
                     .params
                     .iter()
-                    .map(|param| sparql_local_name(param.path))
+                    .map(|param| purrdf_iri::local_name(param.path).to_owned())
                     .collect();
                 for (attachment, validator, kind) in
                     declared_validators(data, &component_term, &mut subclass_memo)
@@ -795,22 +795,6 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
-///
-/// Extract the SPARQL local name for an IRI: the substring after the last `/`,
-/// `#`, or `:` delimiter. This is used to derive the variable name bound to a
-/// declared component parameter.
-///
-/// ```ignore
-/// use crate::components::sparql_local_name;
-///
-/// assert_eq!(sparql_local_name("http://example.org/ns#requiredParam"), "requiredParam");
-/// assert_eq!(sparql_local_name("http://example.org/ns/requiredParam"), "requiredParam");
-/// assert_eq!(sparql_local_name("ex:requiredParam"), "requiredParam");
-/// ```
-#[must_use]
-pub(crate) fn sparql_local_name(iri: &str) -> String {
-    purrdf_iri::local_name(iri).to_owned()
-}
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -1263,20 +1247,6 @@ mod tests {
         let document = parse_turtle_document(ttl, Some(base_iri)).expect("fixture parses");
         let prefixes = PrefixResolver::new(&document.prefixes);
         ComponentRegistry::parse(document.dataset.as_ref(), &prefixes).expect("registry parses")
-    }
-
-    #[test]
-    fn sparql_local_name_extracts_suffix() {
-        assert_eq!(
-            sparql_local_name("http://example.org/ns#requiredParam"),
-            "requiredParam"
-        );
-        assert_eq!(
-            sparql_local_name("http://example.org/ns/requiredParam"),
-            "requiredParam"
-        );
-        assert_eq!(sparql_local_name("ex:requiredParam"), "requiredParam");
-        assert_eq!(sparql_local_name("requiredParam"), "requiredParam");
     }
 
     #[test]

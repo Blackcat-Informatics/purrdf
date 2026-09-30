@@ -69,7 +69,7 @@ use purrdf_core::imports::imported_iris;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
 use purrdf_rdf::{NativeRdfFormat, SourceFormat};
 
-use crate::error::CliError;
+use crate::error::{CliError, argv_iri_refusal};
 use crate::{format, source};
 
 /// A shapes document READ but not yet parsed into `Shapes`: the frozen graph plus the
@@ -414,7 +414,7 @@ fn resolve_shapes_import_pairs(specs: &[String]) -> Result<Vec<ShapesImportPair<
 /// an already-absolute invocation is byte-for-byte what it always was. A RELATIVE one resolves
 /// against `base`, so `--shapes-graph sg` names exactly what `sh:shapesGraph <sg>` written in
 /// the shapes document names. A relative one with nothing in scope is refused: see
-/// [`shapes_graph_refusal`].
+/// [`argv_iri_refusal`](crate::error::argv_iri_refusal).
 pub(crate) fn resolve_shapes_graph(
     raw: Option<&str>,
     base: Option<&str>,
@@ -439,27 +439,17 @@ pub(crate) fn resolve_shapes_graph(
     scope
         .resolve(raw)
         .map(|iri| Some(iri.as_str().to_owned()))
-        .map_err(|error| shapes_graph_refusal(raw, &error))
-}
-
-/// The refusal for a `--shapes-graph` that names no graph.
-///
-/// It carries the shared [`purrdf_iri::IriError::diagnostic_code`] so it groups with every
-/// other IRI failure in this toolkit, and it does NOT carry the library's own remedy for a
-/// missing base: that one names `@base` and `xml:base`, which are DOCUMENT directives, and a
-/// `--shapes-graph` value is argv text that no document can reach. Naming a fix the operator
-/// cannot apply is worse than naming none — this is the same refusal shape `describe --iri`
-/// carries, for the same reason.
-fn shapes_graph_refusal(raw: &str, error: &purrdf_iri::IriError) -> CliError {
-    let code = error.diagnostic_code();
-    if code == "iri-relative-no-base" {
-        return CliError::Usage(format!(
-            "--shapes-graph `{raw}`: {code}: a relative IRI reference has no base in scope, so \
-             it names no graph to expose the shapes under. This is a command-line value, so no \
-             `@base` you write in a document resolves it: give --shapes a PATH, whose `file://` \
-             retrieval IRI this flag resolves against exactly as a `sh:shapesGraph` inside that \
-             document would, or write the graph name in absolute form"
-        ));
-    }
-    CliError::Usage(format!("--shapes-graph `{raw}`: {code}: {error}"))
+        .map_err(|error| {
+            argv_iri_refusal(
+                &format!("--shapes-graph `{raw}`"),
+                &error,
+                "iri-relative-no-base",
+                "a relative IRI reference has no base in scope, so it names no graph to expose \
+                 the shapes under. This is a command-line value, so no `@base` you write in a \
+                 document resolves it: give --shapes a PATH, whose `file://` retrieval IRI this \
+                 flag resolves against exactly as a `sh:shapesGraph` inside that document \
+                 would, or write the graph name in absolute form",
+                "",
+            )
+        })
 }
