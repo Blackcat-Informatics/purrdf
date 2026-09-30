@@ -84,21 +84,18 @@ pub fn emit_core_prefixes(vocab: &SliceVocab) -> String {
 /// builder produced.
 pub fn emit_jsonld_context(vocab: &SliceVocab) -> String {
     let registry = effective_registry(vocab);
-    let mut source = serde_json::Map::new();
-    source.insert(
-        "@vocab".to_owned(),
-        serde_json::Value::String(vocab.ns().to_owned()),
-    );
+    let mut source = purrdf_lex::json::Object::new();
+    source.insert("@vocab", vocab.ns());
     for (prefix, namespace) in &registry {
-        source.insert(prefix.clone(), serde_json::Value::String(namespace.clone()));
+        source.insert(prefix.clone(), namespace.clone());
     }
     let compiled = purrdf::native_codecs::jsonld::CompiledJsonLdContext::compile(
-        &serde_json::Value::Object(source),
+        &purrdf_lex::json::Value::Object(source),
         None,
     )
     .expect("validated slice prefix authority must compile as a JSON-LD context");
-    let canonical = compiled
-        .canonical_context()
+    let canonical_context = compiled.canonical_context();
+    let canonical = canonical_context
         .as_object()
         .expect("compiled slice context is an object");
     let mut out = String::new();
@@ -106,7 +103,7 @@ pub fn emit_jsonld_context(vocab: &SliceVocab) -> String {
     out.push_str("  \"@context\": {\n");
     let canonical_vocab = canonical
         .get("@vocab")
-        .and_then(serde_json::Value::as_str)
+        .and_then(purrdf_lex::json::Value::as_str)
         .expect("compiled slice context retains @vocab");
     let _ = writeln!(out, "    \"@vocab\": {},", json_string(canonical_vocab));
     let last = registry.len() - 1;
@@ -114,7 +111,7 @@ pub fn emit_jsonld_context(vocab: &SliceVocab) -> String {
         let comma = if i == last { "" } else { "," };
         let namespace = canonical
             .get(prefix)
-            .and_then(serde_json::Value::as_str)
+            .and_then(purrdf_lex::json::Value::as_str)
             .expect("compiled slice context retains prefix mapping");
         let _ = writeln!(
             out,

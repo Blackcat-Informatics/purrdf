@@ -11,7 +11,7 @@
 use std::error::Error;
 use std::fmt;
 
-use serde_json::{Map, Value};
+use crate::json_model::{Object, Value, ValueKind};
 
 use crate::json_schema::CompiledSchema;
 
@@ -110,7 +110,7 @@ impl CompiledSchemaCatalog {
         Ok(Self { document })
     }
 
-    pub(crate) fn definitions(&self) -> &Map<String, Value> {
+    pub(crate) fn definitions(&self) -> &Object {
         self.document
             .as_object()
             .and_then(|root| root.get("$defs"))
@@ -119,29 +119,56 @@ impl CompiledSchemaCatalog {
     }
 }
 
-fn invalid_json_error(error: &serde_json::Error) -> SchemaCatalogError {
+fn invalid_json_error(error: &purrdf_lex::json::Error) -> SchemaCatalogError {
     SchemaCatalogError::new(format!(
         "CompiledSchema.schema_json is not valid JSON: {error}"
     ))
 }
 
+/// Read the catalog document under `limits`, refusing a repeated member name
+/// (RFC 7493 §2.3): a schema whose `$defs` named one definition twice would
+/// otherwise mean whichever copy a reader happened to keep.
+///
+/// `limits.depth` counts open arrays and objects (the root is one) and is
+/// capped at 128.
 fn parse_bounded_document(
     input: &str,
     limits: SchemaCatalogLimits,
 ) -> Result<Value, SchemaCatalogError> {
-    purrdf::json_value::parse(
-        input.as_bytes(),
-        purrdf::json_value::Limits {
-            bytes: limits.input_bytes,
-            values: limits.nodes,
-            depth: limits.depth,
-            string_bytes: limits.string_bytes,
+    use purrdf_lex::json::ErrorKind;
+
+    if input.len() > limits.input_bytes {
+        return Err(SchemaCatalogError::new(format!(
+            "JSON input exceeds byte limit {}",
+            limits.input_bytes
+        )));
+    }
+    let mut document = purrdf_lex::json::read_with(
+        input,
+        purrdf_lex::json::Limits {
+            max_depth: limits.depth.min(128),
+            max_values: u64::try_from(limits.nodes).unwrap_or(u64::MAX),
+            max_string_bytes: limits.string_bytes,
+            unique_members: true,
         },
     )
-    .map_err(|error| match error {
-        purrdf::json_value::Error::Limit(message) => SchemaCatalogError::new(message),
-        purrdf::json_value::Error::Syntax(error) => invalid_json_error(&error),
-    })
+    .map_err(|error| {
+        let at = error.offset();
+        match error.kind() {
+            ErrorKind::Depth { limit } => SchemaCatalogError::new(format!(
+                "JSON nesting limit {limit}: input exceeds depth limit at byte {at}"
+            )),
+            ErrorKind::Values { limit } => {
+                SchemaCatalogError::new(format!("more than {limit} JSON nodes at byte {at}"))
+            }
+            ErrorKind::StringBytes { limit } => SchemaCatalogError::new(format!(
+                "JSON string longer than {limit} bytes at byte {at}"
+            )),
+            _ => invalid_json_error(&error),
+        }
+    })?;
+    document.sort_keys();
+    Ok(document)
 }
 
 fn validate_definition_limit(
@@ -205,7 +232,7 @@ pub(crate) const fn schema_single_keywords() -> &'static [&'static str] {
 
 fn validate_schema(
     value: &Value,
-    definitions: &Map<String, Value>,
+    definitions: &Object,
     path: &str,
 ) -> Result<(), SchemaCatalogError> {
     let Value::Object(object) = value else {
@@ -249,7 +276,7 @@ fn validate_schema(
     }
 
     for keyword in schema_map_keywords() {
-        if let Some(children) = object.get(*keyword) {
+        if let Some(children) = object.get(keyword) {
             let children = children.as_object().ok_or_else(|| {
                 SchemaCatalogError::new(format!("{path}/{keyword} must be an object"))
             })?;
@@ -263,7 +290,7 @@ fn validate_schema(
         }
     }
     for keyword in schema_array_keywords() {
-        if let Some(children) = object.get(*keyword) {
+        if let Some(children) = object.get(keyword) {
             let children = children.as_array().ok_or_else(|| {
                 SchemaCatalogError::new(format!("{path}/{keyword} must be an array"))
             })?;
@@ -273,7 +300,7 @@ fn validate_schema(
         }
     }
     for keyword in schema_single_keywords() {
-        if let Some(child) = object.get(*keyword) {
+        if let Some(child) = object.get(keyword) {
             validate_schema(child, definitions, &format!("{path}/{keyword}"))?;
         }
     }
@@ -283,12 +310,12 @@ fn validate_schema(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_model::json;
     use ::purrdf::loss::LossLedger;
-    use serde_json::json;
 
     fn compiled(schema: &Value) -> CompiledSchema {
         CompiledSchema {
-            schema_json: serde_json::to_string(schema).expect("fixture serializes"),
+            schema_json: crate::json_model::write_compact(schema),
             openapi_json: "{}\n".to_owned(),
             losses: LossLedger::new(),
         }
@@ -329,7 +356,7 @@ mod tests {
             for (index, lexical) in lexicals.iter().enumerate() {
                 let correct: f64 = lexical.parse().expect("decimal");
                 assert_eq!(
-                    properties[format!("ex:v{index}")]["minimum"]
+                    properties[format!("ex:v{index}").as_str()]["minimum"]
                         .as_f64()
                         .map(f64::to_bits),
                     Some(correct.to_bits()),
@@ -521,7 +548,7 @@ mod tests {
                 "more than 3 JSON nodes",
             ),
             (
-                r#"{"$defs":{"longer" trailing"#,
+                r#"{"$defs":{"longer": trailing"#,
                 SchemaCatalogLimits {
                     input_bytes: 1_024,
                     definitions: 10,
@@ -529,7 +556,7 @@ mod tests {
                     nodes: 10,
                     string_bytes: 5,
                 },
-                "6-byte string; limit is 5",
+                "JSON string longer than 5 bytes",
             ),
             (
                 r#"{"$defs":{"A":{"properties":{"x":{ trailing"#,
@@ -568,10 +595,11 @@ mod tests {
             string_bytes: 100,
         };
         assert!(parse_bounded_document(r#"{"a":1,"\u0061":2}"#, limits).is_err());
+        assert!(parse_bounded_document(r#"{"a":1,"\u0062":2}"#, limits).is_ok());
     }
 
     #[test]
-    fn bounded_parser_matches_serde_json_value_semantics() {
+    fn bounded_parser_matches_the_unbounded_reader() {
         for source in [
             "null",
             "true",
@@ -582,7 +610,7 @@ mod tests {
             r#"[null,true,-1,2.5,"x"]"#,
             r#"{"a":2,"nested":{"items":[false,"z"]}}"#,
         ] {
-            let expected = serde_json::from_str::<Value>(source).expect("serde JSON fixture");
+            let expected = purrdf_lex::json::read(source).expect("JSON fixture");
             let actual = parse_bounded_document(
                 source,
                 SchemaCatalogLimits {

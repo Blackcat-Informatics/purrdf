@@ -122,13 +122,17 @@ fn ontology_property_surface_reaches_every_language_emitter() {
 
     let linkml = emit_linkml(compiled, &linkml_config()).expect("LinkML emission");
     let linkml_classes = &linkml.document.as_value()["classes"];
-    assert!(linkml_classes["EmailMessage"].is_object());
+    assert!(linkml_classes["EmailMessage"].as_object().is_some());
     assert!(
-        linkml_classes["EmailMessage"]["attributes"]["ex:resentDate"].is_object(),
+        linkml_classes["EmailMessage"]["attributes"]["ex:resentDate"]
+            .as_object()
+            .is_some(),
         "LinkML must retain the ontology-only resentDate attribute"
     );
     assert!(
-        linkml_classes["EmailMessage"]["attributes"]["ex:resentMessageId"].is_object(),
+        linkml_classes["EmailMessage"]["attributes"]["ex:resentMessageId"]
+            .as_object()
+            .is_some(),
         "LinkML must retain the ontology-only resentMessageId attribute"
     );
 

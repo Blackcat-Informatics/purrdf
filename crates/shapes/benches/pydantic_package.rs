@@ -7,6 +7,14 @@ use std::time::Duration;
 
 use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_main, black_box};
 
+#[allow(
+    dead_code,
+    unused_imports,
+    unused_macros,
+    reason = "each target uses part of the crate's shared JSON model"
+)]
+#[path = "../src/json_model.rs"]
+mod json_model;
 #[path = "support/pydantic.rs"]
 mod pydantic_support;
 use pydantic_support::{Fixture, Mode, SIZES};

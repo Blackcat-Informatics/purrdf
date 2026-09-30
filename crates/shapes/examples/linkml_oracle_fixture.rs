@@ -6,6 +6,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 
+#[allow(
+    dead_code,
+    unused_imports,
+    unused_macros,
+    reason = "each target uses part of the crate's shared JSON model"
+)]
+#[path = "../src/json_model.rs"]
+mod json_model;
+#[path = "support/json_text.rs"]
+mod json_text;
 #[path = "support/shacl_lists.rs"]
 mod shacl_lists;
 #[path = "support/shacl_temporal.rs"]
@@ -13,17 +23,18 @@ mod shacl_temporal;
 #[path = "support/shacl_value_shapes.rs"]
 mod shacl_value_shapes;
 
+use json_model::{Value, json};
+use json_text::read_sorted;
 use purrdf::loss::{LossLedger, check_ledger_sound};
 use purrdf_shapes::json_schema::CompiledSchema;
 use purrdf_shapes::{
     ImportedShapes, LinkmlConfig, LinkmlPackage, Namespaces, SchemaDatatypeMap, SchemaImportConfig,
     emit_linkml, import_linkml_package, parse_linkml, write_linkml,
 };
-use serde_json::{Value, json};
 
-fn compiled(schema: &Value) -> Result<CompiledSchema, serde_json::Error> {
+fn compiled(schema: &Value) -> Result<CompiledSchema, purrdf_lex::json::Error> {
     Ok(CompiledSchema {
-        schema_json: format!("{}\n", serde_json::to_string_pretty(schema)?),
+        schema_json: format!("{}\n", json_model::write_pretty(schema)),
         openapi_json: "{}\n".to_owned(),
         losses: LossLedger::new(),
     })
@@ -88,8 +99,8 @@ fn reverse_payload(
         .map(|shape| shape.id.to_string())
         .collect::<Vec<_>>();
     Ok(json!({
-        "losses": serde_json::from_str::<Value>(&imported.losses.render_json())?,
-        "schema": serde_json::from_str::<Value>(&compiled.schema_json)?,
+        "losses": read_sorted(&imported.losses.render_json())?,
+        "schema": read_sorted(&compiled.schema_json)?,
         "shape_ids": shape_ids,
     }))
 }
@@ -374,23 +385,23 @@ fn main() -> Result<(), Box<dyn Error>> {
     let output = json!({
         "value_shapes": {
             "element_names": value_shapes.element_names,
-            "losses": serde_json::from_str::<Value>(&value_shapes.losses.render_json())?,
+            "losses": read_sorted(&value_shapes.losses.render_json())?,
             "probes": value_shape_probes,
-            "schema": serde_json::from_str::<Value>(&value_shape_schema.schema_json)?,
+            "schema": read_sorted(&value_shape_schema.schema_json)?,
             "yaml": value_shapes.yaml,
         },
         "temporal": {
             "element_names": temporal.element_names,
-            "losses": serde_json::from_str::<Value>(&temporal.losses.render_json())?,
+            "losses": read_sorted(&temporal.losses.render_json())?,
             "probes": temporal_probes,
-            "schema": serde_json::from_str::<Value>(&temporal_schema.schema_json)?,
+            "schema": read_sorted(&temporal_schema.schema_json)?,
             "yaml": temporal.yaml,
         },
         "lists": {
             "element_names": lists.element_names,
-            "losses": serde_json::from_str::<Value>(&lists.losses.render_json())?,
+            "losses": read_sorted(&lists.losses.render_json())?,
             "probes": list_probes,
-            "schema": serde_json::from_str::<Value>(&list_schema.schema_json)?,
+            "schema": read_sorted(&list_schema.schema_json)?,
             "yaml": lists.yaml,
         },
         "exact": {
@@ -401,21 +412,32 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
         "lossy": {
             "element_names": lossy.element_names,
-            "losses": serde_json::from_str::<Value>(&lossy.losses.render_json())?,
+            "losses": read_sorted(&lossy.losses.render_json())?,
             "reverse": reverse_payload(&lossy, &import_config)?,
             "schema": lossy_schema,
             "yaml": lossy.yaml,
         },
         "renamed": {
             "element_names": renamed.element_names,
-            "losses": serde_json::from_str::<Value>(&renamed.losses.render_json())?,
+            "losses": read_sorted(&renamed.losses.render_json())?,
             "reverse": reverse_payload(&renamed, &import_config)?,
             "schema": renamed_schema,
-            "slot_diagnostics": renamed.slot_diagnostics,
-            "slot_renames": renamed.slot_renames,
+            "slot_diagnostics": renamed
+                .slot_diagnostics
+                .iter()
+                .map(purrdf_shapes::LinkmlSlotDiagnostic::to_json)
+                .collect::<Vec<_>>(),
+            "slot_renames": renamed
+                .slot_renames
+                .iter()
+                .map(purrdf_shapes::LinkmlSlotRename::to_json)
+                .collect::<Vec<_>>(),
             "yaml": renamed.yaml,
         }
     });
-    println!("{}", serde_json::to_string(&output)?);
+    // Every object is written with its members in name order.
+    let mut output = output;
+    output.sort_keys();
+    println!("{}", json_model::write_compact(&output));
     Ok(())
 }

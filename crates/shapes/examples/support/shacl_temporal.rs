@@ -14,10 +14,10 @@
 use std::error::Error;
 use std::fmt::Write as _;
 
+use purrdf_lex::json::Value;
 use purrdf_shapes::engine::{parse_shapes, validate_dataset_with_shapes_graph};
 use purrdf_shapes::json_schema::{CompiledSchema, Namespaces, compile};
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
-use serde_json::Value;
 
 const PREFIXES: &str = r"
     @prefix sh:  <http://www.w3.org/ns/shacl#> .

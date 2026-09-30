@@ -9,6 +9,7 @@
 //! parse cannot become a spurious timeout. See `crates/rdf/tests/never_panic.rs`
 //! for the contract rationale.
 
+use purrdf_lex::json::{Number, Object, Value};
 use purrdf_shapes::engine::parse_shapes;
 use purrdf_shapes::json_schema::Namespaces;
 use purrdf_shapes::{
@@ -16,7 +17,6 @@ use purrdf_shapes::{
     parse_linkml,
 };
 use purrdf_testkit::prop::prelude::*;
-use serde_json::{Map, Number, Value};
 
 fn arbitrary_bytes() -> impl Strategy<Value = Vec<u8>> {
     prop::collection::vec(any::<u8>(), 0..4096)
@@ -121,9 +121,8 @@ fn arbitrary_json() -> impl Strategy<Value = Value> {
     leaf.prop_recursive(5, 128, 8, |inner| {
         prop_oneof![
             prop::collection::vec(inner.clone(), 0..8).prop_map(Value::Array),
-            prop::collection::btree_map(prop::string::regex(".{0,24}"), inner, 0..8).prop_map(
-                |entries| { Value::Object(entries.into_iter().collect::<Map<String, Value>>()) }
-            ),
+            prop::collection::btree_map(prop::string::regex(".{0,24}"), inner, 0..8)
+                .prop_map(|entries| { Value::Object(entries.into_iter().collect::<Object>()) }),
         ]
     })
 }
@@ -166,7 +165,7 @@ prop_test! {
 
     #[test]
     fn import_json_schema_never_panics(value in arbitrary_json()) {
-        let input = serde_json::to_string(&value).expect("JSON value serializes");
+        let input = purrdf_lex::json::write_compact(&value);
         let _ = import_json_schema(&input, &schema_import_config());
     }
 
@@ -179,7 +178,7 @@ prop_test! {
 
     #[test]
     fn import_linkml_never_panics(section in 0_usize..4, value in arbitrary_json()) {
-        let mut document = serde_json::json!({
+        let mut document = purrdf_lex::json::read(r#"{
             "id": "https://example.org/schema/linkml",
             "name": "Generated-Schema",
             "metamodel_version": "1.11.0",
@@ -192,7 +191,8 @@ prop_test! {
             "enums": {},
             "slots": {},
             "types": {}
-        });
+        }"#)
+        .expect("literal");
         let section_name = ["classes", "enums", "slots", "types"][section];
         document[section_name]["Generated"] = value;
         if let Ok(document) = LinkmlDocument::from_value(document) {

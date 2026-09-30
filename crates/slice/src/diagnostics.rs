@@ -14,7 +14,7 @@
 /// validator's diagnostic dict (`purrdf.validate_sssom`) so the PyO3 binding packs
 /// both into the same `{severity, code, message, check, instance}` shape the Python
 /// finding leg consumes.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectionDiagnostic {
     /// Severity token: `"ERROR"`, `"WARNING"`, or `"INFO"`.
     pub severity: String,
@@ -38,6 +38,22 @@ pub struct ProjectionDiagnostic {
 }
 
 impl ProjectionDiagnostic {
+    /// The diagnostic as a JSON object whose members are its fields, in
+    /// declaration order; an absent optional field is `null`.
+    pub fn to_json(&self) -> purrdf_lex::json::Value {
+        purrdf_lex::json::Value::from(
+            purrdf_lex::json::Object::new()
+                .with("severity", &self.severity)
+                .with("check", &self.check)
+                .with("code", &self.code)
+                .with("message", &self.message)
+                .with("instance", self.instance.as_deref())
+                .with("subject_id", self.subject_id.as_deref())
+                .with("predicate_id", self.predicate_id.as_deref())
+                .with("object_id", self.object_id.as_deref()),
+        )
+    }
+
     /// Severity-first ordering used for stable, deterministic lint output:
     /// ERROR < WARNING < INFO < everything else, then check, then instance.
     pub fn cmp_severity_check_instance(&self, other: &Self) -> std::cmp::Ordering {

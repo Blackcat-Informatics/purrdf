@@ -111,7 +111,7 @@ fn stem_range_exclusion_doc(tag: &str) -> String {
 }
 
 /// JSON-quote a tag. Every tag under test is ASCII with no `"` or `\`, so this
-/// is exact; a `serde_json` dependency here would only hide what is being fed in.
+/// is exact; a JSON writer here would only hide what is being fed in.
 fn quote(tag: &str) -> String {
     assert!(
         tag.chars().all(|c| c.is_ascii() && c != '"' && c != '\\'),

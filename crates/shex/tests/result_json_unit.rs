@@ -45,8 +45,7 @@ fn array_fields_and_status() {
         ),
     ];
     let result = validate(&schema, &data, &map);
-    let json: serde_json::Value =
-        serde_json::from_str(&result.to_result_json()).expect("valid JSON");
+    let json = purrdf_lex::json::read(&result.to_result_json()).expect("valid JSON");
     let rows = json.as_array().expect("array");
     assert_eq!(rows.len(), 2);
 
@@ -59,7 +58,7 @@ fn array_fields_and_status() {
     // s2 fails (literal object where IRI required); reason present.
     assert_eq!(rows[1]["node"], "<http://a.example/s2>");
     assert_eq!(rows[1]["status"], "nonconformant");
-    assert!(rows[1]["reason"].is_string());
+    assert!(rows[1]["reason"].as_str().is_some());
 }
 
 #[test]
@@ -92,8 +91,7 @@ fn literal_and_start_term_syntax() {
         (TermValue::simple_literal("a\"b"), ShapeSelector::Start),
     ];
     let result = validate(&schema, &data, &map);
-    let json: serde_json::Value =
-        serde_json::from_str(&result.to_result_json()).expect("valid JSON");
+    let json = purrdf_lex::json::read(&result.to_result_json()).expect("valid JSON");
     let rows = json.as_array().expect("array");
     assert_eq!(rows[0]["node"], "\"hi\"@en");
     assert_eq!(rows[0]["shape"], "START");
@@ -118,8 +116,7 @@ fn emitted_node_term(node: &TermValue) -> String {
             reason: None,
         }],
     };
-    let json: serde_json::Value =
-        serde_json::from_str(&result.to_result_json()).expect("valid JSON");
+    let json = purrdf_lex::json::read(&result.to_result_json()).expect("valid JSON");
     json[0]["node"]
         .as_str()
         .expect("node is a string")
@@ -220,7 +217,7 @@ fn reason_strings_with_quotes_and_newlines_stay_valid_json() {
     )];
     let result = validate(&schema, &data, &map);
     let rendered = result.to_result_json();
-    let json: serde_json::Value = serde_json::from_str(&rendered).expect("valid JSON");
+    let json = purrdf_lex::json::read(&rendered).expect("valid JSON");
     let reason = json[0]["reason"].as_str().expect("reason present");
     assert_ne!(reason, "");
 
@@ -235,7 +232,7 @@ fn reason_strings_with_quotes_and_newlines_stay_valid_json() {
         }],
     };
     let rendered = result.to_result_json();
-    let json: serde_json::Value = serde_json::from_str(&rendered).expect("valid JSON");
+    let json = purrdf_lex::json::read(&rendered).expect("valid JSON");
     assert_eq!(json[0]["reason"], "bad \"value\"\nline two");
 }
 

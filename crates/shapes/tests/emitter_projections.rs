@@ -25,6 +25,7 @@
 
 use std::collections::BTreeMap;
 
+use purrdf_lex::json::Value;
 use purrdf_shapes::json_schema::{CompiledSchema, Namespaces, compile};
 use purrdf_shapes::shapes::from_dataset;
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
@@ -32,7 +33,6 @@ use purrdf_shapes::{
     GRAPHQL_SCHEMA_PATH, GraphqlConfig, LinkmlConfig, PydanticConfig, TYPESCRIPT_DECLARATION_PATH,
     TypeScriptConfig, emit_graphql, emit_linkml, emit_pydantic, emit_typescript,
 };
-use serde_json::Value;
 
 const PREFIXES: &str = r"
     @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
@@ -221,7 +221,7 @@ fn emit(body: &str) -> Emitted {
     let dataset = parse_turtle_to_dataset(&format!("{PREFIXES}{body}"), None).expect("Turtle");
     let shapes = from_dataset(&dataset).expect("shapes graph");
     let compiled = compile(&shapes, &namespaces()).expect("schema compilation");
-    let schema = serde_json::from_str(&compiled.schema_json).expect("schema JSON");
+    let schema = purrdf_lex::json::read(&compiled.schema_json).expect("schema JSON");
     let typescript = emit_typescript(
         &compiled,
         &TypeScriptConfig::new("example-types", "Example package.", "Example declarations.")
@@ -297,12 +297,16 @@ fn python_json(text: &str) -> String {
     out
 }
 
+/// An expected JSON value, its members in name order as every emitter writes
+/// them, so that equality with an emitted value ignores the literal's order.
 fn json(text: &str) -> Value {
-    serde_json::from_str(text).expect("expected JSON")
+    let mut value = purrdf_lex::json::read(text).expect("expected JSON");
+    value.sort_keys();
+    value
 }
 
 fn ledger_rows(ledger: &str) -> Vec<(String, String, String)> {
-    let ledger: Value = serde_json::from_str(ledger).expect("ledger JSON");
+    let ledger: Value = purrdf_lex::json::read(ledger).expect("ledger JSON");
     ledger["losses"]
         .as_array()
         .expect("losses array")
@@ -401,7 +405,7 @@ fn holder_comments(emitted: &Emitted) -> Vec<String> {
 
 fn assert_pydantic_keeps_comments(emitted: &Emitted) {
     for comment in holder_comments(emitted) {
-        let encoded = serde_json::to_string(&comment).expect("JSON string");
+        let encoded = purrdf_lex::json::write_compact(&Value::from(comment.as_str()));
         assert!(
             emitted.pydantic.contains(&encoded),
             "model_json_schema() keeps {encoded}"
@@ -2276,7 +2280,10 @@ fn linkml_projects_some_value() {
     let emitted = emit(SOME_VALUE);
     let subject = &emitted.linkml["classes"]["Holder"]["attributes"]["ex:subject"];
     assert_eq!(subject["required"], true);
-    assert!(subject["any_of"][0]["all_of"].is_array(), "{subject}");
+    assert!(
+        subject["any_of"][0]["all_of"].as_array().is_some(),
+        "{subject}"
+    );
     assert_eq!(subject["any_of"][1]["minimum_cardinality"], 1);
     let member = &subject["any_of"][1]["has_member"];
     assert_eq!(
@@ -3213,7 +3220,8 @@ mod observed {
                 purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
                     .iter()
                     .map(|&(uri, text)| {
-                        let document: Value = serde_json::from_str(text).expect("meta-schema JSON");
+                        let document: Value =
+                            purrdf_lex::json::read(text).expect("meta-schema JSON");
                         (uri, document)
                     }),
             )
@@ -3240,7 +3248,7 @@ mod observed {
             .find(|node| node["@id"] == "https://example.org/h")
             .expect("ex:h is projected")
             .clone();
-        let schema: Value = serde_json::from_str(&compiled.schema_json).expect("schema JSON");
+        let schema: Value = purrdf_lex::json::read(&compiled.schema_json).expect("schema JSON");
         let location = "mem:///holder.schema.json";
         let mut registry = purrdf_jsonschema::Registry::with_metaschemas(metaschemas());
         registry

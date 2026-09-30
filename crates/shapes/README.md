@@ -471,7 +471,7 @@ use purrdf_shapes::{
     PydanticClassConfig, PydanticModuleConfig, PydanticPackageTopology,
     PydanticVersionStamp,
 };
-use serde_json::json;
+use purrdf_lex::json::Value;
 
 let topology = PydanticPackageTopology::new(
     [PydanticModuleConfig::new(
@@ -483,8 +483,8 @@ let topology = PydanticPackageTopology::new(
         "domain.people",
         "Caller-owned Person documentation.",
         BTreeMap::from([
-            ("definitionDigest".to_owned(), json!("sha256:...")),
-            ("docs".to_owned(), json!("https://example.org/docs/person")),
+            ("definitionDigest".to_owned(), Value::from("sha256:...")),
+            ("docs".to_owned(), Value::from("https://example.org/docs/person")),
         ]),
     )?],
 )?;

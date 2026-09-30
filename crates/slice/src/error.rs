@@ -26,6 +26,10 @@ pub enum SliceError {
     /// A structurally malformed RDF Collection encountered while walking an
     /// `rdf:first`/`rdf:rest` chain.
     RdfList(purrdf::RdfListError),
+    /// A JSON value does not have the shape a slice record decodes from
+    /// (`from_json` on [`crate::ManifestView`], [`crate::ArtifactRecord`] and
+    /// their parts).
+    Json(String),
 }
 
 impl std::fmt::Display for SliceError {
@@ -39,6 +43,7 @@ impl std::fmt::Display for SliceError {
                 write!(f, "digest mismatch: expected {expected}, got {actual}")
             }
             Self::RdfList(e) => write!(f, "malformed RDF collection: {e}"),
+            Self::Json(msg) => write!(f, "invalid slice JSON: {msg}"),
         }
     }
 }

@@ -20,9 +20,11 @@
 //! silently ignored — this is what lets the conformance harness catch
 //! ShEx 2.next constructs in a 2.1 corpus.
 //!
-//! [`Schema`] also implements [`serde::Serialize`]/[`serde::Deserialize`]
-//! by delegation to this module, so it can be embedded in larger serde
-//! documents.
+//! The document is read by the workspace's one JSON reader
+//! ([`purrdf_lex::json`]) with at most 128 open arrays and
+//! objects, and no object may repeat a member name. RFC 8259 §4 leaves the
+//! meaning of a repeated name open, so a strict reader cannot pick one
+//! occurrence without silently discarding the other (RFC 7493 §2.3).
 //!
 //! # Every IRI-valued member is document-relative, because ShExJ is JSON-LD
 //!
@@ -64,10 +66,8 @@
 //! the empty stem is the spec's "any language" wildcard.
 
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, langtag};
+use purrdf_lex::json::{self, Limits, Number, Object, Value};
 use purrdf_xsd::ieee::Binary64Scope;
-use serde::de::Error as _;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::{Map, Number, Value, json};
 
 use crate::ast::{
     Annotation, IriExclusion, LanguageExclusion, LiteralExclusion, NodeConstraint, NodeKind,
@@ -78,6 +78,13 @@ use crate::error::{Result, ShexError};
 
 /// The canonical `@context` IRI emitted on serialized schemas.
 pub const SHEX_CONTEXT: &str = "http://www.w3.org/ns/shex.jsonld";
+
+/// The bounds a ShExJ document is read under: 128 open arrays and objects,
+/// and no repeated member name.
+const SHEXJ_LIMITS: Limits = Limits {
+    unique_members: true,
+    ..Limits::with_depth(128)
+};
 
 /// Parse a ShExJ document into a [`Schema`], resolving every IRI-valued member
 /// against `base`.
@@ -109,14 +116,12 @@ pub const SHEX_CONTEXT: &str = "http://www.w3.org/ns/shex.jsonld";
 /// assert!(err.to_string().contains("iri-relative-no-base"));
 /// ```
 pub fn parse_shexj(input: &str, base: Option<&str>) -> Result<Schema> {
-    // A numeric facet's value is compared with every datum validated against it: read it
-    // inside a binary64 scope so the x87 rounds `serde_json`'s exact fast path once, like
-    // every other unit (the workspace's `float_roundtrip` makes the rest correctly rounded).
-    let value: Value = {
-        let _binary64 = Binary64Scope::enter();
-        serde_json::from_str(input)
-    }
-    .map_err(|e| ShexError::shexj(format!("invalid JSON: {e}")))?;
+    let value = json::read_with(input, SHEXJ_LIMITS)
+        .map_err(|e| ShexError::shexj(format!("invalid JSON: {e}")))?;
+    // A numeric facet's value is compared with every datum validated against it: its
+    // lexeme becomes a binary64 inside a binary64 scope so the x87 rounds it once, like
+    // every other unit.
+    let _binary64 = Binary64Scope::enter();
     Reader::new(base)?.schema(&value)
 }
 
@@ -145,50 +150,31 @@ pub fn parse_shexj(input: &str, base: Option<&str>) -> Result<Schema> {
 /// ```
 #[must_use]
 pub fn to_shexj(schema: &Schema) -> String {
-    let value = schema_to_value(schema);
-    serde_json::to_string_pretty(&value).unwrap_or_else(|_| String::from("{}"))
-}
-
-impl Serialize for Schema {
-    fn serialize<S: Serializer>(&self, serializer: S) -> core::result::Result<S::Ok, S::Error> {
-        schema_to_value(self).serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for Schema {
-    /// Read an embedded ShExJ document with **no** base in scope.
-    ///
-    /// A `Schema` nested inside a larger serde document is handed no retrieval
-    /// IRI and serde carries no place to put one, so a relative reference here is
-    /// the RFC-3986 §5.1.4 hard failure. Reach [`parse_shexj`] directly to supply
-    /// a base.
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> core::result::Result<Self, D::Error> {
-        let value = Value::deserialize(deserializer)?;
-        Reader::new(None)
-            .and_then(|reader| reader.schema(&value))
-            .map_err(D::Error::custom)
-    }
+    let mut value = schema_to_value(schema);
+    // Members are written in name order: the byte layout every ShExJ golden pins.
+    value.sort_keys();
+    json::write_pretty(&value)
 }
 
 // ── serialization (AST → Value) ─────────────────────────────────────────────
 
 fn schema_to_value(schema: &Schema) -> Value {
-    let mut obj = Map::new();
-    obj.insert("@context".into(), json!(SHEX_CONTEXT));
-    obj.insert("type".into(), json!("Schema"));
+    let mut obj = Object::new();
+    obj.push("@context", SHEX_CONTEXT);
+    obj.push("type", "Schema");
     if !schema.imports.is_empty() {
-        obj.insert("imports".into(), json!(schema.imports));
+        obj.push("imports", schema.imports.as_slice());
     }
     if !schema.start_acts.is_empty() {
         let acts: Vec<Value> = schema.start_acts.iter().map(sem_act_to_value).collect();
-        obj.insert("startActs".into(), Value::Array(acts));
+        obj.push("startActs", Value::Array(acts));
     }
     if let Some(start) = &schema.start {
-        obj.insert("start".into(), shape_expr_to_value(start));
+        obj.push("start", shape_expr_to_value(start));
     }
     if !schema.shapes.is_empty() {
         let shapes: Vec<Value> = schema.shapes.iter().map(shape_decl_to_value).collect();
-        obj.insert("shapes".into(), Value::Array(shapes));
+        obj.push("shapes", Value::Array(shapes));
     }
     Value::Object(obj)
 }
@@ -197,47 +183,51 @@ fn shape_decl_to_value(decl: &ShapeDecl) -> Value {
     // ShExJ 2.1 inlines the declaration id on the shape-expression object. A
     // bare reference cannot carry an id, so it is wrapped in a singleton
     // `ShapeAnd` (the only faithful 2.1 encoding).
-    let body = match &decl.expr {
+    let mut body = match &decl.expr {
         ShapeExpr::Ref(_) => shape_expr_to_value(&ShapeExpr::And(vec![decl.expr.clone()])),
         other => shape_expr_to_value(other),
     };
-    match body {
-        Value::Object(mut obj) => {
-            obj.insert("id".into(), json!(decl.id));
-            Value::Object(obj)
-        }
-        other => other,
+    if let Some(obj) = body.as_object_mut() {
+        obj.push("id", &decl.id);
     }
+    body
 }
 
 fn shape_expr_to_value(expr: &ShapeExpr) -> Value {
     match expr {
-        ShapeExpr::Ref(label) => json!(label),
+        ShapeExpr::Ref(label) => Value::from(label),
         ShapeExpr::And(parts) => {
             let parts: Vec<Value> = parts.iter().map(shape_expr_to_value).collect();
-            json!({"type": "ShapeAnd", "shapeExprs": parts})
+            Value::object([
+                ("type", Value::from("ShapeAnd")),
+                ("shapeExprs", Value::from(parts)),
+            ])
         }
         ShapeExpr::Or(parts) => {
             let parts: Vec<Value> = parts.iter().map(shape_expr_to_value).collect();
-            json!({"type": "ShapeOr", "shapeExprs": parts})
+            Value::object([
+                ("type", Value::from("ShapeOr")),
+                ("shapeExprs", Value::from(parts)),
+            ])
         }
-        ShapeExpr::Not(inner) => {
-            json!({"type": "ShapeNot", "shapeExpr": shape_expr_to_value(inner)})
-        }
-        ShapeExpr::External => json!({"type": "ShapeExternal"}),
+        ShapeExpr::Not(inner) => Value::object([
+            ("type", Value::from("ShapeNot")),
+            ("shapeExpr", shape_expr_to_value(inner)),
+        ]),
+        ShapeExpr::External => Value::object([("type", Value::from("ShapeExternal"))]),
         ShapeExpr::Node(nc) => node_constraint_to_value(nc),
         ShapeExpr::Shape(shape) => shape_to_value(shape),
     }
 }
 
 fn node_constraint_to_value(nc: &NodeConstraint) -> Value {
-    let mut obj = Map::new();
-    obj.insert("type".into(), json!("NodeConstraint"));
+    let mut obj = Object::new();
+    obj.push("type", "NodeConstraint");
     if let Some(kind) = nc.node_kind {
-        obj.insert("nodeKind".into(), json!(kind.as_str()));
+        obj.push("nodeKind", kind.as_str());
     }
     if let Some(dt) = &nc.datatype {
-        obj.insert("datatype".into(), json!(dt));
+        obj.push("datatype", dt);
     }
     for (key, slot) in [
         ("length", nc.length),
@@ -247,14 +237,14 @@ fn node_constraint_to_value(nc: &NodeConstraint) -> Value {
         ("fractiondigits", nc.fractiondigits),
     ] {
         if let Some(n) = slot {
-            obj.insert(key.into(), json!(n));
+            obj.push(key, Value::from(n));
         }
     }
     if let Some(p) = &nc.pattern {
-        obj.insert("pattern".into(), json!(p));
+        obj.push("pattern", p);
     }
     if let Some(f) = &nc.flags {
-        obj.insert("flags".into(), json!(f));
+        obj.push("flags", f);
     }
     for (key, slot) in [
         ("mininclusive", nc.mininclusive),
@@ -263,143 +253,162 @@ fn node_constraint_to_value(nc: &NodeConstraint) -> Value {
         ("maxexclusive", nc.maxexclusive),
     ] {
         if let Some(n) = slot {
-            obj.insert(key.into(), numeric_to_value(n));
+            obj.push(key, numeric_to_value(n));
         }
     }
     if let Some(values) = &nc.values {
         let values: Vec<Value> = values.iter().map(value_set_value_to_value).collect();
-        obj.insert("values".into(), Value::Array(values));
+        obj.push("values", Value::Array(values));
     }
     Value::Object(obj)
 }
 
 fn numeric_to_value(n: NumericLiteral) -> Value {
     match n {
-        NumericLiteral::Integer(i) => json!(i),
+        NumericLiteral::Integer(i) => Value::from(i),
         NumericLiteral::Fractional(f) => {
-            Number::from_f64(f).map_or_else(|| json!(0), Value::Number)
+            Number::from_f64(f).map_or_else(|| Value::from(0_u8), Value::Number)
         }
     }
 }
 
 fn stem_to_value(stem: &StemValue) -> Value {
     match stem {
-        StemValue::Str(s) => json!(s),
-        StemValue::Wildcard => json!({"type": "Wildcard"}),
+        StemValue::Str(s) => Value::from(s),
+        StemValue::Wildcard => Value::object([("type", Value::from("Wildcard"))]),
     }
 }
 
 fn value_set_value_to_value(v: &ValueSetValue) -> Value {
     match v {
-        ValueSetValue::Iri(iri) => json!(iri),
+        ValueSetValue::Iri(iri) => Value::from(iri),
         ValueSetValue::Literal(lit) => object_literal_to_value(lit),
-        ValueSetValue::IriStem { stem } => json!({"type": "IriStem", "stem": stem}),
+        ValueSetValue::IriStem { stem } => Value::object([
+            ("type", Value::from("IriStem")),
+            ("stem", Value::from(stem)),
+        ]),
         ValueSetValue::IriStemRange { stem, exclusions } => {
             let exclusions: Vec<Value> = exclusions
                 .iter()
                 .map(|e| match e {
-                    IriExclusion::Iri(iri) => json!(iri),
-                    IriExclusion::Stem(stem) => json!({"type": "IriStem", "stem": stem}),
+                    IriExclusion::Iri(iri) => Value::from(iri),
+                    IriExclusion::Stem(stem) => Value::object([
+                        ("type", Value::from("IriStem")),
+                        ("stem", Value::from(stem)),
+                    ]),
                 })
                 .collect();
-            json!({"type": "IriStemRange", "stem": stem_to_value(stem), "exclusions": exclusions})
+            Value::object([
+                ("type", Value::from("IriStemRange")),
+                ("stem", stem_to_value(stem)),
+                ("exclusions", Value::from(exclusions)),
+            ])
         }
-        ValueSetValue::LiteralStem { stem } => json!({"type": "LiteralStem", "stem": stem}),
+        ValueSetValue::LiteralStem { stem } => Value::object([
+            ("type", Value::from("LiteralStem")),
+            ("stem", Value::from(stem)),
+        ]),
         ValueSetValue::LiteralStemRange { stem, exclusions } => {
             let exclusions: Vec<Value> = exclusions
                 .iter()
                 .map(|e| match e {
-                    LiteralExclusion::Literal(v) => json!(v),
-                    LiteralExclusion::Stem(stem) => {
-                        json!({"type": "LiteralStem", "stem": stem})
-                    }
+                    LiteralExclusion::Literal(v) => Value::from(v),
+                    LiteralExclusion::Stem(stem) => Value::object([
+                        ("type", Value::from("LiteralStem")),
+                        ("stem", Value::from(stem)),
+                    ]),
                 })
                 .collect();
-            json!({
-                "type": "LiteralStemRange",
-                "stem": stem_to_value(stem),
-                "exclusions": exclusions,
-            })
+            Value::object([
+                ("type", Value::from("LiteralStemRange")),
+                ("stem", stem_to_value(stem)),
+                ("exclusions", Value::from(exclusions)),
+            ])
         }
-        ValueSetValue::Language { language_tag } => {
-            json!({"type": "Language", "languageTag": language_tag})
-        }
-        ValueSetValue::LanguageStem { stem } => json!({"type": "LanguageStem", "stem": stem}),
+        ValueSetValue::Language { language_tag } => Value::object([
+            ("type", Value::from("Language")),
+            ("languageTag", Value::from(language_tag)),
+        ]),
+        ValueSetValue::LanguageStem { stem } => Value::object([
+            ("type", Value::from("LanguageStem")),
+            ("stem", Value::from(stem)),
+        ]),
         ValueSetValue::LanguageStemRange { stem, exclusions } => {
             let exclusions: Vec<Value> = exclusions
                 .iter()
                 .map(|e| match e {
-                    LanguageExclusion::Language(tag) => json!(tag),
-                    LanguageExclusion::Stem(stem) => {
-                        json!({"type": "LanguageStem", "stem": stem})
-                    }
+                    LanguageExclusion::Language(tag) => Value::from(tag),
+                    LanguageExclusion::Stem(stem) => Value::object([
+                        ("type", Value::from("LanguageStem")),
+                        ("stem", Value::from(stem)),
+                    ]),
                 })
                 .collect();
-            json!({
-                "type": "LanguageStemRange",
-                "stem": stem_to_value(stem),
-                "exclusions": exclusions,
-            })
+            Value::object([
+                ("type", Value::from("LanguageStemRange")),
+                ("stem", stem_to_value(stem)),
+                ("exclusions", Value::from(exclusions)),
+            ])
         }
     }
 }
 
 fn object_literal_to_value(lit: &ObjectLiteral) -> Value {
-    let mut obj = Map::new();
-    obj.insert("value".into(), json!(lit.value));
+    let mut obj = Object::new();
+    obj.push("value", &lit.value);
     if let Some(lang) = &lit.language {
-        obj.insert("language".into(), json!(lang));
+        obj.push("language", lang);
     }
     if let Some(dt) = &lit.datatype {
-        obj.insert("type".into(), json!(dt));
+        obj.push("type", dt);
     }
     Value::Object(obj)
 }
 
 fn shape_to_value(shape: &Shape) -> Value {
-    let mut obj = Map::new();
-    obj.insert("type".into(), json!("Shape"));
+    let mut obj = Object::new();
+    obj.push("type", "Shape");
     if let Some(closed) = shape.closed {
-        obj.insert("closed".into(), json!(closed));
+        obj.push("closed", closed);
     }
     if !shape.extra.is_empty() {
-        obj.insert("extra".into(), json!(shape.extra));
+        obj.push("extra", shape.extra.as_slice());
     }
     if let Some(expr) = &shape.expression {
-        obj.insert("expression".into(), triple_expr_to_value(expr));
+        obj.push("expression", triple_expr_to_value(expr));
     }
     insert_acts_annots(&mut obj, &shape.sem_acts, &shape.annotations);
     Value::Object(obj)
 }
 
-fn insert_acts_annots(obj: &mut Map<String, Value>, sem_acts: &[SemAct], annots: &[Annotation]) {
+fn insert_acts_annots(obj: &mut Object, sem_acts: &[SemAct], annots: &[Annotation]) {
     if !sem_acts.is_empty() {
         let acts: Vec<Value> = sem_acts.iter().map(sem_act_to_value).collect();
-        obj.insert("semActs".into(), Value::Array(acts));
+        obj.push("semActs", Value::Array(acts));
     }
     if !annots.is_empty() {
         let annots: Vec<Value> = annots.iter().map(annotation_to_value).collect();
-        obj.insert("annotations".into(), Value::Array(annots));
+        obj.push("annotations", Value::Array(annots));
     }
 }
 
 fn triple_expr_to_value(expr: &TripleExpr) -> Value {
     match expr {
-        TripleExpr::Ref(label) => json!(label),
+        TripleExpr::Ref(label) => Value::from(label),
         TripleExpr::EachOf(group) => group_to_value("EachOf", group),
         TripleExpr::OneOf(group) => group_to_value("OneOf", group),
         TripleExpr::TripleConstraint(tc) => {
-            let mut obj = Map::new();
-            obj.insert("type".into(), json!("TripleConstraint"));
+            let mut obj = Object::new();
+            obj.push("type", "TripleConstraint");
             if let Some(id) = &tc.id {
-                obj.insert("id".into(), json!(id));
+                obj.push("id", id);
             }
             if let Some(inverse) = tc.inverse {
-                obj.insert("inverse".into(), json!(inverse));
+                obj.push("inverse", inverse);
             }
-            obj.insert("predicate".into(), json!(tc.predicate));
+            obj.push("predicate", &tc.predicate);
             if let Some(ve) = &tc.value_expr {
-                obj.insert("valueExpr".into(), shape_expr_to_value(ve));
+                obj.push("valueExpr", shape_expr_to_value(ve));
             }
             insert_min_max(&mut obj, tc.min, tc.max);
             insert_acts_annots(&mut obj, &tc.sem_acts, &tc.annotations);
@@ -409,54 +418,54 @@ fn triple_expr_to_value(expr: &TripleExpr) -> Value {
 }
 
 fn group_to_value(kind: &str, group: &TripleExprGroup) -> Value {
-    let mut obj = Map::new();
-    obj.insert("type".into(), json!(kind));
+    let mut obj = Object::new();
+    obj.push("type", kind);
     if let Some(id) = &group.id {
-        obj.insert("id".into(), json!(id));
+        obj.push("id", id);
     }
     let members: Vec<Value> = group.expressions.iter().map(triple_expr_to_value).collect();
-    obj.insert("expressions".into(), Value::Array(members));
+    obj.push("expressions", Value::Array(members));
     insert_min_max(&mut obj, group.min, group.max);
     insert_acts_annots(&mut obj, &group.sem_acts, &group.annotations);
     Value::Object(obj)
 }
 
-fn insert_min_max(obj: &mut Map<String, Value>, min: Option<i64>, max: Option<i64>) {
+fn insert_min_max(obj: &mut Object, min: Option<i64>, max: Option<i64>) {
     if let Some(min) = min {
-        obj.insert("min".into(), json!(min));
+        obj.push("min", min);
     }
     if let Some(max) = max {
-        obj.insert("max".into(), json!(max));
+        obj.push("max", max);
     }
 }
 
 fn sem_act_to_value(act: &SemAct) -> Value {
-    let mut obj = Map::new();
-    obj.insert("type".into(), json!("SemAct"));
-    obj.insert("name".into(), json!(act.name));
+    let mut obj = Object::new();
+    obj.push("type", "SemAct");
+    obj.push("name", &act.name);
     if let Some(code) = &act.code {
-        obj.insert("code".into(), json!(code));
+        obj.push("code", code);
     }
     Value::Object(obj)
 }
 
 fn annotation_to_value(annotation: &Annotation) -> Value {
     let object = match &annotation.object {
-        ObjectValue::Iri(iri) => json!(iri),
+        ObjectValue::Iri(iri) => Value::from(iri),
         ObjectValue::Literal(lit) => object_literal_to_value(lit),
     };
-    json!({
-        "type": "Annotation",
-        "predicate": annotation.predicate,
-        "object": object,
-    })
+    Value::object([
+        ("type", Value::from("Annotation")),
+        ("predicate", Value::from(&annotation.predicate)),
+        ("object", object),
+    ])
 }
 
 // ── deserialization (Value → AST) ────────────────────────────────────────────
 
 /// A strict object reader: every key must be consumed, or the read fails.
 struct Obj<'a> {
-    map: &'a Map<String, Value>,
+    map: &'a Object,
     taken: Vec<&'a str>,
     what: &'static str,
 }
@@ -552,7 +561,7 @@ impl<'a> Obj<'a> {
             Some(Value::Number(n)) => {
                 if let Some(i) = n.as_i64() {
                     Ok(Some(NumericLiteral::Integer(i)))
-                } else if let Some(f) = n.as_f64() {
+                } else if let Some(f) = Some(n.as_f64()).filter(|f| f.is_finite()) {
                     Ok(Some(NumericLiteral::Fractional(f)))
                 } else {
                     Err(ShexError::shexj(format!(
@@ -1080,7 +1089,7 @@ fn plain_stem(value: &Value, what: &'static str) -> Result<StemValue> {
 ///
 /// ShExJ is JSON, so nothing between the file and the AST lexes anything: a
 /// `"language"`, a `"languageTag"` and a `LanguageStemRange` string exclusion are
-/// each a bare `String` lifted straight out of `serde_json`. The ShExC lexer holds
+/// each a bare `String` lifted straight out of the JSON value. The ShExC lexer holds
 /// the identical positions to [`crate::lexer::LANGTAG_PROFILE`] (`@tag`), and
 /// [`crate::shexc`] writes every one of them back out **verbatim** after `@`. So
 /// without this call the crate refuses its own output: `parse_shexj` on
@@ -1182,6 +1191,54 @@ mod tests {
 
     fn parse(base: Option<&str>) -> Result<Schema> {
         parse_shexj(EVERY_POSITION, base)
+    }
+
+    #[test]
+    fn a_repeated_member_name_is_refused() {
+        let doc = r#"{"type":"Schema","shapes":[{"type":"Shape","id":"http://example.org/S","closed":true,"closed":false}]}"#;
+        let err = parse_shexj(doc, None).expect_err("a repeated member name is ambiguous");
+        assert!(
+            err.to_string().contains("repeats a member name"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn distinct_member_names_beside_a_repeated_value_are_accepted() {
+        // The neighbour of the refusal: the same value twice under distinct names,
+        // and the same name in two sibling objects, are not repeats.
+        let doc = concat!(
+            r#"{"type":"Schema","shapes":["#,
+            r#"{"type":"Shape","id":"http://example.org/S","closed":true},"#,
+            r#"{"type":"Shape","id":"http://example.org/T","closed":true}]}"#,
+        );
+        let schema = parse_shexj(doc, None).expect("no object repeats a member name");
+        assert_eq!(schema.shapes.len(), 2);
+    }
+
+    #[test]
+    fn nesting_is_bounded_at_128_open_containers() {
+        let nested = |depth: usize| {
+            // `Schema` and `shapes` are two containers; the rest is ShapeNot nesting.
+            let mut doc = String::from(r#"{"type":"Schema","shapes":["#);
+            let inner = depth - 3;
+            doc.push_str(r#"{"type":"ShapeNot","id":"http://example.org/S","shapeExpr":"#);
+            for _ in 1..inner {
+                doc.push_str(r#"{"type":"ShapeNot","shapeExpr":"#);
+            }
+            doc.push_str(r#"{"type":"ShapeExternal"}"#);
+            for _ in 0..inner {
+                doc.push('}');
+            }
+            doc.push_str("]}");
+            doc
+        };
+        let err = parse_shexj(&nested(129), None).expect_err("129 open containers");
+        assert!(
+            err.to_string().contains("nested"),
+            "unexpected error: {err}"
+        );
+        parse_shexj(&nested(128), None).expect("128 open containers are within the bound");
     }
 
     /// A numeric facet holds the value its decimal spells: the witnesses are numbers a

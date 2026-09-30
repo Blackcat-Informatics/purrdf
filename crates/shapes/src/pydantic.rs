@@ -40,10 +40,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Write as _};
 
+use crate::json_model::{Map, Object, Value, ValueKind};
 use ::purrdf::RdfLocation;
 use ::purrdf::loss::{LossEntry, LossLedger};
 use purrdf_hash::fnv::fnv1a64;
-use serde_json::{Map, Value};
 
 use crate::json_schema::CompiledSchema;
 use crate::schema_catalog::{
@@ -577,7 +577,7 @@ pub fn emit_pydantic(
             rewrite_references(definition, &names).map(|value| (class_name, value))
         })
         .collect::<Result<Map<_, _>, _>>()?;
-    let defs_literal = python_value(&Value::Object(rewritten_defs));
+    let defs_literal = python_value(&crate::json_model::object(rewritten_defs));
 
     let package_path = config.package_name.replace('.', "/");
     let mut artifacts = ArtifactAccumulator::new();
@@ -782,7 +782,7 @@ pub fn import_pydantic_package(
 }
 
 fn definition_names(
-    defs: &Map<String, Value>,
+    defs: &Object,
     routed: bool,
 ) -> Result<BTreeMap<String, String>, PydanticError> {
     let mut names = BTreeMap::new();
@@ -806,7 +806,7 @@ fn definition_names(
 
 struct Renderer<'a> {
     names: &'a BTreeMap<String, String>,
-    defs: &'a Map<String, Value>,
+    defs: &'a Object,
     routed: bool,
     ledger: LossLedger,
     helpers: Vec<(String, String)>,
@@ -822,11 +822,7 @@ struct Renderer<'a> {
 }
 
 impl<'a> Renderer<'a> {
-    fn new(
-        names: &'a BTreeMap<String, String>,
-        defs: &'a Map<String, Value>,
-        routed: bool,
-    ) -> Self {
+    fn new(names: &'a BTreeMap<String, String>, defs: &'a Object, routed: bool) -> Self {
         let mut used_names: BTreeSet<String> = names.values().cloned().collect();
         used_names.extend(reserved_type_names().into_iter().map(str::to_owned));
         Self {
@@ -874,7 +870,7 @@ impl<'a> Renderer<'a> {
     fn render_record(
         &mut self,
         class_name: &str,
-        definition: &Map<String, Value>,
+        definition: &Object,
         path: &str,
         schema_literal: &str,
         class_config: Option<&PydanticClassConfig>,
@@ -1087,7 +1083,7 @@ impl<'a> Renderer<'a> {
                             object.get(key).map(|value| (key.to_owned(), value.clone()))
                         })
                         .collect();
-                let required = Value::Object(required);
+                let required = crate::json_model::object(required);
                 Ok(
                     if required
                         .as_object()
@@ -1122,7 +1118,7 @@ impl<'a> Renderer<'a> {
 
     fn resolve_declared_type(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         path: &str,
     ) -> Result<String, PydanticError> {
         let Some(declared) = object.get("type") else {
@@ -1141,7 +1137,11 @@ impl<'a> Renderer<'a> {
                         PydanticError::new(format!("{path}/type/{index} must be a string"))
                     })?;
                     let mut branch = object.clone();
-                    branch.insert("type".to_owned(), Value::String(kind.to_owned()));
+                    crate::json_model::insert_sorted(
+                        &mut branch,
+                        "type".to_owned(),
+                        Value::String(kind.to_owned()),
+                    );
                     let base = self.resolve_type_name(kind, &branch, path)?;
                     resolved.push(apply_constraints(base, &branch));
                 }
@@ -1156,7 +1156,7 @@ impl<'a> Renderer<'a> {
     fn resolve_type_name(
         &mut self,
         kind: &str,
-        object: &Map<String, Value>,
+        object: &Object,
         path: &str,
     ) -> Result<String, PydanticError> {
         match kind {
@@ -1173,7 +1173,8 @@ impl<'a> Renderer<'a> {
                 _ => "StrictStr".to_owned(),
             }),
             "array" => {
-                let items = object.get("items").unwrap_or(&Value::Bool(true));
+                let always = Value::Bool(true);
+                let items = object.get("items").unwrap_or(&always);
                 let item_type = self.resolve_type(items, &format!("{path}/items"))?;
                 Ok(format!("list[{item_type}]"))
             }
@@ -1184,11 +1185,7 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    fn resolve_object(
-        &mut self,
-        object: &Map<String, Value>,
-        path: &str,
-    ) -> Result<String, PydanticError> {
+    fn resolve_object(&mut self, object: &Object, path: &str) -> Result<String, PydanticError> {
         let properties = properties(object, path)?;
         if properties.is_empty() {
             return match object.get("additionalProperties") {
@@ -1209,11 +1206,7 @@ impl<'a> Renderer<'a> {
         self.render_typed_dict(object, path)
     }
 
-    fn render_typed_dict(
-        &mut self,
-        object: &Map<String, Value>,
-        path: &str,
-    ) -> Result<String, PydanticError> {
+    fn render_typed_dict(&mut self, object: &Object, path: &str) -> Result<String, PydanticError> {
         if let Some(name) = self.helper_by_path.get(path) {
             return Ok(name.clone());
         }
@@ -1331,7 +1324,7 @@ impl<'a> Renderer<'a> {
     fn resolve_composed_union(
         &mut self,
         branches: &[Value],
-        parent: &Map<String, Value>,
+        parent: &Object,
         path: &str,
     ) -> Result<String, PydanticError> {
         let mut types = Vec::with_capacity(branches.len());
@@ -1413,7 +1406,7 @@ impl<'a> Renderer<'a> {
                 "additionalProperties",
             ]
             .iter()
-            .any(|keyword| object.contains_key(*keyword))
+            .any(|keyword| object.contains_key(keyword))
         {
             self.record(
                 "intersection-validation-widened",
@@ -1511,7 +1504,7 @@ impl<'a> Renderer<'a> {
             let union_is_shadowed = type_is_union
                 && ["$ref", "enum", "const"]
                     .iter()
-                    .any(|keyword| object.contains_key(*keyword));
+                    .any(|keyword| object.contains_key(keyword));
             if union_is_shadowed || (type_is_missing && !constraints_are_distributed) {
                 self.record(
                     "keyword-validation-dropped",
@@ -1537,7 +1530,7 @@ impl<'a> Renderer<'a> {
         }
 
         for key in schema_map_keywords() {
-            if let Some(children) = object.get(*key).and_then(Value::as_object) {
+            if let Some(children) = object.get(key).and_then(Value::as_object) {
                 for (child_key, child) in children {
                     self.audit_schema(
                         child,
@@ -1551,14 +1544,14 @@ impl<'a> Renderer<'a> {
             }
         }
         for key in schema_array_keywords() {
-            if let Some(children) = object.get(*key).and_then(Value::as_array) {
+            if let Some(children) = object.get(key).and_then(Value::as_array) {
                 for (index, child) in children.iter().enumerate() {
                     self.audit_schema(child, &format!("{path}/{key}/{index}"))?;
                 }
             }
         }
         for key in schema_single_keywords() {
-            if let Some(child) = object.get(*key) {
+            if let Some(child) = object.get(key) {
                 // Boolean additionalProperties is enforced by the model
                 // extra policy; only its schema form needs a nested audit.
                 if *key == "additionalProperties" && child.is_boolean() {
@@ -1661,25 +1654,22 @@ fn append_schema_surface(out: &mut String, schema_literal: &str, routed: bool) {
     out.push_str("        return schema\n");
 }
 
-fn properties<'a>(
-    object: &'a Map<String, Value>,
-    path: &str,
-) -> Result<&'a Map<String, Value>, PydanticError> {
+fn properties<'a>(object: &'a Object, path: &str) -> Result<&'a Object, PydanticError> {
     match object.get("properties") {
         Some(Value::Object(properties)) => Ok(properties),
         Some(_) => Err(PydanticError::new(format!(
             "{path}/properties must be an object"
         ))),
         None => {
-            static EMPTY: std::sync::OnceLock<Map<String, Value>> = std::sync::OnceLock::new();
-            Ok(EMPTY.get_or_init(Map::new))
+            static EMPTY: std::sync::OnceLock<Object> = std::sync::OnceLock::new();
+            Ok(EMPTY.get_or_init(Object::new))
         }
     }
 }
 
 fn required_names(
-    object: &Map<String, Value>,
-    properties: &Map<String, Value>,
+    object: &Object,
+    properties: &Object,
     path: &str,
 ) -> Result<BTreeSet<String>, PydanticError> {
     let mut required = BTreeSet::new();
@@ -1703,7 +1693,7 @@ fn required_names(
     Ok(required)
 }
 
-fn extra_policy(object: &Map<String, Value>, path: &str) -> Result<&'static str, PydanticError> {
+fn extra_policy(object: &Object, path: &str) -> Result<&'static str, PydanticError> {
     match object.get("additionalProperties") {
         Some(Value::Bool(false)) => Ok("forbid"),
         Some(Value::Bool(true) | Value::Object(_)) | None => Ok("allow"),
@@ -1713,11 +1703,11 @@ fn extra_policy(object: &Map<String, Value>, path: &str) -> Result<&'static str,
     }
 }
 
-fn is_record_definition(object: &Map<String, Value>) -> bool {
+fn is_record_definition(object: &Object) -> bool {
     let property_count = object
         .get("properties")
         .and_then(Value::as_object)
-        .map_or(0, Map::len);
+        .map_or(0, Object::len);
     property_count > 0
         || object.get("additionalProperties") == Some(&Value::Bool(false))
         || object
@@ -1726,7 +1716,7 @@ fn is_record_definition(object: &Map<String, Value>) -> bool {
             .is_some_and(|required| !required.is_empty())
 }
 
-fn apply_constraints(base: String, object: &Map<String, Value>) -> String {
+fn apply_constraints(base: String, object: &Object) -> String {
     let mut arguments = Vec::new();
     let declared_type = object.get("type").and_then(Value::as_str);
     if matches!(declared_type, Some("integer" | "number")) {
@@ -1780,7 +1770,7 @@ fn temporal_type(kind: &str) -> String {
     format!("Annotated[{kind}, BeforeValidator(_purrdf_temporal_input)]")
 }
 
-fn is_temporal_format(object: &Map<String, Value>) -> bool {
+fn is_temporal_format(object: &Object) -> bool {
     matches!(
         object.get("format").and_then(Value::as_str),
         Some("date-time" | "date" | "time")
@@ -1796,11 +1786,7 @@ fn runtime_pattern_supported(pattern: &str) -> bool {
 /// Whether the runtime negation check ([`NEGATION_HELPER`]) evaluates `schema`
 /// exactly: every keyword, through every subschema and `$defs` reference, is in
 /// its closed table.
-fn negation_supported(
-    schema: &Value,
-    defs: &Map<String, Value>,
-    visiting: &mut BTreeSet<String>,
-) -> bool {
+fn negation_supported(schema: &Value, defs: &Object, visiting: &mut BTreeSet<String>) -> bool {
     let Value::Object(object) = schema else {
         return schema.is_boolean();
     };
@@ -1854,7 +1840,7 @@ fn negation_supported(
     true
 }
 
-fn has_schema_type(object: &Map<String, Value>, expected: &str) -> bool {
+fn has_schema_type(object: &Object, expected: &str) -> bool {
     match object.get("type") {
         Some(Value::String(kind)) => kind == expected,
         Some(Value::Array(kinds)) => kinds.iter().any(|kind| kind.as_str() == Some(expected)),
@@ -1862,11 +1848,11 @@ fn has_schema_type(object: &Map<String, Value>, expected: &str) -> bool {
     }
 }
 
-fn has_numeric_schema_type(object: &Map<String, Value>) -> bool {
+fn has_numeric_schema_type(object: &Object) -> bool {
     has_schema_type(object, "integer") || has_schema_type(object, "number")
 }
 
-fn branch_with_parent_constraints(branch: &Value, parent: &Map<String, Value>) -> (Value, bool) {
+fn branch_with_parent_constraints(branch: &Value, parent: &Object) -> (Value, bool) {
     let Some(branch_object) = branch.as_object() else {
         return (branch.clone(), false);
     };
@@ -1897,16 +1883,16 @@ fn branch_with_parent_constraints(branch: &Value, parent: &Map<String, Value>) -
         if augmented.contains_key(key) {
             conflict = true;
         } else {
-            augmented.insert(key.to_owned(), value.clone());
+            crate::json_model::insert_sorted(&mut augmented, key.to_owned(), value.clone());
         }
     }
     (Value::Object(augmented), conflict)
 }
 
-fn has_runtime_constraints(object: &Map<String, Value>) -> bool {
+fn has_runtime_constraints(object: &Object) -> bool {
     runtime_constraint_keys()
         .iter()
-        .any(|key| object.contains_key(*key))
+        .any(|key| object.contains_key(key))
 }
 
 fn runtime_constraint_keys() -> &'static [&'static str] {
@@ -1926,21 +1912,24 @@ fn runtime_constraint_keys() -> &'static [&'static str] {
     ]
 }
 
-fn enum_object_schema(member: &Map<String, Value>) -> Value {
+fn enum_object_schema(member: &Object) -> Value {
     let mut properties = Map::new();
     let mut required = Vec::new();
     for (key, value) in member {
         let mut constraint = Map::new();
         constraint.insert("const".to_owned(), value.clone());
-        properties.insert(key.clone(), Value::Object(constraint));
+        properties.insert(key.clone(), crate::json_model::object(constraint));
         required.push(Value::String(key.clone()));
     }
     let mut schema = Map::new();
     schema.insert("type".to_owned(), Value::String("object".to_owned()));
-    schema.insert("properties".to_owned(), Value::Object(properties));
+    schema.insert(
+        "properties".to_owned(),
+        crate::json_model::object(properties),
+    );
     schema.insert("required".to_owned(), Value::Array(required));
     schema.insert("additionalProperties".to_owned(), Value::Bool(false));
-    Value::Object(schema)
+    crate::json_model::object(schema)
 }
 
 fn render_string_enum(name: &str, values: &[Value]) -> String {
@@ -2275,34 +2264,47 @@ fn rewrite_references(
         let class_name = names
             .get(&def_key)
             .ok_or_else(|| PydanticError::new(format!("dangling $defs reference {def_key:?}")))?;
-        rewritten.insert(
+        crate::json_model::insert_sorted(
+            &mut rewritten,
             "$ref".to_owned(),
             Value::String(format!("#/$defs/{class_name}")),
         );
     }
     for keyword in schema_map_keywords() {
-        if let Some(children) = object.get(*keyword).and_then(Value::as_object) {
+        if let Some(children) = object.get(keyword).and_then(Value::as_object) {
             let mapped = children
                 .iter()
                 .map(|(key, child)| {
                     rewrite_references(child, names).map(|value| (key.clone(), value))
                 })
                 .collect::<Result<Map<_, _>, _>>()?;
-            rewritten.insert((*keyword).to_owned(), Value::Object(mapped));
+            crate::json_model::insert_sorted(
+                &mut rewritten,
+                (*keyword).to_owned(),
+                crate::json_model::object(mapped),
+            );
         }
     }
     for keyword in schema_array_keywords() {
-        if let Some(children) = object.get(*keyword).and_then(Value::as_array) {
+        if let Some(children) = object.get(keyword).and_then(Value::as_array) {
             let mapped = children
                 .iter()
                 .map(|child| rewrite_references(child, names))
                 .collect::<Result<Vec<_>, _>>()?;
-            rewritten.insert((*keyword).to_owned(), Value::Array(mapped));
+            crate::json_model::insert_sorted(
+                &mut rewritten,
+                (*keyword).to_owned(),
+                Value::Array(mapped),
+            );
         }
     }
     for keyword in schema_single_keywords() {
-        if let Some(child) = object.get(*keyword) {
-            rewritten.insert((*keyword).to_owned(), rewrite_references(child, names)?);
+        if let Some(child) = object.get(keyword) {
+            crate::json_model::insert_sorted(
+                &mut rewritten,
+                (*keyword).to_owned(),
+                rewrite_references(child, names)?,
+            );
         }
     }
     Ok(Value::Object(rewritten))
@@ -2346,7 +2348,7 @@ fn python_mapping(values: &BTreeMap<String, Value>) -> String {
 }
 
 fn python_string(value: &str) -> String {
-    serde_json::to_string(value).expect("serializing a Rust string to JSON cannot fail")
+    crate::json_model::json_string(value)
 }
 
 fn python_field_name(raw: &str) -> String {
@@ -2575,19 +2577,16 @@ fn reserved_type_names() -> BTreeSet<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_model::json;
     use crate::json_schema::Namespaces;
     use crate::schema_import::SchemaDatatypeMap;
     use ::purrdf::loss::check_ledger_sound;
-    use serde_json::json;
 
     use purrdf_xsd::datatype::XSD_NS as XSD;
 
     fn compiled(schema: &Value) -> CompiledSchema {
         CompiledSchema {
-            schema_json: format!(
-                "{}\n",
-                serde_json::to_string_pretty(&schema).expect("fixture serializes")
-            ),
+            schema_json: format!("{}\n", crate::json_model::write_pretty(schema)),
             openapi_json: "{}\n".to_owned(),
             losses: LossLedger::new(),
         }
@@ -3233,7 +3232,7 @@ mod tests {
             }
         });
         let compiled = CompiledSchema {
-            schema_json: serde_json::to_string(&schema).expect("compact resource fixture"),
+            schema_json: crate::json_model::write_compact(&schema),
             openapi_json: "{}\n".to_owned(),
             losses: LossLedger::new(),
         };

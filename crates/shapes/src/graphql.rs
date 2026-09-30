@@ -24,10 +24,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Write as _};
 
+use crate::json_model::{Map, NumberKind, Object, ToJson, Value, ValueKind, json};
 use ::purrdf::RdfLocation;
 use ::purrdf::loss::{LossEntry, LossLedger};
-use serde::Serialize;
-use serde_json::{Map, Value, json};
 
 use crate::json_schema::CompiledSchema;
 use crate::schema_catalog::{
@@ -131,7 +130,7 @@ impl GraphqlConfig {
 }
 
 /// Output/input GraphQL type expressions for one source `$defs` key.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphqlDefinitionMap {
     /// Type expression used at GraphQL output position.
     pub output_type: String,
@@ -140,7 +139,7 @@ pub struct GraphqlDefinitionMap {
 }
 
 /// One finite source JSON value and its generated GraphQL enum symbol.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphqlEnumValueMap {
     /// Exact source JSON value.
     pub source_value: Value,
@@ -150,7 +149,7 @@ pub struct GraphqlEnumValueMap {
 
 /// One alternative of a JSON Schema `anyOf` carried as a GraphQL `@oneOf`
 /// input field and an output union member.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphqlUnionMemberMap {
     /// Index of the alternative in the source `anyOf` array.
     pub branch: usize,
@@ -165,7 +164,7 @@ pub struct GraphqlUnionMemberMap {
 }
 
 /// Typed, deterministic source-name/value → GraphQL-name map.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphqlNameMap {
     /// Fixed emitter dialect.
     pub dialect: String,
@@ -181,6 +180,68 @@ pub struct GraphqlNameMap {
     /// output union members.
     pub unions: BTreeMap<String, Vec<GraphqlUnionMemberMap>>,
 }
+
+impl GraphqlDefinitionMap {
+    /// The map as JSON: its fields as members, in declaration order.
+    #[must_use]
+    pub fn to_json(&self) -> Value {
+        Value::from(
+            Object::new()
+                .with("output_type", &self.output_type)
+                .with("input_type", &self.input_type),
+        )
+    }
+}
+
+impl GraphqlEnumValueMap {
+    /// The map as JSON: its fields as members, in declaration order.
+    #[must_use]
+    pub fn to_json(&self) -> Value {
+        Value::from(
+            Object::new()
+                .with("source_value", self.source_value.clone())
+                .with("graphql_name", &self.graphql_name),
+        )
+    }
+}
+
+impl GraphqlUnionMemberMap {
+    /// The map as JSON: its fields as members, in declaration order.
+    #[must_use]
+    pub fn to_json(&self) -> Value {
+        Value::from(
+            Object::new()
+                .with("branch", self.branch)
+                .with("input_field", &self.input_field)
+                .with("output_type", &self.output_type)
+                .with("wrapped", self.wrapped),
+        )
+    }
+}
+
+impl GraphqlNameMap {
+    /// The canonical `name-map.json` document: the fields as members in
+    /// declaration order, every map's entries in key order.
+    #[must_use]
+    pub fn to_json(&self) -> Value {
+        Value::from(
+            Object::new()
+                .with("dialect", &self.dialect)
+                .with("schema_name", &self.schema_name)
+                .with("definitions", self.definitions.to_json())
+                .with("fields", self.fields.to_json())
+                .with("enum_values", self.enum_values.to_json())
+                .with("unions", self.unions.to_json()),
+        )
+    }
+}
+
+crate::json_model::to_json_by_inherent!(
+    GraphqlDefinitionMap,
+    GraphqlEnumValueMap,
+    GraphqlUnionMemberMap,
+    GraphqlNameMap
+);
 
 /// Deterministic generated GraphQL package and its projection losses.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -374,9 +435,7 @@ pub fn emit_graphql(
         enum_values: planner.enum_values.clone(),
         unions: planner.union_maps(),
     };
-    let mut name_map_json = serde_json::to_string_pretty(&names).map_err(|error| {
-        GraphqlError::new(format!("cannot serialize GraphQL name map: {error}"))
-    })?;
+    let mut name_map_json = crate::json_model::write_pretty(&names.to_json());
     name_map_json.push('\n');
     if name_map_json.len() > MAX_ARTIFACT_BYTES {
         return Err(GraphqlError::new(format!(
@@ -553,7 +612,7 @@ impl CodecDirection {
 }
 
 struct Planner<'a> {
-    definitions: &'a Map<String, Value>,
+    definitions: &'a Object,
     config: &'a GraphqlConfig,
     representations: BTreeMap<String, Representation>,
     schemas: BTreeMap<String, Value>,
@@ -571,10 +630,7 @@ struct Planner<'a> {
 }
 
 impl<'a> Planner<'a> {
-    fn new(
-        definitions: &'a Map<String, Value>,
-        config: &'a GraphqlConfig,
-    ) -> Result<Self, GraphqlError> {
+    fn new(definitions: &'a Object, config: &'a GraphqlConfig) -> Result<Self, GraphqlError> {
         let mut used_type_names = BTreeMap::new();
         used_type_names.insert(
             config.fallback_scalar_name.clone(),
@@ -1072,7 +1128,7 @@ impl<'a> Planner<'a> {
     /// admits that kind (otherwise no value it could judge passes `anyOf`).
     fn audit_union(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         path: &str,
         depth: usize,
     ) -> Result<(), GraphqlError> {
@@ -1108,10 +1164,10 @@ impl<'a> Planner<'a> {
                 continue;
             }
             for keyword in keywords {
-                if keyword == &"uniqueItems" && object.get(*keyword) != Some(&Value::Bool(true)) {
+                if keyword == &"uniqueItems" && object.get(keyword) != Some(&Value::Bool(true)) {
                     continue;
                 }
-                if object.contains_key(*keyword) {
+                if object.contains_key(keyword) {
                     self.record(code, &format!("{path}/{keyword}"), note);
                 }
             }
@@ -1133,7 +1189,7 @@ impl<'a> Planner<'a> {
 
     fn audit_object(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         path: &str,
         depth: usize,
     ) -> Result<(), GraphqlError> {
@@ -1183,7 +1239,7 @@ impl<'a> Planner<'a> {
             }
         }
 
-        let empty = Map::new();
+        let empty = Object::new();
         let properties = object
             .get("properties")
             .and_then(Value::as_object)
@@ -1221,7 +1277,7 @@ impl<'a> Planner<'a> {
 
     fn audit_array(
         &mut self,
-        object: &Map<String, Value>,
+        object: &Object,
         path: &str,
         depth: usize,
     ) -> Result<(), GraphqlError> {
@@ -1566,7 +1622,7 @@ impl<'a> Planner<'a> {
         writeln!(output, "{keyword} {name} {{")
             .expect("writing GraphQL SDL to a String cannot fail");
 
-        let empty = Map::new();
+        let empty = Object::new();
         let properties = object
             .get("properties")
             .and_then(Value::as_object)
@@ -1629,7 +1685,7 @@ impl<'a> Planner<'a> {
             let object = schema
                 .as_object()
                 .expect("planned object representation has an object schema");
-            let empty = Map::new();
+            let empty = Object::new();
             let properties = object
                 .get("properties")
                 .and_then(Value::as_object)
@@ -1876,7 +1932,7 @@ impl GraphqlPackage {
                     output.insert("__typename".to_owned(), json!(member.output_type));
                     output.insert("value".to_owned(), inner);
                 } else {
-                    let Value::Object(fields) = inner else {
+                    let Ok(fields) = crate::json_model::into_object(inner) else {
                         return Err(GraphqlError::new(format!(
                             "GraphQL union member at {branch_path} must be an object"
                         )));
@@ -1884,7 +1940,7 @@ impl GraphqlPackage {
                     output.insert("__typename".to_owned(), json!(member.output_type));
                     output.extend(fields);
                 }
-                Ok(Value::Object(output))
+                Ok(crate::json_model::object(output))
             }
             CodecDirection::DecodeInput => {
                 let object = value.as_object().ok_or_else(|| {
@@ -1996,7 +2052,7 @@ impl GraphqlPackage {
         let schema = schema
             .as_object()
             .expect("object representation comes from an object schema");
-        let empty = Map::new();
+        let empty = Object::new();
         let properties = schema
             .get("properties")
             .and_then(Value::as_object)
@@ -2038,7 +2094,7 @@ impl GraphqlPackage {
                 )));
             }
         }
-        Ok(Value::Object(output))
+        Ok(crate::json_model::object(output))
     }
 }
 
@@ -2056,7 +2112,7 @@ enum JsonKind {
 fn classify_schema(
     schema: &Value,
     path: &str,
-    definitions: &Map<String, Value>,
+    definitions: &Object,
 ) -> Result<(Representation, Option<Vec<UnionMember>>), GraphqlError> {
     let Value::Object(object) = schema else {
         return Ok((Representation::Fallback, None));
@@ -2076,10 +2132,7 @@ fn classify_schema(
     Ok((classify_plain_schema(object, path)?, None))
 }
 
-fn classify_plain_schema(
-    object: &Map<String, Value>,
-    path: &str,
-) -> Result<Representation, GraphqlError> {
+fn classify_plain_schema(object: &Object, path: &str) -> Result<Representation, GraphqlError> {
     if has_unknown_assertion(object)
         || object.contains_key("allOf")
         || object.contains_key("anyOf")
@@ -2160,9 +2213,9 @@ struct Alternative {
 /// the value is valid under the `anyOf` exactly when it is valid under the
 /// alternative it selects. `None` when the alternatives overlap.
 fn union_members(
-    object: &Map<String, Value>,
+    object: &Object,
     path: &str,
-    definitions: &Map<String, Value>,
+    definitions: &Object,
 ) -> Result<Option<Vec<UnionMember>>, GraphqlError> {
     let Some(branches) = object.get("anyOf").and_then(Value::as_array) else {
         return Ok(None);
@@ -2265,7 +2318,7 @@ fn union_members(
 fn analyse_alternative(
     branch: &Value,
     path: &str,
-    definitions: &Map<String, Value>,
+    definitions: &Object,
 ) -> Result<Option<Alternative>, GraphqlError> {
     if schema_allows_null(branch, definitions, &mut BTreeSet::new())? {
         return Ok(None);
@@ -2397,8 +2450,7 @@ fn finite_values(schema: &Value, path: &str) -> Result<Option<Vec<Value>>, Graph
     }
     let mut canonical = BTreeMap::<String, Value>::new();
     for value in values {
-        let key = serde_json::to_string(&value)
-            .map_err(|error| GraphqlError::new(format!("cannot inspect {path}: {error}")))?;
+        let key = crate::json_model::write_compact(&value);
         canonical.insert(key, value);
     }
     if canonical.is_empty() {
@@ -2407,7 +2459,7 @@ fn finite_values(schema: &Value, path: &str) -> Result<Option<Vec<Value>>, Graph
     Ok(Some(canonical.into_values().collect()))
 }
 
-fn pure_reference(object: &Map<String, Value>) -> Option<&str> {
+fn pure_reference(object: &Object) -> Option<&str> {
     let reference = object.get("$ref")?.as_str()?;
     object
         .keys()
@@ -2415,10 +2467,7 @@ fn pure_reference(object: &Map<String, Value>) -> Option<&str> {
         .then_some(reference)
 }
 
-fn declared_types(
-    object: &Map<String, Value>,
-    path: &str,
-) -> Result<Option<BTreeSet<JsonKind>>, GraphqlError> {
+fn declared_types(object: &Object, path: &str) -> Result<Option<BTreeSet<JsonKind>>, GraphqlError> {
     let Some(value) = object.get("type") else {
         return Ok(None);
     };
@@ -2485,18 +2534,18 @@ fn value_matches_types(value: &Value, kinds: &BTreeSet<JsonKind>) -> bool {
     kinds.contains(&kind) || (kind == JsonKind::Integer && kinds.contains(&JsonKind::Number))
 }
 
-fn is_exact_graphql_int_domain(object: &Map<String, Value>) -> bool {
+fn is_exact_graphql_int_domain(object: &Object) -> bool {
     object.get("minimum").and_then(Value::as_i64) == Some(i64::from(i32::MIN))
         && object.get("maximum").and_then(Value::as_i64) == Some(i64::from(i32::MAX))
         && !object.contains_key("exclusiveMinimum")
         && !object.contains_key("exclusiveMaximum")
 }
 
-fn object_field_count(object: &Map<String, Value>, path: &str) -> Result<usize, GraphqlError> {
+fn object_field_count(object: &Object, path: &str) -> Result<usize, GraphqlError> {
     let properties = object
         .get("properties")
         .and_then(Value::as_object)
-        .map_or(0, Map::len);
+        .map_or(0, Object::len);
     let required = required_names(object, path)?;
     let property_names = object
         .get("properties")
@@ -2531,9 +2580,7 @@ fn validate_schema_keywords(schema: &Value, path: &str, depth: usize) -> Result<
         }
         let mut seen = BTreeSet::new();
         for (index, value) in values.iter().enumerate() {
-            let canonical = serde_json::to_string(value).map_err(|error| {
-                GraphqlError::new(format!("cannot inspect {path}/enum/{index}: {error}"))
-            })?;
+            let canonical = crate::json_model::write_compact(value);
             if !seen.insert(canonical) {
                 return Err(GraphqlError::new(format!(
                     "{path}/enum repeats value at index {index}"
@@ -2645,7 +2692,7 @@ fn validate_schema_keywords(schema: &Value, path: &str, depth: usize) -> Result<
     }
 
     for keyword in schema_map_keywords() {
-        if let Some(children) = object.get(*keyword).and_then(Value::as_object) {
+        if let Some(children) = object.get(keyword).and_then(Value::as_object) {
             for (key, child) in children {
                 validate_schema_keywords(
                     child,
@@ -2656,14 +2703,14 @@ fn validate_schema_keywords(schema: &Value, path: &str, depth: usize) -> Result<
         }
     }
     for keyword in schema_array_keywords() {
-        if let Some(children) = object.get(*keyword).and_then(Value::as_array) {
+        if let Some(children) = object.get(keyword).and_then(Value::as_array) {
             for (index, child) in children.iter().enumerate() {
                 validate_schema_keywords(child, &format!("{path}/{keyword}/{index}"), depth + 1)?;
             }
         }
     }
     for keyword in schema_single_keywords() {
-        if let Some(child) = object.get(*keyword) {
+        if let Some(child) = object.get(keyword) {
             validate_schema_keywords(child, &format!("{path}/{keyword}"), depth + 1)?;
         }
     }
@@ -2673,7 +2720,7 @@ fn validate_schema_keywords(schema: &Value, path: &str, depth: usize) -> Result<
 fn validate_nonnegative_integer(value: &Value, path: &str) -> Result<(), GraphqlError> {
     if value.as_u64().is_some()
         || value
-            .as_f64()
+            .as_finite_f64()
             .is_some_and(|number| number >= 0.0 && number.fract() == 0.0)
     {
         Ok(())
@@ -2684,10 +2731,7 @@ fn validate_nonnegative_integer(value: &Value, path: &str) -> Result<(), Graphql
     }
 }
 
-fn required_names(
-    object: &Map<String, Value>,
-    path: &str,
-) -> Result<BTreeSet<String>, GraphqlError> {
+fn required_names(object: &Object, path: &str) -> Result<BTreeSet<String>, GraphqlError> {
     let Some(value) = object.get("required") else {
         return Ok(BTreeSet::new());
     };
@@ -2710,7 +2754,7 @@ fn required_names(
 
 fn schema_allows_null(
     schema: &Value,
-    definitions: &Map<String, Value>,
+    definitions: &Object,
     active_references: &mut BTreeSet<String>,
 ) -> Result<bool, GraphqlError> {
     let mut current = schema;
@@ -2812,7 +2856,7 @@ fn find_cycle_edge(
     None
 }
 
-fn has_unknown_assertion(object: &Map<String, Value>) -> bool {
+fn has_unknown_assertion(object: &Object) -> bool {
     object
         .keys()
         .any(|key| !known_schema_keyword(key) && !is_annotation_keyword(key))
@@ -3002,7 +3046,7 @@ fn normalize_prose(label: &str, value: &str) -> Result<String, GraphqlError> {
 }
 
 fn graphql_string(value: &str) -> String {
-    serde_json::to_string(value).expect("serializing a Rust string to JSON cannot fail")
+    crate::json_model::json_string(value)
 }
 
 fn write_comment(output: &mut String, value: &str) {
@@ -3043,9 +3087,7 @@ fn ensure_value_size(value: &Value) -> Result<(), GraphqlError> {
             Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
         }
     }
-    let bytes = serde_json::to_vec(value).map_err(|error| {
-        GraphqlError::new(format!("cannot inspect GraphQL JSON value: {error}"))
-    })?;
+    let bytes = crate::json_model::write_compact(value);
     if bytes.len() > MAX_VALUE_JSON_BYTES {
         Err(GraphqlError::new(format!(
             "GraphQL JSON value exceeds the {MAX_VALUE_JSON_BYTES}-byte codec limit"
@@ -3068,20 +3110,17 @@ fn finish_text(mut text: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_model::json;
     use crate::json_schema::Namespaces;
     use crate::schema_import::SchemaDatatypeMap;
     use ::purrdf::loss::{check_ledger_complete, check_ledger_sound};
     use purrdf_testkit::prop::prelude::*;
-    use serde_json::json;
 
     use purrdf_xsd::datatype::XSD_NS as XSD;
 
     fn compiled(schema: &Value) -> CompiledSchema {
         CompiledSchema {
-            schema_json: format!(
-                "{}\n",
-                serde_json::to_string_pretty(schema).expect("fixture serializes")
-            ),
+            schema_json: format!("{}\n", crate::json_model::write_pretty(schema)),
             openapi_json: "{}\n".to_owned(),
             losses: LossLedger::new(),
         }
@@ -3230,11 +3269,12 @@ mod tests {
         assert!(!schema_source.contains("blackcatinformatics.ca"));
         assert!(!schema_source.to_ascii_lowercase().contains("gmeow"));
 
-        let artifact: Value = serde_json::from_slice(
+        let artifact: Value = purrdf_lex::json::read_slice(
             first
                 .artifacts
                 .get(GRAPHQL_NAME_MAP_PATH)
                 .expect("name map artifact exists"),
+            purrdf_lex::json::Limits::DEFAULT,
         )
         .expect("name map is JSON");
         assert_eq!(artifact["dialect"], GRAPHQL_DIALECT);

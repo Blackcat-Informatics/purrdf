@@ -198,7 +198,7 @@ fn imported_properties_have_distinct_deterministic_source_identities() {
         )
         .expect("datatype configuration"),
     );
-    let document = serde_json::json!({
+    let document = r#"{
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$defs": {
             "Record": {
@@ -207,10 +207,9 @@ fn imported_properties_have_distinct_deterministic_source_identities() {
                 "required": ["ex:name", "ex:missing"]
             }
         }
-    })
-    .to_string();
-    let imported = import_json_schema(&document, &config).expect("imported schema");
-    let repeated = import_json_schema(&document, &config).expect("repeated import");
+    }"#;
+    let imported = import_json_schema(document, &config).expect("imported schema");
+    let repeated = import_json_schema(document, &config).expect("repeated import");
     let properties = &imported.shapes.node_shapes[0].property_shapes;
     assert_eq!(properties.len(), 2);
     assert_ne!(properties[0].id, properties[1].id);

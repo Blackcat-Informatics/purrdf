@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::Value;
+use crate::json_model::Value;
 
 use super::{PydanticError, is_python_identifier, is_python_keyword};
 
@@ -877,7 +877,7 @@ mod tests {
         }
     }
     use crate::PydanticConfig;
-    use serde_json::json;
+    use crate::json_model::json;
 
     fn module(path: &str) -> PydanticModuleConfig {
         PydanticModuleConfig::new(path, format!("Caller docs for {path}.")).expect("module")

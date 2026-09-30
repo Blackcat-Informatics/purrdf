@@ -38,8 +38,6 @@ purrdf-iri = { workspace = true }
 purrdf-lex = { workspace = true }
 purrdf-xsd = { workspace = true }
 regex = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 
 [dev-dependencies]
 # Runs the deep-structure tests on a stack of a stated size: a fresh thread

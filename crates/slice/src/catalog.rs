@@ -11,9 +11,11 @@ use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 
 use purrdf::RdfDataset;
+use purrdf_lex::json::{Object as JsonObject, Value as JsonValue};
 
 use crate::artifact::{ArtifactRecord, ArtifactRole};
 use crate::error::SliceError;
+use crate::json_form;
 use crate::rdf_query::{Dataset, Object};
 use crate::vocab::SliceVocab;
 
@@ -28,7 +30,7 @@ const DCTERMS_CREATOR: &str = "http://purl.org/dc/terms/creator";
 const DCTERMS_IDENTIFIER: &str = "http://purl.org/dc/terms/identifier";
 
 /// The tier of a slice in the slice taxonomy.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SliceTier {
     /// A core slice (`<vocab>tierCore`).
     Core,
@@ -53,7 +55,7 @@ impl SliceTier {
 }
 
 /// A parsed view of the mandatory `manifest.ttl` fields.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestView {
     /// The IRI of the slice resource (`a <vocab>Slice`).
     pub slice_iri: String,
@@ -78,6 +80,77 @@ pub struct ManifestView {
     /// A named profile's membership is the closure of its declared members over
     /// this relation; docs reuse it for the same closure.
     pub depends_on: Vec<String>,
+}
+
+impl SliceTier {
+    /// The tier as JSON: a named tier is its variant name (`"Core"`), and
+    /// [`SliceTier::Unknown`] is `{"Unknown": <iri>}`.
+    pub fn to_json(&self) -> JsonValue {
+        match self {
+            Self::Core => JsonValue::from("Core"),
+            Self::Extension => JsonValue::from("Extension"),
+            Self::Domain => JsonValue::from("Domain"),
+            Self::Unknown(iri) => JsonValue::from(JsonObject::new().with("Unknown", iri)),
+        }
+    }
+
+    /// The tier [`SliceTier::to_json`] wrote.
+    ///
+    /// # Errors
+    ///
+    /// [`SliceError::Json`] for any other value.
+    pub fn from_json(value: &JsonValue) -> Result<Self, SliceError> {
+        match value.as_str() {
+            Some("Core") => Ok(Self::Core),
+            Some("Extension") => Ok(Self::Extension),
+            Some("Domain") => Ok(Self::Domain),
+            Some(other) => Err(SliceError::Json(format!("unknown slice tier `{other}`"))),
+            None => json_form::newtype_variant(value, "Unknown").map(Self::Unknown),
+        }
+    }
+}
+
+impl ManifestView {
+    /// The view as a JSON object whose members are its fields, in declaration
+    /// order; an absent optional field is `null`.
+    pub fn to_json(&self) -> JsonValue {
+        JsonValue::from(
+            JsonObject::new()
+                .with("slice_iri", &self.slice_iri)
+                .with("label", self.label.as_deref())
+                .with("title", self.title.as_deref())
+                .with("creators", self.creators.as_slice())
+                .with("identifier", self.identifier.as_deref())
+                .with("tier", self.tier.as_ref().map(SliceTier::to_json))
+                .with("consumers", self.consumers.as_slice())
+                .with("profiles", self.profiles.as_slice())
+                .with("depends_on", self.depends_on.as_slice()),
+        )
+    }
+
+    /// The view [`ManifestView::to_json`] wrote.
+    ///
+    /// # Errors
+    ///
+    /// [`SliceError::Json`] when a field is missing or has the wrong type.
+    pub fn from_json(value: &JsonValue) -> Result<Self, SliceError> {
+        let object = json_form::object(value, "a manifest view")?;
+        let tier = match object.get("tier") {
+            None | Some(JsonValue::Null) => None,
+            Some(tier) => Some(SliceTier::from_json(tier)?),
+        };
+        Ok(Self {
+            slice_iri: json_form::string(object, "slice_iri")?,
+            label: json_form::optional_string(object, "label")?,
+            title: json_form::optional_string(object, "title")?,
+            creators: json_form::strings(object, "creators")?,
+            identifier: json_form::optional_string(object, "identifier")?,
+            tier,
+            consumers: json_form::strings(object, "consumers")?,
+            profiles: json_form::strings(object, "profiles")?,
+            depends_on: json_form::strings(object, "depends_on")?,
+        })
+    }
 }
 
 /// A fully-loaded slice record: manifest view, manifest IR dataset, and artifact
@@ -511,6 +584,45 @@ fn find_slice_dirs_inner(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), Slice
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manifest_view_json_round_trips_every_tier() {
+        for tier in [
+            None,
+            Some(SliceTier::Core),
+            Some(SliceTier::Extension),
+            Some(SliceTier::Domain),
+            Some(SliceTier::Unknown("https://example.org/tierX".to_owned())),
+        ] {
+            let view = ManifestView {
+                slice_iri: "https://example.org/slice/a".to_owned(),
+                label: Some("A".to_owned()),
+                title: None,
+                creators: vec!["https://example.org/c".to_owned()],
+                identifier: None,
+                tier,
+                consumers: Vec::new(),
+                profiles: vec!["claims".to_owned()],
+                depends_on: vec!["https://example.org/slice/b".to_owned()],
+            };
+            assert_eq!(ManifestView::from_json(&view.to_json()).unwrap(), view);
+        }
+    }
+
+    #[test]
+    fn slice_tier_from_json_refuses_an_unknown_name_and_accepts_a_known_one() {
+        assert!(SliceTier::from_json(&JsonValue::from("Kernel")).is_err());
+        assert_eq!(
+            SliceTier::from_json(&JsonValue::from("Domain")).unwrap(),
+            SliceTier::Domain
+        );
+        let unknown = JsonValue::from(JsonObject::new().with("Unknown", "https://example.org/t"));
+        assert_eq!(
+            purrdf_lex::json::write_compact(&unknown),
+            r#"{"Unknown":"https://example.org/t"}"#
+        );
+        assert!(SliceTier::from_json(&unknown).is_ok());
+    }
 
     /// Fix 1: a manifest declaring two `a <vocab>Slice` subjects must hard-fail
     /// with `SliceError::InvalidManifest` naming both subjects. The vocabulary

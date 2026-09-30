@@ -44,6 +44,7 @@ use purrdf_core::{
     DatasetView, FastMap, FastSet, GraphMatch, RdfDataset, RdfTextDirection, TermId, TermRef,
     TermValue,
 };
+use purrdf_lex::json_escape::{JsonEscapes, push_string};
 use purrdf_lex::term_syntax;
 
 use crate::ast::{Schema, SemAct, Shape, ShapeExpr, TripleExpr};
@@ -117,25 +118,28 @@ impl ResultShapeMap {
                 out.push(',');
             }
             out.push_str("{\"node\":");
-            push_json_string(&mut out, &node_term_string(&entry.node));
+            push_string(
+                &mut out,
+                &node_term_string(&entry.node),
+                JsonEscapes::ShortForms,
+            );
             out.push_str(",\"shape\":");
-            push_json_string(&mut out, &shape_term_string(&entry.shape));
+            push_string(
+                &mut out,
+                &shape_term_string(&entry.shape),
+                JsonEscapes::ShortForms,
+            );
             out.push_str(",\"status\":");
-            push_json_string(&mut out, status_str(entry.status));
+            push_string(&mut out, status_str(entry.status), JsonEscapes::ShortForms);
             if let Some(reason) = &entry.reason {
                 out.push_str(",\"reason\":");
-                push_json_string(&mut out, reason);
+                push_string(&mut out, reason, JsonEscapes::ShortForms);
             }
             out.push('}');
         }
         out.push(']');
         out
     }
-}
-
-/// Append `s` as a JSON string literal (serde_json handles escaping).
-fn push_json_string(out: &mut String, s: &str) {
-    out.push_str(&serde_json::to_string(s).expect("a &str always serializes"));
 }
 
 /// The result-map spelling of a conformance status.
