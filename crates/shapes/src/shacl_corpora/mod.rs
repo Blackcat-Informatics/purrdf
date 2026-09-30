@@ -287,7 +287,8 @@ pub fn object(g: &RdfDataset, subject: &Term, predicate: &str) -> Option<Term> {
 }
 
 /// Walk an RDF collection (`rdf:first`/`rdf:rest`) into a vec, in list order,
-/// through the strict walker [`DatasetView::rdf_list_strict`].
+/// through the strict walker
+/// [`DatasetView::rdf_list_strict`](purrdf_core::DatasetView::rdf_list_strict).
 ///
 /// The corpora are frozen, so a malformed list — a cell with no `rdf:first`, no
 /// `rdf:rest`, more than one of either, or a `rdf:rest` chain that revisits a

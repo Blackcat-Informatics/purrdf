@@ -438,21 +438,6 @@ impl HnswIndex {
     }
 }
 
-impl HnswIndex<Reassociated> {
-    /// [`build`] under [`Reassociated`], spelled as a method of the type it returns.
-    ///
-    /// # Errors
-    ///
-    /// As [`build`].
-    pub fn build_reassociated(
-        matrix: VectorMatrix,
-        metric: &DistanceMetric,
-        params: Params,
-    ) -> Result<Self> {
-        build(matrix, metric, params)
-    }
-}
-
 impl<A: IndexArithmetic> HnswIndex<A> {
     /// Decode an index under `A` from its canonical image, over the matrix it describes.
     ///

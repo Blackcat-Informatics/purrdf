@@ -237,7 +237,7 @@ fn report(name: &str, rows: usize, dims: usize) {
     let exact = HnswIndex::build(vectors, &DistanceMetric::SquaredEuclidean, seed_params)
         .expect("the fixture builds");
     sweep("exact", exact, &norms, &exact_ordered);
-    let reassociated = HnswIndex::build_reassociated(
+    let reassociated = purrdf_hnsw::build::<purrdf_core::distance::Reassociated>(
         reassociated_vectors,
         &DistanceMetric::SquaredEuclidean,
         seed_params,

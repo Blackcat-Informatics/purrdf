@@ -315,10 +315,10 @@ the sealed `IndexArithmetic` family (`Exact` and `Reassociated`), whose members 
 what differs between them: the implementation identifier the profile publishes, and
 the walks this crate compiled for the arithmetic, taken from a non-generic function
 of this crate so the instantiation the asm gate measures is the one every caller runs.
-`hnsw::build::<Reassociated>` (and its named spelling `HnswIndex::build_reassociated`)
-builds the same algorithm under `purrdf_core::distance::Reassociated`, whose sums may
-be reassociated and contracted to fused multiply-add along the dispatch path the build
-resolves, the widest this process runs; `HnswIndex::build` is the default, exact one.
+`hnsw::build::<Reassociated>` builds the same algorithm under
+`purrdf_core::distance::Reassociated`, whose sums may be reassociated and
+contracted to fused multiply-add along the dispatch path the build resolves, the
+widest this process runs; `HnswIndex::build` is the default, exact one.
 `HnswIndex::<Reassociated>::decode`, `guard::load::<Reassociated>` and
 `HnswSpace::<Reassociated>::from_artifact` read it back. It is a second type, not a mode:
 neither index ever computes a distance under the other's law, and there is no runtime

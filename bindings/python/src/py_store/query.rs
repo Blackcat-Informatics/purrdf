@@ -1192,6 +1192,8 @@ pub struct PyCancellationToken {
 
 #[pymethods]
 impl PyCancellationToken {
+    /// `CancellationToken()` — a fresh, uncancelled token. A written-out function
+    /// because `#[new]` exports only a function of the `#[pymethods]` block.
     #[new]
     fn new() -> Self {
         Self::default()

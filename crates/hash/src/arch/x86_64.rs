@@ -50,6 +50,9 @@ pub(crate) fn sha1_x86_sha() -> Option<Sha1Blocks> {
     .then_some(sha1_blocks as Sha1Blocks)
 }
 
+/// The safe entry to this module's SHA-NI kernel. Every architecture module has a
+/// wrapper of this shape around its own `sha1_kernel`, the symbol
+/// `scripts/simd-asm-manifest.toml` measures for that architecture.
 fn sha1_blocks(state: &mut [u32; 5], blocks: &[u8]) {
     // SAFETY: this function escapes the module only through `sha1_x86_sha`,
     // which returns it after detecting `sha`, `ssse3` and `sse4.1`, every
@@ -216,6 +219,9 @@ pub(crate) fn hex_x86_ssse3() -> Option<HexEncode> {
     is_x86_feature_detected!("ssse3").then_some(hex_encode as HexEncode)
 }
 
+/// The safe entry to this module's SSSE3 base16 kernel. Every architecture module
+/// has a wrapper of this shape around its own kernel, and each is a site
+/// `scripts/simd-asm-manifest.toml` measures.
 fn hex_encode(input: &[u8], output: &mut [u8], upper: bool) {
     // SAFETY: this function escapes the module only through `hex_x86_ssse3`,
     // which returns it after detecting `ssse3`, the one feature the kernel is

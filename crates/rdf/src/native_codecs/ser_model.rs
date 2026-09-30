@@ -59,6 +59,11 @@ pub(crate) type SerAnnotationRow = (usize, usize, usize, Option<usize>);
 /// The serialization graph: terms plus the base quads and the RDF 1.2 statement layer
 /// (reifier bindings + annotations). Each row carries an `Option<usize>` graph slot
 /// (`None` = default graph).
+///
+/// It is the native codec's own model rather than `purrdf_gts::model::Graph`, whose
+/// reifier rows have the same shape: the native codec depends on no GTS codec
+/// (`tests/gts_codec_hygiene.rs` holds that seam), so each model keeps its own
+/// first-row reifier lookup.
 #[derive(Debug, Default)]
 pub(crate) struct SerGraph {
     pub terms: Vec<SerTerm>,

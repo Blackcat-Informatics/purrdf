@@ -646,7 +646,7 @@ pub struct AggDescriptor {
 /// # Instance identity, not just declared contents
 ///
 /// `id` is a `RegistryId` (`crate::registry_id::RegistryId`) minted fresh by
-/// `Default`/[`new`](Self::new) — see that type's docs for why a counter, why a
+/// [`Default`] — see that type's docs for why a counter, why a
 /// counter is enough, and why [`Clone`] inherits rather than re-mints it. It
 /// exists because DECLARED metadata (arity, volatility, algebraic class, state
 /// bound) cannot distinguish two independently built registries that happen to
@@ -684,7 +684,7 @@ impl AggregateRegistry {
     /// old `Option::None` spelling, so "no registry" and "an empty registry" are
     /// the same value rather than two spellings of one state.
     ///
-    /// A `const`, not merely a fresh [`Self::new`] call per use: every one of
+    /// A `const`, not merely a fresh `Self::default()` call per use: every one of
     /// those seams can borrow the SAME `'static` value, and — see
     /// `RegistryId::EMPTY`'s (`crate::registry_id::RegistryId::EMPTY`) docs —
     /// sharing one fixed instance id across every `EMPTY` reference is the

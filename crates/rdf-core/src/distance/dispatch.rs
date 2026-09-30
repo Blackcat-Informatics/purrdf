@@ -110,6 +110,10 @@ pub(crate) mod portable {
 
 /// The same generic body compiled with AVX2 enabled.
 ///
+/// Its wrappers repeat the [`portable`] and [`avx512f`] wrappers' source by design: each
+/// module is one compilation of the one body under its own target features, and each
+/// wrapper is the symbol `scripts/simd-asm-manifest.toml` measures for its path.
+///
 /// Safe functions carrying `#[target_feature]`: calling one is `unsafe` from any context
 /// that does not itself enable AVX2, and the only such call sites are the wrappers
 /// below, each behind a [`Path::Avx2`] that only [`exact_path`] produces.

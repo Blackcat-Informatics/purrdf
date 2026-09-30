@@ -100,9 +100,9 @@ under Changed and Fixed where a longer account helps.
   `derived_index`, `profile::implementation_for` and
   `profile::profile_declaration_for` bounded by `IndexArithmetic`. A call whose
   context does not fix the arithmetic names it (`guard::load::<Exact>`,
-  `HnswIndex::<Exact>::decode`). `HnswIndex::build` and
-  `HnswIndex::build_reassociated` stay as named spellings of `build`.
-  `HnswIndex::decode_reassociated`, `guard::load_reassociated`,
+  `HnswIndex::<Exact>::decode`). `HnswIndex::build` stays as the named
+  spelling of `build::<Exact>`. `HnswIndex::build_reassociated` (use
+  `build::<Reassociated>`), `HnswIndex::decode_reassociated`, `guard::load_reassociated`,
   `HnswSpace::from_artifact_reassociated`, the free `build_reassociated`,
   `profile::loss_evidence_reassociated` (use
   `profile::loss_evidence_for::<Reassociated>`) and
@@ -1424,10 +1424,10 @@ under Changed and Fixed where a longer account helps.
 
 - **hnsw:** a reassociated HNSW index, `HnswIndex<Reassociated>`. The generic
   constructors build, decode and load it under `Reassociated`
-  (`build::<Reassociated>` or `HnswIndex::build_reassociated`,
-  `HnswIndex::<Reassociated>::decode`, `guard::load::<Reassociated>`,
-  `HnswSpace::<Reassociated>::from_artifact`), and each one refuses the other
-  arithmetic's image codes. The image records the
+  (`build::<Reassociated>`, `HnswIndex::<Reassociated>::decode`,
+  `guard::load::<Reassociated>`, `HnswSpace::<Reassociated>::from_artifact`),
+  each one body generic over the sealed `IndexArithmetic` family, and each one
+  refuses the other arithmetic's image codes. The image records the
   dispatch path that built it, and decode, rebuild verification and search run
   that path, not the widest one: an image built on the sse2 or avx2+fma path runs
   on that path on an avx512f processor. Only a path the process cannot run

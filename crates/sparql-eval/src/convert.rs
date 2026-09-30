@@ -33,7 +33,8 @@ pub fn named_node_to_value(node: &NamedNode) -> TermValue {
 /// it queries — so `BIND("[_:b, 42]"^^cdt:List AS ?l)` names a node distinct from
 /// the `_:b` of a Turtle file the query is evaluated against, exactly as two
 /// Turtle files that both write `_:b` name two nodes. Without a scope of its own
-/// the query-authored label lands at [`BlankScope::DEFAULT`] — which is precisely
+/// the query-authored label lands at
+/// [`BlankScope::DEFAULT`](purrdf_core::ir::BlankScope::DEFAULT) — which is precisely
 /// where a directly-parsed document's blanks live — and the two collapse onto one
 /// node.
 ///

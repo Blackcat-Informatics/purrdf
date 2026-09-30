@@ -847,8 +847,9 @@ impl RdfDataset {
 
     /// Resolve a term id to its dataset-independent [`TermValue`] (C0.1/C0.2/C0.3).
     ///
-    /// [`DatasetView::term_value`](crate::dataset_view::DatasetView::term_value) for an id this dataset minted, which always
-    /// resolves: every literal it interns has an IRI datatype. Consumers that key on
+    /// [`DatasetView::term_value`](crate::dataset_view::DatasetView::term_value) for an
+    /// id this dataset minted, which always resolves: every literal it interns has an
+    /// IRI datatype. Consumers that key on
     /// the dataset-independent value identity (the SPARQL egress, the reasoners)
     /// resolve through this rather than the `RdfTerm` owned model.
     ///

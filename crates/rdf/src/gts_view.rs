@@ -539,8 +539,8 @@ impl GtsFoldView {
 
     /// The members, in order, of the RDF Collection headed by `head_tid` within
     /// the scope, read by the strict walker
-    /// ([`walk_rdf_list`]) every
-    /// reader of a collection shares.
+    /// ([`purrdf_core::collections::walk_rdf_list`]) every reader of a collection
+    /// shares.
     ///
     /// A well-formed list yields all its members. A malformed one yields the
     /// members read before the walk stopped ([`ListError::members`](purrdf_core::ListError)):

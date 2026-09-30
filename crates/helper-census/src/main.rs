@@ -272,6 +272,96 @@ const FIXTURE_JOB: &str = "[[job]]\nid = \"fnv\"\nsummary = \"FNV-1a\"\nhome = \
 
 const FIXTURE_VARIANT: &str = "[[job.variant]]\nsymbol = \"fixture_beta::fold\"\nfile = \"crates/beta/src/lib.rs\"\ndetector = \"DETECTOR\"\ncriterion = \"a\"\nanchor = \"fixture_beta::fold\"\nreason = \"fixture\"\n";
 
+const FIXTURE_DISTINCT: &str = "[[distinct]]\nmembers = [MEMBERS]\nkind = \"KIND\"\ncriterion = \"b\"\nanchor = \"ANCHOR\"\nreason = \"fixture\"\n";
+
+/// The `--check` findings over `tree` under a ledger of one `[[distinct]]` row.
+fn distinct_findings(tree: &dyn Tree, members: &str, kind: &str, anchor: &str) -> Vec<String> {
+    let row = FIXTURE_DISTINCT
+        .replace("MEMBERS", members)
+        .replace("KIND", kind)
+        .replace("ANCHOR", anchor);
+    ledger::parse(&row).map_or_else(
+        |error| vec![error],
+        |ledger| census::check_findings(&Workspace::walk(tree), &ledger),
+    )
+}
+
+/// The `[[distinct]]` cases: the row sanctions its exact group and nothing
+/// else, and a row that no longer matches, or whose anchor is undocumented, fails.
+fn distinct_cases() -> Vec<(&'static str, bool)> {
+    let tree = fixture_tree();
+    let pair = "\"fixture_beta::fold\", \"fixture_alpha::fnv1a\"";
+    let mut grown = fixture_tree();
+    grown.files.insert(
+        "crates/gamma/Cargo.toml".to_owned(),
+        "[package]\nname = \"fixture-gamma\"\n".to_owned(),
+    );
+    grown.files.insert(
+        "crates/gamma/src/lib.rs".to_owned(),
+        "/// A third copy of the sanctioned shape.\npub fn mix(data: &[u8]) -> u64 {\n    let mut acc = 1_u64;\n    for d in data {\n        acc ^= u64::from(*d);\n        acc = acc.wrapping_mul(3);\n    }\n    acc\n}\n".to_owned(),
+    );
+    vec![
+        (
+            "a distinct row naming exactly its group's members sanctions it",
+            distinct_findings(&tree, pair, "body", "fixture_alpha::fnv1a").is_empty(),
+        ),
+        (
+            "a distinct row of the other kind does not sanction the group, and is STALE",
+            distinct_findings(&tree, pair, "shim", "fixture_alpha::fnv1a").len() == 2,
+        ),
+        (
+            "a group that gains a member its distinct row does not name fails, and the row is STALE",
+            distinct_findings(&grown, pair, "body", "fixture_alpha::fnv1a")
+                .iter()
+                .filter(|finding| {
+                    finding.contains("fixture_gamma::mix") || finding.contains("STALE")
+                })
+                .count()
+                == 2,
+        ),
+        (
+            "a distinct row whose members are no group is STALE, and the group still fails",
+            {
+                let findings = distinct_findings(
+                    &tree,
+                    "\"fixture_alpha::fnv1a\", \"fixture_beta::count\"",
+                    "body",
+                    "fixture_alpha::fnv1a",
+                );
+                findings.len() == 2
+                    && findings
+                        .iter()
+                        .any(|finding| finding.starts_with("isomorphic bodies"))
+                    && findings.iter().any(|finding| finding.contains("STALE"))
+            },
+        ),
+        (
+            "a distinct row naming a member that no longer exists is STALE",
+            distinct_findings(
+                &tree,
+                "\"fixture_alpha::fnv1a\", \"fixture_beta::gone\"",
+                "body",
+                "fixture_alpha::fnv1a",
+            )
+            .iter()
+            .any(|finding| finding.contains("STALE") && finding.contains("fixture_beta::gone")),
+        ),
+        (
+            "a distinct row whose anchor carries no documentation fails",
+            distinct_findings(&tree, pair, "body", "fixture_beta::digits::DIGITS")
+                == [
+                    "[[distinct]] body [fixture_alpha::fnv1a, fixture_beta::fold]: anchor `fixture_beta::digits::DIGITS` carries no documentation",
+                ],
+        ),
+        (
+            "a distinct row whose anchor does not resolve fails",
+            distinct_findings(&tree, pair, "body", "fixture_alpha::missing")
+                .iter()
+                .any(|finding| finding.contains("does not resolve")),
+        ),
+    ]
+}
+
 /// One seeded case: its name and whether it held.
 fn self_test_cases() -> Vec<(&'static str, bool)> {
     let tree: &dyn Tree = &fixture_tree();
@@ -315,7 +405,7 @@ fn self_test_cases() -> Vec<(&'static str, bool)> {
     let copies_with_forbidden_variant = forbidden.job("fnv").map_or(usize::MAX, |job| {
         census::copies(&census::matches(job, &workspace, "fixture-alpha"))
     });
-    vec![
+    let mut cases = vec![
         (
             "the walk reads every fixture file",
             workspace.errors.is_empty(),
@@ -367,7 +457,9 @@ fn self_test_cases() -> Vec<(&'static str, bool)> {
             "a forbidden variant row removes its copy from the count",
             copies_with_forbidden_variant == 1,
         ),
-    ]
+    ];
+    cases.extend(distinct_cases());
+    cases
 }
 
 fn self_test() -> ExitCode {

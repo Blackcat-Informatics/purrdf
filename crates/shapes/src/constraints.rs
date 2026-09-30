@@ -49,6 +49,12 @@ use purrdf_xsd::datatype::{
 /// never materialized on the conforming path. Content-needing arms (datatype,
 /// pattern, length, node-kind, numeric/string comparisons) resolve to an owned
 /// [`Term`] on demand, and the report boundary always records an owned [`Term`].
+///
+/// It has the same two arms as [`FocusNode`] and is a separate type because their
+/// `Foreign` arms promise different things: a focus node is `Foreign` only when the
+/// dataset does not intern its term ([`FocusNode::resolve`]), while a value node keeps
+/// a node-expression term verbatim even when the dataset interns it, so the report
+/// shows the term the expression produced.
 #[derive(Clone)]
 enum ValueNode {
     /// An interned value node — carries its `TermId`, resolved to a [`Term`] only

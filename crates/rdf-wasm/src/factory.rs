@@ -64,6 +64,10 @@ impl Default for DataFactory {
 #[wasm_bindgen]
 impl DataFactory {
     /// `new DataFactory()` — a fresh factory with its blank-node counter at zero.
+    ///
+    /// A written-out function rather than the type's `Default`: `#[wasm_bindgen(constructor)]`
+    /// exports only a function of the `#[wasm_bindgen]` impl block, as `#[new]` does in a
+    /// `#[pymethods]` block, so every exported constructor has this one-line body.
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self::default()

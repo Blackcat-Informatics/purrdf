@@ -47,8 +47,8 @@
 //! [`PageTranslation`] carries an exact summary — per-term occurrence counts for the
 //! base-quad subject, predicate and object positions and for each side table's
 //! reifier column, plus per-graph row counts for all three composed streams — keyed
-//! in that page's own LOCAL [`TermId`](crate::ir::TermId) space. Local keying is what makes the summary
-//! invariant under [`compact`](PagedDataset::compact), which renumbers only the
+//! in that page's own LOCAL [`TermId`](crate::ir::TermId) space. Local keying is what
+//! makes the summary invariant under [`compact`](PagedDataset::compact), which renumbers only the
 //! global side.
 //!
 //! `admission::admit_pattern` applies the law and reports a named reason when it
