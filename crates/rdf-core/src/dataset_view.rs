@@ -1033,6 +1033,17 @@ pub trait DatasetMut: sealed::Sealed {
     ) -> Vec<Self::Quad>;
 }
 
+/// The widest triple-term nesting bound among `bounds`, or `None` when any of them
+/// vouches for none. A view composed of others is bounded by its widest part; an
+/// empty composition holds no triple term, so its bound is 0.
+pub(crate) fn widest_nesting_bound(
+    bounds: impl IntoIterator<Item = Option<usize>>,
+) -> Option<usize> {
+    bounds
+        .into_iter()
+        .try_fold(0, |widest, bound| bound.map(|bound| widest.max(bound)))
+}
+
 /// The production read view: the immutable value-interned [`RdfDataset`] (C1).
 impl DatasetView for RdfDataset {
     type Id = TermId;
@@ -1042,7 +1053,7 @@ impl DatasetView for RdfDataset {
     /// which refuses a triple term nested past 16.
     #[inline]
     fn triple_term_nesting_bound(&self) -> Option<usize> {
-        Some(crate::ir::validate::MAX_TERM_NESTING_DEPTH)
+        Some(purrdf_events::MAX_TERM_NESTING_DEPTH)
     }
 
     #[inline]

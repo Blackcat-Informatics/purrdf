@@ -22,7 +22,6 @@ const MAX_METADATA_DEPTH: usize = 128;
 const MAX_METADATA_NODES: usize = 1_000_000;
 const MAX_ARTIFACTS: usize = 131_072;
 pub(super) const MAX_SCHEMA_BYTES: usize = 16 * 1024 * 1024;
-pub(super) const MAX_SCHEMA_DEPTH: usize = 128;
 pub(super) const MAX_SCHEMA_NODES: usize = 1_000_000;
 pub(super) const MAX_SCHEMA_STRING_BYTES: usize = 16 * 1024 * 1024;
 pub(super) const MAX_ARTIFACT_BYTES: usize = 256 * 1024 * 1024;

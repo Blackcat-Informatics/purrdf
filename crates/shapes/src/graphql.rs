@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use crate::json_model::{Map, NumberKind, Object, ToJson, Value, ValueKind, json};
+use crate::limits::{self, MAX_SCHEMA_DEPTH};
 // A JSON string literal is a GraphQL `StringValue` with the same value.
 use crate::json_model::json_string as graphql_string;
 use ::purrdf::RdfLocation;
@@ -54,7 +55,6 @@ const MAX_VALUE_JSON_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DEFINITIONS: usize = 65_536;
 const MAX_FIELDS: usize = 65_536;
 const MAX_ENUM_VALUES: usize = 65_536;
-const MAX_SCHEMA_DEPTH: usize = 128;
 const MAX_GRAPHQL_NAME_BYTES: usize = 255;
 
 /// Caller-owned identity and prose for a generated GraphQL schema package.
@@ -696,7 +696,7 @@ impl<'a> Planner<'a> {
         base: &str,
         depth: usize,
     ) -> Result<(), GraphqlError> {
-        ensure_depth(depth, path)?;
+        limits::ensure_depth(depth, path, "GraphQL").map_err(GraphqlError::new)?;
         if self.representations.contains_key(path) {
             return Ok(());
         }
@@ -921,7 +921,7 @@ impl<'a> Planner<'a> {
         path: &str,
         depth: usize,
     ) -> Result<(), GraphqlError> {
-        ensure_depth(depth, path)?;
+        limits::ensure_depth(depth, path, "GraphQL").map_err(GraphqlError::new)?;
         let representation = self
             .representations
             .get(path)
@@ -1741,7 +1741,7 @@ impl GraphqlPackage {
         direction: CodecDirection,
         depth: usize,
     ) -> Result<Value, GraphqlError> {
-        ensure_depth(depth, path)?;
+        limits::ensure_depth(depth, path, "GraphQL").map_err(GraphqlError::new)?;
         let representation = self
             .representations
             .get(path)
@@ -1774,7 +1774,8 @@ impl GraphqlPackage {
                     } else {
                         item.clone()
                     });
-                    ensure_depth(depth + 1, &format!("{path}/value/{index}"))?;
+                    limits::ensure_depth(depth + 1, &format!("{path}/value/{index}"), "GraphQL")
+                        .map_err(GraphqlError::new)?;
                 }
                 Ok(Value::Array(translated))
             }
@@ -2541,7 +2542,7 @@ fn object_field_count(object: &Object, path: &str) -> Result<usize, GraphqlError
 }
 
 fn validate_schema_keywords(schema: &Value, path: &str, depth: usize) -> Result<(), GraphqlError> {
-    ensure_depth(depth, path)?;
+    limits::ensure_depth(depth, path, "GraphQL").map_err(GraphqlError::new)?;
     let Value::Object(object) = schema else {
         return if schema.is_boolean() {
             Ok(())
@@ -2968,16 +2969,6 @@ fn write_comment(output: &mut String, value: &str) {
         } else {
             writeln!(output, "# {line}").expect("writing GraphQL SDL to a String cannot fail");
         }
-    }
-}
-
-fn ensure_depth(depth: usize, path: &str) -> Result<(), GraphqlError> {
-    if depth > MAX_SCHEMA_DEPTH {
-        Err(GraphqlError::new(format!(
-            "GraphQL schema expression at {path} exceeds depth {MAX_SCHEMA_DEPTH}"
-        )))
-    } else {
-        Ok(())
     }
 }
 

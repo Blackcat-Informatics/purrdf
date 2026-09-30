@@ -8,8 +8,6 @@ use super::ProjectionError;
 
 /// Maximum artifact path length accepted by the portable package profile.
 const MAX_ARTIFACT_PATH_BYTES: usize = 4_096;
-/// Hard recursion ceiling shared with the RDF kernel's validated triple-term forest.
-const MAX_TERM_DEPTH: usize = 16;
 /// Largest value representable by the canonical 11-octal-digit USTAR size field.
 const USTAR_MAX_MEMBER_BYTES: u64 = 0o77_777_777_777;
 
@@ -75,9 +73,10 @@ impl ProjectionLimits {
                 "max_artifact_bytes exceeds USTAR's {USTAR_MAX_MEMBER_BYTES}-byte member ceiling"
             )));
         }
-        if max_term_depth > MAX_TERM_DEPTH {
+        if max_term_depth > purrdf_events::MAX_TERM_NESTING_DEPTH {
             return Err(ProjectionError::configuration(format!(
-                "max_term_depth exceeds the hard safety ceiling of {MAX_TERM_DEPTH}"
+                "max_term_depth exceeds the hard safety ceiling of {}",
+                purrdf_events::MAX_TERM_NESTING_DEPTH
             )));
         }
         Ok(Self {
@@ -504,7 +503,10 @@ mod tests {
         assert!(from_slice::<ProjectionLimits>(bad).is_err());
         let unknown = br#"{"max_artifacts":1,"max_artifact_bytes":1,"max_total_bytes":1,"max_archive_bytes":1536,"max_term_depth":1,"surprise":true}"#;
         assert!(from_slice::<ProjectionLimits>(unknown).is_err());
-        assert!(ProjectionLimits::new(1, 1, 1, 1_536, MAX_TERM_DEPTH + 1).is_err());
+        assert!(
+            ProjectionLimits::new(1, 1, 1, 1_536, purrdf_events::MAX_TERM_NESTING_DEPTH + 1)
+                .is_err()
+        );
     }
 
     #[test]

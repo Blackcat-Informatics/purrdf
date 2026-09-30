@@ -111,6 +111,9 @@ pub(crate) const VOCABULARY_LITERAL: &str = "rule:vocabulary-literal";
 /// The rule id a ledger job's `forbidden.fingerprints` names to forbid a
 /// literal its home item spells, written out anywhere else.
 pub(crate) const HOME_LITERAL: &str = "rule:home-literal";
+/// `rule:sole-name`: a function inside the home crate whose name a job forbids is
+/// a copy unless it is the home or an entry point (a constant always is).
+pub(crate) const SOLE_NAME: &str = "rule:sole-name";
 
 /// The keywords that mark a multi-line literal as an embedded Turtle, TriG or
 /// SPARQL document; compared case-insensitively, as whole words.
@@ -177,10 +180,11 @@ pub(crate) const JSON_POINTER_ESCAPE: &str = "rule:json-pointer-escape";
 pub(crate) const HEX_DIGIT_RADIX: &str = "rule:hex-digit-radix";
 
 /// Every rule the census computes itself.
-pub(crate) const RULES: [&str; 9] = [
+pub(crate) const RULES: [&str; 10] = [
     STD_DEFAULT_HASHER,
     VOCABULARY_LITERAL,
     HOME_LITERAL,
+    SOLE_NAME,
     HEX_FORMAT_LOOP,
     HEX_PAIR_RADIX,
     HEX_TABLE,

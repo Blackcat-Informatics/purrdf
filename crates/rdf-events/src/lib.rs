@@ -164,9 +164,9 @@
 
 use core::ops::ControlFlow;
 
-/// Depth bound for resolving nested reified-triple terms, mirroring
-/// `MAX_GTS_TERM_NESTING_DEPTH` in the IR engine. A cyclic or absurdly nested triple
-/// term hard-fails ([`EventError::NestingDepthExceeded`]) rather than recursing
+/// Depth bound for resolving nested reified-triple terms, the one bound the GTS
+/// reader and writer, the IR validator and the projections all enforce. A cyclic or
+/// absurdly nested triple term hard-fails ([`EventError::NestingDepthExceeded`]) rather than recursing
 /// without bound.
 pub const MAX_TERM_NESTING_DEPTH: usize = 16;
 

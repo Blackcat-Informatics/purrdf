@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 
 use crate::json_model::{Map, Number, NumberKind, Object, Value, ValueKind};
+use crate::limits::MAX_SCHEMA_DEPTH;
 use ::purrdf::RdfLocation;
 use ::purrdf::RdfTextDirection;
 use ::purrdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_loss_ledger};
@@ -41,7 +42,6 @@ const JSON_SCHEMA_SOURCE: &str = "json-schema";
 const MAX_SCHEMA_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DEFINITIONS: usize = 65_536;
 const MAX_PROPERTIES: usize = 65_536;
-const MAX_SCHEMA_DEPTH: usize = 128;
 const MAX_SCHEMA_NODES: usize = 1_000_000;
 const MAX_STRING_BYTES: usize = 16 * 1024 * 1024;
 

@@ -256,7 +256,7 @@ pub(crate) fn matches(job: &Job, workspace: &Workspace, home_package: &str) -> V
                 file: unit.file.clone(),
                 line: unit.line,
                 reasons,
-                in_home: unit.package == home_package,
+                in_home: unit.package == home_package && !second_home(job, workspace, unit),
                 variant: variants.contains(&unit.symbol),
             });
         }
@@ -440,9 +440,34 @@ fn home_literal_matches(
     found
 }
 
+/// Whether `unit` matches the job by name yet is neither the home nor one of its
+/// entry points, inside the home crate: a second home. A constant is always a
+/// copy there (a bound redeclared beside its home is a second bound); a function
+/// is one only for a job that lists [`crate::rules::SOLE_NAME`], since a home
+/// crate's own sibling helpers may legitimately share a job's name pattern.
+fn second_home(job: &Job, workspace: &Workspace, unit: &Unit) -> bool {
+    let strict = match unit.kind {
+        UnitKind::Constant => true,
+        UnitKind::Function => job
+            .forbidden
+            .fingerprints
+            .iter()
+            .any(|id| id == crate::rules::SOLE_NAME),
+    };
+    strict
+        && job
+            .forbidden
+            .names
+            .iter()
+            .any(|pattern| pattern.is_match(&unit.name))
+        && std::iter::once(&job.home)
+            .chain(&job.entry_points)
+            .all(|path| workspace.resolve(path).as_deref() != Some(unit.symbol.as_str()))
+}
+
 fn unit_reasons(job: &Job, unit: &Unit) -> Vec<String> {
     let mut reasons = Vec::new();
-    if unit.kind == UnitKind::Function {
+    if matches!(unit.kind, UnitKind::Function | UnitKind::Constant) {
         for pattern in &job.forbidden.names {
             if pattern.is_match(&unit.name) {
                 reasons.push(format!("name /{}/", pattern.as_str()));

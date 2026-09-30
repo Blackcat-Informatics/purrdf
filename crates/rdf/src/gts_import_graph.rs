@@ -24,11 +24,11 @@
 use purrdf_core::cdt_blank::BlankBinding;
 use purrdf_gts::model::{Graph, Term, TermKind};
 
-use crate::gts_resolve::MAX_GTS_TERM_NESTING_DEPTH;
 use crate::{
     BlankScope, GtsBundle, RdfDatasetBuilder, RdfDiagnostic, RdfEnvelope, RdfLiteral, RdfLocation,
     TermId, TermRef,
 };
+use purrdf_events::MAX_TERM_NESTING_DEPTH;
 
 /// The single, flattened blank-node scope every folded blank is interned under.
 ///
@@ -59,7 +59,7 @@ impl GraphInterner {
         if let Some(&id) = self.remap.get(&gts_id) {
             return Ok(id);
         }
-        if depth > MAX_GTS_TERM_NESTING_DEPTH {
+        if depth > MAX_TERM_NESTING_DEPTH {
             return Err(RdfDiagnostic::error(
                 "gts-term-nesting-limit",
                 "GTS term nesting depth limit exceeded",

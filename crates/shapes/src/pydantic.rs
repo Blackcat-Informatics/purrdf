@@ -536,7 +536,7 @@ pub fn emit_pydantic(
         SchemaCatalogLimits {
             input_bytes: config::MAX_SCHEMA_BYTES,
             definitions: config::MAX_DEFINITIONS,
-            depth: config::MAX_SCHEMA_DEPTH,
+            depth: crate::limits::MAX_SCHEMA_DEPTH,
             nodes: config::MAX_SCHEMA_NODES,
             string_bytes: config::MAX_SCHEMA_STRING_BYTES,
         },

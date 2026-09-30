@@ -29,6 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use crate::json_model::{Number, NumberKind, Object, Value, ValueKind, json_string};
+use crate::limits;
 use ::purrdf::RdfLocation;
 use ::purrdf::loss::{LossEntry, LossLedger};
 
@@ -51,7 +52,6 @@ const LOSS_CONTEXT: &str = "typescript-emitter";
 const MAX_SCHEMA_JSON_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DECLARATION_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DEFINITIONS: usize = 65_536;
-const MAX_SCHEMA_DEPTH: usize = 128;
 /// The greatest length a JavaScript array can have (ECMA-262 §10.4.2): a
 /// length bound at or beyond it constrains no JSON value TypeScript types.
 const MAX_ARRAY_LENGTH: u64 = 4_294_967_295;
@@ -561,7 +561,7 @@ impl<'a> Renderer<'a> {
         path: &str,
         depth: usize,
     ) -> Result<String, TypeScriptError> {
-        ensure_depth(depth, path)?;
+        limits::ensure_depth(depth, path, "TypeScript").map_err(TypeScriptError::new)?;
         match schema {
             Value::Bool(true) => Ok("JsonValue".to_owned()),
             Value::Bool(false) => Ok("never".to_owned()),
@@ -686,7 +686,7 @@ impl<'a> Renderer<'a> {
         path: &str,
         depth: usize,
     ) -> Result<String, TypeScriptError> {
-        ensure_depth(depth, path)?;
+        limits::ensure_depth(depth, path, "TypeScript").map_err(TypeScriptError::new)?;
         let empty = Object::new();
         let properties = object
             .get("properties")
@@ -804,7 +804,7 @@ impl<'a> Renderer<'a> {
         path: &str,
         depth: usize,
     ) -> Result<String, TypeScriptError> {
-        ensure_depth(depth, path)?;
+        limits::ensure_depth(depth, path, "TypeScript").map_err(TypeScriptError::new)?;
         let mut prefix = Vec::new();
         if let Some(items) = object.get("prefixItems").and_then(Value::as_array) {
             prefix.reserve(items.len());
@@ -901,7 +901,7 @@ impl<'a> Renderer<'a> {
     }
 
     fn render_literal(value: &Value, path: &str, depth: usize) -> Result<String, TypeScriptError> {
-        ensure_depth(depth, path)?;
+        limits::ensure_depth(depth, path, "TypeScript").map_err(TypeScriptError::new)?;
         match value {
             Value::Null => Ok("null".to_owned()),
             Value::Bool(value) => Ok(value.to_string()),
@@ -947,7 +947,7 @@ impl<'a> Renderer<'a> {
         path: &str,
         depth: usize,
     ) -> Result<(), TypeScriptError> {
-        ensure_depth(depth, path)?;
+        limits::ensure_depth(depth, path, "TypeScript").map_err(TypeScriptError::new)?;
         let Value::Object(object) = schema else {
             return if schema.is_boolean() {
                 Ok(())
@@ -1183,7 +1183,7 @@ impl<'a> Renderer<'a> {
         path: &str,
         depth: usize,
     ) -> Result<(), TypeScriptError> {
-        ensure_depth(depth, path)?;
+        limits::ensure_depth(depth, path, "TypeScript").map_err(TypeScriptError::new)?;
         match value {
             Value::Number(number) if integer_exceeds_typescript_exact_range(number) => {
                 self.record(
@@ -2003,16 +2003,6 @@ fn write_doc_comment(output: &mut String, depth: usize, text: &str, tag: Option<
 
 fn indentation(depth: usize) -> String {
     "  ".repeat(depth)
-}
-
-fn ensure_depth(depth: usize, path: &str) -> Result<(), TypeScriptError> {
-    if depth > MAX_SCHEMA_DEPTH {
-        Err(TypeScriptError::new(format!(
-            "TypeScript schema expression at {path} exceeds depth {MAX_SCHEMA_DEPTH}"
-        )))
-    } else {
-        Ok(())
-    }
 }
 
 fn typescript_type_name(raw: &str, fallback: &str) -> String {

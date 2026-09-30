@@ -51,9 +51,13 @@
 #                  home and entry-point modules, outside those modules, an
 #                  embedded Turtle/SPARQL document excepted; `rule:home-literal`:
 #                  a string literal equal to one the home item's own bodies
-#                  spell, outside the home item). A body or shim fingerprint
+#                  spell, outside the home item; `rule:sole-name`: a function
+#                  inside the home crate that a `names` pattern matches is a copy
+#                  unless it is the home or an entry point). A body or shim fingerprint
 #                  must still match some unit.
-#   names        = regular expressions over function names.
+#   names        = regular expressions over function and constant names (a bound
+#                  redeclared under a home's name is a copy; a value such as 16
+#                  or 128 is too common to forbid by `constants`).
 #
 # [[job.variant]] — a sanctioned second implementation; each is re-checked on
 # every run, and one that no longer matches anything is STALE and fails.
@@ -1350,6 +1354,40 @@ fingerprints = []
 names = ['^(fire_rule|match_pivot|join_remaining|match_join_candidate|semi_naive_chase|seminaive_fixpoint)$']
 
 [[job]]
+id = "term-nesting-depth"
+summary = "The triple-term nesting bound every resolver, importer, writer and validator enforces"
+home = "purrdf_events::MAX_TERM_NESTING_DEPTH"
+entry_points = []
+spec = "RDF 1.2 triple terms nest; a sink bounds resolution depth so a cyclic or absurdly nested term hard-fails (crates/rdf-events/src/lib.rs)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^MAX_(GTS_)?TERM_(NESTING_)?DEPTH$']
+
+[[job]]
+id = "schema-nesting-depth"
+summary = "The JSON Schema nesting bound and the guard the emitters share"
+home = "purrdf_shapes::limits::MAX_SCHEMA_DEPTH"
+entry_points = ["purrdf_shapes::limits::ensure_depth"]
+spec = "one depth ceiling for every JSON Schema surface: importer, TypeScript and GraphQL emitters, Pydantic generator (crates/shapes/src/limits.rs)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:sole-name"]
+names = ['^MAX_SCHEMA_DEPTH$', '^ensure_depth$']
+
+[[job]]
 id = "cli-shared-stdin"
 summary = "Refusing a command line in which two documents read standard input: one helper names every reader in one message"
 home = "purrdf_cli::argv_documents::refuse_shared_stdin"
@@ -1398,6 +1436,23 @@ enforced = true
 [job.forbidden]
 constants = []
 fingerprints = ["body:a7d79d50415357e5"]
+names = []
+
+[[job]]
+id = "frozen-nesting-bound"
+summary = "The triple-term nesting bound a frozen dataset vouches for; composed views take the widest bound of their parts"
+home = "purrdf_core::ir::dataset::RdfDataset::triple_term_nesting_bound"
+entry_points = ["purrdf_core::dataset_view::widest_nesting_bound"]
+spec = "RdfDatasetBuilder::freeze refuses a triple term nested past purrdf_events::MAX_TERM_NESTING_DEPTH, so every frozen dataset is bounded there"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["shim:676d6014a0e29d48"]
 names = []
 
 [[distinct]]

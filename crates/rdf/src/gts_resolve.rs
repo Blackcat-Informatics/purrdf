@@ -18,7 +18,7 @@
 //! `Graph` *by value* and MOVES term strings into the interner, which is structurally
 //! incompatible with borrowing the same `Graph` for a clone-based resolver. It
 //! therefore mirrors this traversal in move form, sharing the
-//! [`MAX_GTS_TERM_NESTING_DEPTH`] bound and the `gts-*` diagnostic codes so the two
+//! [`purrdf_events::MAX_TERM_NESTING_DEPTH`] bound and the `gts-*` diagnostic codes so the two
 //! cannot drift on structural contract.
 //!
 //! The diagnostic codes here are the historical `gts-*` codes (preserved verbatim
@@ -30,11 +30,6 @@ use purrdf_gts::model::{Graph, TermKind};
 use crate::{RdfDiagnostic, RdfTextDirection};
 #[cfg(test)]
 use crate::{RdfLiteral, RdfLocation, RdfTerm, RdfTriple};
-
-/// Depth bound for resolving nested quoted-triple terms. A cyclic or absurdly
-/// nested triple term hard-fails rather than recursing without bound. Shared by the
-/// eager resolver here and the move-based importer in [`super::import_graph`].
-pub(crate) const MAX_GTS_TERM_NESTING_DEPTH: usize = 16;
 
 /// The outgoing structural edges of one term: the ids it makes another walker
 /// resolve. Three is the maximum (a quoted triple's `(s, p, o)`); a literal
@@ -232,7 +227,7 @@ fn term_from_id_depth(
     location: RdfLocation,
     depth: usize,
 ) -> Result<RdfTerm, RdfDiagnostic> {
-    if depth > MAX_GTS_TERM_NESTING_DEPTH {
+    if depth > purrdf_events::MAX_TERM_NESTING_DEPTH {
         return Err(RdfDiagnostic::error(
             "gts-term-nesting-limit",
             "GTS term nesting depth limit exceeded",

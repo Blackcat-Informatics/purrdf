@@ -2412,6 +2412,23 @@ under Changed and Fixed where a longer account helps.
   interpreter over 2048 generated cases, and `scripts/check-shapes-parser-drops.py`
   (in `make check` and CI) forbids the parser patterns that dropped terms silently.
 
+- **gts, rdf, core, shapes:** the triple-term nesting bound and the schema nesting
+  bound each have one home. `purrdf_events::MAX_TERM_NESTING_DEPTH` (16) replaces
+  six redeclarations: `purrdf_gts::MAX_GTS_TERM_NESTING_DEPTH` is removed
+  (**Breaking API**; use the events constant, same value), and the copies in the
+  IR validator, the GTS resolver, importer and writer and the projection package
+  limits are deleted. `purrdf_shapes::limits::{MAX_SCHEMA_DEPTH, ensure_depth}`
+  (128) replaces four `MAX_SCHEMA_DEPTH` constants and the TypeScript and GraphQL
+  `ensure_depth` pair; the messages users see are unchanged. The ledger jobs
+  `term-nesting-depth` and `schema-nesting-depth` refuse a redeclaration:
+  `forbidden.names` now also reads constant names, and `rule:sole-name` makes a
+  same-named function inside the home crate a copy.
+- **core:** `DatasetView::triple_term_nesting_bound` on a delta view and a
+  composite view is the widest bound of their parts, and `None` when any part
+  vouches for no bound; both used to claim 16 whatever they held. A composite
+  over no sources reports 0. `RdfDataset` still reports 16, the bound its
+  `freeze` enforces.
+
 ### Measured
 
 Peak allocator bytes, from the deterministic counting allocator rather than timings.

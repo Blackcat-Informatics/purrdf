@@ -27,14 +27,10 @@
 //! [`RdfDatasetBuilder::freeze`]: super::builder::RdfDatasetBuilder::freeze
 
 use crate::RdfDiagnostic;
+use purrdf_events::MAX_TERM_NESTING_DEPTH;
 
 use super::builder::RdfDatasetBuilder;
 use super::term::{InternedTerm, TermId};
-
-/// Maximum triple-term nesting depth: how many triple terms one chain may hold, the
-/// outermost included (`<<( s p <<( s p o )>> )>>` holds two). Reuses the GTS importer's
-/// nesting bound so the IR and the transport agree on the acyclicity cliff.
-pub(crate) const MAX_TERM_NESTING_DEPTH: usize = 16;
 
 /// Validate the builder's accumulated structure. Returns `Ok(())` when the dataset
 /// is structurally sound, or a precise [`RdfDiagnostic`] on the first violation.

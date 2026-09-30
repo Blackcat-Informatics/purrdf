@@ -92,6 +92,17 @@ enum Carrier {
     Selected(Arc<SelectedGraphs>),
 }
 
+impl Carrier {
+    /// The triple-term nesting bound the carried view vouches for.
+    fn nesting_bound(&self) -> Option<usize> {
+        match self {
+            Self::Native(dataset) => dataset.triple_term_nesting_bound(),
+            Self::Delta(view) => view.triple_term_nesting_bound(),
+            Self::Selected(selection) => selection.view.triple_term_nesting_bound(),
+        }
+    }
+}
+
 /// One retained immutable source with its explicit graph placement and blank
 /// scope binding.
 #[derive(Debug, Clone)]
@@ -1783,10 +1794,13 @@ fn alias_last(
 impl DatasetView for CompositeDatasetView {
     type Id = CompositeViewId;
     type ProbePlan = QuadProbePlan;
-    /// Every source is a frozen dataset, a delta view over frozen datasets, or a
-    /// selection of a frozen dataset's graphs: each bounded at 16.
+    /// The widest bound any retained source vouches for.
     fn triple_term_nesting_bound(&self) -> Option<usize> {
-        Some(super::validate::MAX_TERM_NESTING_DEPTH)
+        crate::dataset_view::widest_nesting_bound(
+            self.sources
+                .iter()
+                .map(|source| source.carrier.nesting_bound()),
+        )
     }
     fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.quads_for_pattern(None, None, None, GraphMatch::Any)

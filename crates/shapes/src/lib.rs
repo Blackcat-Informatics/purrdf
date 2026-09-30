@@ -45,6 +45,7 @@ pub mod imports;
 pub mod instance;
 pub(crate) mod json_model;
 pub mod json_schema;
+pub mod limits;
 pub mod linkml;
 pub mod lint;
 pub mod model;

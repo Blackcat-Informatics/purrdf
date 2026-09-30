@@ -32,7 +32,7 @@
 //! 2. **Resolution phase** (per-segment flush, see below): resolve each gts term
 //!    to a target id — non-triple terms intern directly; triple terms resolve
 //!    their now-complete `(s, p, o)` recursively, inner-first, depth-bounded by
-//!    [`MAX_GTS_TERM_NESTING_DEPTH`] — then push the raw quad / reifier /
+//!    [`purrdf_events::MAX_TERM_NESTING_DEPTH`] — then push the raw quad / reifier /
 //!    annotation rows through the per-segment remap.
 //!
 //! # Memory model — resolve per-segment at close
@@ -62,11 +62,6 @@ use crate::model::{
     Diagnostic, OpaqueNode, Quad, Signature, StreamableInfo, Suppression, Term, TermKind, Triple3,
 };
 use crate::reader::{BlobPayload, BlobRefusal, FrameContext, StreamingSink};
-
-/// Depth bound for resolving nested quoted-triple terms. A cyclic or absurdly
-/// nested triple term hard-fails rather than recursing without bound. Mirrors
-/// the same guard on the folded (`reader::read`) path.
-pub const MAX_GTS_TERM_NESTING_DEPTH: usize = 16;
 
 /// The three resolved components `(subject, predicate, object)` a reifier binds,
 /// in the target's id space.
@@ -168,7 +163,7 @@ pub trait ResolvedSink {
     /// a genuinely dangling reference. `role` names the referencing position.
     fn err_dangling_term(&self, segment_index: usize, gts_id: usize, role: &str) -> Self::Error;
 
-    /// Build the error for exceeding [`MAX_GTS_TERM_NESTING_DEPTH`] while
+    /// Build the error for exceeding [`purrdf_events::MAX_TERM_NESTING_DEPTH`] while
     /// resolving nested quoted triples.
     fn err_nesting_limit(&self, segment_index: usize, gts_id: usize) -> Self::Error;
 
@@ -478,7 +473,7 @@ impl<S: ResolvedSink> SegmentResolver<S> {
         if let Some(&id) = self.remaps.get(&(segment_index, gts_id)) {
             return Ok(id);
         }
-        if depth > MAX_GTS_TERM_NESTING_DEPTH {
+        if depth > purrdf_events::MAX_TERM_NESTING_DEPTH {
             return Err(self.sink.err_nesting_limit(segment_index, gts_id));
         }
         // MOVE the raw term out: it resolves at most once (every later reference
@@ -580,7 +575,7 @@ impl<S: ResolvedSink> SegmentResolver<S> {
         reifier: usize,
         depth: usize,
     ) -> Result<ResolvedComponents<S>, S::Error> {
-        if depth > MAX_GTS_TERM_NESTING_DEPTH {
+        if depth > purrdf_events::MAX_TERM_NESTING_DEPTH {
             return Err(self.sink.err_nesting_limit(segment_index, reifier));
         }
         let Some(&(s, p, o)) = self.reifier_bindings.get(&(segment_index, reifier)) else {
