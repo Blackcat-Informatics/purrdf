@@ -145,12 +145,7 @@ fn kat_crc32_check_value_on_every_path() {
 fn split_input() -> Vec<u8> {
     let mut state = 0x2545_F491_4F6C_DD1Du64;
     (0..300)
-        .map(|_| {
-            state = state
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1);
-            (state >> 56) as u8
-        })
+        .map(|_| (purrdf_hash::mix::lcg64_next(&mut state, 1) >> 56) as u8)
         .collect()
 }
 

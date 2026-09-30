@@ -18,6 +18,11 @@
 //! [`signed_unit`] and its stream forms map a draw onto a binary64 value in
 //! `[-1, 1)`, the form a deterministic vector corpus is generated in.
 //!
+//! [`lcg64_next`] is the 64-bit linear congruential generator with Knuth's MMIX
+//! multiplier. It is not a SplitMix stream: it is here because existing test
+//! fixtures were generated from it and must keep regenerating bit for bit, and
+//! this crate's own tests are among them.
+//!
 //! Every function is total and target-independent: the integer functions are
 //! `const` wrapping arithmetic, and the `[-1, 1)` mapping is exact binary64
 //! arithmetic, so a value is the same on every target, wasm32 included.
@@ -112,6 +117,27 @@ pub fn signed_unit_step(state: &mut u64) -> f64 {
 pub fn signed_unit_step_nonzero(state: &mut u64, substitute: f64) -> f64 {
     *state = splitmix64_step(*state);
     signed_unit_nonzero(*state, substitute)
+}
+
+/// The multiplier of the 64-bit linear congruential generator: Knuth's MMIX
+/// constant, which passes the spectral test for modulus 2^64.
+pub const LCG64_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
+
+/// The increment MMIX pairs with [`LCG64_MULTIPLIER`].
+pub const LCG64_MMIX_INCREMENT: u64 = 1_442_695_040_888_963_407;
+
+/// One step of the 64-bit linear congruential generator modulo 2^64:
+/// `state = state * LCG64_MULTIPLIER + increment`, returning the new state.
+///
+/// The fixtures built on it use two increments — [`LCG64_MMIX_INCREMENT`] and
+/// `1` — and take different bits of the state (the high 31 above bit 33, the
+/// high byte, the whole word), so the increment is the caller's and the
+/// projection is too. The low bits of an LCG modulo a power of two are weak;
+/// a caller drawing a small range takes the high bits.
+#[must_use]
+pub const fn lcg64_next(state: &mut u64, increment: u64) -> u64 {
+    *state = state.wrapping_mul(LCG64_MULTIPLIER).wrapping_add(increment);
+    *state
 }
 
 #[cfg(test)]
