@@ -2993,7 +2993,7 @@ pub fn subtract_times(a: &Time, b: &Time) -> Result<Duration, XsdError> {
 /// operands' own *declared* tags, never on their computed (months, seconds)
 /// components — `dayTimeDuration` iff both operands declare it, `yearMonthDuration`
 /// iff both do, else the general `xsd:duration`. This is a plain `match`, the same
-/// idiom [`Shape`]'s doc requires of it: durations do not carry a total order over
+/// idiom the private `Shape` enum's doc requires of it: durations do not carry a total order over
 /// tags for `Ord`/`max` to invent one from.
 ///
 /// The join is a semilattice operation (associative, commutative, idempotent), so a

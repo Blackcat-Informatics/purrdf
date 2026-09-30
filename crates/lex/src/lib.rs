@@ -67,7 +67,7 @@
 //! * **XML** — [`xml`], the one XML 1.0 + Namespaces reader: a pull reader and
 //!   a document tree, with DOCTYPE and external entities refused, an explicit
 //!   depth cap, no machine-stack recursion, and byte offsets in every error.
-//! * **Constructors** — [`constructors`], the one spelling of an inherent
+//! * **Constructors** — [`constructors!`](macro@crate::constructors), the one spelling of an inherent
 //!   constructor whose whole body is a conversion: a caller's text taken as
 //!   `impl Into<String>` into a variant or a newtype field
 //!   ([`constructors!`]), a `new` that is the type's `Default`, and a `From`

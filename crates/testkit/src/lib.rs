@@ -29,7 +29,7 @@
 //! * [`jsonschema_metaschemas`] — the published JSON Schema meta-schemas as
 //!   test data, for every test and example that registers them with
 //!   `purrdf-jsonschema` (which carries none).
-//! * [`bench`] — the micro-benchmark harness for `harness = false` bench
+//! * [`mod@bench`] — the micro-benchmark harness for `harness = false` bench
 //!   targets: warm-up, flat sampling, the median with its MAD and a seeded
 //!   bootstrap interval, throughput, saved baselines compared with a
 //!   bootstrapped change, and a fixed-schema JSON estimates file per

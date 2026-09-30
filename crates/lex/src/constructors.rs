@@ -14,7 +14,7 @@
 //! answers `Default` from.)
 //!
 //! These bodies are the same code whatever type they build, so they are
-//! written once, here, as [`constructors!`](crate::constructors) and
+//! written once, here, as [`constructors!`](macro@crate::constructors) and
 //! [`variant_from!`](crate::variant_from), and every type instantiates them.
 //! One spelling keeps the signature uniform across the workspace (no
 //! constructor takes `&str` where its neighbour takes `String`) and leaves no

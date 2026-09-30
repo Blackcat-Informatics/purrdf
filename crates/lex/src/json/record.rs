@@ -7,8 +7,8 @@
 //! written through.
 //!
 //! A type states its JSON shape once, in a [`FromJson`] and a [`ToJson`]
-//! impl — a plain record through [`json_record!`], a closed vocabulary
-//! through [`json_string_enum!`], anything else by hand; the grammar stays in
+//! impl — a plain record through [`json_record!`](crate::json_record), a closed vocabulary
+//! through [`json_string_enum!`](crate::json_string_enum), anything else by hand; the grammar stays in
 //! the reader and writer of [`crate::json`]. The record law is stated here once so that every document
 //! a PurRDF component reads refuses the same shapes in the same words.
 //!
