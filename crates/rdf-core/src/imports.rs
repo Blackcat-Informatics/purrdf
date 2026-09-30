@@ -577,8 +577,9 @@ impl ClosureGraphIdentity {
         let objects = |subject: TermId, predicate: Option<TermId>| -> Vec<String> {
             predicate.map_or_else(Vec::new, |predicate| {
                 dataset
-                    .quads_for_pattern(Some(subject), Some(predicate), None, GraphMatch::Any)
-                    .filter_map(|quad| match dataset.term_value(quad.o) {
+                    .objects(subject, predicate, GraphMatch::Any)
+                    .into_iter()
+                    .filter_map(|object| match dataset.term_value(object) {
                         TermValue::Iri(iri) => Some(iri),
                         _ => None,
                     })

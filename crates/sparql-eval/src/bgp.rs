@@ -32,9 +32,11 @@
 //! never accidentally share a join variable.
 
 use purrdf_core::{DatasetView, GraphMatch, QuadIds, TermId, TermRef, ViewTermId};
+use purrdf_lex::term_syntax::{
+    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri, write_literal,
+};
 use purrdf_sparql_algebra::{
-    GraphPattern, Literal, NamedNodePattern, PropertyFunctionCall, TermPattern, TriplePattern,
-    Variable,
+    GraphPattern, NamedNodePattern, PropertyFunctionCall, TermPattern, TriplePattern, Variable,
 };
 use purrdf_xsd::ieee::{Binary64, Binary64Scope};
 
@@ -1535,11 +1537,11 @@ fn triple_pattern_to_string(tp: &TriplePattern) -> String {
     )
 }
 
-/// Format a term pattern as a compact SPARQL-like string: a quoted triple as
-/// `<<(s p o)>>`, written left to right over a work list of the pieces still to
+/// Format a term pattern as a compact SPARQL-like string: every constant in the
+/// RDF 1.2 term syntax ([`purrdf_lex::term_syntax`]), a quoted triple as
+/// `<<( s p o )>>`, written left to right over a work list of the pieces still to
 /// emit, so a term nested to any depth is formatted on constant machine stack.
 fn term_pattern_to_string(term: &TermPattern) -> String {
-    use std::fmt::Write as _;
     /// One piece of the text still to emit.
     enum Piece<'a> {
         Term(&'a TermPattern),
@@ -1551,21 +1553,27 @@ fn term_pattern_to_string(term: &TermPattern) -> String {
     while let Some(piece) = pending.pop() {
         match piece {
             Piece::Text(text) => out.push_str(text),
-            Piece::Predicate(nn) => out.push_str(&named_node_pattern_to_string(nn)),
+            Piece::Predicate(nn) => write_named_node_pattern(nn, &mut out),
             Piece::Term(TermPattern::Variable(v)) => {
-                write!(out, "?{}", v.as_str()).expect("a String write cannot fail");
+                out.push('?');
+                out.push_str(v.as_str());
             }
-            Piece::Term(TermPattern::BlankNode(b)) => {
-                write!(out, "_:{}", b.as_str()).expect("a String write cannot fail");
-            }
-            Piece::Term(TermPattern::NamedNode(n)) => {
-                write!(out, "<{}>", n.as_str()).expect("a String write cannot fail");
-            }
-            Piece::Term(TermPattern::Literal(l)) => out.push_str(&literal_to_string(l)),
+            Piece::Term(TermPattern::BlankNode(b)) => write_blank(b.as_str(), &mut out),
+            Piece::Term(TermPattern::NamedNode(n)) => write_iri(n.as_str(), &mut out),
+            Piece::Term(TermPattern::Literal(l)) => write_literal(
+                l.value(),
+                l.datatype().as_str(),
+                l.language(),
+                l.direction()
+                    .map(purrdf_sparql_algebra::BaseDirection::as_str),
+                &mut out,
+            ),
             Piece::Term(TermPattern::Triple(t)) => {
-                out.push_str("<<(");
+                out.push_str(TRIPLE_TERM_OPEN);
+                out.push(' ');
                 pending.extend([
-                    Piece::Text(")>>"),
+                    Piece::Text(TRIPLE_TERM_CLOSE),
+                    Piece::Text(" "),
                     Piece::Term(&t.object),
                     Piece::Text(" "),
                     Piece::Predicate(&t.predicate),
@@ -1578,22 +1586,22 @@ fn term_pattern_to_string(term: &TermPattern) -> String {
     out
 }
 
-/// Format a named-node pattern (IRI or variable) as a compact string.
-fn named_node_pattern_to_string(nn: &NamedNodePattern) -> String {
+/// Append a named-node pattern (IRI or variable).
+fn write_named_node_pattern(nn: &NamedNodePattern, out: &mut String) {
     match nn {
-        NamedNodePattern::Variable(v) => format!("?{}", v.as_str()),
-        NamedNodePattern::NamedNode(n) => format!("<{}>", n.as_str()),
+        NamedNodePattern::Variable(v) => {
+            out.push('?');
+            out.push_str(v.as_str());
+        }
+        NamedNodePattern::NamedNode(n) => write_iri(n.as_str(), out),
     }
 }
 
-/// Format a literal as a compact SPARQL-like string.
-fn literal_to_string(l: &Literal) -> String {
-    let escaped = l.value().replace('"', "\\\"");
-    match (l.language(), l.direction()) {
-        (Some(lang), Some(dir)) => format!("\"{escaped}\"@{lang}--{dir:?}"),
-        (Some(lang), None) => format!("\"{escaped}\"@{lang}"),
-        (None, _) => format!("\"{escaped}\"^^<{}>", l.datatype().as_str()),
-    }
+/// Format a named-node pattern (IRI or variable) as a compact string.
+fn named_node_pattern_to_string(nn: &NamedNodePattern) -> String {
+    let mut out = String::new();
+    write_named_node_pattern(nn, &mut out);
+    out
 }
 
 /// What one planner-side walk of a query learns about it, without evaluating it: the
@@ -2935,9 +2943,9 @@ mod term_walk_tests {
 
     use super::{
         CompiledPattern, Pos, TriplePos, bind_pos, blank_var, collect_triple_slot_keys,
-        compile_predicate, compile_term, for_each_slot, hash_pos, literal_to_string,
-        named_node_pattern_to_string, pos_has_bound_slot, slot_col, slot_keys, structural_order,
-        term_pattern_to_string, triple_pattern_to_string,
+        compile_predicate, compile_term, for_each_slot, hash_pos, named_node_pattern_to_string,
+        pos_has_bound_slot, slot_col, slot_keys, structural_order, term_pattern_to_string,
+        triple_pattern_to_string,
     };
     use crate::convert::ground_term_pattern_to_value;
     use crate::error::EvalError;
@@ -3143,13 +3151,26 @@ mod term_walk_tests {
     }
 
     fn reference_term_pattern_to_string(term: &TermPattern) -> String {
+        let mut out = String::new();
         match term {
             TermPattern::Variable(v) => format!("?{}", v.as_str()),
             TermPattern::BlankNode(b) => format!("_:{}", b.as_str()),
-            TermPattern::NamedNode(n) => format!("<{}>", n.as_str()),
-            TermPattern::Literal(l) => literal_to_string(l),
+            TermPattern::NamedNode(n) => {
+                purrdf_lex::term_syntax::write_iri(n.as_str(), &mut out);
+                out
+            }
+            TermPattern::Literal(l) => {
+                purrdf_lex::term_syntax::write_literal(
+                    l.value(),
+                    l.datatype().as_str(),
+                    l.language(),
+                    l.direction().map(BaseDirection::as_str),
+                    &mut out,
+                );
+                out
+            }
             TermPattern::Triple(t) => format!(
-                "<<({} {} {})>>",
+                "<<( {} {} {} )>>",
                 reference_term_pattern_to_string(&t.subject),
                 named_node_pattern_to_string(&t.predicate),
                 reference_term_pattern_to_string(&t.object)
@@ -3602,6 +3623,40 @@ mod term_walk_tests {
     /// Slot-key collection and the plan-introspection rendering answer as their
     /// recursive references do, for every generated triple pattern.
     #[test]
+    fn explain_writes_literals_in_term_syntax_with_the_direction_token() {
+        let rtl =
+            TermPattern::Literal(Literal::new_lang("a\"b\\c", "ar", Some(BaseDirection::Rtl)));
+        assert_eq!(term_pattern_to_string(&rtl), "\"a\\\"b\\\\c\"@ar--rtl");
+        let ltr = TermPattern::Literal(Literal::new_lang("x", "en", Some(BaseDirection::Ltr)));
+        assert_eq!(term_pattern_to_string(&ltr), "\"x\"@en--ltr");
+        // A non-directional literal keeps its tag or datatype.
+        let tagged = TermPattern::Literal(Literal::new_lang("x", "en", None));
+        assert_eq!(term_pattern_to_string(&tagged), "\"x\"@en");
+        let typed = TermPattern::Literal(Literal::new_typed(
+            "1",
+            NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
+        ));
+        assert_eq!(
+            term_pattern_to_string(&typed),
+            "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"
+        );
+        // A backslash in the lexical form is escaped, not left to swallow the quote.
+        let slash = TermPattern::Literal(Literal::new_simple("a\\"));
+        assert_eq!(term_pattern_to_string(&slash), "\"a\\\\\"");
+        let triple = TermPattern::Triple(Child::new(TriplePattern {
+            subject: TermPattern::NamedNode(NamedNode::new_unchecked("http://example.org/s")),
+            predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                "http://example.org/p",
+            )),
+            object: TermPattern::Variable(Variable::new("o")),
+        }));
+        assert_eq!(
+            term_pattern_to_string(&triple),
+            "<<( <http://example.org/s> <http://example.org/p> ?o )>>"
+        );
+    }
+
+    #[test]
     fn slot_keys_and_rendering_agree_with_their_references_on_generated_patterns() {
         let mut nested = 0;
         for seed in 0..400_u64 {
@@ -3792,11 +3847,11 @@ mod term_walk_tests {
             );
             assert_eq!(keys, vec![Variable::new("s"), Variable::new("v")]);
             let rendered = term_pattern_to_string(&term);
-            assert!(rendered.starts_with(&format!("<<(<{EX}a> <{EX}p> <<(<{EX}a> <{EX}p> ")));
-            assert!(rendered.ends_with(&format!("?v{}", ")>>".repeat(DEPTH))));
+            assert!(rendered.starts_with(&format!("<<( <{EX}a> <{EX}p> <<( <{EX}a> <{EX}p> ")));
+            assert!(rendered.ends_with(&format!("?v{}", " )>>".repeat(DEPTH))));
             assert_eq!(
                 rendered.len(),
-                DEPTH * (format!("<<(<{EX}a> <{EX}p> )>>").len()) + 2
+                DEPTH * (format!("<<( <{EX}a> <{EX}p>  )>>").len()) + 2
             );
 
             let dataset = dataset();

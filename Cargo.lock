@@ -488,6 +488,7 @@ version = "2.0.2"
 dependencies = [
  "purrdf-hash",
  "purrdf-iri",
+ "purrdf-lex",
  "purrdf-stack",
  "purrdf-testkit",
  "purrdf-xsd",
@@ -586,10 +587,10 @@ dependencies = [
  "purrdf-datalog",
  "purrdf-hash",
  "purrdf-iri",
+ "purrdf-lex",
  "purrdf-stack",
  "purrdf-testkit",
  "purrdf-xsd",
- "roxmltree",
 ]
 
 [[package]]
@@ -779,6 +780,7 @@ dependencies = [
  "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-hash",
+ "purrdf-lex",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-stack",
@@ -881,7 +883,6 @@ dependencies = [
  "purrdf-stack",
  "purrdf-testkit",
  "purrdf-validate",
- "roxmltree",
 ]
 
 [[package]]
@@ -895,6 +896,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-hash",
  "purrdf-iri",
+ "purrdf-lex",
  "purrdf-sparql-algebra",
  "purrdf-sparql-results",
  "purrdf-stack",
@@ -1119,12 +1121,6 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
-
-[[package]]
-name = "roxmltree"
-version = "0.20.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
 name = "rustversion"

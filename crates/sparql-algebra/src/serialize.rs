@@ -52,12 +52,13 @@ use crate::algebra::{
     AggregateExpression, AggregateFunction, ArithmeticOperator, Expression, Function, GraphPattern,
     OrderExpression, PropertyFunctionCall, PropertyPathExpression,
 };
-use crate::ast::{
-    GroundTerm, Literal, NamedNodePattern, RDF_LANG_STRING, TermPattern, TriplePattern, Variable,
-    XSD_STRING,
-};
+use crate::ast::{GroundTerm, Literal, NamedNodePattern, TermPattern, TriplePattern, Variable};
 use crate::walk::{Flow, NodeRef, Visit, walk_pre_post};
 use crate::worklist::WorkList;
+use purrdf_lex::literal_escape::{self, Carrier};
+use purrdf_lex::term_syntax::{
+    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri, write_literal,
+};
 
 /// The rendering's work list: a shallow tree's stays inline.
 type Items<'a> = WorkList<Item<'a>, 32>;
@@ -495,8 +496,10 @@ const fn arithmetic_level(op: ArithmeticOperator) -> Level {
 enum Item<'a> {
     /// Literal text.
     Str(&'static str),
-    /// Text borrowed from the tree, written verbatim: an IRI, a scalar-value name.
+    /// Text borrowed from the tree, written verbatim: a scalar-value name.
     Raw(&'a str),
+    /// An IRI, written as an escaped `IRIREF`.
+    Iri(&'a str),
     /// A literal.
     Literal(&'a Literal),
     /// A `GROUP_CONCAT` separator, escaped as a string literal's content.
@@ -594,7 +597,8 @@ fn render<'a>(s: &mut String, item: Item<'a>, next: &mut Items<'a>) {
     match item {
         Item::Str(text) | Item::Raw(text) => s.push_str(text),
         Item::Literal(l) => fmt_literal(s, l),
-        Item::Escaped(text) => push_escaped(s, text),
+        Item::Iri(iri) => write_iri(iri, s),
+        Item::Escaped(text) => literal_escape::write(text, Carrier::Canonical, s),
         Item::Bounds(min, max) => {
             let _ = match max {
                 Some(m) if m == min => write!(s, "{{{min}}}"),
@@ -663,26 +667,29 @@ fn render<'a>(s: &mut String, item: Item<'a>, next: &mut Items<'a>) {
         Item::Aggregate(agg) => aggregate(s, agg, next),
         Item::Term(term) => match term {
             TermPattern::Triple(t) => {
-                s.push_str("<<( ");
+                s.push_str(TRIPLE_TERM_OPEN);
+                s.push(' ');
                 triple_items(t, next);
-                next.push(Item::Str(" )>>"));
+                next.extend([Item::Char(' '), Item::Str(TRIPLE_TERM_CLOSE)]);
             }
             leaf => fmt_leaf_term(s, leaf),
         },
         Item::Ground(term) => match term {
             GroundTerm::NamedNode(n) => {
-                let _ = write!(s, "<{}>", n.as_str());
+                write_iri(n.as_str(), s);
             }
             GroundTerm::Literal(l) => fmt_literal(s, l),
             GroundTerm::Triple(t) => {
-                s.push_str("<<( ");
+                s.push_str(TRIPLE_TERM_OPEN);
+                s.push(' ');
                 next.extend([
                     Item::Ground(&t.subject),
-                    Item::Str(" <"),
-                    Item::Raw(t.predicate.as_str()),
-                    Item::Str("> "),
+                    Item::Char(' '),
+                    Item::Iri(t.predicate.as_str()),
+                    Item::Char(' '),
                     Item::Ground(&t.object),
-                    Item::Str(" )>>"),
+                    Item::Char(' '),
+                    Item::Str(TRIPLE_TERM_CLOSE),
                 ]);
             }
             // Injection-only: emitted as a blank-node label. The parser never
@@ -693,9 +700,7 @@ fn render<'a>(s: &mut String, item: Item<'a>, next: &mut Items<'a>) {
             // `DataBlockValue` syntax, so it must never reach the wire. This arm
             // therefore stays live only for a hand-built pattern serialized directly
             // through this crate's public API; the forwarding path never feeds it one.
-            GroundTerm::BlankNode(b) => {
-                let _ = write!(s, "_:{}", b.as_str());
-            }
+            GroundTerm::BlankNode(b) => write_blank(b.as_str(), s),
         },
         Item::Path(path) => path_items(s, path, next),
         Item::PathElt(path) => match path {
@@ -920,7 +925,7 @@ fn group_body<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>) {
 /// because the predicate names a property function.
 fn property_function<'a>(call: &'a PropertyFunctionCall, next: &mut Items<'a>) {
     property_function_args(&call.subject_args, next);
-    next.extend([Item::Str(" <"), Item::Raw(&call.iri), Item::Str("> ")]);
+    next.extend([Item::Char(' '), Item::Iri(&call.iri), Item::Char(' ')]);
     property_function_args(&call.object_args, next);
     next.push(Item::Str(" ."));
 }
@@ -1259,7 +1264,7 @@ fn expr_bare<'a>(
     let operand = |e: &'a Expression, level: Level| Item::Expr(e, level, group);
     match e {
         Expression::NamedNode(n) => {
-            let _ = write!(s, "<{}>", n.as_str());
+            write_iri(n.as_str(), s);
         }
         Expression::Literal(l) => fmt_literal(s, l),
         Expression::Variable(v) => {
@@ -1467,7 +1472,9 @@ fn aggregate<'a>(s: &mut String, agg: &'a AggregateExpression, next: &mut Items<
             // never here) — round-trips through `; NAME=value` clauses in the
             // SAME order they were parsed, so a query that never wrote one
             // never emits one either.
-            let _ = write!(s, "AGG(<{}>, ", n.as_str());
+            s.push_str("AGG(");
+            write_iri(n.as_str(), s);
+            s.push_str(", ");
             if *distinct {
                 s.push_str("DISTINCT ");
             }
@@ -1525,7 +1532,7 @@ fn path_items<'a>(s: &mut String, path: &'a PropertyPathExpression, next: &mut I
     use PropertyPathExpression as P;
     match path {
         P::NamedNode(n) => {
-            let _ = write!(s, "<{}>", n.as_str());
+            write_iri(n.as_str(), s);
         }
         P::Reverse(a) => {
             s.push('^');
@@ -1564,7 +1571,7 @@ fn path_items<'a>(s: &mut String, path: &'a PropertyPathExpression, next: &mut I
                 if e.inverse {
                     s.push('^');
                 }
-                let _ = write!(s, "<{}>", e.predicate.as_str());
+                write_iri(e.predicate.as_str(), s);
             }
             s.push(')');
         }
@@ -1602,11 +1609,9 @@ fn path_chain<'a>(
 fn fmt_leaf_term(s: &mut String, t: &TermPattern) {
     match t {
         TermPattern::NamedNode(n) => {
-            let _ = write!(s, "<{}>", n.as_str());
+            write_iri(n.as_str(), s);
         }
-        TermPattern::BlankNode(b) => {
-            let _ = write!(s, "_:{}", b.as_str());
-        }
+        TermPattern::BlankNode(b) => write_blank(b.as_str(), s),
         TermPattern::Literal(l) => fmt_literal(s, l),
         TermPattern::Variable(v) => {
             s.push('?');
@@ -1620,7 +1625,7 @@ fn fmt_leaf_term(s: &mut String, t: &TermPattern) {
 fn fmt_named_node_pattern(s: &mut String, n: &NamedNodePattern) {
     match n {
         NamedNodePattern::NamedNode(node) => {
-            let _ = write!(s, "<{}>", node.as_str());
+            write_iri(node.as_str(), s);
         }
         NamedNodePattern::Variable(v) => {
             s.push('?');
@@ -1629,44 +1634,17 @@ fn fmt_named_node_pattern(s: &mut String, n: &NamedNodePattern) {
     }
 }
 
-/// Emit a literal, escaping the lexical form to mirror the lexer's string rules.
+/// Emit a literal in the RDF 1.2 canonical term form
+/// ([`term_syntax::write_literal`](purrdf_lex::term_syntax::write_literal)),
+/// which the SPARQL string and literal productions read back unchanged.
 fn fmt_literal(s: &mut String, l: &Literal) {
-    s.push('"');
-    push_escaped(s, l.value());
-    s.push('"');
-    match (l.language(), l.direction()) {
-        (Some(lang), Some(dir)) => {
-            let _ = write!(s, "@{lang}--{}", dir.as_str());
-        }
-        (Some(lang), None) => {
-            let _ = write!(s, "@{lang}");
-        }
-        (None, _) => {
-            let dt = l.datatype().as_str();
-            // `xsd:string` and `rdf:langString` are implied; everything else is
-            // explicit `^^<datatype>`.
-            if dt != XSD_STRING && dt != RDF_LANG_STRING {
-                let _ = write!(s, "^^<{dt}>");
-            }
-        }
-    }
-}
-
-/// Escape a string literal's lexical content for a short `"…"` form, mirroring
-/// the lexer's `lex_string` escape table (`\`, `"`, `\n`, `\r`, `\t`).
-fn push_escaped(s: &mut String, value: &str) {
-    for c in value.chars() {
-        match c {
-            '\\' => s.push_str("\\\\"),
-            '"' => s.push_str("\\\""),
-            '\n' => s.push_str("\\n"),
-            '\r' => s.push_str("\\r"),
-            '\t' => s.push_str("\\t"),
-            '\u{0008}' => s.push_str("\\b"),
-            '\u{000C}' => s.push_str("\\f"),
-            other => s.push(other),
-        }
-    }
+    write_literal(
+        l.value(),
+        l.datatype().as_str(),
+        l.language(),
+        l.direction().map(crate::ast::BaseDirection::as_str),
+        s,
+    );
 }
 
 /// Emit a SPARQL built-in or custom function name.
@@ -1680,17 +1658,17 @@ fn fmt_function_name(s: &mut String, f: &Function) {
         // same `ParserOptions` re-dispatches to the same function.
         None => match f {
             Function::Purrdf(call) => {
-                let _ = write!(s, "<{}>", call.iri);
+                write_iri(&call.iri, s);
             }
             // SEP-0009 fixes the IRI, so this is also `call.fn_kind.iri()` —
             // writing the recorded string rather than re-deriving it keeps the
             // "emit exactly what was read" rule uniform across every IRI-named
             // function seam.
             Function::Cdt(call) => {
-                let _ = write!(s, "<{}>", call.iri);
+                write_iri(&call.iri, s);
             }
             Function::Custom(n) => {
-                let _ = write!(s, "<{}>", n.as_str());
+                write_iri(n.as_str(), s);
             }
             // `function_keyword` answers `Some` for every other variant.
             _ => s.push_str("<>"),

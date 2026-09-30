@@ -40,7 +40,6 @@ pub mod mode_restricted;
 pub mod owl2;
 pub mod owl2_rl;
 pub mod paths;
-pub mod rif_xml;
 pub mod rs_resultset;
 pub mod run;
 pub mod service;

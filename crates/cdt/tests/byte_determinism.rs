@@ -49,6 +49,20 @@ fn canonical_bytes_are_pinned() {
             .canonical_lexical(),
         "[\"\\t\\b\\n\\r\\f\\\"'\\\\\\u0000\"^^<http://www.w3.org/2001/XMLSchema#string>]"
     );
+    // The RDF 1.2 canonical string body keeps the C1 block raw and escapes DEL.
+    assert_eq!(
+        parse_list("[\"a\u{85}\\u007F\"]")
+            .unwrap()
+            .canonical_lexical(),
+        "[\"a\u{85}\\u007F\"^^<http://www.w3.org/2001/XMLSchema#string>]"
+    );
+    // An IRI is escaped exactly as every IRIREF writer escapes it.
+    assert_eq!(
+        parse_list("[<http://example.org/b'c>]")
+            .unwrap()
+            .canonical_lexical(),
+        "[<http://example.org/b'c>]"
+    );
 }
 
 #[test]

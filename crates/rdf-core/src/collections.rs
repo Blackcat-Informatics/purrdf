@@ -120,6 +120,12 @@ impl ListErrorKind {
     }
 }
 
+impl std::fmt::Display for ListErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.describe())
+    }
+}
+
 /// A malformed RDF Collection: what was broken, where, and every member read
 /// before the walk stopped.
 ///
@@ -154,6 +160,148 @@ impl<Id: std::fmt::Debug> std::fmt::Display for ListError<Id> {
 
 impl<Id: std::fmt::Debug> std::error::Error for ListError<Id> {}
 
+/// How many distinct objects one `(cell, predicate, ?)` edge has — the one
+/// question the strict walker asks of an edge source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SoleObject<Id> {
+    /// No object.
+    None,
+    /// Exactly one distinct object.
+    One(Id),
+    /// Two or more distinct objects.
+    Many,
+}
+
+impl<Id: Copy + Eq> SoleObject<Id> {
+    /// Fold `objects` (repeats allowed: a statement asserted in several graphs
+    /// is one object) into how many distinct ones there are, stopping at the
+    /// second distinct one.
+    pub fn of(objects: impl IntoIterator<Item = Id>) -> Self {
+        let mut found = Self::None;
+        for object in objects {
+            found = found.and(object);
+            if found == Self::Many {
+                break;
+            }
+        }
+        found
+    }
+
+    /// The count after one more object: a repeat of the one already seen
+    /// changes nothing. For a source that reports objects through a callback
+    /// rather than an iterator.
+    #[must_use]
+    pub fn and(self, object: Id) -> Self {
+        match self {
+            Self::None => Self::One(object),
+            Self::One(existing) if existing != object => Self::Many,
+            same => same,
+        }
+    }
+}
+
+/// The members of the RDF Collection headed by `head`, in list order, over any
+/// edge source — the strict walker behind
+/// [`DatasetView::rdf_list_strict`](crate::DatasetView::rdf_list_strict).
+///
+/// `first(cell)` and `rest(cell)` answer how many distinct `rdf:first` and
+/// `rdf:rest` objects `cell` has, and `nil` is `rdf:nil`'s identifier (`None`
+/// when the source holds no such term, so no chain can end). A source that is
+/// not a single [`GraphMatch`](crate::GraphMatch) — a merge of graphs, or a
+/// buffer of statements minted during a query — asks the same question here, so
+/// every reader of a collection shares one definition of a well-formed list
+/// (RDF 1.2 Semantics §D.3, SHACL 1.2 Core §1.4): exactly one `rdf:first` and
+/// one `rdf:rest` per cell, a chain reaching `rdf:nil` without revisiting a
+/// cell, and `rdf:nil` carrying neither edge.
+///
+/// The cycle check allocates nothing: Brent's algorithm keeps one saved cell
+/// and compares each step against it, so a cycle is found within twice the
+/// walked length and a well-formed list costs no lookup beyond its own edges.
+///
+/// # Errors
+///
+/// [`ListError`] when the collection is malformed; see [`ListErrorKind`].
+pub fn walk_rdf_list<Id: Copy + Eq>(
+    head: Id,
+    nil: Option<Id>,
+    mut first: impl FnMut(Id) -> SoleObject<Id>,
+    mut rest: impl FnMut(Id) -> SoleObject<Id>,
+) -> Result<Vec<Id>, ListError<Id>> {
+    let mut members = Vec::new();
+    let fail = |kind, members, node| {
+        Err(ListError {
+            kind,
+            members,
+            node,
+        })
+    };
+    // Brent: `saved` is compared against every cell; it jumps forward to the
+    // current cell whenever `steps` reaches `power`, which doubles.
+    let (mut saved, mut power, mut steps) = (head, 1_usize, 0_usize);
+    let mut cell = head;
+    loop {
+        if Some(cell) == nil {
+            if first(cell) != SoleObject::None || rest(cell) != SoleObject::None {
+                return fail(ListErrorKind::NonEmptyNil, members, cell);
+            }
+            return Ok(members);
+        }
+        match first(cell) {
+            SoleObject::None => return fail(ListErrorKind::MissingFirst, members, cell),
+            SoleObject::Many => return fail(ListErrorKind::MultipleFirst, members, cell),
+            SoleObject::One(member) => members.push(member),
+        }
+        let next = match rest(cell) {
+            SoleObject::None => return fail(ListErrorKind::MissingRest, members, cell),
+            SoleObject::Many => return fail(ListErrorKind::MultipleRest, members, cell),
+            SoleObject::One(next) => next,
+        };
+        steps += 1;
+        if next == saved {
+            // `steps` is now the cycle's length: find where it starts (two
+            // cursors `steps` apart meet at the first repeated cell) and keep
+            // each distinct cell's member once.
+            let (prefix, entry) = cycle_start(head, steps, &mut rest);
+            members.truncate(prefix + steps);
+            return fail(ListErrorKind::Cycle, members, entry);
+        }
+        if steps == power {
+            saved = next;
+            power *= 2;
+            steps = 0;
+        }
+        cell = next;
+    }
+}
+
+/// Where a cycle of length `length` on the `rdf:rest` chain from `head`
+/// begins: the number of cells before it, and its first cell. Two cursors
+/// `length` cells apart meet exactly there. Every cell they visit was already
+/// validated by the walk that found the cycle, so each has one `rdf:rest`.
+fn cycle_start<Id: Copy + Eq>(
+    head: Id,
+    length: usize,
+    rest: &mut impl FnMut(Id) -> SoleObject<Id>,
+) -> (usize, Id) {
+    let mut step = |cell: Id| match rest(cell) {
+        SoleObject::One(next) => next,
+        SoleObject::None | SoleObject::Many => {
+            unreachable!("the walk validated every cell on the cycle")
+        }
+    };
+    let mut ahead = head;
+    for _ in 0..length {
+        ahead = step(ahead);
+    }
+    let (mut behind, mut prefix) = (head, 0);
+    while behind != ahead {
+        behind = step(behind);
+        ahead = step(ahead);
+        prefix += 1;
+    }
+    (prefix, behind)
+}
+
 /// The three terms an RDF Collection is written with, in a caller's term
 /// type: `rdf:first`, `rdf:rest` and `rdf:nil`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -175,6 +323,19 @@ impl ListVocab<crate::ir::TermValue> {
             first: TermValue::iri(RDF_FIRST),
             rest: TermValue::iri(RDF_REST),
             nil: TermValue::iri(RDF_NIL),
+        }
+    }
+}
+
+impl ListVocab<crate::model::RdfTerm> {
+    /// The three terms as owned-model [`RdfTerm`](crate::model::RdfTerm) IRIs.
+    #[must_use]
+    pub fn rdf_terms() -> Self {
+        use crate::model::RdfTerm;
+        Self {
+            first: RdfTerm::iri(RDF_FIRST),
+            rest: RdfTerm::iri(RDF_REST),
+            nil: RdfTerm::iri(RDF_NIL),
         }
     }
 }
@@ -847,5 +1008,63 @@ mod tests {
                 (head, TermValue::iri(RDF_REST), TermValue::iri(RDF_NIL)),
             ]
         );
+    }
+
+    /// The walker over a plain statement slice: the edge source a merged graph
+    /// scope or a per-query buffer supplies.
+    fn walk_slice(edges: &[(u8, u8, u8)], head: u8) -> Result<Vec<u8>, ListError<u8>> {
+        const FIRST: u8 = 100;
+        const REST: u8 = 101;
+        const NIL: u8 = 0;
+        let objects = |cell: u8, predicate: u8| {
+            SoleObject::of(
+                edges
+                    .iter()
+                    .filter(|(s, p, _)| *s == cell && *p == predicate)
+                    .map(|&(_, _, o)| o),
+            )
+        };
+        walk_rdf_list(
+            head,
+            Some(NIL),
+            |cell| objects(cell, FIRST),
+            |cell| objects(cell, REST),
+        )
+    }
+
+    #[test]
+    fn the_walker_reads_any_edge_source_and_counts_a_repeated_edge_once() {
+        let list = [
+            (1, 100, 7),
+            (1, 101, 2),
+            (2, 100, 8),
+            (2, 101, 0),
+            (1, 100, 7),
+        ];
+        assert_eq!(walk_slice(&list, 1), Ok(vec![7, 8]));
+        assert_eq!(walk_slice(&list, 0), Ok(vec![]));
+
+        let two_rests = [(1, 100, 7), (1, 101, 0), (1, 101, 2)];
+        let error = walk_slice(&two_rests, 1).expect_err("two rdf:rest objects");
+        assert_eq!(error.kind, ListErrorKind::MultipleRest);
+        assert_eq!((error.node, error.members), (1, vec![7]));
+
+        let cycle = [(1, 100, 7), (1, 101, 2), (2, 100, 8), (2, 101, 1)];
+        let error = walk_slice(&cycle, 1).expect_err("a cycle");
+        assert_eq!(error.kind, ListErrorKind::Cycle);
+        assert_eq!(error.members, vec![7, 8]);
+
+        let busy_nil = [(1, 100, 7), (1, 101, 0), (0, 100, 9)];
+        let error = walk_slice(&busy_nil, 1).expect_err("rdf:nil with an edge");
+        assert_eq!(error.kind, ListErrorKind::NonEmptyNil);
+    }
+
+    #[test]
+    fn sole_object_counts_distinct_objects_up_to_two() {
+        assert_eq!(SoleObject::<u8>::of([]), SoleObject::None);
+        assert_eq!(SoleObject::of([3, 3, 3]), SoleObject::One(3));
+        assert_eq!(SoleObject::of([3, 4, 3]), SoleObject::Many);
+        assert_eq!(SoleObject::None.and(1).and(1), SoleObject::One(1));
+        assert_eq!(SoleObject::One(1).and(2).and(1), SoleObject::Many);
     }
 }

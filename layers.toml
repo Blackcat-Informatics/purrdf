@@ -115,7 +115,7 @@ deps = [
     "purrdf-hash",
     "purrdf-iri",
     "purrdf-xsd",
-    { name = "purrdf-lex", pending = true },
+    "purrdf-lex",
 ]
 
 [[crate]]
@@ -201,6 +201,7 @@ deps = [
     "purrdf-datalog",
     "purrdf-hash",
     "purrdf-iri",
+    "purrdf-lex",
     "purrdf-xsd",
 ]
 
@@ -211,6 +212,7 @@ deps = [
     "purrdf-core",
     "purrdf-hash",
     "purrdf-iri",
+    "purrdf-lex",
     "purrdf-sparql-algebra",
     "purrdf-sparql-results",
     "purrdf-stack",
@@ -267,6 +269,7 @@ name = "purrdf-retrieval"
 deps = [
     "purrdf-core",
     "purrdf-hash",
+    "purrdf-lex",
     "purrdf-sparql-algebra",
     "purrdf-sparql-eval",
     "purrdf-text",

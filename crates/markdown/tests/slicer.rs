@@ -208,6 +208,8 @@ fn unescape(literal: &str) -> String {
             Some('n') => out.push('\n'),
             Some('r') => out.push('\r'),
             Some('t') => out.push('\t'),
+            Some('b') => out.push('\u{8}'),
+            Some('f') => out.push('\u{c}'),
             Some('"') => out.push('"'),
             Some('\\') => out.push('\\'),
             Some('u') => {

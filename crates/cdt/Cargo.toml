@@ -32,6 +32,7 @@ name = "purrdf_cdt"
 [dependencies]
 # The uppercase hex digits of the `\uXXXX` / `\UXXXXXXXX` escapes the writer emits.
 purrdf-hash = { workspace = true }
+purrdf-lex = { workspace = true }
 # Absolute-IRI validation for every IRIREF the grammar admits.
 purrdf-iri = { workspace = true }
 # The XSD value space the numeric/boolean shorthands and `parse_literal` resolve into.

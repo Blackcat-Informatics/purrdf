@@ -18,7 +18,7 @@
 use std::collections::BTreeSet;
 
 use crate::dataset_view::DatasetView;
-use crate::ir::TermRef;
+use crate::term_writer::write_term_value;
 
 /// How many graph names a refusal spells out individually before it summarises the
 /// rest as a count.
@@ -56,20 +56,26 @@ pub fn distinct_graph_names<D: DatasetView>(view: &D) -> Vec<String> {
     names.into_iter().collect()
 }
 
-/// Render one graph-name term for a diagnostic, in N-Triples term syntax.
+/// Render one graph-name term for a diagnostic, in N-Triples term syntax
+/// ([`write_term_value`]): an escaped `IRIREF`, a blank node under a legal
+/// `BLANK_NODE_LABEL`, and — though no graph slot should hold one — a literal or
+/// triple term in full, because a diagnostic that panics on a term it did not
+/// expect is worse than one that names it.
 ///
 /// A CONSTRUCT template's graph slot only ever resolves to an IRI (a graph variable
 /// bound to anything else skips the statement, per SPARQL §16.2), and the RDF 1.2
-/// abstract syntax admits only an IRI or a blank node in the graph position — but the
-/// match is total over [`TermRef`] rather than partial, because a diagnostic that
-/// panics on a term it did not expect is worse than one that names it.
+/// abstract syntax admits only an IRI or a blank node in the graph position.
 fn render_graph_name<D: DatasetView>(view: &D, id: D::Id) -> String {
-    match view.resolve(id) {
-        TermRef::Iri(iri) => format!("<{iri}>"),
-        TermRef::Blank { label, .. } => format!("_:{label}"),
-        TermRef::Literal { lexical, .. } => format!("\"{lexical}\""),
-        TermRef::Triple { .. } => "<<( … )>>".to_owned(),
+    let mut out = String::new();
+    match view.term_value(id) {
+        Ok(term) => write_term_value(&term, &mut out),
+        Err(error) => {
+            out.push_str("<unresolvable graph name: ");
+            out.push_str(&error.to_string());
+            out.push('>');
+        }
     }
+    out
 }
 
 /// The refusal sentence a host raises when a graph-carrying result meets a
@@ -159,5 +165,22 @@ mod tests {
         )));
         assert!(message.contains("and 2 more"));
         assert!(!message.contains("<https://example.org/g8>"));
+    }
+
+    #[test]
+    fn graph_names_are_written_in_term_syntax() {
+        let mut b = crate::RdfDatasetBuilder::new();
+        let s = b.intern_iri("https://example.org/s");
+        let iri_graph = b.intern_iri("https://example.org/g");
+        let odd_blank = b.intern_blank("a b", crate::BlankScope::DEFAULT);
+        let plain_blank = b.intern_blank("g1", crate::BlankScope::DEFAULT);
+        b.push_quad(s, s, s, Some(iri_graph));
+        b.push_quad(s, s, s, Some(odd_blank));
+        b.push_quad(s, s, s, Some(plain_blank));
+        let ds = b.freeze().expect("dataset freezes");
+        assert_eq!(
+            distinct_graph_names(&ds),
+            ["<https://example.org/g>", "_:g1", "_:purrdfesc_a_000020b",]
+        );
     }
 }

@@ -14,8 +14,8 @@
 //!
 //! The kernel's canonical N-Quads writer owns the authoritative escape set, and
 //! this layer reproduces none of it: literals are written by
-//! [`purrdf_core::ir::canon::write_literal_escaped`] and IRIs by
-//! [`purrdf_core::iri_escape::push_escaped`], the same functions the canonical
+//! [`purrdf_lex::term_syntax::write_literal`] and IRIs by
+//! [`purrdf_lex::term_syntax::write_iri`], the same functions the canonical
 //! writer calls. That is what makes an emitted constant and a canonicalized
 //! dataset agree character for character: `"a\nb"` written here is
 //! byte-identical to `"a\nb"` written there, so a needle that matches in one
@@ -53,6 +53,7 @@ use std::collections::BTreeMap;
 
 use purrdf_core::terminals;
 use purrdf_core::{RdfTextDirection, TermValue};
+use purrdf_lex::term_syntax;
 
 use crate::fusion_stream::{CounterReading, StratumResolution};
 use crate::iri::Iri;
@@ -284,7 +285,7 @@ fn write_term(value: &TermValue, out: &mut String) -> Result<(), RenderError> {
 fn write_leaf(out: &mut String, value: &TermValue) -> Result<(), RenderError> {
     match value {
         TermValue::Iri(iri) => {
-            write_iri(iri, out);
+            term_syntax::write_iri(iri, out);
             Ok(())
         }
         TermValue::Blank { label, .. } => Err(RenderError::BlankNotGround {
@@ -300,15 +301,9 @@ fn write_leaf(out: &mut String, value: &TermValue) -> Result<(), RenderError> {
     }
 }
 
-/// Append `iri`'s `<…>` form, escaping exactly what the `IRIREF` production
-/// forbids.
-fn write_iri(iri: &str, out: &mut String) {
-    out.push('<');
-    purrdf_core::iri_escape::push_escaped(iri, out);
-    out.push('>');
-}
-
-/// Append a literal's `"…"` form with its tag, direction or datatype.
+/// Append a literal's `"…"` form with its tag, direction or datatype, in
+/// [`term_syntax::write_literal`]'s canonical spelling, after refusing what no
+/// SPARQL constant can carry.
 fn write_literal(
     lexical_form: &str,
     datatype: &str,
@@ -321,28 +316,20 @@ fn write_literal(
             lexical_form: lexical_form.to_owned(),
         });
     }
-    out.push('"');
-    purrdf_core::ir::canon::write_literal_escaped(lexical_form, out);
-    out.push('"');
-    if let Some(tag) = language {
-        if !is_langtag(tag) {
-            return Err(RenderError::MalformedLanguageTag {
-                tag: tag.to_owned(),
-            });
-        }
-        out.push('@');
-        out.push_str(tag);
-        if let Some(direction) = direction {
-            out.push_str("--");
-            out.push_str(direction.as_str());
-        }
-        return Ok(());
+    if let Some(tag) = language
+        && !is_langtag(tag)
+    {
+        return Err(RenderError::MalformedLanguageTag {
+            tag: tag.to_owned(),
+        });
     }
-    // The short form for a plain string; every other datatype is written out.
-    if datatype != XSD_STRING {
-        out.push_str("^^");
-        write_iri(datatype, out);
-    }
+    term_syntax::write_literal(
+        lexical_form,
+        datatype,
+        language,
+        direction.map(RdfTextDirection::as_str),
+        out,
+    );
     Ok(())
 }
 

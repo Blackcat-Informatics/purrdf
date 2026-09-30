@@ -361,7 +361,8 @@ pub enum EntailError {
     /// `owl:distinctMembers`, `owl:propertyChainAxiom` and `owl:hasKey` all REQUIRE their
     /// object to be an RDF collection, and the `OWL-RL` lane walks each one into an
     /// internal relation before evaluating. A cell with no `rdf:first`, with two, with no
-    /// `rdf:rest`, with two, a walk that never reaches `rdf:nil`, or a cycle is a refusal
+    /// `rdf:rest`, with two, a walk that never reaches `rdf:nil`, an `rdf:nil` carrying an
+    /// edge, or a cycle is a refusal
     /// rather than a truncation: reasoning over the well-formed PREFIX of a broken
     /// collection would answer a question the caller did not ask, and it would do so
     /// silently. The message names the collection's head, the cell the walk stopped at,

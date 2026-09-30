@@ -8,14 +8,22 @@
 //! [`crate::json_read::ParsedSolutions`] (`SELECT`) or a boolean (`ASK`). The W3C
 //! conformance harness reads expected `.srx` results with it.
 //!
-//! # Wasm discipline
+//! # The XML layer
 //!
-//! A hand-rolled XML scanner over `&[u8]` building a minimal DOM tree — **no
-//! external XML crate, no `std::io`** — keeping the crate wasm-clean. The SRX grammar is shallow and fixed, so a tree-walk is enough.
+//! The document is read by the workspace's one XML reader,
+//! [`purrdf_lex::xml`]: XML 1.0 and Namespaces in XML 1.0 well-formedness,
+//! character and entity references expanded, line ends and attribute values
+//! normalized, and every element and attribute resolved to its namespace name.
+//! A document type declaration is refused ([`purrdf_lex::xml::Dtd::Refuse`]):
+//! a results document has no use for one, and refusing it means no entity is
+//! ever expanded. The SRX grammar is shallow and fixed, so a walk of the tree
+//! is enough; its elements are matched by local name in the SRX namespace
+//! (or in no namespace, as some producers write them).
 
 use purrdf_core::TermBox;
 use purrdf_core::terminals;
 use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
+use purrdf_lex::xml::{Document, Node, XML_NAMESPACE};
 
 use crate::error::Error;
 use crate::json_read::ParsedSolutions;
@@ -25,9 +33,13 @@ use purrdf_core::datatype::XSD_STRING;
 /// The ITS (Internationalization Tag Set) namespace IRI the SPARQL 1.2 Query
 /// Results specification uses for the base-direction attribute — see
 /// [`crate::xml`]'s module docs for the spec quote. Matched by namespace URI,
-/// not by the literal `its:` prefix spelling — see [`Element::attr_ns`].
+/// not by the literal `its:` prefix spelling.
 use purrdf_core::vocab::its::NS as ITS_NS;
 use purrdf_core::vocab::language_datatype_iri;
+
+/// The namespace of every SPARQL Query Results XML element (SPARQL 1.1 Query
+/// Results XML Format §2).
+const SRX_NS: &str = "http://www.w3.org/2005/sparql-results#";
 
 /// Parse a SPARQL Results XML `SELECT` document into [`ParsedSolutions`].
 ///
@@ -36,23 +48,22 @@ use purrdf_core::vocab::language_datatype_iri;
 /// Returns [`Error::Format`] on malformed XML, a non-`<sparql>` root, an `ASK`
 /// (`<boolean>`) document (use [`from_xml_boolean`]), or a malformed binding.
 pub fn from_xml(bytes: &[u8]) -> Result<ParsedSolutions, Error> {
-    let root = parse_root(bytes)?;
-    if root.child("boolean").is_some() {
+    let document = parse(bytes)?;
+    let root = sparql_root(&document)?;
+    if child(root, "boolean").is_some() {
         return Err(fmt(
             "expected SELECT results, got an ASK (boolean) document",
         ));
     }
-    let variables = read_head_vars(&root)?;
-    let results = root
-        .child("results")
-        .ok_or_else(|| fmt("missing <results>"))?;
+    let variables = read_head_vars(root);
+    let results = child(root, "results").ok_or_else(|| fmt("missing <results>"))?;
 
     let mut rows = Vec::new();
-    for result in results.children_named("result") {
+    for result in children_named(results, "result") {
         let mut row = vec![None; variables.len()];
-        for binding in result.children_named("binding") {
+        for binding in children_named(result, "binding") {
             let name = binding
-                .attr("name")
+                .attribute("name")
                 .ok_or_else(|| fmt("<binding> without name"))?;
             let idx = variables
                 .iter()
@@ -61,7 +72,7 @@ pub fn from_xml(bytes: &[u8]) -> Result<ParsedSolutions, Error> {
             // A `<binding>` with no child term element means the variable is
             // unbound in this solution — an older convention (conformant
             // SPARQL-XML simply omits the `<binding>`).  Treat it as absent.
-            let Some(term_elem) = binding.child_elements().next() else {
+            let Some(term_elem) = child_elements(binding).next() else {
                 continue;
             };
             row[idx] = Some(decode_term(term_elem)?);
@@ -102,11 +113,10 @@ pub fn from_xml(bytes: &[u8]) -> Result<ParsedSolutions, Error> {
 /// `<boolean>` element, or a `<boolean>` whose text is not `true` or `false`
 /// once XML `S` is stripped from both ends.
 pub fn from_xml_boolean(bytes: &[u8]) -> Result<bool, Error> {
-    let root = parse_root(bytes)?;
-    let boolean = root
-        .child("boolean")
-        .ok_or_else(|| fmt("missing <boolean>"))?;
-    let text = boolean.text();
+    let document = parse(bytes)?;
+    let boolean =
+        child(sparql_root(&document)?, "boolean").ok_or_else(|| fmt("missing <boolean>"))?;
+    let text = text(boolean);
     match terminals::trim_ws(&text) {
         "true" => Ok(true),
         "false" => Ok(false),
@@ -123,8 +133,7 @@ pub fn from_xml_boolean(bytes: &[u8]) -> Result<bool, Error> {
 /// members) only when both the source `provenance` was non-empty and a
 /// namespace was supplied, so a reader must be told the SAME namespace to know
 /// which element to decode. Matched by NAMESPACE URI plus local name — exactly
-/// as `Element::attr_ns` (this module's private DOM helper) resolves
-/// `its:dir` — not by the literal QName
+/// as `its:dir` is resolved — not by the literal QName
 /// prefix spelling, because XML namespace identity is URI-based
 /// (<https://www.w3.org/TR/xml-names/>): a document that binds
 /// `namespace.iri()` to a DIFFERENT prefix than this crate's own writer uses
@@ -144,22 +153,18 @@ pub fn provenance_from_xml(
     bytes: &[u8],
     namespace: &ProvenanceNamespace,
 ) -> Result<ResultProvenance, Error> {
-    let root = parse_root(bytes)?;
+    let document = parse(bytes)?;
+    let root = sparql_root(&document)?;
     let iri = namespace.iri();
-    let Some(provenance_elem) = root.child_ns(iri, "provenance") else {
+    let named = |node, local| children_in(node, iri, local);
+    let Some(provenance_elem) = named(root, "provenance").next() else {
         return Ok(ResultProvenance::default());
     };
-    let query_hash = provenance_elem
-        .child_ns(iri, "queryHash")
-        .map(Element::text);
-    let engine = provenance_elem.child_ns(iri, "engine").map(Element::text);
-    let solutions = provenance_elem
-        .children_named_ns(iri, "solution")
+    let query_hash = named(provenance_elem, "queryHash").next().map(text);
+    let engine = named(provenance_elem, "engine").next().map(text);
+    let solutions = named(provenance_elem, "solution")
         .map(|solution_elem| SolutionProvenance {
-            sources: solution_elem
-                .children_named_ns(iri, "source")
-                .map(Element::text)
-                .collect(),
+            sources: named(solution_elem, "source").map(text).collect(),
         })
         .collect();
     Ok(ResultProvenance {
@@ -169,25 +174,70 @@ pub fn provenance_from_xml(
     })
 }
 
-/// Parse the document and return its `<sparql>` root element.
-fn parse_root(bytes: &[u8]) -> Result<Element, Error> {
+/// Read `bytes` as an XML document (a document type declaration refused).
+fn parse(bytes: &[u8]) -> Result<Document<'_>, Error> {
     let text = core::str::from_utf8(bytes).map_err(|_| fmt("non-UTF-8 document"))?;
-    let root = XmlParser::new(text).parse_document()?;
-    if root.name != "sparql" {
+    Document::parse(text).map_err(|error| {
+        let (line, column) = error.line_column(text);
+        fmt(&format!("{error} (line {line}, column {column})"))
+    })
+}
+
+/// The document's `<sparql>` root element.
+fn sparql_root<'d, 'a>(document: &'d Document<'a>) -> Result<Node<'d, 'a>, Error> {
+    let root = document.root_element();
+    if !is_srx(root, "sparql") {
         return Err(fmt("root element is not <sparql>"));
     }
     Ok(root)
 }
 
 /// Read the `<head>`'s `<variable name="…"/>` declarations, in order.
-fn read_head_vars(root: &Element) -> Result<Vec<String>, Error> {
-    let Some(head) = root.child("head") else {
-        return Ok(Vec::new());
-    };
-    Ok(head
-        .children_named("variable")
-        .filter_map(|v| v.attr("name").map(str::to_owned))
-        .collect())
+fn read_head_vars(root: Node<'_, '_>) -> Vec<String> {
+    child(root, "head").map_or_else(Vec::new, |head| {
+        children_named(head, "variable")
+            .filter_map(|v| v.attribute("name").map(str::to_owned))
+            .collect()
+    })
+}
+
+/// Whether `node` is the SRX element `local`: that local name, in the SRX
+/// namespace or in none.
+fn is_srx(node: Node<'_, '_>, local: &str) -> bool {
+    let name = node.tag_name();
+    name.name() == local && matches!(name.namespace(), None | Some(SRX_NS))
+}
+
+/// The direct child elements of `node`.
+fn child_elements<'d, 'a>(node: Node<'d, 'a>) -> impl Iterator<Item = Node<'d, 'a>> {
+    node.children().filter(Node::is_element)
+}
+
+/// The direct child SRX elements `local`.
+fn children_named<'d, 'a>(
+    node: Node<'d, 'a>,
+    local: &'static str,
+) -> impl Iterator<Item = Node<'d, 'a>> {
+    child_elements(node).filter(move |child| is_srx(*child, local))
+}
+
+/// The direct child elements `local` in the namespace `namespace`.
+fn children_in<'d, 'a, 'q>(
+    node: Node<'d, 'a>,
+    namespace: &'q str,
+    local: &'q str,
+) -> impl Iterator<Item = Node<'d, 'a>> + use<'d, 'a, 'q> {
+    child_elements(node).filter(move |child| child.has_tag_name((namespace, local)))
+}
+
+/// The first direct child SRX element `local`.
+fn child<'d, 'a>(node: Node<'d, 'a>, local: &'static str) -> Option<Node<'d, 'a>> {
+    children_named(node, local).next()
+}
+
+/// The concatenated direct text content, every reference already expanded.
+fn text(node: Node<'_, '_>) -> String {
+    node.children().filter_map(|child| child.text()).collect()
 }
 
 /// Decode a single bound-term element (`<uri>`/`<bnode>`/`<literal>`/`<triple>`).
@@ -196,13 +246,13 @@ fn read_head_vars(root: &Element) -> Result<Vec<String>, Error> {
 /// its `<subject>` term element and decodes it — a nested `<triple>` there fully —
 /// then does the same for its `<predicate>` and its `<object>`, and is checked and
 /// assembled once all three are decoded. The first error ends the decoding.
-fn decode_term(elem: &Element) -> Result<TermValue, Error> {
+fn decode_term(elem: Node<'_, '_>) -> Result<TermValue, Error> {
     /// A `<triple>` being decoded, and the components decoded so far.
-    struct Frame<'e> {
-        elem: &'e Element,
+    struct Frame<'d, 'a> {
+        elem: Node<'d, 'a>,
         decoded: Vec<TermValue>,
     }
-    let mut frames: Vec<Frame<'_>> = Vec::new();
+    let mut frames: Vec<Frame<'_, '_>> = Vec::new();
     let mut next = elem;
     loop {
         let Some(mut term) = decode_leaf(next)? else {
@@ -246,15 +296,19 @@ fn decode_term(elem: &Element) -> Result<TermValue, Error> {
 }
 
 /// Decode a bound-term element that is not a `<triple>`, or `None` for a `<triple>`.
-fn decode_leaf(elem: &Element) -> Result<Option<TermValue>, Error> {
-    Ok(Some(match elem.name.as_str() {
-        "uri" => TermValue::Iri(elem.text()),
+fn decode_leaf(elem: Node<'_, '_>) -> Result<Option<TermValue>, Error> {
+    let name = elem.tag_name();
+    if !matches!(name.namespace(), None | Some(SRX_NS)) {
+        return Err(fmt(&format!("unexpected term element <{}>", name.name())));
+    }
+    Ok(Some(match name.name() {
+        "uri" => TermValue::Iri(text(elem)),
         "bnode" => TermValue::Blank {
-            label: elem.text(),
+            label: text(elem),
             scope: BlankScope::DEFAULT,
         },
         "literal" => {
-            let language = elem.attr("xml:lang").map(str::to_owned);
+            let language = elem.attribute((XML_NAMESPACE, "lang")).map(str::to_owned);
             // A tag arriving in a DOCUMENT is parsed input, held to the same
             // grammar as every other parsed tag in the workspace — see
             // [`crate::error::language_tag_refusal`] for why a results reader
@@ -278,9 +332,14 @@ fn decode_leaf(elem: &Element) -> Result<Option<TermValue>, Error> {
             // because this crate's own earlier writer emitted them before
             // this de-minting pass — never because they are spec-sanctioned.
             let dir_str = elem
-                .attr_ns(ITS_NS, "dir")
-                .or_else(|| elem.attr("dir"))
-                .or_else(|| elem.attr("purrdf:dir"));
+                .attribute((ITS_NS, "dir"))
+                .or_else(|| elem.attribute("dir"))
+                .or_else(|| {
+                    elem.attributes()
+                        .iter()
+                        .find(|attribute| attribute.qname() == "purrdf:dir")
+                        .map(purrdf_lex::xml::Attribute::value)
+                });
             let direction = match dir_str {
                 Some(token) => Some(
                     RdfTextDirection::from_str_token(token)
@@ -288,13 +347,13 @@ fn decode_leaf(elem: &Element) -> Result<Option<TermValue>, Error> {
                 ),
                 None => None,
             };
-            let datatype = match elem.attr("datatype") {
+            let datatype = match elem.attribute("datatype") {
                 Some(dt) => dt.to_owned(),
                 None if language.is_some() => language_datatype_iri(direction.is_some()).to_owned(),
                 None => XSD_STRING.to_owned(),
             };
             TermValue::Literal {
-                lexical_form: elem.text(),
+                lexical_form: text(elem),
                 datatype,
                 language,
                 direction,
@@ -306,11 +365,9 @@ fn decode_leaf(elem: &Element) -> Result<Option<TermValue>, Error> {
 }
 
 /// Read the single child term element of a `<triple>` component wrapper.
-fn component<'a>(triple: &'a Element, role: &str) -> Result<&'a Element, Error> {
-    triple
-        .child(role)
-        .ok_or_else(|| fmt(&format!("<triple> missing <{role}>")))?
-        .child_elements()
+fn component<'d, 'a>(triple: Node<'d, 'a>, role: &'static str) -> Result<Node<'d, 'a>, Error> {
+    let wrapper = child(triple, role).ok_or_else(|| fmt(&format!("<triple> missing <{role}>")))?;
+    child_elements(wrapper)
         .next()
         .ok_or_else(|| fmt(&format!("<{role}> has no term")))
 }
@@ -318,440 +375,6 @@ fn component<'a>(triple: &'a Element, role: &str) -> Result<&'a Element, Error> 
 /// Build a `Format` error.
 fn fmt(msg: &str) -> Error {
     Error::Format(format!("SPARQL-XML: {msg}"))
-}
-
-/// A minimal parsed XML element: name, attributes (raw QName spelling plus a
-/// namespace-resolved view), and ordered child nodes.
-#[derive(Debug)]
-struct Element {
-    name: String,
-    attrs: Vec<(String, String)>,
-    /// Every attribute resolved to `(namespace URI, local name, value)` using
-    /// the `xmlns:*` bindings in scope at this element (its own declarations
-    /// plus every ancestor's — XML namespace scope is inherited downward).
-    /// `namespace` is `None` for an unprefixed attribute (XML Namespaces never
-    /// puts an unprefixed ATTRIBUTE in a namespace, unlike elements, which
-    /// inherit a default `xmlns`) or a prefix with no in-scope binding. See
-    /// [`Self::attr_ns`].
-    ns_attrs: Vec<(Option<String>, String, String)>,
-    /// THIS element's own namespace URI, resolved from its QName plus the
-    /// `xmlns`/`xmlns:*` bindings in scope at its own start tag (its own
-    /// declarations plus every ancestor's) — `None` for an unprefixed element
-    /// with no default namespace in scope, or a prefix with no in-scope
-    /// binding. See [`Self::child_ns`]/[`Self::children_named_ns`].
-    ns: Option<String>,
-    children: Vec<Node>,
-}
-
-#[derive(Debug)]
-enum Node {
-    Element(Element),
-    Text(String),
-}
-
-impl Element {
-    /// The value of an attribute, if present, matched by its RAW QName
-    /// (literal prefix spelling). Used for attributes this reader matches
-    /// positionally (`name`, `xml:lang`, `datatype`) or for legacy fallback
-    /// spellings that were never namespace-qualified in the first place. For
-    /// an attribute whose correctness depends on XML namespace semantics
-    /// (defined by URI, not prefix), use [`Self::attr_ns`] instead.
-    fn attr(&self, key: &str) -> Option<&str> {
-        self.attrs
-            .iter()
-            .find(|(k, _)| k == key)
-            .map(|(_, v)| v.as_str())
-    }
-
-    /// The value of the attribute whose namespace URI is `ns` and local name
-    /// is `local`, resolved via the `xmlns:*` bindings in scope at this
-    /// element — matching by namespace URI rather than by the literal QName
-    /// prefix, exactly as XML Namespaces (<https://www.w3.org/TR/xml-names/>)
-    /// defines attribute identity. A document that binds `ns` to a different
-    /// prefix than the writer's own convention, or declares the binding on an
-    /// ancestor element rather than this one, still resolves correctly.
-    fn attr_ns(&self, ns: &str, local: &str) -> Option<&str> {
-        self.ns_attrs.iter().find_map(|(uri, name, value)| {
-            (uri.as_deref() == Some(ns) && name == local).then_some(value.as_str())
-        })
-    }
-
-    /// The first direct child element named `name`.
-    fn child(&self, name: &str) -> Option<&Self> {
-        self.child_elements().find(|e| e.name == name)
-    }
-
-    /// All direct child elements named `name`.
-    fn children_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a Self> {
-        self.child_elements().filter(move |e| e.name == name)
-    }
-
-    /// The first direct child element whose namespace URI is `ns` and local
-    /// name is `local`, resolved via each child's OWN QName plus the
-    /// `xmlns`/`xmlns:*` bindings in scope where it appears — matching by
-    /// namespace URI rather than by the literal QName prefix, exactly as
-    /// [`Self::attr_ns`] does for attributes and XML Namespaces defines
-    /// element identity. A document that binds `ns` to a different prefix
-    /// than the writer's own convention (or none at all — a default
-    /// namespace) still resolves correctly; a document that reuses the same
-    /// PREFIX spelling for an unrelated namespace does not falsely match.
-    fn child_ns(&self, ns: &str, local: &str) -> Option<&Self> {
-        self.child_elements()
-            .find(|e| e.ns.as_deref() == Some(ns) && local_name(&e.name) == local)
-    }
-
-    /// All direct child elements whose namespace URI is `ns` and local name
-    /// is `local`. See [`Self::child_ns`].
-    fn children_named_ns<'a>(
-        &'a self,
-        ns: &'a str,
-        local: &'a str,
-    ) -> impl Iterator<Item = &'a Self> {
-        self.child_elements()
-            .filter(move |e| e.ns.as_deref() == Some(ns) && local_name(&e.name) == local)
-    }
-
-    /// All direct child elements (text nodes skipped).
-    fn child_elements(&self) -> impl Iterator<Item = &Self> {
-        self.children.iter().filter_map(|n| match n {
-            Node::Element(e) => Some(e),
-            Node::Text(_) => None,
-        })
-    }
-
-    /// The concatenated direct text content (entity-unescaped during parse).
-    fn text(&self) -> String {
-        let mut s = String::new();
-        for n in &self.children {
-            if let Node::Text(t) = n {
-                s.push_str(t);
-            }
-        }
-        s
-    }
-}
-
-/// A hand-rolled XML tree parser over `&str`, covering the shallow SRX grammar
-/// plus the standard prolog/comment/entity surface.
-struct XmlParser<'a> {
-    src: &'a str,
-    bytes: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> XmlParser<'a> {
-    fn new(src: &'a str) -> Self {
-        Self {
-            src,
-            bytes: src.as_bytes(),
-            pos: 0,
-        }
-    }
-
-    /// Skip the prolog (`<?xml?>`, comments, doctype, whitespace) and parse the
-    /// single root element.
-    fn parse_document(&mut self) -> Result<Element, Error> {
-        self.skip_misc()?;
-        if self.peek() != Some(b'<') {
-            return Err(fmt("expected root element"));
-        }
-        self.parse_element(&[])
-    }
-
-    fn peek(&self) -> Option<u8> {
-        self.bytes.get(self.pos).copied()
-    }
-
-    fn starts_with(&self, s: &str) -> bool {
-        self.bytes[self.pos..].starts_with(s.as_bytes())
-    }
-
-    /// Skip XML `S ::= (#x20 | #x9 | #xD | #xA)+`.
-    fn skip_ws(&mut self) {
-        self.pos = terminals::skip_ws(self.bytes, self.pos);
-    }
-
-    /// Skip XML declarations, comments, processing instructions, and doctype.
-    fn skip_misc(&mut self) -> Result<(), Error> {
-        loop {
-            self.skip_ws();
-            if self.starts_with("<?") {
-                self.skip_until("?>")?;
-            } else if self.starts_with("<!--") {
-                self.skip_until("-->")?;
-            } else if self.starts_with("<!") {
-                self.skip_until(">")?;
-            } else {
-                return Ok(());
-            }
-        }
-    }
-
-    fn skip_until(&mut self, close: &str) -> Result<(), Error> {
-        if let Some(rel) = self.src[self.pos..].find(close) {
-            self.pos += rel + close.len();
-            Ok(())
-        } else {
-            Err(fmt(&format!("unterminated `{close}`")))
-        }
-    }
-
-    /// Parse an element starting at `<`. `parent_scope` is the `(prefix,
-    /// namespace URI)` bindings in scope from ancestor elements; this
-    /// element's own `xmlns:*` declarations extend it (see
-    /// [`extend_ns_scope`]) both for resolving its own attributes and for
-    /// every descendant this call parses.
-    fn parse_element(&mut self, parent_scope: &[(String, String)]) -> Result<Element, Error> {
-        self.pos += 1; // consume '<'
-        let name = self.parse_name()?;
-        let mut attrs = Vec::new();
-        loop {
-            self.skip_ws();
-            match self.peek() {
-                Some(b'/') => {
-                    // Self-closing element. Extend the scope with this
-                    // element's OWN `xmlns:*`/`xmlns` declarations first —
-                    // exactly as the non-self-closing branch below does —
-                    // so a self-closing element that both declares and uses
-                    // a namespace on itself (`<foo xmlns:i="..." i:bar="baz"/>`)
-                    // resolves both its attributes and its own element name
-                    // correctly, not just a namespace declared on an ancestor.
-                    self.pos += 1;
-                    self.expect(b'>')?;
-                    let scope = extend_ns_scope(parent_scope, &attrs);
-                    let ns_attrs = resolve_ns_attrs(&attrs, &scope);
-                    let ns = resolve_element_ns(&name, &scope);
-                    return Ok(Element {
-                        name,
-                        attrs,
-                        ns_attrs,
-                        ns,
-                        children: Vec::new(),
-                    });
-                }
-                Some(b'>') => {
-                    self.pos += 1;
-                    break;
-                }
-                Some(_) => {
-                    let (k, v) = self.parse_attr()?;
-                    attrs.push((k, v));
-                }
-                None => return Err(fmt("unterminated start tag")),
-            }
-        }
-        let scope = extend_ns_scope(parent_scope, &attrs);
-        let ns_attrs = resolve_ns_attrs(&attrs, &scope);
-        let ns = resolve_element_ns(&name, &scope);
-        // Parse children until the matching end tag.
-        let mut children = Vec::new();
-        loop {
-            match self.peek() {
-                None => return Err(fmt("unterminated element")),
-                Some(b'<') => {
-                    if self.starts_with("</") {
-                        self.pos += 2;
-                        let close = self.parse_name()?;
-                        self.skip_ws();
-                        self.expect(b'>')?;
-                        if close != name {
-                            return Err(fmt(&format!(
-                                "mismatched end tag </{close}> for <{name}>"
-                            )));
-                        }
-                        break;
-                    } else if self.starts_with("<!--") {
-                        self.skip_until("-->")?;
-                    } else if self.starts_with("<![CDATA[") {
-                        let start = self.pos + "<![CDATA[".len();
-                        let rel = self.src[start..]
-                            .find("]]>")
-                            .ok_or_else(|| fmt("unterminated CDATA"))?;
-                        children.push(Node::Text(self.src[start..start + rel].to_owned()));
-                        self.pos = start + rel + "]]>".len();
-                    } else {
-                        children.push(Node::Element(self.parse_element(&scope)?));
-                    }
-                }
-                Some(_) => {
-                    let text = self.parse_text()?;
-                    if !text.is_empty() {
-                        children.push(Node::Text(text));
-                    }
-                }
-            }
-        }
-        Ok(Element {
-            name,
-            attrs,
-            ns_attrs,
-            ns,
-            children,
-        })
-    }
-
-    /// Parse character data up to the next `<`, unescaping entities.
-    fn parse_text(&mut self) -> Result<String, Error> {
-        let start = self.pos;
-        while let Some(c) = self.peek() {
-            if c == b'<' {
-                break;
-            }
-            self.pos += 1;
-        }
-        unescape(&self.src[start..self.pos])
-    }
-
-    fn parse_name(&mut self) -> Result<String, Error> {
-        let start = self.pos;
-        while let Some(c) = self.peek() {
-            if matches!(c, b' ' | b'\t' | b'\n' | b'\r' | b'/' | b'>' | b'=') {
-                break;
-            }
-            self.pos += 1;
-        }
-        if self.pos == start {
-            return Err(fmt("empty element/attribute name"));
-        }
-        Ok(self.src[start..self.pos].to_owned())
-    }
-
-    fn parse_attr(&mut self) -> Result<(String, String), Error> {
-        let key = self.parse_name()?;
-        self.skip_ws();
-        self.expect(b'=')?;
-        self.skip_ws();
-        let Some(quote @ (b'"' | b'\'')) = self.peek() else {
-            return Err(fmt("attribute value must be quoted"));
-        };
-        self.pos += 1;
-        let start = self.pos;
-        while let Some(c) = self.peek() {
-            if c == quote {
-                break;
-            }
-            self.pos += 1;
-        }
-        if self.peek() != Some(quote) {
-            return Err(fmt("unterminated attribute value"));
-        }
-        let value = unescape(&self.src[start..self.pos])?;
-        self.pos += 1; // consume closing quote
-        Ok((key, value))
-    }
-
-    fn expect(&mut self, c: u8) -> Result<(), Error> {
-        if self.peek() == Some(c) {
-            self.pos += 1;
-            Ok(())
-        } else {
-            Err(fmt(&format!("expected `{}`", c as char)))
-        }
-    }
-}
-
-/// Extend `parent_scope` with any `xmlns:prefix="uri"` declaration, OR a bare
-/// default-namespace `xmlns="uri"` declaration (tracked under the empty-string
-/// "prefix", exactly the key an unprefixed ELEMENT name resolves against —
-/// see [`resolve_element_ns`]), found among `attrs` (this element's own start
-/// tag) — the namespace scope every descendant, and this element's own
-/// attributes and name, resolve against.
-fn extend_ns_scope(
-    parent_scope: &[(String, String)],
-    attrs: &[(String, String)],
-) -> Vec<(String, String)> {
-    let mut scope = parent_scope.to_vec();
-    for (k, v) in attrs {
-        if let Some(prefix) = k.strip_prefix("xmlns:") {
-            scope.push((prefix.to_owned(), v.clone()));
-        } else if k == "xmlns" {
-            scope.push((String::new(), v.clone()));
-        }
-    }
-    scope
-}
-
-/// Resolve an ELEMENT's (as opposed to an attribute's) namespace URI from its
-/// raw QName `name` and the bindings in scope at its own start tag: a
-/// prefixed name (`p:local`) resolves against the nearest `xmlns:p`
-/// declaration; an unprefixed name resolves against the nearest bare
-/// `xmlns=` (default namespace) declaration, if any — unlike an attribute, an
-/// unprefixed ELEMENT is NOT namespace-less when a default namespace is in
-/// scope (<https://www.w3.org/TR/xml-names/#defaulting>).
-fn resolve_element_ns(name: &str, scope: &[(String, String)]) -> Option<String> {
-    let prefix = name.split_once(':').map_or("", |(p, _)| p);
-    scope
-        .iter()
-        .rev()
-        .find(|(p, _)| p == prefix)
-        .map(|(_, uri)| uri.clone())
-}
-
-/// An element's local name: everything after its QName's `:`, or the whole
-/// name when it carries no prefix.
-fn local_name(name: &str) -> &str {
-    name.split_once(':').map_or(name, |(_, local)| local)
-}
-
-/// Resolve every attribute in `attrs` to `(namespace URI, local name, value)`
-/// using `scope` (the nearest — i.e. last-pushed — binding for a prefix
-/// wins, matching XML's "nearest declaration in scope" resolution rule).
-/// `xmlns`/`xmlns:*` declaration attributes themselves are namespace
-/// machinery, not ordinary content attributes, so they are excluded here.
-fn resolve_ns_attrs(
-    attrs: &[(String, String)],
-    scope: &[(String, String)],
-) -> Vec<(Option<String>, String, String)> {
-    attrs
-        .iter()
-        .filter(|(k, _)| k != "xmlns" && !k.starts_with("xmlns:"))
-        .map(|(k, v)| match k.split_once(':') {
-            Some((prefix, local)) => {
-                let ns = scope
-                    .iter()
-                    .rev()
-                    .find(|(p, _)| p == prefix)
-                    .map(|(_, uri)| uri.clone());
-                (ns, local.to_owned(), v.clone())
-            }
-            None => (None, k.clone(), v.clone()),
-        })
-        .collect()
-}
-
-/// Unescape the five predefined XML entities plus numeric character references.
-fn unescape(s: &str) -> Result<String, Error> {
-    if !s.contains('&') {
-        return Ok(s.to_owned());
-    }
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(amp) = rest.find('&') {
-        out.push_str(&rest[..amp]);
-        let after = &rest[amp..];
-        let semi = after
-            .find(';')
-            .ok_or_else(|| fmt("unterminated entity reference"))?;
-        let entity = &after[1..semi];
-        match entity {
-            "lt" => out.push('<'),
-            "gt" => out.push('>'),
-            "amp" => out.push('&'),
-            "quot" => out.push('"'),
-            "apos" => out.push('\''),
-            _ if let Some(body) = entity.strip_prefix('#') => {
-                out.push(terminals::decode_char_ref(body.as_bytes()).ok_or_else(|| {
-                    fmt(&format!(
-                        "`&{entity};` is not a character reference to an XML `Char`"
-                    ))
-                })?);
-            }
-            other => return Err(fmt(&format!("unknown entity &{other};"))),
-        }
-        rest = &after[semi + 1..];
-    }
-    out.push_str(rest);
-    Ok(out)
 }
 
 #[cfg(test)]
@@ -764,8 +387,27 @@ mod tests {
         DIR_LANG_STRING as RDF_DIR_LANGSTRING, LANG_STRING as RDF_LANGSTRING,
     };
 
+    /// A one-literal SELECT document whose literal content is `content`.
+    fn srx_literal(content: &str) -> Vec<u8> {
+        format!(
+            "<sparql xmlns=\"http://www.w3.org/2005/sparql-results#\">\
+             <head><variable name=\"l\"/></head><results><result>\
+             <binding name=\"l\"><literal>{content}</literal></binding>\
+             </result></results></sparql>"
+        )
+        .into_bytes()
+    }
+
+    fn literal_text(document: &[u8]) -> Result<String, Error> {
+        let parsed = from_xml(document)?;
+        match parsed.rows[0][0].clone() {
+            Some(TermValue::Literal { lexical_form, .. }) => Ok(lexical_form),
+            other => panic!("expected a literal, got {other:?}"),
+        }
+    }
+
     #[test]
-    fn a_character_reference_to_a_non_char_is_refused() {
+    fn a_character_reference_to_a_non_char_or_a_misspelled_one_is_refused() {
         let decimal_zero = format!("&#{};", 0);
         for text in [
             "&#x0;",
@@ -775,8 +417,15 @@ mod tests {
             "&#xFFFF;",
             "&#xD800;",
             "&#X41;",
+            "&#x+41;",
+            "&#+65;",
+            "&#x-41;",
+            "&#-65;",
         ] {
-            assert!(unescape(text).is_err(), "{text}");
+            assert!(
+                matches!(literal_text(&srx_literal(text)), Err(Error::Format(_))),
+                "{text}"
+            );
         }
     }
 
@@ -791,29 +440,68 @@ mod tests {
             ("&#x10000;", "\u{10000}"),
             ("&#x10FFFF;", "\u{10ffff}"),
             ("&#x0010FFFF;", "\u{10ffff}"),
+            ("&#x41;", "A"),
         ] {
             assert_eq!(
-                unescape(text).expect("a lawful reference"),
+                literal_text(&srx_literal(text)).expect("a lawful reference"),
                 expected,
                 "{text}"
             );
         }
+        // The decimal form is spelled through `format!` so the source holds no `#`
+        // followed by digits.
+        assert_eq!(
+            literal_text(&srx_literal(&format!("&#{};", 65))).expect("a lawful reference"),
+            "A"
+        );
     }
 
+    /// A results document has no use for a document type declaration, so one is
+    /// refused (no entity it declares is ever expanded); the same document without
+    /// it still reads.
     #[test]
-    fn a_signed_character_reference_is_refused() {
-        for text in ["&#x+41;", "&#+65;", "&#x-41;", "&#-65;"] {
-            assert!(unescape(text).is_err(), "{text}");
+    fn a_doctype_is_refused_and_the_document_without_it_reads() {
+        let plain = srx_literal("x");
+        assert_eq!(literal_text(&plain).expect("no DOCTYPE"), "x");
+        for doctype in [
+            "<!DOCTYPE sparql>",
+            "<!DOCTYPE sparql [<!ENTITY x \"expanded\">]>",
+        ] {
+            let mut document = doctype.as_bytes().to_vec();
+            document.extend_from_slice(&plain);
+            assert!(
+                matches!(from_xml(&document), Err(Error::Format(_))),
+                "{doctype}"
+            );
         }
     }
 
+    /// The SRX elements are matched in the SRX namespace or in none; the same
+    /// document under a foreign default namespace is not a results document.
     #[test]
-    fn an_unsigned_character_reference_still_decodes() {
-        // The decimal form is spelled through `format!` so the source holds no
-        // `#` followed by digits.
-        for text in ["&#x41;".to_owned(), format!("&#{};", 65)] {
-            assert_eq!(unescape(&text).expect("a lawful reference"), "A", "{text}");
+    fn srx_elements_are_read_in_their_namespace_or_none() {
+        let document = |namespace: &str| {
+            format!(
+                "<sparql{namespace}><head><variable name=\"x\"/></head><results><result>\
+                 <binding name=\"x\"><uri>http://example.org/a</uri></binding>\
+                 </result></results></sparql>"
+            )
+            .into_bytes()
+        };
+        let expected = Some(TermValue::Iri("http://example.org/a".to_owned()));
+        for namespace in ["", " xmlns=\"http://www.w3.org/2005/sparql-results#\""] {
+            assert_eq!(
+                from_xml(&document(namespace)).expect("reads").rows[0][0],
+                expected
+            );
         }
+        let prefixed = b"<r:sparql xmlns:r=\"http://www.w3.org/2005/sparql-results#\">\
+            <r:head/><r:boolean>true</r:boolean></r:sparql>";
+        assert!(from_xml_boolean(prefixed).expect("a prefixed SRX document reads"));
+        assert!(matches!(
+            from_xml(&document(" xmlns=\"http://example.org/other\"")),
+            Err(Error::Format(_))
+        ));
     }
 
     /// Provenance round-trip: what [`crate::xml::to_xml`] writes under a namespace,
@@ -1361,9 +1049,11 @@ mod term_walk_tests {
 
     use purrdf_core::{TermBox, TermValue};
 
-    use super::{Element, Error, XmlParser, component, decode_leaf, decode_term, fmt};
+    use purrdf_lex::xml::{Document, Node};
 
-    fn reference(elem: &Element) -> Result<TermValue, Error> {
+    use super::{Error, component, decode_leaf, decode_term, fmt};
+
+    fn reference(elem: Node<'_, '_>) -> Result<TermValue, Error> {
         if let Some(term) = decode_leaf(elem)? {
             return Ok(term);
         }
@@ -1438,13 +1128,13 @@ mod term_walk_tests {
             );
             for lose_objects in [false, true] {
                 let text = element_text(&value, lose_objects);
-                let elem = XmlParser::new(&text)
-                    .parse_document()
-                    .expect("a generated element is well-formed XML");
-                let found = decode_term(&elem);
+                let document =
+                    Document::parse(&text).expect("a generated element is well-formed XML");
+                let elem = document.root_element();
+                let found = decode_term(elem);
                 assert_eq!(
                     format!("{found:?}"),
-                    format!("{:?}", reference(&elem)),
+                    format!("{:?}", reference(elem)),
                     "seed {seed}: {text}"
                 );
                 decoded += usize::from(found.is_ok());

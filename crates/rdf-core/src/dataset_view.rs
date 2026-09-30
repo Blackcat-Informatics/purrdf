@@ -18,7 +18,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::RdfStoreCapabilities;
-use crate::collections::{ListError, ListErrorKind, RdfListError, container_member_index};
+use crate::collections::{
+    ListError, ListErrorKind, RdfListError, SoleObject, container_member_index, walk_rdf_list,
+};
 use crate::collections::{RDF_ALT, RDF_BAG, RDF_FIRST, RDF_NIL, RDF_REST, RDF_SEQ, RDF_TYPE};
 use crate::ir::{QuadIds, QuadProbePlan, QuadRef, RdfDataset, TermId, TermRef, TermValue};
 
@@ -28,60 +30,20 @@ mod sealed {
     impl Sealed for crate::ir::MutableDataset {}
 }
 
-/// How many distinct objects a `(subject, predicate, ?)` pattern has.
-enum Sole<Id> {
-    None,
-    One(Id),
-    Many,
-}
-
-/// The distinct object of `(subject, predicate, ?)` in `graph`, if there is
-/// exactly one. A statement asserted in several named graphs is one object.
+/// The distinct objects of `(subject, predicate, ?)` in `graph`, counted up to
+/// two. A statement asserted in several named graphs is one object.
 fn sole_object<V: DatasetView + ?Sized>(
     view: &V,
     subject: V::Id,
     predicate: Option<V::Id>,
     graph: GraphMatch<V::Id>,
-) -> Sole<V::Id> {
-    let Some(predicate) = predicate else {
-        return Sole::None;
-    };
-    let mut found = Sole::None;
-    for quad in view.quads_for_pattern(Some(subject), Some(predicate), None, graph) {
-        match found {
-            Sole::One(existing) if existing != quad.o => return Sole::Many,
-            _ => found = Sole::One(quad.o),
-        }
-    }
-    found
-}
-
-/// Where a cycle of length `length` on the `rdf:rest` chain from `head`
-/// begins: the number of cells before it, and its first cell. Two cursors
-/// `length` cells apart meet exactly there. Every cell they visit was already
-/// validated by the walk that found the cycle, so each has one `rdf:rest`.
-fn cycle_start<V: DatasetView + ?Sized>(
-    view: &V,
-    head: V::Id,
-    length: usize,
-    rest: Option<V::Id>,
-    graph: GraphMatch<V::Id>,
-) -> (usize, V::Id) {
-    let step = |cell: V::Id| match sole_object(view, cell, rest, graph) {
-        Sole::One(next) => next,
-        Sole::None | Sole::Many => unreachable!("the walk validated every cell on the cycle"),
-    };
-    let mut ahead = head;
-    for _ in 0..length {
-        ahead = step(ahead);
-    }
-    let (mut behind, mut prefix) = (head, 0);
-    while behind != ahead {
-        behind = step(behind);
-        ahead = step(ahead);
-        prefix += 1;
-    }
-    (prefix, behind)
+) -> SoleObject<V::Id> {
+    predicate.map_or(SoleObject::None, |predicate| {
+        SoleObject::of(
+            view.quads_for_pattern(Some(subject), Some(predicate), None, graph)
+                .map(|quad| quad.o),
+        )
+    })
 }
 
 /// Why [`DatasetView::term_value`] could not resolve an id to a value.
@@ -618,58 +580,12 @@ pub trait DatasetView {
         let first = self.term_id_by_value(&TermValue::iri(RDF_FIRST));
         let rest = self.term_id_by_value(&TermValue::iri(RDF_REST));
         let nil = self.term_id_by_value(&TermValue::iri(RDF_NIL));
-        let mut members = Vec::new();
-        let fail = |kind, members, node| {
-            Err(ListError {
-                kind,
-                members,
-                node,
-            })
-        };
-        // Brent: `saved` is compared against every cell; it jumps forward to
-        // the current cell whenever `steps` reaches `power`, which doubles.
-        let (mut saved, mut power, mut steps) = (head, 1_usize, 0_usize);
-        let mut cell = head;
-        loop {
-            if Some(cell) == nil {
-                let carries = |p: Option<Self::Id>| {
-                    p.is_some_and(|p| {
-                        self.quads_for_pattern(Some(cell), Some(p), None, graph)
-                            .next()
-                            .is_some()
-                    })
-                };
-                if carries(first) || carries(rest) {
-                    return fail(ListErrorKind::NonEmptyNil, members, cell);
-                }
-                return Ok(members);
-            }
-            match sole_object(self, cell, first, graph) {
-                Sole::None => return fail(ListErrorKind::MissingFirst, members, cell),
-                Sole::Many => return fail(ListErrorKind::MultipleFirst, members, cell),
-                Sole::One(member) => members.push(member),
-            }
-            let next = match sole_object(self, cell, rest, graph) {
-                Sole::None => return fail(ListErrorKind::MissingRest, members, cell),
-                Sole::Many => return fail(ListErrorKind::MultipleRest, members, cell),
-                Sole::One(next) => next,
-            };
-            steps += 1;
-            if next == saved {
-                // `steps` is now the cycle's length: find where it starts
-                // (two cursors `steps` apart meet at the first repeated cell)
-                // and keep each distinct cell's member once.
-                let (prefix, entry) = cycle_start(self, head, steps, rest, graph);
-                members.truncate(prefix + steps);
-                return fail(ListErrorKind::Cycle, members, entry);
-            }
-            if steps == power {
-                saved = next;
-                power *= 2;
-                steps = 0;
-            }
-            cell = next;
-        }
+        walk_rdf_list(
+            head,
+            nil,
+            |cell| sole_object(self, cell, first, graph),
+            |cell| sole_object(self, cell, rest, graph),
+        )
     }
 
     /// Materialize an `rdf:first`/`rdf:rest`/`rdf:nil` Collection whose head is

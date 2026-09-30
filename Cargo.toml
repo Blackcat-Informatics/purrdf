@@ -149,7 +149,6 @@ pyo3 = { version = "0.29", features = ["abi3-py313", "extension-module"] }
 rayon = "1"
 regex = "1"
 regex-syntax = "0.8.11"
-roxmltree = "0.20"
 serde = { version = "1", features = ["derive"] }
 # `float_roundtrip`: a JSON number that becomes an `f64` becomes the binary64
 # nearest its decimal value. Without it `serde_json` scales a `u64` significand

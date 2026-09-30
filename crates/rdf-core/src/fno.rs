@@ -30,15 +30,13 @@
 //! subjects reuse the slice-emitter-computed labels purely so the model is
 //! self-documenting.
 
+use crate::collections::{ListVocab, build_rdf_list};
 use crate::{RdfLiteral, RdfQuad, RdfTerm, turtle};
 
 // --------------------------------------------------------------------------- //
 // Vocabulary
 // --------------------------------------------------------------------------- //
 
-use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
-use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
-use purrdf_iri::vocab::rdf::REST as RDF_REST;
 use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
 use purrdf_iri::vocab::rdfs::COMMENT as RDFS_COMMENT;
@@ -492,14 +490,6 @@ fn attach_list(
     items: &[RdfTerm],
     tag: &str,
 ) {
-    if items.is_empty() {
-        quads.push(RdfQuad::new(
-            subject.clone(),
-            predicate,
-            RdfTerm::iri(RDF_NIL),
-        ));
-        return;
-    }
     let subj_id = match subject {
         RdfTerm::Iri(iri) => iri.as_str(),
         RdfTerm::BlankNode(label) => label.as_str(),
@@ -509,19 +499,20 @@ fn attach_list(
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { '_' })
         .collect();
-    let cells: Vec<RdfTerm> = (0..items.len())
-        .map(|i| RdfTerm::blank_node(format!("l_{safe}_{tag}_{i}")))
-        .collect();
-    quads.push(RdfQuad::new(subject.clone(), predicate, cells[0].clone()));
-    for (i, item) in items.iter().enumerate() {
-        quads.push(RdfQuad::new(cells[i].clone(), RDF_FIRST, item.clone()));
-        let rest = if i + 1 < items.len() {
-            cells[i + 1].clone()
-        } else {
-            RdfTerm::iri(RDF_NIL)
-        };
-        quads.push(RdfQuad::new(cells[i].clone(), RDF_REST, rest));
-    }
+    // The link precedes the cells, so it is placed once the head is known.
+    let link_at = quads.len();
+    let head = build_rdf_list(
+        items.iter().cloned(),
+        &ListVocab::rdf_terms(),
+        |i| RdfTerm::blank_node(format!("l_{safe}_{tag}_{i}")),
+        |cell, predicate, object| {
+            let RdfTerm::Iri(predicate) = predicate else {
+                unreachable!("the list vocabulary is IRIs")
+            };
+            quads.push(RdfQuad::new(cell, predicate, object));
+        },
+    );
+    quads.insert(link_at, RdfQuad::new(subject.clone(), predicate, head));
 }
 
 /// Serialize a [`FnoCatalog`]'s typed model to N-Triples text (the rdflib-parseable
@@ -538,6 +529,7 @@ pub fn to_ntriples(catalog: &FnoCatalog) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_iri::vocab::rdf::{FIRST as RDF_FIRST, NIL as RDF_NIL, REST as RDF_REST};
 
     /// A hand-built catalog: one function with one required + one optional param,
     /// one profile implementation, and one mapping with two param-var bindings and

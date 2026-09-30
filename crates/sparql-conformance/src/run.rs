@@ -829,9 +829,53 @@ fn build_rif_ruleset(
     let mut ruleset = purrdf_entail::RuleSet::new();
     for name in basenames {
         let rif_path = dir.join(&name);
-        ruleset.extend(crate::rif_xml::load_ruleset(&rif_path)?);
+        ruleset.extend(load_rif_ruleset(&rif_path)?);
     }
     Ok(ruleset)
+}
+
+/// Load the `.rif` document at `rif_path` into a [`RuleSet`](purrdf_entail::RuleSet)
+/// through the entailment crate's RIF-in-XML reader, every `Import` it names resolved
+/// to the vendored fixture of the same basename beside it (never over the network).
+///
+/// # Errors
+///
+/// A message on any read, parse or import-resolution failure.
+fn load_rif_ruleset(rif_path: &std::path::Path) -> Result<purrdf_entail::RuleSet, String> {
+    let text = std::fs::read_to_string(rif_path)
+        .map_err(|e| format!("read rif {}: {e}", rif_path.display()))?;
+    let parsed = purrdf_entail::parse_rif_xml(&text, None)
+        .map_err(|e| format!("parse rif {}: {e}", rif_path.display()))?;
+    let dir = rif_path
+        .parent()
+        .ok_or_else(|| format!("rif {} has no directory", rif_path.display()))?;
+    purrdf_entail::resolve_rif_imports(parsed, |import| load_rif_import(dir, import))
+        .map_err(|e| format!("resolve rif {} imports: {e}", rif_path.display()))
+}
+
+/// The dataset an `Import` names: the vendored fixture whose file name is the location's
+/// last path segment. A `.rdf` fixture is RDF/XML; anything else is N-Triples. A missing
+/// fixture is a hard error.
+fn load_rif_import(
+    dir: &std::path::Path,
+    import: &purrdf_entail::RifImport,
+) -> Result<Arc<RdfDataset>, purrdf_entail::EntailError> {
+    let location = &import.location;
+    let fail = |why: String| purrdf_entail::EntailError::Parse(format!("import {location}: {why}"));
+    let basename = location
+        .rsplit(['/', '#'])
+        .next()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| fail("the location has no basename".to_owned()))?;
+    let path = dir.join(basename);
+    let bytes = std::fs::read(&path).map_err(|e| fail(format!("read {}: {e}", path.display())))?;
+    let media_type = if path.extension().and_then(|e| e.to_str()) == Some("rdf") {
+        "application/rdf+xml"
+    } else {
+        "application/n-triples"
+    };
+    purrdf::parse_dataset(&bytes, media_type, Some(location))
+        .map_err(|e| fail(format!("parse {}: {e}", path.display())))
 }
 
 /// Parse `query_text` and collect every basic-graph-pattern triple, translated into

@@ -30,7 +30,8 @@ name = "purrdf_sparql_results"
 
 [dependencies]
 # The workspace's one JSON reader (the SRJ readers' grammar, tree and pull
-# reader) and its string escape law (the SRJ writer's spelling).
+# reader), its string escape law (the SRJ writer's spelling), and its one XML
+# reader, for SPARQL Results XML documents.
 purrdf-lex = { workspace = true }
 purrdf-core = { workspace = true }
 # The IRI/URI value space: validates a caller-supplied `ProvenanceNamespace`

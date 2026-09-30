@@ -45,13 +45,14 @@
 
 use crate::sink::TextOut;
 use crate::{
-    QuadIds, RdfAnnotation, RdfDataset, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTriple,
-    TermId, TermRef,
+    QuadIds, RdfAnnotation, RdfDataset, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, TermId, TermRef,
     blank_label::{LabelAlphabet, encode_blank_label, retarget_owned_label},
-    iri_escape::push_escaped,
 };
+use purrdf_lex::term_syntax::{
+    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri, write_literal,
+};
+use purrdf_xsd::datatype::XSD_STRING;
 use std::borrow::Cow;
-use std::fmt::Write as _;
 
 /// The blank-node label this emitter writes after `_:` for an OWNED-model term:
 /// the caller's label when it is already legal under the exact W3C
@@ -92,85 +93,34 @@ pub fn rule_iri(base: &str, rule_name: &str) -> String {
     )
 }
 
-/// Escape a string for embedding in a double-quoted Turtle literal.
+/// Append an [`RdfLiteral`] in its canonical term form through
+/// [`write_literal`]: `"lex"`, `"lex"@lang`, `"lex"@lang--dir` or
+/// `"lex"^^<datatype>`, with an `xsd:string` datatype left unwritten.
 ///
-/// Backslash first (so later escapes are not doubled), then the quote and the
-/// readable ECHAR forms (`\n \r \t`). The remaining C0 control characters and
-/// DEL (`0x7F`) are escaped as `\uXXXX` — the N-Triples/N-Quads literal grammar
-/// forbids them raw. The C1 block (`0x80`-`0x9F`) is left **raw**: the
-/// N-Triples/N-Quads literal grammar permits it and the W3C RDFC-1.0 fixtures
-/// pin it passing through unescaped. Mirrors
-/// [`crate::ir::canon::write_literal_escaped`] exactly.
-fn escape_literal(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    write_literal_escaped(value, &mut out);
-    out
-}
-
-fn write_literal_escaped<W: TextOut + ?Sized>(value: &str, out: &mut W) {
-    for ch in value.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
-                let _ = write!(out, "\\u{:04X}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-}
-
-/// Render an [`RdfLiteral`] as an N-Triples/Turtle literal token.
-///
-/// Forms produced:
-/// - `"lex"@lang` — plain language-tagged string
-/// - `"lex"@lang--ltr` / `"lex"@lang--rtl` — RDF 1.2 directional language-tagged string
-/// - `"lex"^^<datatype>` — datatype literal
-/// - `"lex"` — plain literal (no lang, no datatype)
-///
-/// Direction without a language tag is malformed RDF and is silently ignored.
-/// This function is infallible.
-fn emit_literal(literal: &RdfLiteral) -> String {
-    let lex = escape_literal(&literal.lexical_form);
-    if let Some(lang) = &literal.language {
-        match literal.direction {
-            Some(dir) => format!("\"{lex}\"@{lang}--{}", dir.as_str()),
-            None => format!("\"{lex}\"@{lang}"),
-        }
-    } else if let Some(datatype) = &literal.datatype {
-        format!("\"{lex}\"^^<{datatype}>")
-    } else {
-        format!("\"{lex}\"")
-    }
-}
-
-/// Escape a string for embedding in an IRIREF (`<…>`).
-///
-/// Which scalars ride as `\uXXXX` is decided by
-/// [`is_iriref_escape_required`](crate::iri_escape::is_iriref_escape_required)
-/// and emitted by [`push_escaped`], and by nothing written here — see that
-/// module for the production
-/// (`IRIREF ::= '<' ( [^#x00-#x20<>"{}|^`\] | UCHAR )* '>'`, Turtle 1.2 §6.5
-/// `[18t]`) and for why egress escapes DEL and the C1 block, which the grammar
-/// permits raw.
-fn escape_iri(iri: &str) -> String {
-    let mut out = String::with_capacity(iri.len());
-    write_iri_escaped(iri, &mut out);
-    out
-}
-
-fn write_iri_escaped<W: TextOut + ?Sized>(iri: &str, out: &mut W) {
-    push_escaped(iri, out);
+/// A base direction exists only beside a language tag (RDF 1.2 Concepts §3.3);
+/// the owned model can hold one without a tag, and that direction is not part
+/// of any RDF 1.2 literal, so it is not written.
+fn write_owned_literal<W: TextOut + ?Sized>(literal: &RdfLiteral, out: &mut W) {
+    let language = literal.language.as_deref();
+    write_literal(
+        &literal.lexical_form,
+        literal.datatype.as_deref().unwrap_or(XSD_STRING),
+        language,
+        literal
+            .direction
+            .filter(|_| language.is_some())
+            .map(crate::RdfTextDirection::as_str),
+        out,
+    );
 }
 
 /// Append one interned term to an existing Turtle/N-Triples output buffer.
 ///
 /// This is the borrowed counterpart of [`emit_term`]: it resolves directly from
 /// the frozen dataset and allocates neither an owned term tree nor an intermediate
-/// rendered string. The blank node's `(label, scope)` pair is encoded into the
+/// rendered string. Every spelling is [`purrdf_lex::term_syntax`]'s (an escaped
+/// `IRIREF`, the canonical literal with `xsd:string` elided, the `<<( … )>>`
+/// delimiters). The blank node's `(label, scope)` pair is encoded into the
 /// Turtle `BLANK_NODE_LABEL` alphabet in ONE step (via [`encode_blank_label`]),
 /// so the buffer always holds a re-parsable term.
 ///
@@ -180,7 +130,6 @@ fn write_iri_escaped<W: TextOut + ?Sized>(iri: &str, out: &mut W) {
 pub fn write_dataset_term<W: TextOut + ?Sized>(dataset: &RdfDataset, id: TermId, out: &mut W) {
     enum Step {
         Term(TermId),
-        Predicate(TermId),
         Text(&'static str),
     }
     let mut held: Vec<Step> = Vec::new();
@@ -191,73 +140,46 @@ pub fn write_dataset_term<W: TextOut + ?Sized>(dataset: &RdfDataset, id: TermId,
                 out.push_str(text);
                 continue;
             }
-            Step::Predicate(id) => {
-                write_dataset_predicate(dataset, id, out);
-                continue;
-            }
             Step::Term(id) => id,
         };
         match dataset.resolve(id) {
-            TermRef::Iri(iri) => {
-                out.push('<');
-                write_iri_escaped(iri, out);
-                out.push('>');
-            }
-            TermRef::Blank { label, scope } => {
-                out.push_str("_:");
-                out.push_str(&encode_blank_label(
-                    label,
-                    scope,
-                    LabelAlphabet::BlankNodeLabel,
-                ));
-            }
+            TermRef::Iri(iri) => write_iri(iri, out),
+            TermRef::Blank { label, scope } => write_blank(
+                &encode_blank_label(label, scope, LabelAlphabet::BlankNodeLabel),
+                out,
+            ),
             TermRef::Literal {
                 lexical,
                 datatype,
                 language,
                 direction,
             } => {
-                out.push('"');
-                write_literal_escaped(lexical, out);
-                out.push('"');
-                if let Some(language) = language {
-                    out.push('@');
-                    out.push_str(language);
-                    if let Some(direction) = direction {
-                        out.push_str("--");
-                        out.push_str(direction.as_str());
-                    }
-                } else {
-                    let TermRef::Iri(datatype) = dataset.resolve(datatype) else {
-                        unreachable!("literal datatype must resolve to an IRI")
-                    };
-                    out.push_str("^^<");
-                    out.push_str(datatype);
-                    out.push('>');
-                }
+                let TermRef::Iri(datatype) = dataset.resolve(datatype) else {
+                    unreachable!("literal datatype must resolve to an IRI")
+                };
+                write_literal(
+                    lexical,
+                    datatype,
+                    language,
+                    direction.map(crate::RdfTextDirection::as_str),
+                    out,
+                );
             }
             TermRef::Triple { s, p, o } => {
-                out.push_str("<<( ");
+                out.push_str(TRIPLE_TERM_OPEN);
+                out.push(' ');
                 held.extend([
-                    Step::Text(" )>>"),
+                    Step::Text(TRIPLE_TERM_CLOSE),
+                    Step::Text(" "),
                     Step::Term(o),
                     Step::Text(" "),
-                    Step::Predicate(p),
+                    Step::Term(p),
                     Step::Text(" "),
                 ]);
                 next = Some(Step::Term(s));
             }
         }
     }
-}
-
-fn write_dataset_predicate<W: TextOut + ?Sized>(dataset: &RdfDataset, id: TermId, out: &mut W) {
-    let TermRef::Iri(iri) = dataset.resolve(id) else {
-        unreachable!("predicate must resolve to an IRI")
-    };
-    out.push('<');
-    out.push_str(iri);
-    out.push('>');
 }
 
 /// The `rdf:reifies` IRI every reifier binding is written under.
@@ -282,7 +204,7 @@ fn write_dataset_statement<W: TextOut + ?Sized>(
 ) {
     write_dataset_term(dataset, subject, out);
     out.push(' ');
-    write_dataset_predicate(dataset, predicate, out);
+    write_dataset_term(dataset, predicate, out);
     out.push(' ');
     write_dataset_term(dataset, object, out);
     if let Some(graph) = graph {
@@ -301,9 +223,9 @@ fn write_dataset_reifier_statement<W: TextOut + ?Sized>(
     out: &mut W,
 ) {
     write_dataset_term(dataset, reifier, out);
-    out.push_str(" <");
-    out.push_str(RDF_REIFIES);
-    out.push_str("> ");
+    out.push(' ');
+    write_iri(RDF_REIFIES, out);
+    out.push(' ');
     write_dataset_term(dataset, statement, out);
     if let Some(graph) = graph {
         out.push(' ');
@@ -403,16 +325,9 @@ pub fn write_dataset_reifier_nquad<W: TextOut + ?Sized>(
 /// caller's own label; [`emit_term`] is the egress form, which escapes it.
 #[must_use]
 pub fn display_term(term: &RdfTerm) -> String {
-    write_owned_term(term, |leaf, out| match leaf {
-        RdfTerm::Iri(iri) => {
-            let _ = write!(out, "<{}>", escape_iri(iri));
-        }
-        RdfTerm::BlankNode(label) => {
-            let _ = write!(out, "_:{label}");
-        }
-        RdfTerm::Literal(literal) => out.push_str(&emit_literal(literal)),
-        RdfTerm::Triple(_) => unreachable!("a triple term is written from its components"),
-    })
+    let mut out = String::new();
+    write_owned_term(term, &mut out, write_blank);
+    out
 }
 
 /// Serialize an [`RdfTerm`] to its Turtle form (full `<iri>`, `_:bnode`, literal,
@@ -424,19 +339,20 @@ pub fn display_term(term: &RdfTerm) -> String {
 /// co-reference is preserved exactly.
 #[must_use]
 pub fn emit_term(term: &RdfTerm) -> String {
-    write_owned_term(term, |leaf, out| match leaf {
-        RdfTerm::Iri(iri) => {
-            let _ = write!(out, "<{}>", escape_iri(iri));
-        }
-        RdfTerm::BlankNode(label) => {
-            let _ = write!(out, "_:{}", emit_blank_label(label));
-        }
-        RdfTerm::Literal(literal) => out.push_str(&emit_literal(literal)),
-        RdfTerm::Triple(_) => unreachable!("a triple term is written from its components"),
-    })
+    let mut out = String::new();
+    write_emitted_term(term, &mut out);
+    out
 }
 
-/// Write an owned term, with `leaf` writing every term that is not a triple term.
+/// Append [`emit_term`]'s form of `term` to `out`.
+fn write_emitted_term(term: &RdfTerm, out: &mut String) {
+    write_owned_term(term, out, |label, out| {
+        write_blank(&emit_blank_label(label), out);
+    });
+}
+
+/// Write an owned term in the [`purrdf_lex::term_syntax`] spelling, with `blank`
+/// writing every blank node from its label.
 ///
 /// A triple term is written as an RDF 1.2 triple term, `<<( s <p> o )>>`. The parens
 /// matter — the bare `<< s p o >>` form is a *reifying triple* that ALSO asserts
@@ -447,43 +363,54 @@ pub fn emit_term(term: &RdfTerm) -> String {
 /// The walk runs over a work list: a triple term's opening `<<( ` is written at once,
 /// then its subject next, with the predicate, the object and the closing ` )>>` held
 /// back in that order until the subject's whole nesting is written.
-fn write_owned_term(term: &RdfTerm, mut leaf: impl FnMut(&RdfTerm, &mut String)) -> String {
+fn write_owned_term(term: &RdfTerm, out: &mut String, mut blank: impl FnMut(&str, &mut String)) {
     enum Step<'t> {
         Term(&'t RdfTerm),
-        Text(&'t str),
+        Iri(&'t str),
+        Text(&'static str),
     }
-    let mut out = String::new();
     let mut held: Vec<Step<'_>> = Vec::new();
     let mut next = Some(Step::Term(term));
     while let Some(step) = next.take().or_else(|| held.pop()) {
         match step {
             Step::Text(text) => out.push_str(text),
+            Step::Iri(iri) => write_iri(iri, out),
             Step::Term(RdfTerm::Triple(triple)) => {
-                out.push_str("<<( ");
+                out.push_str(TRIPLE_TERM_OPEN);
+                out.push(' ');
                 held.extend([
-                    Step::Text(" )>>"),
+                    Step::Text(TRIPLE_TERM_CLOSE),
+                    Step::Text(" "),
                     Step::Term(&triple.object),
-                    Step::Text("> "),
-                    Step::Text(&triple.predicate),
-                    Step::Text(" <"),
+                    Step::Text(" "),
+                    Step::Iri(&triple.predicate),
+                    Step::Text(" "),
                 ]);
                 next = Some(Step::Term(&triple.subject));
             }
-            Step::Term(term) => leaf(term, &mut out),
+            Step::Term(RdfTerm::Iri(iri)) => write_iri(iri, out),
+            Step::Term(RdfTerm::BlankNode(label)) => blank(label, out),
+            Step::Term(RdfTerm::Literal(literal)) => write_owned_literal(literal, out),
         }
     }
-    out
 }
 
-/// Serialize an [`RdfTriple`] as an RDF 1.2 triple-term (`<<( <s> <p> <o> )>>`),
-/// escaping every blank-node label in the tree.
-fn emit_triple_term(triple: &RdfTriple) -> String {
-    format!(
-        "<<( {} <{}> {} )>>",
-        emit_term(&triple.subject),
-        triple.predicate,
-        emit_term(&triple.object)
-    )
+/// Append `s <p> o` — the subject, predicate IRI and object of one statement,
+/// every term through [`emit_term`]'s spelling.
+fn write_emitted_statement(subject: &RdfTerm, predicate: &str, object: &RdfTerm, out: &mut String) {
+    write_emitted_term(subject, out);
+    out.push(' ');
+    write_iri(predicate, out);
+    out.push(' ');
+    write_emitted_term(object, out);
+}
+
+/// Append ` <p> o`, one predicate-object pair of a property list.
+fn write_emitted_property(predicate: &str, object: &RdfTerm, out: &mut String) {
+    out.push(' ');
+    write_iri(predicate, out);
+    out.push(' ');
+    write_emitted_term(object, out);
 }
 
 /// Emit a single quad as a Turtle statement line (`<s> <p> <o> .`).
@@ -493,12 +420,10 @@ fn emit_triple_term(triple: &RdfTriple) -> String {
 /// as `purrdf:inWorld` annotations, not Turtle named graphs).
 #[must_use]
 pub fn emit_quad(quad: &RdfQuad) -> String {
-    format!(
-        "{} <{}> {} .\n",
-        emit_term(&quad.subject),
-        quad.predicate,
-        emit_term(&quad.object)
-    )
+    let mut out = String::new();
+    write_emitted_statement(&quad.subject, &quad.predicate, &quad.object, &mut out);
+    out.push_str(" .\n");
+    out
 }
 
 /// Emit a reifier binding as `<reifier> rdf:reifies <<( s p o )>> ; <pred> <obj> ; … .`
@@ -529,10 +454,24 @@ pub fn emit_reifier(reifier: &RdfReifier, annotations: &[(String, RdfTerm)]) -> 
         RdfTerm::BlankNode(_) if !annotations.is_empty() => "[]".to_owned(),
         other => emit_term(other),
     };
-    let statement = emit_triple_term(&reifier.statement);
-    let mut out = format!("{subject} <{RDF_REIFIES}> {statement}");
+    let mut out = subject;
+    out.push(' ');
+    write_iri(RDF_REIFIES, &mut out);
+    out.push(' ');
+    let statement = &reifier.statement;
+    out.push_str(TRIPLE_TERM_OPEN);
+    out.push(' ');
+    write_emitted_statement(
+        &statement.subject,
+        &statement.predicate,
+        &statement.object,
+        &mut out,
+    );
+    out.push(' ');
+    out.push_str(TRIPLE_TERM_CLOSE);
     for (predicate, object) in annotations {
-        let _ = write!(out, " ;\n   <{predicate}> {}", emit_term(object));
+        out.push_str(" ;\n  ");
+        write_emitted_property(predicate, object, &mut out);
     }
     out.push_str(" .\n");
     out
@@ -548,16 +487,13 @@ pub fn emit_reifier(reifier: &RdfReifier, annotations: &[(String, RdfTerm)]) -> 
 /// object is label-escaped and a literal object is properly quoted, rather
 /// than trusting the caller to have pre-rendered a safe token.
 pub fn emit_resource(subject: &str, properties: &[(String, RdfTerm)]) -> String {
-    let mut out = format!("<{subject}>");
-    let mut first = true;
-    for (predicate, object) in properties {
-        let object = emit_term(object);
-        if first {
-            let _ = write!(out, " <{predicate}> {object}");
-            first = false;
-        } else {
-            let _ = write!(out, " ;\n   <{predicate}> {object}");
+    let mut out = String::new();
+    write_iri(subject, &mut out);
+    for (index, (predicate, object)) in properties.iter().enumerate() {
+        if index > 0 {
+            out.push_str(" ;\n  ");
         }
+        write_emitted_property(predicate, object, &mut out);
     }
     out.push_str(" .\n");
     out
@@ -569,17 +505,21 @@ pub fn emit_resource(subject: &str, properties: &[(String, RdfTerm)]) -> String 
 /// head via [`emit_reifier`].
 #[must_use]
 pub fn emit_annotation(annotation: &RdfAnnotation) -> String {
-    format!(
-        "{} <{}> {} .\n",
-        emit_term(&annotation.reifier),
-        annotation.predicate,
-        emit_term(&annotation.object)
-    )
+    let mut out = String::new();
+    write_emitted_statement(
+        &annotation.reifier,
+        &annotation.predicate,
+        &annotation.object,
+        &mut out,
+    );
+    out.push_str(" .\n");
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RdfTriple;
 
     fn iri(value: &str) -> RdfTerm {
         RdfTerm::iri(value)
@@ -657,18 +597,100 @@ mod tests {
         );
     }
 
+    fn owned_literal(literal: &RdfLiteral) -> String {
+        let mut out = String::new();
+        write_owned_literal(literal, &mut out);
+        out
+    }
+
     #[test]
     fn emit_literal_lang_and_datatype() {
         assert_eq!(
-            emit_literal(&RdfLiteral::language_tagged("hello \"x\"", "en")),
+            owned_literal(&RdfLiteral::language_tagged("hello \"x\"", "en")),
             "\"hello \\\"x\\\"\"@en"
         );
         assert_eq!(
-            emit_literal(&RdfLiteral::typed(
+            owned_literal(&RdfLiteral::typed(
                 "42",
                 "http://www.w3.org/2001/XMLSchema#integer"
             )),
             "\"42\"^^<http://www.w3.org/2001/XMLSchema#integer>"
+        );
+    }
+
+    #[test]
+    fn an_xsd_string_literal_is_written_bare_and_every_other_datatype_kept() {
+        assert_eq!(owned_literal(&RdfLiteral::typed("a", XSD_STRING)), "\"a\"");
+        assert_eq!(owned_literal(&RdfLiteral::simple("a")), "\"a\"");
+        let mut builder = crate::RdfDatasetBuilder::new();
+        let s = builder.intern_iri("http://example.org/s");
+        let p = builder.intern_iri("http://example.org/p");
+        let string = builder.intern_literal(RdfLiteral::typed("a", XSD_STRING));
+        let integer = builder.intern_literal(RdfLiteral::typed(
+            "1",
+            "http://www.w3.org/2001/XMLSchema#integer",
+        ));
+        builder.push_quad(s, p, string, None);
+        builder.push_quad(s, p, integer, None);
+        let dataset = builder.freeze().expect("dataset freezes");
+        let mut out = String::new();
+        write_dataset_term(&dataset, string, &mut out);
+        out.push('|');
+        write_dataset_term(&dataset, integer, &mut out);
+        assert_eq!(
+            out,
+            "\"a\"|\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"
+        );
+    }
+
+    #[test]
+    fn the_literal_body_gains_the_backspace_and_form_feed_echars() {
+        assert_eq!(
+            owned_literal(&RdfLiteral::simple("a\u{8}b\u{c}c\u{1}\u{85}")),
+            "\"a\\bb\\fc\\u0001\u{85}\""
+        );
+        assert_eq!(owned_literal(&RdfLiteral::simple("plain")), "\"plain\"");
+    }
+
+    #[test]
+    fn predicate_and_datatype_iris_are_uchar_escaped_and_plain_ones_untouched() {
+        // The owned writers hold any string: `>` and SPACE ride as UCHAR.
+        let quad = RdfQuad {
+            subject: iri("http://example.org/s"),
+            predicate: "http://example.org/p>q r".to_owned(),
+            object: RdfTerm::Literal(RdfLiteral::typed("v", "http://example.org/d t>")),
+            graph_name: None,
+            location: None,
+        };
+        assert_eq!(
+            emit_quad(&quad),
+            "<http://example.org/s> <http://example.org/p\\u003Eq\\u0020r> \
+             \"v\"^^<http://example.org/d\\u0020t\\u003E> .\n"
+        );
+        let plain = RdfQuad {
+            predicate: "http://example.org/p".to_owned(),
+            object: iri("http://example.org/o"),
+            ..quad
+        };
+        assert_eq!(
+            emit_quad(&plain),
+            "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n"
+        );
+
+        // A frozen dataset's IRIs are validated at intern time, so its
+        // predicate slot goes through the same IRIREF writer as every term.
+        let mut builder = crate::RdfDatasetBuilder::new();
+        let s = builder.intern_iri("http://example.org/s");
+        let p = builder.intern_iri("http://example.org/p");
+        builder.push_quad(s, p, s, None);
+        let dataset = builder.freeze().expect("dataset freezes");
+        let mut line = String::new();
+        for quad in dataset.quads() {
+            write_dataset_nquad(&dataset, quad, &mut line);
+        }
+        assert_eq!(
+            line,
+            "<http://example.org/s> <http://example.org/p> <http://example.org/s> .\n"
         );
     }
 
@@ -976,7 +998,7 @@ mod tests {
             RdfTerm::Triple(triple) => format!(
                 "<<( {} <{}> {} )>>",
                 reference_render(&triple.subject, display),
-                triple.predicate,
+                purrdf_lex::iri_escape::escape(&triple.predicate),
                 reference_render(&triple.object, display)
             ),
             leaf if display => display_term(leaf),
@@ -992,8 +1014,9 @@ mod tests {
                     unreachable!("a stored triple term's predicate is an IRI")
                 };
                 format!(
-                    "<<( {} <{predicate}> {} )>>",
+                    "<<( {} <{}> {} )>>",
                     reference_dataset_term(dataset, s),
+                    purrdf_lex::iri_escape::escape(predicate),
                     reference_dataset_term(dataset, o)
                 )
             }

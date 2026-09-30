@@ -33,11 +33,7 @@ purrdf-cdt = { workspace = true }
 purrdf-sparql-results = { workspace = true }
 # Native RDFS/OWL-RL entailment closure for `sd:entailmentRegime` tests.
 purrdf-entail = { workspace = true }
-# RIF-in-XML (normative RIF XML syntax) reader for the RIF entailment cases.
-roxmltree = { workspace = true }
-# The ONE transcription of the W3C terminal character classes. The RIF-XML reader
-# scans a DTD internal subset and element content by hand, and its boundaries are
-# XML's `S` terminal — not the Unicode `White_Space` property.
+# The W3C vocabulary IRIs the manifests and the RIF and OWL 2 harnesses read.
 purrdf-iri = { workspace = true }
 # The workspace root a manifest's sentinel-space file IRIs resolve against
 # (`src/manifest.rs`), and the libtest-compatible runner the `harness = false`
