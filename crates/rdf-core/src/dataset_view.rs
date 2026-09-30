@@ -166,6 +166,45 @@ pub enum GraphMatchValue<'a> {
     Named(&'a TermValue),
 }
 
+/// Which graph a dataset-independent configuration reads: the owned, **value**
+/// space selector an index configuration writes down once and applies to any
+/// dataset.
+///
+/// [`GraphMatch::Named`] holds a dataset-local id, which means something only
+/// inside the one dataset that minted it; a configuration may be applied to
+/// several datasets, so it names a graph by its IRI and is resolved against the
+/// dataset in hand by [`GraphSelector::resolve`]. This is the one selector and
+/// the one resolution every derived index (text, geometry) uses.
+///
+/// Deliberately exhaustive, like [`GraphMatch`]: a quad's graph is the default
+/// graph or exactly one named graph, so the three cases are closed.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum GraphSelector {
+    /// Read from every graph, default and named alike.
+    Any,
+    /// Read from the default graph only.
+    Default,
+    /// Read from the one named graph this IRI identifies.
+    Named(TermValue),
+}
+
+impl GraphSelector {
+    /// Resolve this selector against `dataset`, without minting.
+    ///
+    /// [`None`] where the selector names a graph the dataset has not interned:
+    /// nothing is in a graph that is not there, so no quad can match and the
+    /// caller reads nothing. This cannot fail: an absent graph is a state of the
+    /// corpus, not a fault in the wiring.
+    #[must_use]
+    pub fn resolve<D: DatasetView + ?Sized>(&self, dataset: &D) -> Option<GraphMatch<D::Id>> {
+        Some(match self {
+            Self::Any => GraphMatch::Any,
+            Self::Default => GraphMatch::Default,
+            Self::Named(name) => GraphMatch::Named(dataset.term_id_by_value(name)?),
+        })
+    }
+}
+
 /// A static, allocation-free read view over an RDF dataset (purrdf backend
 /// contract, C2/C3/C6). All methods are infallible for a frozen, validated dataset.
 ///
@@ -1301,6 +1340,28 @@ mod tests {
             GraphMatch::<TermId>::Default.matches(None) && !GraphMatch::Default.matches(Some(g))
         );
         assert!(GraphMatch::Named(g).matches(Some(g)) && !GraphMatch::Named(g).matches(None));
+    }
+
+    #[test]
+    fn graph_selector_resolves_against_the_dataset_without_minting() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o, g) = (
+            iri(&mut b, "s"),
+            iri(&mut b, "p"),
+            iri(&mut b, "o"),
+            iri(&mut b, "g"),
+        );
+        b.push_quad(s, p, o, Some(g));
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(GraphSelector::Any.resolve(&ds), Some(GraphMatch::Any));
+        assert_eq!(
+            GraphSelector::Default.resolve(&ds),
+            Some(GraphMatch::Default)
+        );
+        let named = GraphSelector::Named(TermValue::iri("http://example.org/g"));
+        assert_eq!(named.resolve(&ds), Some(GraphMatch::Named(g)));
+        let absent = GraphSelector::Named(TermValue::iri("http://example.org/absent"));
+        assert_eq!(absent.resolve(&ds), None);
     }
 
     /// Every value a predicate takes, once, ascending by id: a value stated by

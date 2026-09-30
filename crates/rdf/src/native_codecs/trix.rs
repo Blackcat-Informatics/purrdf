@@ -108,7 +108,7 @@ pub(super) fn parse_trix_to_dataset(
 
     // Accumulate (subject, predicate, object, graph) rows, then intern + fold once.
     let mut rows: Vec<(TrixTerm, String, TrixTerm, Option<TrixTerm>)> = Vec::new();
-    for graph in element_children(root) {
+    for graph in root.element_children() {
         if !is_trix(graph, "graph") {
             return Err(parse_err(format!(
                 "unexpected element <{}> under <TriX>",
@@ -117,7 +117,7 @@ pub(super) fn parse_trix_to_dataset(
         }
         let mut graph_name: Option<TrixTerm> = None;
         let mut seen_triple = false;
-        for child in element_children(graph) {
+        for child in graph.element_children() {
             if is_trix(child, "triple") {
                 seen_triple = true;
                 let (subject, predicate, object) = parse_triple(child, base)?;
@@ -146,7 +146,7 @@ fn parse_triple(
     element: Node<'_, '_>,
     base: &purrdf_iri::BaseScope,
 ) -> Result<(TrixTerm, String, TrixTerm), RdfDiagnostic> {
-    let terms: Vec<Node<'_, '_>> = element_children(element).collect();
+    let terms: Vec<Node<'_, '_>> = element.element_children().collect();
     if terms.len() != 3 {
         return Err(parse_err(format!(
             "<triple> must have exactly three term children, found {}",
@@ -284,10 +284,6 @@ fn local_of<'a>(element: Node<'a, '_>) -> Option<&'a str> {
         .is_element()
         .then(|| element.tag_name().name())
         .filter(|_| matches!(element.tag_name().namespace(), None | Some(TRIX_NS)))
-}
-
-fn element_children<'a, 'input>(node: Node<'a, 'input>) -> impl Iterator<Item = Node<'a, 'input>> {
-    node.children().filter(Node::is_element)
 }
 
 /// Concatenated direct text of an element (the literal lexical form, verbatim).

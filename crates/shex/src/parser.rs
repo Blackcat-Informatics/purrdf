@@ -211,10 +211,7 @@ impl Parser<'_> {
     /// nothing the absolute terms of a data graph can match, so it silently turns
     /// every constraint written with it into a vacuous one.
     fn resolve(&self, reference: &str) -> Result<String> {
-        self.base
-            .resolve(reference)
-            .map(|iri| iri.as_str().to_owned())
-            .map_err(|e| ShexError::iri(reference, &e))
+        resolve_iri(&self.base, reference)
     }
 
     /// Expand a prefixed name against the declared prefixes.
@@ -1174,6 +1171,26 @@ impl Parser<'_> {
     }
 }
 
+/// Resolve an IRI reference against the base in force, as an absolute IRI string.
+///
+/// The one resolution every ShEx surface uses — the ShExC parser, the compact
+/// shape-map parser and the ShExJ reader all admit relative references and all
+/// resolve them through [`BaseScope::resolve`] (RFC 3986 §5.2). There is
+/// deliberately no "no base in scope, keep the reference verbatim" fallthrough:
+/// an unresolved relative reference denotes nothing an absolute data term can
+/// match, so it would turn every constraint or node selector written with it
+/// into a vacuous one.
+///
+/// # Errors
+///
+/// [`ShexError::Iri`] when the reference does not resolve (no base in scope for
+/// a relative reference, or a malformed reference).
+pub(crate) fn resolve_iri(base: &BaseScope, reference: &str) -> Result<String> {
+    base.resolve(reference)
+        .map(|iri| iri.as_str().to_owned())
+        .map_err(|e| ShexError::iri(reference, &e))
+}
+
 /// Attach a bracketed group's cardinality/annotations/semActs to `inner`,
 /// wrapping in a singleton `EachOf` when `inner` already carries its own
 /// modifiers (so `(x{2}){3}` keeps both cardinalities).
@@ -1280,6 +1297,30 @@ fn numeric_from_lexical(lexical: &str) -> Option<NumericLiteral> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_iri_resolves_a_relative_reference_against_the_base_in_force() {
+        let base = BaseScope::rooted(
+            BaseIri::parse("http://example.org/schema/").expect("base parses"),
+            BaseOrigin::Caller,
+        );
+        assert_eq!(
+            resolve_iri(&base, "S").as_deref(),
+            Ok("http://example.org/schema/S")
+        );
+        assert_eq!(
+            resolve_iri(&BaseScope::empty(), "http://example.org/S").as_deref(),
+            Ok("http://example.org/S")
+        );
+    }
+
+    #[test]
+    fn resolve_iri_refuses_a_relative_reference_with_no_base_in_scope() {
+        assert!(matches!(
+            resolve_iri(&BaseScope::empty(), "S"),
+            Err(ShexError::Iri { .. })
+        ));
+    }
 
     #[test]
     fn hostile_inputs_error_instead_of_panicking() {

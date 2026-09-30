@@ -183,6 +183,21 @@ pub enum ReconciliationStatus {
     Forbidden,
 }
 
+impl ReconciliationStatus {
+    /// The stable lowercase token the status is written as — in the analysis graph's
+    /// status literal and in every host binding (`matched`, `undeclared`, `stale`,
+    /// `forbidden`).
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Matched => "matched",
+            Self::Undeclared => "undeclared",
+            Self::Stale => "stale",
+            Self::Forbidden => "forbidden",
+        }
+    }
+}
+
 /// A single computed cross-slice dependency edge with retained evidence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DependencyEdge {
@@ -1110,6 +1125,19 @@ mod rdf_fact_tests {
     use super::*;
 
     const EX: &str = "https://example.org/vocab/";
+
+    /// Each status writes its own stable token.
+    #[test]
+    fn reconciliation_status_tokens_are_the_stable_lowercase_names() {
+        let tokens = [
+            ReconciliationStatus::Matched,
+            ReconciliationStatus::Undeclared,
+            ReconciliationStatus::Stale,
+            ReconciliationStatus::Forbidden,
+        ]
+        .map(ReconciliationStatus::token);
+        assert_eq!(tokens, ["matched", "undeclared", "stale", "forbidden"]);
+    }
 
     #[test]
     fn one_ir_walk_collects_ownership_and_nested_rdf12_references() {

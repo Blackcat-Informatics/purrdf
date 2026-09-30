@@ -72,7 +72,7 @@ pub fn from_xml(bytes: &[u8]) -> Result<ParsedSolutions, Error> {
             // A `<binding>` with no child term element means the variable is
             // unbound in this solution — an older convention (conformant
             // SPARQL-XML simply omits the `<binding>`).  Treat it as absent.
-            let Some(term_elem) = child_elements(binding).next() else {
+            let Some(term_elem) = binding.element_children().next() else {
                 continue;
             };
             row[idx] = Some(decode_term(term_elem)?);
@@ -208,17 +208,13 @@ fn is_srx(node: Node<'_, '_>, local: &str) -> bool {
     name.name() == local && matches!(name.namespace(), None | Some(SRX_NS))
 }
 
-/// The direct child elements of `node`.
-fn child_elements<'d, 'a>(node: Node<'d, 'a>) -> impl Iterator<Item = Node<'d, 'a>> {
-    node.children().filter(Node::is_element)
-}
-
 /// The direct child SRX elements `local`.
 fn children_named<'d, 'a>(
     node: Node<'d, 'a>,
     local: &'static str,
 ) -> impl Iterator<Item = Node<'d, 'a>> {
-    child_elements(node).filter(move |child| is_srx(*child, local))
+    node.element_children()
+        .filter(move |child| is_srx(*child, local))
 }
 
 /// The direct child elements `local` in the namespace `namespace`.
@@ -227,7 +223,8 @@ fn children_in<'d, 'a, 'q>(
     namespace: &'q str,
     local: &'q str,
 ) -> impl Iterator<Item = Node<'d, 'a>> + use<'d, 'a, 'q> {
-    child_elements(node).filter(move |child| child.has_tag_name((namespace, local)))
+    node.element_children()
+        .filter(move |child| child.has_tag_name((namespace, local)))
 }
 
 /// The first direct child SRX element `local`.
@@ -367,7 +364,8 @@ fn decode_leaf(elem: Node<'_, '_>) -> Result<Option<TermValue>, Error> {
 /// Read the single child term element of a `<triple>` component wrapper.
 fn component<'d, 'a>(triple: Node<'d, 'a>, role: &'static str) -> Result<Node<'d, 'a>, Error> {
     let wrapper = child(triple, role).ok_or_else(|| fmt(&format!("<triple> missing <{role}>")))?;
-    child_elements(wrapper)
+    wrapper
+        .element_children()
         .next()
         .ok_or_else(|| fmt(&format!("<{role}> has no term")))
 }

@@ -285,12 +285,14 @@ impl Default for SparqlParser {
     }
 }
 
-impl SparqlParser {
-    /// Construct a parser with no implicit base IRI.
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl SparqlParser {
+        /// Construct a parser with no implicit base IRI.
+        pub fn new() -> Self::default();
     }
+}
 
+impl SparqlParser {
     /// Set an implicit base IRI used to resolve relative IRI references that
     /// appear before any in-query `BASE` declaration, and against which a
     /// relative in-query `BASE` itself resolves (SPARQL 1.1 §4.1.1 → RFC-3986
@@ -2512,39 +2514,21 @@ impl<'a> Parser<'a, '_> {
 
     // ── solution modifiers ───────────────────────────────────────────────────
 
-    /// True when the cursor is at a bare (non-parenthesized) `GROUP BY`
-    /// GroupCondition — a `BuiltInCall` or `FunctionCall`. The grammar's bare
-    /// conditions all begin with a callee token (a builtin keyword, an IRI, or a
-    /// prefixed name); the modifier-list terminators (`HAVING`/`ORDER`/`LIMIT`/
-    /// `OFFSET`/`VALUES`) and boolean literals are excluded so the `GROUP BY`
-    /// loop stops cleanly at the next clause.
-    fn at_bare_group_condition(&self) -> bool {
-        match self.peek() {
-            Some(Token::Iri(_) | Token::PrefixedName(_, _)) => true,
-            Some(Token::Word(w)) => !is_modifier_terminator_word(w),
-            _ => false,
-        }
-    }
-
     /// True when the upcoming token can start a bare (non-parenthesized)
-    /// `Constraint` — a `BuiltInCall` or `FunctionCall` (SPARQL 1.1/1.2
-    /// `Constraint ::= BrackettedExpression | BuiltInCall | FunctionCall`).
-    /// Used by `HAVING`'s `Constraint+` list (both to decide whether the
-    /// first, mandatory constraint is bare, and whether a SUBSEQUENT one
-    /// begins) and by `ORDER BY`'s `OrderCondition ::= ... | (Constraint |
-    /// Var)` alternative. The bracketed form (`Token::LParen`) is recognized
-    /// separately at each call site — this only covers the bare spelling, so
-    /// it deliberately excludes a bare `Var` or literal (neither is a
-    /// `Constraint`, only an `OrderCondition`'s OTHER alternative or a
-    /// non-constraint primary expression).
+    /// `BuiltInCall` or `FunctionCall`: the bare alternative of a `Constraint`
+    /// (`Constraint ::= BrackettedExpression | BuiltInCall | FunctionCall`) and,
+    /// by the same productions, of a `GROUP BY` `GroupCondition`. Every bare call
+    /// begins with a callee token (a builtin keyword, an IRI or a prefixed name);
+    /// the modifier-list terminators (`HAVING`/`ORDER`/`LIMIT`/`OFFSET`/`VALUES`)
+    /// and boolean literals are excluded so a `GROUP BY`, `HAVING` or `ORDER BY`
+    /// list stops cleanly at the next clause.
     ///
-    /// Same shape as [`Self::at_bare_group_condition`] (a callee token —
-    /// IRI/prefixed name/keyword — modulo the clause-terminator words that
-    /// can legally follow a `Constraint+`/`OrderCondition*` list), kept
-    /// separate because the terminator set differs slightly (`HAVING` can
-    /// recur inside itself as a callee-shaped word is never in question
-    /// here, since `HAVING` itself cannot re-appear mid-list, but excluding
-    /// it is harmless and keeps the two helpers independently auditable).
+    /// Used by `GROUP BY`'s condition loop, by `HAVING`'s `Constraint+` list (both
+    /// to decide whether the first, mandatory constraint is bare, and whether a
+    /// subsequent one begins) and by `ORDER BY`'s `OrderCondition ::= ... |
+    /// (Constraint | Var)` alternative. The bracketed form (`Token::LParen`) is
+    /// recognized separately at each call site, so this deliberately excludes a
+    /// bare `Var` or literal (neither is a call).
     fn at_bare_constraint(&self) -> bool {
         match self.peek() {
             Some(Token::Iri(_) | Token::PrefixedName(_, _)) => true,
@@ -2810,10 +2794,10 @@ impl Modifiers {
 /// identity table `Z`) on either side so a group that opens with a non-triple
 /// element (`UNION`, a property path, …) is not wrapped in a vacuous `Join`.
 fn join(left: GraphPattern, right: GraphPattern) -> GraphPattern {
-    if is_empty_bgp(&left) {
+    if left.is_empty_bgp() {
         return right;
     }
-    if is_empty_bgp(&right) {
+    if right.is_empty_bgp() {
         return left;
     }
     match (left, right) {
@@ -2826,10 +2810,6 @@ fn join(left: GraphPattern, right: GraphPattern) -> GraphPattern {
             right: Child::new(r),
         },
     }
-}
-
-fn is_empty_bgp(p: &GraphPattern) -> bool {
-    matches!(p, GraphPattern::Bgp { patterns } if patterns.is_empty())
 }
 
 /// Lift a run of template triples into quad patterns, all scoped to `graph`
@@ -2924,11 +2904,13 @@ struct VarScope {
     seen: std::collections::BTreeSet<Variable>,
 }
 
-impl VarScope {
-    fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl VarScope {
+        fn new() -> Self::default();
     }
+}
 
+impl VarScope {
     /// Record `v` as in scope; a no-op if it already is (first-appearance
     /// order is preserved, so a later re-mention never moves it).
     fn note(&mut self, v: &Variable) {
@@ -3704,8 +3686,8 @@ fn iri_error(lexical: &str, error: &IriError) -> ParseError {
 }
 
 /// The clause-terminator / boolean-literal words that end a bare `GROUP BY`
-/// GroupCondition or `HAVING`/`ORDER BY` Constraint list — the shared word set
-/// of [`Parser::at_bare_group_condition`] and [`Parser::at_bare_constraint`].
+/// GroupCondition or `HAVING`/`ORDER BY` Constraint list — the word set
+/// [`Parser::at_bare_constraint`] excludes.
 const MODIFIER_TERMINATOR_WORDS: [&str; 8] = [
     "HAVING", "ORDER", "LIMIT", "OFFSET", "VALUES", "BINDINGS", "TRUE", "FALSE",
 ];

@@ -522,13 +522,15 @@ impl core::fmt::Debug for UserFunctionRegistry {
     }
 }
 
-impl UserFunctionRegistry {
-    /// An empty registry.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl UserFunctionRegistry {
+        /// An empty registry.
+        #[must_use]
+        pub fn new() -> Self::default();
     }
+}
 
+impl UserFunctionRegistry {
     /// The canonical empty registry â the non-optional "no scalar functions
     /// registered" value every registry-carrying seam
     /// ([`crate::engine::QueryOptions::functions`],

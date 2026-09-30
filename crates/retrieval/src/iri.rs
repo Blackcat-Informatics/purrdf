@@ -99,13 +99,15 @@ impl Ord for Iri {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Term(String);
 
-impl Term {
-    /// Carry `text` as a term.
-    #[must_use]
-    pub fn new(text: impl Into<String>) -> Self {
-        Self(text.into())
+purrdf_lex::constructors! {
+    impl Term {
+        /// Carry `text` as a term.
+        #[must_use]
+        pub fn new(text) -> Self;
     }
+}
 
+impl Term {
     /// The term's canonical text.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -134,7 +136,7 @@ impl From<String> for Term {
 
 impl From<&str> for Term {
     fn from(value: &str) -> Self {
-        Self(value.to_owned())
+        Self::new(value)
     }
 }
 

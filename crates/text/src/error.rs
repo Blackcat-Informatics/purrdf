@@ -54,25 +54,19 @@ pub enum TextError {
     Domain(String),
 }
 
-impl TextError {
-    /// Construct a [`TextError::Config`] from any displayable message.
-    pub fn config(what: impl Into<String>) -> Self {
-        Self::Config(what.into())
-    }
+purrdf_lex::constructors! {
+    impl TextError {
+        /// Construct a [`TextError::Config`] from any displayable message.
+        pub fn config(what) -> Self::Config;
 
-    /// Construct a [`TextError::Data`] from any displayable message.
-    pub fn data(what: impl Into<String>) -> Self {
-        Self::Data(what.into())
-    }
+        /// Construct a [`TextError::Data`] from any displayable message.
+        pub fn data(what) -> Self::Data;
 
-    /// Construct a [`TextError::Overflow`] from any displayable message.
-    pub fn overflow(what: impl Into<String>) -> Self {
-        Self::Overflow(what.into())
-    }
+        /// Construct a [`TextError::Overflow`] from any displayable message.
+        pub fn overflow(what) -> Self::Overflow;
 
-    /// Construct a [`TextError::Domain`] from any displayable message.
-    pub fn domain(what: impl Into<String>) -> Self {
-        Self::Domain(what.into())
+        /// Construct a [`TextError::Domain`] from any displayable message.
+        pub fn domain(what) -> Self::Domain;
     }
 }
 

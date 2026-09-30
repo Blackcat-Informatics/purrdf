@@ -392,13 +392,15 @@ pub struct BitVec {
     len: usize,
 }
 
-impl BitVec {
-    /// An empty bit sequence.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl BitVec {
+        /// An empty bit sequence.
+        #[must_use]
+        pub fn new() -> Self::default();
     }
+}
 
+impl BitVec {
     /// Append one bit.
     pub fn push(&mut self, bit: bool) {
         let word_index = self.len / 64;

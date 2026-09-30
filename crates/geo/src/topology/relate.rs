@@ -1617,12 +1617,13 @@ mod nesting_tests {
             );
         }
 
-        arbitrary::on_small_stack(move || {
+        purrdf_stack::on_stack(arbitrary::SMALL_STACK, move || {
             let deep = arbitrary::nest(square, arbitrary::DEEP);
             assert_eq!(relate(&deep, &inside), square_point);
             assert_eq!(relate(&deep, &overlapping), square_box);
             let deep_other = arbitrary::nest(overlapping, arbitrary::DEEP);
             assert_eq!(relate(&deep, &deep_other), square_box);
-        });
+        })
+        .expect("the thread starts");
     }
 }

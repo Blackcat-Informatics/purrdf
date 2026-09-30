@@ -65,6 +65,11 @@
 //! * **XML** — [`xml`], the one XML 1.0 + Namespaces reader: a pull reader and
 //!   a document tree, with DOCTYPE and external entities refused, an explicit
 //!   depth cap, no machine-stack recursion, and byte offsets in every error.
+//! * **Constructors** — [`constructors`], the one spelling of an inherent
+//!   constructor whose whole body is a conversion: a caller's text taken as
+//!   `impl Into<String>` into a variant or a newtype field
+//!   ([`constructors!`]), a `new` that is the type's `Default`, and a `From`
+//!   impl that wraps a lower layer's value into a variant ([`variant_from!`]).
 //! * **Crockford Base32** — [`crockford`], the text form of a 128-bit ULID.
 //! * **JSON documents** — [`json`], the one RFC 8259 reader, value and writer:
 //!   a pull [`json::Reader`] with byte offsets, streaming skips and an
@@ -114,6 +119,7 @@
 #![forbid(unsafe_code)]
 
 pub mod cbor;
+pub mod constructors;
 pub mod crockford;
 pub mod iri_escape;
 pub mod json;

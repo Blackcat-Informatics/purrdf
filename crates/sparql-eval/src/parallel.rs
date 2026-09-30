@@ -805,12 +805,17 @@ fn pattern_reaches_unsafe_builtin(
 /// guess in the one direction that can silently change an answer. A sequential fallback
 /// is always correct, so "when in doubt, UNSAFE".
 fn property_function_is_unsafe(iri: &str, relations: &PropertyFunctionRegistry) -> bool {
-    let Some(relation) = relations.resolve(iri) else {
-        return true;
-    };
-    // Wildcard-shaped match — `Volatility` is `#[non_exhaustive]`, and a class added
-    // later must be unsafe here until it is deliberately admitted.
-    !matches!(relation.volatility(), Volatility::Stable)
+    resolved_is_unsafe(relations.resolve(iri).map(|relation| relation.volatility()))
+}
+
+/// Whether a registered callee whose resolution gave `declared` is unsafe to run from a
+/// forked worker: safe only when it resolved and declared [`Volatility::Stable`].
+///
+/// The one verdict behind [`property_function_is_unsafe`] and [`aggregate_is_unsafe`].
+/// Wildcard-shaped — `Volatility` is `#[non_exhaustive]`, and a class added later must
+/// be unsafe here until it is deliberately admitted.
+const fn resolved_is_unsafe(declared: Option<Volatility>) -> bool {
+    !matches!(declared, Some(Volatility::Stable))
 }
 
 /// Whether a `Custom` aggregate call on `iri` is unsafe to fold from a forked
@@ -834,10 +839,11 @@ fn property_function_is_unsafe(iri: &str, relations: &PropertyFunctionRegistry) 
 /// change an answer. A sequential fallback is always correct, so "when in doubt,
 /// UNSAFE".
 pub(crate) fn aggregate_is_unsafe(iri: &str, aggregates: &AggregateRegistry) -> bool {
-    let Some(aggregate) = aggregates.resolve(iri) else {
-        return true;
-    };
-    !matches!(aggregate.volatility(), Volatility::Stable)
+    resolved_is_unsafe(
+        aggregates
+            .resolve(iri)
+            .map(|aggregate| aggregate.volatility()),
+    )
 }
 
 /// Chunk-based, infallible parallel collect: split `items` into index-ordered

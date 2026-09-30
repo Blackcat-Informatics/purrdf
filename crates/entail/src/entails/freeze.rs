@@ -141,6 +141,7 @@
 //! constants in mint order, and the premise is seeded once. Two runs over one premise and one
 //! conclusion produce the same warrant, on `wasm32` as on native.
 
+use super::is;
 use std::collections::BTreeSet;
 
 use purrdf_core::{RdfDataset, TermValue};
@@ -589,11 +590,6 @@ struct Reading {
     /// triple this lane read the predicate of and refused the terms of is one it has admitted
     /// it cannot decide, and an admission must not become a refutation.
     declined: Vec<String>,
-}
-
-/// Whether `term` is the IRI `iri`.
-fn is(term: &TermValue, iri: &str) -> bool {
-    matches!(term, TermValue::Iri(value) if value == iri)
 }
 
 /// What this mechanism made of one conclusion triple.

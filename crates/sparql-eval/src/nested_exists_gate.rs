@@ -40,11 +40,6 @@ const EX: &str = "http://example.org/";
 /// A stack large enough for every depth these tests evaluate.
 const BIG_STACK: usize = 512 * 1024 * 1024;
 
-/// Run `body` on a fresh thread with [`BIG_STACK`] of stack.
-fn on_big_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-    purrdf_stack::on_stack(BIG_STACK, body).expect("spawn")
-}
-
 /// An engine that evaluates on the calling thread, so the thread-local counters and the
 /// thread-local eager override see the whole evaluation.
 fn sequential_engine() -> NativeSparqlEngine {
@@ -179,7 +174,7 @@ struct Cost {
 }
 
 fn cost(depth: usize, eager: bool) -> Cost {
-    on_big_stack(move || {
+    purrdf_stack::on_stack(BIG_STACK, move || {
         let query = same_row_nesting(depth);
         let (one, c1, b1) = counted(&edge_per_subject(1), &query, eager);
         assert_eq!(one, vec![vec![iri("s0")]]);
@@ -197,6 +192,7 @@ fn cost(depth: usize, eager: bool) -> Cost {
             once_builds: b1,
         }
     })
+    .expect("spawn")
 }
 
 /// **One more outer row of `d` nested correlated `EXISTS` costs `O(d)` counted work.**
@@ -382,7 +378,7 @@ fn alternating_nested_exists_answers_the_pinned_rows() {
 #[test]
 fn two_hundred_nested_levels_answer_within_a_governor_bound() {
     const DEPTH: usize = 200;
-    let (rows, evidence) = on_big_stack(|| {
+    let (rows, evidence) = purrdf_stack::on_stack(BIG_STACK, || {
         let ds = next_graph();
         let query = alternating_walk(DEPTH);
         // A hundred units of fuel a level, for five outer rows: a bound linear in the depth
@@ -407,7 +403,8 @@ fn two_hundred_nested_levels_answer_within_a_governor_bound() {
             panic!("two hundred levels must complete inside the bound: {outcome:?}");
         };
         (rows_of(&result), evidence)
-    });
+    })
+    .expect("spawn");
     eprintln!("depth {DEPTH}: {evidence:?}");
     assert_eq!(rows, alternating_walk_by_hand(DEPTH));
 }
@@ -537,11 +534,12 @@ fn deferred_substitution_matches_the_full_substitution() {
         ),
     ];
     for query in &queries {
-        let rows = on_big_stack({
+        let rows = purrdf_stack::on_stack(BIG_STACK, {
             let ds = Arc::clone(&ds);
             let query = query.clone();
             move || answer_both_ways(&ds, &query)
-        });
+        })
+        .expect("spawn");
         assert!(
             !rows.is_empty(),
             "the corpus query must answer something: {query}"

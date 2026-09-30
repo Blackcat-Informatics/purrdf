@@ -23,15 +23,11 @@
 use std::path::Path;
 
 use purrdf::{
-    DatasetView, GraphMatch, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm,
+    DatasetView, GraphMatch, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, RdfQuad,
     RdfTextDirection, TermId, TermRef, TermValue, parse_dataset,
 };
 
 use crate::error::SliceError;
-
-/// The `rdf:reifies` predicate IRI — re-materialized when flattening the RDF 1.2
-/// statement overlay back to plain quads for canonicalization.
-use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 // ── Native NamedNode ───────────────────────────────────────────────────────────
 
@@ -541,31 +537,13 @@ impl Dataset {
     /// folded `canonicalize` would instead emit reserved overlay sentinels).
     pub fn canonical_nquads_flat(&self) -> Result<String, SliceError> {
         let mut builder = RdfDatasetBuilder::new();
-        for quad in self.flat_quads() {
+        for quad in purrdf::flat_rdf_quads(&self.ds) {
             builder.push_owned_quad(&quad);
         }
         let frozen = builder
             .freeze()
             .map_err(|e| SliceError::Parse(format!("flatten for canonicalization: {e}")))?;
         Ok(purrdf::canonicalize(&frozen).nquads)
-    }
-
-    /// Flatten the dataset to the source-faithful plain-quad stream: base quads, then
-    /// the re-materialized `rdf:reifies` reifier rows, then the annotation rows.
-    fn flat_quads(&self) -> Vec<RdfQuad> {
-        let mut quads: Vec<RdfQuad> = self.ds.owned_quads().collect();
-        for reifier in self.ds.owned_reifiers() {
-            let statement = RdfTerm::triple(reifier.statement);
-            quads.push(RdfQuad::new(reifier.reifier, RDF_REIFIES, statement));
-        }
-        for annotation in self.ds.owned_annotations() {
-            quads.push(RdfQuad::new(
-                annotation.reifier,
-                annotation.predicate,
-                annotation.object,
-            ));
-        }
-        quads
     }
 
     /// Build a frozen [`RdfDataset`] from a flat owned-quad set (`push_owned_quad`,
@@ -962,6 +940,64 @@ pub(crate) fn media_type_for_path(path: &Path) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const REIFIES: &str = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies>";
+
+    fn flat_lines(trig: &str) -> Vec<String> {
+        let ds = Dataset::parse(trig.as_bytes(), "application/trig", None, "test").unwrap();
+        let mut lines: Vec<String> = ds
+            .canonical_nquads_flat()
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        lines.sort();
+        lines
+    }
+
+    #[test]
+    fn a_graph_scoped_reifier_and_its_annotation_keep_their_graph_when_flattened() {
+        let lines = flat_lines(
+            "@prefix ex: <https://example.org/> .\n\
+             GRAPH ex:g { ex:s ex:p ex:o ~ ex:r {| ex:source ex:w |} . }\n",
+        );
+        let (s, p, o) = (
+            "<https://example.org/s>",
+            "<https://example.org/p>",
+            "<https://example.org/o>",
+        );
+        let (r, g) = ("<https://example.org/r>", "<https://example.org/g>");
+        assert_eq!(
+            lines,
+            vec![
+                format!("{r} {REIFIES} <<( {s} {p} {o} )>> {g} ."),
+                format!("{r} <https://example.org/source> <https://example.org/w> {g} ."),
+                format!("{s} {p} {o} {g} ."),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_default_graph_reifier_flattens_into_the_default_graph() {
+        let lines = flat_lines(
+            "@prefix ex: <https://example.org/> .\n\
+             ex:s ex:p ex:o ~ ex:r {| ex:source ex:w |} .\n",
+        );
+        let (s, p, o) = (
+            "<https://example.org/s>",
+            "<https://example.org/p>",
+            "<https://example.org/o>",
+        );
+        let r = "<https://example.org/r>";
+        assert_eq!(
+            lines,
+            vec![
+                format!("{r} {REIFIES} <<( {s} {p} {o} )>> ."),
+                format!("{r} <https://example.org/source> <https://example.org/w> ."),
+                format!("{s} {p} {o} ."),
+            ]
+        );
+    }
 
     #[test]
     fn named_node_validates_and_orders_lexically() {

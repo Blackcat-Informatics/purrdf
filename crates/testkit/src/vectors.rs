@@ -318,9 +318,15 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    /// An empty recorder.
-    pub fn new() -> Self {
-        Self::default()
+    /// An empty recorder, usable in `const` context.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            comments: Vec::new(),
+            headers: Vec::new(),
+            body: String::new(),
+            count: 0,
+        }
     }
 
     /// Append a free-form header comment line (without its leading `# `).

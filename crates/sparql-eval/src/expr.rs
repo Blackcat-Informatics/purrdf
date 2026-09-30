@@ -318,6 +318,14 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
 /// [`ScratchInterner::intern_checked`](crate::scratch::ScratchInterner::intern_checked). Every
 /// caller here is inside an expression, so the mapping is the one §17.2 already
 /// states and `eval_str_lang` already performs: the expression is unbound.
+///
+/// The one door every expression module interns through. For the CDT functions
+/// (`crate::cdt_fn`) the gate is a real seam: a composite member is parsed out of a
+/// literal's lexical form, a caller-supplied string no kernel check has admitted. For
+/// the `rdf:List` functions (`crate::list_fn`) it is vacuous today — their members were
+/// admitted on the way into the dataset and the cells they mint are blank nodes — and
+/// is kept because their walk also reads the per-query constructed buffer, so one door
+/// is cheaper to keep right than two whose difference must be re-derived per writer.
 pub(crate) fn intern<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: TermValue,
@@ -1052,11 +1060,11 @@ fn collect_vars(mut pending: Vec<VarNode<'_>>, out: &mut DetHashSet<Variable>) {
                         out.extend(variables.iter().cloned());
                         for (v, agg) in aggregates {
                             out.insert(v.clone());
-                            for arg in agg
-                                .args()
-                                .iter()
-                                .chain(agg.order_by().iter().map(crate::modifier::order_sort_key))
-                            {
+                            for arg in agg.args().iter().chain(
+                                agg.order_by()
+                                    .iter()
+                                    .map(purrdf_sparql_algebra::OrderExpression::expression),
+                            ) {
                                 pending.push(VarNode::Expression(arg));
                             }
                         }
@@ -2923,7 +2931,7 @@ fn substitute_pattern_impl(
                 // omitting them would leave `FOLD(?v ORDER BY ?k)`'s `?k`
                 // unbound in the substituted pattern.
                 for order in agg.order_by() {
-                    defer.expr_vars(crate::modifier::order_sort_key(order), &mut free);
+                    defer.expr_vars(order.expression(), &mut free);
                 }
             }
             let inner_sub = substitute_pattern_impl(inner, row, map, defer);
@@ -2947,7 +2955,7 @@ fn substitute_pattern_impl(
                                     crate::modifier::rebuild_order(
                                         order,
                                         substitute_expr(
-                                            crate::modifier::order_sort_key(order),
+                                            order.expression(),
                                             row,
                                             &mut *map,
                                             &mut *defer,
@@ -4437,7 +4445,7 @@ fn eval_held_in<D: DatasetView + Sync>(
 }
 
 /// The value at argument index `i`, if it was bound (not unbound/error).
-fn arg(vals: &[Option<TermValue>], i: usize) -> Option<&TermValue> {
+pub(crate) fn arg(vals: &[Option<TermValue>], i: usize) -> Option<&TermValue> {
     vals.get(i).and_then(|v| v.as_ref())
 }
 
@@ -10674,7 +10682,7 @@ mod walk_tests {
                     for arg in agg
                         .args()
                         .iter()
-                        .chain(agg.order_by().iter().map(crate::modifier::order_sort_key))
+                        .chain(agg.order_by().iter().map(OrderExpression::expression))
                     {
                         reference_expr_vars(arg, out);
                     }
@@ -11080,10 +11088,6 @@ mod walk_tests {
         names
     }
 
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
-    }
-
     fn a_triple(choices: &mut Choices) -> TriplePattern {
         TriplePattern {
             subject: TermPattern::Variable(var(choices)),
@@ -11148,46 +11152,48 @@ mod walk_tests {
     /// 128 KiB stack.
     #[test]
     fn a_hundred_thousand_level_pattern_and_expression_are_read_on_a_128_kib_thread() {
-        let (pattern_vars, expr_vars_found, term_vars) = on_small_stack(|| {
-            let mut shape = GraphPattern::Bgp {
-                patterns: vec![TriplePattern {
-                    subject: TermPattern::Variable(Variable::new("deep")),
-                    predicate: NamedNodePattern::NamedNode(iri(0)),
-                    object: TermPattern::NamedNode(iri(1)),
-                }],
-            };
-            for _ in 0..DEPTH {
-                shape = GraphPattern::Filter {
-                    expr: Expression::Exists(Child::new(shape)),
-                    inner: Child::new(GraphPattern::Bgp {
-                        patterns: Vec::new(),
-                    }),
+        let (pattern_vars, expr_vars_found, term_vars) =
+            purrdf_stack::on_stack(SMALL_STACK, || {
+                let mut shape = GraphPattern::Bgp {
+                    patterns: vec![TriplePattern {
+                        subject: TermPattern::Variable(Variable::new("deep")),
+                        predicate: NamedNodePattern::NamedNode(iri(0)),
+                        object: TermPattern::NamedNode(iri(1)),
+                    }],
                 };
-            }
-            let mut expr = Expression::Variable(Variable::new("negated"));
-            for _ in 0..DEPTH {
-                expr = Expression::Not(Child::new(expr));
-            }
-            let mut term = TermPattern::Variable(Variable::new("quoted"));
-            for _ in 0..DEPTH {
-                term = TermPattern::Triple(Child::new(TriplePattern {
-                    subject: TermPattern::NamedNode(iri(0)),
-                    predicate: NamedNodePattern::NamedNode(iri(1)),
-                    object: term,
-                }));
-            }
-            let mut pattern_vars = DetHashSet::default();
-            pattern_all_vars(&shape, &mut pattern_vars);
-            let mut expr_vars_found = DetHashSet::default();
-            expr_vars(&expr, &mut expr_vars_found);
-            let mut term_vars = DetHashSet::default();
-            term_pattern_vars(&term, &mut term_vars);
-            (
-                sorted(&pattern_vars),
-                sorted(&expr_vars_found),
-                sorted(&term_vars),
-            )
-        });
+                for _ in 0..DEPTH {
+                    shape = GraphPattern::Filter {
+                        expr: Expression::Exists(Child::new(shape)),
+                        inner: Child::new(GraphPattern::Bgp {
+                            patterns: Vec::new(),
+                        }),
+                    };
+                }
+                let mut expr = Expression::Variable(Variable::new("negated"));
+                for _ in 0..DEPTH {
+                    expr = Expression::Not(Child::new(expr));
+                }
+                let mut term = TermPattern::Variable(Variable::new("quoted"));
+                for _ in 0..DEPTH {
+                    term = TermPattern::Triple(Child::new(TriplePattern {
+                        subject: TermPattern::NamedNode(iri(0)),
+                        predicate: NamedNodePattern::NamedNode(iri(1)),
+                        object: term,
+                    }));
+                }
+                let mut pattern_vars = DetHashSet::default();
+                pattern_all_vars(&shape, &mut pattern_vars);
+                let mut expr_vars_found = DetHashSet::default();
+                expr_vars(&expr, &mut expr_vars_found);
+                let mut term_vars = DetHashSet::default();
+                term_pattern_vars(&term, &mut term_vars);
+                (
+                    sorted(&pattern_vars),
+                    sorted(&expr_vars_found),
+                    sorted(&term_vars),
+                )
+            })
+            .expect("spawn");
         assert_eq!(pattern_vars, vec!["deep"]);
         assert_eq!(expr_vars_found, vec!["negated"]);
         assert_eq!(term_vars, vec!["quoted"]);
@@ -11220,7 +11226,7 @@ mod walk_tests {
     /// A quoted triple a hundred thousand levels deep is converted on a 128 KiB stack.
     #[test]
     fn a_hundred_thousand_level_quoted_triple_is_converted_on_a_128_kib_thread() {
-        let depth = on_small_stack(|| {
+        let depth = purrdf_stack::on_stack(SMALL_STACK, || {
             let mut value = TermValue::iri(format!("{EX}bottom"));
             for _ in 0..DEPTH {
                 value = TermValue::Triple {
@@ -11241,7 +11247,8 @@ mod walk_tests {
                 GroundTerm::NamedNode(NamedNode::new_unchecked(format!("{EX}bottom")))
             );
             depth
-        });
+        })
+        .expect("spawn");
         assert_eq!(depth, DEPTH);
     }
 
@@ -11341,7 +11348,7 @@ mod walk_tests {
     /// of an undeferred one there, are reported on a 128 KiB stack.
     #[test]
     fn a_hundred_thousand_level_expression_is_read_by_the_deferral_walk_on_a_128_kib_thread() {
-        let (deferred, direct) = on_small_stack(|| {
+        let (deferred, direct) = purrdf_stack::on_stack(SMALL_STACK, || {
             let mut choices = Choices::new(7);
             let body = GraphPattern::Bgp {
                 patterns: vec![a_triple(&mut choices)],
@@ -11367,7 +11374,8 @@ mod walk_tests {
                 (deferred.sites.len(), sorted(&deferred.direct)),
                 (direct.sites.len(), sorted(&direct.direct), sorted(&vars)),
             )
-        });
+        })
+        .expect("spawn");
         assert_eq!(deferred, (1, Vec::new()));
         assert_eq!(direct.0, 0);
         assert_eq!(direct.1, direct.2);

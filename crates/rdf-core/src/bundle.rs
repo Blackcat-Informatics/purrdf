@@ -151,12 +151,14 @@ pub struct ArtifactIndex {
     by_unit: FastMap<UnitId, Vec<usize>>,
 }
 
-impl ArtifactIndex {
-    /// A fresh, empty index.
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl ArtifactIndex {
+        /// A fresh, empty index.
+        pub fn new() -> Self::default();
     }
+}
 
+impl ArtifactIndex {
     /// Append an artifact record. Duplicate logical paths and duplicate
     /// `ArtifactId`s are *not* rejected here — the loader enforces those rules so
     /// builder code can stage freely; [`RdfBundle::load`] is the gate.
@@ -232,12 +234,14 @@ pub struct SegmentUnitMap {
     unit_to_segs: FastMap<UnitId, Vec<usize>>,
 }
 
-impl SegmentUnitMap {
-    /// A fresh, empty map.
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl SegmentUnitMap {
+        /// A fresh, empty map.
+        pub fn new() -> Self::default();
     }
+}
 
+impl SegmentUnitMap {
     /// Associate `segment` with `unit`. Idempotent: a repeated `(segment, unit)`
     /// pair does not duplicate either side.
     pub fn associate(&mut self, segment: usize, unit: UnitId) {

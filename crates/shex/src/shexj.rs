@@ -634,10 +634,7 @@ impl Reader {
     /// unresolved reference in a schema denotes nothing an absolute data term can
     /// match, so it turns every constraint written with it into a vacuous one.
     fn iri(&self, reference: &str) -> Result<String> {
-        self.base
-            .resolve(reference)
-            .map(|iri| iri.as_str().to_owned())
-            .map_err(|e| ShexError::iri(reference, &e))
+        crate::parser::resolve_iri(&self.base, reference)
     }
 
     /// Read a `shapeExprLabel` / `tripleExprLabel`.

@@ -183,22 +183,20 @@ pub enum ClauseTerm {
     DefaultGraph,
 }
 
+purrdf_lex::constructors! {
+    impl ClauseTerm {
+        /// A variable term.
+        pub fn var(name) -> Self::Var;
+
+        /// A constant IRI term, from the unbracketed IRI.
+        pub fn iri(iri) -> Self::Iri;
+
+        /// A constant literal term, from its already-rendered lexical surface.
+        pub fn literal(surface) -> Self::Literal;
+    }
+}
+
 impl ClauseTerm {
-    /// A variable term.
-    pub fn var(name: impl Into<String>) -> Self {
-        Self::Var(name.into())
-    }
-
-    /// A constant IRI term, from the unbracketed IRI.
-    pub fn iri(iri: impl Into<String>) -> Self {
-        Self::Iri(iri.into())
-    }
-
-    /// A constant literal term, from its already-rendered lexical surface.
-    pub fn literal(surface: impl Into<String>) -> Self {
-        Self::Literal(surface.into())
-    }
-
     /// The default graph — see [`ClauseTerm::DefaultGraph`].
     pub fn default_graph() -> Self {
         Self::DefaultGraph

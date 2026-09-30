@@ -125,12 +125,14 @@ pub(crate) struct DistanceCache {
     state: RefCell<CacheState>,
 }
 
-impl DistanceCache {
-    /// An empty cache.
-    pub(crate) fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl DistanceCache {
+        /// An empty cache.
+        pub(crate) fn new() -> Self::default();
     }
+}
 
+impl DistanceCache {
     /// A stored distance to `row`.
     fn get(&self, row: usize) -> Option<f64> {
         self.state.borrow().entries.get(&row).copied()

@@ -318,13 +318,15 @@ pub enum TermValue {
     },
 }
 
-impl TermValue {
-    /// An IRI term from its full string.
-    #[inline]
-    pub fn iri(value: impl Into<String>) -> Self {
-        Self::Iri(value.into())
+purrdf_lex::constructors! {
+    impl TermValue {
+        /// An IRI term from its full string.
+        #[inline]
+        pub fn iri(value) -> Self::Iri;
     }
+}
 
+impl TermValue {
     /// A blank node in the default scope, from its bare label.
     #[inline]
     pub fn blank(label: impl Into<String>) -> Self {

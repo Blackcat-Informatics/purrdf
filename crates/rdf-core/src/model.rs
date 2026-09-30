@@ -190,13 +190,15 @@ pub enum RdfTerm {
     Triple(Box<RdfTriple>),
 }
 
-impl RdfTerm {
-    /// An IRI term from its full string.
-    #[must_use]
-    pub fn iri(value: impl Into<String>) -> Self {
-        Self::Iri(value.into())
+purrdf_lex::constructors! {
+    impl RdfTerm {
+        /// An IRI term from its full string.
+        #[must_use]
+        pub fn iri(value) -> Self::Iri;
     }
+}
 
+impl RdfTerm {
     /// A blank-node term from its label (without the `_:` prefix).
     #[must_use]
     pub fn blank_node(value: impl Into<String>) -> Self {

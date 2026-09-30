@@ -1225,11 +1225,9 @@ mod tests {
     /// The nesting depth every deep-input test uses.
     const DEEP: usize = 1_000_000;
 
-    /// Run `body` on a thread with a 128 KiB machine stack: a walk that recursed once
-    /// per nesting level would overflow it after a few hundred levels.
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        purrdf_stack::on_stack(128 * 1024, body).expect("spawn a small-stack thread")
-    }
+    /// The machine stack every deep-input test runs on, 128 KiB: a walk that
+    /// recursed once per nesting level would overflow it after a few hundred levels.
+    const SMALL_STACK: usize = 128 * 1024;
 
     /// `depth` nested JSON arrays around nothing: `[[…[]…]]`.
     fn nested_arrays(depth: usize) -> String {
@@ -1249,7 +1247,7 @@ mod tests {
 
     #[test]
     fn a_deeply_nested_value_in_a_binding_position_is_refused_without_overflow() {
-        let (full, bounded, truncated) = on_small_stack(|| {
+        let (full, bounded, truncated) = purrdf_stack::on_stack(SMALL_STACK, || {
             let doc = select_with_binding(&nested_arrays(DEEP));
             // The same nesting with its innermost array left unclosed.
             let unclosed = select_with_binding(&"[".repeat(DEEP));
@@ -1258,7 +1256,8 @@ mod tests {
                 from_json_bounded(&doc, u64::MAX).map(|bounded| bounded.solutions),
                 from_json(&unclosed),
             )
-        });
+        })
+        .expect("spawn a small-stack thread");
         let not_an_object = format_error("binding is not an object");
         assert_eq!(full, Err(not_an_object.clone()));
         assert_eq!(bounded, Err(not_an_object));
@@ -1273,7 +1272,7 @@ mod tests {
 
     #[test]
     fn a_deeply_nested_ignored_member_parses_without_overflow() {
-        let (full, bounded, skipped) = on_small_stack(|| {
+        let (full, bounded, skipped) = purrdf_stack::on_stack(SMALL_STACK, || {
             let deep = nested_arrays(DEEP);
             let doc = format!(
                 r#"{{"head":{{"vars":["x"],"link":{deep}}},"results":{{"bindings":[{{"x":{{"type":"uri","value":"http://example.org/a"}},"y":{deep}}}]}},"extra":{deep}}}"#
@@ -1289,7 +1288,8 @@ mod tests {
                 from_json_bounded(&doc, u64::MAX),
                 from_json_bounded(&over_limit, 1),
             )
-        });
+        })
+        .expect("spawn a small-stack thread");
         let expected = ParsedSolutions {
             variables: vec!["x".to_owned()],
             rows: vec![vec![Some(TermValue::Iri(
@@ -1337,7 +1337,7 @@ mod tests {
 
     #[test]
     fn a_deeply_nested_triple_term_binding_decodes_without_overflow() {
-        let (full, bounded) = on_small_stack(|| {
+        let (full, bounded) = purrdf_stack::on_stack(SMALL_STACK, || {
             let doc = select_with_binding(&nested_triple_binding(DEEP));
             let full = from_json(&doc).map(|parsed| {
                 let [row] = parsed.rows.as_slice() else {
@@ -1349,7 +1349,8 @@ mod tests {
                 object_chain_depth(bounded.solutions.rows[0][0].as_ref().expect("bound"))
             });
             (full, bounded)
-        });
+        })
+        .expect("spawn a small-stack thread");
         assert_eq!(full, Ok(DEEP));
         assert_eq!(bounded, Ok(DEEP));
     }

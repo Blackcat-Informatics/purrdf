@@ -86,7 +86,7 @@ use purrdf_datalog::store::{Fact, RelationStore};
 
 use crate::calculus::{ChaseRule, program_with_attribution};
 use crate::engine::{seed, surface_of};
-use crate::interner::{Interner, intern_into};
+use crate::interner::{Interner, blank_closure, blank_subjects, intern_into};
 use crate::reasoner::{DlAxiom, Reasoner, Verdict};
 use crate::rules::RuleId;
 use crate::{EntailError, Regime};
@@ -988,12 +988,7 @@ impl Axioms {
             let o = interner.intern(ds.term_value(quad.o));
             triples.push((s, p, o));
         }
-        let mut blanks: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
-        for (index, &(s, _, _)) in triples.iter().enumerate() {
-            if matches!(interner.value(s), TermValue::Blank { .. }) {
-                blanks.entry(s).or_default().push(index);
-            }
-        }
+        let blanks = blank_subjects(&interner, &triples);
         // A blank node that appears as an OBJECT is scaffolding reached from somewhere; one
         // that never does is the subject of an axiom nothing points at, and dropping it
         // would silently lose a general class inclusion.
@@ -1016,17 +1011,7 @@ impl Axioms {
 
     /// Add the blank-node closure reachable from `term` to `out`.
     fn closure(&self, term: u32, out: &mut BTreeSet<usize>) {
-        let mut stack = vec![term];
-        let mut seen: BTreeSet<u32> = BTreeSet::new();
-        while let Some(node) = stack.pop() {
-            if !matches!(self.interner.value(node), TermValue::Blank { .. }) || !seen.insert(node) {
-                continue;
-            }
-            for &index in self.blanks.get(&node).map_or(&[][..], Vec::as_slice) {
-                out.insert(index);
-                stack.push(self.triples[index].2);
-            }
-        }
+        blank_closure(&self.interner, &self.triples, &self.blanks, term, out);
     }
 
     /// Freeze the subset holding the axioms at the root POSITIONS in `kept`, plus their

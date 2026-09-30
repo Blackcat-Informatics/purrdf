@@ -414,6 +414,7 @@ dependencies = [
  "purrdf-hnsw",
  "purrdf-iri",
  "purrdf-json",
+ "purrdf-lex",
  "purrdf-markdown",
  "purrdf-rdf",
  "purrdf-retrieval",
@@ -534,6 +535,7 @@ dependencies = [
  "hashbrown",
  "purrdf-core",
  "purrdf-hash",
+ "purrdf-lex",
  "purrdf-testkit",
  "rayon",
 ]

@@ -104,23 +104,22 @@ impl SparqlResultsFormat {
     /// JSON first, the default.
     pub const ALL: [Self; 4] = [Self::Json, Self::Xml, Self::Csv, Self::Tsv];
 
-    /// Every name [`Self::from_name`] accepts, and the format each one names.
+    /// Every format's spellings, in [`Self::ALL`] (declaration) order: its short
+    /// token, the internet media type the W3C SPARQL 1.1 Query Results format
+    /// specifications register for it (`text/csv` and `text/tab-separated-values`
+    /// for CSV and TSV), and its spelled-out aliases.
     ///
-    /// Per format: the short token, the spelled-out aliases, and the internet media type
-    /// the W3C SPARQL 1.1 Query Results format specifications register for it
-    /// (`text/csv` and `text/tab-separated-values` for CSV and TSV).
-    const NAMES: [(&'static str, Self); 11] = [
-        ("json", Self::Json),
-        ("srj", Self::Json),
-        ("sparql-json", Self::Json),
-        ("application/sparql-results+json", Self::Json),
-        ("xml", Self::Xml),
-        ("sparql-xml", Self::Xml),
-        ("application/sparql-results+xml", Self::Xml),
-        ("csv", Self::Csv),
-        ("text/csv", Self::Csv),
-        ("tsv", Self::Tsv),
-        ("text/tab-separated-values", Self::Tsv),
+    /// The one table every spelling is read from, so [`Self::token`],
+    /// [`Self::media_type`] and [`Self::from_name`] cannot drift apart.
+    const SPELLINGS: [(&'static str, &'static str, &'static [&'static str]); 4] = [
+        (
+            "json",
+            "application/sparql-results+json",
+            &["srj", "sparql-json"],
+        ),
+        ("xml", "application/sparql-results+xml", &["sparql-xml"]),
+        ("csv", "text/csv", &[]),
+        ("tsv", "text/tab-separated-values", &[]),
     ];
 
     /// The format a caller named, or `None` for a name that is not one of the four.
@@ -135,34 +134,27 @@ impl SparqlResultsFormat {
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
         let name = name.trim();
-        Self::NAMES
-            .iter()
-            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
-            .map(|&(_, format)| format)
+        Self::ALL.into_iter().find(|&format| {
+            let (token, media_type, aliases) = Self::SPELLINGS[format as usize];
+            [token, media_type]
+                .iter()
+                .chain(aliases)
+                .any(|candidate| candidate.eq_ignore_ascii_case(name))
+        })
     }
 
     /// The format's short token — `json`, `xml`, `csv` or `tsv` — which
     /// [`Self::from_name`] reads back.
     #[must_use]
     pub const fn token(self) -> &'static str {
-        match self {
-            Self::Json => "json",
-            Self::Xml => "xml",
-            Self::Csv => "csv",
-            Self::Tsv => "tsv",
-        }
+        Self::SPELLINGS[self as usize].0
     }
 
     /// The format's registered media type, for a `Content-Type` or an `Accept`
     /// negotiation; [`Self::from_name`] reads it back.
     #[must_use]
     pub const fn media_type(self) -> &'static str {
-        match self {
-            Self::Json => "application/sparql-results+json",
-            Self::Xml => "application/sparql-results+xml",
-            Self::Csv => "text/csv",
-            Self::Tsv => "text/tab-separated-values",
-        }
+        Self::SPELLINGS[self as usize].1
     }
 }
 
@@ -415,6 +407,15 @@ mod tests {
         assert_eq!(
             SparqlResultsFormat::ALL.map(SparqlResultsFormat::token),
             ["json", "xml", "csv", "tsv"]
+        );
+        assert_eq!(
+            SparqlResultsFormat::ALL.map(SparqlResultsFormat::media_type),
+            [
+                "application/sparql-results+json",
+                "application/sparql-results+xml",
+                "text/csv",
+                "text/tab-separated-values",
+            ]
         );
         for format in SparqlResultsFormat::ALL {
             assert_eq!(SparqlResultsFormat::from_name(format.token()), Some(format));

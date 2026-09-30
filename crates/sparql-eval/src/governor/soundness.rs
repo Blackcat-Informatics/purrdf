@@ -635,12 +635,7 @@ where
                 aggregate
                     .args()
                     .iter()
-                    .chain(
-                        aggregate
-                            .order_by()
-                            .iter()
-                            .map(crate::modifier::order_sort_key),
-                    )
+                    .chain(aggregate.order_by().iter().map(OrderExpression::expression))
                     .any(|e| visit(PatternPart::Expression(e)))
             })
         }
@@ -1830,7 +1825,7 @@ fn push_pattern_parts<'a>(pattern: &'a GraphPattern, steps: &mut Vec<AnalysisSte
         GraphPattern::OrderBy { inner, expression } => {
             steps.push(AnalysisStep::EnterPattern(inner));
             for oe in expression {
-                steps.push(AnalysisStep::EnterExpr(crate::modifier::order_sort_key(oe)));
+                steps.push(AnalysisStep::EnterExpr(oe.expression()));
             }
         }
         GraphPattern::Group {
@@ -1841,7 +1836,7 @@ fn push_pattern_parts<'a>(pattern: &'a GraphPattern, steps: &mut Vec<AnalysisSte
                 for arg in agg
                     .args()
                     .iter()
-                    .chain(agg.order_by().iter().map(crate::modifier::order_sort_key))
+                    .chain(agg.order_by().iter().map(OrderExpression::expression))
                 {
                     steps.push(AnalysisStep::EnterExpr(arg));
                 }
@@ -4374,8 +4369,7 @@ mod iterative_walks {
                 let mut stateful = i.has_stateful_builtin;
                 let mut hard_error = i.can_hard_error;
                 for oe in expression {
-                    let (f, s, h) =
-                        reference_analyze_expr(crate::modifier::order_sort_key(oe), table);
+                    let (f, s, h) = reference_analyze_expr(oe.expression(), table);
                     free_vars.extend(f);
                     stateful |= s;
                     hard_error |= h;
@@ -4422,7 +4416,7 @@ mod iterative_walks {
                     for arg in agg
                         .args()
                         .iter()
-                        .chain(agg.order_by().iter().map(crate::modifier::order_sort_key))
+                        .chain(agg.order_by().iter().map(OrderExpression::expression))
                     {
                         let (f, s, h) = reference_analyze_expr(arg, table);
                         free_vars.extend(f);
@@ -5326,11 +5320,6 @@ mod iterative_walks {
 
     // ---- deep cases ---------------------------------------------------------
 
-    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
-    }
-
     fn var(name: &str) -> Variable {
         Variable::new(name)
     }
@@ -5392,7 +5381,7 @@ mod iterative_walks {
     /// introduction to collide with.
     #[test]
     fn a_hundred_thousand_filters_are_analyzed_and_admitted_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let pattern = nested(leaf_xy(), filter_bound_x);
             let mut table = NodeAnalysisTable::default();
             let (root, entered) = counted(|| analyze_pattern(&pattern, &mut table));
@@ -5405,7 +5394,8 @@ mod iterative_walks {
             assert!(probe_admissible(&pattern, &table, &schema_of(&["x"])));
             assert!(!pattern_can_hard_error(&pattern));
             assert_eq!(exists_row_collision(&pattern, &vars(&["x", "y"])), None);
-        });
+        })
+        .expect("spawn");
     }
 
     /// The same wrappers over a `VALUES ?x` block: every filter is admissible against
@@ -5413,7 +5403,7 @@ mod iterative_walks {
     /// levels down — refuses the probe for rebinding the current row's `?x`.
     #[test]
     fn a_refusal_a_hundred_thousand_levels_down_is_reached_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let values = GraphPattern::Values {
                 variables: vec![var("x")],
                 bindings: vec![vec![Some(GroundTerm::NamedNode(NamedNode::new_unchecked(
@@ -5425,14 +5415,15 @@ mod iterative_walks {
             analyze_pattern(&pattern, &mut table);
             assert!(!probe_admissible(&pattern, &table, &schema_of(&["x"])));
             assert!(probe_admissible(&pattern, &table, &schema_of(&["q"])));
-        });
+        })
+        .expect("spawn");
     }
 
     /// A hundred thousand `!` over `BOUND(?x)`: the expression walk, alone and as a
     /// filter condition judged for the probe.
     #[test]
     fn a_hundred_thousand_negations_are_analyzed_and_admitted_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let mut expr = Expression::Bound(var("x"));
             for _ in 0..DEPTH {
                 expr = Expression::Not(Child::new(expr));
@@ -5450,14 +5441,15 @@ mod iterative_walks {
             let mut table = NodeAnalysisTable::default();
             analyze_pattern(&pattern, &mut table);
             assert!(probe_admissible(&pattern, &table, &schema_of(&["x"])));
-        });
+        })
+        .expect("spawn");
     }
 
     /// A `BIND` a hundred thousand `DISTINCT` wrappers down collides exactly when the
     /// row scope names its target.
     #[test]
     fn a_collision_a_hundred_thousand_levels_down_is_found_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let pattern = nested(bind(leaf_xy(), "z"), |inner| GraphPattern::Distinct {
                 inner: Child::new(inner),
             });
@@ -5470,7 +5462,8 @@ mod iterative_walks {
             let root = analyze_pattern(&pattern, &mut table);
             assert_eq!(root.free_vars, vars(&["x", "y", "z"]));
             assert_eq!(root.certainly_bound, vars(&["x", "y", "z"]));
-        });
+        })
+        .expect("spawn");
     }
 
     /// A hundred thousand sub-`SELECT`s, each narrowing the row scope to `?z`, over a
@@ -5478,7 +5471,7 @@ mod iterative_walks {
     /// projection drops is answered without descending.
     #[test]
     fn a_hundred_thousand_narrowing_projections_are_searched_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let pattern = nested(bind(leaf_xy(), "z"), |inner| GraphPattern::Project {
                 inner: Child::new(inner),
                 variables: vec![var("z")],
@@ -5494,14 +5487,15 @@ mod iterative_walks {
             assert_eq!(root.certainly_bound, vars(&["z"]));
             assert!(probe_admissible(&pattern, &table, &schema_of(&["x", "y"])));
             assert!(!probe_admissible(&pattern, &table, &schema_of(&["z"])));
-        });
+        })
+        .expect("spawn");
     }
 
     /// A grouping-key `BIND` a hundred thousand filters beneath its `GROUP BY` is found
     /// by the grouping-key search.
     #[test]
     fn a_grouping_key_bind_a_hundred_thousand_levels_down_is_found_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let pattern = GraphPattern::Group {
                 inner: Child::new(nested(bind(leaf_xy(), "k"), filter_bound_x)),
                 variables: vec![var("k")],
@@ -5512,7 +5506,8 @@ mod iterative_walks {
                 Some((&var("k"), RowCollisionIntro::Bind))
             );
             assert_eq!(exists_row_collision(&pattern, &vars(&["x"])), None);
-        });
+        })
+        .expect("spawn");
     }
 
     /// A quoted triple nested a hundred thousand levels in an object position: its
@@ -5520,7 +5515,7 @@ mod iterative_walks {
     /// inside a quoted endpoint raises.
     #[test]
     fn a_hundred_thousand_level_quoted_triple_is_walked_on_a_128_kib_thread() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let p = NamedNodePattern::NamedNode(NamedNode::new_unchecked(format!("{EX}p")));
             let mut term = TermPattern::Variable(var("o"));
             for _ in 0..DEPTH {
@@ -5550,6 +5545,7 @@ mod iterative_walks {
                 object: TermPattern::Variable(var("t")),
             };
             assert!(pattern_can_hard_error(&path));
-        });
+        })
+        .expect("spawn");
     }
 }

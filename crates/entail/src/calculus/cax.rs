@@ -35,24 +35,23 @@ use crate::vocab::{
     OWL_ALLDISJOINTCLASSES, OWL_DISJOINTWITH, OWL_EQUIVALENTCLASS, OWL_MEMBERS, RDF_TYPE,
 };
 
-/// `cax-eqc1`: `?c1 owl:equivalentClass ?c2`, `?x rdf:type ?c1` ⇒ `?x rdf:type ?c2`.
-pub(super) fn equivalent_class_instance_left() -> Vec<DlClause> {
+/// `cax-eqc1` (`FORWARD`): `?c1 owl:equivalentClass ?c2`, `?x rdf:type ?c1` ⇒
+/// `?x rdf:type ?c2`; `cax-eqc2` (not `FORWARD`): the same assertion read right to left,
+/// `?x rdf:type ?c2` ⇒ `?x rdf:type ?c1`.
+///
+/// The two rules are one schema read in each direction of the symmetric relation, so they
+/// are one body instantiated twice.
+pub(super) fn equivalent_class_instance<const FORWARD: bool>() -> Vec<DlClause> {
+    let (from, to) = if FORWARD {
+        ("?c1", "?c2")
+    } else {
+        ("?c2", "?c1")
+    };
     vec![DlClause::datalog(
-        atom(var("?x"), RDF_TYPE, var("?c2")),
+        atom(var("?x"), RDF_TYPE, var(to)),
         vec![
             atom(var("?c1"), OWL_EQUIVALENTCLASS, var("?c2")),
-            atom(var("?x"), RDF_TYPE, var("?c1")),
-        ],
-    )]
-}
-
-/// `cax-eqc2`: `?c1 owl:equivalentClass ?c2`, `?x rdf:type ?c2` ⇒ `?x rdf:type ?c1`.
-pub(super) fn equivalent_class_instance_right() -> Vec<DlClause> {
-    vec![DlClause::datalog(
-        atom(var("?x"), RDF_TYPE, var("?c1")),
-        vec![
-            atom(var("?c1"), OWL_EQUIVALENTCLASS, var("?c2")),
-            atom(var("?x"), RDF_TYPE, var("?c2")),
+            atom(var("?x"), RDF_TYPE, var(from)),
         ],
     )]
 }
@@ -103,13 +102,13 @@ macro_rules! cax_rules {
             EquivalentClassInstanceLeft {
                 id: CaxEqc1,
                 lanes: [OwlRl],
-                clauses: cax::equivalent_class_instance_left,
+                clauses: cax::equivalent_class_instance::<true>,
             },
             /// `cax-eqc2` — the same, right to left. `OWL-RL` only.
             EquivalentClassInstanceRight {
                 id: CaxEqc2,
                 lanes: [OwlRl],
-                clauses: cax::equivalent_class_instance_right,
+                clauses: cax::equivalent_class_instance::<false>,
             },
             /// `cax-dw` — two disjoint classes with a shared instance is an
             /// inconsistency. DECLARED, not evaluated: the head is `false`.

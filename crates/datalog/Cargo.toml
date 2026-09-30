@@ -37,6 +37,8 @@ purrdf-hash = { workspace = true }
 # demand keying, forward evaluator query-plan index selection) lives in the
 # shared kernel now that a second, non-Datalog consumer needs it too.
 purrdf-core = { workspace = true }
+# The one spelling of the clause-term constructors that wrap a caller's text.
+purrdf-lex = { workspace = true }
 # Fixed-key store-once interners and the arrangement's probe tables hash with
 # purrdf-hash's `FixedHasher` (declared above). Fixed-key (not RandomState)
 # because wasm32 has no entropy source and because iteration order must never

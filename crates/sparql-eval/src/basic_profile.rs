@@ -374,7 +374,7 @@ fn check_from(root: Pending<'_>) -> Result<(), EvalError> {
 fn aggregate_expressions(agg: &AggregateExpression) -> impl Iterator<Item = &Expression> {
     agg.args()
         .iter()
-        .chain(agg.order_by().iter().map(crate::modifier::order_sort_key))
+        .chain(agg.order_by().iter().map(OrderExpression::expression))
 }
 
 fn check_property_function(call: &PropertyFunctionCall) -> Result<(), EvalError> {
@@ -530,7 +530,7 @@ mod walk_tests {
                 .try_for_each(check_ground_term),
             GraphPattern::OrderBy { inner, expression } => {
                 for oe in expression {
-                    reference_expression(crate::modifier::order_sort_key(oe))?;
+                    reference_expression(oe.expression())?;
                 }
                 reference_pattern(inner)
             }

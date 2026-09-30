@@ -881,12 +881,6 @@ fn the_vm_matches_the_tree_walk_over_generated_expressions() {
 
 const DEPTH: usize = 100_000;
 
-/// Run `f` on a thread whose stack is 128 KiB: a recursion over a 100 000-deep
-/// expression would need far more.
-fn on_small_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    purrdf_stack::on_stack(128 * 1024, f).expect("the thread spawns")
-}
-
 /// Compile, link and run `expr` over the empty row, on a fresh context.
 fn evaluate(expr: &Expression) -> Option<TermValue> {
     let ds = RdfDatasetBuilder::new().freeze().expect("an empty dataset");
@@ -900,7 +894,7 @@ fn evaluate(expr: &Expression) -> Option<TermValue> {
 
 #[test]
 fn a_deep_arithmetic_chain_evaluates_on_a_small_stack() {
-    let value = on_small_stack(|| {
+    let value = purrdf_stack::on_stack(128 * 1024, || {
         // `1 + (1 + (1 + … 1))`: the right operand nests, so the tree is DEPTH deep.
         let mut expr = int(1);
         for _ in 0..DEPTH {
@@ -910,7 +904,8 @@ fn a_deep_arithmetic_chain_evaluates_on_a_small_stack() {
             );
         }
         evaluate(&expr)
-    });
+    })
+    .expect("the thread spawns");
     // DEPTH additions of 1 onto the innermost 1.
     let expected = (DEPTH + 1).to_string();
     assert_eq!(value, Some(literal(&expected, "integer")));
@@ -922,7 +917,7 @@ fn a_deep_arithmetic_chain_evaluates_on_a_small_stack() {
 /// its outermost term, the subject and predicate constants, and nothing else.
 #[test]
 fn a_deep_triple_constructor_chain_interns_its_outermost_term_once() {
-    let (value, computed) = on_small_stack(|| {
+    let (value, computed) = purrdf_stack::on_stack(128 * 1024, || {
         let iri =
             |local: &str| Expression::NamedNode(NamedNode::new_unchecked(format!("{EX}{local}")));
         let mut expr = int(7);
@@ -940,7 +935,8 @@ fn a_deep_triple_constructor_chain_interns_its_outermost_term_once() {
         drop(linked);
         drop(expr);
         (value.map(|value| triple_depth_and_core(&value)), computed)
-    });
+    })
+    .expect("the thread spawns");
     assert_eq!(value, Some((DEPTH, literal("7", "integer"))));
     assert_eq!(
         computed, 4,
@@ -962,7 +958,7 @@ fn triple_depth_and_core(value: &TermValue) -> (usize, TermValue) {
 
 #[test]
 fn a_deep_if_nest_evaluates_on_a_small_stack() {
-    let value = on_small_stack(|| {
+    let value = purrdf_stack::on_stack(128 * 1024, || {
         // Alternating `IF(true, e, 0)` and `IF(false, 0, e)`: every level takes the
         // branch holding the nest, so the answer is the innermost value.
         let mut expr = int(7);
@@ -982,13 +978,14 @@ fn a_deep_if_nest_evaluates_on_a_small_stack() {
             };
         }
         evaluate(&expr)
-    });
+    })
+    .expect("the thread spawns");
     assert_eq!(value, Some(literal("7", "integer")));
 }
 
 #[test]
 fn a_deep_coalesce_nest_evaluates_on_a_small_stack() {
-    let value = on_small_stack(|| {
+    let value = purrdf_stack::on_stack(128 * 1024, || {
         // `COALESCE(?unbound, COALESCE(?unbound, … 5))`: every level's first item is
         // unbound, so every level falls through to the nest and the answer is 5.
         let mut expr = int(5);
@@ -996,19 +993,21 @@ fn a_deep_coalesce_nest_evaluates_on_a_small_stack() {
             expr = Expression::Coalesce(vec![var("unbound"), expr].into());
         }
         evaluate(&expr)
-    });
+    })
+    .expect("the thread spawns");
     assert_eq!(value, Some(literal("5", "integer")));
 }
 
 #[test]
 fn a_deep_not_nest_evaluates_on_a_small_stack() {
-    let value = on_small_stack(|| {
+    let value = purrdf_stack::on_stack(128 * 1024, || {
         let mut expr = boolean(true);
         for _ in 0..DEPTH {
             expr = Expression::Not(Child::new(expr));
         }
         evaluate(&expr)
-    });
+    })
+    .expect("the thread spawns");
     // An even number of negations of `true` is `true`, an odd number `false`.
     let expected = if DEPTH.is_multiple_of(2) {
         "true"

@@ -1181,12 +1181,13 @@ mod nesting_tests {
             expected.push(')');
         }
 
-        arbitrary::on_small_stack(move || {
+        purrdf_stack::on_stack(arbitrary::SMALL_STACK, move || {
             let deep = arbitrary::nest(triangle.clone(), depth);
             assert_eq!(wkt::write_bare(&boundary(&deep), 0), expected);
             assert_eq!(envelope(&deep), envelope(&triangle));
             assert_eq!(convex_hull(&deep), convex_hull(&triangle));
             assert_eq!(centroid(&deep), centroid(&triangle));
-        });
+        })
+        .expect("the thread starts");
     }
 }

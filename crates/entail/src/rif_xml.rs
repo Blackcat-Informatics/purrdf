@@ -140,7 +140,7 @@ fn parse_document(text: &str, base: &BaseScope) -> Result<ParsedRifDocument, Str
     let base = enter(&root, base)?;
     let mut ruleset = RuleSet::new();
     let mut imports = Vec::new();
-    for child in elements(&root) {
+    for child in root.element_children() {
         let base = enter(&child, &base)?;
         match local_name(&child)? {
             "directive" => collect_import(&child, &mut imports, &base)?,
@@ -161,7 +161,7 @@ fn collect_import(
     let base = enter(&import, base)?;
     let mut location = None;
     let mut profile = None;
-    for child in elements(&import) {
+    for child in import.element_children() {
         let base = enter(&child, &base)?;
         match local_name(&child)? {
             // Both are IRI-valued: a `<location>` names the graph to fetch and a
@@ -187,7 +187,7 @@ fn parse_payload(
 ) -> Result<(), String> {
     let group = only_element(payload, "Group")?;
     let base = enter(&group, base)?;
-    for child in elements(&group) {
+    for child in group.element_children() {
         let base = enter(&child, &base)?;
         match local_name(&child)? {
             "sentence" => parse_sentence(&child, ruleset, &base)?,
@@ -222,7 +222,7 @@ fn parse_sentence(
 
 fn parse_forall(forall: &Node<'_, '_>, base: &BaseScope) -> Result<Rule, String> {
     let mut formula = None;
-    for child in elements(forall) {
+    for child in forall.element_children() {
         match local_name(&child)? {
             "declare" | "meta" | "id" => {}
             "formula" => formula = Some(child),
@@ -236,7 +236,7 @@ fn parse_forall(forall: &Node<'_, '_>, base: &BaseScope) -> Result<Rule, String>
     let base = enter(&implies, &base)?;
     let mut body = None;
     let mut head = None;
-    for child in elements(&implies) {
+    for child in implies.element_children() {
         let base = enter(&child, &base)?;
         match local_name(&child)? {
             "if" => {
@@ -264,7 +264,7 @@ fn parse_conjunction(node: &Node<'_, '_>, base: &BaseScope) -> Result<Vec<Atom>,
         "Frame" => parse_frame(node, base),
         "And" => {
             let mut atoms = Vec::new();
-            for child in elements(node) {
+            for child in node.element_children() {
                 let base = enter(&child, base)?;
                 match local_name(&child)? {
                     "formula" => {
@@ -286,7 +286,7 @@ fn parse_frame(frame: &Node<'_, '_>, base: &BaseScope) -> Result<Vec<Atom>, Stri
     require(frame, "Frame")?;
     let mut object = None;
     let mut slots = Vec::new();
-    for child in elements(frame) {
+    for child in frame.element_children() {
         let base = enter(&child, base)?;
         match local_name(&child)? {
             "object" => {
@@ -314,7 +314,7 @@ fn parse_frame(frame: &Node<'_, '_>, base: &BaseScope) -> Result<Vec<Atom>, Stri
 }
 
 fn parse_slot(slot: &Node<'_, '_>, base: &BaseScope) -> Result<(RifTerm, RifTerm), String> {
-    let mut children = elements(slot);
+    let mut children = slot.element_children();
     let predicate_node = children.next().ok_or("slot without a predicate")?;
     let predicate_base = enter(&predicate_node, base)?;
     let predicate = parse_term(&predicate_node, &predicate_base)?;
@@ -429,12 +429,6 @@ fn fill_dataset_facts(dataset: &RdfDataset, facts: &mut Vec<Fact>) {
     }));
 }
 
-fn elements<'a, 'input>(
-    node: &Node<'a, 'input>,
-) -> impl Iterator<Item = Node<'a, 'input>> + use<'a, 'input> {
-    node.children().filter(Node::is_element)
-}
-
 fn local_name<'a>(node: &Node<'a, '_>) -> Result<&'a str, String> {
     let tag = node.tag_name();
     match tag.namespace() {
@@ -459,7 +453,7 @@ fn single_element<'a, 'input>(
     node: &Node<'a, 'input>,
     parent: &str,
 ) -> Result<Node<'a, 'input>, String> {
-    let mut children = elements(node);
+    let mut children = node.element_children();
     let first = children
         .next()
         .ok_or_else(|| format!("<{parent}> is empty"))?;

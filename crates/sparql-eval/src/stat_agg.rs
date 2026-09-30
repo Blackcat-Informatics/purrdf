@@ -331,6 +331,11 @@ use purrdf_xsd::datatype::XSD_STRING;
 
 /// `PERCENTILE`'s named scalarval: `AGG(<{NS}PERCENTILE>, ?v; P=0.95)`.
 const PERCENTILE_P: &str = "P";
+
+/// The arity of every aggregate in this module: one expression folded per row.
+/// A parameter (`PERCENTILE`'s `P`, `TOPK`'s `K`) is a scalarval, never an
+/// argument, so it does not widen this.
+const ONE_EXPRESSION: Arity = Arity::Exact(1);
 /// `TOPK`'s named scalarval: `AGG(<{NS}TOPK>, ?v; K=3)`.
 const TOPK_K: &str = "K";
 
@@ -529,83 +534,51 @@ enum ValueSeries {
     Poisoned,
 }
 
-struct MedianAccumulator {
-    state: ValueSeries,
-}
-
-impl AggregateAccumulator for MedianAccumulator {
-    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        if matches!(self.state, ValueSeries::Poisoned) {
-            return Ok(());
+impl ValueSeries {
+    /// Fold one row's argument in: a value outside the numeric tower and the
+    /// duration group, or of the other family than the values already held,
+    /// poisons the series, and a poisoned series stays poisoned.
+    fn step(&mut self, args: &[TermValue]) {
+        if matches!(self, Self::Poisoned) {
+            return;
         }
         let Some(x) = args
             .first()
             .and_then(xsd_of)
             .filter(is_numeric_or_duration_xsd)
         else {
-            self.state = ValueSeries::Poisoned;
-            return Ok(());
+            *self = Self::Poisoned;
+            return;
         };
-        self.state = match mem::replace(&mut self.state, ValueSeries::Empty) {
-            ValueSeries::Empty => ValueSeries::Ok(vec![x]),
-            ValueSeries::Ok(mut values) if same_value_family(&values[0], &x) => {
+        *self = match mem::replace(self, Self::Empty) {
+            Self::Empty => Self::Ok(vec![x]),
+            Self::Ok(mut values) if same_value_family(&values[0], &x) => {
                 values.push(x);
-                ValueSeries::Ok(values)
+                Self::Ok(values)
             }
-            ValueSeries::Ok(_) => ValueSeries::Poisoned,
-            ValueSeries::Poisoned => ValueSeries::Poisoned,
+            Self::Ok(_) | Self::Poisoned => Self::Poisoned,
         };
-        Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
-        // Concatenate the two (still-unsorted) value lists: merge order never
-        // matters, because `finish` sorts the whole multiset before computing
-        // a rank — see the module docs' "Real merges" section. A family
-        // mismatch between the two partials (numeric vs duration) poisons,
-        // the same as a within-accumulator mismatch in `step` above.
-        let other = downcast_combine_partial::<Self>(other)?;
-        self.state = match (
-            mem::replace(&mut self.state, ValueSeries::Empty),
-            other.state,
-        ) {
-            (ValueSeries::Poisoned, _) | (_, ValueSeries::Poisoned) => ValueSeries::Poisoned,
-            (ValueSeries::Empty, s) | (s, ValueSeries::Empty) => s,
-            (ValueSeries::Ok(mut values), ValueSeries::Ok(other_values)) => {
+    /// Merge a partial series in by concatenating the two (still-unsorted)
+    /// value lists. Merge order never matters, because `finish` sorts the
+    /// whole multiset before computing a rank — see the module docs' "Real
+    /// merges" section. A family mismatch between the two partials (numeric
+    /// vs duration) poisons, the same as a within-series mismatch in
+    /// [`Self::step`].
+    fn combine(&mut self, other: Self) {
+        *self = match (mem::replace(self, Self::Empty), other) {
+            (Self::Poisoned, _) | (_, Self::Poisoned) => Self::Poisoned,
+            (Self::Empty, s) | (s, Self::Empty) => s,
+            (Self::Ok(mut values), Self::Ok(other_values)) => {
                 if same_value_family(&values[0], &other_values[0]) {
                     values.extend(other_values);
-                    ValueSeries::Ok(values)
+                    Self::Ok(values)
                 } else {
-                    ValueSeries::Poisoned
+                    Self::Poisoned
                 }
             }
         };
-        Ok(())
-    }
-
-    /// See [`AggregateAccumulator::into_any`]'s trait docs — every implementor's
-    /// body is this same one line.
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
-        self
-    }
-
-    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        let Self { state } = *self;
-        match state {
-            ValueSeries::Empty | ValueSeries::Poisoned => Ok(None),
-            ValueSeries::Ok(values) => {
-                // The sort must also order durations, and it must be a TOTAL
-                // order or `sort_by` may panic. An incomparable pair (e.g. `P1M`
-                // vs `P30D`) still sorts as EQUAL — the SAME policy this
-                // comparator always used — but only against another member of
-                // its own comparability class; see `sort_series` and the module
-                // docs' "Ordering policy for incomparable duration pairs".
-                let values = sort_series(values);
-                Ok(percentile_of(&values, &half())
-                    .as_ref()
-                    .map(xsd_value_to_term))
-            }
-        }
     }
 }
 
@@ -613,7 +586,7 @@ struct MedianAggregate;
 
 impl CustomAggregate for MedianAggregate {
     fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ONE_EXPRESSION
     }
     fn volatility(&self) -> Volatility {
         Volatility::Stable
@@ -625,7 +598,10 @@ impl CustomAggregate for MedianAggregate {
         VALUE_PROPORTIONAL_STATE_BOUND
     }
     fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
-        Box::new(MedianAccumulator {
+        // MEDIAN is PERCENTILE at one half: one accumulator, so the two
+        // cannot drift in how they fold, merge, sort or rank.
+        Box::new(PercentileAccumulator {
+            p: Some(half()),
             state: ValueSeries::Empty,
         })
     }
@@ -652,26 +628,7 @@ impl AggregateAccumulator for PercentileAccumulator {
             self.state = ValueSeries::Poisoned;
             return Ok(());
         }
-        if matches!(self.state, ValueSeries::Poisoned) {
-            return Ok(());
-        }
-        let Some(x) = args
-            .first()
-            .and_then(xsd_of)
-            .filter(is_numeric_or_duration_xsd)
-        else {
-            self.state = ValueSeries::Poisoned;
-            return Ok(());
-        };
-        self.state = match mem::replace(&mut self.state, ValueSeries::Empty) {
-            ValueSeries::Empty => ValueSeries::Ok(vec![x]),
-            ValueSeries::Ok(mut values) if same_value_family(&values[0], &x) => {
-                values.push(x);
-                ValueSeries::Ok(values)
-            }
-            ValueSeries::Ok(_) => ValueSeries::Poisoned,
-            ValueSeries::Poisoned => ValueSeries::Poisoned,
-        };
+        self.state.step(args);
         Ok(())
     }
 
@@ -682,27 +639,10 @@ impl AggregateAccumulator for PercentileAccumulator {
         // scalarvals (see the module docs' "Real merges" section and
         // `crate::agg_fn`'s "Merging structural state" section) — so, unlike
         // the old per-row positional-argument design, there is no cross-chunk
-        // `p`-mismatch to detect here: concatenating the (still-unsorted)
-        // value lists is always correct, since `finish` sorts the whole
-        // multiset before computing a rank either way. A family mismatch
-        // between the two partials (numeric vs duration) poisons, the same
-        // as a within-accumulator mismatch in `step` above.
+        // `p`-mismatch to detect here: merging the two series is always
+        // correct (see `ValueSeries::combine`).
         let other = downcast_combine_partial::<Self>(other)?;
-        self.state = match (
-            mem::replace(&mut self.state, ValueSeries::Empty),
-            other.state,
-        ) {
-            (ValueSeries::Poisoned, _) | (_, ValueSeries::Poisoned) => ValueSeries::Poisoned,
-            (ValueSeries::Empty, s) | (s, ValueSeries::Empty) => s,
-            (ValueSeries::Ok(mut values), ValueSeries::Ok(other_values)) => {
-                if same_value_family(&values[0], &other_values[0]) {
-                    values.extend(other_values);
-                    ValueSeries::Ok(values)
-                } else {
-                    ValueSeries::Poisoned
-                }
-            }
-        };
+        self.state.combine(other.state);
         Ok(())
     }
 
@@ -717,8 +657,11 @@ impl AggregateAccumulator for PercentileAccumulator {
         let (Some(p), ValueSeries::Ok(values)) = (p, state) else {
             return Ok(None);
         };
-        // The same total-order sort `MedianAccumulator::finish` uses — one
-        // function, so the two cannot drift.
+        // The sort must also order durations, and it must be a TOTAL order or
+        // `sort_by` may panic. An incomparable pair (e.g. `P1M` vs `P30D`)
+        // still sorts as EQUAL, but only against another member of its own
+        // comparability class; see `sort_series` and the module docs'
+        // "Ordering policy for incomparable duration pairs".
         let values = sort_series(values);
         Ok(percentile_of(&values, &p).as_ref().map(xsd_value_to_term))
     }
@@ -728,7 +671,7 @@ struct PercentileAggregate;
 
 impl CustomAggregate for PercentileAggregate {
     fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ONE_EXPRESSION
     }
     fn volatility(&self) -> Volatility {
         Volatility::Stable
@@ -946,7 +889,7 @@ struct MomentsAggregate {
 
 impl CustomAggregate for MomentsAggregate {
     fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ONE_EXPRESSION
     }
     fn volatility(&self) -> Volatility {
         Volatility::Stable
@@ -1044,7 +987,7 @@ struct ModeAggregate;
 
 impl CustomAggregate for ModeAggregate {
     fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ONE_EXPRESSION
     }
     fn volatility(&self) -> Volatility {
         Volatility::Stable
@@ -1120,7 +1063,7 @@ struct FirstAggregate;
 
 impl CustomAggregate for FirstAggregate {
     fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ONE_EXPRESSION
     }
     fn volatility(&self) -> Volatility {
         Volatility::Stable
@@ -1181,7 +1124,7 @@ struct LastAggregate;
 
 impl CustomAggregate for LastAggregate {
     fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ONE_EXPRESSION
     }
     fn volatility(&self) -> Volatility {
         Volatility::Stable
@@ -1323,7 +1266,7 @@ struct TopKAggregate;
 
 impl CustomAggregate for TopKAggregate {
     fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ONE_EXPRESSION
     }
     fn volatility(&self) -> Volatility {
         Volatility::Stable

@@ -35,7 +35,7 @@
 //!   ([`EvalOptions::with_max_stored_facts`](purrdf_datalog::seminaive::EvalOptions::with_max_stored_facts)),
 //!   not by the join-step limit. Passing it is [`EntailError::Evaluate`](crate::EntailError):
 //!   a REFUSAL carrying the observation, never a truncated closure.
-//! * **the predicate position** — [`equal_predicate`] rewrites a triple's PREDICATE, which
+//! * **the predicate position** — [`equal_at`] (as `eq-rep-p`) rewrites a triple's PREDICATE, which
 //!   is expressible only because a [`ClauseAtom`](purrdf_datalog::clause::ClauseAtom)
 //!   carries the predicate as DATA. A rewrite that puts a non-IRI there is a
 //!   generalized-RDF triple the RDF 1.2 IR cannot hold, so it is dropped at the
@@ -104,41 +104,29 @@ pub(super) fn transitive() -> Vec<DlClause> {
     )]
 }
 
-/// `eq-rep-s`: `?s owl:sameAs ?s'`, `T(?s, ?p, ?o)` ⇒ `T(?s', ?p, ?o)`.
-pub(super) fn equal_subject() -> Vec<DlClause> {
-    vec![DlClause::datalog(
-        quad(var("?s2"), var("?p"), var("?o")),
-        vec![
-            atom(var("?s"), OWL_SAMEAS, var("?s2")),
-            quad(var("?s"), var("?p"), var("?o")),
-        ],
-    )]
-}
-
-/// `eq-rep-p`: `?p owl:sameAs ?p'`, `T(?s, ?p, ?o)` ⇒ `T(?s, ?p', ?o)`.
+/// `eq-rep-s`, `eq-rep-p` and `eq-rep-o`: `?x owl:sameAs ?x'`, `T(?s, ?p, ?o)` ⇒ the
+/// same triple with `?x'` in place of `?x`, where `?x` is the term at `POSITION` (`0` the
+/// subject, `1` the predicate, `2` the object).
 ///
-/// The one rule of the whole calculus whose conclusion rewrites the PREDICATE position
-/// from a variable bound in a DIFFERENT position of another atom — `?p2` is the OBJECT of
-/// the `owl:sameAs` triple and the PREDICATE of the conclusion. It is expressible only
-/// because a clause atom carries its predicate as data; an IR that addressed relations by
-/// predicate symbol could not write it. A `?p2` that is not an IRI makes the conclusion a
-/// generalized-RDF triple, dropped at the boundary and reported.
-pub(super) fn equal_predicate() -> Vec<DlClause> {
+/// The three rules are one schema over the triple's positions, so they are one body
+/// instantiated three times; the replacement variable is the position's variable with a
+/// `2` suffix (`?s2`, `?p2`, `?o2`).
+///
+/// `eq-rep-p` is the one rule of the whole calculus whose conclusion rewrites the
+/// PREDICATE position from a variable bound in a DIFFERENT position of another atom —
+/// `?p2` is the OBJECT of the `owl:sameAs` triple and the PREDICATE of the conclusion. It
+/// is expressible only because a clause atom carries its predicate as data; an IR that
+/// addressed relations by predicate symbol could not write it. A `?p2` that is not an IRI
+/// makes the conclusion a generalized-RDF triple, dropped at the boundary and reported.
+pub(super) fn equal_at<const POSITION: usize>() -> Vec<DlClause> {
+    const NAMES: [&str; 3] = ["?s", "?p", "?o"];
+    let replaced = format!("{}2", NAMES[POSITION]);
+    let [subject, predicate, object] =
+        core::array::from_fn(|at| var(if at == POSITION { &replaced } else { NAMES[at] }));
     vec![DlClause::datalog(
-        quad(var("?s"), var("?p2"), var("?o")),
+        quad(subject, predicate, object),
         vec![
-            atom(var("?p"), OWL_SAMEAS, var("?p2")),
-            quad(var("?s"), var("?p"), var("?o")),
-        ],
-    )]
-}
-
-/// `eq-rep-o`: `?o owl:sameAs ?o'`, `T(?s, ?p, ?o)` ⇒ `T(?s, ?p, ?o')`.
-pub(super) fn equal_object() -> Vec<DlClause> {
-    vec![DlClause::datalog(
-        quad(var("?s"), var("?p"), var("?o2")),
-        vec![
-            atom(var("?o"), OWL_SAMEAS, var("?o2")),
+            atom(var(NAMES[POSITION]), OWL_SAMEAS, var(&replaced)),
             quad(var("?s"), var("?p"), var("?o")),
         ],
     )]
@@ -227,19 +215,19 @@ macro_rules! eq_rules {
             EqualSubject {
                 id: EqRepS,
                 lanes: [OwlRl],
-                clauses: eq::equal_subject,
+                clauses: eq::equal_at::<0>,
             },
             /// `eq-rep-p` — equality substitutes in PREDICATE position. `OWL-RL` only.
             EqualPredicate {
                 id: EqRepP,
                 lanes: [OwlRl],
-                clauses: eq::equal_predicate,
+                clauses: eq::equal_at::<1>,
             },
             /// `eq-rep-o` — equality substitutes in OBJECT position. `OWL-RL` only.
             EqualObject {
                 id: EqRepO,
                 lanes: [OwlRl],
-                clauses: eq::equal_object,
+                clauses: eq::equal_at::<2>,
             },
             /// `eq-diff1` — two things both same and different is an inconsistency.
             Different1 {

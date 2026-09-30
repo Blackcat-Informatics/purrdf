@@ -74,7 +74,7 @@ use purrdf_hash::Domain;
 use purrdf_hash::frame::frame_le;
 use std::cmp::Ordering;
 
-use purrdf_core::{DatasetView, FastMap, GraphMatch, RdfTextDirection, TermValue};
+use purrdf_core::{DatasetView, FastMap, RdfTextDirection, TermValue};
 
 use crate::analysis::{Analyzer, UnicodeVersions, unicode_versions};
 use crate::error::TextError;
@@ -103,28 +103,7 @@ const PRESENT: u8 = 0x01;
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// Which graph's literals an index is built over.
-///
-/// This is deliberately in **value** space rather than
-/// [`GraphMatch`](purrdf_core::GraphMatch) space. `GraphMatch::Named` holds a
-/// dataset-local term id, which means something only inside the one dataset that
-/// minted it; a configuration is a statement the caller writes down once and may
-/// apply to several datasets, so it must name a graph by its IRI.
-/// [`TextIndex::from_dataset`] resolves the selector to a `GraphMatch` against
-/// the dataset in hand.
-///
-/// Deliberately exhaustive, like `GraphMatch`: a quad's graph is the default
-/// graph or exactly one named graph, so the three cases are closed.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum GraphSelector {
-    /// Index literals from every graph, default and named alike. Each graph
-    /// still yields its own documents and its own partitions.
-    Any,
-    /// Index literals from the default graph only.
-    Default,
-    /// Index literals from the one named graph this IRI identifies.
-    Named(TermValue),
-}
+pub use purrdf_core::GraphSelector;
 
 /// The caller's complete, dataset-independent statement of what to index.
 ///
@@ -1300,7 +1279,7 @@ fn collect_rows<D: DatasetView>(
     dataset: &D,
     config: &TextIndexConfig,
 ) -> Result<(Vec<SourceRow>, SourceCoverage), TextError> {
-    let Some(graph) = resolve_graph(dataset, config.graph()) else {
+    let Some(graph) = config.graph().resolve(dataset) else {
         return Ok((
             Vec::new(),
             SourceCoverage::nothing_in_scope(dataset, config),
@@ -1445,26 +1424,6 @@ fn push_row<D: DatasetView>(
         direction,
     });
     Ok(())
-}
-
-/// Resolve `selector` against `dataset`'s own id space, or `None` when no quad
-/// of this dataset can possibly match it.
-///
-/// `None` arises for exactly one reason: a [`GraphSelector::Named`] graph whose
-/// IRI the dataset has not interned. There is then no id a quad's graph could
-/// equal, so the match is empty rather than unrepresentable — `GraphMatch` holds
-/// dataset-local ids and has no id that names an absent term, so the emptiness is
-/// carried here instead of being encoded as one. `Any` and `Default` name no term
-/// and so always resolve.
-fn resolve_graph<D: DatasetView>(
-    dataset: &D,
-    selector: &GraphSelector,
-) -> Option<GraphMatch<D::Id>> {
-    Some(match selector {
-        GraphSelector::Any => GraphMatch::Any,
-        GraphSelector::Default => GraphMatch::Default,
-        GraphSelector::Named(name) => GraphMatch::Named(dataset.term_id_by_value(name)?),
-    })
 }
 
 /// Resolve a dataset-local id to its dataset-independent [`TermValue`] through

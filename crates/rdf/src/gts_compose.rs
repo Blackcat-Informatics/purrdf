@@ -233,12 +233,14 @@ pub struct SnapshotBuilder {
     totals: IngestReport,
 }
 
-impl SnapshotBuilder {
-    /// A fresh, empty builder.
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl SnapshotBuilder {
+        /// A fresh, empty builder.
+        pub fn new() -> Self::default();
     }
+}
 
+impl SnapshotBuilder {
     /// Append a freshly built non-blank term row and index it. The insertion
     /// path owns its strings; that is the dictionary, not scratch.
     fn push_term_row(&mut self, row: TermRow) -> usize {

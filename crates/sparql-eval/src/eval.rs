@@ -1562,7 +1562,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         if !agg
             .order_by()
             .iter()
-            .all(|order| self.may_fork_row_loop(crate::modifier::order_sort_key(order)))
+            .all(|order| self.may_fork_row_loop(order.expression()))
         {
             return false;
         }
@@ -2747,8 +2747,9 @@ fn eval_node<D: DatasetView + Sync>(
         GraphPattern::Project { inner, variables } => {
             crate::modifier::eval_project(pattern, inner, variables, ctx)
         }
-        GraphPattern::Distinct { inner } => crate::modifier::eval_distinct(pattern, inner, ctx),
-        GraphPattern::Reduced { inner } => crate::modifier::eval_reduced(pattern, inner, ctx),
+        GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
+            crate::modifier::eval_dedup(pattern, inner, ctx)
+        }
         GraphPattern::Slice {
             inner,
             start,

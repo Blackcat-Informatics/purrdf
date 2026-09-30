@@ -2944,11 +2944,6 @@ mod term_walk_tests {
         tracker
     }
 
-    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
-    }
-
     /// How many triple terms `value`'s object chain nests, and its innermost object.
     fn unwind(value: &TermValue) -> (usize, &TermValue) {
         let mut levels = 0;
@@ -2996,7 +2991,7 @@ mod term_walk_tests {
     /// bottom.
     #[test]
     fn a_hundred_thousand_level_position_is_classified_on_a_128_kib_stack() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let mut pattern = TermPattern::Variable(Variable::new("v"));
             let mut value = TermValue::Blank {
                 label: "d".to_owned(),
@@ -3030,7 +3025,8 @@ mod term_walk_tests {
             let (levels, innermost) = unwind(&tracked);
             assert_eq!(levels, DEPTH);
             assert!(matches!(innermost, TermValue::Blank { label, .. } if label == "d"));
-        });
+        })
+        .expect("spawn");
     }
 }
 

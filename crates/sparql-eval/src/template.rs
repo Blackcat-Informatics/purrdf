@@ -682,11 +682,6 @@ mod term_walk_tests {
         (schema, row)
     }
 
-    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
-    }
-
     /// A quoted-triple chain `depth` levels deep, its innermost object the blank
     /// `_:deep`.
     fn deep_pattern(depth: usize) -> TermPattern {
@@ -761,7 +756,7 @@ mod term_walk_tests {
 
     #[test]
     fn a_hundred_thousand_level_template_term_is_instantiated_on_a_128_kib_stack() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let pattern = deep_pattern(DEPTH);
 
             let mut blanks = DetHashMap::default();
@@ -789,6 +784,7 @@ mod term_walk_tests {
             drop(driven);
             drop(ordinal);
             drop(pattern);
-        });
+        })
+        .expect("spawn");
     }
 }

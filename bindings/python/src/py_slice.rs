@@ -39,19 +39,9 @@ use purrdf_slice::catalog::{ManifestView, SliceCatalog, SliceRecord, SliceTier};
 use purrdf_slice::fix_deps::{ManifestPatch, compute_fix_deps};
 use purrdf_slice::ownership::{
     DependencyEdge, OwnershipAnalyzer, OwnershipDiagnostic, OwnershipReport, OwnershipStatus,
-    ReconciliationStatus, SliceIri,
+    SliceIri,
 };
 use purrdf_slice::vocab::SliceVocab;
-
-/// The stable lowercase token a [`ReconciliationStatus`] is exposed as.
-fn reconciliation_token(status: ReconciliationStatus) -> &'static str {
-    match status {
-        ReconciliationStatus::Matched => "matched",
-        ReconciliationStatus::Undeclared => "undeclared",
-        ReconciliationStatus::Stale => "stale",
-        ReconciliationStatus::Forbidden => "forbidden",
-    }
-}
 
 /// The stable string name an [`ArtifactRole`] is exposed as (matches the Rust
 /// variant name so Python can compare against `"Manifest"`, `"Module"`, …).
@@ -370,7 +360,7 @@ impl PyDependencyEdge {
         Self {
             from_slice: edge.from_slice.clone(),
             to_slice: edge.to_slice.clone(),
-            reconciliation: reconciliation_token(edge.reconciliation),
+            reconciliation: edge.reconciliation.token(),
             is_semantic: edge.edge_kind.is_semantic(),
         }
     }

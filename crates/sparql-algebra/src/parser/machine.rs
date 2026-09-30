@@ -2351,7 +2351,7 @@ impl Parser<'_, '_> {
                     .ctl
                     .push(Ctl::Modifiers(ModStage::GroupBracketed));
                 return Ok(self.activate(Reach::Full, Sink::Refuse(AGGREGATE_OUTSIDE)));
-            } else if self.at_bare_group_condition() {
+            } else if self.at_bare_constraint() {
                 // A bare `BuiltInCall` / `FunctionCall` GroupCondition, e.g. `GROUP BY
                 // STR(?x)` — lowered to a synthetic-var Extend.
                 self.machine.ctl.push(Ctl::Modifiers(ModStage::GroupBare));

@@ -611,12 +611,14 @@ pub struct SkolemRegistry {
     witnesses: BTreeMap<String, WitnessAddress>,
 }
 
-impl SkolemRegistry {
-    /// A fresh, empty registry.
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl SkolemRegistry {
+        /// A fresh, empty registry.
+        pub fn new() -> Self::default();
     }
+}
 
+impl SkolemRegistry {
     /// Mint — or recover — the witness for `address`, returning its blank-node surface.
     fn mint(&mut self, address: WitnessAddress) -> String {
         let surface = witness_surface(&address);

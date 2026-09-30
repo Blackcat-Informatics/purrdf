@@ -445,7 +445,7 @@ fn needs(root: Node<'_>) -> bool {
                         expression
                             .iter()
                             .rev()
-                            .map(|key| Node::Expression(crate::modifier::order_sort_key(key))),
+                            .map(|key| Node::Expression(key.expression())),
                     );
                     pending.push(Node::Pattern(inner));
                 }
@@ -458,7 +458,7 @@ fn needs(root: Node<'_>) -> bool {
                                 .order_by()
                                 .iter()
                                 .rev()
-                                .map(|key| Node::Expression(crate::modifier::order_sort_key(key))),
+                                .map(|key| Node::Expression(key.expression())),
                         );
                         pending.extend(aggregate.args().iter().rev().map(Node::Expression));
                     }
@@ -645,14 +645,6 @@ fn for_each_operand_mut(expr: &mut Expression, visit: &mut impl FnMut(ChildMut<'
     }
 }
 
-/// What stands in a child position while its subtree is away being rewritten: the
-/// empty basic graph pattern, or an empty `COALESCE`. Neither allocates.
-fn pattern_hole() -> GraphPattern {
-    GraphPattern::Bgp {
-        patterns: Vec::new(),
-    }
-}
-
 fn expression_hole() -> Expression {
     Expression::Coalesce(purrdf_sparql_algebra::Args::new())
 }
@@ -827,9 +819,10 @@ fn rewrite_pattern(pattern: GraphPattern, next_spine: &mut usize) -> GraphPatter
                 }
                 for_each_child_mut(&mut node, &mut |child| {
                     children.push(match child {
-                        ChildMut::Pattern(inner) => {
-                            Step::Pattern(std::mem::replace(inner, pattern_hole()), spine)
-                        }
+                        ChildMut::Pattern(inner) => Step::Pattern(
+                            std::mem::replace(inner, GraphPattern::empty_bgp()),
+                            spine,
+                        ),
                         ChildMut::Expression(expr) => {
                             Step::Expression(std::mem::replace(expr, expression_hole()))
                         }
@@ -848,9 +841,10 @@ fn rewrite_pattern(pattern: GraphPattern, next_spine: &mut usize) -> GraphPatter
             Step::Expression(mut node) => {
                 for_each_operand_mut(&mut node, &mut |child| {
                     children.push(match child {
-                        ChildMut::Pattern(inner) => {
-                            Step::Pattern(std::mem::replace(inner, pattern_hole()), false)
-                        }
+                        ChildMut::Pattern(inner) => Step::Pattern(
+                            std::mem::replace(inner, GraphPattern::empty_bgp()),
+                            false,
+                        ),
                         ChildMut::Expression(expr) => {
                             Step::Expression(std::mem::replace(expr, expression_hole()))
                         }
@@ -1100,7 +1094,7 @@ mod walk_tests {
                 reference_pattern_needs(inner)
                     || expression
                         .iter()
-                        .any(|key| reference_expression_needs(crate::modifier::order_sort_key(key)))
+                        .any(|key| reference_expression_needs(key.expression()))
             }
             GraphPattern::Group {
                 inner, aggregates, ..
@@ -1118,7 +1112,7 @@ mod walk_tests {
             || aggregate
                 .order_by()
                 .iter()
-                .any(|key| reference_expression_needs(crate::modifier::order_sort_key(key)))
+                .any(|key| reference_expression_needs(key.expression()))
     }
 
     fn reference_expression_needs(expr: &Expression) -> bool {

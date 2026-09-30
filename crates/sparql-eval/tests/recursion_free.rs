@@ -524,18 +524,14 @@ fn evaluate(text: &str, service: bool) -> Result<Answer, RdfDiagnostic> {
         .map(answer_of)
 }
 
-/// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
-fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-    purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
-}
-
 /// Evaluate the vector named `name` at `depth` on the 128 KiB thread and assert its
 /// constructed answer.
 fn assert_deep(name: &str, depth: usize) {
     let vector = find(name);
     let text = (vector.text)(depth);
     let service = vector.service;
-    let answered = on_small_stack(move || evaluate(&text, service));
+    let answered =
+        purrdf_stack::on_stack(SMALL_STACK, move || evaluate(&text, service)).expect("spawn");
     match answered {
         Ok(answer) => assert_eq!(
             answer,
@@ -575,7 +571,7 @@ fn every_deep_request_parses_copies_compares_and_drops_on_a_128_kib_thread() {
     for vector in vectors() {
         let name = vector.name;
         let text = (vector.text)(DEPTH);
-        on_small_stack(move || {
+        purrdf_stack::on_stack(SMALL_STACK, move || {
             let parsed = SparqlParser::new()
                 .parse_query(&text)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -583,7 +579,8 @@ fn every_deep_request_parses_copies_compares_and_drops_on_a_128_kib_thread() {
             assert!(copy == parsed, "{name}: the copy equals the original");
             drop(copy);
             drop(parsed);
-        });
+        })
+        .expect("spawn");
     }
 }
 

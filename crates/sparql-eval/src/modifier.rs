@@ -211,32 +211,16 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
     Ok(lift.finish(SolutionSeq { schema: out, rows }))
 }
 
-/// `DISTINCT`: drop duplicate whole-solution rows, preserving first-seen order.
-pub(crate) fn eval_distinct<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    inner: &GraphPattern,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    dedup_lifted(node, inner, ctx)
-}
-
-/// `REDUCED`: permitted to drop duplicates; we apply the same dedup as `DISTINCT`
-/// (a stronger-but-permitted reduction than the spec's minimum).
-pub(crate) fn eval_reduced<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    inner: &GraphPattern,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    dedup_lifted(node, inner, ctx)
-}
-
-/// The shared `DISTINCT`/`REDUCED` body.
+/// `DISTINCT` and `REDUCED`: drop duplicate whole-solution rows, preserving first-seen
+/// order. `REDUCED` is permitted to drop duplicates, and applying the same dedup as
+/// `DISTINCT` is a stronger-but-permitted reduction than the spec's minimum (§18.5), so
+/// the two operators share this one body.
 ///
 /// De-duplication decides each row from the rows already seen, so it depends only on the
 /// prefix and commits **per input row**: a prefix of the input dedups to a prefix of the
 /// output, which is why a truncation below either operator keeps its bound instead of
 /// voiding every `SELECT DISTINCT` in the corpus.
-fn dedup_lifted<D: DatasetView + Sync>(
+pub(crate) fn eval_dedup<D: DatasetView + Sync>(
     node: &GraphPattern,
     inner: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
@@ -351,22 +335,7 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
     Ok(lift.finish(SolutionSeq { schema, rows }))
 }
 
-/// The expression a sort key sorts by, with its `ASC`/`DESC` direction set
-/// aside — the read half of the `(direction, expression)` pair
-/// [`OrderExpression`] is.
-///
-/// Every walk that treats a sort key as an ordinary expression (variable
-/// collection, substitution, prepare-time planning) wants exactly this and
-/// nothing else, and re-spelling the irrefutable
-/// `let (Asc(e) | Desc(e)) = oe;` binding at each of them is how one of them
-/// eventually diverges from the rest.
-pub(crate) const fn order_sort_key(order: &OrderExpression) -> &Expression {
-    match order {
-        OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => expr,
-    }
-}
-
-/// [`order_sort_key`]'s write half: put a rewritten expression back under
+/// [`OrderExpression::expression`]'s write half: put a rewritten expression back under
 /// `order`'s ORIGINAL direction. Pairing the two is what keeps a rewrite from
 /// silently turning a `DESC` key into an `ASC` one.
 pub(crate) fn rebuild_order(order: &OrderExpression, expr: Expression) -> OrderExpression {
@@ -1515,7 +1484,7 @@ fn link_aggregates<'e, D: DatasetView + Sync>(
         .map(|(_, agg)| {
             agg.args()
                 .iter()
-                .chain(agg.order_by().iter().map(order_sort_key))
+                .chain(agg.order_by().iter().map(OrderExpression::expression))
                 .map(|expr| {
                     let program = crate::vm::program_at(ctx, node, expr);
                     crate::vm::Linked::link(program, expr, schema, ctx)
@@ -2155,8 +2124,8 @@ enum NumericFold {
     /// practice — only the narrowing back to `i64` at `finish` can fail
     /// (checked anyway, for honesty, not because it is expected to fire).
     ///
-    /// `datatype` is the joined result tag ([`join_duration_datatype`]:
-    /// `dayTimeDuration` iff every folded value declared it, likewise
+    /// `datatype` is the joined result tag
+    /// ([`purrdf_xsd::temporal::duration_result_datatype`]: `dayTimeDuration` iff every folded value declared it, likewise
     /// `yearMonthDuration`, else the general `xsd:duration`) — a genuine
     /// semilattice join (associative, commutative, idempotent on its own), so
     /// folding it per step, unlike the sign check, stays safe.
@@ -2288,7 +2257,8 @@ impl NumericFold {
                 };
                 *months = new_months;
                 *seconds = new_seconds;
-                *datatype = join_duration_datatype(*datatype, dur.datatype());
+                *datatype =
+                    purrdf_xsd::temporal::duration_result_datatype(*datatype, dur.datatype());
                 *count += 1;
                 true
             }
@@ -2526,7 +2496,9 @@ impl NumericFold {
                     .map(|seconds| Self::Dur {
                         months,
                         seconds,
-                        datatype: join_duration_datatype(datatype1, datatype2),
+                        datatype: purrdf_xsd::temporal::duration_result_datatype(
+                            datatype1, datatype2,
+                        ),
                         count: count1 + count2,
                     })
             }),
@@ -2536,28 +2508,6 @@ impl NumericFold {
             (Self::Dur { .. }, Self::Int { .. } | Self::Ok { .. })
             | (Self::Int { .. } | Self::Ok { .. }, Self::Dur { .. }) => None,
         }
-    }
-}
-
-/// The joined result tag for two duration operands' declared datatypes, used
-/// per fold step by [`NumericFold::Dur`]. Mirrors `purrdf_xsd::temporal`'s own
-/// (private) `duration_result_datatype`: `dayTimeDuration` iff both declare
-/// it, `yearMonthDuration` iff both declare it, else the general
-/// `xsd:duration`. A plain match over the pair, never a derived `Ord` + `max`
-/// — `purrdf_xsd::temporal`'s own `Shape` doc explains why a duration tag has
-/// no total order for `max` to invent one from. This join is a genuine
-/// semilattice operation (associative, commutative, idempotent), unlike the
-/// sign-coherence check [`NumericFold::Dur`] defers to `finish` — see that
-/// variant's own doc.
-fn join_duration_datatype(a: XsdDatatype, b: XsdDatatype) -> XsdDatatype {
-    match (a, b) {
-        (XsdDatatype::YearMonthDuration, XsdDatatype::YearMonthDuration) => {
-            XsdDatatype::YearMonthDuration
-        }
-        (XsdDatatype::DayTimeDuration, XsdDatatype::DayTimeDuration) => {
-            XsdDatatype::DayTimeDuration
-        }
-        _ => XsdDatatype::Duration,
     }
 }
 
@@ -6761,11 +6711,6 @@ mod sort_key_walk_tests {
         }
     }
 
-    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
-    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
-    }
-
     /// A triple-term chain `depth` levels deep whose innermost object is the string
     /// `innermost`.
     fn chain(depth: usize, innermost: &str) -> TermValue {
@@ -6805,7 +6750,7 @@ mod sort_key_walk_tests {
 
     #[test]
     fn a_hundred_thousand_level_key_is_projected_compared_and_released_on_a_128_kib_stack() {
-        on_small_stack(|| {
+        purrdf_stack::on_stack(SMALL_STACK, || {
             let a = chain(DEPTH, "a");
             let b = chain(DEPTH, "b");
             let again = chain(DEPTH, "a");
@@ -6823,7 +6768,8 @@ mod sort_key_walk_tests {
             // other holds a triple term, and a literal ranks below a triple term.
             assert_eq!(total_order(&key_shorter, &key_a), Ordering::Less);
             drop((key_a, key_b, key_again, key_shorter));
-        });
+        })
+        .expect("spawn");
     }
 }
 

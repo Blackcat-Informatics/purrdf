@@ -169,13 +169,15 @@ impl Default for DatasetSink {
     }
 }
 
-impl DatasetSink {
-    /// A fresh sink with the default scope open. Delegates to [`Default`] so the two
-    /// can never diverge.
-    pub fn new() -> Self {
-        Self::default()
+purrdf_lex::constructors! {
+    impl DatasetSink {
+        /// A fresh sink with the default scope open. Delegates to [`Default`] so the two
+        /// can never diverge.
+        pub fn new() -> Self::default();
     }
+}
 
+impl DatasetSink {
     /// The frozen dataset produced by a successful [`finish`](RdfEventSink::finish).
     /// `None` before `finish` or after a cancelled drive.
     pub fn into_dataset(self) -> Option<Arc<RdfDataset>> {
