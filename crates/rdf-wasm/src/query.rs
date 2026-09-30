@@ -1449,7 +1449,7 @@ impl QueryEngine {
     ///
     /// **A tripped governor is an outcome, not a thrown error** — see the module header.
     ///
-    /// `aggregate_namespace` registers purrdf's first-party statistical aggregate set
+    /// `aggregate_namespace` registers PurRDF's first-party statistical aggregate set
     /// (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
     /// `FIRST`, `LAST`, `TOPK`) under that IRI namespace, so the query text can call
     /// `AGG(<{NAMESPACE}NAME>, args…)` (see `purrdf_validate::query::statistical_aggregates`). `None` (the default)
@@ -1508,7 +1508,7 @@ impl QueryEngine {
     /// closure report and query outcome together.
     ///
     /// `aggregate_namespace` behaves exactly as on [`Self::query_governed`]: it registers
-    /// purrdf's first-party statistical aggregate set under that IRI namespace for the
+    /// PurRDF's first-party statistical aggregate set under that IRI namespace for the
     /// closure query's PARSE and its evaluation, so `AGG(<{NAMESPACE}NAME>, args…)` reaches
     /// the entailment-aware lane exactly as it reaches the ordinary one. `undefined` (the
     /// default) leaves every one of the ten names an ordinary unregistered custom-aggregate

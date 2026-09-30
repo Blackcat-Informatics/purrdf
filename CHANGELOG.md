@@ -383,7 +383,7 @@ under Changed and Fixed where a longer account helps.
   wrapper per float control register, `set_mxcsr` clearing the reserved bits
   that would fault), and `purrdf_testkit::rng::permute` (an unbiased
   Fisher-Yates over `Xoshiro256::up_to`). The four lex, the xsd and the geo,
-  text, retrieval and purrdf bench SplitMix wrappers, the hash and deflate
+  text, retrieval and `purrdf` bench SplitMix wrappers, the hash and deflate
   xorshift benches and the sparql-eval counting allocator now draw from
   `purrdf_testkit::rng` and `purrdf_alloc_probe`; bench inputs are byte for byte
   the ones they were.

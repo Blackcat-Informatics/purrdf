@@ -94,6 +94,10 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "open",
     ): "The SPARQL-JSON READER's stacks of containers and triple terms still open while a document is parsed or a binding decoded; popping one closes it. The reader emits nothing.",
     (
+        "crates/sparql-results/src/json_read.rs",
+        "scratch.bound",
+    ): "The SPARQL-JSON READER's per-row scratch of which variable columns already have a cell, cleared and resized at the start of each `results.bindings` entry so the buffer is reused across rows. It is decoder bookkeeping over input; the reader emits nothing.",
+    (
         "crates/sparql-results/src/xml.rs",
         "held",
     ): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",

@@ -4894,6 +4894,12 @@ def rl_matrix_agreement_claim(
 # quantity.
 _CHANGE_PATH_PINS = ("FOCUS_NODES", "SEAM_FOCUS_NODES", "BIND_ALLOC_CONST", "REPETITIONS")
 
+# `REPETITIONS` is shared by every allocation suite, so it lives in the measured-region
+# support module they all include rather than in `change_path_alloc.rs`; it is a
+# `pub const` there. Every other pin is a private `const` in the change-path test.
+_MEASURED_SUPPORT = _REPO / "crates" / "shapes" / "tests" / "support" / "measured.rs"
+_CHANGE_PATH_PIN_SOURCES: dict[str, Path] = {"REPETITIONS": _MEASURED_SUPPORT}
+
 
 def load_change_path_pins() -> dict[str, int]:
     """The change-path suite's pinned sizes and allocation constants, plus its scope.
@@ -4910,10 +4916,14 @@ def load_change_path_pins() -> dict[str, int]:
     rel = _CHANGE_PATH_TEST.relative_to(_REPO)
     pins: dict[str, int] = {}
     for name in _CHANGE_PATH_PINS:
-        found = re.search(rf"^const {name}: \w+ = ([\d_]+);", text, re.MULTILINE)
+        source = _CHANGE_PATH_PIN_SOURCES.get(name, _CHANGE_PATH_TEST)
+        found = re.search(
+            rf"^(?:pub )?const {name}: \w+ = ([\d_]+);", _read(source), re.MULTILINE
+        )
         if not found:
             raise SystemExit(
-                f"check-doc-claims: no `const {name}` in {rel}; the allocation claims "
+                f"check-doc-claims: no `const {name}` in {source.relative_to(_REPO)}; "
+                f"the allocation claims "
                 f"derived from it cannot be checked, so do not leave them unchecked"
             )
         pins[name] = int(found.group(1).replace("_", ""))
