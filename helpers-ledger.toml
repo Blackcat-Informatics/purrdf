@@ -1303,6 +1303,23 @@ constants = []
 fingerprints = []
 names = ['^(guess_media_type|infer_media_type|media_type_for|media_type_for_ext|mime_for_extension)$']
 
+[[job]]
+id = "datalog-shortest-path"
+summary = "The breadth-first shortest path a Datalog stratification diagnostic reports as its cycle, over rule indices and predicate symbols alike"
+home = "purrdf_datalog::paths::shortest_path"
+entry_points = []
+spec = "breadth-first search over lexically ordered adjacency: the reported cycle is a pure function of the program"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(shortest_rule_path|shortest_dependency_path)$']
+
 [[distinct]]
 members = [
     "purrdf_core::distance::build_identity::compiler_text",

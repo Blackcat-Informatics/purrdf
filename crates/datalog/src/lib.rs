@@ -293,6 +293,7 @@ pub mod clause;
 pub mod cursor;
 pub mod guard;
 pub mod id;
+pub(crate) mod paths;
 pub mod plan;
 pub mod proof;
 pub mod resolve_fol;
