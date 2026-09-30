@@ -555,6 +555,7 @@ name = "purrdf-ed25519"
 version = "2.0.2"
 dependencies = [
  "purrdf-hash",
+ "purrdf-lex",
  "purrdf-testkit",
  "sha2",
 ]

@@ -34,7 +34,7 @@ packages = [
   "purrdf-sparql-eval", "purrdf-sparql-results", "purrdf-datalog", "purrdf-entail", "purrdf-shapes",
   "purrdf-shex", "purrdf-markdown", "purrdf-hnsw", "purrdf-text", "purrdf-retrieval",
   "purrdf-columnar", "purrdf-geo", "purrdf-gts", "purrdf-slice", "purrdf-deflate",
-  "purrdf-hash", "purrdf-jsonschema", "purrdf-lex",
+  "purrdf-hash", "purrdf-jsonschema", "purrdf-lex", "purrdf-ed25519",
 ]
 # purrdf-wasm is also a cdylib, and linking one needs a linker for the target, which the
 # cross configurations do not have and the asm does not need: it is built as an rlib.
@@ -6790,6 +6790,30 @@ summary = "`instance::project_graph`, the JSON-LD instance projection: the subje
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_shapes"
   symbol = "<purrdf_shapes::instance::ListIndex>::build"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "ed25519.sign"
+summary = "`SigningKey::sign`, Ed25519 signing: the fixed-base multiplication of the nonce over radix-2^51 field arithmetic and the Montgomery scalar multiply-add"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_ed25519"
+  symbol = "<purrdf_ed25519::keys::SigningKey>::sign"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "ed25519.verify"
+summary = "`VerifyingKey::verify_strict`, Ed25519 verification: the variable-time double-scalar multiplication over the same field arithmetic"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_ed25519"
+  symbol = "<purrdf_ed25519::keys::VerifyingKey>::verify_strict"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true

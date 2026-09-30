@@ -351,6 +351,20 @@ under Changed and Fixed where a longer account helps.
   vector and frozen vectors for signing, verification edge cases, key
   decoding and torsion and mixed-order signatures
   (`crates/ed25519/tests/vectors/`) are replayed.
+- **ed25519:** the crate is now graded against Project Wycheproof's Ed25519
+  vectors, vendored byte-frozen in `vectors/wycheproof/` (pinned upstream
+  commit and SHA-256 in its `PROVENANCE.md`, re-fetched only by
+  `scripts/vendor-wycheproof-ed25519.py`, guarded by
+  `scripts/check-corpus-frozen.py`): `tests/wycheproof.rs` runs every group and
+  case (151 cases, 88 valid accepted and 63 invalid refused). Statistical
+  constant-time tests in the ordinary test run (dudect: fixed secret against
+  random secrets, interleaved by a random coin, percentile-cropped Welch's
+  t-test, threshold |t| < 10) cover signing, key expansion, the fixed-base
+  multiplication and the scalar multiply-add, with a planted-leak control
+  proving the harness can see one. A `purrdf_testkit::bench` target
+  (`benches/ed25519.rs`) times sign, verify_strict, key expansion, key
+  decoding and a GTS-shaped 64-signature batch, and the SIMD audit carries
+  `ed25519.sign` and `ed25519.verify` site rows.
 - **lex:** `purrdf_lex::json`, the workspace's one RFC 8259 JSON home: the pull
   `Reader` (events with byte offsets, `next_key`/`next_item`, `skip_value`,
   `read_value`), `read`/`read_with`/`read_slice`, `occurrences`, a `Value`

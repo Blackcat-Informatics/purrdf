@@ -39,3 +39,9 @@ sha2 = { workspace = true }
 # The SplitMix64 stream the seeded tests draw from, and the frozen-vector
 # reader the reference vectors replay through.
 purrdf-testkit = { workspace = true }
+# The one JSON reader, which reads the vendored Wycheproof vectors.
+purrdf-lex = { workspace = true }
+
+[[bench]]
+name = "ed25519"
+harness = false
