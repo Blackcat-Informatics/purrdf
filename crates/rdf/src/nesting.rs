@@ -29,8 +29,9 @@
 //!   depth counter of their own: the tree they descend is bounded by the call that built
 //!   it.
 //!
-//! JSON-LD needs neither: `serde_json` enforces its own 128-deep recursion limit and returns
-//! it as an error. TriX, HexTuples and the OKF binary reader do not nest.
+//! JSON-LD needs neither: the workspace's one JSON reader (`purrdf_lex::json`) is handed
+//! the same 128 as its depth limit and returns an excess as an error. TriX, HexTuples and
+//! the OKF binary reader do not nest.
 
 use purrdf_lex::xml::{Document, Dtd, Options, XmlError, XmlErrorKind};
 
@@ -60,8 +61,8 @@ use crate::RdfDiagnostic;
 /// these levels per syntactic one, so it stops at 64 real levels — 7.4× below its own cliff.
 ///
 /// 128 is also the envelope this crate's structured lanes already publish: a JSON-LD
-/// document is refused past `serde_json`'s 128-deep recursion limit and a JSON-LD context
-/// document past `MAX_JSON_LD_DOCUMENT_DEPTH`, both 128. One number for the whole surface.
+/// document is refused past `MAX_JSON_LD_DOCUMENT_DEPTH` open containers and every strict
+/// JSON read is capped at the same 128. One number for the whole surface.
 pub(crate) const MAX_PARSE_NESTING_DEPTH: usize = 128;
 
 /// Why [`parse_xml`] refused a document.

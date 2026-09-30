@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use serde_json::Value;
+use purrdf_lex::json::{self, Object, Value};
 
 use super::{
     CompiledJsonLdContext, JSON_LD_SERIALIZE_OPTIONS_VERSION, JsonLdContextLimits,
@@ -148,73 +148,78 @@ impl JsonLdSerializeOptions {
 
     /// JSON Schema for the shared version-1 options document.
     pub fn json_schema() -> Value {
-        serde_json::json!({
+        let mut schema = json::read(&format!(
+            r#"{{
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "additionalProperties": false,
-            "properties": {
-                "context": {},
-                "document_iri": {"type": "string"},
-                "mode": {"enum": ["expanded", "context", "derived"]},
-                "prefixes": {
-                    "additionalProperties": {"type": "string"},
+            "properties": {{
+                "context": {{}},
+                "document_iri": {{"type": "string"}},
+                "mode": {{"enum": ["expanded", "context", "derived"]}},
+                "prefixes": {{
+                    "additionalProperties": {{"type": "string"}},
                     "type": "object"
-                },
-                "registry": {
-                    "additionalProperties": {
-                        "properties": {"@context": {}},
+                }},
+                "registry": {{
+                    "additionalProperties": {{
+                        "properties": {{"@context": {{}}}},
                         "required": ["@context"],
                         "type": "object"
-                    },
+                    }},
                     "type": "object"
-                },
-                "version": {"const": JSON_LD_SERIALIZE_OPTIONS_VERSION},
-                "yaml_schema_url": {"type": "string"}
-            },
+                }},
+                "version": {{"const": {JSON_LD_SERIALIZE_OPTIONS_VERSION}}},
+                "yaml_schema_url": {{"type": "string"}}
+            }},
             "allOf": [
-                {
-                    "if": {
-                        "properties": {"mode": {"enum": ["expanded", "derived"]}},
+                {{
+                    "if": {{
+                        "properties": {{"mode": {{"enum": ["expanded", "derived"]}}}},
                         "required": ["mode"]
-                    },
-                    "then": {
-                        "not": {
+                    }},
+                    "then": {{
+                        "not": {{
                             "anyOf": [
-                                {"required": ["context"]},
-                                {"required": ["document_iri"]},
-                                {"required": ["prefixes"]},
-                                {"required": ["registry"]}
+                                {{"required": ["context"]}},
+                                {{"required": ["document_iri"]}},
+                                {{"required": ["prefixes"]}},
+                                {{"required": ["registry"]}}
                             ]
-                        }
-                    }
-                },
-                {
-                    "if": {
-                        "properties": {"mode": {"const": "context"}},
+                        }}
+                    }}
+                }},
+                {{
+                    "if": {{
+                        "properties": {{"mode": {{"const": "context"}}}},
                         "required": ["mode"]
-                    },
-                    "then": {
+                    }},
+                    "then": {{
                         "oneOf": [
-                            {
+                            {{
                                 "required": ["context"],
-                                "not": {"required": ["prefixes"]}
-                            },
-                            {
+                                "not": {{"required": ["prefixes"]}}
+                            }},
+                            {{
                                 "required": ["prefixes"],
-                                "not": {
+                                "not": {{
                                     "anyOf": [
-                                        {"required": ["context"]},
-                                        {"required": ["document_iri"]},
-                                        {"required": ["registry"]}
+                                        {{"required": ["context"]}},
+                                        {{"required": ["document_iri"]}},
+                                        {{"required": ["registry"]}}
                                     ]
-                                }
-                            }
+                                }}
+                            }}
                         ]
-                    }
-                }
+                    }}
+                }}
             ],
             "required": ["version", "mode"],
             "type": "object"
-        })
+        }}"#
+        ))
+        .expect("the options schema is JSON");
+        schema.sort_keys();
+        schema
     }
 }
 
@@ -248,7 +253,7 @@ fn decode_options(
 
     let context_fields: BTreeSet<&str> = ["context", "document_iri", "prefixes", "registry"]
         .into_iter()
-        .filter(|key| object.contains_key(*key))
+        .filter(|key| object.contains_key(key))
         .collect();
     let mut options = match mode {
         "expanded" => {
@@ -286,7 +291,7 @@ fn reject_fields(mode: &str, fields: &BTreeSet<&str>) -> Result<(), RdfDiagnosti
 }
 
 fn decode_context_mode(
-    object: &serde_json::Map<String, Value>,
+    object: &Object,
     limits: JsonLdContextLimits,
 ) -> Result<JsonLdSerializeOptions, RdfDiagnostic> {
     let has_context = object.contains_key("context");
@@ -359,8 +364,7 @@ fn decode_registry(
                 "registry document `{iri}` must be an object containing @context"
             )));
         }
-        let bytes = serde_json::to_vec(&canonicalize(document))
-            .map_err(|source| context_error(format!("encode registry document: {source}")))?;
+        let bytes = json::write_compact(&canonicalize(document)?).into_bytes();
         documents.insert(iri.clone(), bytes);
     }
     JsonLdContextRegistry::new_with_limits(documents, limits)

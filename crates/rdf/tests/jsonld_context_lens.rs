@@ -14,6 +14,7 @@ mod common;
 
 use std::fmt::Write as _;
 
+use purrdf_lex::json::{self as lex_json, Value};
 use purrdf_rdf::native_codecs::jsonld::{
     CompiledJsonLdContext, JsonLdContextRegistry, JsonLdSerializeOptions, derive_jsonld_context,
     parse_jsonld, parse_jsonld_with_context, serialize_dataset_to_jsonld_with_options,
@@ -22,7 +23,22 @@ use purrdf_rdf::{
     RdfDatasetBuilder, RdfLiteral, canonical_flat_nquads, datasets_isomorphic, parse_dataset,
 };
 use purrdf_testkit::prop::prelude::*;
-use serde_json::{Value, json};
+
+/// The JSON value literal JSON text spells, members in name order.
+macro_rules! json {
+    ($($json:tt)+) => {{
+        let mut value = lex_json::read(stringify!($($json)+)).expect("literal JSON");
+        value.sort_keys();
+        value
+    }};
+}
+
+/// The document a serializer emitted, members in name order.
+fn read_output(text: &str) -> Value {
+    let mut value = lex_json::read(text).expect("JSON output");
+    value.sort_keys();
+    value
+}
 
 fn parse_nquads(source: &str) -> std::sync::Arc<purrdf_rdf::RdfDataset> {
     parse_dataset(source.as_bytes(), "application/n-quads", None).expect("N-Quads fixture")
@@ -63,7 +79,7 @@ fn aliases_base_vocab_and_coercions_compact_and_expand_losslessly() {
         "name": {"@id": "schema:name", "@language": "en"}
     });
     let (dataset, compacted) = serialize_with_context(source, &context);
-    let value: Value = serde_json::from_str(&compacted).expect("JSON output");
+    let value = read_output(&compacted);
     let node = &value["graph"][0];
     assert_eq!(node["id"], "ex:alice");
     assert_eq!(node["type"], "ex:Person");
@@ -129,7 +145,7 @@ fn heterogeneous_values_partition_across_compatible_aliases() {
         "text": {"@id": "ex:p", "@language": "en"}
     });
     let (dataset, compacted) = serialize_with_context(source, &context);
-    let value: Value = serde_json::from_str(&compacted).expect("JSON output");
+    let value = read_output(&compacted);
     let node = &value["@graph"][0];
     assert_eq!(node["ref"], "ex:o");
     assert_eq!(node["text"], "hello");
@@ -157,7 +173,7 @@ fn safe_rdf_lists_use_list_containers_and_reconstruct_isomorphically() {
         "items": {"@container": "@list", "@id": "ex:items"}
     });
     let (dataset, compacted) = serialize_with_context(source, &context);
-    let value: Value = serde_json::from_str(&compacted).expect("JSON output");
+    let value = read_output(&compacted);
     assert_eq!(value["@graph"][0]["items"][0], "one");
     assert_eq!(value["@graph"][0]["items"][1]["@id"], "ex:two");
     assert!(!compacted.contains("rdf-syntax-ns#first"));
@@ -260,7 +276,7 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
         "\"{\\\"a\\\":1}\"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n",
     );
     let (dataset, compacted) = serialize_with_context(canonical, &context);
-    let value: Value = serde_json::from_str(&compacted).expect("JSON output");
+    let value = read_output(&compacted);
     assert_eq!(value["@graph"][0]["json"], json!({"a": 1}));
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand canonical rdf:JSON");
     assert!(
@@ -275,7 +291,7 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
         "\"{ \\\"a\\\": 1 }\"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n",
     );
     let (dataset, compacted) = serialize_with_context(noncanonical, &context);
-    let value: Value = serde_json::from_str(&compacted).expect("JSON output");
+    let value = read_output(&compacted);
     assert_eq!(value["@graph"][0]["ex:json"]["@value"], "{ \"a\": 1 }");
     assert_eq!(value["@graph"][0]["ex:json"]["@type"], "rdf:JSON");
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand lexical rdf:JSON");
@@ -301,7 +317,7 @@ fn language_and_id_maps_compact_and_expand_losslessly() {
         "member": {"@id": "ex:member", "@container": "@id"}
     });
     let (dataset, compacted) = serialize_with_context(source, &context);
-    let value: Value = serde_json::from_str(&compacted).expect("JSON output");
+    let value = read_output(&compacted);
     assert_eq!(value["@graph"][0]["label"]["en"], "hello");
     assert_eq!(value["@graph"][0]["label"]["fr"], "bonjour");
     assert_eq!(value["@graph"][0]["member"]["ex:alice"], json!({}));
@@ -448,7 +464,7 @@ fn named_graph_references_compact_into_graph_id_maps() {
         "name": "ex:name"
     });
     let (dataset, compacted) = serialize_with_context(source, &context);
-    let value: Value = serde_json::from_str(&compacted).expect("JSON output");
+    let value = read_output(&compacted);
     let catalog = value["@graph"]
         .as_array()
         .expect("top-level graph")
@@ -475,7 +491,7 @@ fn a_standalone_named_graph_is_not_embedded_again_by_a_later_graph() {
         "name": "ex:name"
     });
     let (dataset, compacted) = serialize_with_context(source, &context);
-    let value: Value = serde_json::from_str(&compacted).expect("JSON output");
+    let value = read_output(&compacted);
     let top_level = value["@graph"].as_array().expect("top-level graph");
     assert_eq!(top_level.len(), 2);
     assert_eq!(
@@ -602,7 +618,7 @@ fn reverse_aliases_and_graph_index_maps_compact_losslessly() {
         "knownBy": {"@reverse": "ex:knows", "@type": "@id"}
     });
     let (dataset, compacted) = serialize_with_context(reverse_source, &reverse_context);
-    let value: Value = serde_json::from_str(&compacted).expect("JSON output");
+    let value = read_output(&compacted);
     let alice = value["@graph"]
         .as_array()
         .expect("top-level graph")
@@ -628,7 +644,7 @@ fn reverse_aliases_and_graph_index_maps_compact_losslessly() {
         "name": "ex:name"
     });
     let (dataset, compacted) = serialize_with_context(indexed_source, &indexed_context);
-    let value: Value = serde_json::from_str(&compacted).expect("JSON output");
+    let value = read_output(&compacted);
     assert_eq!(value["@graph"][0]["indexedGraphs"]["row-1"]["name"], "Item");
     assert_eq!(value["@graph"].as_array().expect("graph").len(), 1);
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand graph index map");
@@ -652,7 +668,7 @@ fn graph_index_containers_apply_inside_named_graphs() {
         "name": "ex:name"
     });
     let (dataset, compacted) = serialize_with_context(source, &context);
-    let value: Value = serde_json::from_str(&compacted).expect("JSON output");
+    let value = read_output(&compacted);
     let outer = value["@graph"]
         .as_array()
         .expect("top-level graph")
@@ -685,7 +701,7 @@ fn list_coercion_and_shared_list_identity_are_preserved() {
         "items": {"@id": "ex:items", "@container": "@list", "@language": "en"}
     });
     let (dataset, compacted) = serialize_with_context(language_list, &context);
-    let value: Value = serde_json::from_str(&compacted).expect("JSON output");
+    let value = read_output(&compacted);
     assert_eq!(value["@graph"][0]["items"], json!(["one", "two"]));
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand coerced list");
     assert!(datasets_isomorphic(&dataset, &reparsed));

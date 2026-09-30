@@ -5,15 +5,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Serialize};
-
 use super::*;
 
 /// Version of the renderer-neutral semantic scene contract.
 pub const VIZ_SCENE_SCHEMA_VERSION: &str = "purrdf-viz-scene-1";
 
 /// Renderer-neutral semantic scene.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizScene {
     /// Scene schema version.
     pub schema_version: String,
@@ -32,8 +30,7 @@ pub struct VizScene {
 }
 
 /// Typed semantic identity bound to scene elements.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "id", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VizSemanticRef {
     /// RDF term.
     Term(VizTermId),
@@ -52,7 +49,7 @@ pub enum VizSemanticRef {
 }
 
 /// Renderer-neutral node.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizSceneNode {
     /// Stable scene id.
     pub id: String,
@@ -71,8 +68,7 @@ pub struct VizSceneNode {
 }
 
 /// Node grammar independent of renderer styling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VizSceneNodeKind {
     /// IRI resource.
     Iri,
@@ -85,7 +81,7 @@ pub enum VizSceneNodeKind {
 }
 
 /// Renderer-neutral edge.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizSceneEdge {
     /// Stable scene id.
     pub id: String,
@@ -108,8 +104,7 @@ pub struct VizSceneEdge {
 }
 
 /// Edge grammar independent of renderer styling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VizSceneEdgeKind {
     /// Asserted predicate edge.
     Assertion,
@@ -130,7 +125,7 @@ pub enum VizSceneEdgeKind {
 }
 
 /// Typed port on a scene node.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizPort {
     /// Stable port id, local to the node.
     pub id: String,
@@ -139,8 +134,7 @@ pub struct VizPort {
 }
 
 /// Port role used by layout and emitters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VizPortKind {
     /// General incoming edge port.
     In,
@@ -159,8 +153,7 @@ pub enum VizPortKind {
 }
 
 /// Endpoint on a node port or on an addressable assertion edge.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum VizEndpoint {
     /// Endpoint on a node port.
     NodePort {
@@ -179,7 +172,7 @@ pub enum VizEndpoint {
 }
 
 /// Addressable structural-statement identity carried by an assertion edge.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizEdgeAnchor {
     /// Stable edge-local anchor id.
     pub id: String,
@@ -194,7 +187,7 @@ pub struct VizEdgeAnchor {
 }
 
 /// Display label with full RDF text and language direction.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizSceneLabel {
     /// Compact display text.
     pub text: String,
@@ -207,7 +200,7 @@ pub struct VizSceneLabel {
 }
 
 /// Semantic badge attached to a node, edge, or edge anchor.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizBadge {
     /// Badge grammar.
     pub kind: VizBadgeKind,
@@ -218,8 +211,7 @@ pub struct VizBadge {
 }
 
 /// Badge grammar independent of renderer styling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VizBadgeKind {
     /// Assertion state.
     Asserted,
@@ -248,7 +240,7 @@ pub enum VizBadgeKind {
 }
 
 /// Accessible text carried independently of concrete SVG elements.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizAccessibility {
     /// Concise accessible name.
     pub title: String,
@@ -257,7 +249,7 @@ pub struct VizAccessibility {
 }
 
 /// Scene group that does not impose geometry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizSceneGroup {
     /// Stable group id.
     pub id: String,
@@ -270,15 +262,14 @@ pub struct VizSceneGroup {
 }
 
 /// Scene group grammar.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VizSceneGroupKind {
     /// Visual grammar legend.
     Legend,
 }
 
 /// One legend entry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizLegendEntry {
     /// Stable legend entry id.
     pub id: String,
@@ -289,7 +280,7 @@ pub struct VizLegendEntry {
 }
 
 /// Renderer-neutral statement table.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizSceneTable {
     /// Ordered columns.
     pub fields: Vec<VizTableField>,
@@ -298,7 +289,7 @@ pub struct VizSceneTable {
 }
 
 /// Renderer-neutral statement table row.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizSceneTableRow {
     /// Stable row id.
     pub id: String,
@@ -309,7 +300,7 @@ pub struct VizSceneTableRow {
 }
 
 /// Renderer-neutral statement table cell.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizSceneTableCell {
     /// Column represented by the cell.
     pub field: VizTableField,

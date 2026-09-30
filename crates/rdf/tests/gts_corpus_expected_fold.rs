@@ -36,7 +36,6 @@ use std::path::PathBuf;
 use purrdf_rdf::gts_dict_vectors::{
     DEFAULT_MODE, expected_fold_json_in_mode, render_expected_json,
 };
-use serde_json::Value as Json;
 
 /// Every vector in the frozen corpus, so an upstream add or remove is loud.
 const VECTOR_COUNT: usize = 39;
@@ -85,7 +84,7 @@ fn every_frozen_vector_matches_its_committed_expected_fold() {
             .unwrap_or_else(|error| panic!("read {stem}.gts: {error}"));
         let expected = std::fs::read_to_string(vectors.join(format!("{stem}.expected.json")))
             .unwrap_or_else(|error| panic!("read {stem}.expected.json: {error}"));
-        let declared: Json = serde_json::from_str(&expected)
+        let declared = purrdf_lex::json::read(&expected)
             .unwrap_or_else(|error| panic!("parse {stem}.expected.json: {error}"));
         let mode = declared["mode"].as_str().unwrap_or(DEFAULT_MODE);
 

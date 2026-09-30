@@ -3,7 +3,7 @@
 
 //! Duplicate-free, bounded JSON decoding shared by JSON-LD contexts and options.
 
-use serde_json::Value;
+use purrdf_lex::json::Value;
 
 use super::super::ByteLimit;
 use crate::RdfDiagnostic;
@@ -27,10 +27,8 @@ pub(super) fn parse_strict_json(
             limits.bytes
         )));
     }
-    crate::json_number::read_json(|| {
-        crate::json_number::parse_strict(bytes, limits.values, limits.depth)
-    })
-    .map_err(|source| error(format!("parse {description}: {source}")))
+    crate::json_number::parse_strict(bytes, limits.values, limits.depth)
+        .map_err(|source| error(format!("parse {description}: {source}")))
 }
 
 fn error(message: impl Into<String>) -> RdfDiagnostic {

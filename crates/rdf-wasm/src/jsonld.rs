@@ -33,9 +33,8 @@ impl CompiledJsonLdContext {
 
     /// Return the recursively canonical context document as JSON.
     #[wasm_bindgen(js_name = canonicalContextJson)]
-    pub fn canonical_context_json(&self) -> Result<String, JsError> {
-        serde_json::to_string(self.inner.canonical_context())
-            .map_err(|error| JsError::new(&error.to_string()))
+    pub fn canonical_context_json(&self) -> String {
+        self.inner.canonical_json()
     }
 }
 

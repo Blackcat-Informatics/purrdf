@@ -50,9 +50,8 @@ impl PyCompiledJsonLdContext {
     }
 
     /// Return the recursively canonicalized context document as JSON.
-    fn canonical_context_json(&self) -> PyResult<String> {
-        serde_json::to_string(self.inner.canonical_context())
-            .map_err(|error| PyValueError::new_err(error.to_string()))
+    fn canonical_context_json(&self) -> String {
+        self.inner.canonical_json()
     }
 }
 

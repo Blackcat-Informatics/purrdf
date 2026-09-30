@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use serde_json::{Map, Value};
+use purrdf_lex::json::{self, Object as Map, Value};
 
 use super::{
     ActiveContext, CompiledJsonLdContext, InverseContext, JsonLdContainer, JsonLdContextLimits,
@@ -129,18 +129,23 @@ pub(super) fn compile(
         override_protected: false,
     };
     compiler.charge_value(context, 0)?;
-    let canonical_context = canonicalize(context);
-    let context_bytes = serde_json::to_vec(&canonical_context)
-        .map_err(|source| context_error(format!("encode canonical JSON-LD context: {source}")))?;
-    if context_bytes.len() > limits.max_context_bytes() {
+    let canonical_context = canonicalize(context)?;
+    let context_bytes = json::write_compact(&canonical_context).len();
+    if context_bytes > limits.max_context_bytes() {
         return Err(context_limit(format!(
             "canonical JSON-LD context is {} bytes; limit is {}",
-            context_bytes.len(),
+            context_bytes,
             limits.max_context_bytes()
         )));
     }
     let mut active = ActiveContext::new(document_iri.clone());
-    compiler.process_context(&mut active, context, document_iri.as_deref(), false, 0)?;
+    compiler.process_context(
+        &mut active,
+        &canonical_context,
+        document_iri.as_deref(),
+        false,
+        0,
+    )?;
     let inverse = build_inverse_context(&active);
     Ok(CompiledJsonLdContext {
         canonical_context,
@@ -183,17 +188,18 @@ pub(super) fn apply_context(
         override_protected,
     };
     compiler.charge_value(context, 0)?;
+    let canonical_context = canonicalize(context)?;
     let mut active = parent.active.clone();
     compiler.process_context(
         &mut active,
-        context,
+        &canonical_context,
         base_url.or(parent.active.base_iri.as_deref()),
         false,
         0,
     )?;
     let inverse = build_inverse_context(&active);
     Ok(CompiledJsonLdContext {
-        canonical_context: canonicalize(context),
+        canonical_context,
         active,
         inverse,
         registry: parent.registry.clone(),
@@ -406,7 +412,7 @@ impl Compiler<'_> {
     fn process_context_object(
         &mut self,
         active: &mut ActiveContext,
-        object: &Map<String, Value>,
+        object: &Map,
         base_url: Option<&str>,
         remote: bool,
         depth: usize,
@@ -425,6 +431,7 @@ impl Compiler<'_> {
                 local.insert(key.clone(), value.clone());
             }
         }
+        local.sort_keys();
         self.validate_context_object_keywords(&local)?;
         if let Some(version) = local.get("@version") {
             let valid = version.as_f64().is_some_and(|number| number == 1.1);
@@ -436,11 +443,7 @@ impl Compiler<'_> {
         self.define_local_terms(active, &local, base_url, depth + 1)
     }
 
-    fn load_import_object(
-        &mut self,
-        iri: &str,
-        depth: usize,
-    ) -> Result<Map<String, Value>, RdfDiagnostic> {
+    fn load_import_object(&mut self, iri: &str, depth: usize) -> Result<Map, RdfDiagnostic> {
         if self.remote_stack.iter().any(|entry| entry == iri) {
             return Err(context_error(format!(
                 "offline @import cycle: {} -> {iri}",
@@ -503,10 +506,7 @@ impl Compiler<'_> {
         Ok(document)
     }
 
-    fn validate_context_object_keywords(
-        &self,
-        object: &Map<String, Value>,
-    ) -> Result<(), RdfDiagnostic> {
+    fn validate_context_object_keywords(&self, object: &Map) -> Result<(), RdfDiagnostic> {
         for key in object.keys().filter(|key| key.starts_with('@')) {
             if is_extension_control(key) {
                 return Err(context_error(format!(
@@ -520,7 +520,7 @@ impl Compiler<'_> {
     fn process_context_settings(
         &self,
         active: &mut ActiveContext,
-        object: &Map<String, Value>,
+        object: &Map,
         remote: bool,
     ) -> Result<(), RdfDiagnostic> {
         if let Some(value) = object.get("@propagate") {
@@ -596,7 +596,7 @@ impl Compiler<'_> {
     fn define_local_terms(
         &mut self,
         active: &mut ActiveContext,
-        object: &Map<String, Value>,
+        object: &Map,
         base_url: Option<&str>,
         depth: usize,
     ) -> Result<(), RdfDiagnostic> {
@@ -662,7 +662,7 @@ impl Compiler<'_> {
     fn define_term(
         &mut self,
         active: &mut ActiveContext,
-        local: &Map<String, Value>,
+        local: &Map,
         term: &str,
         default_protected: bool,
         base_url: Option<&str>,
@@ -750,7 +750,7 @@ impl Compiler<'_> {
     fn compile_term_definition(
         &mut self,
         active: &mut ActiveContext,
-        local: &Map<String, Value>,
+        local: &Map,
         term: &str,
         value: Value,
         default_protected: bool,
@@ -758,15 +758,12 @@ impl Compiler<'_> {
         states: &mut BTreeMap<String, DefinitionState>,
         depth: usize,
     ) -> Result<JsonLdTermDefinition, RdfDiagnostic> {
-        let simple_term = value.is_string();
-        let object: Map<String, Value> = match value {
-            Value::Null => BTreeMap::from([("@id".to_owned(), Value::Null)])
-                .into_iter()
-                .collect(),
-            Value::String(id) => BTreeMap::from([("@id".to_owned(), Value::String(id))])
-                .into_iter()
-                .collect(),
-            Value::Object(object) => object,
+        let mut value = value;
+        let simple_term = value.as_str().is_some();
+        let object: Map = match &mut value {
+            Value::Null => Map::new().with("@id", Value::Null),
+            Value::String(id) => Map::new().with("@id", std::mem::take(id)),
+            Value::Object(object) => std::mem::take(object),
             _ => {
                 return Err(context_error(format!(
                     "term `{term}` definition must be null, a string, or an object"
@@ -1026,7 +1023,7 @@ impl Compiler<'_> {
             })
             .transpose()?;
 
-        let scoped_context = object.get("@context").map(canonicalize);
+        let scoped_context = object.get("@context").map(canonicalize).transpose()?;
         let scoped_context_base = scoped_context
             .as_ref()
             .and_then(|_| base_url.map(str::to_owned));
@@ -1054,7 +1051,7 @@ impl Compiler<'_> {
     fn derive_term_mapping(
         &mut self,
         active: &mut ActiveContext,
-        local: &Map<String, Value>,
+        local: &Map,
         term: &str,
         base_url: Option<&str>,
         default_protected: bool,
@@ -1122,7 +1119,7 @@ impl Compiler<'_> {
     fn expand_local_iri(
         &mut self,
         active: &mut ActiveContext,
-        local: &Map<String, Value>,
+        local: &Map,
         value: &str,
         vocab: bool,
         document_relative: bool,
@@ -1222,7 +1219,7 @@ impl Compiler<'_> {
     fn compile_type_mapping(
         &mut self,
         active: &mut ActiveContext,
-        local: &Map<String, Value>,
+        local: &Map,
         term: &str,
         value: &Value,
         base_url: Option<&str>,
@@ -1280,7 +1277,7 @@ fn empty_definition(protected: bool) -> JsonLdTermDefinition {
 }
 
 fn compile_type_keyword_definition(
-    object: &Map<String, Value>,
+    object: &Map,
     default_protected: bool,
 ) -> Result<JsonLdTermDefinition, RdfDiagnostic> {
     for key in object.keys() {

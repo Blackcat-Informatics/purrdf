@@ -4,7 +4,8 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_yaml::Value as YamlValue;
+use purrdf_lex::json::{self, Number, Object, Value as YamlValue};
+use purrdf_lex::yaml;
 
 use super::reader::{extract_markdown_links, resolve_link_path};
 use super::{OkfBundle, OkfConfig, OkfError, decimal_lexical_from_f64, minted_document_iri};
@@ -520,7 +521,7 @@ impl<'a> Projector<'a> {
             if !document.tags.is_empty() {
                 document.fields.insert(
                     "tags".to_owned(),
-                    YamlValue::Sequence(document.tags.into_iter().map(YamlValue::String).collect()),
+                    YamlValue::Array(document.tags.into_iter().map(YamlValue::String).collect()),
                 );
             }
             if by_path
@@ -764,9 +765,9 @@ impl<'a> Projector<'a> {
         let mut bundle = OkfBundle::new();
         for (path, document) in documents {
             validate_yaml_fields(&document.fields, &path)?;
-            let yaml = serde_yaml::to_string(&document.fields).map_err(|error| {
-                OkfError::new(format!("cannot serialize `{path}` frontmatter: {error}"))
-            })?;
+            let yaml = yaml::write(&YamlValue::Object(
+                document.fields.into_iter().collect::<Object>(),
+            ));
             if yaml.len() > super::MAX_OKF_FRONTMATTER_BYTES {
                 return Err(OkfError::new(format!(
                     "`{path}` YAML frontmatter is {} bytes; limit is {}",
@@ -822,9 +823,9 @@ impl<'a> Projector<'a> {
             XSD_INTEGER => {
                 let parsed = canonical_xsd(lexical, datatype)?;
                 if let Ok(value) = parsed.parse::<i64>() {
-                    serde_yaml::to_value(value).map_err(|error| yaml_value_error(&error))
+                    Ok(YamlValue::from(value))
                 } else if let Ok(value) = parsed.parse::<u64>() {
-                    serde_yaml::to_value(value).map_err(|error| yaml_value_error(&error))
+                    Ok(YamlValue::from(value))
                 } else {
                     Err(OkfError::new(format!(
                         "OKF integer `{parsed}` exceeds YAML's exact 64-bit numeric domain"
@@ -855,34 +856,33 @@ impl<'a> Projector<'a> {
                         "OKF decimal `{parsed}` would lose precision in YAML"
                     )));
                 }
-                serde_yaml::to_value(value).map_err(|error| yaml_value_error(&error))
+                Number::from_f64(value)
+                    .map(YamlValue::Number)
+                    .ok_or_else(|| OkfError::new(format!("OKF decimal `{parsed}` is not finite")))
             }
             datatype if datatype == self.config.json_datatype() => {
-                let json: serde_json::Value = crate::json_number::read_json(|| {
-                    crate::json_number::parse_strict(
-                        lexical.as_bytes(),
-                        super::MAX_OKF_YAML_NODES,
-                        super::MAX_OKF_YAML_DEPTH,
-                    )
-                })
+                let json = crate::json_number::parse_strict(
+                    lexical.as_bytes(),
+                    super::MAX_OKF_YAML_NODES,
+                    super::MAX_OKF_YAML_DEPTH,
+                )
                 .map_err(|error| {
                     OkfError::new(format!("invalid OKF JSON literal `{lexical}`: {error}"))
                 })?;
-                let canonical = serde_json::to_string(&json).map_err(|error| {
-                    OkfError::new(format!("cannot canonicalize OKF JSON: {error}"))
-                })?;
+                let canonical = json::write_compact(&json);
                 if canonical != lexical.as_str() {
                     return Err(OkfError::new(format!(
                         "OKF JSON literal must be canonical; expected `{canonical}`"
                     )));
                 }
-                let yaml = json_to_yaml(&json)?;
-                if super::reader::json_from_yaml(yaml.clone())? != json {
+                // The frontmatter holds the JSON value itself; the reader normalizes
+                // its numbers, so a literal it would respell cannot be written.
+                if super::reader::okf_json(&json)? != json {
                     return Err(OkfError::new(
                         "OKF JSON literal would lose precision or lexical identity in YAML",
                     ));
                 }
-                Ok(yaml)
+                Ok(json)
             }
             other => Err(OkfError::new(format!(
                 "OKF extension literal datatype `{other}` is not representable"
@@ -988,46 +988,6 @@ fn parse_known_xsd(lexical: &str, datatype: &str) -> Result<purrdf_xsd::XsdValue
         .ok_or_else(|| OkfError::new(format!("unrecognized internal XSD datatype `{datatype}`")))
 }
 
-/// Serialize public scalar values explicitly: arbitrary-precision JSON numbers
-/// have a serde representation that is not a YAML number.
-fn json_to_yaml(value: &serde_json::Value) -> Result<YamlValue, OkfError> {
-    match value {
-        serde_json::Value::Null => Ok(YamlValue::Null),
-        serde_json::Value::Bool(value) => Ok(YamlValue::Bool(*value)),
-        serde_json::Value::String(value) => Ok(YamlValue::String(value.clone())),
-        serde_json::Value::Number(value) => {
-            let yaml = if let Some(value) = value.as_i64() {
-                serde_yaml::to_value(value)
-            } else if let Some(value) = value.as_u64() {
-                serde_yaml::to_value(value)
-            } else {
-                let number = value
-                    .as_f64()
-                    .filter(|number| number.is_finite())
-                    .ok_or_else(|| {
-                        OkfError::new(format!("OKF JSON number `{value}` is not finite in YAML"))
-                    })?;
-                serde_yaml::to_value(number)
-            };
-            yaml.map_err(|error| yaml_value_error(&error))
-        }
-        serde_json::Value::Array(values) => values
-            .iter()
-            .map(json_to_yaml)
-            .collect::<Result<Vec<_>, _>>()
-            .map(YamlValue::Sequence),
-        serde_json::Value::Object(values) => values
-            .iter()
-            .map(|(key, value)| Ok((YamlValue::String(key.clone()), json_to_yaml(value)?)))
-            .collect::<Result<serde_yaml::Mapping, OkfError>>()
-            .map(YamlValue::Mapping),
-    }
-}
-
-fn yaml_value_error(error: &serde_yaml::Error) -> OkfError {
-    OkfError::new(format!("cannot encode OKF YAML value: {error}"))
-}
-
 fn validate_yaml_fields(fields: &BTreeMap<String, YamlValue>, path: &str) -> Result<(), OkfError> {
     fn visit(
         value: &YamlValue,
@@ -1051,20 +1011,15 @@ fn validate_yaml_fields(fields: &BTreeMap<String, YamlValue>, path: &str) -> Res
             )));
         }
         match value {
-            YamlValue::Sequence(values) => {
+            YamlValue::Array(values) => {
                 for child in values {
                     visit(child, depth + 1, nodes, path)?;
                 }
             }
-            YamlValue::Mapping(values) => {
+            YamlValue::Object(values) => {
                 for child in values.values() {
                     visit(child, depth + 1, nodes, path)?;
                 }
-            }
-            YamlValue::Tagged(_) => {
-                return Err(OkfError::new(format!(
-                    "`{path}` cannot represent a tagged YAML value"
-                )));
             }
             YamlValue::Null | YamlValue::Bool(_) | YamlValue::Number(_) | YamlValue::String(_) => {}
         }
@@ -1149,26 +1104,26 @@ mod tests {
     #[test]
     fn json_yaml_numbers_and_reserved_names_preserve_identity() {
         let original = crate::json_number::parse_strict(
-            br#"{"ranks":[1,2,0.25],"$serde_json::private::Number":"123"}"#,
+            br#"{"ranks":[1,2,0.25],"$private::Number":"123"}"#,
             16,
             8,
         )
         .expect("JSON");
-        let yaml = json_to_yaml(&original).expect("YAML");
+        let yaml = yaml::write(&original);
+        let read = yaml::read(&yaml).expect("the frontmatter YAML reads back");
         assert_eq!(
-            super::super::reader::json_from_yaml(yaml).expect("read"),
+            super::super::reader::okf_json(&read).expect("read"),
             original
         );
         for lexical in ["18446744073709551617", "0.123456789012345678901"] {
-            let original = serde_json::from_str::<serde_json::Value>(lexical).expect("number");
-            let yaml = json_to_yaml(&original).expect("finite YAML candidate");
+            let original = json::read(lexical).expect("number");
             assert_ne!(
-                super::super::reader::json_from_yaml(yaml).expect("read"),
+                super::super::reader::okf_json(&original).expect("read"),
                 original
             );
         }
-        let enormous = serde_json::from_str::<serde_json::Value>("1e400").expect("exact JSON");
-        assert!(json_to_yaml(&enormous).is_err());
+        let enormous = json::read("1e400").expect("exact JSON");
+        assert!(super::super::reader::okf_json(&enormous).is_err());
     }
 
     use crate::{
@@ -1251,7 +1206,7 @@ mod tests {
         assert!(table.contains("resource: https://example.org/data/events"));
         assert!(table.contains("ratio: 0.625"));
         assert!(table.contains("small: 0.00001"));
-        assert!(table.contains("large: 1e20"));
+        assert!(table.contains("large: 1e+20"));
         assert!(table.contains("- analytics\n- stable"));
     }
 
@@ -1357,7 +1312,7 @@ mod tests {
     fn json_extensions_round_trip_or_refuse_numeric_loss() {
         let config = config();
         for (lexical, accepted) in [
-            (r#"{"$serde_json::private::Number":"123"}"#, true),
+            (r#"{"$private::Number":"123"}"#, true),
             (r#"{"ranks":[1,2,0.25]}"#, true),
             (r#"{"n":18446744073709551617}"#, false),
             (r#"{"n":0.123456789012345678901}"#, false),

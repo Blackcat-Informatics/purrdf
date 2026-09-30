@@ -5,14 +5,12 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
-
 use super::*;
 
 const ROUTE_CORNER_RADIUS: i32 = 8;
 
 /// SVG emitter options. Semantic and layout choices live outside this type.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizSvgOptions {
     /// Embed the complete versioned [`VizExport`] JSON in `<metadata>`.
     pub embed_metadata: bool,
@@ -33,7 +31,7 @@ impl Default for VizSvgOptions {
 }
 
 /// Complete render options with independent layout and SVG controls.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct VizRenderOptions {
     /// Renderer-neutral deterministic layout options.
     pub layout: VizLayoutOptions,
@@ -42,7 +40,7 @@ pub struct VizRenderOptions {
 }
 
 /// Deterministic SVG paired with its load-bearing structured export.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizSvgDocument {
     /// Complete SVG XML text.
     pub svg: String,
@@ -58,12 +56,9 @@ pub fn build_export(
 ) -> Result<VizExport, VizError> {
     let scene = build_scene(projection, spec)?;
     let layout = layout_scene(&scene, layout_options)?;
-    let spec_json =
-        serde_json::to_string(spec).map_err(|error| VizError::Serialize(error.to_string()))?;
-    let model_json = serde_json::to_string(projection)
-        .map_err(|error| VizError::Serialize(error.to_string()))?;
-    let scene_json =
-        serde_json::to_string(&scene).map_err(|error| VizError::Serialize(error.to_string()))?;
+    let spec_json = purrdf_lex::json::write_compact(&spec.to_json());
+    let model_json = purrdf_lex::json::write_compact(&projection.to_json());
+    let scene_json = purrdf_lex::json::write_compact(&scene.to_json());
     let element_index = build_element_index(&scene, &layout);
     Ok(VizExport {
         schema_version: VIZ_EXPORT_SCHEMA_VERSION.to_owned(),
@@ -101,7 +96,7 @@ pub fn project_graph_input_export(
 
 /// Serialize a complete visualization export to deterministic JSON.
 pub fn export_json(export: &VizExport) -> Result<String, VizError> {
-    serde_json::to_string(export).map_err(|error| VizError::Serialize(error.to_string()))
+    Ok(purrdf_lex::json::write_compact(&export.to_json()))
 }
 
 /// Render an existing semantic projection to deterministic SVG.
@@ -1213,7 +1208,8 @@ mod tests {
             .find(|node| node.has_tag_name("metadata"))
             .and_then(|node| node.text())
             .expect("metadata text");
-        let decoded: VizExport = serde_json::from_str(metadata).expect("export JSON");
+        let decoded = VizExport::from_json(&purrdf_lex::json::read(metadata).expect("export JSON"))
+            .expect("export JSON form");
         assert_eq!(decoded, document.export);
         let all_ids = xml
             .descendants()

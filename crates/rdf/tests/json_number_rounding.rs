@@ -5,8 +5,8 @@
 //! turns one into RDF, on every target, the x87 included.
 //!
 //! The witnesses are numbers a reader that is not correctly rounded gets wrong, found by
-//! search against [`soft::significand_power_decimal`] -- the conversion `serde_json` makes
-//! without its `float_roundtrip` feature, reproduced in integers -- and against the x87's
+//! search against [`soft::significand_power_decimal`] -- the significand-times-power
+//! conversion a fast JSON reader makes, reproduced in integers -- and against the x87's
 //! double rounding of an exact fast path ([`soft::x87_fast_path_decimals`]). Each reader
 //! must give every witness the value `str::parse::<f64>` gives it (core's reader is
 //! correctly rounded and sets the x87's precision itself), and so the literal that value
@@ -14,6 +14,8 @@
 
 use std::collections::BTreeMap;
 
+use purrdf_lex::json::{self, Number, Object, Value};
+use purrdf_lex::json_escape::JsonEscapes;
 use purrdf_rdf::{
     CsvwAction, CsvwConfig, CsvwContext, CsvwInput, CsvwMode, CsvwVocabulary, DatasetSink,
     OkfBundle, OkfConfig, ProjectionLimits, SerializeGraph, datasets_isomorphic, lift_okf_bundle,
@@ -74,12 +76,12 @@ fn nquads(dataset: &purrdf_rdf::RdfDataset) -> String {
     .expect("UTF-8")
 }
 
-/// The reader itself, as the workspace resolves it: `serde_json` with `float_roundtrip`,
-/// read under the binary64 scope every result-affecting read in this workspace enters.
+/// The reader itself: the workspace's one JSON reader, its number converted to binary64
+/// under the scope every result-affecting read in this workspace enters.
 /// The sweep covers the witnesses and a wide draw of midpoints, the hardest inputs a
 /// decimal reader has.
 #[test]
-fn serde_json_reads_every_witness_and_midpoint_correctly_rounded() {
+fn the_json_reader_reads_every_witness_and_midpoint_correctly_rounded() {
     let mut lexicals = witnesses();
     let mut state = 0x6a73_6f6e_u64;
     for index in 0..1_500_u32 {
@@ -101,7 +103,10 @@ fn serde_json_reads_every_witness_and_midpoint_correctly_rounded() {
     for lexical in &lexicals {
         let read: f64 = {
             let _binary64 = Binary64Scope::enter();
-            serde_json::from_str(lexical).expect("a JSON number")
+            json::read(lexical)
+                .expect("a JSON number")
+                .as_f64()
+                .expect("a number")
         };
         assert_eq!(read.to_bits(), correct(lexical).to_bits(), "{lexical}");
         if soft::significand_power_decimal(lexical).map(f64::to_bits) != Some(read.to_bits()) {
@@ -157,7 +162,7 @@ fn json_ld_numbers_expand_to_the_correctly_rounded_double() {
     // An `@json` term's value is the whole array: one rdf:JSON literal, serialized from
     // the values read.
     let values: Vec<f64> = witnesses.iter().map(|witness| correct(witness)).collect();
-    let json = serde_json::to_string(&values).expect("finite numbers");
+    let json = json::write_compact(&Value::array(values));
     let line = format!(
         "<http://example.org/s> <http://example.org/json> \"{json}\"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .",
     );
@@ -224,12 +229,10 @@ fn csvw_metadata_numbers_become_the_correctly_rounded_literal() {
     let quads = nquads(&outcome.dataset);
     for witness in &witnesses {
         let value = correct(witness);
-        let lexical = serde_json::Number::from_f64(value)
-            .expect("finite")
-            .to_string();
+        let lexical = Number::from_f64(value).expect("finite").into_lexeme();
         let old = soft::significand_power_decimal(witness)
-            .and_then(serde_json::Number::from_f64)
-            .map(|number| number.to_string());
+            .and_then(Number::from_f64)
+            .map(Number::into_lexeme);
         for property in ["bare", "object"] {
             let object = format!("<http://example.org/{property}> \"{lexical}\"^^<{XSD_DOUBLE}> .");
             assert!(quads.contains(&object), "{witness}: missing {object}");
@@ -237,8 +240,8 @@ fn csvw_metadata_numbers_become_the_correctly_rounded_literal() {
                 let neighbour =
                     format!("<http://example.org/{property}> \"{old}\"^^<{XSD_DOUBLE}> .");
                 let spelled_by_another = witnesses.iter().any(|other| {
-                    serde_json::Number::from_f64(correct(other))
-                        .map(|number| number.to_string())
+                    Number::from_f64(correct(other))
+                        .map(Number::into_lexeme)
                         .as_deref()
                         == Some(old.as_str())
                 });
@@ -261,7 +264,7 @@ fn okf_config() -> OkfConfig {
 }
 
 /// OKF: a YAML float inside structured frontmatter becomes an rdf:JSON literal through
-/// `serde_json`, and writing it back parses that literal again and requires it to be
+/// the JSON writer, and writing it back parses that literal again and requires it to be
 /// canonical. The read witnesses are floats whose decimal lexical form the old reader
 /// misread; the write witnesses are floats whose serialized form it misread, which made
 /// the canonical check refuse a literal the reader itself produced. Each list also holds
@@ -279,7 +282,7 @@ fn okf_structured_numbers_read_and_write_back_correctly_rounded() {
     };
     let serialized = |value: f64| {
         decimal(value)?;
-        serde_json::to_string(&value).ok()
+        Number::from_f64(value).map(Number::into_lexeme)
     };
     let values = |found: Vec<(f64, String)>| found.into_iter().map(|(value, _)| value);
     let read: Vec<f64> = values(soft::misread_spellings(40, decimal))
@@ -309,10 +312,15 @@ fn okf_structured_numbers_read_and_write_back_correctly_rounded() {
     assert!(outcome.losses.is_empty());
     let dataset = sink.into_dataset().expect("finished sink");
 
-    let expected = serde_json::to_string(&serde_json::json!({ "read": read, "write": write }))
-        .expect("finite numbers");
+    let expected = json::write_compact(
+        &Object::new()
+            .with("read", Value::array(read))
+            .with("write", Value::array(write))
+            .into(),
+    );
     let quads = nquads(&dataset);
-    let literal = serde_json::to_string(&expected).expect("a string");
+    let mut literal = String::new();
+    purrdf_lex::json_escape::push_string(&mut literal, &expected, JsonEscapes::ShortForms);
     assert!(
         quads.contains(&format!("{literal}^^<{}>", config.json_datatype())),
         "missing {literal} in {quads}"
