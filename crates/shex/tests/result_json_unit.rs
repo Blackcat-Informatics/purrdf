@@ -298,15 +298,15 @@ fn an_iri_only_report_is_byte_identical() {
 }
 
 #[test]
-fn a_triple_term_must_close_with_the_delimiter_that_opened_it() {
+fn a_triple_term_must_close_with_its_own_delimiter() {
     let s = "<http://a.example/s> <http://a.example/p> <http://a.example/o>";
     // Mismatched delimiters are refused.
     assert!(parse_shape_map(&format!("<<( {s} >> @START"), None).is_err());
     assert!(parse_shape_map(&format!("<< {s} )>> @START"), None).is_err());
-    // Each matched pair parses, to the same triple term.
-    let rdf12 = parse_shape_map(&format!("<<( {s} )>> @START"), None).expect("<<( )>> parses");
-    let legacy = parse_shape_map(&format!("<< {s} >> @START"), None).expect("<< >> parses");
-    assert_eq!(rdf12, legacy);
+    // `<< s p o >>` is reifier syntax, not a triple term: refused.
+    assert!(parse_shape_map(&format!("<< {s} >> @START"), None).is_err());
+    // The RDF 1.2 spelling parses.
+    parse_shape_map(&format!("<<( {s} )>> @START"), None).expect("<<( )>> parses");
 }
 
 #[test]

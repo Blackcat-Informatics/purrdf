@@ -333,6 +333,53 @@ fn rdf12_triple_terms_are_ordinary_nodes() {
     );
 }
 
+/// A shape-map focus node spelled `<< s p o >>` is RDF 1.2 reifier syntax, not a triple
+/// term: the CLI refuses it (naming `<<( s p o )>>`), while the `<<( s p o )>>` neighbour
+/// validates end to end.
+#[test]
+fn reifier_syntax_is_refused_as_a_focus_node_but_a_triple_term_validates() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let schema = write_file(
+        dir.path(),
+        "claim.shex",
+        "PREFIX ex: <http://example.org/>\nex:Claim { ex:states NONLITERAL }\n",
+    );
+    let data = write_file(
+        dir.path(),
+        "claim.ttl",
+        "@prefix ex: <http://example.org/> .\nex:claim ex:states <<( ex:alice ex:knows ex:bob )>> .\n",
+    );
+    let triple = "<http://example.org/alice> <http://example.org/knows> <http://example.org/bob>";
+    let refused = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--data",
+        &data,
+        &format!("<< {triple} >>@<http://example.org/Claim>"),
+    ]);
+    assert_ne!(code(&refused), 0, "{}", stdout(&refused));
+    assert!(
+        stderr(&refused).contains("<<( s p o )>>"),
+        "{}",
+        stderr(&refused)
+    );
+    let accepted = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--data",
+        &data,
+        &format!("<<( {triple} )>>@<http://example.org/Claim>"),
+    ]);
+    assert_eq!(code(&accepted), 0, "{}", stderr(&accepted));
+    assert!(
+        stdout(&accepted).contains(&format!("\"node\":\"<<( {triple} )>>\"")),
+        "{}",
+        stdout(&accepted)
+    );
+}
+
 /// The RDF 1.2 STATEMENT layer IS reachable through the CLI's shape maps: a selector over
 /// an annotation predicate selects the reifier that carries it.
 ///

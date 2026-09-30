@@ -191,7 +191,7 @@ fn selector_over_rdf_reifies_both_directions() {
     // Anchoring the object on a concrete triple term picks its reifiers.
     assert_eq!(
         selected(&format!(
-            "{{FOCUS <{REIFIES}> << <{ALICE}> <{KNOWS}> <{BOB}> >>}}@START"
+            "{{FOCUS <{REIFIES}> <<( <{ALICE}> <{KNOWS}> <{BOB}> )>>}}@START"
         )),
         vec![TermValue::iri(R1), TermValue::iri(R2)],
     );

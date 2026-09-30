@@ -140,9 +140,13 @@ fn parse_node(src: &str) -> TermValue {
     }
 }
 
+const S: &str = "<http://a.example/s>";
+const P: &str = "<http://a.example/p>";
+const O: &str = "<http://a.example/o>";
+
 #[test]
-fn parses_quoted_triple_term() {
-    let got = parse_node("<< <http://a.example/s> <http://a.example/p> <http://a.example/o> >>");
+fn parses_triple_term() {
+    let got = parse_node(&format!("<<( {S} {P} {O} )>>"));
     assert_eq!(
         got,
         TermValue::Triple {
@@ -154,24 +158,16 @@ fn parses_quoted_triple_term() {
 }
 
 #[test]
-fn parses_quoted_triple_term_tolerates_extra_whitespace() {
-    let got =
-        parse_node("<<   <http://a.example/s>\t<http://a.example/p>\n\n<http://a.example/o>   >>");
-    assert_eq!(
-        got,
-        TermValue::Triple {
-            s: TermBox::new(iri("http://a.example/s")),
-            p: TermBox::new(iri("http://a.example/p")),
-            o: TermBox::new(iri("http://a.example/o")),
-        }
-    );
+fn parses_triple_term_tolerates_extra_whitespace() {
+    let got = parse_node(&format!("<<(   {S}\t{P}\n\n{O}   )>>"));
+    assert_eq!(got, parse_node(&format!("<<( {S} {P} {O} )>>")));
 }
 
 #[test]
-fn parses_nested_quoted_triple_term() {
-    let got = parse_node(
-        "<< << <http://a.example/s> <http://a.example/p> <http://a.example/o> >> <http://a.example/p2> <http://a.example/o2> >>",
-    );
+fn parses_nested_triple_term() {
+    let got = parse_node(&format!(
+        "<<( <<( {S} {P} {O} )>> <http://a.example/p2> <http://a.example/o2> )>>"
+    ));
     let inner = TermValue::Triple {
         s: TermBox::new(iri("http://a.example/s")),
         p: TermBox::new(iri("http://a.example/p")),
@@ -188,8 +184,8 @@ fn parses_nested_quoted_triple_term() {
 }
 
 #[test]
-fn parses_quoted_triple_with_blank_and_literal_positions() {
-    let got = parse_node(r#"<< _:b1 <http://a.example/p> "lit"@en >>"#);
+fn parses_triple_term_with_blank_and_literal_positions() {
+    let got = parse_node(r#"<<( _:b1 <http://a.example/p> "lit"@en )>>"#);
     assert_eq!(
         got,
         TermValue::Triple {
@@ -201,12 +197,33 @@ fn parses_quoted_triple_with_blank_and_literal_positions() {
 }
 
 #[test]
-fn quoted_triple_term_requires_closing_delimiter() {
-    let err = parse_shape_map(
-        "<< <http://a.example/s> <http://a.example/p> <http://a.example/o> @START",
-        None,
-    );
+fn triple_term_requires_closing_delimiter() {
+    let err = parse_shape_map(&format!("<<( {S} {P} {O} @START"), None);
     assert!(err.is_err());
+}
+
+/// `<< s p o >>` is RDF 1.2 reifier syntax, not a triple term: refused at the top
+/// level and at every nesting position, with an error naming `<<( … )>>`; the
+/// neighbouring `<<( s p o )>>` spelling is accepted in the same positions.
+#[test]
+fn reifier_syntax_is_refused_not_read_as_a_triple_term() {
+    for legacy in [
+        format!("<< {S} {P} {O} >>"),
+        format!("<<{S} {P} {O}>>"),
+        format!("<<( << {S} {P} {O} >> {P} {O} )>>"),
+        format!("<<( {S} {P} << {S} {P} {O} >> )>>"),
+        format!("<< <<( {S} {P} {O} )>> {P} {O} >>"),
+    ] {
+        let err = parse_shape_map(&format!("{legacy} @START"), None).unwrap_err();
+        assert!(err.to_string().contains("<<( s p o )>>"), "{legacy}: {err}");
+    }
+    for valid in [
+        format!("<<( {S} {P} {O} )>>"),
+        format!("<<( <<( {S} {P} {O} )>> {P} {O} )>>"),
+        format!("<<( {S} {P} <<( {S} {P} {O} )>> )>>"),
+    ] {
+        parse_shape_map(&format!("{valid} @START"), None).expect(&valid);
+    }
 }
 
 /// A relative `<iri>` in a shape map with no base is refused with the same shared
