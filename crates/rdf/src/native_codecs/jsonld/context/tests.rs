@@ -639,12 +639,17 @@ fn metaschemas() -> &'static purrdf_jsonschema::Metaschemas {
             purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
                 .iter()
                 .map(|&(uri, text)| {
-                    let document: Value = serde_json::from_str(text).expect("meta-schema JSON");
+                    let document = purrdf_lex::json::read(text).expect("meta-schema JSON");
                     (uri, document)
                 }),
         )
         .expect("the draft 2020-12 meta-schemas")
     })
+}
+
+/// The codec's options schema in the validator's JSON value model.
+fn lex(value: &Value) -> purrdf_lex::json::Value {
+    purrdf_lex::json::read(&value.to_string()).expect("serialized JSON reads back")
 }
 
 /// Compile the published options schema against `metaschemas`.
@@ -654,7 +659,7 @@ fn options_schema(
     purrdf_jsonschema::Schema::from_document(
         metaschemas,
         "mem:///jsonld-options.schema.json",
-        JsonLdSerializeOptions::json_schema(),
+        lex(&JsonLdSerializeOptions::json_schema()),
     )
 }
 
@@ -663,10 +668,10 @@ fn options_schema_compiles_with_its_metaschema_and_names_it_when_absent() {
     let schema = options_schema(metaschemas()).expect("compiles with the 2020-12 meta-schemas");
     assert!(
         schema
-            .is_valid(&json!({"mode": "expanded", "version": 1}))
+            .is_valid(&lex(&json!({"mode": "expanded", "version": 1})))
             .expect("evaluation")
     );
-    let none = purrdf_jsonschema::Metaschemas::new(Vec::<(&str, Value)>::new())
+    let none = purrdf_jsonschema::Metaschemas::new(Vec::<(&str, purrdf_lex::json::Value)>::new())
         .expect("an empty set is a set");
     match options_schema(&none) {
         Err(purrdf_jsonschema::SchemaError::MissingMetaschema { metaschema, .. }) => {
@@ -681,7 +686,7 @@ fn options_schema_and_decoder_have_identical_mode_field_constraints() {
     fn schema_accepts(instance: &Value) -> bool {
         options_schema(metaschemas())
             .expect("compile options schema")
-            .is_valid(instance)
+            .is_valid(&lex(instance))
             .expect("evaluation")
     }
 

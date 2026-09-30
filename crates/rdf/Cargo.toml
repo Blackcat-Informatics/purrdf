@@ -49,9 +49,6 @@ purrdf-xsd = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
-# The workspace CBOR codec: GTS metadata payloads and blob containers are
-# `purrdf_lex::cbor::Value` trees, the type purrdf-gts reads and writes.
-purrdf-lex = { workspace = true }
 # CSVW string/duration format validation. Already workspace-pinned and present in
 # the SPARQL tree; the direct edge keeps one standards parser on native and wasm.
 regex = { workspace = true }
@@ -79,8 +76,10 @@ purrdf-sparql-algebra = { workspace = true }
 purrdf-iri = { workspace = true }
 # The lexical layer: the one XML reader (`purrdf_lex::xml`) behind the RDF/XML,
 # TriX, GraphML and DataCite readers, and the literal/IRI escapers, the RDF term
-# syntax and the Crockford Base32 renderer every text writer here spells with.
-# Depends only on `purrdf-hash`, and wasm32-clean.
+# syntax and the Crockford Base32 renderer every text writer here spells with,
+# and the CBOR codec whose `purrdf_lex::cbor::Value` trees are the GTS metadata
+# payloads and blob containers purrdf-gts reads and writes. Depends only on
+# `purrdf-hash`, and wasm32-clean.
 purrdf-lex = { workspace = true }
 # Chunk-parallel N-Triples / N-Quads line parsing (phase 1 of the two-phase parse in
 # `native_codecs::text_parse`): tokenize+parse per line-aligned chunk in parallel,
