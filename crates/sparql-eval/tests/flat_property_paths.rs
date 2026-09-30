@@ -6,7 +6,8 @@
 //! refused.
 //!
 //! A generated `p1/p2/…/pn` or `p1|p2|…|pn` nests nothing: the parser reads it with a
-//! loop into one n-ary node. These tests drive thousands of elements of each through
+//! loop; a predicate-only sequence then translates into one BGP, while a complex path
+//! keeps one n-ary node. These tests drive thousands of elements of each through
 //! the whole request path and hold the answer to an oracle that would see a dropped,
 //! reordered or re-associated element:
 //!
@@ -503,8 +504,8 @@ fn assert_stack_refusal(result: Result<SparqlResult, RdfDiagnostic>, what: &str)
     );
 }
 
-/// What really nests is bounded by the stack: 200 right-nested path groups,
-/// `p0/(p1/(p2/…))`, past the removed 128-level recursion budget, answer on a test
+/// What really nests is bounded by the stack: 200 right-nested complex path groups,
+/// `p0/(p1/(p2/…/pn+))`, past the removed 128-level recursion budget, answer on a test
 /// thread the one pair their 201 steps connect — not the whole graph, and not a shorter
 /// chain's pair — and ten thousand are the typed stack refusal.
 #[test]
@@ -512,7 +513,13 @@ fn nested_path_groups_are_bounded_by_the_stack() {
     let data = chain(300);
     let nested = |depth: usize| {
         let parts = (0..=depth)
-            .map(|i| format!("<{EX}p{i}>"))
+            .map(|i| {
+                if i == depth {
+                    format!("<{EX}p{i}>+")
+                } else {
+                    format!("<{EX}p{i}>")
+                }
+            })
             .collect::<Vec<_>>();
         format!(
             "SELECT ?s ?o WHERE {{ ?s {} ?o }}",
@@ -521,6 +528,36 @@ fn nested_path_groups_are_bounded_by_the_stack() {
     };
     assert_eq!(rows(run(&data, &nested(200))), vec![row(&["n0", "n201"])]);
     assert_stack_refusal(run(&data, &nested(10_000)), "10 000 nested path groups");
+}
+
+/// Pure path groups disappear at translation: a right-nested sequence keeps its
+/// answers, and ten thousand nested inverses become one triple rather than a tall
+/// evaluator path. The even and odd neighbours hold both direction and parity fixed.
+#[test]
+fn deeply_nested_plain_paths_translate_before_evaluation() {
+    let data = chain(300);
+    let parts = (0..=200).map(|i| format!("<{EX}p{i}>")).collect::<Vec<_>>();
+    assert_eq!(
+        rows(run(
+            &data,
+            &format!(
+                "SELECT ?s ?o WHERE {{ ?s {} ?o }}",
+                right_nested(&parts, "/")
+            )
+        )),
+        vec![row(&["n0", "n201"])]
+    );
+    for (depth, expected) in [(10_000, ["n0", "n1"]), (10_001, ["n1", "n0"])] {
+        let path = format!("{}<{EX}p0>{}", "^(".repeat(depth), ")".repeat(depth));
+        assert_eq!(
+            rows(run(
+                &data,
+                &format!("SELECT ?s ?o WHERE {{ ?s {path} ?o }}")
+            )),
+            vec![row(&expected)],
+            "{depth} inverses"
+        );
+    }
 }
 
 /// A `SERVICE` forwards its body as text the in-process endpoint re-parses. A body

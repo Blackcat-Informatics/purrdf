@@ -7,7 +7,7 @@
 
 //! Report-only execution-governor cost envelope.
 //!
-//! Five comparisons keep distinct costs distinct:
+//! Six comparisons keep distinct costs distinct:
 //!
 //! - ordinary ungoverned evaluation, whose latency is the regression ceiling;
 //! - the typed governed carrier under `UNBOUNDED`, which should take the same recursive
@@ -16,6 +16,8 @@
 //!   the measurement-only forced-sequential branch;
 //! - exact property-path ranges at increasing graph sizes, with a fixed four-billion
 //!   exponent, so growth follows the reachable relation rather than the numeric range;
+//! - linear paths connecting typed endpoints versus explicit triple expansion, with
+//!   preparation outside timing and a cold join-order cache in every sample;
 //! - the per-row loops of `FILTER`, `BIND` and `UNFOLD` over 16 384 rows, each run
 //!   ungoverned, under a stop signal alone, and under a fuel ceiling with a stop
 //!   signal, on the forced-sequential engine and on the default one that forks a

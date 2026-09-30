@@ -12140,7 +12140,7 @@ solutions vars=["x"] rows=1 ordered=false
 metered complete fuel=7 answer-rows=1 intermediate-cells=1
 explain fuel=7 answer-rows=1 intermediate-cells=1
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
-node 1 depth=1 Path rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 path-frontier-expansion=3
+node 1 depth=1 Bgp rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=3
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=2
 fuel 2 tripped fuel-exhausted consumed=3 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=3
@@ -12173,7 +12173,7 @@ solutions vars=["x"] rows=1 ordered=false
 metered complete fuel=8 answer-rows=1 intermediate-cells=1
 explain fuel=8 answer-rows=1 intermediate-cells=1
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
-node 1 depth=1 Path rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 path-frontier-expansion=4
+node 1 depth=1 Bgp rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=4
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=2
 fuel 2 tripped fuel-exhausted consumed=3 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=3
@@ -12185,17 +12185,16 @@ fuel 7 tripped fuel-exhausted consumed=8 certain prefix=true rows=1 digest=e36f2
 fuel 8..=64 x57 complete rows=1 digest=e36f2faf352ec40c | fuel=8
 == w3c-sparql11/property-path <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/property-path/manifest#pp06> (pp06) Path with two graphs
 solutions vars=["x"] rows=0 ordered=false
-metered complete fuel=5
-explain fuel=5
+metered complete fuel=4
+explain fuel=4
 node 0 depth=0 Project rows=0 cells=0 algebra-node-entry=1
 node 1 depth=1 Graph rows=0 cells=0 algebra-node-entry=1
-node 2 depth=2 Path rows=0 cells=0 algebra-node-entry=2 path-frontier-expansion=1
+node 2 depth=2 Bgp rows=0 cells=0 algebra-node-entry=2
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=2
 fuel 2 tripped fuel-exhausted consumed=3 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=3
 fuel 3 tripped fuel-exhausted consumed=4 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=4
-fuel 4 tripped fuel-exhausted consumed=5 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=5
-fuel 5..=64 x60 complete rows=0 digest=919ca8e368d038c7 | fuel=5
+fuel 4..=64 x61 complete rows=0 digest=919ca8e368d038c7 | fuel=4
 == w3c-sparql11/property-path <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/property-path/manifest#pp07> (pp07) Path with one graph
 solutions vars=["x"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:x> <http://www.example.org/instance#c> .
@@ -12203,7 +12202,7 @@ metered complete fuel=8 answer-rows=1 intermediate-cells=2
 explain fuel=8 answer-rows=1 intermediate-cells=2
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Graph rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
-node 2 depth=2 Path rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 path-frontier-expansion=2
+node 2 depth=2 Bgp rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=2
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=2
 fuel 2 tripped fuel-exhausted consumed=3 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=3
@@ -12217,7 +12216,7 @@ fuel 8..=64 x57 complete rows=1 digest=71d8f7d50ba82bb2 | fuel=8
 boolean true
 metered complete fuel=3
 explain fuel=3
-node 0 depth=0 Path rows=1 cells=0 algebra-node-entry=1 committed-output-row=1 path-frontier-expansion=1
+node 0 depth=0 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=1
 fuel 0 tripped fuel-exhausted consumed=1 unknown barrier=ask-unsettled | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 unknown barrier=ask-unsettled | fuel=2
 fuel 2 tripped fuel-exhausted consumed=3 certain prefix=true rows=1 digest=27229339670298e5 | fuel=3
@@ -12228,7 +12227,7 @@ solutions vars=["x"] rows=1 ordered=false
 metered complete fuel=6 answer-rows=1 intermediate-cells=1
 explain fuel=6 answer-rows=1 intermediate-cells=1
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
-node 1 depth=1 Path rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 path-frontier-expansion=2
+node 1 depth=1 Bgp rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=2
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=2
 fuel 2 tripped fuel-exhausted consumed=3 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=3
@@ -12258,11 +12257,10 @@ solutions vars=["x"] rows=2 ordered=false
 metered complete fuel=10 answer-rows=2 intermediate-cells=2
 explain fuel=10 answer-rows=2 intermediate-cells=2
 node 0 depth=0 Project rows=2 cells=2 algebra-node-entry=1 committed-output-row=2
-node 1 depth=1 Path rows=2 cells=2 algebra-node-entry=1 committed-output-row=2 path-frontier-expansion=4
+node 1 depth=1 Bgp rows=2 cells=2 algebra-node-entry=1 committed-output-row=2 bgp-candidate-quad=4
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=2
-fuel 2 tripped fuel-exhausted consumed=3 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=3
-fuel 3 tripped fuel-exhausted consumed=4 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=4
+fuel 2..=3 x2 tripped fuel-exhausted consumed=4 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=4
 fuel 4 tripped fuel-exhausted consumed=5 certain prefix=true rows=0 digest=919ca8e368d038c7 | fuel=5
 fuel 5 tripped fuel-exhausted consumed=6 certain prefix=true rows=1 digest=71d8f7d50ba82bb2 | fuel=6
 fuel 6 tripped fuel-exhausted consumed=7 certain prefix=true rows=2 digest=add1a8d8e31894d2 | fuel=7
