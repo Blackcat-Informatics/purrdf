@@ -423,22 +423,47 @@ fn resolve_sources(sources: &[&Path]) -> Result<Vec<(PathBuf, String)>, String> 
     Ok(entries)
 }
 
-fn guess_media_type(path: &Path) -> String {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("txt") => "text/plain".to_string(),
-        Some("html" | "htm") => "text/html".to_string(),
-        Some("json") => "application/json".to_string(),
-        Some("xml") => "application/xml".to_string(),
-        Some("png") => "image/png".to_string(),
-        Some("jpg" | "jpeg") => "image/jpeg".to_string(),
-        Some("gif") => "image/gif".to_string(),
-        Some("webp") => "image/webp".to_string(),
-        Some("pdf") => "application/pdf".to_string(),
-        Some("zip") => "application/zip".to_string(),
-        Some("gz") => "application/gzip".to_string(),
-        Some("tar") => "application/x-tar".to_string(),
-        _ => "application/octet-stream".to_string(),
+/// Media type for a file extension (without its dot), matched case-insensitively.
+///
+/// The workspace's one extension-to-media-type table: GTS file and tar ingest, the
+/// slice catalog, the slice-artifact blob rows of the Python binding and the
+/// slice RDF query loader all call it. The RDF entries name the media types the
+/// native codecs register (`text/turtle`, `application/n-triples`,
+/// `application/n-quads`, `application/trig`); an extension it does not know
+/// maps to `application/octet-stream`.
+#[must_use]
+pub fn media_type_for_extension(extension: &str) -> &'static str {
+    match extension.to_ascii_lowercase().as_str() {
+        "txt" => "text/plain",
+        "html" | "htm" => "text/html",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "gz" => "application/gzip",
+        "tar" => "application/x-tar",
+        "ttl" => "text/turtle",
+        "nt" => "application/n-triples",
+        "nq" => "application/n-quads",
+        "trig" => "application/trig",
+        "sparql" | "rq" => "application/sparql-query",
+        "md" => "text/markdown",
+        "yaml" | "yml" | "cff" => "application/yaml",
+        _ => "application/octet-stream",
     }
+}
+
+/// Media type for a path, from its final extension; see [`media_type_for_extension`].
+/// A path with no extension maps to `application/octet-stream`.
+#[must_use]
+pub fn media_type_for_path(path: &Path) -> &'static str {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map_or("application/octet-stream", media_type_for_extension)
 }
 
 fn write_blob_pub_map<W: Write>(
@@ -715,7 +740,7 @@ fn resolved_files_with_metadata(sources: &[&Path]) -> Result<Vec<ResolvedFile>, 
             .modified()
             .map_err(|e| format!("mtime {fspath:?}: {e}"))?;
         let modified = format_datetime(&mtime).map_err(|e| format!("datetime {fspath:?}: {e}"))?;
-        let media_type = guess_media_type(&fspath);
+        let media_type = media_type_for_path(&fspath).to_string();
         let digest = digest_file(&fspath, size)?;
         out.push(ResolvedFile {
             fspath,
@@ -1841,4 +1866,79 @@ pub fn diff(graph: &Graph, directory: &Path) -> Result<Vec<String>, String> {
     }
     lines.sort();
     Ok(lines)
+}
+
+#[cfg(test)]
+mod media_type_tests {
+    use super::{media_type_for_extension, media_type_for_path};
+    use std::path::Path;
+
+    #[test]
+    fn every_extension_maps_to_its_media_type() {
+        let table = [
+            ("txt", "text/plain"),
+            ("html", "text/html"),
+            ("htm", "text/html"),
+            ("json", "application/json"),
+            ("xml", "application/xml"),
+            ("png", "image/png"),
+            ("jpg", "image/jpeg"),
+            ("jpeg", "image/jpeg"),
+            ("gif", "image/gif"),
+            ("webp", "image/webp"),
+            ("pdf", "application/pdf"),
+            ("zip", "application/zip"),
+            ("gz", "application/gzip"),
+            ("tar", "application/x-tar"),
+            ("ttl", "text/turtle"),
+            ("nt", "application/n-triples"),
+            ("nq", "application/n-quads"),
+            ("trig", "application/trig"),
+            ("sparql", "application/sparql-query"),
+            ("rq", "application/sparql-query"),
+            ("md", "text/markdown"),
+            ("yaml", "application/yaml"),
+            ("yml", "application/yaml"),
+            ("cff", "application/yaml"),
+        ];
+        for (extension, media_type) in table {
+            assert_eq!(
+                media_type_for_extension(extension),
+                media_type,
+                "{extension}"
+            );
+            assert_eq!(
+                media_type_for_extension(&extension.to_ascii_uppercase()),
+                media_type,
+                "{extension} upper-cased"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_or_missing_extension_is_octet_stream() {
+        assert_eq!(media_type_for_extension("bin"), "application/octet-stream");
+        assert_eq!(media_type_for_extension(""), "application/octet-stream");
+        assert_eq!(
+            media_type_for_path(Path::new("LICENSE")),
+            "application/octet-stream"
+        );
+        // A bare file name that merely equals an extension has no extension.
+        assert_eq!(
+            media_type_for_path(Path::new("ttl")),
+            "application/octet-stream"
+        );
+    }
+
+    #[test]
+    fn a_path_uses_its_final_extension() {
+        assert_eq!(
+            media_type_for_path(Path::new("a/b.tar.gz")),
+            "application/gzip"
+        );
+        assert_eq!(
+            media_type_for_path(Path::new("dir.ttl/readme.md")),
+            "text/markdown"
+        );
+    }
 }

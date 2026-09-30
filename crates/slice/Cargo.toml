@@ -38,6 +38,10 @@ purrdf = { package = "purrdf-rdf", path = "../rdf", version = "2.0.2" }
 # dependency instead of laundering it. Already upstream of this crate in the
 # publish order, so the release lane is unchanged.
 purrdf-core = { workspace = true }
+# The one extension-to-media-type table (`purrdf_gts::files::media_type_for_path`),
+# behind the catalog's artifact media types and the RDF query loader's syntax
+# routing. Already upstream of this crate through `purrdf-rdf`.
+purrdf-gts = { workspace = true }
 # Native SPARQL parser — competency/verify queries are PARSED
 # (RFC §10), never text-searched, to extract referenced term IRIs.
 # RDF-1.2 quoted triple terms are first-class.

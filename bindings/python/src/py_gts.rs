@@ -120,7 +120,10 @@ fn assemble_slice_bundle(
         // role + logical path so a repo-free consumer recovers each artifact.
         blob_rows.push(BlobRow {
             data: row.content.clone(),
-            media_type: media_type_for(&row.logical_path),
+            media_type: purrdf_gts::files::media_type_for_path(std::path::Path::new(
+                &row.logical_path,
+            ))
+            .to_string(),
             rep: format!(
                 "{SLICE_ARTIFACT_REP_PREFIX}{}:{}",
                 row.role, row.logical_path
@@ -131,23 +134,6 @@ fn assemble_slice_bundle(
     // HARD-fail on any structural violation BEFORE serialization (no-optionality).
     bundle.validate().map_err(|e| e.to_string())?;
     Ok(blob_rows)
-}
-
-/// Infer a stable MIME type for a slice artifact path (mirrors the slice catalog's
-/// `infer_media_type`, kept local to avoid a kernel→slice dependency edge).
-fn media_type_for(path: &str) -> String {
-    let ext = path.rsplit('.').next().unwrap_or("");
-    match ext {
-        "ttl" => "text/turtle",
-        "nt" => "application/n-triples",
-        "nq" => "application/n-quads",
-        "sparql" | "rq" => "application/sparql-query",
-        "md" => "text/markdown",
-        "yaml" | "yml" | "cff" => "application/yaml",
-        "json" => "application/json",
-        _ => "application/octet-stream",
-    }
-    .to_string()
 }
 
 // ── Python helpers ────────────────────────────────────────────────────────────

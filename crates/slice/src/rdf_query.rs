@@ -392,7 +392,7 @@ impl Dataset {
         let base = crate::retrieval::retrieval_base_iri(path)?;
         Self::parse(
             bytes,
-            media_type_for_path(path),
+            rdf_media_type_for_path(path),
             Some(base.as_str()),
             &path.display().to_string(),
         )
@@ -882,7 +882,7 @@ impl DatasetAccumulator {
         let base = crate::retrieval::retrieval_base_iri(path)?;
         self.add(
             bytes,
-            media_type_for_path(path),
+            rdf_media_type_for_path(path),
             Some(base.as_str()),
             &path.display().to_string(),
         )
@@ -922,15 +922,20 @@ use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
 /// Map a file extension to the native RDF media type, defaulting to Turtle.
 ///
-/// Mirrors the historical extension routing (`.nt` → N-Triples, `.nq` → N-Quads,
-/// `.trig` → TriG, everything else Turtle).
-pub(crate) fn media_type_for_path(path: &Path) -> &'static str {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("nt") => NativeRdfFormat::NTriples.media_type(),
-        Some("nq") => NativeRdfFormat::NQuads.media_type(),
-        Some("trig") => NativeRdfFormat::TriG.media_type(),
-        _ => NativeRdfFormat::Turtle.media_type(),
-    }
+/// The extension table is `purrdf_gts::files::media_type_for_path`; this keeps
+/// its answer where it names a native RDF syntax (`.nt` → N-Triples, `.nq` →
+/// N-Quads, `.trig` → TriG) and routes everything else to Turtle.
+pub(crate) fn rdf_media_type_for_path(path: &Path) -> &'static str {
+    let guessed = purrdf_gts::files::media_type_for_path(path);
+    [
+        NativeRdfFormat::NTriples,
+        NativeRdfFormat::NQuads,
+        NativeRdfFormat::TriG,
+    ]
+    .into_iter()
+    .map(NativeRdfFormat::media_type)
+    .find(|media_type| *media_type == guessed)
+    .unwrap_or_else(|| NativeRdfFormat::Turtle.media_type())
 }
 
 #[cfg(test)]

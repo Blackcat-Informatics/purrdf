@@ -420,7 +420,8 @@ fn collect_artifacts(
         let raw_digest = hex_sha256(&content);
 
         let role = classify_role(&logical_path);
-        let media_type = infer_media_type(&logical_path);
+        let media_type =
+            purrdf_gts::files::media_type_for_path(Path::new(&logical_path)).to_string();
 
         // For RDF files, compute the semantic digest via canonical N-Triples.
         //
@@ -526,22 +527,6 @@ fn classify_role(path: &str) -> ArtifactRole {
         return ArtifactRole::TranslationCatalog;
     }
     ArtifactRole::Other(path.to_string())
-}
-
-fn infer_media_type(path: &str) -> String {
-    let ext = path.rsplit('.').next().unwrap_or("");
-    match ext {
-        "ttl" => "text/turtle",
-        "nt" => "application/n-triples",
-        "nq" => "application/n-quads",
-        "sparql" | "rq" => "application/sparql-query",
-        "md" => "text/markdown",
-        "yaml" | "yml" => "application/yaml",
-        "json" => "application/json",
-        "cff" => "application/yaml",
-        _ => "application/octet-stream",
-    }
-    .to_string()
 }
 
 // ── Recursive slice-dir discovery ─────────────────────────────────────────────

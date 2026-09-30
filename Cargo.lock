@@ -813,6 +813,7 @@ name = "purrdf-slice"
 version = "2.0.2"
 dependencies = [
  "purrdf-core",
+ "purrdf-gts",
  "purrdf-hash",
  "purrdf-iri",
  "purrdf-lex",
