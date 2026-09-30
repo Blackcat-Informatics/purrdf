@@ -444,7 +444,8 @@ impl<T> CdtOutcome<T> {
     }
 }
 
-/// A SPARQL expression error with a fixed explanation.
+/// A SPARQL expression error with a fixed explanation — a type error included,
+/// such as a function applied to the wrong composite datatype.
 fn raise<T>(reason: &'static str) -> CdtOutcome<T> {
     CdtOutcome::Error(CdtTypeError::undefined(reason))
 }
@@ -1381,11 +1382,6 @@ pub fn map_merge(maps: &[&[CdtEntry]]) -> CdtOutcome<CdtValue> {
 
 // ── Dispatch on the runtime composite datatype ──────────────────────────────────
 
-/// A SPARQL type error for a function applied to the wrong composite datatype.
-fn wrong_datatype<T>(wanted: &'static str) -> CdtOutcome<T> {
-    CdtOutcome::Error(CdtTypeError::undefined(wanted))
-}
-
 /// `cdt:size(…)` — dispatching on the argument's composite datatype.
 ///
 /// This is one of the two overloaded names in the library, and it is the one whose
@@ -1454,7 +1450,7 @@ pub fn contains(value: &CdtValue, term: &CdtTerm) -> CdtOutcome<bool> {
     match value.contents() {
         CdtContents::List(items) => list_contains(items, term),
         CdtContents::Map(_) => {
-            wrong_datatype("cdt:contains applies to a cdt:List; a cdt:Map has cdt:containsKey")
+            raise("cdt:contains applies to a cdt:List; a cdt:Map has cdt:containsKey")
         }
     }
 }
@@ -1463,7 +1459,7 @@ pub fn contains(value: &CdtValue, term: &CdtTerm) -> CdtOutcome<bool> {
 pub fn head(value: &CdtValue) -> CdtOutcome<CdtTerm> {
     match value.contents() {
         CdtContents::List(items) => list_head(items),
-        CdtContents::Map(_) => wrong_datatype("cdt:head applies to a cdt:List"),
+        CdtContents::Map(_) => raise("cdt:head applies to a cdt:List"),
     }
 }
 
@@ -1471,7 +1467,7 @@ pub fn head(value: &CdtValue) -> CdtOutcome<CdtTerm> {
 pub fn tail(value: &CdtValue) -> CdtOutcome<CdtValue> {
     match value.contents() {
         CdtContents::List(items) => list_tail(items),
-        CdtContents::Map(_) => wrong_datatype("cdt:tail applies to a cdt:List"),
+        CdtContents::Map(_) => raise("cdt:tail applies to a cdt:List"),
     }
 }
 
@@ -1479,7 +1475,7 @@ pub fn tail(value: &CdtValue) -> CdtOutcome<CdtValue> {
 pub fn reverse(value: &CdtValue) -> CdtOutcome<CdtValue> {
     match value.contents() {
         CdtContents::List(items) => CdtOutcome::Value(list_reverse(items)),
-        CdtContents::Map(_) => wrong_datatype("cdt:reverse applies to a cdt:List"),
+        CdtContents::Map(_) => raise("cdt:reverse applies to a cdt:List"),
     }
 }
 
@@ -1487,7 +1483,7 @@ pub fn reverse(value: &CdtValue) -> CdtOutcome<CdtValue> {
 pub fn subseq(value: &CdtValue, start: &CdtTerm, length: Option<&CdtTerm>) -> CdtOutcome<CdtValue> {
     match value.contents() {
         CdtContents::List(items) => list_subseq(items, start, length),
-        CdtContents::Map(_) => wrong_datatype("cdt:subseq applies to a cdt:List"),
+        CdtContents::Map(_) => raise("cdt:subseq applies to a cdt:List"),
     }
 }
 
@@ -1514,7 +1510,7 @@ pub fn concat(values: &[CdtValue]) -> CdtOutcome<CdtValue> {
         match value.contents() {
             CdtContents::List(items) => lists.push(items),
             CdtContents::Map(_) => {
-                return wrong_datatype("cdt:concat applies to cdt:List arguments only");
+                return raise("cdt:concat applies to cdt:List arguments only");
             }
         }
     }
@@ -1526,7 +1522,7 @@ pub fn contains_key(value: &CdtValue, key: &CdtTerm) -> CdtOutcome<bool> {
     match value.contents() {
         CdtContents::Map(entries) => CdtOutcome::Value(map_contains_key(entries, key)),
         CdtContents::List(_) => {
-            wrong_datatype("cdt:containsKey applies to a cdt:Map; a cdt:List has cdt:contains")
+            raise("cdt:containsKey applies to a cdt:Map; a cdt:List has cdt:contains")
         }
     }
 }
@@ -1535,7 +1531,7 @@ pub fn contains_key(value: &CdtValue, key: &CdtTerm) -> CdtOutcome<bool> {
 pub fn keys(value: &CdtValue) -> CdtOutcome<CdtValue> {
     match value.contents() {
         CdtContents::Map(entries) => CdtOutcome::Value(map_keys(entries)),
-        CdtContents::List(_) => wrong_datatype("cdt:keys applies to a cdt:Map"),
+        CdtContents::List(_) => raise("cdt:keys applies to a cdt:Map"),
     }
 }
 
@@ -1546,7 +1542,7 @@ pub fn merge(values: &[CdtValue]) -> CdtOutcome<CdtValue> {
         match value.contents() {
             CdtContents::Map(entries) => maps.push(entries),
             CdtContents::List(_) => {
-                return wrong_datatype("cdt:merge applies to cdt:Map arguments only");
+                return raise("cdt:merge applies to cdt:Map arguments only");
             }
         }
     }
@@ -1557,7 +1553,7 @@ pub fn merge(values: &[CdtValue]) -> CdtOutcome<CdtValue> {
 pub fn put(value: &CdtValue, key: &CdtTerm, item: &CdtTerm) -> CdtOutcome<CdtValue> {
     match value.contents() {
         CdtContents::Map(entries) => map_put(entries, key, item),
-        CdtContents::List(_) => wrong_datatype("cdt:put applies to a cdt:Map"),
+        CdtContents::List(_) => raise("cdt:put applies to a cdt:Map"),
     }
 }
 
@@ -1568,6 +1564,6 @@ pub fn put(value: &CdtValue, key: &CdtTerm, item: &CdtTerm) -> CdtOutcome<CdtVal
 pub fn remove(value: &CdtValue, key: &CdtTerm) -> CdtOutcome<MapRemoval> {
     match value.contents() {
         CdtContents::Map(entries) => CdtOutcome::Value(map_remove(entries, key)),
-        CdtContents::List(_) => wrong_datatype("cdt:remove applies to a cdt:Map"),
+        CdtContents::List(_) => raise("cdt:remove applies to a cdt:Map"),
     }
 }

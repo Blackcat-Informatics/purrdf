@@ -144,6 +144,20 @@ impl From<QuadRow> for QuadIds {
     }
 }
 
+impl<Id> QuadIds<Id> {
+    /// The same quad with every id, graph slot included, through `map`: how a view
+    /// re-keys the rows of the dataset it wraps into its own id space.
+    #[inline]
+    pub fn map_ids<B>(self, mut map: impl FnMut(Id) -> B) -> QuadIds<B> {
+        QuadIds {
+            s: map(self.s),
+            p: map(self.p),
+            o: map(self.o),
+            g: self.g.map(map),
+        }
+    }
+}
+
 /// A borrowed, resolved view of a term — mirrors `InternedTerm` but exposes
 /// `&str` slices borrowed from the dataset, so resolving a term performs **no
 /// allocation and no clone**. Triple components are returned as ids; resolve them
@@ -185,6 +199,50 @@ pub enum TermRef<'a, Id = TermId> {
         /// The quoted triple's object term id.
         o: Id,
     },
+}
+
+impl<'a, Id> TermRef<'a, Id> {
+    /// The same term with its ids — a literal's `datatype`, a triple term's
+    /// `s`/`p`/`o` — through `map`, and a blank node's scope through `scope`; the
+    /// borrowed strings are untouched. This is the one re-keying of a resolved term:
+    /// a view over other datasets moves their terms into its own id space (and, when
+    /// it merges several, keeps their blank-node scopes apart) here.
+    #[inline]
+    pub fn map_ids_scoped<B>(
+        self,
+        mut map: impl FnMut(Id) -> B,
+        scope: impl FnOnce(BlankScope) -> BlankScope,
+    ) -> TermRef<'a, B> {
+        match self {
+            TermRef::Iri(iri) => TermRef::Iri(iri),
+            TermRef::Blank { label, scope: old } => TermRef::Blank {
+                label,
+                scope: scope(old),
+            },
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => TermRef::Literal {
+                lexical,
+                datatype: map(datatype),
+                language,
+                direction,
+            },
+            TermRef::Triple { s, p, o } => TermRef::Triple {
+                s: map(s),
+                p: map(p),
+                o: map(o),
+            },
+        }
+    }
+
+    /// [`Self::map_ids_scoped`] keeping the blank-node scope.
+    #[inline]
+    pub fn map_ids<B>(self, map: impl FnMut(Id) -> B) -> TermRef<'a, B> {
+        self.map_ids_scoped(map, |scope| scope)
+    }
 }
 
 /// A borrowed, resolved quad view: each position is a [`TermRef`] borrowing into the
@@ -2083,6 +2141,68 @@ mod tests {
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
         b.intern_iri(&format!("http://example.org/{n}"))
+    }
+
+    #[test]
+    fn map_ids_rekeys_every_id_column_and_only_those() {
+        let quad = QuadIds {
+            s: 1_u32,
+            p: 2,
+            o: 3,
+            g: Some(4),
+        };
+        assert_eq!(
+            quad.map_ids(|id| u64::from(id) * 10),
+            QuadIds {
+                s: 10_u64,
+                p: 20,
+                o: 30,
+                g: Some(40),
+            }
+        );
+        let default_graph = QuadIds {
+            s: 1_u32,
+            p: 2,
+            o: 3,
+            g: None,
+        };
+        assert_eq!(default_graph.map_ids(u64::from).g, None);
+
+        let literal = TermRef::Literal {
+            lexical: "x",
+            datatype: 7_u32,
+            language: Some("en"),
+            direction: None,
+        };
+        assert_eq!(
+            literal.map_ids(|id| id + 1),
+            TermRef::Literal {
+                lexical: "x",
+                datatype: 8_u32,
+                language: Some("en"),
+                direction: None,
+            }
+        );
+        let triple: TermRef<'_, u32> = TermRef::Triple { s: 1, p: 2, o: 3 };
+        assert_eq!(
+            triple.map_ids(|id| id * 2),
+            TermRef::Triple { s: 2, p: 4, o: 6 }
+        );
+        let blank: TermRef<'_, u32> = TermRef::Blank {
+            label: "b",
+            scope: BlankScope::DEFAULT,
+        };
+        assert_eq!(blank.map_ids(|id| id), blank);
+        let rescoped = blank.map_ids_scoped(|id| id, |_| BlankScope(9));
+        assert_eq!(
+            rescoped,
+            TermRef::Blank {
+                label: "b",
+                scope: BlankScope(9),
+            }
+        );
+        let iri: TermRef<'_, u32> = TermRef::Iri("http://example.org/i");
+        assert_eq!(iri.map_ids(u64::from), TermRef::Iri("http://example.org/i"));
     }
 
     #[test]

@@ -285,7 +285,19 @@ pub trait DatasetView {
     fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_;
 
     /// Iterate every quad as a borrowed, resolved [`QuadRef`] (no allocation).
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_, Self::Id>> + '_;
+    ///
+    /// Provided as [`Self::quads`] with each position through [`Self::resolve`]:
+    /// a resolved quad is by definition its id row resolved, so every view shares
+    /// this one body. A view overrides it only when it holds its quads already
+    /// resolved and can hand them out without the per-term lookup.
+    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_, Self::Id>> + '_ {
+        self.quads().map(|q| QuadRef {
+            s: self.resolve(q.s),
+            p: self.resolve(q.p),
+            o: self.resolve(q.o),
+            g: q.g.map(|id| self.resolve(id)),
+        })
+    }
 
     /// Resolve a dataset-local id to its borrowed [`TermRef`].
     fn resolve(&self, id: Self::Id) -> TermRef<'_, Self::Id>;

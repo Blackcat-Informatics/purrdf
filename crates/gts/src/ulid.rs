@@ -17,32 +17,11 @@ const TIMESTAMP_BYTES: usize = 6;
 const RANDOMNESS_BYTES: usize = 10;
 const MAX_RANDOMNESS: u128 = (1u128 << 80) - 1;
 
-/// Error raised for invalid ULID construction or parsing.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UlidError {
-    detail: String,
+purrdf_lex::message_error! {
+    /// Error raised for invalid ULID construction or parsing.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct UlidError, detail;
 }
-
-impl UlidError {
-    fn new(detail: impl Into<String>) -> Self {
-        Self {
-            detail: detail.into(),
-        }
-    }
-
-    /// Human-readable error detail.
-    pub fn detail(&self) -> &str {
-        &self.detail
-    }
-}
-
-impl fmt::Display for UlidError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.detail)
-    }
-}
-
-impl std::error::Error for UlidError {}
 
 /// A 128-bit ULID value with canonical Crockford Base32 rendering.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

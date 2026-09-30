@@ -281,11 +281,7 @@ impl Digest {
     }
 }
 
-impl Default for Digest {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(Digest);
 
 impl fmt::Debug for Digest {
     /// Deliberately opaque: a hasher's interior state is not meaningful to a

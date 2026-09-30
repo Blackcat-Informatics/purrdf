@@ -92,7 +92,7 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, OnceLock};
 
 use crate::dataset_view::{DatasetView, GraphMatch};
-use crate::ir::{GlobalDictionary, GlobalTermId, QuadIds, QuadRef, RdfDataset, TermId, TermValue};
+use crate::ir::{GlobalDictionary, GlobalTermId, QuadIds, RdfDataset, TermValue};
 use crate::{FastHasher, FastMap, RdfStoreCapabilities};
 use admission::PageAdmission;
 use graph_index::GraphPageIndex;
@@ -451,21 +451,21 @@ impl PagedDataset {
                 }))
             };
             for q in page.quads() {
-                let g = map_quad_to_global(&translation, q);
+                let g = q.map_ids(|id| translation.to_global(id));
                 let key: GlobalQuad = (g.s, g.p, g.o, g.g);
                 if let Some(first_page) = seen_primary.insert(key, id) {
                     return Err(overlap(key, first_page, PagedQuadTable::Primary));
                 }
             }
             for q in page.reifier_quads() {
-                let g = map_quad_to_global(&translation, q);
+                let g = q.map_ids(|id| translation.to_global(id));
                 let key: GlobalQuad = (g.s, g.p, g.o, g.g);
                 if let Some(first_page) = seen_reifier.insert(key, id) {
                     return Err(overlap(key, first_page, PagedQuadTable::Reifier));
                 }
             }
             for q in page.annotation_quads() {
-                let g = map_quad_to_global(&translation, q);
+                let g = q.map_ids(|id| translation.to_global(id));
                 let key: GlobalQuad = (g.s, g.p, g.o, g.g);
                 if let Some(first_page) = seen_annotation.insert(key, id) {
                     return Err(overlap(key, first_page, PagedQuadTable::Annotation));
@@ -1143,16 +1143,6 @@ fn disagreeing_field(sealed: &PageSummary, page: &RdfDataset) -> Option<&'static
         .and_then(|fresh| sealed.first_disagreeing_field(&fresh))
 }
 
-/// Map a page-local [`QuadIds`] back to the shared global id space.
-fn map_quad_to_global(translation: &PageTranslation, q: QuadIds<TermId>) -> QuadIds<GlobalTermId> {
-    QuadIds {
-        s: translation.to_global(q.s),
-        p: translation.to_global(q.p),
-        o: translation.to_global(q.o),
-        g: q.g.map(|g| translation.to_global(g)),
-    }
-}
-
 impl DatasetView for PagedDataset {
     type Id = GlobalTermId;
     type ProbePlan = ();
@@ -1166,19 +1156,7 @@ impl DatasetView for PagedDataset {
                 .page(slot.id)
                 .expect("sealed page must re-materialize deterministically");
             page.quads()
-                .map(move |q| map_quad_to_global(&slot.translation, q))
-        })
-    }
-
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_, GlobalTermId>> + '_ {
-        // `quads()` yields OWNED id rows (each page is materialized behind `self`'s
-        // per-page cache, not by the caller), so resolving each through the shared
-        // dictionary borrows only `self`.
-        self.quads().map(move |q| QuadRef {
-            s: self.dictionary.resolve(q.s),
-            p: self.dictionary.resolve(q.p),
-            o: self.dictionary.resolve(q.o),
-            g: q.g.map(|g| self.dictionary.resolve(g)),
+                .map(move |q| q.map_ids(|id| slot.translation.to_global(id)))
         })
     }
 
@@ -1213,7 +1191,7 @@ impl DatasetView for PagedDataset {
                     .page(slot.id)
                     .expect("sealed page must re-materialize deterministically");
                 page.quads_for_pattern_indexed(local.s, local.p, local.o, local.g)
-                    .map(move |q| map_quad_to_global(&slot.translation, q))
+                    .map(move |q| q.map_ids(|id| slot.translation.to_global(id)))
             })
         })
     }
@@ -1309,7 +1287,7 @@ impl DatasetView for PagedDataset {
                 .page(slot.id)
                 .expect("sealed page must re-materialize deterministically");
             page.reifier_quads()
-                .map(move |q| map_quad_to_global(&slot.translation, q))
+                .map(move |q| q.map_ids(|id| slot.translation.to_global(id)))
         })
     }
 
@@ -1336,7 +1314,7 @@ impl DatasetView for PagedDataset {
                         .page(slot.id)
                         .expect("sealed page must re-materialize deterministically");
                     page.reifier_quads_of(local_reifier)
-                        .map(move |q| map_quad_to_global(&slot.translation, q))
+                        .map(move |q| q.map_ids(|id| slot.translation.to_global(id)))
                 })
         })
     }
@@ -1348,7 +1326,7 @@ impl DatasetView for PagedDataset {
                 .page(slot.id)
                 .expect("sealed page must re-materialize deterministically");
             page.annotation_quads()
-                .map(move |q| map_quad_to_global(&slot.translation, q))
+                .map(move |q| q.map_ids(|id| slot.translation.to_global(id)))
         })
     }
 
@@ -1413,7 +1391,7 @@ impl DatasetView for PagedDataset {
                 .page(slot.id)
                 .expect("sealed page must re-materialize deterministically");
             page.reifier_quads()
-                .map(move |q| map_quad_to_global(&slot.translation, q))
+                .map(move |q| q.map_ids(|id| slot.translation.to_global(id)))
                 .filter(move |q| g.matches(q.g))
         })
     }
@@ -1440,7 +1418,7 @@ impl DatasetView for PagedDataset {
                 .page(slot.id)
                 .expect("sealed page must re-materialize deterministically");
             page.annotation_quads()
-                .map(move |q| map_quad_to_global(&slot.translation, q))
+                .map(move |q| q.map_ids(|id| slot.translation.to_global(id)))
                 .filter(move |q| g.matches(q.g))
         })
     }

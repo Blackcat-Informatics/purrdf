@@ -37,8 +37,7 @@
 //! generated runtime models.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::error::Error;
-use std::fmt::{self, Write as _};
+use std::fmt::Write as _;
 
 use crate::json_model::{Map, Object, Value, ValueKind};
 // A JSON string literal is a valid Python `str` literal with the same value.
@@ -425,27 +424,11 @@ impl PydanticPackage {
     }
 }
 
-/// A malformed emitter configuration or input schema.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PydanticError {
-    message: String,
+purrdf_lex::message_error! {
+    /// A malformed emitter configuration or input schema.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct PydanticError;
 }
-
-impl PydanticError {
-    fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for PydanticError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl Error for PydanticError {}
 
 struct ArtifactAccumulator {
     artifacts: BTreeMap<String, Vec<u8>>,

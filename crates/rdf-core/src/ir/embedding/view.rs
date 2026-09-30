@@ -12,7 +12,7 @@ use crate::distance::{Exact, Resolved};
 
 use super::contract::{
     DistanceMetric, PrefixPostprocessing, TlvEntryRef, TlvWireType, VectorDtype, canonical_tlv,
-    validate_sha256_field,
+    optional_tlv, required_tlv, validate_sha256_field,
 };
 use super::error::{DigestKind, EmbeddingError};
 use super::identity::{
@@ -21,6 +21,7 @@ use super::identity::{
     ProjectionId, TargetId, TargetIdentityDigest, TargetSetId, VectorSpaceId,
     derive_chunking_contract_id,
 };
+use super::metadata::{edge_count, require_edge, require_edge_count};
 use super::target::{TargetKind, validate_target_identity as validate_canonical_target_identity};
 use super::wire::{
     PURREMB_DIRECTORY_ENTRY_LENGTH, PURREMB_FILE_ALIGNMENT, PURREMB_HEADER_LENGTH, PURREMB_MAGIC,
@@ -984,19 +985,27 @@ impl Iterator for F64Scalars<'_> {
 
 impl ExactSizeIterator for F64Scalars<'_> {}
 
-/// Logical `f32` prefix values, raw or deterministically L2-normalized.
+/// Logical prefix values of one row, raw or deterministically L2-normalized: one
+/// enum for both scalar widths, so a row is read through one `Iterator` whichever
+/// width it stores.
 #[derive(Debug, Clone)]
-pub enum EffectiveF32Row<'a> {
+pub enum EffectiveRow<R, N> {
     /// Exact stored leading-prefix values.
-    Raw(F32Scalars<'a>),
+    Raw(R),
     /// Values normalized by the normative binary64 fold.
-    Normalized(L2F32Scalars<'a>),
+    Normalized(N),
 }
 
-impl Iterator for EffectiveF32Row<'_> {
-    type Item = Result<f32, EmbeddingError>;
+/// Logical `f32` prefix values, raw or deterministically L2-normalized.
+pub type EffectiveF32Row<'a> = EffectiveRow<F32Scalars<'a>, L2F32Scalars<'a>>;
 
-    fn next(&mut self) -> Option<Self::Item> {
+/// Logical `f64` prefix values, raw or deterministically L2-normalized.
+pub type EffectiveF64Row<'a> = EffectiveRow<F64Scalars<'a>, L2F64Scalars<'a>>;
+
+impl<T, R: Iterator<Item = T>, N: Iterator<Item = T>> Iterator for EffectiveRow<R, N> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
         match self {
             Self::Raw(values) => values.next(),
             Self::Normalized(values) => values.next(),
@@ -1011,7 +1020,10 @@ impl Iterator for EffectiveF32Row<'_> {
     }
 }
 
-impl ExactSizeIterator for EffectiveF32Row<'_> {}
+impl<T, R: ExactSizeIterator<Item = T>, N: ExactSizeIterator<Item = T>> ExactSizeIterator
+    for EffectiveRow<R, N>
+{
+}
 
 impl EffectiveF32Row<'_> {
     /// Append every remaining logical value to `out`, in order.
@@ -1038,35 +1050,6 @@ impl EffectiveF32Row<'_> {
         }
     }
 }
-
-/// Logical `f64` prefix values, raw or deterministically L2-normalized.
-#[derive(Debug, Clone)]
-pub enum EffectiveF64Row<'a> {
-    /// Exact stored leading-prefix values.
-    Raw(F64Scalars<'a>),
-    /// Values normalized by the normative binary64 fold.
-    Normalized(L2F64Scalars<'a>),
-}
-
-impl Iterator for EffectiveF64Row<'_> {
-    type Item = Result<f64, EmbeddingError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Raw(values) => values.next(),
-            Self::Normalized(values) => values.next(),
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match self {
-            Self::Raw(values) => values.size_hint(),
-            Self::Normalized(values) => values.size_hint(),
-        }
-    }
-}
-
-impl ExactSizeIterator for EffectiveF64Row<'_> {}
 
 /// Allocation-free deterministic-L2 `f32` projection iterator.
 #[derive(Debug, Clone)]
@@ -1994,30 +1977,30 @@ fn validate_complete_relations(view: &EmbeddingView<'_>) -> Result<(), Embedding
         match target.kind()? {
             TargetKind::Corpus | TargetKind::RdfDataset | TargetKind::Extension => {}
             TargetKind::Document => {
-                require_borrowed_edge_count(&incoming, target.id(), 1, 1)?;
+                require_edge_count(&incoming, target.id(), 1, 1)?;
                 if let Some(parent) = borrowed_target_id(target, 1)? {
-                    require_borrowed_edge(&edges, parent, 1, target.id())?;
+                    require_edge(&edges, parent, 1, target.id())?;
                 }
             }
             TargetKind::Chunk => {
-                require_borrowed_edge_count(&incoming, target.id(), 2, 1)?;
+                require_edge_count(&incoming, target.id(), 2, 1)?;
                 if let Some(parent) = borrowed_target_id(target, 1)? {
-                    require_borrowed_edge(&edges, parent, 2, target.id())?;
+                    require_edge(&edges, parent, 2, target.id())?;
                 }
             }
             TargetKind::RdfGraph => {
-                require_borrowed_edge_count(&incoming, target.id(), 16, 1)?;
+                require_edge_count(&incoming, target.id(), 16, 1)?;
                 if let Some(dataset) = borrowed_target_id(target, 1)? {
-                    require_borrowed_edge(&edges, dataset, 16, target.id())?;
+                    require_edge(&edges, dataset, 16, target.id())?;
                     match borrowed_u32(target, 2)?
                         .ok_or(EmbeddingError::Missing("retained RDF graph form"))?
                     {
-                        0 => require_borrowed_edge_count(&edges, target.id(), 26, 0)?,
+                        0 => require_edge_count(&edges, target.id(), 26, 0)?,
                         1 => {
                             let name =
                                 borrowed_required_target_id(target, 3, "retained RDF graph name")?;
-                            require_borrowed_edge_count(&edges, target.id(), 26, 1)?;
-                            require_borrowed_edge(&edges, target.id(), 26, name)?;
+                            require_edge_count(&edges, target.id(), 26, 1)?;
+                            require_edge(&edges, target.id(), 26, name)?;
                             validate_borrowed_term_position(view, name, &[1, 2], "RDF graph name")?;
                         }
                         value => {
@@ -2027,36 +2010,36 @@ fn validate_complete_relations(view: &EmbeddingView<'_>) -> Result<(), Embedding
                             });
                         }
                     }
-                } else if borrowed_edge_count(&edges, target.id(), 26) > 1 {
+                } else if edge_count(&edges, target.id(), 26) > 1 {
                     return Err(EmbeddingError::Duplicate("RDF graph name relation"));
                 }
             }
             TargetKind::RdfStatement => {
-                require_borrowed_edge_count(&incoming, target.id(), 17, 1)?;
+                require_edge_count(&incoming, target.id(), 17, 1)?;
                 for kind in 18..=20 {
-                    require_borrowed_edge_count(&edges, target.id(), kind, 1)?;
+                    require_edge_count(&edges, target.id(), kind, 1)?;
                 }
                 if let Some(graph) = borrowed_target_id(target, 1)? {
-                    require_borrowed_edge(&edges, graph, 17, target.id())?;
+                    require_edge(&edges, graph, 17, target.id())?;
                     let subject = borrowed_required_target_id(target, 2, "statement subject")?;
                     let predicate = borrowed_required_target_id(target, 3, "statement predicate")?;
                     let object = borrowed_required_target_id(target, 4, "statement object")?;
-                    require_borrowed_edge(&edges, target.id(), 18, subject)?;
-                    require_borrowed_edge(&edges, target.id(), 19, predicate)?;
-                    require_borrowed_edge(&edges, target.id(), 20, object)?;
+                    require_edge(&edges, target.id(), 18, subject)?;
+                    require_edge(&edges, target.id(), 19, predicate)?;
+                    require_edge(&edges, target.id(), 20, object)?;
                     validate_borrowed_term_position(view, subject, &[1, 2, 4], "RDF subject")?;
                     validate_borrowed_term_position(view, predicate, &[1], "RDF predicate")?;
                 }
             }
             TargetKind::RdfReifier => {
-                require_borrowed_edge_count(&incoming, target.id(), 21, 1)?;
-                require_borrowed_edge_count(&edges, target.id(), 22, 1)?;
+                require_edge_count(&incoming, target.id(), 21, 1)?;
+                require_edge_count(&edges, target.id(), 22, 1)?;
                 if borrowed_target_id(target, 1)?.is_some() {
                     let graph = borrowed_required_target_id(target, 1, "reifier graph")?;
                     let statement = borrowed_required_target_id(target, 2, "reified statement")?;
                     let term = borrowed_required_target_id(target, 3, "reifier term")?;
-                    require_borrowed_edge(&edges, statement, 21, target.id())?;
-                    require_borrowed_edge(&edges, target.id(), 22, term)?;
+                    require_edge(&edges, statement, 21, target.id())?;
+                    require_edge(&edges, target.id(), 22, term)?;
                     validate_borrowed_term_position(view, term, &[1, 2], "RDF reifier term")?;
                     require_borrowed_composite_graph(
                         view,
@@ -2067,17 +2050,17 @@ fn validate_complete_relations(view: &EmbeddingView<'_>) -> Result<(), Embedding
                 }
             }
             TargetKind::RdfAnnotation => {
-                require_borrowed_edge_count(&incoming, target.id(), 23, 1)?;
-                require_borrowed_edge_count(&edges, target.id(), 24, 1)?;
-                require_borrowed_edge_count(&edges, target.id(), 25, 1)?;
+                require_edge_count(&incoming, target.id(), 23, 1)?;
+                require_edge_count(&edges, target.id(), 24, 1)?;
+                require_edge_count(&edges, target.id(), 25, 1)?;
                 if borrowed_target_id(target, 1)?.is_some() {
                     let graph = borrowed_required_target_id(target, 1, "annotation graph")?;
                     let reifier = borrowed_required_target_id(target, 2, "annotation reifier")?;
                     let predicate = borrowed_required_target_id(target, 3, "annotation predicate")?;
                     let object = borrowed_required_target_id(target, 4, "annotation object")?;
-                    require_borrowed_edge(&edges, reifier, 23, target.id())?;
-                    require_borrowed_edge(&edges, target.id(), 24, predicate)?;
-                    require_borrowed_edge(&edges, target.id(), 25, object)?;
+                    require_edge(&edges, reifier, 23, target.id())?;
+                    require_edge(&edges, target.id(), 24, predicate)?;
+                    require_edge(&edges, target.id(), 25, object)?;
                     validate_borrowed_term_position(view, predicate, &[1], "annotation predicate")?;
                     require_borrowed_composite_graph(
                         view,
@@ -2098,13 +2081,13 @@ fn validate_borrowed_triple_relations(
     edges: &[BorrowedBuiltinEdge],
     target: TargetView<'_>,
 ) -> Result<(), EmbeddingError> {
-    let counts = [32, 33, 34].map(|kind| borrowed_edge_count(edges, target.id(), kind));
+    let counts = [32, 33, 34].map(|kind| edge_count(edges, target.id(), kind));
     match borrowed_u32(target, 1)? {
         Some(4) => {
             for (tag, kind) in (2..=4).zip(32..=34) {
-                require_borrowed_edge_count(edges, target.id(), kind, 1)?;
+                require_edge_count(edges, target.id(), kind, 1)?;
                 let component = borrowed_required_target_id(target, tag, "triple-term component")?;
-                require_borrowed_edge(edges, target.id(), kind, component)?;
+                require_edge(edges, target.id(), kind, component)?;
                 if tag == 2 {
                     validate_borrowed_term_position(view, component, &[1, 2, 4], "triple subject")?;
                 } else if tag == 3 {
@@ -2200,40 +2183,6 @@ fn require_borrowed_composite_graph(
         return Err(EmbeddingError::Malformed(context));
     }
     Ok(())
-}
-
-fn require_borrowed_edge(
-    edges: &[BorrowedBuiltinEdge],
-    subject: TargetId,
-    kind: u32,
-    object: TargetId,
-) -> Result<(), EmbeddingError> {
-    if edges.binary_search(&(subject, kind, object)).is_err() {
-        return Err(EmbeddingError::MissingReference(
-            "required built-in target relation",
-        ));
-    }
-    Ok(())
-}
-
-fn require_borrowed_edge_count(
-    edges: &[BorrowedBuiltinEdge],
-    target: TargetId,
-    kind: u32,
-    expected: usize,
-) -> Result<(), EmbeddingError> {
-    if borrowed_edge_count(edges, target, kind) != expected {
-        return Err(EmbeddingError::Malformed(
-            "built-in target relation cardinality",
-        ));
-    }
-    Ok(())
-}
-
-fn borrowed_edge_count(edges: &[BorrowedBuiltinEdge], target: TargetId, kind: u32) -> usize {
-    let start = edges.partition_point(|edge| (edge.0, edge.1) < (target, kind));
-    let end = edges.partition_point(|edge| (edge.0, edge.1) <= (target, kind));
-    end - start
 }
 
 /// Iterator over one target's contiguous relation range.
@@ -4371,25 +4320,6 @@ fn validate_loss_contract(bytes: &[u8]) -> Result<(), EmbeddingError> {
         validate_sha256_field(bytes, 4, 5, DigestKind::Index)?;
     }
     Ok(())
-}
-
-fn required_tlv<'a>(
-    bytes: &'a [u8],
-    tag: u16,
-    wire: TlvWireType,
-    context: &'static str,
-) -> Result<TlvEntryRef<'a>, EmbeddingError> {
-    let entry = optional_tlv(bytes, tag)?.ok_or(EmbeddingError::Missing(context))?;
-    if entry.wire_type != wire || !entry.critical {
-        return Err(EmbeddingError::MalformedTlv(
-            "required field has wrong type or criticality",
-        ));
-    }
-    Ok(entry)
-}
-
-fn optional_tlv(bytes: &[u8], tag: u16) -> Result<Option<TlvEntryRef<'_>>, EmbeddingError> {
-    Ok(canonical_tlv(bytes)?.find(|entry| entry.tag == tag))
 }
 
 fn require_nonempty_tlv<'a>(

@@ -709,7 +709,7 @@ fn is_biased_by(numerator: &syn::Expr, divisor: &syn::Expr) -> bool {
 
 /// Whether `expr` is the integer literal `1`.
 fn is_one(expr: &syn::Expr) -> bool {
-    matches!(expr, syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(literal), .. }) if literal.base10_digits() == "1")
+    crate::rules::is_int_literal(expr, "1")
 }
 
 /// Every byte-layout hit in one parsed shipping file.

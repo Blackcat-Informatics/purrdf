@@ -7,7 +7,10 @@ use core::cmp::Ordering;
 
 use crate::{ContentDigest, RdfTextDirection};
 
-use super::contract::{TlvEntryRef, TlvWireType, canonical_tlv, push_tlv, validate_sha256_field};
+use super::contract::{
+    TlvEntryRef, TlvWireType, canonical_tlv, optional_tlv, push_tlv, required_tlv,
+    validate_sha256_field,
+};
 use super::error::{DigestKind, EmbeddingError};
 use super::identity::{
     ChunkingContractId, FamilyId, TargetId, TargetIdentityDigest, TargetSetId,
@@ -944,25 +947,20 @@ pub(crate) fn validate_target_identity(
                     required_target_rule(7, TlvWireType::U64),
                 ],
             )?;
-            let byte_start = target_u64(required_target_tlv(
+            let byte_start = target_u64(required_tlv(
                 bytes,
                 4,
                 TlvWireType::U64,
                 "chunk byte start",
             )?)?;
-            let byte_end = target_u64(required_target_tlv(
-                bytes,
-                5,
-                TlvWireType::U64,
-                "chunk byte end",
-            )?)?;
-            let scalar_start = target_u64(required_target_tlv(
+            let byte_end = target_u64(required_tlv(bytes, 5, TlvWireType::U64, "chunk byte end")?)?;
+            let scalar_start = target_u64(required_tlv(
                 bytes,
                 6,
                 TlvWireType::U64,
                 "chunk scalar start",
             )?)?;
-            let scalar_end = target_u64(required_target_tlv(
+            let scalar_end = target_u64(required_tlv(
                 bytes,
                 7,
                 TlvWireType::U64,
@@ -980,12 +978,7 @@ pub(crate) fn validate_target_identity(
             validate_target_schema(bytes, &[required_target_rule(1, TlvWireType::Digest32)])?;
         }
         TargetKind::RdfGraph => {
-            let form = target_u32(required_target_tlv(
-                bytes,
-                2,
-                TlvWireType::U32,
-                "RDF graph form",
-            )?)?;
+            let form = target_u32(required_tlv(bytes, 2, TlvWireType::U32, "RDF graph form")?)?;
             let rules: &[TargetFieldRule] = match form {
                 0 => &[
                     required_target_rule(1, TlvWireType::Digest32),
@@ -1045,12 +1038,7 @@ const fn four_target_digest_rules() -> [TargetFieldRule; 4] {
 }
 
 fn validate_rdf_term_identity(bytes: &[u8]) -> Result<(), EmbeddingError> {
-    let form = target_u32(required_target_tlv(
-        bytes,
-        1,
-        TlvWireType::U32,
-        "RDF term form",
-    )?)?;
+    let form = target_u32(required_tlv(bytes, 1, TlvWireType::U32, "RDF term form")?)?;
     match form {
         1 => {
             validate_target_schema(
@@ -1091,13 +1079,13 @@ fn validate_rdf_term_identity(bytes: &[u8]) -> Result<(), EmbeddingError> {
             )?;
             let datatype = required_target_text(bytes, 3, "literal datatype IRI")?;
             validate_absolute_iri(datatype)?;
-            let language = optional_target_tlv(bytes, 4)?;
+            let language = optional_tlv(bytes, 4)?;
             if let Some(language) = language {
                 let language = core::str::from_utf8(language.value)
                     .map_err(|_| EmbeddingError::InvalidUtf8("language tag"))?;
                 validate_language_tag(language)?;
             }
-            let direction = target_u32(required_target_tlv(
+            let direction = target_u32(required_tlv(
                 bytes,
                 5,
                 TlvWireType::U32,
@@ -1137,31 +1125,12 @@ fn validate_rdf_term_identity(bytes: &[u8]) -> Result<(), EmbeddingError> {
     Ok(())
 }
 
-fn required_target_tlv<'a>(
-    bytes: &'a [u8],
-    tag: u16,
-    wire: TlvWireType,
-    context: &'static str,
-) -> Result<TlvEntryRef<'a>, EmbeddingError> {
-    let entry = optional_target_tlv(bytes, tag)?.ok_or(EmbeddingError::Missing(context))?;
-    if entry.wire_type != wire || !entry.critical {
-        return Err(EmbeddingError::MalformedTlv(
-            "required target field has wrong type or criticality",
-        ));
-    }
-    Ok(entry)
-}
-
-fn optional_target_tlv(bytes: &[u8], tag: u16) -> Result<Option<TlvEntryRef<'_>>, EmbeddingError> {
-    Ok(canonical_tlv(bytes)?.find(|entry| entry.tag == tag))
-}
-
 fn required_target_text<'a>(
     bytes: &'a [u8],
     tag: u16,
     context: &'static str,
 ) -> Result<&'a str, EmbeddingError> {
-    let entry = required_target_tlv(bytes, tag, TlvWireType::Utf8, context)?;
+    let entry = required_tlv(bytes, tag, TlvWireType::Utf8, context)?;
     if entry.value.is_empty() {
         return Err(EmbeddingError::Missing(context));
     }

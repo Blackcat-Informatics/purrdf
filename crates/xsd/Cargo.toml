@@ -21,8 +21,9 @@ all-features = true
 workspace = true
 
 [lib]
-# rlib-only, and a foundation: its one runtime dependency is the
-# zero-dependency root `purrdf-hash`. It must stay wasm-clean. It does NOT depend on
+# rlib-only, and a foundation: its runtime dependencies are the zero-dependency
+# root `purrdf-hash` and the lexical layer `purrdf-lex` directly above it. It must
+# stay wasm-clean. It does NOT depend on
 # `purrdf-core` — the dependency points the other way.
 crate-type = ["rlib"]
 path = "src/lib.rs"
@@ -33,6 +34,9 @@ name = "purrdf_xsd"
 # uppercase canonical writer), and the SplitMix64 stream `ieee::reference`
 # draws its deterministic samples from.
 purrdf-hash = { workspace = true }
+# The byte-run membership test (`scan::in_runs`) the whitespace facets' chunked
+# prechecks classify each byte with.
+purrdf-lex = { workspace = true }
 
 [dev-dependencies]
 # Round-trip / canonicalization property tests (lexical -> value -> canonical)

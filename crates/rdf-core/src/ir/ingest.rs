@@ -35,7 +35,7 @@ use purrdf_events::{
 use super::builder::RdfDatasetBuilder;
 use super::dataset::{RdfDataset, TermRef};
 use super::term::{BlankScope, TermId};
-use crate::{FastMap, FastSet, RdfLiteral, RdfTextDirection};
+use crate::{FastMap, FastSet, RdfLiteral};
 
 /// A buffered term declaration, owned so it survives until phase-2 resolution. The
 /// borrowed [`EventTerm`] strings are copied into owned form on receipt, because the
@@ -78,23 +78,6 @@ impl RawTerm {
             },
             EventTerm::Triple(triple) => Self::Triple(triple),
         }
-    }
-}
-
-/// Map the protocol's [`TextDirection`] onto the IR's [`RdfTextDirection`].
-const fn map_direction(direction: TextDirection) -> RdfTextDirection {
-    match direction {
-        TextDirection::Ltr => RdfTextDirection::Ltr,
-        TextDirection::Rtl => RdfTextDirection::Rtl,
-    }
-}
-
-/// Map the IR's [`RdfTextDirection`] onto the protocol's [`TextDirection`]; the
-/// inverse of [`map_direction`].
-const fn event_direction(direction: RdfTextDirection) -> TextDirection {
-    match direction {
-        RdfTextDirection::Ltr => TextDirection::Ltr,
-        RdfTextDirection::Rtl => TextDirection::Rtl,
     }
 }
 
@@ -269,7 +252,7 @@ impl DatasetSink {
                         Some(datatype)
                     },
                     language,
-                    direction: direction.map(map_direction),
+                    direction,
                 };
                 self.builder_mut().intern_literal(literal)
             }
@@ -524,7 +507,7 @@ impl<'a> FrozenDatasetSource<'a> {
                         lexical,
                         datatype: datatype_iri,
                         language,
-                        direction: direction.map(event_direction),
+                        direction,
                     },
                 )
             }

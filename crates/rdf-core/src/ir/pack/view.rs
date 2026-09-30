@@ -35,7 +35,7 @@ use std::num::NonZeroU64;
 
 use crate::RdfStoreCapabilities;
 use crate::dataset_view::{DatasetView, GraphMatch, ViewTermId};
-use crate::ir::{QuadIds, QuadRef, TermRef, TermValue};
+use crate::ir::{QuadIds, TermRef, TermValue};
 
 use super::container::PackView;
 use super::dict::PackTermId;
@@ -113,36 +113,11 @@ impl ViewTermId for PackId {
         u128::from(self.get())
     }
 
+    /// [`GlobalTermId`](crate::ir::global::GlobalTermId)'s computed-key scheme: both
+    /// ids are `u64`-bounded, so both key spaces are that one.
     #[inline]
     fn encode_computed(scratch_index: u32) -> u128 {
-        (1u128 << 64) | u128::from(scratch_index)
-    }
-}
-
-/// Rewrite a resolved [`TermRef`] out of the `u64`-keyed [`PackTermId`] space into
-/// the caller-facing [`PackId`] space: only the id-carrying variants (a literal's
-/// `datatype`, a triple term's `s`/`p`/`o`) change; the borrowed string payloads are
-/// untouched (same lifetime in, same lifetime out).
-fn map_term_ref(term: TermRef<'_, PackTermId>) -> TermRef<'_, PackId> {
-    match term {
-        TermRef::Iri(iri) => TermRef::Iri(iri),
-        TermRef::Blank { label, scope } => TermRef::Blank { label, scope },
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => TermRef::Literal {
-            lexical,
-            datatype: PackId::from_unified(datatype),
-            language,
-            direction,
-        },
-        TermRef::Triple { s, p, o } => TermRef::Triple {
-            s: PackId::from_unified(s),
-            p: PackId::from_unified(p),
-            o: PackId::from_unified(o),
-        },
+        crate::ir::global::GlobalTermId::encode_computed(scratch_index)
     }
 }
 
@@ -152,12 +127,7 @@ fn map_term_ref(term: TermRef<'_, PackTermId>) -> TermRef<'_, PackId> {
 fn map_quad(
     (s, p, o, g): (PackTermId, PackTermId, PackTermId, Option<PackTermId>),
 ) -> QuadIds<PackId> {
-    QuadIds {
-        s: PackId::from_unified(s),
-        p: PackId::from_unified(p),
-        o: PackId::from_unified(o),
-        g: g.map(PackId::from_unified),
-    }
+    QuadIds { s, p, o, g }.map_ids(PackId::from_unified)
 }
 
 /// Rewrite a caller's [`GraphMatch<PackId>`] down to the `u64`-keyed
@@ -189,17 +159,10 @@ impl DatasetView for PackView<'_> {
         self.triples().all_quads().map(map_quad)
     }
 
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_, PackId>> + '_ {
-        self.quads().map(move |q| QuadRef {
-            s: self.resolve(q.s),
-            p: self.resolve(q.p),
-            o: self.resolve(q.o),
-            g: q.g.map(|g| self.resolve(g)),
-        })
-    }
-
     fn resolve(&self, id: PackId) -> TermRef<'_, PackId> {
-        map_term_ref(self.dict().resolve(id.as_unified()))
+        self.dict()
+            .resolve(id.as_unified())
+            .map_ids(PackId::from_unified)
     }
 
     fn quads_for_pattern(

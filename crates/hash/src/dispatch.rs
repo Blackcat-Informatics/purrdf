@@ -90,6 +90,88 @@ pub trait Backend: Copy + Eq + Sized + 'static {
     fn name(self) -> &'static str;
 }
 
+/// Declare a [`Backend`] family on the vector-ISA ladder every byte kernel of
+/// the workspace is compiled for: `Portable`, `Sse2`, `Avx2`, `Neon` and
+/// `Simd128`, preferred widest first (`Avx2`, `Sse2`, `Neon`, `Simd128`, then
+/// `Portable`), each named by its lowercase spelling.
+///
+/// The ladder, its order and its names are one thing, stated here; a family
+/// supplies its documentation, each path's documentation, and which paths this
+/// build and processor can run.
+///
+/// ```rust
+/// use purrdf_hash::Backend as _;
+///
+/// purrdf_hash::vector_backend! {
+///     /// A kernel path.
+///     pub enum Path {
+///         /// Always available.
+///         Portable,
+///         /// SSE2.
+///         Sse2,
+///         /// AVX2.
+///         Avx2,
+///         /// NEON.
+///         Neon,
+///         /// wasm `simd128`.
+///         Simd128,
+///     }
+///     available: |path| path == Path::Portable;
+/// }
+///
+/// assert_eq!(Path::selected(), Path::Portable);
+/// assert_eq!(Path::Avx2.name(), "avx2");
+/// ```
+#[macro_export]
+macro_rules! vector_backend {
+    (
+        $(#[$meta:meta])*
+        $vis:vis enum $name:ident {
+            $(#[$portable:meta])* Portable,
+            $(#[$sse2:meta])* Sse2,
+            $(#[$avx2:meta])* Avx2,
+            $(#[$neon:meta])* Neon,
+            $(#[$simd128:meta])* Simd128,
+        }
+        available: |$path:ident| $available:expr;
+    ) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        $vis enum $name {
+            $(#[$portable])* Portable,
+            $(#[$sse2])* Sse2,
+            $(#[$avx2])* Avx2,
+            $(#[$neon])* Neon,
+            $(#[$simd128])* Simd128,
+        }
+
+        impl $crate::Backend for $name {
+            const ALL: &'static [Self] = &[
+                Self::Avx2,
+                Self::Sse2,
+                Self::Neon,
+                Self::Simd128,
+                Self::Portable,
+            ];
+
+            fn is_available(self) -> bool {
+                let $path = self;
+                $available
+            }
+
+            fn name(self) -> &'static str {
+                match self {
+                    Self::Portable => "portable",
+                    Self::Sse2 => "sse2",
+                    Self::Avx2 => "avx2",
+                    Self::Neon => "neon",
+                    Self::Simd128 => "simd128",
+                }
+            }
+        }
+    };
+}
+
 /// Whether this host advertises every processor feature in `flags`,
 /// independently of the run-time detection a test is checking: the `flags`
 /// (x86) or `Features` (Arm) line of Linux `/proc/cpuinfo`. An empty `flags`

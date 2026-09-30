@@ -13,8 +13,6 @@
 use purrdf_iri::json_pointer;
 use purrdf_iri::terminals::{is_ncname_char, is_ncname_start};
 use std::collections::{BTreeMap, BTreeSet};
-use std::error::Error;
-use std::fmt;
 
 use crate::json_model::{Object, ToJson, Value, ValueKind};
 use ::purrdf::loss::LossLedger;
@@ -484,33 +482,11 @@ pub struct LinkmlPackage {
     canonical_slot_diagnostics: Vec<LinkmlSlotDiagnostic>,
 }
 
-/// A malformed LinkML configuration, document, or projection input.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LinkmlError {
-    detail: String,
+purrdf_lex::message_error! {
+    /// A malformed LinkML configuration, document, or projection input.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct LinkmlError, detail;
 }
-
-impl LinkmlError {
-    fn new(detail: impl Into<String>) -> Self {
-        Self {
-            detail: detail.into(),
-        }
-    }
-
-    /// Stable human-readable error detail.
-    #[must_use]
-    pub fn detail(&self) -> &str {
-        &self.detail
-    }
-}
-
-impl fmt::Display for LinkmlError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.detail)
-    }
-}
-
-impl Error for LinkmlError {}
 
 /// Parse a LinkML 1.11 YAML document without accepting lossy YAML semantics.
 ///

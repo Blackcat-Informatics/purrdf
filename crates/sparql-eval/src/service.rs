@@ -732,11 +732,7 @@ impl fmt::Debug for ServiceRouter<'_> {
     }
 }
 
-impl Default for ServiceRouter<'_> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(ServiceRouter<'_>);
 
 impl<'a> ServiceRouter<'a> {
     /// A router with no routes and no fallback: every service is denied.

@@ -944,9 +944,9 @@ impl SnapshotBuilder {
                     quads
                         .iter()
                         .map(|&(s, p, o, g)| {
-                            let mut row = vec![iv(s), iv(p), iv(o)];
+                            let mut row = vec![Value::from(s), Value::from(p), Value::from(o)];
                             if let Some(g) = g {
-                                row.push(iv(g));
+                                row.push(Value::from(g));
                             }
                             Value::Array(row)
                         })
@@ -963,9 +963,14 @@ impl SnapshotBuilder {
                     reifies
                         .iter()
                         .map(|&(rid, (s, p, o), g)| {
-                            let mut row = vec![iv(rid), iv(s), iv(p), iv(o)];
+                            let mut row = vec![
+                                Value::from(rid),
+                                Value::from(s),
+                                Value::from(p),
+                                Value::from(o),
+                            ];
                             if let Some(g) = g {
-                                row.push(iv(g));
+                                row.push(Value::from(g));
                             }
                             Value::Array(row)
                         })
@@ -980,9 +985,9 @@ impl SnapshotBuilder {
                     annot
                         .iter()
                         .map(|&(r, p, v, g)| {
-                            let mut row = vec![iv(r), iv(p), iv(v)];
+                            let mut row = vec![Value::from(r), Value::from(p), Value::from(v)];
                             if let Some(g) = g {
-                                row.push(iv(g));
+                                row.push(Value::from(g));
                             }
                             Value::Array(row)
                         })
@@ -1010,10 +1015,6 @@ impl SnapshotBuilder {
         let bytes = canonical(&self.snapshot_payload());
         digest_str(&bytes)
     }
-}
-
-fn iv(n: usize) -> Value {
-    Value::Integer(purrdf_lex::cbor::Integer::from(n as u64))
 }
 
 /// The by-VALUE twin of `purrdf_gts::writer::term_to_wire`.
@@ -1281,18 +1282,9 @@ pub struct BlobRow {
 }
 
 /// Choose `zstd-rsyncable` for large payloads when the base chain is the default
-/// `["zstd"]` (`_Builder.to_gts.choose_transform`).
-pub fn choose_transform(
-    base_chain: &[String],
-    payload_len: usize,
-    threshold: usize,
-) -> Vec<String> {
-    if base_chain.len() == 1 && base_chain[0] == "zstd" && payload_len > threshold {
-        vec!["zstd-rsyncable".to_string()]
-    } else {
-        base_chain.to_vec()
-    }
-}
+/// `["zstd"]`: the GTS writer's snapshot rule, so a composed archive and a
+/// written one pick the same transform.
+pub use purrdf_gts::writer::choose_snapshot_transform as choose_transform;
 
 /// Which frame slot an assignment row addresses.
 ///

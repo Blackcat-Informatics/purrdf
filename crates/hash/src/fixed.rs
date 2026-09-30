@@ -392,5 +392,36 @@ impl BuildHasher for FixedState {
     }
 }
 
+/// The [`FixedHasher`] hash of `value`: [`FixedState`]'s
+/// [`hash_one`](BuildHasher::hash_one), as a function, so a table that keeps
+/// its own index hashes its entries with the same call it hashes its probes with.
+#[inline]
+#[must_use]
+pub fn hash_one<T: core::hash::Hash + ?Sized>(value: &T) -> u64 {
+    FixedState::new().hash_one(value)
+}
+
 /// The name of the path this build's [`FixedHasher`] runs.
 pub(crate) const SELECTED_NAME: &str = Selected::NAME;
+
+#[cfg(test)]
+mod hash_one_tests {
+    use core::hash::{Hash, Hasher};
+
+    use super::{FixedHasher, hash_one};
+
+    #[test]
+    fn hash_one_is_one_fixed_hasher_run() {
+        for value in [
+            "",
+            "http://example.org/s",
+            "a longer value spanning several words",
+        ] {
+            let mut hasher = FixedHasher::default();
+            value.hash(&mut hasher);
+            assert_eq!(hash_one(value), hasher.finish(), "{value:?}");
+        }
+        assert_eq!(hash_one(&(1_u32, "x")), hash_one(&(1_u32, "x")));
+        assert_ne!(hash_one(&1_u64), hash_one(&2_u64));
+    }
+}

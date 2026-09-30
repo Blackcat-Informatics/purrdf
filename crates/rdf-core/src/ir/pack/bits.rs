@@ -165,6 +165,25 @@ impl IntVector {
         }
     }
 
+    /// The narrowest vector holding every one of `values`, in order: the width is
+    /// [`bits_for`] of their maximum (0 for an empty slice), chosen once, and the
+    /// backing words are sized once before the values are packed.
+    ///
+    /// This is the one constructor from a finished slice. The width is a property
+    /// of the whole slice, so a builder that has its values in hand never guesses
+    /// a width or widens one; every pack codec and page summary builds its vectors
+    /// here.
+    #[must_use]
+    pub fn from_values(values: &[u64]) -> Self {
+        let mut vector = Self::with_width(bits_for(values.iter().copied().max().unwrap_or(0)));
+        let bits = values.len() as u64 * u64::from(vector.width);
+        vector.words.reserve_exact(bits.div_ceil(64) as usize);
+        for &value in values {
+            vector.push(value);
+        }
+        vector
+    }
+
     /// Append `value`.
     ///
     /// # Panics
@@ -963,6 +982,22 @@ impl<'a> RankSelectRef<'a> {
     pub fn select0(&self, k: usize) -> Option<usize> {
         RankSelectDir::select0(self, k)
     }
+
+    /// Group `k`'s range `[start, end)` under the mark-last convention: the bitmap
+    /// sets the bit of each group's LAST position, so group `k` starts one past the
+    /// `(k - 1)`-th set bit (at 0 for the first group) and ends one past the `k`-th.
+    /// `None` when there is no `k`-th set bit, which is no group `k`.
+    ///
+    /// This is the one reading of a boundary bitmap; every pack structure that
+    /// groups a flat array by marking group ends reads its groups here.
+    #[must_use]
+    pub fn mark_last_range(&self, k: usize) -> Option<(usize, usize)> {
+        let start = match k.checked_sub(1) {
+            None => 0,
+            Some(previous) => self.select1(previous)? + 1,
+        };
+        Some((start, self.select1(k)? + 1))
+    }
 }
 
 impl RankSelectDir for RankSelectRef<'_> {
@@ -1148,6 +1183,33 @@ mod tests {
     use purrdf_testkit::prop::prelude::*;
 
     // -- IntVector ------------------------------------------------------------
+
+    #[test]
+    fn from_values_packs_at_the_width_of_the_maximum() {
+        let values = [0_u64, 5, 3, 1 << 40];
+        let vector = IntVector::from_values(&values);
+        assert_eq!(vector.width(), bits_for(1 << 40));
+        assert_eq!(vector.len(), values.len());
+        for (index, &value) in values.iter().enumerate() {
+            assert_eq!(vector.get(index), value);
+        }
+        let empty = IntVector::from_values(&[]);
+        assert_eq!((empty.width(), empty.len()), (0, 0));
+        let zeros = IntVector::from_values(&[0, 0, 0]);
+        assert_eq!((zeros.width(), zeros.len()), (0, 3));
+    }
+
+    #[test]
+    fn mark_last_range_reads_each_group_between_its_boundary_bits() {
+        // Groups of sizes 2, 1 and 3 over six positions: the last position of each
+        // group is set.
+        let bytes = build_rank_select(&[false, true, true, false, false, true]).to_bytes();
+        let index = RankSelectRef::from_bytes(&bytes).expect("a valid bitmap");
+        assert_eq!(index.mark_last_range(0), Some((0, 2)));
+        assert_eq!(index.mark_last_range(1), Some((2, 3)));
+        assert_eq!(index.mark_last_range(2), Some((3, 6)));
+        assert_eq!(index.mark_last_range(3), None);
+    }
 
     #[test]
     fn bits_for_boundaries() {

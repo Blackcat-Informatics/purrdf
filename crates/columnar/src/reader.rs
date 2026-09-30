@@ -5,14 +5,13 @@
 
 use purrdf_core::TermBox;
 use std::collections::BTreeMap;
-use std::convert::Infallible;
 use std::str;
 use std::sync::Arc;
 
 use purrdf_core::langtag::is_identity_folded;
 use purrdf_core::{
-    BlankScope, ContentDigest, ContentStore, LossLedger, Nested, RdfDataset, RdfDatasetBuilder,
-    RdfLiteral, RdfTextDirection, TermId, TermValue, try_fold_nested,
+    BlankScope, ContentDigest, ContentStore, LossLedger, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+    RdfTextDirection, TermFactory as _, TermValue,
 };
 
 use crate::column::Int64Column;
@@ -540,7 +539,7 @@ fn reconstruct_dataset(
     let ids: Vec<_> = dictionary
         .values
         .iter()
-        .map(|value| intern_value(&mut builder, value))
+        .map(|value| builder.intern_value(value))
         .collect();
     for (index, &named) in dictionary.named_graphs.iter().enumerate() {
         if named {
@@ -575,37 +574,6 @@ fn reconstruct_dataset(
     builder
         .freeze()
         .map_err(|error| ColumnarError::malformed("RDF reconstruction", error.to_string()))
-}
-
-/// Intern `value` into `builder`, a triple term over [`try_fold_nested`]'s work list:
-/// its subject, predicate and object, each fully before the next, then the triple.
-fn intern_value(builder: &mut RdfDatasetBuilder, value: &TermValue) -> TermId {
-    let interned = try_fold_nested(
-        value,
-        builder,
-        |builder, value| {
-            Ok::<_, Infallible>(Nested::Leaf(match value {
-                TermValue::Iri(iri) => builder.intern_iri(iri),
-                TermValue::Blank { label, scope } => builder.intern_blank(label, *scope),
-                TermValue::Literal {
-                    lexical_form,
-                    datatype,
-                    language,
-                    direction,
-                } => builder.intern_literal(RdfLiteral {
-                    lexical_form: lexical_form.clone(),
-                    datatype: Some(datatype.clone()),
-                    language: language.clone(),
-                    direction: *direction,
-                }),
-                TermValue::Triple { s, p, o } => return Ok(Nested::Triple(&**s, &**p, &**o)),
-            }))
-        },
-        |builder, _, s, p, o| Ok(builder.intern_triple(s, p, o)),
-    );
-    match interned {
-        Ok(id) => id,
-    }
 }
 
 fn int_column(data: &TableData, index: usize) -> Result<&Int64Column, ColumnarError> {
@@ -858,17 +826,14 @@ mod tests {
 
 #[cfg(test)]
 mod term_walk_tests {
-    //! The term-record resolution and the re-interning against their recursive
-    //! references, and at a hundred thousand levels on a 128 KiB thread.
+    //! The term-record resolution against its recursive reference, and deep on a
+    //! 128 KiB thread. Re-interning a resolved value is the builder's own
+    //! `TermFactory::intern_value`, tested beside it in `purrdf-core`.
 
     use purrdf_core::langtag::is_identity_folded;
-    use purrdf_core::{
-        BlankScope, RdfDatasetBuilder, RdfLiteral, RdfTextDirection, TermBox, TermId, TermValue,
-    };
+    use purrdf_core::{BlankScope, RdfLiteral, RdfTextDirection, TermBox, TermValue};
 
-    use super::{
-        ColumnarError, TermRecord, intern_value, resolve_term_record, resolve_term_records,
-    };
+    use super::{ColumnarError, TermRecord, resolve_term_record, resolve_term_records};
 
     fn reference_record(
         index: usize,
@@ -939,18 +904,6 @@ mod term_walk_tests {
         states[index] = 2;
         values[index] = Some(value.clone());
         Ok(value)
-    }
-
-    fn reference_intern(builder: &mut RdfDatasetBuilder, value: &TermValue) -> TermId {
-        match value {
-            TermValue::Triple { s, p, o } => {
-                let s = reference_intern(builder, s);
-                let p = reference_intern(builder, p);
-                let o = reference_intern(builder, o);
-                builder.intern_triple(s, p, o)
-            }
-            leaf => intern_value(builder, leaf),
-        }
     }
 
     /// A generated term-record table: records naming any record — cycles included — and
@@ -1071,34 +1024,6 @@ mod term_walk_tests {
         assert!(refused > 0, "some generated table is refused");
     }
 
-    /// Every generated term re-interns into a fresh builder as the recursive reference
-    /// interns it: the same id, and the same next id after it.
-    #[test]
-    fn interning_agrees_with_its_recursive_reference_on_generated_terms() {
-        for seed in 0..400_u64 {
-            let mut state = seed;
-            let mut budget = 8;
-            let value = purrdf_core::term_fixture::term_value(
-                &mut state,
-                purrdf_testkit::rng::splitmix64_next,
-                &mut budget,
-                purrdf_core::term_fixture::TermShape::Any,
-            );
-            let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
-            assert_eq!(
-                intern_value(&mut found, &value),
-                reference_intern(&mut expected, &value),
-                "seed {seed}"
-            );
-            let sentinel = "http://example.org/sentinel";
-            assert_eq!(
-                found.intern_iri(sentinel),
-                expected.intern_iri(sentinel),
-                "seed {seed}"
-            );
-        }
-    }
-
     /// A record chain a thousand triple terms deep resolves on a thread whose whole
     /// stack is 128 KiB — more levels than a recursion could take there. Every record is
     /// memoised as its whole value, so a chain costs memory with the square of its depth
@@ -1124,19 +1049,6 @@ mod term_walk_tests {
             let value = resolve_term_record(root, &records, &mut states, &mut values)
                 .expect("the chain resolves");
             assert_eq!(value, purrdf_core::term_fixture::triple_chain(LEVELS));
-        })
-        .expect("the thread starts");
-    }
-
-    /// A triple term a hundred thousand levels deep re-interns on a thread whose whole
-    /// stack is 128 KiB.
-    #[test]
-    fn a_hundred_thousand_level_term_interns_on_a_128_kib_thread() {
-        const LEVELS: usize = 100_000;
-        purrdf_stack::on_stack(128 * 1024, || {
-            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
-            let mut builder = RdfDatasetBuilder::new();
-            assert_eq!(intern_value(&mut builder, &value).index(), LEVELS + 2);
         })
         .expect("the thread starts");
     }

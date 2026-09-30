@@ -85,6 +85,28 @@ subtree! {
     };
 }
 
+/// The [`Child`] drop of a node type: release the node onto a work list and
+/// dismantle it there, so no drop recurses.
+macro_rules! child_node {
+    ($($ty:ty),+ $(,)?) => {$(
+        impl purrdf_lex::walk::Dismantle for $ty {
+            fn dismantle(node: Box<Self>) {
+                let mut work = DropWork::new();
+                (*node).release(&mut work);
+                reclaim(&mut work);
+            }
+        }
+    )+};
+}
+
+child_node!(
+    crate::GraphPattern,
+    crate::Expression,
+    crate::PropertyPathExpression,
+    crate::TriplePattern,
+    crate::GroundTriple,
+);
+
 /// Release every node of `nodes` and dismantle what they own.
 fn release_all<T: Subtree>(nodes: Vec<T>) {
     if nodes.is_empty() {
@@ -99,125 +121,11 @@ fn release_all<T: Subtree>(nodes: Vec<T>) {
 
 /// Exactly one boxed node: an operand, an inner pattern, a quoted triple.
 ///
-/// Reads like a `Box<T>` — it dereferences to `T` — and is built with [`Child::new`]
-/// or `T::into()`, and taken apart with [`Child::into_inner`]. Its [`Drop`] is
-/// iterative (see the [module docs](self)).
-pub struct Child<T: Subtree>(Option<Box<T>>);
-
-impl<T: Subtree> Child<T> {
-    /// Box `value` as a child.
-    #[must_use]
-    pub fn new(value: T) -> Self {
-        Self(Some(Box::new(value)))
-    }
-
-    /// The child, unboxed.
-    #[must_use]
-    pub fn into_inner(mut self) -> T {
-        *self.take_box()
-    }
-
-    /// The child, still boxed.
-    #[must_use]
-    pub fn into_box(mut self) -> Box<T> {
-        self.take_box()
-    }
-
-    fn take_box(&mut self) -> Box<T> {
-        self.0
-            .take()
-            .expect("a child is emptied only by its own drop")
-    }
-
-    /// The boxed node, taken out for the iterative drop; `None` once taken.
-    pub(crate) fn take(&mut self) -> Option<Box<T>> {
-        self.0.take()
-    }
-}
-
-impl<T: Subtree> Drop for Child<T> {
-    fn drop(&mut self) {
-        if let Some(node) = self.0.take() {
-            let mut work = DropWork::new();
-            (*node).release(&mut work);
-            reclaim(&mut work);
-        }
-    }
-}
-
-impl<T: Subtree> Deref for Child<T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        self.0
-            .as_deref()
-            .expect("a child is emptied only by its own drop")
-    }
-}
-
-impl<T: Subtree> DerefMut for Child<T> {
-    fn deref_mut(&mut self) -> &mut T {
-        self.0
-            .as_deref_mut()
-            .expect("a child is emptied only by its own drop")
-    }
-}
-
-impl<T: Subtree> AsRef<T> for Child<T> {
-    fn as_ref(&self) -> &T {
-        self
-    }
-}
-
-impl<T: Subtree> AsMut<T> for Child<T> {
-    fn as_mut(&mut self) -> &mut T {
-        self
-    }
-}
-
-impl<T: Subtree> core::borrow::Borrow<T> for Child<T> {
-    fn borrow(&self) -> &T {
-        self
-    }
-}
-
-impl<T: Subtree> From<T> for Child<T> {
-    fn from(value: T) -> Self {
-        Self::new(value)
-    }
-}
-
-impl<T: Subtree> From<Box<T>> for Child<T> {
-    fn from(value: Box<T>) -> Self {
-        Self(Some(value))
-    }
-}
-
-impl<T: Subtree + Clone> Clone for Child<T> {
-    fn clone(&self) -> Self {
-        Self::new(T::clone(self))
-    }
-}
-
-impl<T: Subtree + PartialEq> PartialEq for Child<T> {
-    fn eq(&self, other: &Self) -> bool {
-        T::eq(self, other)
-    }
-}
-
-impl<T: Subtree + Eq> Eq for Child<T> {}
-
-impl<T: Subtree + Hash> Hash for Child<T> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        T::hash(self, state);
-    }
-}
-
-impl<T: Subtree + fmt::Debug> fmt::Debug for Child<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        T::fmt(self, f)
-    }
-}
+/// The workspace's one iteratively dropped box, [`purrdf_lex::walk::Nested`]: it
+/// reads like a `Box<T>` — it dereferences to `T` — is built with `Child::new` or
+/// `T::into()`, and is taken apart with `Child::into_inner`. Its [`Drop`] hands the
+/// node to [`Subtree`]'s iterative release (see the [module docs](self)).
+pub type Child<T> = purrdf_lex::walk::Nested<T>;
 
 /// Implements the traits the three list edges share: iteration, conversion back to
 /// a `Vec`, and `Clone`/`==`/`Hash`/`Debug` exactly as the `Vec` they wrap has them.
@@ -578,11 +486,7 @@ impl<T: Subtree> Args<T> {
     }
 }
 
-impl<T: Subtree> Default for Args<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!([T: Subtree] Args<T>);
 
 impl<T: Subtree> From<Vec<T>> for Args<T> {
     fn from(nodes: Vec<T>) -> Self {

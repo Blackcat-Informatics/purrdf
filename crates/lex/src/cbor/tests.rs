@@ -689,37 +689,33 @@ fn a_sequence_keeps_its_intact_prefix_and_marks_a_torn_tail() {
 
 #[test]
 fn a_hundred_thousand_deep_item_decodes_encodes_clones_compares_prints_and_drops() {
-    std::thread::Builder::new()
-        .stack_size(256 * 1024)
-        .spawn(|| {
-            const DEPTH: usize = 100_000;
-            let unbounded = Limits {
-                max_depth: usize::MAX,
-            };
-            for opener in [&[0x81_u8][..], &[0xc1], &[0xa1, 0x00]] {
-                let mut bytes = opener.repeat(DEPTH);
-                bytes.push(0x00);
-                let value = decode(&bytes, unbounded).unwrap();
-                assert_eq!(encode(&value), bytes);
-                assert_eq!(canonical(&value), bytes);
-                assert_eq!(decode_deterministic(&bytes, unbounded).unwrap(), value);
-                let copy = value.clone();
-                assert_eq!(copy, value);
-                assert!(format!("{copy:?}").len() > DEPTH);
-                let mut sorted = copy.clone();
-                sorted.canonicalize();
-                drop((copy, sorted, value));
-            }
-            // A map nested in a map KEY, a hundred thousand deep, is sorted by
-            // the bottom-up encoder.
-            let mut bytes = [0xa1_u8].repeat(DEPTH);
+    purrdf_stack::on_stack(256 * 1024, || {
+        const DEPTH: usize = 100_000;
+        let unbounded = Limits {
+            max_depth: usize::MAX,
+        };
+        for opener in [&[0x81_u8][..], &[0xc1], &[0xa1, 0x00]] {
+            let mut bytes = opener.repeat(DEPTH);
             bytes.push(0x00);
-            bytes.extend(std::iter::repeat_n(0x00, DEPTH));
             let value = decode(&bytes, unbounded).unwrap();
+            assert_eq!(encode(&value), bytes);
             assert_eq!(canonical(&value), bytes);
-            drop(value);
-        })
-        .unwrap()
-        .join()
-        .unwrap();
+            assert_eq!(decode_deterministic(&bytes, unbounded).unwrap(), value);
+            let copy = value.clone();
+            assert_eq!(copy, value);
+            assert!(format!("{copy:?}").len() > DEPTH);
+            let mut sorted = copy.clone();
+            sorted.canonicalize();
+            drop((copy, sorted, value));
+        }
+        // A map nested in a map KEY, a hundred thousand deep, is sorted by
+        // the bottom-up encoder.
+        let mut bytes = [0xa1_u8].repeat(DEPTH);
+        bytes.push(0x00);
+        bytes.extend(std::iter::repeat_n(0x00, DEPTH));
+        let value = decode(&bytes, unbounded).unwrap();
+        assert_eq!(canonical(&value), bytes);
+        drop(value);
+    })
+    .expect("a 256 KiB stack thread runs the walk");
 }

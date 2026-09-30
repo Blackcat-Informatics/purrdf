@@ -712,8 +712,8 @@ reason = "The one XML reader lives in purrdf-lex, below purrdf-iri, and must che
 [[job]]
 id = "text-direction"
 summary = "The RDF 1.2 base direction: one enum, its ltr/rtl token and the parse of that token"
-home = "purrdf_cdt::TextDirection"
-entry_points = ["purrdf_core::RdfTextDirection", "purrdf_sparql_algebra::ast::BaseDirection"]
+home = "purrdf_events::TextDirection"
+entry_points = ["purrdf_cdt::TextDirection", "purrdf_core::RdfTextDirection", "purrdf_sparql_algebra::ast::BaseDirection"]
 spec = "RDF 1.2 Concepts section 3.3 (the base direction of a directional language-tagged string is ltr or rtl)"
 vectors = []
 bench = []
@@ -725,14 +725,6 @@ enforced = true
 constants = []
 fingerprints = ["rule:home-literal"]
 names = []
-
-[[job.variant]]
-symbol = "purrdf_events::TextDirection::from_token"
-file = "crates/rdf-events/src/lib.rs"
-detector = "forbidden"
-criterion = "layering"
-anchor = "purrdf_events::TextDirection"
-reason = "The event protocol sits below purrdf-cdt and may depend on nothing but purrdf-hash, so it keeps its own direction enum and its own reading of the token for the producers below purrdf-cdt; purrdf-core's ingest maps the two enums in one place."
 
 [[job]]
 id = "frame-le"

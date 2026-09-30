@@ -12,8 +12,6 @@
 use purrdf_iri::json_pointer;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::error::Error;
-use std::fmt;
 use std::sync::{Arc, OnceLock};
 
 use crate::json_model::{Map, Number, NumberKind, Object, Value, ValueKind};
@@ -180,34 +178,12 @@ pub struct ImportedShapes {
     pub losses: LossLedger,
 }
 
-/// A malformed, ambiguous, unsupported-resource, or internally inconsistent
-/// schema import request.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SchemaImportError {
-    detail: String,
+purrdf_lex::message_error! {
+    /// A malformed, ambiguous, unsupported-resource, or internally inconsistent
+    /// schema import request.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct SchemaImportError, detail;
 }
-
-impl SchemaImportError {
-    fn new(detail: impl Into<String>) -> Self {
-        Self {
-            detail: detail.into(),
-        }
-    }
-
-    /// Stable human-readable error detail.
-    #[must_use]
-    pub fn detail(&self) -> &str {
-        &self.detail
-    }
-}
-
-impl fmt::Display for SchemaImportError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.detail)
-    }
-}
-
-impl Error for SchemaImportError {}
 
 /// Import one JSON Schema draft 2020-12 document as SHACL shapes.
 ///

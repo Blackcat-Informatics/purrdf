@@ -75,11 +75,7 @@ const BASE64_ALPHABET: &[u8; 64] =
 /// - Any character outside the alphabet is a hard failure.
 /// - The empty string (after stripping whitespace) is valid and decodes to empty `Vec<u8>`.
 pub fn parse_base64(lexical: &str) -> Result<Vec<u8>, XsdError> {
-    let err = |reason| XsdError::InvalidLexical {
-        datatype: XsdDatatype::Base64Binary,
-        lexical: lexical.to_string(),
-        reason,
-    };
+    let err = |reason| XsdError::invalid(XsdDatatype::Base64Binary, lexical, reason);
 
     // Strip ASCII whitespace first (XSD base64Binary lexical space permits it).
     let stripped: Vec<u8> = lexical
@@ -256,11 +252,11 @@ pub fn parse_binary(datatype: XsdDatatype, lexical: &str) -> Result<Vec<u8>, Xsd
     match datatype {
         XsdDatatype::HexBinary => parse_hex(lexical),
         XsdDatatype::Base64Binary => parse_base64(lexical),
-        _ => Err(XsdError::InvalidLexical {
+        _ => Err(XsdError::invalid(
             datatype,
-            lexical: lexical.to_string(),
-            reason: "parse_binary called with non-binary datatype",
-        }),
+            lexical,
+            "parse_binary called with non-binary datatype",
+        )),
     }
 }
 

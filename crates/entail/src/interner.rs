@@ -10,12 +10,11 @@
 //! builder soundly.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::convert::Infallible;
 use std::hash::BuildHasher;
 
 use hashbrown::HashTable;
 
-use purrdf_core::{Nested, RdfDatasetBuilder, RdfLiteral, TermId, TermValue, try_fold_nested};
+use purrdf_core::{RdfDatasetBuilder, TermFactory, TermId, TermValue};
 
 /// Local `TermValue`→`u32` interner over dataset-independent terms.
 #[derive(Default)]
@@ -128,35 +127,10 @@ impl Interner {
 /// the closure is incomplete rather than left to assume it is exact. Re-materializing the
 /// term faithfully is what keeps the conclusions the rules DO draw around it correct.
 ///
-/// A triple term is interned over [`try_fold_nested`]'s work list: its subject, predicate
-/// and object, each fully before the next, then the triple itself.
+/// The builder's own value interning ([`TermFactory::intern_value`]), which takes a
+/// triple term apart over a work list rather than the machine stack.
 pub(crate) fn intern_into(b: &mut RdfDatasetBuilder, v: &TermValue) -> TermId {
-    let interned = try_fold_nested(
-        v,
-        b,
-        |b, v| {
-            Ok::<_, Infallible>(Nested::Leaf(match v {
-                TermValue::Iri(iri) => b.intern_iri(iri),
-                TermValue::Blank { label, scope } => b.intern_blank(label, *scope),
-                TermValue::Literal {
-                    lexical_form,
-                    datatype,
-                    language,
-                    direction,
-                } => b.intern_literal(RdfLiteral {
-                    lexical_form: lexical_form.clone(),
-                    datatype: Some(datatype.clone()),
-                    language: language.clone(),
-                    direction: *direction,
-                }),
-                TermValue::Triple { s, p, o } => return Ok(Nested::Triple(&**s, &**p, &**o)),
-            }))
-        },
-        |b, _, s, p, o| Ok(b.intern_triple(s, p, o)),
-    );
-    match interned {
-        Ok(id) => id,
-    }
+    b.intern_value(v)
 }
 
 #[cfg(test)]

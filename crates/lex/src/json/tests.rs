@@ -15,17 +15,6 @@ fn number(lexeme: &str) -> Value {
     Value::Number(Number::from_lexeme(lexeme).expect("a JSON number"))
 }
 
-/// Run `body` on a thread with a 256 KiB stack, so a walk that recursed once per
-/// level would overflow long before the depth these tests reach.
-fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-    std::thread::Builder::new()
-        .stack_size(256 * 1024)
-        .spawn(body)
-        .expect("spawn a small-stack thread")
-        .join()
-        .expect("the small-stack thread finishes")
-}
-
 // ---- values and whitespace -------------------------------------------------
 
 #[test]
@@ -497,7 +486,7 @@ fn the_string_cap_bounds_decoded_bytes_not_escaped_ones() {
 
 #[test]
 fn a_hundred_thousand_deep_document_reads_clones_compares_writes_and_drops() {
-    on_small_stack(|| {
+    purrdf_stack::on_stack(256 * 1024, || {
         const DEPTH: usize = 100_000;
         let arrays = format!("{}0{}", "[".repeat(DEPTH), "]".repeat(DEPTH));
         let objects = format!("{}0{}", "{\"k\":".repeat(DEPTH), "}".repeat(DEPTH));
@@ -520,7 +509,8 @@ fn a_hundred_thousand_deep_document_reads_clones_compares_writes_and_drops() {
             drop(sorted);
             drop(value);
         }
-    });
+    })
+    .expect("a 256 KiB stack thread runs the walk");
 }
 
 // ---- the pull reader --------------------------------------------------------

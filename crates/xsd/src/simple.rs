@@ -6,6 +6,8 @@
 //! `xsd:string`'s value space is its lexical space, so it has no dedicated parser
 //! (the [`crate::parse`] entry maps it straight to [`crate::XsdValue::String`]).
 
+use purrdf_lex::scan::in_runs;
+
 use crate::datatype::XsdDatatype;
 use crate::value::XsdError;
 
@@ -14,11 +16,11 @@ pub fn parse_boolean(s: &str) -> Result<bool, XsdError> {
     match s {
         "true" | "1" => Ok(true),
         "false" | "0" => Ok(false),
-        _ => Err(XsdError::InvalidLexical {
-            datatype: XsdDatatype::Boolean,
-            lexical: s.to_string(),
-            reason: "expected one of: true, false, 1, 0",
-        }),
+        _ => Err(XsdError::invalid(
+            XsdDatatype::Boolean,
+            s,
+            "expected one of: true, false, 1, 0",
+        )),
     }
 }
 
@@ -107,22 +109,6 @@ const CHUNK: usize = 16;
 const REPLACED_RUNS: [(u8, u8); 2] = [(b'\t', b'\n'), (b'\r', b'\r')];
 /// The byte the `collapse` facet additionally folds, `#x20`, as a byte run.
 const SPACE_RUNS: [(u8, u8); 1] = [(b' ', b' ')];
-
-/// Whether `b` falls in one of `runs`: one wrapping subtraction and one unsigned
-/// comparison per run, OR-ed with no early exit.
-#[allow(
-    clippy::inline_always,
-    reason = "the lane helpers must be inlined into the chunk loop so the class's runs fold \
-              in as constants and the lane compares vectorize"
-)]
-#[inline(always)]
-fn in_runs(b: u8, runs: &[(u8, u8)]) -> bool {
-    let mut hit = false;
-    for &(lo, hi) in runs {
-        hit |= b.wrapping_sub(lo) <= hi - lo;
-    }
-    hit
-}
 
 /// The lanes of one chunk for one class: lane `i` is `0xFF` iff `chunk[i]` is in
 /// `runs`, else `0x00`.

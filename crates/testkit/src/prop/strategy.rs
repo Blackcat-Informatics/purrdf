@@ -177,13 +177,7 @@ pub struct Map<S, F> {
     map: F,
 }
 
-impl<S: fmt::Debug, F> fmt::Debug for Map<S, F> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Map")
-            .field("source", &self.source)
-            .finish_non_exhaustive()
-    }
-}
+purrdf_hash::debug_non_exhaustive!([S: fmt::Debug, F] Map<S, F> { source });
 
 impl<S: Strategy, O: fmt::Debug, F: Fn(S::Value) -> O> Strategy for Map<S, F> {
     type Value = O;
@@ -201,14 +195,7 @@ pub struct Filter<S, F> {
     predicate: F,
 }
 
-impl<S: fmt::Debug, F> fmt::Debug for Filter<S, F> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Filter")
-            .field("source", &self.source)
-            .field("whence", &self.whence)
-            .finish_non_exhaustive()
-    }
-}
+purrdf_hash::debug_non_exhaustive!([S: fmt::Debug, F] Filter<S, F> { source, whence });
 
 impl<S: Strategy, F: Fn(&S::Value) -> bool> Strategy for Filter<S, F> {
     type Value = S::Value;
@@ -232,14 +219,7 @@ pub struct FilterMap<S, F> {
     map: F,
 }
 
-impl<S: fmt::Debug, F> fmt::Debug for FilterMap<S, F> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("FilterMap")
-            .field("source", &self.source)
-            .field("whence", &self.whence)
-            .finish_non_exhaustive()
-    }
-}
+purrdf_hash::debug_non_exhaustive!([S: fmt::Debug, F] FilterMap<S, F> { source, whence });
 
 impl<S: Strategy, O: fmt::Debug, F: Fn(S::Value) -> Option<O>> Strategy for FilterMap<S, F> {
     type Value = O;
@@ -261,13 +241,7 @@ pub struct FlatMap<S, F> {
     build: F,
 }
 
-impl<S: fmt::Debug, F> fmt::Debug for FlatMap<S, F> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("FlatMap")
-            .field("source", &self.source)
-            .finish_non_exhaustive()
-    }
-}
+purrdf_hash::debug_non_exhaustive!([S: fmt::Debug, F] FlatMap<S, F> { source });
 
 impl<S: Strategy, T: Strategy, F: Fn(S::Value) -> T> Strategy for FlatMap<S, F> {
     type Value = T::Value;
@@ -294,13 +268,7 @@ impl<T> Clone for Union<T> {
     }
 }
 
-impl<T> fmt::Debug for Union<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Union")
-            .field("weights", &self.weights)
-            .finish_non_exhaustive()
-    }
-}
+purrdf_hash::debug_non_exhaustive!([T] Union<T> { weights });
 
 impl<T: fmt::Debug + 'static> Union<T> {
     /// Equally weighted alternatives.

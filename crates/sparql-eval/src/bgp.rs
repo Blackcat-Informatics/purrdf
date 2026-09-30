@@ -1622,14 +1622,7 @@ pub(crate) struct PlanSurvey {
     shape: Arc<PlanShape>,
 }
 
-impl std::fmt::Debug for PlanSurvey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PlanSurvey")
-            .field("orders", &self.orders)
-            .field("estimates", &self.estimates)
-            .finish_non_exhaustive()
-    }
-}
+purrdf_hash::debug_non_exhaustive!(PlanSurvey { orders, estimates });
 
 impl PlanSurvey {
     /// An empty survey of the tree `shape` numbers.

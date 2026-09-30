@@ -459,6 +459,17 @@ impl StdHashMapRule<'_> {
     }
 }
 
+/// `Visit` methods that name their scope: each pushes the item's name onto the
+/// visitor's `scope` for the walk beneath it, which is how a rule hit is placed
+/// in its enclosing items. Every scoping visitor spells its methods here.
+macro_rules! scoped_visits {
+    ($lt:lifetime; $($method:ident($ty:ty) => |$node:ident| $name:expr;)+) => {$(
+        fn $method(&mut self, $node: &$lt $ty) {
+            self.scoped($name, |this| syn::visit::$method(this, $node));
+        }
+    )+};
+}
+
 impl<'ast> Visit<'ast> for StdHashMapRule<'_> {
     fn visit_type_path(&mut self, node: &'ast syn::TypePath) {
         self.check_path(&node.path, true);
@@ -502,40 +513,14 @@ impl<'ast> Visit<'ast> for StdHashMapRule<'_> {
         syn::visit::visit_macro(self, node);
     }
 
-    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
-        self.scoped(node.sig.ident.to_string(), |this| {
-            syn::visit::visit_item_fn(this, node);
-        });
-    }
-
-    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
-        self.scoped(node.sig.ident.to_string(), |this| {
-            syn::visit::visit_impl_item_fn(this, node);
-        });
-    }
-
-    fn visit_trait_item_fn(&mut self, node: &'ast syn::TraitItemFn) {
-        self.scoped(node.sig.ident.to_string(), |this| {
-            syn::visit::visit_trait_item_fn(this, node);
-        });
-    }
-
-    fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
-        self.scoped(node.ident.to_string(), |this| {
-            syn::visit::visit_item_mod(this, node);
-        });
-    }
-
-    fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
-        self.scoped(node.ident.to_string(), |this| {
-            syn::visit::visit_item_struct(this, node);
-        });
-    }
-
-    fn visit_item_type(&mut self, node: &'ast syn::ItemType) {
-        self.scoped(node.ident.to_string(), |this| {
-            syn::visit::visit_item_type(this, node);
-        });
+    scoped_visits! {
+        'ast;
+        visit_item_fn(syn::ItemFn) => |node| node.sig.ident.to_string();
+        visit_impl_item_fn(syn::ImplItemFn) => |node| node.sig.ident.to_string();
+        visit_trait_item_fn(syn::TraitItemFn) => |node| node.sig.ident.to_string();
+        visit_item_mod(syn::ItemMod) => |node| node.ident.to_string();
+        visit_item_struct(syn::ItemStruct) => |node| node.ident.to_string();
+        visit_item_type(syn::ItemType) => |node| node.ident.to_string();
     }
 }
 
@@ -750,34 +735,13 @@ impl<'ast> Visit<'ast> for HexRules<'_> {
         syn::visit::visit_expr_array(self, node);
     }
 
-    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
-        self.scoped(node.sig.ident.to_string(), |this| {
-            syn::visit::visit_item_fn(this, node);
-        });
-    }
-
-    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
-        self.scoped(node.sig.ident.to_string(), |this| {
-            syn::visit::visit_impl_item_fn(this, node);
-        });
-    }
-
-    fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
-        self.scoped(node.ident.to_string(), |this| {
-            syn::visit::visit_item_mod(this, node);
-        });
-    }
-
-    fn visit_item_const(&mut self, node: &'ast syn::ItemConst) {
-        self.scoped(node.ident.to_string(), |this| {
-            syn::visit::visit_item_const(this, node);
-        });
-    }
-
-    fn visit_item_static(&mut self, node: &'ast syn::ItemStatic) {
-        self.scoped(node.ident.to_string(), |this| {
-            syn::visit::visit_item_static(this, node);
-        });
+    scoped_visits! {
+        'ast;
+        visit_item_fn(syn::ItemFn) => |node| node.sig.ident.to_string();
+        visit_impl_item_fn(syn::ImplItemFn) => |node| node.sig.ident.to_string();
+        visit_item_mod(syn::ItemMod) => |node| node.ident.to_string();
+        visit_item_const(syn::ItemConst) => |node| node.ident.to_string();
+        visit_item_static(syn::ItemStatic) => |node| node.ident.to_string();
     }
 }
 
@@ -836,9 +800,15 @@ impl LexRules<'_> {
     }
 }
 
+/// Whether `expression` is the integer literal whose base-10 digits are `digits`
+/// (so `0x10` and `16` are both `"16"`).
+pub(crate) fn is_int_literal(expression: &syn::Expr, digits: &str) -> bool {
+    matches!(expression, syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(literal), .. }) if literal.base10_digits() == digits)
+}
+
 /// Whether `expression` is the integer literal `16`.
 fn is_sixteen(expression: &syn::Expr) -> bool {
-    matches!(expression, syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(radix), .. }) if radix.base10_digits() == "16")
+    is_int_literal(expression, "16")
 }
 
 const GRAMMAR_WS_DETAIL: &str = "`is_ascii_whitespace` admits U+000C FORM FEED, which no grammar's `WS` names; \

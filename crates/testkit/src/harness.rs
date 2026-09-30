@@ -138,14 +138,7 @@ pub struct Trial {
     body: Body,
 }
 
-impl fmt::Debug for Trial {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Trial")
-            .field("name", &self.name)
-            .field("ignored", &self.ignored)
-            .finish_non_exhaustive()
-    }
-}
+purrdf_hash::debug_non_exhaustive!(Trial { name, ignored });
 
 impl Trial {
     /// A case named `name` that runs `body`. A panic in `body` fails the case.

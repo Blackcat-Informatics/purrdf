@@ -21,8 +21,7 @@
 //! SHACL.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::error::Error;
-use std::fmt::{self, Write as _};
+use std::fmt::Write as _;
 
 use crate::json_model::{Map, NumberKind, Object, ToJson, Value, ValueKind, json};
 // A JSON string literal is a GraphQL `StringValue` with the same value.
@@ -358,28 +357,12 @@ impl GraphqlPackage {
     }
 }
 
-/// A malformed GraphQL configuration, input schema, generated name graph, or
-/// value-codec request.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GraphqlError {
-    message: String,
+purrdf_lex::message_error! {
+    /// A malformed GraphQL configuration, input schema, generated name graph, or
+    /// value-codec request.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct GraphqlError;
 }
-
-impl GraphqlError {
-    fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for GraphqlError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
-    }
-}
-
-impl Error for GraphqlError {}
 
 /// Emit deterministic paired GraphQL output/input SDL and a canonical name map
 /// from one compiled SHACL-derived JSON Schema.

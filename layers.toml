@@ -104,7 +104,7 @@ external = ["regex-syntax", "sha2", "wasm-bindgen"]
 [[crate]]
 name = "purrdf-xsd"
 deps = [
-    { name = "purrdf-lex", pending = true },
+    "purrdf-lex",
     "purrdf-hash",
 ]
 external = []
@@ -112,6 +112,7 @@ external = []
 [[crate]]
 name = "purrdf-cdt"
 deps = [
+    "purrdf-events",
     "purrdf-hash",
     "purrdf-iri",
     "purrdf-xsd",

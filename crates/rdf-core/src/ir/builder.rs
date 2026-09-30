@@ -31,7 +31,9 @@ use crate::{
 };
 
 use super::dataset::{FastHasher, QuadHandle, QuadIds, QuadRow, RdfDataset, TermRef};
-use super::term::{BlankScope, InternedLiteral, InternedTerm, StrRange, TermId, arena_str};
+use super::term::{
+    BlankScope, InternedLiteral, InternedTerm, StrRange, TermId, arena_str, push_arena_str,
+};
 use crate::RdfLocation;
 // The store-once tables hash with the fixed-key `hash_of`, so they are
 // deterministic across runs. The frozen output is sorted by id, not
@@ -97,6 +99,14 @@ fn store_once<T: Hash + Eq>(vec: &mut Vec<T>, table: &mut HashTable<u32>, value:
     vec.push(value);
     table.insert_unique(hash, i, |&i| hash_of(&vec[i as usize]));
     i
+}
+
+/// Reserve room for `additional` more values in a [`store_once`] pair: the table
+/// and its index grow together, the index rehashing through the values it points
+/// into, so a bulk load that states its size rehashes neither mid-way.
+fn reserve_store_once<T: Hash>(vec: &mut Vec<T>, table: &mut HashTable<u32>, additional: usize) {
+    vec.reserve(additional);
+    table.reserve(additional, |&i| hash_of(&vec[i as usize]));
 }
 
 /// A borrowed term lookup key (P3b): carries the string components by reference
@@ -222,16 +232,7 @@ impl Interner {
 
     /// Append a string to the arena, returning its range.
     fn push_str(&mut self, s: &str) -> StrRange {
-        // Validate the range fits u32 BEFORE mutating the arena: a checked overflow
-        // here fails fast and leaves the builder consistent, rather than extending the
-        // arena past u32::MAX and corrupting every subsequent push_str.
-        let offset = u32::try_from(self.arena.len()).expect("term arena exceeds u32::MAX bytes");
-        let len = u32::try_from(s.len()).expect("term string exceeds u32::MAX bytes");
-        offset
-            .checked_add(len)
-            .expect("term arena exceeds u32::MAX bytes");
-        self.arena.extend_from_slice(s.as_bytes());
-        StrRange { offset, len }
+        push_arena_str(&mut self.arena, s)
     }
 
     /// Intern a term BY VALUE: dedups against existing terms (resolving their ranges
@@ -455,11 +456,7 @@ impl ValidatedRdfDatasetBuilder {
     }
 }
 
-impl Default for RdfDatasetBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(RdfDatasetBuilder);
 
 /// Bulk-push already-interned quads. The ids MUST belong to THIS builder's interner
 /// (C0.8 — `TermId`s are dataset-local), so this is the ergonomic bulk form of
@@ -482,9 +479,7 @@ impl Extend<QuadIds> for RdfDatasetBuilder {
                 u32::try_from(self.quads.len() + reserve).is_ok(),
                 "bulk quad push exceeds maximum quad capacity of u32::MAX"
             );
-            self.quads.reserve(reserve);
-            self.quad_index
-                .reserve(reserve, |&i| hash_of(&self.quads[i as usize]));
+            reserve_store_once(&mut self.quads, &mut self.quad_index, reserve);
         }
         for q in iter {
             self.push_quad(q.s, q.p, q.o, q.g);
@@ -565,10 +560,7 @@ impl RdfDatasetBuilder {
         table.reserve(terms);
         index.reserve(terms, |&i| hash_stored_value(arena, &table[i as usize]));
 
-        self.quads.reserve(quads);
-        let rows = &self.quads;
-        self.quad_index
-            .reserve(quads, |&i| hash_of(&rows[i as usize]));
+        reserve_store_once(&mut self.quads, &mut self.quad_index, quads);
     }
 
     /// Explicitly declare that a named graph exists, even if it turns out to own
@@ -1089,9 +1081,7 @@ impl RdfDatasetBuilder {
                 u32::try_from(self.quads.len() + reserve).is_ok(),
                 "dataset merge exceeds maximum quad capacity of u32::MAX"
             );
-            self.quads.reserve(reserve);
-            self.quad_index
-                .reserve(reserve, |&i| hash_of(&self.quads[i as usize]));
+            reserve_store_once(&mut self.quads, &mut self.quad_index, reserve);
         }
         for quad in other.owned_quads() {
             self.push_owned_quad_scoped(&quad, scope);
@@ -1391,20 +1381,14 @@ impl RdfDatasetBuilder {
     /// (a graph with no reifiers at all must reserve nothing for them). A hint, never
     /// a contract. See that method for why this is not public.
     pub(crate) fn reserve_reifiers(&mut self, rows: usize) {
-        self.reifiers.reserve(rows);
-        let existing = &self.reifiers;
-        self.reifier_index
-            .reserve(rows, |&i| hash_of(&existing[i as usize]));
+        reserve_store_once(&mut self.reifiers, &mut self.reifier_index, rows);
     }
 
     /// Reserve room for `rows` more statement annotations, table and dedup index
     /// together. The annotation twin of
     /// [`reserve_reifiers`](Self::reserve_reifiers); the same hint discipline applies.
     pub(crate) fn reserve_annotations(&mut self, rows: usize) {
-        self.annotations.reserve(rows);
-        let existing = &self.annotations;
-        self.annotation_index
-            .reserve(rows, |&i| hash_of(&existing[i as usize]));
+        reserve_store_once(&mut self.annotations, &mut self.annotation_index, rows);
     }
 
     /// The predicate implicitly interned by reifier insertion, if any. Native

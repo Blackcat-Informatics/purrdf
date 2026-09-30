@@ -23,8 +23,8 @@
 //!   point location are folds too.
 //! * **`PartialEq`** compares two trees pair by pair off one work list.
 //! * **`Debug`** prints the *script* `#[derive(Debug)]` prints — struct and variant
-//!   names, field names, leaf values — through [`crate::debug_script`], which writes
-//!   it token by token in both the plain (`{:?}`) and the pretty (`{:#?}`) form, so
+//!   names, field names, leaf values — through [`purrdf_lex::walk::write_debug`],
+//!   which writes it token by token in both the plain (`{:?}`) and the pretty (`{:#?}`) form, so
 //!   the bytes are the derive's exactly.
 //! * **[`Coords`]** yields every position in written order off a work list of
 //!   pending geometries.
@@ -38,7 +38,7 @@ use core::fmt;
 use core::mem;
 
 use super::{Coord, Geometry, GeometryBody};
-use crate::debug_script::{self, Tok};
+use purrdf_lex::walk::{Tok, WorkList, write_debug};
 
 /// Whether `geometry` owns other geometries.
 fn has_members(geometry: &Geometry) -> bool {
@@ -243,16 +243,16 @@ impl<'a> Iterator for Coords<'a> {
 
 /// Append the script `#[derive(Debug)]` prints for `node` to `out`, each member as a
 /// [`Tok::Node`].
-fn script<'a>(node: &'a Geometry, out: &mut Vec<Tok<'a, &'a Geometry>>) {
+fn script<'a>(node: &'a Geometry, out: &mut WorkList<GeometryTok<'a>, 16>) {
     out.extend([
         Tok::Struct("Geometry"),
         Tok::Field("dim"),
-        Tok::Leaf(&node.dim),
+        Tok::Leaf(&node.dim as &dyn fmt::Debug),
         Tok::Field("body"),
     ]);
     match &node.body {
         GeometryBody::GeometryCollection(members) => {
-            out.extend([Tok::Tuple("GeometryCollection"), Tok::List]);
+            out.extend([Tok::Tuple("GeometryCollection"), Tok::List(members.len())]);
             out.extend(members.iter().map(Tok::Node));
             out.extend([Tok::EndList, Tok::EndTuple]);
         }
@@ -261,9 +261,12 @@ fn script<'a>(node: &'a Geometry, out: &mut Vec<Tok<'a, &'a Geometry>>) {
     out.push(Tok::EndStruct);
 }
 
+/// One token of a geometry's `Debug` script.
+type GeometryTok<'a> = Tok<&'a Geometry, &'a dyn fmt::Debug>;
+
 impl fmt::Debug for Geometry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        debug_script::write(f, self, script)
+        write_debug(f, self, script)
     }
 }
 

@@ -24,8 +24,8 @@ use std::sync::{Arc, OnceLock};
 
 use ::purrdf::ir::QuadProbePlan;
 use ::purrdf::{
-    DatasetView, FastMap, FastSet, GraphMatch, QuadIds, QuadRef, RdfDataset, RdfStoreCapabilities,
-    SmallVec, TermId, TermRef, TermValue,
+    DatasetView, FastMap, FastSet, GraphMatch, QuadIds, RdfDataset, RdfStoreCapabilities, SmallVec,
+    TermId, TermRef, TermValue,
 };
 
 use crate::model::{rdf, rdfs};
@@ -702,15 +702,6 @@ impl DatasetView for ClassMembershipView {
         self.base
             .quads()
             .chain(self.derived_for_pattern(None, None, None, GraphMatch::Any))
-    }
-
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
-        self.quads().map(|quad| QuadRef {
-            s: self.base.resolve(quad.s),
-            p: self.base.resolve(quad.p),
-            o: self.base.resolve(quad.o),
-            g: quad.g.map(|graph| self.base.resolve(graph)),
-        })
     }
 
     #[inline]

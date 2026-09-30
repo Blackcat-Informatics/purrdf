@@ -378,10 +378,8 @@ fn blob_decode_refused(digest: &str, err: impl std::fmt::Debug) -> CompactRefuse
 
 /// Look up a blob's decoded length in the insertion-ordered table.
 fn blob_decoded_len(g: &Graph, digest: &str) -> Result<Option<usize>, CompactRefusedError> {
-    g.blobs
-        .iter()
-        .find(|(d, _)| d == digest)
-        .map(|(_, entry)| {
+    purrdf_lex::assoc::get(&g.blobs, digest)
+        .map(|entry| {
             entry
                 .decoded_len()
                 .map_err(|err| blob_decode_refused(digest, err))
@@ -394,10 +392,8 @@ fn blob_bytes<'a>(
     g: &'a Graph,
     digest: &str,
 ) -> Result<Option<Cow<'a, [u8]>>, CompactRefusedError> {
-    g.blobs
-        .iter()
-        .find(|(d, _)| d == digest)
-        .map(|(_, entry)| {
+    purrdf_lex::assoc::get(&g.blobs, digest)
+        .map(|entry| {
             entry
                 .decoded_bytes()
                 .map_err(|err| blob_decode_refused(digest, err))
@@ -407,17 +403,14 @@ fn blob_bytes<'a>(
 
 /// A declared text field (`mt`/`rep`) from a blob's `pub` metadata (§12).
 fn blob_meta_text(g: &Graph, digest: &str, key: &str) -> Option<String> {
-    g.blob_meta
-        .iter()
-        .find(|(d, _)| d == digest)
-        .and_then(|(_, meta)| {
-            if let Value::Map(entries) = meta
-                && let Some(Value::Text(t)) = map_get(entries, key)
-            {
-                return Some(t.clone());
-            }
-            None
-        })
+    purrdf_lex::assoc::get(&g.blob_meta, digest).and_then(|meta| {
+        if let Value::Map(entries) = meta
+            && let Some(Value::Text(t)) = map_get(entries, key)
+        {
+            return Some(t.clone());
+        }
+        None
+    })
 }
 
 /// Base64url WITHOUT padding (RFC 4648 §5) — the `stream:cose` literal form.
@@ -830,7 +823,7 @@ fn shifted_suppressions(g: &Graph, base: usize) -> Vec<Suppression> {
                         ""
                     };
                     if (kind == "term" || kind == "reifier") && key == "id" {
-                        if let Some(tid) = value_idx(v) {
+                        if let Some(tid) = crate::reader::as_idx(v) {
                             return (k.clone(), Value::from((tid + base) as u64));
                         }
                     } else if kind == "quad"
@@ -839,7 +832,7 @@ fn shifted_suppressions(g: &Graph, base: usize) -> Vec<Suppression> {
                     {
                         let remapped: Vec<Value> = ids
                             .iter()
-                            .map(|x| match value_idx(x) {
+                            .map(|x| match crate::reader::as_idx(x) {
                                 Some(tid) => Value::from((tid + base) as u64),
                                 None => x.clone(),
                             })
@@ -858,14 +851,6 @@ fn shifted_suppressions(g: &Graph, base: usize) -> Vec<Suppression> {
         });
     }
     out
-}
-
-fn value_idx(v: &Value) -> Option<usize> {
-    if let Value::Integer(i) = v {
-        usize::try_from(i128::from(*i)).ok()
-    } else {
-        None
-    }
 }
 
 /// Obtain every in-band pack dictionary the plan names: derived entries over the
@@ -1389,7 +1374,7 @@ mod tests {
 
     fn target_id(t: &Value) -> Option<usize> {
         let Value::Map(entries) = t else { return None };
-        value_idx(map_get(entries, "id")?)
+        crate::reader::as_idx(map_get(entries, "id")?)
     }
 
     fn target_q(t: &Value) -> Option<Vec<Value>> {
@@ -1532,7 +1517,7 @@ mod tests {
         let q = target_q(t).expect("quad target carries a \"q\" array");
         let ids: Vec<usize> = q
             .iter()
-            .map(|v| value_idx(v).expect("q element is an id"))
+            .map(|v| crate::reader::as_idx(v).expect("q element is an id"))
             .collect();
         assert_eq!(
             ids,

@@ -1397,7 +1397,7 @@ impl<Id: ViewTermId> Sentinels<Id> {
 /// a blank node.
 ///
 /// The quad subject and the statement layer's reifier slot carry the same rule at
-/// freeze time (`require_asserted_subject`), so on a frozen dataset it holds already;
+/// freeze time (`require_subject`), so on a frozen dataset it holds already;
 /// it is checked anyway because the fold's whole safety argument is that the shape it
 /// recognizes is EXACTLY the shape the lowering emits, and a shape test that assumes
 /// away one of its conjuncts is not exact.

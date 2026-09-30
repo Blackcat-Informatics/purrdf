@@ -85,7 +85,7 @@ use purrdf_xsd::datatype::XSD_STRING;
 pub trait GtsEventSink: RdfEventSink {
     /// Per-frame byte/identity provenance, announced once per frame.
     fn frame(&mut self, _ctx: FrameContext<'_>) -> Result<ControlFlow<()>, EventError> {
-        Ok(ControlFlow::Continue(()))
+        purrdf_events::CONTINUE
     }
 
     /// An inline blob's content digest and declared public metadata.
@@ -95,7 +95,7 @@ pub trait GtsEventSink: RdfEventSink {
         _digest: &str,
         _meta: Option<&Value>,
     ) -> Result<ControlFlow<()>, EventError> {
-        Ok(ControlFlow::Continue(()))
+        purrdf_events::CONTINUE
     }
 
     /// An opaque frame (unknown codec, missing key, or damaged payload).
@@ -104,7 +104,7 @@ pub trait GtsEventSink: RdfEventSink {
         _ctx: Option<FrameContext<'_>>,
         _node: &OpaqueNode,
     ) -> Result<ControlFlow<()>, EventError> {
-        Ok(ControlFlow::Continue(()))
+        purrdf_events::CONTINUE
     }
 
     /// A signature observation on a frame.
@@ -113,7 +113,7 @@ pub trait GtsEventSink: RdfEventSink {
         _ctx: Option<FrameContext<'_>>,
         _sig: &Signature,
     ) -> Result<ControlFlow<()>, EventError> {
-        Ok(ControlFlow::Continue(()))
+        purrdf_events::CONTINUE
     }
 
     /// A suppression directive.
@@ -122,7 +122,7 @@ pub trait GtsEventSink: RdfEventSink {
         _ctx: Option<FrameContext<'_>>,
         _suppression: &Suppression,
     ) -> Result<ControlFlow<()>, EventError> {
-        Ok(ControlFlow::Continue(()))
+        purrdf_events::CONTINUE
     }
 
     /// A reader diagnostic. Frame-scoped diagnostics carry the cached
@@ -132,7 +132,7 @@ pub trait GtsEventSink: RdfEventSink {
         _ctx: Option<FrameContext<'_>>,
         _diagnostic: &Diagnostic,
     ) -> Result<ControlFlow<()>, EventError> {
-        Ok(ControlFlow::Continue(()))
+        purrdf_events::CONTINUE
     }
 }
 
@@ -327,7 +327,7 @@ fn parse_direction(
 ) -> Result<Option<TextDirection>, EventError> {
     let parsed = match direction {
         None => return Ok(None),
-        Some(token) => TextDirection::from_token(token).ok_or_else(|| {
+        Some(token) => TextDirection::from_str_token(token).ok_or_else(|| {
             EventError::message(format!("unrecognized GTS literal base direction {token:?}"))
         })?,
     };

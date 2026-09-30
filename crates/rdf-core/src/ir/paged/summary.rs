@@ -37,7 +37,7 @@ use std::fmt;
 
 use purrdf_hash::mix::{GOLDEN_GAMMA, splitmix64_finalize};
 
-use crate::ir::pack::bits::{IntVector, bits_for};
+use crate::ir::pack::bits::IntVector;
 
 use crate::ir::{RdfDataset, TermId};
 
@@ -470,18 +470,6 @@ fn count_at(vector: &IntVector, term: TermId) -> u64 {
     }
 }
 
-/// Build a value-indexed [`IntVector`] from a scratch counter array: the width is
-/// chosen once from the scratch array's own maximum (never a fixed/guessed width),
-/// then every value is pushed in index order (`IntVector::push` is append-only).
-fn build_int_vector(scratch: &[u64]) -> IntVector {
-    let max = scratch.iter().copied().max().unwrap_or(0);
-    let mut vector = IntVector::with_width(bits_for(max));
-    for &value in scratch {
-        vector.push(value);
-    }
-    vector
-}
-
 impl PageSummary {
     /// Seal `page`'s exact per-term and per-graph row counts — the ONLY producer of
     /// a `PageSummary`.
@@ -506,14 +494,14 @@ impl PageSummary {
         let counts = PageCounts::accumulate(page)?;
         let digest = counts.digest();
         Ok(Self {
-            subject: build_int_vector(&counts.subject),
-            predicate: build_int_vector(&counts.predicate),
-            object: build_int_vector(&counts.object),
-            reifier: build_int_vector(&counts.reifier),
-            annotation: build_int_vector(&counts.annotation),
-            graph_base_rows: build_int_vector(&counts.graph_base),
-            graph_reifier_rows: build_int_vector(&counts.graph_reifier),
-            graph_annotation_rows: build_int_vector(&counts.graph_annotation),
+            subject: IntVector::from_values(&counts.subject),
+            predicate: IntVector::from_values(&counts.predicate),
+            object: IntVector::from_values(&counts.object),
+            reifier: IntVector::from_values(&counts.reifier),
+            annotation: IntVector::from_values(&counts.annotation),
+            graph_base_rows: IntVector::from_values(&counts.graph_base),
+            graph_reifier_rows: IntVector::from_values(&counts.graph_reifier),
+            graph_annotation_rows: IntVector::from_values(&counts.graph_annotation),
             graphs: counts.graphs,
             default_base_rows: counts.default_base_rows,
             default_reifier_rows: counts.default_reifier_rows,
@@ -703,7 +691,7 @@ mod tests {
     ///   - the reification TARGET of `:r1 rdf:reifies <<(...)>>` (named graph `:g1`)
     ///     — the RDF 1.2 sense in which a quoted triple is "the subject of an
     ///     annotation": semantically the statement being annotated, even though
-    ///     `RdfDataset`'s frozen IR (see `validate::require_asserted_subject`) never
+    ///     `RdfDataset`'s frozen IR (see `validate::require_subject`) never
     ///     permits a triple TERM in a literal subject slot anywhere (quad subject,
     ///     reifier, or annotation reifier must be an IRI or blank node) — that
     ///     restriction is RDF 1.2 spec-correct, not an over-refusal, so this fixture
