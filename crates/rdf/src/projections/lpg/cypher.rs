@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 use purrdf_core::DatasetView;
 
+use super::super::json_codec::ToJson;
 use super::super::{
     ProjectionArtifactSink, ProjectionError, ProjectionPackage, ProjectionPackageSink,
     escape_cypher_identifier, escape_cypher_string,
@@ -138,9 +139,7 @@ where
         render_cypher_into(output, graph, config)
     })?;
     session.write_artifact(LPG_PATH, |output| {
-        serde_json::to_writer(output, graph).map_err(|error| {
-            ProjectionError::integrity(format!("serialize canonical LPG JSON: {error}"))
-        })
+        output.write_bytes(purrdf_lex::json::write_compact(&graph.to_json()).as_bytes())
     })?;
     let manifest = write_manifest(PROFILE, graph, config)?;
     session.write_artifact(MANIFEST_PATH, |output| output.write_bytes(&manifest))?;

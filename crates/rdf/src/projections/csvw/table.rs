@@ -1230,13 +1230,13 @@ fn validate_value_facets(
 }
 
 fn parse_bound(
-    value: &serde_json::Value,
+    value: &purrdf_lex::json::Value,
     datatype: XsdDatatype,
 ) -> Result<purrdf_xsd::XsdValue, String> {
     let lexical = match value {
-        serde_json::Value::String(value) => value.clone(),
-        serde_json::Value::Number(value) => value.to_string(),
-        serde_json::Value::Bool(value) => value.to_string(),
+        purrdf_lex::json::Value::String(value) => value.clone(),
+        purrdf_lex::json::Value::Number(value) => value.lexeme().to_owned(),
+        purrdf_lex::json::Value::Bool(value) => value.to_string(),
         _ => return Err("CSVW datatype facet is not atomic".to_owned()),
     };
     parse_xsd(&lexical, datatype).map_err(|error| format!("invalid CSVW datatype facet: {error}"))

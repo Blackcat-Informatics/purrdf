@@ -374,13 +374,11 @@ impl<'a> Projector<'a> {
                 )));
             }
             rows.push(
-                crate::json_number::read_json(|| serde_json::from_str(&lexical)).map_err(
-                    |error| {
-                        ProjectionError::syntax(format!(
-                            "parse inline row JSON for record set `{id}`: {error}"
-                        ))
-                    },
-                )?,
+                super::super::json_codec::read_document(lexical.as_bytes()).map_err(|error| {
+                    ProjectionError::syntax(format!(
+                        "parse inline row JSON for record set `{id}`: {error}"
+                    ))
+                })?,
             );
         }
         Ok(ResearchRecordSet {
@@ -870,9 +868,7 @@ pub fn lift_research_object(
             )?;
         }
         for checksum in &resource.checksums {
-            let key = serde_json::to_vec(&(resource.id.as_str(), checksum)).map_err(|error| {
-                ProjectionError::integrity(format!("serialize checksum identity: {error}"))
-            })?;
+            let key = super::super::json_codec::to_vec(&(resource.id.as_str(), checksum));
             let local = stable_identifier("checksum", &key)?;
             let checksum_id = config.identity().resolve_relative(&local)?;
             push_relation(
@@ -997,9 +993,7 @@ pub fn lift_research_object(
             )?;
         }
         for row in &record_set.rows {
-            let lexical = serde_json::to_string(row).map_err(|error| {
-                ProjectionError::syntax(format!("serialize inline row JSON: {error}"))
-            })?;
+            let lexical = purrdf_lex::json::write_compact(row);
             let value =
                 ResearchText::new(lexical, roles.iri(ResearchRole::JsonDatatype), None, None)?;
             push_texts(
@@ -1122,7 +1116,7 @@ fn term_label(term: &ProjectionTerm) -> String {
         ProjectionTerm::Blank { label, scope } => format!("_:{scope}:{label}"),
         ProjectionTerm::Literal { lexical, .. } => format!("literal:{lexical}"),
         ProjectionTerm::Triple { .. } => {
-            serde_json::to_string(term).unwrap_or_else(|_| "triple-term".to_owned())
+            purrdf_lex::json::write_compact(&super::super::json_codec::ToJson::to_json(term))
         }
     }
 }
@@ -1231,15 +1225,21 @@ mod tests {
         use purrdf_xsd::ieee::reference as soft;
 
         let config = config();
-        let serialized = |value: f64| serde_json::to_string(&value).ok();
+        let serialized = |value: f64| {
+            purrdf_lex::json::Number::from_f64(value).map(purrdf_lex::json::Number::into_lexeme)
+        };
         let numbers: Vec<f64> = soft::misread_spellings(40, serialized)
             .into_iter()
             .chain(soft::x87_misread_spellings(20, serialized))
             .map(|(value, _)| value)
             .collect();
-        let rows: Vec<serde_json::Value> = numbers
+        let rows: Vec<purrdf_lex::json::Value> = numbers
             .chunks(6)
-            .map(|chunk| serde_json::json!({ "n": chunk }))
+            .map(|chunk| {
+                purrdf_lex::json::Value::from(
+                    purrdf_lex::json::Object::new().with("n", chunk.to_vec()),
+                )
+            })
             .collect();
         let record_set = "https://example.org/entities/numbers";
         let mut dataset = ResearchDataset {
@@ -1281,7 +1281,7 @@ mod tests {
             project_research_object(&*lifted, "croissant-1.1", &config).expect("project");
         let mut read = projected.model.record_sets[0].rows.clone();
         let mut expected = rows;
-        let key = |row: &serde_json::Value| serde_json::to_string(row).expect("row");
+        let key = |row: &purrdf_lex::json::Value| purrdf_lex::json::write_compact(row);
         read.sort_by_key(key);
         expected.sort_by_key(key);
         assert_eq!(read, expected);

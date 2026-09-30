@@ -6,9 +6,9 @@
 use std::collections::BTreeMap;
 
 use purrdf_core::RdfTextDirection;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use purrdf_lex::json::{Object, Value};
 
+use super::super::json_codec::{Fields, FromJson, JsonError, ToJson};
 use super::super::{ProjectionError, validate_absolute_iri};
 
 /// Natural-language values keyed by a BCP47 language tag.
@@ -25,8 +25,7 @@ pub type CsvwNaturalLanguage = BTreeMap<String, Vec<String>>;
 pub type CsvwAnnotations = BTreeMap<String, Value>;
 
 /// CSVW text direction for a column value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CsvwTextDirection {
     /// Direction is inferred from the value.
     Auto,
@@ -39,8 +38,7 @@ pub enum CsvwTextDirection {
 }
 
 /// Direction in which a table is presented.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CsvwTableDirection {
     /// Direction is inferred by the host.
     Auto,
@@ -69,8 +67,7 @@ impl From<RdfTextDirection> for CsvwTableDirection {
 }
 
 /// Whitespace trimming policy from a CSVW dialect description.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CsvwTrim {
     /// Retain leading and trailing whitespace.
     None,
@@ -83,8 +80,7 @@ pub enum CsvwTrim {
 }
 
 /// A normalized CSVW dialect.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwDialect {
     /// Character encoding label. The engine currently accepts UTF-8 labels only.
     pub encoding: String,
@@ -132,8 +128,7 @@ impl Default for CsvwDialect {
 }
 
 /// A CSVW numeric-format object.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwNumericFormat {
     /// UTS 35 number pattern.
     pub pattern: Option<String>,
@@ -144,8 +139,7 @@ pub struct CsvwNumericFormat {
 }
 
 /// String or numeric-object datatype format.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", tag = "kind", content = "value")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CsvwDatatypeFormat {
     /// UTS 35 date/time, boolean, or regular-expression-like format string.
     Pattern(String),
@@ -154,8 +148,7 @@ pub enum CsvwDatatypeFormat {
 }
 
 /// CSVW datatype and its value-space facets.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwDatatype {
     /// Optional custom datatype identity used for emitted literals.
     pub id: Option<String>,
@@ -183,9 +176,100 @@ pub struct CsvwDatatype {
     pub max_exclusive: Option<Value>,
 }
 
+impl FromJson for CsvwNumericFormat {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct CsvwNumericFormat")?;
+        let format = Self {
+            pattern: fields.optional("pattern")?,
+            decimal_char: fields.required("decimal_char")?,
+            group_char: fields.optional("group_char")?,
+        };
+        fields.deny_unknown()?;
+        Ok(format)
+    }
+}
+
+impl ToJson for CsvwNumericFormat {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("pattern", self.pattern.to_json())
+                .with("decimal_char", self.decimal_char.to_json())
+                .with("group_char", self.group_char.to_json()),
+        )
+    }
+}
+
+impl FromJson for CsvwDatatypeFormat {
+    /// `{"kind": "pattern" | "numeric", "value": …}`; other members are ignored.
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "adjacently tagged enum CsvwDatatypeFormat")?;
+        let kind = fields.tag("kind", &["pattern", "numeric"])?;
+        let content = fields
+            .raw("value")?
+            .ok_or_else(|| JsonError::missing_field("value"))?;
+        Ok(if kind == "pattern" {
+            Self::Pattern(String::from_json(content)?)
+        } else {
+            Self::Numeric(CsvwNumericFormat::from_json(content)?)
+        })
+    }
+}
+
+impl ToJson for CsvwDatatypeFormat {
+    fn to_json(&self) -> Value {
+        let (kind, content) = match self {
+            Self::Pattern(pattern) => ("pattern", pattern.to_json()),
+            Self::Numeric(numeric) => ("numeric", numeric.to_json()),
+        };
+        Value::Object(Object::new().with("kind", kind).with("value", content))
+    }
+}
+
+impl FromJson for CsvwDatatype {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct CsvwDatatype")?;
+        let datatype = Self {
+            id: fields.optional("id")?,
+            base: fields.required("base")?,
+            format: fields.optional("format")?,
+            length: fields.optional("length")?,
+            min_length: fields.optional("min_length")?,
+            max_length: fields.optional("max_length")?,
+            minimum: fields.optional("minimum")?,
+            maximum: fields.optional("maximum")?,
+            min_inclusive: fields.optional("min_inclusive")?,
+            max_inclusive: fields.optional("max_inclusive")?,
+            min_exclusive: fields.optional("min_exclusive")?,
+            max_exclusive: fields.optional("max_exclusive")?,
+        };
+        fields.deny_unknown()?;
+        Ok(datatype)
+    }
+}
+
+impl ToJson for CsvwDatatype {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("id", self.id.to_json())
+                .with("base", self.base.as_str())
+                .with("format", self.format.to_json())
+                .with("length", self.length.to_json())
+                .with("min_length", self.min_length.to_json())
+                .with("max_length", self.max_length.to_json())
+                .with("minimum", self.minimum.to_json())
+                .with("maximum", self.maximum.to_json())
+                .with("min_inclusive", self.min_inclusive.to_json())
+                .with("max_inclusive", self.max_inclusive.to_json())
+                .with("min_exclusive", self.min_exclusive.to_json())
+                .with("max_exclusive", self.max_exclusive.to_json()),
+        )
+    }
+}
+
 /// Properties inherited by table, schema, and column descriptions.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwInheritedProperties {
     /// URI template selecting each described subject.
     pub about_url: Option<String>,
@@ -212,8 +296,7 @@ pub struct CsvwInheritedProperties {
 }
 
 /// A normalized value produced by parsing one CSV cell.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwValue {
     /// Source component after trim/default/separator handling.
     pub source: String,
@@ -228,8 +311,7 @@ pub struct CsvwValue {
 }
 
 /// One annotated table cell.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwCell {
     /// Zero-based column index in the normalized schema.
     pub column: usize,
@@ -242,8 +324,7 @@ pub struct CsvwCell {
 }
 
 /// One annotated table row.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwRow {
     /// One-based row number among data records.
     pub number: usize,
@@ -258,8 +339,7 @@ pub struct CsvwRow {
 }
 
 /// One column description in a CSVW table schema.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwColumn {
     /// Absolute column-description identity, when supplied.
     pub id: Option<String>,
@@ -282,8 +362,7 @@ pub struct CsvwColumn {
 }
 
 /// A foreign-key reference target.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwReference {
     /// Referenced table URL, when targeting another table.
     pub resource: Option<String>,
@@ -294,8 +373,7 @@ pub struct CsvwReference {
 }
 
 /// A table-schema foreign-key constraint.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwForeignKey {
     /// Local column names in tuple order.
     pub column_reference: Vec<String>,
@@ -304,8 +382,7 @@ pub struct CsvwForeignKey {
 }
 
 /// A CSVW transformation description retained by the annotated model.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwTransformation {
     /// Absolute transformation identity, when supplied.
     pub id: Option<String>,
@@ -322,8 +399,7 @@ pub struct CsvwTransformation {
 }
 
 /// A normalized CSVW table schema.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwSchema {
     /// Absolute schema identity, when supplied.
     pub id: Option<String>,
@@ -344,8 +420,7 @@ pub struct CsvwSchema {
 }
 
 /// One annotated CSVW table and its parsed rows.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwTable {
     /// Absolute table-description identity, when supplied.
     pub id: Option<String>,
@@ -370,8 +445,7 @@ pub struct CsvwTable {
 }
 
 /// A normalized CSVW table group.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwTableGroup {
     /// Caller-owned absolute group identity.
     pub id: String,

@@ -9,9 +9,10 @@ use purrdf_core::loss::{
     LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED,
 };
 use purrdf_core::{DatasetView, LossLedger, research_object_to_rdf_loss_ledger};
+use purrdf_lex::json::{Object, Value};
 use purrdf_lex::xml::Node;
-use serde::{Deserialize, Deserializer, Serialize};
 
+use super::super::json_codec::{Fields, FromJson, JsonError, ToJson};
 use super::super::{
     ProjectionError, ProjectionPackage, escape_xml_attribute, escape_xml_text,
     validate_absolute_iri,
@@ -32,7 +33,7 @@ pub const DATACITE_PROFILE: &str = "datacite-4.6";
 pub const DATACITE_ARTIFACT: &str = "datacite.xml";
 
 /// Caller-selected DataCite 4.6 controlled values and identifier policy.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataCiteControlledValues {
     identifier_type: String,
     resource_type_general: String,
@@ -184,51 +185,88 @@ impl DataCiteControlledValues {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawDataCiteControlledValues {
-    identifier_type: String,
-    resource_type_general: String,
-    creator_name_type: String,
-    agent_identifier_scheme: String,
-    agent_identifier_scheme_uri: String,
-    related_identifier_type: String,
-    landing_page_relation_type: String,
-    resource_relation_type: String,
-    activity_relation_type: String,
-    record_set_relation_type: String,
-    issued_date_type: String,
-    modified_date_type: String,
-    description_type: String,
+impl FromJson for DataCiteControlledValues {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct DataCiteControlledValues")?;
+        let identifier_type: String = fields.required("identifier_type")?;
+        let resource_type_general: String = fields.required("resource_type_general")?;
+        let creator_name_type: String = fields.required("creator_name_type")?;
+        let agent_identifier_scheme: String = fields.required("agent_identifier_scheme")?;
+        let agent_identifier_scheme_uri: String = fields.required("agent_identifier_scheme_uri")?;
+        let related_identifier_type: String = fields.required("related_identifier_type")?;
+        let landing_page_relation_type: String = fields.required("landing_page_relation_type")?;
+        let resource_relation_type: String = fields.required("resource_relation_type")?;
+        let activity_relation_type: String = fields.required("activity_relation_type")?;
+        let record_set_relation_type: String = fields.required("record_set_relation_type")?;
+        let issued_date_type: String = fields.required("issued_date_type")?;
+        let modified_date_type: String = fields.required("modified_date_type")?;
+        let description_type: String = fields.required("description_type")?;
+        fields.deny_unknown()?;
+        Ok(Self::new(
+            identifier_type,
+            resource_type_general,
+            creator_name_type,
+            agent_identifier_scheme,
+            agent_identifier_scheme_uri,
+            related_identifier_type,
+            landing_page_relation_type,
+            resource_relation_type,
+            activity_relation_type,
+            record_set_relation_type,
+            issued_date_type,
+            modified_date_type,
+            description_type,
+        )?)
+    }
 }
 
-impl<'de> Deserialize<'de> for DataCiteControlledValues {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawDataCiteControlledValues::deserialize(deserializer)?;
-        Self::new(
-            raw.identifier_type,
-            raw.resource_type_general,
-            raw.creator_name_type,
-            raw.agent_identifier_scheme,
-            raw.agent_identifier_scheme_uri,
-            raw.related_identifier_type,
-            raw.landing_page_relation_type,
-            raw.resource_relation_type,
-            raw.activity_relation_type,
-            raw.record_set_relation_type,
-            raw.issued_date_type,
-            raw.modified_date_type,
-            raw.description_type,
+impl ToJson for DataCiteControlledValues {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("identifier_type", self.identifier_type.to_json())
+                .with(
+                    "resource_type_general",
+                    self.resource_type_general.to_json(),
+                )
+                .with("creator_name_type", self.creator_name_type.to_json())
+                .with(
+                    "agent_identifier_scheme",
+                    self.agent_identifier_scheme.to_json(),
+                )
+                .with(
+                    "agent_identifier_scheme_uri",
+                    self.agent_identifier_scheme_uri.to_json(),
+                )
+                .with(
+                    "related_identifier_type",
+                    self.related_identifier_type.to_json(),
+                )
+                .with(
+                    "landing_page_relation_type",
+                    self.landing_page_relation_type.to_json(),
+                )
+                .with(
+                    "resource_relation_type",
+                    self.resource_relation_type.to_json(),
+                )
+                .with(
+                    "activity_relation_type",
+                    self.activity_relation_type.to_json(),
+                )
+                .with(
+                    "record_set_relation_type",
+                    self.record_set_relation_type.to_json(),
+                )
+                .with("issued_date_type", self.issued_date_type.to_json())
+                .with("modified_date_type", self.modified_date_type.to_json())
+                .with("description_type", self.description_type.to_json()),
         )
-        .map_err(serde::de::Error::custom)
     }
 }
 
 /// Mandatory caller-owned DataCite 4.6 schema and semantic configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataCiteConfig {
     common: ResearchObjectConfig,
     namespace_iri: String,
@@ -291,30 +329,38 @@ impl DataCiteConfig {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawDataCiteConfig {
-    common: ResearchObjectConfig,
-    namespace_iri: String,
-    xml_schema_instance_iri: String,
-    schema_location: String,
-    controlled: DataCiteControlledValues,
+impl FromJson for DataCiteConfig {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct DataCiteConfig")?;
+        let common: ResearchObjectConfig = fields.required("common")?;
+        let namespace_iri: String = fields.required("namespace_iri")?;
+        let xml_schema_instance_iri: String = fields.required("xml_schema_instance_iri")?;
+        let schema_location: String = fields.required("schema_location")?;
+        let controlled: DataCiteControlledValues = fields.required("controlled")?;
+        fields.deny_unknown()?;
+        Ok(Self::new(
+            common,
+            namespace_iri,
+            xml_schema_instance_iri,
+            schema_location,
+            controlled,
+        )?)
+    }
 }
 
-impl<'de> Deserialize<'de> for DataCiteConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawDataCiteConfig::deserialize(deserializer)?;
-        Self::new(
-            raw.common,
-            raw.namespace_iri,
-            raw.xml_schema_instance_iri,
-            raw.schema_location,
-            raw.controlled,
+impl ToJson for DataCiteConfig {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("common", self.common.to_json())
+                .with("namespace_iri", self.namespace_iri.to_json())
+                .with(
+                    "xml_schema_instance_iri",
+                    self.xml_schema_instance_iri.to_json(),
+                )
+                .with("schema_location", self.schema_location.to_json())
+                .with("controlled", self.controlled.to_json()),
         )
-        .map_err(serde::de::Error::custom)
     }
 }
 

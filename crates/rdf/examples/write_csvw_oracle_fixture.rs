@@ -9,6 +9,7 @@ use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 
+use purrdf_lex::json::{self, Object, Value};
 use purrdf_rdf::{
     CsvwAction, CsvwConfig, CsvwContext, CsvwInput, CsvwMode, CsvwVocabulary, CsvwWritePlan,
     ProjectionLimits, read_csvw, write_csvw,
@@ -33,40 +34,66 @@ fn main() -> Result<(), Box<dyn Error>> {
     let metadata_iri = format!("{root}/csvw-metadata.json");
     let parents_iri = format!("{root}/tables/parents.csv");
     let children_iri = format!("{root}/tables/children.csv");
-    let metadata = serde_json::to_vec(&serde_json::json!({
-        "@context": "http://www.w3.org/ns/csvw",
-        "@type": "TableGroup",
-        "tables": [
-            {
-                "url": parents_iri,
-                "tableSchema": {
-                    "columns": [
-                        {"name": "id", "titles": "id", "datatype": "integer", "required": true},
-                        {"name": "label", "titles": "label", "datatype": "string", "required": true}
-                    ],
-                    "primaryKey": "id"
-                }
-            },
-            {
-                "url": children_iri,
-                "tableSchema": {
-                    "columns": [
-                        {"name": "id", "titles": "id", "datatype": "integer", "required": true},
-                        {"name": "parent", "titles": "parent", "datatype": "integer", "required": true},
-                        {"name": "amount", "titles": "amount", "datatype": "decimal", "required": true}
-                    ],
-                    "primaryKey": "id",
-                    "foreignKeys": [{
-                        "columnReference": "parent",
-                        "reference": {
-                            "resource": parents_iri,
-                            "columnReference": "id"
-                        }
-                    }]
-                }
-            }
-        ]
-    }))?;
+    let column = |name: &str, datatype: &str| {
+        Value::from(
+            Object::new()
+                .with("name", name)
+                .with("titles", name)
+                .with("datatype", datatype)
+                .with("required", true),
+        )
+    };
+    let mut metadata = Value::from(
+        Object::new()
+            .with("@context", "http://www.w3.org/ns/csvw")
+            .with("@type", "TableGroup")
+            .with(
+                "tables",
+                vec![
+                    Value::from(
+                        Object::new().with("url", parents_iri.as_str()).with(
+                            "tableSchema",
+                            Object::new()
+                                .with(
+                                    "columns",
+                                    vec![column("id", "integer"), column("label", "string")],
+                                )
+                                .with("primaryKey", "id"),
+                        ),
+                    ),
+                    Value::from(
+                        Object::new().with("url", children_iri.as_str()).with(
+                            "tableSchema",
+                            Object::new()
+                                .with(
+                                    "columns",
+                                    vec![
+                                        column("id", "integer"),
+                                        column("parent", "integer"),
+                                        column("amount", "decimal"),
+                                    ],
+                                )
+                                .with("primaryKey", "id")
+                                .with(
+                                    "foreignKeys",
+                                    vec![Value::from(
+                                        Object::new().with("columnReference", "parent").with(
+                                            "reference",
+                                            Object::new()
+                                                .with("resource", parents_iri.as_str())
+                                                .with("columnReference", "id"),
+                                        ),
+                                    )],
+                                ),
+                        ),
+                    ),
+                ],
+            ),
+    );
+    // Members in name order: the fixture's bytes do not depend on the order
+    // this builder names them in.
+    metadata.sort_keys();
+    let metadata = json::write_compact(&metadata).into_bytes();
     let limits = ProjectionLimits::new(16, 1_000_000, 2_000_000, 4_000_000, 16)?;
     let config = CsvwConfig::new(
         &metadata_iri,

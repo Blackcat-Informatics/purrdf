@@ -3,16 +3,16 @@
 
 use std::collections::BTreeSet;
 
-use serde::{Deserialize, Deserializer, Serialize};
+use purrdf_lex::json::{Object, Value};
 
+use super::super::json_codec::{Fields, FromJson, JsonError, ToJson};
 use super::super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
 
 /// Caller-owned RDF and XML Schema roles used by the OBO Graphs projection.
 ///
 /// No vocabulary has a default. This keeps PurRDF an RDF carrier rather than an
 /// ontology and makes the exact interpretation visible at every call site.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OboRdfRoles {
     rdf_type: String,
     rdf_reifies: String,
@@ -89,8 +89,7 @@ impl OboRdfRoles {
 }
 
 /// Caller-owned RDFS and OWL semantic roles used by the projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OboOwlRoles {
     rdfs_label: String,
     rdfs_comment: String,
@@ -257,8 +256,7 @@ impl OboOwlRoles {
 }
 
 /// Caller-owned OBO metadata roles.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OboMetadataRoles {
     definition: String,
     exact_synonym: String,
@@ -347,8 +345,7 @@ impl OboMetadataRoles {
 }
 
 /// Complete caller-supplied semantic vocabulary for RDF→OBO Graphs 0.3.2.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OboGraphsVocabulary {
     rdf: OboRdfRoles,
     owl: OboOwlRoles,
@@ -398,7 +395,7 @@ impl OboGraphsVocabulary {
 }
 
 /// Mandatory graph identity, vocabulary, and resource bounds for OBO Graphs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OboGraphsConfig {
     graph_id: String,
     vocabulary: OboGraphsVocabulary,
@@ -456,23 +453,186 @@ impl OboGraphsConfig {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawOboGraphsConfig {
-    graph_id: String,
-    vocabulary: OboGraphsVocabulary,
-    limits: ProjectionLimits,
-    max_records: usize,
+impl FromJson for OboRdfRoles {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct OboRdfRoles")?;
+        let roles = Self {
+            rdf_type: fields.required("rdf_type")?,
+            rdf_reifies: fields.required("rdf_reifies")?,
+            rdf_first: fields.required("rdf_first")?,
+            rdf_rest: fields.required("rdf_rest")?,
+            rdf_nil: fields.required("rdf_nil")?,
+            xsd_string: fields.required("xsd_string")?,
+            xsd_boolean: fields.required("xsd_boolean")?,
+        };
+        fields.deny_unknown()?;
+        Ok(roles)
+    }
 }
 
-impl<'de> Deserialize<'de> for OboGraphsConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawOboGraphsConfig::deserialize(deserializer)?;
-        Self::new(raw.graph_id, raw.vocabulary, raw.limits, raw.max_records)
-            .map_err(serde::de::Error::custom)
+impl ToJson for OboRdfRoles {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("rdf_type", self.rdf_type.to_json())
+                .with("rdf_reifies", self.rdf_reifies.to_json())
+                .with("rdf_first", self.rdf_first.to_json())
+                .with("rdf_rest", self.rdf_rest.to_json())
+                .with("rdf_nil", self.rdf_nil.to_json())
+                .with("xsd_string", self.xsd_string.to_json())
+                .with("xsd_boolean", self.xsd_boolean.to_json()),
+        )
+    }
+}
+
+impl FromJson for OboOwlRoles {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct OboOwlRoles")?;
+        let roles = Self {
+            rdfs_label: fields.required("rdfs_label")?,
+            rdfs_comment: fields.required("rdfs_comment")?,
+            rdfs_sub_class_of: fields.required("rdfs_sub_class_of")?,
+            rdfs_sub_property_of: fields.required("rdfs_sub_property_of")?,
+            rdfs_domain: fields.required("rdfs_domain")?,
+            rdfs_range: fields.required("rdfs_range")?,
+            owl_ontology: fields.required("owl_ontology")?,
+            owl_class: fields.required("owl_class")?,
+            owl_named_individual: fields.required("owl_named_individual")?,
+            owl_object_property: fields.required("owl_object_property")?,
+            owl_annotation_property: fields.required("owl_annotation_property")?,
+            owl_datatype_property: fields.required("owl_datatype_property")?,
+            owl_equivalent_class: fields.required("owl_equivalent_class")?,
+            owl_intersection_of: fields.required("owl_intersection_of")?,
+            owl_restriction: fields.required("owl_restriction")?,
+            owl_on_property: fields.required("owl_on_property")?,
+            owl_some_values_from: fields.required("owl_some_values_from")?,
+            owl_all_values_from: fields.required("owl_all_values_from")?,
+            owl_property_chain_axiom: fields.required("owl_property_chain_axiom")?,
+            owl_deprecated: fields.required("owl_deprecated")?,
+        };
+        fields.deny_unknown()?;
+        Ok(roles)
+    }
+}
+
+impl ToJson for OboOwlRoles {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("rdfs_label", self.rdfs_label.to_json())
+                .with("rdfs_comment", self.rdfs_comment.to_json())
+                .with("rdfs_sub_class_of", self.rdfs_sub_class_of.to_json())
+                .with("rdfs_sub_property_of", self.rdfs_sub_property_of.to_json())
+                .with("rdfs_domain", self.rdfs_domain.to_json())
+                .with("rdfs_range", self.rdfs_range.to_json())
+                .with("owl_ontology", self.owl_ontology.to_json())
+                .with("owl_class", self.owl_class.to_json())
+                .with("owl_named_individual", self.owl_named_individual.to_json())
+                .with("owl_object_property", self.owl_object_property.to_json())
+                .with(
+                    "owl_annotation_property",
+                    self.owl_annotation_property.to_json(),
+                )
+                .with(
+                    "owl_datatype_property",
+                    self.owl_datatype_property.to_json(),
+                )
+                .with("owl_equivalent_class", self.owl_equivalent_class.to_json())
+                .with("owl_intersection_of", self.owl_intersection_of.to_json())
+                .with("owl_restriction", self.owl_restriction.to_json())
+                .with("owl_on_property", self.owl_on_property.to_json())
+                .with("owl_some_values_from", self.owl_some_values_from.to_json())
+                .with("owl_all_values_from", self.owl_all_values_from.to_json())
+                .with(
+                    "owl_property_chain_axiom",
+                    self.owl_property_chain_axiom.to_json(),
+                )
+                .with("owl_deprecated", self.owl_deprecated.to_json()),
+        )
+    }
+}
+
+impl FromJson for OboMetadataRoles {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct OboMetadataRoles")?;
+        let roles = Self {
+            definition: fields.required("definition")?,
+            exact_synonym: fields.required("exact_synonym")?,
+            broad_synonym: fields.required("broad_synonym")?,
+            narrow_synonym: fields.required("narrow_synonym")?,
+            related_synonym: fields.required("related_synonym")?,
+            synonym_type: fields.required("synonym_type")?,
+            xref: fields.required("xref")?,
+            subset: fields.required("subset")?,
+            version: fields.required("version")?,
+        };
+        fields.deny_unknown()?;
+        Ok(roles)
+    }
+}
+
+impl ToJson for OboMetadataRoles {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("definition", self.definition.to_json())
+                .with("exact_synonym", self.exact_synonym.to_json())
+                .with("broad_synonym", self.broad_synonym.to_json())
+                .with("narrow_synonym", self.narrow_synonym.to_json())
+                .with("related_synonym", self.related_synonym.to_json())
+                .with("synonym_type", self.synonym_type.to_json())
+                .with("xref", self.xref.to_json())
+                .with("subset", self.subset.to_json())
+                .with("version", self.version.to_json()),
+        )
+    }
+}
+
+impl FromJson for OboGraphsVocabulary {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct OboGraphsVocabulary")?;
+        let roles = Self {
+            rdf: fields.required("rdf")?,
+            owl: fields.required("owl")?,
+            metadata: fields.required("metadata")?,
+        };
+        fields.deny_unknown()?;
+        Ok(roles)
+    }
+}
+
+impl ToJson for OboGraphsVocabulary {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("rdf", self.rdf.to_json())
+                .with("owl", self.owl.to_json())
+                .with("metadata", self.metadata.to_json()),
+        )
+    }
+}
+
+impl FromJson for OboGraphsConfig {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct OboGraphsConfig")?;
+        let graph_id: String = fields.required("graph_id")?;
+        let vocabulary = fields.required("vocabulary")?;
+        let limits = fields.required("limits")?;
+        let max_records = fields.required("max_records")?;
+        fields.deny_unknown()?;
+        Ok(Self::new(graph_id, vocabulary, limits, max_records)?)
+    }
+}
+
+impl ToJson for OboGraphsConfig {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("graph_id", self.graph_id.as_str())
+                .with("vocabulary", self.vocabulary.to_json())
+                .with("limits", self.limits.to_json())
+                .with("max_records", self.max_records),
+        )
     }
 }
 

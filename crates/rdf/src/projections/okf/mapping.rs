@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use crate::projections::source_rows::{
+    SourceAnnotation, SourceQuad, SourceReifier, source_identifier,
+};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -8,8 +11,8 @@ use std::fmt::Write as _;
 use purrdf_core::{
     DatasetView, LossEntry, LossLedger, RdfLocation, check_ledger_sound, rdf_to_okf_loss_ledger,
 };
+use purrdf_lex::json_escape::{JsonEscapes, push_string};
 use purrdf_xsd::XsdValue;
-use serde::Serialize;
 
 use super::config::validate_path_stem;
 use super::{
@@ -30,7 +33,7 @@ use purrdf_xsd::datatype::XSD_DATE_TIME as XSD_DATETIME;
 use purrdf_xsd::datatype::XSD_DECIMAL;
 
 /// Deterministic execution counts for one OKF terms projection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OkfGenerationReport {
     /// Source named-graph declarations, quads, reifiers, and annotations examined.
     pub source_records: usize,
@@ -59,29 +62,6 @@ pub struct OkfProjection {
     pub report: OkfGenerationReport,
     /// Located losses for every source row not carried exactly by the bundle.
     pub loss_ledger: LossLedger,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-struct SourceQuad {
-    subject: ProjectionTerm,
-    predicate: String,
-    object: ProjectionTerm,
-    graph: Option<ProjectionTerm>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-struct SourceReifier {
-    reifier: ProjectionTerm,
-    statement: ProjectionTerm,
-    graph: Option<ProjectionTerm>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-struct SourceAnnotation {
-    reifier: ProjectionTerm,
-    predicate: String,
-    object: ProjectionTerm,
-    graph: Option<ProjectionTerm>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -1063,9 +1043,12 @@ fn render_yaml_entry(
 
 fn render_yaml_scalar(value: &YamlScalar) -> Result<String, ProjectionError> {
     match value {
-        YamlScalar::String(value) => serde_json::to_string(value).map_err(|error| {
-            ProjectionError::integrity(format!("serialize OKF YAML string scalar: {error}"))
-        }),
+        YamlScalar::String(value) => {
+            // A JSON string is a YAML 1.2 double-quoted scalar.
+            let mut quoted = String::with_capacity(value.len() + 2);
+            push_string(&mut quoted, value, JsonEscapes::ShortForms);
+            Ok(quoted)
+        }
         YamlScalar::Boolean(value) => Ok(value.to_string()),
         YamlScalar::Number(value) => Ok(value.clone()),
     }
@@ -1292,13 +1275,6 @@ fn resolve_term<D: DatasetView>(
     let _ = term.to_canonical_json(config.limits())?;
     cache.insert(id, term.clone());
     Ok(term)
-}
-
-fn source_identifier(prefix: &str, value: &impl Serialize) -> Result<String, ProjectionError> {
-    let bytes = serde_json::to_vec(value).map_err(|error| {
-        ProjectionError::integrity(format!("serialize OKF terms source location: {error}"))
-    })?;
-    stable_identifier(prefix, &bytes)
 }
 
 fn reject_duplicates<T: Ord>(values: &[T], description: &str) -> Result<(), ProjectionError> {

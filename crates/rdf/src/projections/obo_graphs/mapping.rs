@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use crate::projections::source_rows::{
+    SourceAnnotation, SourceQuad, SourceReifier, source_identifier,
+};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -13,9 +16,8 @@ use purrdf_core::{
     DatasetView, LossEntry, LossLedger, RdfLocation, check_ledger_sound,
     rdf_to_obo_graphs_loss_ledger,
 };
-use serde::Serialize;
 
-use super::super::{ProjectionError, ProjectionTerm, stable_identifier};
+use super::super::{ProjectionError, ProjectionTerm};
 use super::{
     OboDomainRangeAxiom, OboEdge, OboEquivalentNodesSet, OboExistentialRestriction, OboGraph,
     OboGraphDocument, OboGraphsConfig, OboLogicalDefinitionAxiom, OboMeta, OboNode, OboNodeType,
@@ -29,29 +31,6 @@ pub struct OboGraphsProjection {
     pub document: OboGraphDocument,
     /// Located, always-computed runtime loss ledger.
     pub loss_ledger: LossLedger,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-struct SourceQuad {
-    subject: ProjectionTerm,
-    predicate: String,
-    object: ProjectionTerm,
-    graph: Option<ProjectionTerm>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-struct SourceReifier {
-    reifier: ProjectionTerm,
-    statement: ProjectionTerm,
-    graph: Option<ProjectionTerm>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-struct SourceAnnotation {
-    reifier: ProjectionTerm,
-    predicate: String,
-    object: ProjectionTerm,
-    graph: Option<ProjectionTerm>,
 }
 
 #[derive(Default)]
@@ -1594,13 +1573,6 @@ fn iri(value: &str) -> ProjectionTerm {
     }
 }
 
-fn source_identifier(prefix: &str, value: &impl Serialize) -> Result<String, ProjectionError> {
-    let bytes = serde_json::to_vec(value).map_err(|error| {
-        ProjectionError::integrity(format!("serialize source location: {error}"))
-    })?;
-    stable_identifier(prefix, &bytes)
-}
-
 fn reject_duplicates<T: Ord>(values: &[T], description: &str) -> Result<(), ProjectionError> {
     if values.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err(ProjectionError::integrity(format!(
@@ -1675,6 +1647,8 @@ mod tests {
     };
 
     use super::*;
+    use crate::projections::json_codec::FromJson;
+    use crate::projections::json_codec::ToJson;
     use crate::projections::{
         OboGraphsVocabulary, OboMetadataRoles, OboOwlRoles, OboRdfRoles, ProjectionLimits,
     };
@@ -2195,12 +2169,12 @@ mod tests {
     #[test]
     fn rejects_incomplete_vocabulary_and_ambiguous_owl() {
         let configuration = config(2_000);
-        let mut value = serde_json::to_value(&configuration).expect("config JSON");
+        let mut value = configuration.to_json();
         value["vocabulary"]["rdf"]
             .as_object_mut()
             .expect("RDF roles")
             .remove("rdf_type");
-        assert!(serde_json::from_value::<OboGraphsConfig>(value).is_err());
+        assert!(OboGraphsConfig::from_json(&value).is_err());
 
         let duplicate_metadata = OboMetadataRoles::new(
             format!("{RDFS}label"),

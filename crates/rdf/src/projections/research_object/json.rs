@@ -7,26 +7,26 @@ use std::sync::Arc;
 
 use purrdf_core::loss::{LossEntry, check_ledger_sound};
 use purrdf_core::{LossLedger, RdfDataset, RdfLocation};
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
+use purrdf_lex::json::{Object, Value};
 
 use crate::native_codecs::jsonld::{
     CompiledJsonLdContext, parse_jsonld, serialize_dataset_to_jsonld,
 };
 
+use super::super::json_codec::{Fields, FromJson, JsonError, ToJson, sorted_last_wins};
 use super::super::{ProjectionError, ProjectionLimits, ProjectionPackage, validate_absolute_iri};
 use super::{ResearchObjectConfig, ResearchObjectModel};
 
 /// Caller-owned, locally interpreted JSON-LD context.
 ///
-/// `value` is carried byte-semantically into emitted documents. `definitions`
-/// is the complete offline expansion table used by profile adapters; PurRDF
-/// never dereferences a context IRI.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// `value` is carried byte-semantically into emitted documents, with every
+/// object's members in name order (a repeated name keeps its last value).
+/// `definitions` is the complete offline expansion table used by profile
+/// adapters; PurRDF never dereferences a context IRI.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OfflineJsonLdContext {
     value: Value,
     definitions: BTreeMap<String, String>,
-    #[serde(skip)]
     compiled: Arc<CompiledJsonLdContext>,
 }
 
@@ -39,9 +39,10 @@ impl OfflineJsonLdContext {
     /// keyword-like compact term, a non-absolute expansion, or ambiguous IRI
     /// aliases.
     pub fn new(
-        value: Value,
+        mut value: Value,
         definitions: BTreeMap<String, String>,
     ) -> Result<Self, ProjectionError> {
+        sorted_last_wins(&mut value);
         validate_context_value(&value)?;
         if definitions.is_empty() {
             return Err(ProjectionError::configuration(
@@ -73,10 +74,14 @@ impl OfflineJsonLdContext {
                 // whose expansion is not CURIE concatenation. Those remain explicit
                 // profile rules; plain JSON-LD terms use the shared context engine.
                 .filter(|(term, _)| !term.contains(':'))
-                .map(|(term, iri)| (term.clone(), Value::String(iri.clone())))
-                .collect(),
+                .map(|(term, iri)| (term.as_str(), iri.as_str()))
+                .collect::<Object>(),
         );
-        let compiled = CompiledJsonLdContext::compile(&compiled_value, None).map_err(|error| {
+        let compiled = CompiledJsonLdContext::compile_json(
+            purrdf_lex::json::write_compact(&compiled_value).as_bytes(),
+            None,
+        )
+        .map_err(|error| {
             ProjectionError::configuration(format!(
                 "compile offline JSON-LD term definitions: {error}"
             ))
@@ -120,20 +125,23 @@ impl OfflineJsonLdContext {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawOfflineJsonLdContext {
-    value: Value,
-    definitions: BTreeMap<String, String>,
+impl FromJson for OfflineJsonLdContext {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct OfflineJsonLdContext")?;
+        let context: Value = fields.required("value")?;
+        let definitions = fields.required("definitions")?;
+        fields.deny_unknown()?;
+        Ok(Self::new(context, definitions)?)
+    }
 }
 
-impl<'de> Deserialize<'de> for OfflineJsonLdContext {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawOfflineJsonLdContext::deserialize(deserializer)?;
-        Self::new(raw.value, raw.definitions).map_err(serde::de::Error::custom)
+impl ToJson for OfflineJsonLdContext {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("value", self.value.clone())
+                .with("definitions", self.definitions.to_json()),
+        )
     }
 }
 
@@ -189,12 +197,19 @@ pub struct ResearchObjectReadOutcome {
     pub loss_ledger: LossLedger,
 }
 
+/// A profile document as its canonical bytes: compact JSON with every object's
+/// members in name order, and a trailing newline.
+///
+/// Profile writers build documents member by member; ordering here makes the
+/// bytes a function of the document's content rather than of build order.
 pub(super) fn canonical_json(
     value: &Value,
     limits: ProjectionLimits,
     description: &str,
 ) -> Result<Vec<u8>, ProjectionError> {
-    let mut bytes = super::super::util::canonical_json_bounded(value, limits, description)?;
+    let mut sorted = value.clone();
+    sorted.sort_keys();
+    let mut bytes = super::super::util::canonical_json_bounded(&sorted, limits, description)?;
     if bytes.len() == limits.max_artifact_bytes() {
         return Err(ProjectionError::limit(format!(
             "{description} plus its canonical newline exceeds the {}-byte artifact limit",
@@ -217,14 +232,18 @@ pub(super) fn parse_strict_json(
         ))
         .at_path(path));
     }
-    crate::json_number::read_json(|| {
-        crate::json_number::parse_strict(
-            bytes,
-            config.policy().max_records(),
-            config.policy().max_json_depth(),
-        )
-    })
-    .map_err(|error| ProjectionError::syntax(format!("parse {description}: {error}")).at_path(path))
+    let mut value = crate::json_number::parse_strict(
+        bytes,
+        config.policy().max_records(),
+        config.policy().max_json_depth(),
+    )
+    .map_err(|error| {
+        ProjectionError::syntax(format!("parse {description}: {error}")).at_path(path)
+    })?;
+    // Duplicate members are refused above, so this only orders members by
+    // name: every profile decoder walks a document in that one order.
+    value.sort_keys();
+    Ok(value)
 }
 
 pub(super) fn require_artifact<'a>(
@@ -404,6 +423,11 @@ mod tests {
                 Some(correct.to_bits()),
                 "{lexical}"
             );
+            assert_eq!(
+                read.as_number().map(purrdf_lex::json::Number::lexeme),
+                Some(lexical.as_str()),
+                "the strict reader keeps the lexeme"
+            );
         }
     }
 
@@ -426,7 +450,7 @@ mod tests {
 
         assert!(
             OfflineJsonLdContext::new(
-                serde_json::json!({"@import": "https://example.org/base"}),
+                Value::from(Object::new().with("@import", "https://example.org/base")),
                 valid.definitions,
             )
             .is_err()
@@ -441,7 +465,7 @@ mod tests {
         let dataset = lifted_fixture();
         let json = serialize_dataset_to_jsonld(&dataset)
             .expect("the lifted dataset serializes to JSON-LD");
-        let value: Value = serde_json::from_str(&json).expect("serializer emits JSON");
+        let value = purrdf_lex::json::read(&json).expect("serializer emits JSON");
 
         let mut ids = Vec::new();
         collect_ids(&value, &mut ids);

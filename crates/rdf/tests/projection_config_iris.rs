@@ -44,7 +44,7 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::Value;
+use purrdf_lex::json::{self, Value};
 
 use purrdf_rdf::{
     CsvwConfig, CsvwContext, CsvwMode, CsvwVocabulary, LpgConfig, LpgExecutionLimits, LpgScope,
@@ -360,8 +360,8 @@ fn set(document: &mut Value, at: &[String], replacement: &str) {
 
 /// The rendered failure of parsing `document`, or `None` when it was accepted.
 fn refusal(document: &Value) -> Option<String> {
-    let bytes = serde_json::to_vec(document).expect("re-serialize the mutated configuration");
-    ProjectionConfig::from_json(&bytes)
+    let bytes = json::write_compact(document);
+    ProjectionConfig::from_json(bytes.as_bytes())
         .err()
         .map(|error| error.to_string())
 }
@@ -409,7 +409,8 @@ fn every_iri_valued_configuration_field_is_gated_by_the_shared_layer() {
     let mut observed: Vec<(ProjectionProfile, usize)> = Vec::new();
     for profile in ProjectionProfile::ALL {
         let bytes = config_for(*profile);
-        let pristine: Value = serde_json::from_slice(&bytes).expect("the configuration is JSON");
+        let pristine = json::read(std::str::from_utf8(&bytes).expect("the configuration is UTF-8"))
+            .expect("the configuration is JSON");
         assert!(
             refusal(&pristine).is_none(),
             "{profile}: the configuration must parse as-is"
@@ -471,7 +472,7 @@ fn a_document_base_iri_is_gated_when_the_configuration_document_sets_it() {
             include_str!("fixtures/dataset-description/void.json"),
         ),
     ] {
-        let pristine: Value = serde_json::from_str(text).expect("the fixture is JSON");
+        let pristine = json::read(text).expect("the fixture is JSON");
 
         // A valid ABSOLUTE base is accepted.
         let mut good = pristine.clone();
@@ -511,7 +512,7 @@ fn a_document_base_iri_is_gated_when_the_configuration_document_sets_it() {
 /// IRI", not "not checked".
 #[test]
 fn a_frictionless_package_profile_accepts_a_registry_identifier_and_a_url() {
-    let pristine: Value = serde_json::from_str(include_str!(
+    let pristine = json::read(include_str!(
         "fixtures/research-objects/carrier/frictionless-data-package-1.json"
     ))
     .expect("the fixture is JSON");
@@ -538,10 +539,11 @@ fn a_frictionless_package_profile_accepts_a_registry_identifier_and_a_url() {
     // into something else on the way through.
     let mut document = pristine.clone();
     document["config"]["package_profile"] = Value::String("tabular-data-package".to_owned());
-    let bytes = serde_json::to_vec(&document).expect("re-serialize");
-    let config = ProjectionConfig::from_json(&bytes).expect("the registry identifier parses");
+    let bytes = json::write_compact(&document);
+    let config =
+        ProjectionConfig::from_json(bytes.as_bytes()).expect("the registry identifier parses");
     let round_tripped = config.to_json().expect("re-serialize the parsed config");
-    let seen: Value = serde_json::from_slice(&round_tripped).expect("valid JSON");
+    let seen = json::read(std::str::from_utf8(&round_tripped).expect("UTF-8")).expect("valid JSON");
     assert_eq!(
         seen["config"]["package_profile"],
         Value::String("tabular-data-package".to_owned()),

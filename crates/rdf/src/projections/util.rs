@@ -2,67 +2,30 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 use std::fmt::Write as _;
-use std::io;
 
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use super::json_codec::ToJson;
 use super::{ProjectionError, ProjectionLimits};
 
-struct LimitedJsonBytes {
-    bytes: Vec<u8>,
-    limit: usize,
-    exceeded: bool,
-}
-
-impl LimitedJsonBytes {
-    fn new(limit: usize) -> Self {
-        Self {
-            bytes: Vec::new(),
-            limit,
-            exceeded: false,
-        }
-    }
-}
-
-impl io::Write for LimitedJsonBytes {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        if self
-            .bytes
-            .len()
-            .checked_add(buffer.len())
-            .is_none_or(|length| length > self.limit)
-        {
-            self.exceeded = true;
-            return Err(io::Error::other("projection JSON byte limit exceeded"));
-        }
-        self.bytes.extend_from_slice(buffer);
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-pub(crate) fn canonical_json_bounded<T: Serialize>(
+/// `value` as compact JSON, refused past the artifact byte limit.
+///
+/// The writer is [`purrdf_lex::json::write_compact`]: members in the order the
+/// value holds them, numbers as their lexemes, strings in the one short-form
+/// spelling.
+pub(crate) fn canonical_json_bounded<T: ToJson + ?Sized>(
     value: &T,
     limits: ProjectionLimits,
     description: &str,
 ) -> Result<Vec<u8>, ProjectionError> {
-    let mut output = LimitedJsonBytes::new(limits.max_artifact_bytes());
-    if let Err(error) = serde_json::to_writer(&mut output, value) {
-        if output.exceeded {
-            return Err(ProjectionError::limit(format!(
-                "{description} exceeds the {}-byte artifact limit",
-                limits.max_artifact_bytes()
-            )));
-        }
-        return Err(ProjectionError::syntax(format!(
-            "serialize {description}: {error}"
+    let bytes = purrdf_lex::json::write_compact(&value.to_json()).into_bytes();
+    if bytes.len() > limits.max_artifact_bytes() {
+        return Err(ProjectionError::limit(format!(
+            "{description} exceeds the {}-byte artifact limit",
+            limits.max_artifact_bytes()
         )));
     }
-    Ok(output.bytes)
+    Ok(bytes)
 }
 
 /// Build a stable collision-resistant identifier from a caller-owned ASCII prefix

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use purrdf_core::collections::{ListVocab, build_rdf_list};
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
 use purrdf_iri::percent;
-use serde_json::Value;
+use purrdf_lex::json::{Object, Value};
 
 use super::super::ProjectionError;
 use super::config::{CsvwConfig, CsvwMode};
@@ -266,7 +266,11 @@ impl Converter<'_> {
                         self.quad(node, type_predicate, object);
                     }
                 }
-                for (property, value) in object {
+                // Properties in name order, whatever order a caller-built model
+                // holds them in, so node allocation is a function of content.
+                let mut members = object.iter().collect::<Vec<_>>();
+                members.sort_by(|left, right| left.0.cmp(right.0));
+                for (property, value) in members {
                     if property.starts_with('@') {
                         continue;
                     }
@@ -288,34 +292,32 @@ impl Converter<'_> {
                 self.config.vocabulary().xsd("boolean"),
             )]),
             Value::Number(number) => {
-                let datatype = if number.is_i64() || number.is_u64() {
+                let datatype = if number.as_i64().is_some() || number.as_u64().is_some() {
                     self.config.vocabulary().xsd("integer")
                 } else {
                     self.config.vocabulary().xsd("double")
                 };
-                let lexical = serde_json::to_string(&crate::json_value::Binary64(value)).map_err(
-                    |error| ProjectionError::integrity(format!("CSVW numeric annotation: {error}")),
-                )?;
+                let lexical = crate::json_number::binary64_lexeme(number).map_err(|error| {
+                    ProjectionError::integrity(format!("CSVW numeric annotation: {error}"))
+                })?;
                 Ok(vec![self.typed_literal(&lexical, datatype)])
             }
             Value::Null => Ok(Vec::new()),
         }
     }
 
-    fn annotation_literal(
-        &mut self,
-        object: &serde_json::Map<String, Value>,
-    ) -> Result<TermId, ProjectionError> {
+    fn annotation_literal(&mut self, object: &Object) -> Result<TermId, ProjectionError> {
         let value = object.get("@value").ok_or_else(|| {
             ProjectionError::integrity("CSVW annotation value object lacks @value")
         })?;
         let lexical = match value {
             Value::String(value) => value.clone(),
             Value::Bool(value) => value.to_string(),
-            Value::Number(_) => serde_json::to_string(&crate::json_value::Binary64(value))
-                .map_err(|error| {
+            Value::Number(number) => {
+                crate::json_number::binary64_lexeme(number).map_err(|error| {
                     ProjectionError::integrity(format!("CSVW numeric annotation: {error}"))
-                })?,
+                })?
+            }
             _ => {
                 return Err(ProjectionError::integrity(
                     "CSVW annotation @value is not atomic",
@@ -330,9 +332,9 @@ impl Converter<'_> {
             None
         } else if let Some(Value::String(datatype)) = object.get("@type") {
             Some(expand_jsonld_iri(datatype, self.config)?)
-        } else if value.is_boolean() {
+        } else if matches!(value, Value::Bool(_)) {
             Some(self.config.vocabulary().xsd("boolean"))
-        } else if value.is_number() {
+        } else if matches!(value, Value::Number(_)) {
             Some(if value.as_i64().is_some() || value.as_u64().is_some() {
                 self.config.vocabulary().xsd("integer")
             } else {

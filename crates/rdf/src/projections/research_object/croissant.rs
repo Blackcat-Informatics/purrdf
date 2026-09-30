@@ -11,9 +11,11 @@ use purrdf_core::loss::{
 use purrdf_core::{
     DatasetView, LossLedger, rdf_to_research_object_loss_ledger, research_object_to_rdf_loss_ledger,
 };
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Map, Value};
+use purrdf_lex::json::{Object, Value};
 
+use super::super::json_codec::{
+    Fields, FromJson, JsonError, Owned, ToJson, into_owned, json_string_enum,
+};
 use super::super::{ProjectionError, ProjectionPackage, validate_absolute_iri};
 use super::json::{
     ResearchObjectPackageProjection, ResearchObjectReadOutcome, canonical_json, ensure_sound,
@@ -34,8 +36,7 @@ pub const CROISSANT_ARTIFACT: &str = "croissant.json";
 ///
 /// Every role is bound to a compact term by [`CroissantVocabulary`]. The
 /// compact term is then expanded only through [`OfflineJsonLdContext`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CroissantRole {
     /// Dataset class term.
     DatasetClass,
@@ -113,6 +114,46 @@ pub enum CroissantRole {
     Workflow,
 }
 
+json_string_enum!(CroissantRole {
+    DatasetClass => "dataset-class",
+    FileObjectClass => "file-object-class",
+    RecordSetClass => "record-set-class",
+    FieldClass => "field-class",
+    AgentClass => "agent-class",
+    ActivityClass => "activity-class",
+    Name => "name",
+    Description => "description",
+    Identifier => "identifier",
+    Version => "version",
+    DatePublished => "date-published",
+    DateModified => "date-modified",
+    Url => "url",
+    Keywords => "keywords",
+    License => "license",
+    Creator => "creator",
+    Publisher => "publisher",
+    Distribution => "distribution",
+    Activity => "activity",
+    RecordSet => "record-set",
+    ConformsTo => "conforms-to",
+    Path => "path",
+    ContentUrl => "content-url",
+    EncodingFormat => "encoding-format",
+    Format => "format",
+    ContentSize => "content-size",
+    Sha256 => "sha256",
+    InlineContent => "inline-content",
+    Field => "field",
+    DataType => "data-type",
+    Records => "records",
+    Instrument => "instrument",
+    Agent => "agent",
+    Object => "object",
+    Result => "result",
+    EndTime => "end-time",
+    Workflow => "workflow",
+});
+
 /// Every mandatory Croissant role in deterministic configuration order.
 pub const CROISSANT_ROLES: &[CroissantRole] = &[
     CroissantRole::DatasetClass,
@@ -155,8 +196,7 @@ pub const CROISSANT_ROLES: &[CroissantRole] = &[
 ];
 
 /// Complete caller-owned compact-term binding for Croissant.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CroissantVocabulary(BTreeMap<CroissantRole, String>);
 
 impl CroissantVocabulary {
@@ -208,18 +248,21 @@ impl CroissantVocabulary {
     }
 }
 
-impl<'de> Deserialize<'de> for CroissantVocabulary {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let terms = BTreeMap::<CroissantRole, String>::deserialize(deserializer)?;
-        Self::new(terms).map_err(serde::de::Error::custom)
+impl FromJson for CroissantVocabulary {
+    /// The role map itself, revalidated by [`CroissantVocabulary::new`].
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        Ok(Self::new(BTreeMap::from_json(value)?)?)
+    }
+}
+
+impl ToJson for CroissantVocabulary {
+    fn to_json(&self) -> Value {
+        self.0.to_json()
     }
 }
 
 /// Mandatory caller-owned configuration for the Croissant 1.1 codec.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CroissantConfig {
     common: ResearchObjectConfig,
     context: OfflineJsonLdContext,
@@ -278,23 +321,27 @@ impl CroissantConfig {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawCroissantConfig {
-    common: ResearchObjectConfig,
-    context: OfflineJsonLdContext,
-    vocabulary: CroissantVocabulary,
-    profile_iri: String,
+impl FromJson for CroissantConfig {
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct CroissantConfig")?;
+        let common: ResearchObjectConfig = fields.required("common")?;
+        let context: OfflineJsonLdContext = fields.required("context")?;
+        let vocabulary: CroissantVocabulary = fields.required("vocabulary")?;
+        let profile_iri: String = fields.required("profile_iri")?;
+        fields.deny_unknown()?;
+        Ok(Self::new(common, context, vocabulary, profile_iri)?)
+    }
 }
 
-impl<'de> Deserialize<'de> for CroissantConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawCroissantConfig::deserialize(deserializer)?;
-        Self::new(raw.common, raw.context, raw.vocabulary, raw.profile_iri)
-            .map_err(serde::de::Error::custom)
+impl ToJson for CroissantConfig {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("common", self.common.to_json())
+                .with("context", self.context.to_json())
+                .with("vocabulary", self.vocabulary.to_json())
+                .with("profile_iri", self.profile_iri.to_json()),
+        )
     }
 }
 
@@ -360,7 +407,7 @@ fn encode_document(
     ledger: &mut LossLedger,
 ) -> Result<Value, ProjectionError> {
     let terms = config.vocabulary();
-    let mut root = Map::new();
+    let mut root = Object::new();
     root.insert("@context".to_owned(), config.context().value().clone());
     root.insert("@id".to_owned(), Value::String(model.dataset.id.clone()));
     root.insert(
@@ -685,15 +732,15 @@ fn encode_field(field: &ResearchField, config: &CroissantConfig) -> Value {
     Value::Object(object)
 }
 
-fn typed_object(id: &str, class: &str) -> Map<String, Value> {
-    Map::from_iter([
+fn typed_object(id: &str, class: &str) -> Object {
+    Object::from_iter([
         ("@id".to_owned(), Value::String(id.to_owned())),
         ("@type".to_owned(), Value::String(class.to_owned())),
     ])
 }
 
 fn id_object(id: &str) -> Value {
-    Value::Object(Map::from_iter([(
+    Value::Object(Object::from_iter([(
         "@id".to_owned(),
         Value::String(id.to_owned()),
     )]))
@@ -721,7 +768,7 @@ fn encode_text(value: &ResearchText, config: &CroissantConfig) -> Value {
     if value.datatype == xsd_string && value.language.is_none() && value.direction.is_none() {
         return Value::String(value.value.clone());
     }
-    let mut object = Map::from_iter([("@value".to_owned(), Value::String(value.value.clone()))]);
+    let mut object = Object::from_iter([("@value".to_owned(), Value::String(value.value.clone()))]);
     if let Some(language) = &value.language {
         object.insert("@language".to_owned(), Value::String(language.clone()));
     } else {
@@ -740,7 +787,7 @@ fn encode_text(value: &ResearchText, config: &CroissantConfig) -> Value {
     Value::Object(object)
 }
 
-fn insert_values(object: &mut Map<String, Value>, term: &str, values: Vec<Value>) {
+fn insert_values(object: &mut Object, term: &str, values: Vec<Value>) {
     if !values.is_empty() {
         object.insert(term.to_owned(), Value::Array(values));
     }
@@ -782,7 +829,7 @@ fn decode_document(
 
 impl Decoder<'_> {
     fn decode(&mut self, value: Value) -> Result<ResearchObjectModel, ProjectionError> {
-        let Value::Object(mut root) = value else {
+        let Owned::Object(mut root) = into_owned(value) else {
             return Err(
                 ProjectionError::syntax("Croissant document root must be a JSON object")
                     .at_path(CROISSANT_ARTIFACT),
@@ -863,7 +910,7 @@ impl Decoder<'_> {
         })
     }
 
-    fn require_profile(&mut self, root: &mut Map<String, Value>) -> Result<(), ProjectionError> {
+    fn require_profile(&mut self, root: &mut Object) -> Result<(), ProjectionError> {
         let term = self.config.vocabulary().term(CroissantRole::ConformsTo);
         let pointer = json_pointer("", term);
         let values = self.take_items(root, CroissantRole::ConformsTo, "");
@@ -886,7 +933,7 @@ impl Decoder<'_> {
 
     fn take_agents(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         role: CroissantRole,
         parent: &str,
     ) -> Result<Vec<String>, ProjectionError> {
@@ -917,7 +964,7 @@ impl Decoder<'_> {
         value: Value,
         pointer: &str,
     ) -> Result<Option<ResearchAgent>, ProjectionError> {
-        let Value::Object(mut object) = value else {
+        let Owned::Object(mut object) = into_owned(value) else {
             self.unsupported(pointer);
             return Ok(None);
         };
@@ -934,7 +981,7 @@ impl Decoder<'_> {
 
     fn take_resources(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         parent: &str,
     ) -> Result<Vec<ResearchResource>, ProjectionError> {
         let term = self
@@ -970,7 +1017,7 @@ impl Decoder<'_> {
         value: Value,
         pointer: &str,
     ) -> Result<Option<ResearchResource>, ProjectionError> {
-        let Value::Object(mut object) = value else {
+        let Owned::Object(mut object) = into_owned(value) else {
             self.unsupported(pointer);
             return Ok(None);
         };
@@ -1014,7 +1061,7 @@ impl Decoder<'_> {
 
     fn take_activities(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         parent: &str,
     ) -> Result<Vec<ResearchActivity>, ProjectionError> {
         let term = self
@@ -1050,7 +1097,7 @@ impl Decoder<'_> {
         value: Value,
         pointer: &str,
     ) -> Result<Option<ResearchActivity>, ProjectionError> {
-        let Value::Object(mut object) = value else {
+        let Owned::Object(mut object) = into_owned(value) else {
             self.unsupported(pointer);
             return Ok(None);
         };
@@ -1082,7 +1129,7 @@ impl Decoder<'_> {
 
     fn take_record_sets(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         parent: &str,
     ) -> Result<Vec<ResearchRecordSet>, ProjectionError> {
         let term = self
@@ -1115,7 +1162,7 @@ impl Decoder<'_> {
 
     fn take_activity_agents(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         parent: &str,
     ) -> Result<Vec<String>, ProjectionError> {
         let term = self
@@ -1155,7 +1202,7 @@ impl Decoder<'_> {
         value: Value,
         pointer: &str,
     ) -> Result<Option<ResearchRecordSet>, ProjectionError> {
-        let Value::Object(mut object) = value else {
+        let Owned::Object(mut object) = into_owned(value) else {
             self.unsupported(pointer);
             return Ok(None);
         };
@@ -1181,7 +1228,7 @@ impl Decoder<'_> {
 
     fn take_fields(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         parent: &str,
     ) -> Result<Vec<ResearchField>, ProjectionError> {
         let term = self
@@ -1217,7 +1264,7 @@ impl Decoder<'_> {
         value: Value,
         pointer: &str,
     ) -> Result<Option<ResearchField>, ProjectionError> {
-        let Value::Object(mut object) = value else {
+        let Owned::Object(mut object) = into_owned(value) else {
             self.unsupported(pointer);
             return Ok(None);
         };
@@ -1237,30 +1284,25 @@ impl Decoder<'_> {
         }))
     }
 
-    fn take_items(
-        &mut self,
-        object: &mut Map<String, Value>,
-        role: CroissantRole,
-        parent: &str,
-    ) -> Vec<Value> {
+    fn take_items(&mut self, object: &mut Object, role: CroissantRole, parent: &str) -> Vec<Value> {
         let term = self.config.vocabulary().term(role).to_owned();
         let Some(value) = object.remove(&term) else {
             return Vec::new();
         };
-        match value {
-            Value::Array(values) => {
+        match into_owned(value) {
+            Owned::Array(values) => {
                 if values.len() > 1 {
                     self.loss(LOSS_RESEARCH_ORDER_DROPPED, &json_pointer(parent, &term));
                 }
                 values
             }
-            value => vec![value],
+            other => vec![Value::from(other)],
         }
     }
 
     fn take_texts(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         role: CroissantRole,
         parent: &str,
     ) -> Result<Vec<ResearchText>, ProjectionError> {
@@ -1290,15 +1332,15 @@ impl Decoder<'_> {
             .roles()
             .iri(super::ResearchRole::XsdString)
             .to_owned();
-        match value {
-            Value::String(value) => ResearchText::plain(value, xsd_string).map(Some),
-            Value::Object(mut object) => {
-                let Some(Value::String(value)) = object.remove("@value") else {
+        match into_owned(value) {
+            Owned::String(value) => ResearchText::plain(value, xsd_string).map(Some),
+            Owned::Object(mut object) => {
+                let Some(Owned::String(value)) = object.remove("@value").map(into_owned) else {
                     self.unsupported(pointer);
                     return Ok(None);
                 };
-                let language = match object.remove("@language") {
-                    Some(Value::String(language)) => Some(language),
+                let language = match object.remove("@language").map(into_owned) {
+                    Some(Owned::String(language)) => Some(language),
                     Some(_) => {
                         self.unsupported(&json_pointer(pointer, "@language"));
                         return Ok(None);
@@ -1322,8 +1364,8 @@ impl Decoder<'_> {
                         }
                     }
                 };
-                let explicit_datatype = match object.remove("@type") {
-                    Some(Value::String(datatype)) => Some(datatype),
+                let explicit_datatype = match object.remove("@type").map(into_owned) {
+                    Some(Owned::String(datatype)) => Some(datatype),
                     Some(_) => {
                         self.unsupported(&json_pointer(pointer, "@type"));
                         return Ok(None);
@@ -1359,7 +1401,7 @@ impl Decoder<'_> {
 
     fn take_values(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         role: CroissantRole,
         parent: &str,
     ) -> Result<Vec<ResearchValue>, ProjectionError> {
@@ -1397,7 +1439,7 @@ impl Decoder<'_> {
 
     fn take_references(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         role: CroissantRole,
         parent: &str,
     ) -> Result<Vec<String>, ProjectionError> {
@@ -1445,7 +1487,7 @@ impl Decoder<'_> {
 
     fn take_paths(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         parent: &str,
     ) -> Result<Vec<String>, ProjectionError> {
         let term = self
@@ -1460,7 +1502,7 @@ impl Decoder<'_> {
             .enumerate()
         {
             let pointer = item_pointer(parent, &term, index);
-            let Value::String(path) = value else {
+            let Owned::String(path) = into_owned(value) else {
                 self.unsupported(&pointer);
                 continue;
             };
@@ -1470,7 +1512,7 @@ impl Decoder<'_> {
         Ok(paths)
     }
 
-    fn take_byte_size(&mut self, object: &mut Map<String, Value>, parent: &str) -> Option<u64> {
+    fn take_byte_size(&mut self, object: &mut Object, parent: &str) -> Option<u64> {
         let term = self
             .config
             .vocabulary()
@@ -1486,7 +1528,7 @@ impl Decoder<'_> {
 
     fn take_sha256(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         parent: &str,
     ) -> Result<Vec<ResearchChecksum>, ProjectionError> {
         let values = self.take_texts(object, CroissantRole::Sha256, parent)?;
@@ -1509,12 +1551,12 @@ impl Decoder<'_> {
 
     fn required_entity_id(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         parent: &str,
         allow_relative: bool,
     ) -> Result<String, ProjectionError> {
         let pointer = json_pointer(parent, "@id");
-        let Some(Value::String(id)) = object.remove("@id") else {
+        let Some(Owned::String(id)) = object.remove("@id").map(into_owned) else {
             return Err(
                 ProjectionError::integrity("Croissant entity requires one string @id")
                     .at_path(CROISSANT_ARTIFACT),
@@ -1545,7 +1587,7 @@ impl Decoder<'_> {
 
     fn require_type(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         parent: &str,
         expected: &str,
     ) -> Result<(), ProjectionError> {
@@ -1560,7 +1602,7 @@ impl Decoder<'_> {
 
     fn optional_type(
         &mut self,
-        object: &mut Map<String, Value>,
+        object: &mut Object,
         parent: &str,
         expected: &str,
     ) -> Result<(), ProjectionError> {
@@ -1576,9 +1618,9 @@ impl Decoder<'_> {
         parent: &str,
         expected: &str,
     ) -> Result<(), ProjectionError> {
-        let values = match value {
-            Value::String(value) => vec![value],
-            Value::Array(values) => {
+        let values = match into_owned(value) {
+            Owned::String(value) => vec![value],
+            Owned::Array(values) => {
                 if values.len() > 1 {
                     self.loss(LOSS_RESEARCH_ORDER_DROPPED, &json_pointer(parent, "@type"));
                 }
@@ -1610,7 +1652,7 @@ impl Decoder<'_> {
         Ok(())
     }
 
-    fn record_unknowns(&mut self, object: &Map<String, Value>, parent: &str) {
+    fn record_unknowns(&mut self, object: &Object, parent: &str) {
         for member in object.keys() {
             self.loss(
                 LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,

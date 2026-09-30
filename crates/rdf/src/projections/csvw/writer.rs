@@ -7,8 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::csv::{Dialect, write_record_text};
 use purrdf_core::{DatasetView, LossLedger, RdfTextDirection};
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Map, Value};
+use purrdf_lex::json::{Object, Value};
 
 use super::super::util::canonical_json_bounded;
 use super::super::{ProjectionError, ProjectionPackage, validate_absolute_iri};
@@ -21,7 +20,7 @@ use super::model::{
 };
 
 /// Mandatory mapping from resource identities to safe package paths.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsvwWritePlan {
     metadata_path: String,
     table_paths: BTreeMap<String, String>,
@@ -69,23 +68,6 @@ impl CsvwWritePlan {
     /// Deterministically ordered table-IRI to artifact-path mappings.
     pub fn table_paths(&self) -> &BTreeMap<String, String> {
         &self.table_paths
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawCsvwWritePlan {
-    metadata_path: String,
-    table_paths: BTreeMap<String, String>,
-}
-
-impl<'de> Deserialize<'de> for CsvwWritePlan {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawCsvwWritePlan::deserialize(deserializer)?;
-        Self::new(raw.metadata_path, raw.table_paths).map_err(serde::de::Error::custom)
     }
 }
 
@@ -234,7 +216,10 @@ fn metadata_bytes(group: &CsvwTableGroup, config: &CsvwConfig) -> Result<Vec<u8>
                 .collect::<Result<Vec<_>, _>>()?,
         ),
     );
-    canonical_json_bounded(&Value::Object(root), config.limits(), "CSVW metadata")
+    // Every object is written in member-name order.
+    let mut root = Value::Object(root);
+    root.sort_keys();
+    canonical_json_bounded(&root, config.limits(), "CSVW metadata")
 }
 
 fn table_metadata(table: &CsvwTable, config: &CsvwConfig) -> Result<Value, ProjectionError> {
@@ -272,21 +257,22 @@ fn table_metadata(table: &CsvwTable, config: &CsvwConfig) -> Result<Value, Proje
 }
 
 fn canonical_dialect() -> Value {
-    serde_json::json!({
-        "@type": "Dialect",
-        "commentPrefix": "#",
-        "delimiter": ",",
-        "doubleQuote": true,
-        "encoding": "utf-8",
-        "headerRowCount": 0,
-        "lineTerminators": ["\n"],
-        "quoteChar": "\"",
-        "skipBlankRows": true,
-        "skipColumns": 0,
-        "skipInitialSpace": false,
-        "skipRows": 0,
-        "trim": false
-    })
+    Value::Object(
+        Object::new()
+            .with("@type", "Dialect")
+            .with("commentPrefix", "#")
+            .with("delimiter", ",")
+            .with("doubleQuote", true)
+            .with("encoding", "utf-8")
+            .with("headerRowCount", 0_u8)
+            .with("lineTerminators", vec!["\n"])
+            .with("quoteChar", "\"")
+            .with("skipBlankRows", true)
+            .with("skipColumns", 0_u8)
+            .with("skipInitialSpace", false)
+            .with("skipRows", 0_u8)
+            .with("trim", false),
+    )
 }
 
 fn schema_metadata(schema: &CsvwSchema, config: &CsvwConfig) -> Result<Value, ProjectionError> {
@@ -342,7 +328,7 @@ fn schema_metadata(schema: &CsvwSchema, config: &CsvwConfig) -> Result<Value, Pr
 }
 
 fn insert_inherited(
-    object: &mut Map<String, Value>,
+    object: &mut Object,
     inherited: &CsvwInheritedProperties,
     config: &CsvwConfig,
 ) -> Result<(), ProjectionError> {
@@ -377,7 +363,7 @@ fn datatype_metadata(
     datatype: &CsvwDatatype,
     config: &CsvwConfig,
 ) -> Result<Value, ProjectionError> {
-    let mut object = Map::new();
+    let mut object = Object::new();
     object.insert("@type".to_owned(), Value::String("Datatype".to_owned()));
     if let Some(id) = &datatype.id {
         object.insert("@id".to_owned(), Value::String(id.clone()));
@@ -392,7 +378,7 @@ fn datatype_metadata(
             match format {
                 CsvwDatatypeFormat::Pattern(pattern) => Value::String(pattern.clone()),
                 CsvwDatatypeFormat::Numeric(numeric) => {
-                    let mut value = Map::new();
+                    let mut value = Object::new();
                     if let Some(pattern) = &numeric.pattern {
                         value.insert("pattern".to_owned(), Value::String(pattern.clone()));
                     }
@@ -439,7 +425,7 @@ fn datatype_base(base: &str, config: &CsvwConfig) -> Result<String, ProjectionEr
 }
 
 fn transformation_metadata(transformation: &CsvwTransformation) -> Value {
-    let mut object = Map::new();
+    let mut object = Object::new();
     object.insert("@type".to_owned(), Value::String("Template".to_owned()));
     if let Some(id) = &transformation.id {
         object.insert("@id".to_owned(), Value::String(id.clone()));
@@ -464,7 +450,7 @@ fn transformation_metadata(transformation: &CsvwTransformation) -> Value {
 }
 
 fn foreign_key_metadata(foreign_key: &CsvwForeignKey) -> Value {
-    let mut object = Map::new();
+    let mut object = Object::new();
     object.insert(
         "columnReference".to_owned(),
         strings_value(&foreign_key.column_reference),
@@ -477,7 +463,7 @@ fn foreign_key_metadata(foreign_key: &CsvwForeignKey) -> Value {
 }
 
 fn reference_metadata(reference: &CsvwReference) -> Value {
-    let mut object = Map::new();
+    let mut object = Object::new();
     if let Some(resource) = &reference.resource {
         object.insert("resource".to_owned(), Value::String(resource.clone()));
     }
@@ -556,7 +542,7 @@ fn append_comment(output: &mut Vec<u8>, comment: &str) -> Result<(), ProjectionE
     Ok(())
 }
 
-fn annotation_map(annotations: &CsvwAnnotations) -> Map<String, Value> {
+fn annotation_map(annotations: &CsvwAnnotations) -> Object {
     annotations
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
@@ -580,25 +566,25 @@ fn strings_value(values: &[String]) -> Value {
     }
 }
 
-fn insert_string_or_array(object: &mut Map<String, Value>, key: &str, values: &[String]) {
+fn insert_string_or_array(object: &mut Object, key: &str, values: &[String]) {
     if !values.is_empty() {
         object.insert(key.to_owned(), strings_value(values));
     }
 }
 
-fn insert_optional_string(object: &mut Map<String, Value>, key: &str, value: Option<&str>) {
+fn insert_optional_string(object: &mut Object, key: &str, value: Option<&str>) {
     if let Some(value) = value {
         object.insert(key.to_owned(), Value::String(value.to_owned()));
     }
 }
 
-fn insert_usize(object: &mut Map<String, Value>, key: &str, value: Option<usize>) {
+fn insert_usize(object: &mut Object, key: &str, value: Option<usize>) {
     if let Some(value) = value.and_then(|value| u64::try_from(value).ok()) {
-        object.insert(key.to_owned(), Value::Number(value.into()));
+        object.insert(key, value);
     }
 }
 
-fn insert_value(object: &mut Map<String, Value>, key: &str, value: Option<&Value>) {
+fn insert_value(object: &mut Object, key: &str, value: Option<&Value>) {
     if let Some(value) = value {
         object.insert(key.to_owned(), value.clone());
     }

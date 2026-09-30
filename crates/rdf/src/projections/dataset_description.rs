@@ -6,19 +6,20 @@
 use std::sync::Arc;
 
 use purrdf_core::{DatasetView, LossLedger, RdfDataset, SparqlResult, TermRef};
+use purrdf_lex::json::{Object, Value};
 use purrdf_sparql_algebra::{
     AggregateFunction, Expression, Function, GraphPattern, OrderExpression, ParserOptions,
     PurrdfFn, Query, SparqlParser, TermPattern, TriplePattern,
 };
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
-use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::native_codecs::{NativeRdfFormat, serialize_dataset_to_format};
 
+use super::json_codec::{Fields, FromJson, JsonError, ToJson};
 use super::{ProjectionError, ProjectionLimits, ProjectionPackage};
 
 /// Mandatory bounds and query text for a whole-dataset SPARQL CONSTRUCT view.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConstructViewConfig {
     query: String,
     base_iri: Option<String>,
@@ -146,49 +147,72 @@ impl ConstructViewConfig {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum RequiredNullableString {
-    Value(String),
-    Null(()),
-}
-
-impl RequiredNullableString {
-    fn into_option(self) -> Option<String> {
-        match self {
-            Self::Value(value) => Some(value),
-            Self::Null(()) => None,
-        }
+impl FromJson for ConstructViewConfig {
+    /// Every member is mandatory, `base_iri` included: it is a string or an
+    /// explicit `null`, never absent, so a caller states that the query is
+    /// self-contained rather than implying it by omission.
+    fn from_json(value: &Value) -> Result<Self, JsonError> {
+        let mut fields = Fields::new(value, "struct RawConstructViewConfig")?;
+        let query: String = fields.required("query")?;
+        let base_iri = match fields.raw("base_iri")? {
+            None => return Err(JsonError::missing_field("base_iri")),
+            Some(Value::Null) => None,
+            Some(Value::String(base)) => Some(base.clone()),
+            Some(_) => {
+                return Err(JsonError::custom(
+                    "data did not match any variant of untagged enum RequiredNullableString",
+                ));
+            }
+        };
+        let limits = fields.required("limits")?;
+        let max_query_bytes = fields.required("max_query_bytes")?;
+        let max_input_records = fields.required("max_input_records")?;
+        let max_output_records = fields.required("max_output_records")?;
+        fields.deny_unknown()?;
+        Ok(Self::new(
+            query,
+            base_iri,
+            limits,
+            max_query_bytes,
+            max_input_records,
+            max_output_records,
+        )?)
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawConstructViewConfig {
-    query: String,
-    base_iri: RequiredNullableString,
-    limits: ProjectionLimits,
-    max_query_bytes: usize,
-    max_input_records: usize,
-    max_output_records: usize,
-}
-
-impl<'de> Deserialize<'de> for ConstructViewConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawConstructViewConfig::deserialize(deserializer)?;
-        Self::new(
-            raw.query,
-            raw.base_iri.into_option(),
-            raw.limits,
-            raw.max_query_bytes,
-            raw.max_input_records,
-            raw.max_output_records,
+impl ToJson for ConstructViewConfig {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("query", self.query.as_str())
+                .with("base_iri", self.base_iri.to_json())
+                .with("limits", self.limits.to_json())
+                .with("max_query_bytes", self.max_query_bytes)
+                .with("max_input_records", self.max_input_records)
+                .with("max_output_records", self.max_output_records),
         )
-        .map_err(serde::de::Error::custom)
     }
+}
+
+/// Read a configuration's mandatory `format` member: a string the format
+/// registry's [`classify`](crate::native_codecs::classify) accepts, which
+/// includes the stable [`NativeRdfFormat::id`] that [`format_to_json`] writes.
+pub(super) fn format_from_json(
+    fields: &mut Fields<'_>,
+    name: &'static str,
+) -> Result<NativeRdfFormat, JsonError> {
+    let value = fields
+        .raw(name)?
+        .ok_or_else(|| JsonError::missing_field(name))?;
+    let spelling = value
+        .as_str()
+        .ok_or_else(|| JsonError::invalid_type(value, "a string"))?;
+    crate::native_codecs::classify(spelling).map_err(JsonError::custom)
+}
+
+/// A configuration's output syntax, as its stable [`NativeRdfFormat::id`].
+pub(super) fn format_to_json(format: NativeRdfFormat) -> Value {
+    Value::from(format.id())
 }
 
 /// Materialized result of one bounded whole-dataset CONSTRUCT view.
@@ -752,7 +776,7 @@ pub fn serialize_rdf_description(
     )
 }
 
-/// Serialize a default-graph RDF description without lowering any RDF 1.2 content.
+/// Write a default-graph RDF description without lowering any RDF 1.2 content.
 ///
 /// The description engines deliberately emit one default graph, so every registered
 /// syntax carries the same graph. Syntaxes unable to carry a produced RDF 1.2
@@ -1169,18 +1193,31 @@ mod tests {
             1,
         )
         .expect("relative IRI with base");
-        let json = serde_json::to_value(&with_base).expect("serialize config");
+        let json = with_base.to_json();
         assert_eq!(json["base_iri"], "https://example.org/base/");
-        assert!(serde_json::from_value::<ConstructViewConfig>(json).is_ok());
+        assert!(ConstructViewConfig::from_json(&json).is_ok());
 
-        let missing_base = serde_json::json!({
-            "query": "CONSTRUCT {} WHERE {}",
-            "limits": limits(),
-            "max_query_bytes": 100,
-            "max_input_records": 1,
-            "max_output_records": 1
-        });
-        assert!(serde_json::from_value::<ConstructViewConfig>(missing_base).is_err());
+        let mut missing_base = json.clone();
+        missing_base
+            .as_object_mut()
+            .expect("config object")
+            .remove("base_iri");
+        let error = ConstructViewConfig::from_json(&missing_base).expect_err("absent base");
+        assert_eq!(error.to_string(), "missing field `base_iri`");
+
+        let mut null_base = json;
+        null_base["query"] = Value::from(
+            "CONSTRUCT { <https://example.org/s> <https://example.org/p> <https://example.org/o> } WHERE {}",
+        );
+        null_base["base_iri"] = Value::Null;
+        assert_eq!(
+            ConstructViewConfig::from_json(&null_base)
+                .expect("explicit null base")
+                .base_iri(),
+            None
+        );
+        null_base["base_iri"] = Value::from(7_u8);
+        assert!(ConstructViewConfig::from_json(&null_base).is_err());
     }
 
     #[test]

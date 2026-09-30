@@ -4,11 +4,11 @@
 //! Deterministic GraphML 1.0 carrier for canonical LPG.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io;
 
 use purrdf_core::DatasetView;
 use purrdf_lex::xml::Node;
 
+use super::super::json_codec::ToJson;
 use super::super::{
     ProjectionArtifactSink, ProjectionError, ProjectionPackage, ProjectionPackageSink,
     escape_xml_attribute, escape_xml_text,
@@ -377,9 +377,7 @@ fn render_graphml_into<W: LpgTextWriter + ?Sized>(
     }
     output.push("  <graph id=\"G\" edgedefault=\"directed\">\n")?;
     output.push(&format!("    <data key=\"{GRAPH_JSON}\">"))?;
-    serde_json::to_writer(HexWriter(output), graph).map_err(|error| {
-        ProjectionError::integrity(format!("serialize GraphML LPG JSON payload: {error}"))
-    })?;
+    output.push_hex(purrdf_lex::json::write_compact(&graph.to_json()).as_bytes())?;
     output.push("</data>\n")?;
     for node in &graph.nodes {
         output.push(&format!(
@@ -498,21 +496,6 @@ fn push_hex_data<W: LpgTextWriter + ?Sized>(
     ))?;
     output.push_hex(bytes)?;
     output.push("</data>\n")
-}
-
-struct HexWriter<'a, W: ?Sized>(&'a mut W);
-
-impl<W: LpgTextWriter + ?Sized> io::Write for HexWriter<'_, W> {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        self.0
-            .push_hex(buffer)
-            .map(|()| buffer.len())
-            .map_err(|error| io::Error::other(error.to_string()))
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
 }
 
 fn require_element(node: Node<'_, '_>, local: &str) -> Result<(), ProjectionError> {
