@@ -199,6 +199,19 @@ pub struct VizSceneLabel {
     pub direction: Option<VizTextDirection>,
 }
 
+impl VizSceneLabel {
+    /// A label whose compact and full text are both `value`, with no language
+    /// or direction.
+    pub fn plain(value: &str) -> Self {
+        Self {
+            text: value.to_owned(),
+            full_text: value.to_owned(),
+            language: None,
+            direction: None,
+        }
+    }
+}
+
 /// Semantic badge attached to a node, edge, or edge anchor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizBadge {
@@ -376,7 +389,7 @@ fn build_compact_scene(projection: &VizProjection) -> VizScene {
                 kind: VizSceneEdgeKind::QuoteSubject,
                 source: compact_value_endpoint(&statement.subject, &statements, true),
                 target: node_endpoint(&statement_node_id, "subject"),
-                label: plain_label("subject"),
+                label: VizSceneLabel::plain("subject"),
                 badges: Vec::new(),
                 anchor: None,
                 accessibility: VizAccessibility {
@@ -394,7 +407,7 @@ fn build_compact_scene(projection: &VizProjection) -> VizScene {
                 kind: VizSceneEdgeKind::QuoteObject,
                 source: node_endpoint(&statement_node_id, "object"),
                 target: compact_value_endpoint(&statement.object, &statements, false),
-                label: plain_label("object"),
+                label: VizSceneLabel::plain("object"),
                 badges: Vec::new(),
                 anchor: None,
                 accessibility: VizAccessibility {
@@ -486,7 +499,7 @@ fn build_incidence_scene(projection: &VizProjection) -> VizScene {
                 kind,
                 source: incidence_value_endpoint(value),
                 target: node_endpoint(&target_node, port),
-                label: plain_label(role),
+                label: VizSceneLabel::plain(role),
                 badges: Vec::new(),
                 anchor: None,
                 accessibility: VizAccessibility {
@@ -722,7 +735,7 @@ fn assertion_edge(
         kind: VizSceneEdgeKind::Assertion,
         source: compact_value_endpoint(&statement.subject, statements, true),
         target: compact_value_endpoint(&statement.object, statements, false),
-        label: plain_label(predicate),
+        label: VizSceneLabel::plain(predicate),
         badges: graph_ids
             .into_iter()
             .map(|graph| graph_badge(graph, projection))
@@ -793,7 +806,7 @@ fn statement_anchor(
     if statement.dialect != VizDialect::Rdf12 {
         badges.push(VizBadge {
             kind: VizBadgeKind::Dialect,
-            label: dialect_label(&statement.dialect).to_owned(),
+            label: dialect_label(statement.dialect).to_owned(),
             binding: projection
                 .diagnostics
                 .iter()
@@ -811,7 +824,7 @@ fn statement_anchor(
     VizEdgeAnchor {
         id: scene_statement_anchor_id(&statement.id),
         bindings,
-        label: plain_label(&format!("S:{}", short_suffix(&statement.id.0))),
+        label: VizSceneLabel::plain(&format!("S:{}", short_suffix(&statement.id.0))),
         badges,
         accessibility: VizAccessibility {
             title: "addressable asserted statement".to_owned(),
@@ -854,7 +867,7 @@ fn statement_node(
         id: scene_statement_node_id(&statement.id),
         bindings: vec![VizSemanticRef::Statement(statement.id.clone())],
         kind: VizSceneNodeKind::Statement,
-        label: plain_label(&display_label),
+        label: VizSceneLabel::plain(&display_label),
         ports: vec![
             port("subject", VizPortKind::Subject),
             port("predicate", VizPortKind::Predicate),
@@ -966,7 +979,7 @@ fn add_relation_edges(
                     kind: VizSceneEdgeKind::Reifies,
                     source: node_endpoint(&scene_term_node_id(reifier), "out"),
                     target,
-                    label: plain_label("reifies"),
+                    label: VizSceneLabel::plain("reifies"),
                     badges: vec![graph_badge(graph.clone(), projection)],
                     anchor: None,
                     accessibility: VizAccessibility {
@@ -1003,7 +1016,7 @@ fn add_relation_edges(
                     kind: VizSceneEdgeKind::Annotation,
                     source: node_endpoint(&scene_term_node_id(reifier), "out"),
                     target,
-                    label: plain_label(predicate_label),
+                    label: VizSceneLabel::plain(predicate_label),
                     badges: vec![graph_badge(graph.clone(), projection)],
                     anchor: None,
                     accessibility: VizAccessibility {
@@ -1074,7 +1087,7 @@ fn statement_badges(
     if statement.dialect != VizDialect::Rdf12 {
         badges.push(VizBadge {
             kind: VizBadgeKind::Dialect,
-            label: dialect_label(&statement.dialect).to_owned(),
+            label: dialect_label(statement.dialect).to_owned(),
             binding: projection
                 .diagnostics
                 .iter()
@@ -1241,7 +1254,7 @@ fn statement_accessible_description(
         summary.reifiers.len(),
         summary.annotation_relations.len(),
         statement.incoming_references,
-        dialect_label(&statement.dialect)
+        dialect_label(statement.dialect)
     )
 }
 
@@ -1287,20 +1300,11 @@ fn graph_badge(graph: VizGraphId, projection: &VizProjection) -> VizBadge {
     }
 }
 
-fn dialect_label(dialect: &VizDialect) -> &'static str {
+fn dialect_label(dialect: VizDialect) -> &'static str {
     match dialect {
         VizDialect::Rdf12 => "RDF 1.2",
         VizDialect::SymmetricRdf12 => "symmetric RDF 1.2",
         VizDialect::GeneralizedRdf => "generalized RDF",
-    }
-}
-
-fn plain_label(value: &str) -> VizSceneLabel {
-    VizSceneLabel {
-        text: value.to_owned(),
-        full_text: value.to_owned(),
-        language: None,
-        direction: None,
     }
 }
 

@@ -3,10 +3,11 @@
 
 //! Shared deterministic RDF dataset-description serialization.
 
+use crate::projections::util::validate_portable_bound;
 use std::sync::Arc;
 
 use purrdf_core::{DatasetView, LossLedger, RdfDataset, SparqlResult, TermRef};
-use purrdf_lex::json::{Object, Value};
+use purrdf_lex::json::Value;
 use purrdf_sparql_algebra::{
     AggregateFunction, Expression, Function, GraphPattern, OrderExpression, ParserOptions,
     PurrdfFn, Query, SparqlParser, TermPattern, TriplePattern,
@@ -16,7 +17,7 @@ use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 use crate::native_codecs::{NativeRdfFormat, serialize_dataset_to_format};
 
 use super::{ProjectionError, ProjectionLimits, ProjectionPackage};
-use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record};
 
 /// Mandatory bounds and query text for a whole-dataset SPARQL CONSTRUCT view.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,19 +181,14 @@ impl FromJson for ConstructViewConfig {
     }
 }
 
-impl ToJson for ConstructViewConfig {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("query", self.query.as_str())
-                .with("base_iri", self.base_iri.to_json())
-                .with("limits", self.limits.to_json())
-                .with("max_query_bytes", self.max_query_bytes)
-                .with("max_input_records", self.max_input_records)
-                .with("max_output_records", self.max_output_records),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for ConstructViewConfig {
+    "query" => query,
+    "base_iri" => base_iri,
+    "limits" => limits,
+    "max_query_bytes" => max_query_bytes,
+    "max_input_records" => max_input_records,
+    "max_output_records" => max_output_records,
+});
 
 /// Read a configuration's mandatory `format` member: a string the format
 /// registry's [`classify`](crate::native_codecs::classify) accepts, which
@@ -636,20 +632,6 @@ fn expression_cause<'a>(
     None
 }
 
-fn validate_portable_bound(value: usize, field: &str) -> Result<(), ProjectionError> {
-    if value == 0 {
-        return Err(ProjectionError::configuration(format!(
-            "{field} must be greater than zero"
-        )));
-    }
-    if u32::try_from(value).is_err() {
-        return Err(ProjectionError::configuration(format!(
-            "{field} exceeds the portable u32 ceiling"
-        )));
-    }
-    Ok(())
-}
-
 fn view_record_count<D: DatasetView>(view: &D, label: &str) -> Result<usize, ProjectionError> {
     view.quads()
         .count()
@@ -850,6 +832,7 @@ mod tests {
         BlankScope, PackBuilder, PackView, RdfDatasetBuilder, RdfLiteral, RdfTextDirection,
         datasets_isomorphic,
     };
+    use purrdf_lex::json::record::ToJson;
 
     use super::*;
 

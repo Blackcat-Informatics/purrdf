@@ -119,6 +119,13 @@ impl TermKind {
             _ => Self::Iri,
         }
     }
+
+    /// The wire `"k"` value of this kind: the inverse of
+    /// [`TermKind::from_wire`] on the four kinds (§7.1).
+    #[must_use]
+    pub const fn to_wire(self) -> u8 {
+        self as u8
+    }
 }
 
 /// An RDF term identified by append-order id.

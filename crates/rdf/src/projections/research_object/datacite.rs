@@ -9,11 +9,9 @@ use purrdf_core::loss::{
     LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED,
 };
 use purrdf_core::{DatasetView, LossLedger, research_object_to_rdf_loss_ledger};
-use purrdf_lex::json::{Object, Value};
 use purrdf_lex::terminals::trim_ws;
 use purrdf_lex::xml::Node;
 
-use super::super::json_codec::{Fields, FromJson, JsonError, ToJson};
 use super::super::{
     ProjectionError, ProjectionPackage, escape_xml_attribute, escape_xml_text,
     validate_absolute_iri,
@@ -186,85 +184,37 @@ impl DataCiteControlledValues {
     }
 }
 
-impl FromJson for DataCiteControlledValues {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct DataCiteControlledValues")?;
-        let identifier_type: String = fields.required("identifier_type")?;
-        let resource_type_general: String = fields.required("resource_type_general")?;
-        let creator_name_type: String = fields.required("creator_name_type")?;
-        let agent_identifier_scheme: String = fields.required("agent_identifier_scheme")?;
-        let agent_identifier_scheme_uri: String = fields.required("agent_identifier_scheme_uri")?;
-        let related_identifier_type: String = fields.required("related_identifier_type")?;
-        let landing_page_relation_type: String = fields.required("landing_page_relation_type")?;
-        let resource_relation_type: String = fields.required("resource_relation_type")?;
-        let activity_relation_type: String = fields.required("activity_relation_type")?;
-        let record_set_relation_type: String = fields.required("record_set_relation_type")?;
-        let issued_date_type: String = fields.required("issued_date_type")?;
-        let modified_date_type: String = fields.required("modified_date_type")?;
-        let description_type: String = fields.required("description_type")?;
-        fields.deny_unknown()?;
-        Ok(Self::new(
-            identifier_type,
-            resource_type_general,
-            creator_name_type,
-            agent_identifier_scheme,
-            agent_identifier_scheme_uri,
-            related_identifier_type,
-            landing_page_relation_type,
-            resource_relation_type,
-            activity_relation_type,
-            record_set_relation_type,
-            issued_date_type,
-            modified_date_type,
-            description_type,
-        )?)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for DataCiteControlledValues as "struct DataCiteControlledValues" {
+    "identifier_type" => identifier_type: required::<String>,
+    "resource_type_general" => resource_type_general: required::<String>,
+    "creator_name_type" => creator_name_type: required::<String>,
+    "agent_identifier_scheme" => agent_identifier_scheme: required::<String>,
+    "agent_identifier_scheme_uri" => agent_identifier_scheme_uri: required::<String>,
+    "related_identifier_type" => related_identifier_type: required::<String>,
+    "landing_page_relation_type" => landing_page_relation_type: required::<String>,
+    "resource_relation_type" => resource_relation_type: required::<String>,
+    "activity_relation_type" => activity_relation_type: required::<String>,
+    "record_set_relation_type" => record_set_relation_type: required::<String>,
+    "issued_date_type" => issued_date_type: required::<String>,
+    "modified_date_type" => modified_date_type: required::<String>,
+    "description_type" => description_type: required::<String>,
+} => DataCiteControlledValues::new);
 
-impl ToJson for DataCiteControlledValues {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("identifier_type", self.identifier_type.to_json())
-                .with(
-                    "resource_type_general",
-                    self.resource_type_general.to_json(),
-                )
-                .with("creator_name_type", self.creator_name_type.to_json())
-                .with(
-                    "agent_identifier_scheme",
-                    self.agent_identifier_scheme.to_json(),
-                )
-                .with(
-                    "agent_identifier_scheme_uri",
-                    self.agent_identifier_scheme_uri.to_json(),
-                )
-                .with(
-                    "related_identifier_type",
-                    self.related_identifier_type.to_json(),
-                )
-                .with(
-                    "landing_page_relation_type",
-                    self.landing_page_relation_type.to_json(),
-                )
-                .with(
-                    "resource_relation_type",
-                    self.resource_relation_type.to_json(),
-                )
-                .with(
-                    "activity_relation_type",
-                    self.activity_relation_type.to_json(),
-                )
-                .with(
-                    "record_set_relation_type",
-                    self.record_set_relation_type.to_json(),
-                )
-                .with("issued_date_type", self.issued_date_type.to_json())
-                .with("modified_date_type", self.modified_date_type.to_json())
-                .with("description_type", self.description_type.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for DataCiteControlledValues {
+    "identifier_type" => identifier_type,
+    "resource_type_general" => resource_type_general,
+    "creator_name_type" => creator_name_type,
+    "agent_identifier_scheme" => agent_identifier_scheme,
+    "agent_identifier_scheme_uri" => agent_identifier_scheme_uri,
+    "related_identifier_type" => related_identifier_type,
+    "landing_page_relation_type" => landing_page_relation_type,
+    "resource_relation_type" => resource_relation_type,
+    "activity_relation_type" => activity_relation_type,
+    "record_set_relation_type" => record_set_relation_type,
+    "issued_date_type" => issued_date_type,
+    "modified_date_type" => modified_date_type,
+    "description_type" => description_type,
+});
 
 /// Mandatory caller-owned DataCite 4.6 schema and semantic configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -330,40 +280,21 @@ impl DataCiteConfig {
     }
 }
 
-impl FromJson for DataCiteConfig {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct DataCiteConfig")?;
-        let common: ResearchObjectConfig = fields.required("common")?;
-        let namespace_iri: String = fields.required("namespace_iri")?;
-        let xml_schema_instance_iri: String = fields.required("xml_schema_instance_iri")?;
-        let schema_location: String = fields.required("schema_location")?;
-        let controlled: DataCiteControlledValues = fields.required("controlled")?;
-        fields.deny_unknown()?;
-        Ok(Self::new(
-            common,
-            namespace_iri,
-            xml_schema_instance_iri,
-            schema_location,
-            controlled,
-        )?)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for DataCiteConfig as "struct DataCiteConfig" {
+    "common" => common: required::<ResearchObjectConfig>,
+    "namespace_iri" => namespace_iri: required::<String>,
+    "xml_schema_instance_iri" => xml_schema_instance_iri: required::<String>,
+    "schema_location" => schema_location: required::<String>,
+    "controlled" => controlled: required::<DataCiteControlledValues>,
+} => DataCiteConfig::new);
 
-impl ToJson for DataCiteConfig {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("common", self.common.to_json())
-                .with("namespace_iri", self.namespace_iri.to_json())
-                .with(
-                    "xml_schema_instance_iri",
-                    self.xml_schema_instance_iri.to_json(),
-                )
-                .with("schema_location", self.schema_location.to_json())
-                .with("controlled", self.controlled.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for DataCiteConfig {
+    "common" => common,
+    "namespace_iri" => namespace_iri,
+    "xml_schema_instance_iri" => xml_schema_instance_iri,
+    "schema_location" => schema_location,
+    "controlled" => controlled,
+});
 
 /// Project caller-vocabulary RDF 1.2 into deterministic DataCite 4.6 XML.
 ///
@@ -467,7 +398,7 @@ fn parse_datacite(
     require_datacite_element(root, "resource", config)?;
     let expected_schema_location =
         format!("{} {}", config.namespace_iri(), config.schema_location());
-    if namespaced_attribute(root, config.xml_schema_instance_iri(), "schemaLocation")
+    if root.attribute((config.xml_schema_instance_iri(), "schemaLocation"))
         != Some(expected_schema_location.as_str())
     {
         return Err(ProjectionError::integrity(
@@ -713,7 +644,7 @@ impl DataCiteParser<'_> {
         let mut expected = expected_attributes.to_vec();
         expected.push((Some(XML_NAMESPACE), "lang"));
         let value = self.parse_plain_text(node, path, &expected)?;
-        let language = namespaced_attribute(node, XML_NAMESPACE, "lang").map(str::to_owned);
+        let language = node.attribute((XML_NAMESPACE, "lang")).map(str::to_owned);
         if language.as_deref().is_some_and(str::is_empty) {
             return Err(
                 ProjectionError::integrity("DataCite xml:lang cannot be empty")
@@ -1173,7 +1104,7 @@ fn reject_related_duplicates(related: &RelatedEntities) -> Result<(), Projection
             related
                 .landing_pages
                 .iter()
-                .map(value_lexical)
+                .map(|value| value.lexical().to_owned())
                 .collect::<Vec<_>>(),
         ),
         (
@@ -1247,10 +1178,6 @@ fn require_datacite_namespace(
         .at_path(DATACITE_ARTIFACT));
     }
     Ok(())
-}
-
-fn namespaced_attribute<'a>(node: Node<'a, '_>, namespace: &str, local: &str) -> Option<&'a str> {
-    node.attribute((namespace, local))
 }
 
 fn record_unknown_attributes(
@@ -1328,7 +1255,7 @@ fn write_datacite(
     let identifier = dataset
         .identifiers
         .first()
-        .map_or_else(|| dataset.id.clone(), value_lexical);
+        .map_or_else(|| dataset.id.clone(), |value| value.lexical().to_owned());
     if dataset.titles.is_empty() {
         return Err(ProjectionError::integrity(
             "DataCite 4.6 requires at least one title",
@@ -1471,7 +1398,7 @@ fn write_datacite(
                 &format!(
                     "<alternateIdentifier alternateIdentifierType=\"{}\">{}</alternateIdentifier>",
                     escape_xml_attribute(config.controlled().identifier_type())?,
-                    escape_xml_text(&value_lexical(value))?
+                    escape_xml_text(value.lexical())?
                 ),
             )?;
         }
@@ -1675,7 +1602,7 @@ fn collect_related<'a>(
         .collect();
     for landing_page in &model.dataset.landing_pages {
         values.push((
-            value_lexical(landing_page),
+            landing_page.lexical().to_owned(),
             config.controlled().landing_page_relation_type(),
         ));
     }
@@ -1763,13 +1690,6 @@ fn collect_related<'a>(
     values.sort();
     values.dedup();
     values
-}
-
-fn value_lexical(value: &ResearchValue) -> String {
-    match value {
-        ResearchValue::Iri { value } => value.clone(),
-        ResearchValue::Text(value) => value.value.clone(),
-    }
 }
 
 fn resource_has_detail(resource: &ResearchResource) -> bool {

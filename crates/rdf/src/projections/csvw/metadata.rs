@@ -3,6 +3,7 @@
 
 //! CSVW metadata normalization and inherited-property processing.
 
+use super::table::temporal_datatype;
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_lex::json::{Object, Value};
@@ -351,7 +352,7 @@ impl MetadataLoader<'_> {
             virtual_seen |= parsed.virtual_column;
             columns.push(parsed);
         }
-        ensure_unique_column_names(&columns, resource)?;
+        reject_repeated(&columns, |column| &column.name, "column name", resource)?;
         let mut primary_key = column_reference_property(
             object.get("primaryKey"),
             resource,
@@ -1172,7 +1173,7 @@ impl MetadataLoader<'_> {
             )
             .at_path(resource));
         }
-        ensure_unique_table_urls(&tables, resource)?;
+        reject_repeated(&tables, |table| &table.url, "table URL", resource)?;
         let annotations =
             self.parse_annotations(object, GROUP_PROPERTIES, resource, "$", context)?;
         self.warn_unknown(object, GROUP_PROPERTIES, resource, "$", context);
@@ -1440,20 +1441,6 @@ fn ensure_only_properties(
     Ok(())
 }
 
-fn ensure_unique_table_urls(tables: &[CsvwTable], resource: &str) -> Result<(), ProjectionError> {
-    let mut seen = BTreeSet::new();
-    for table in tables {
-        if !seen.insert(&table.url) {
-            return Err(ProjectionError::integrity(format!(
-                "duplicate CSVW table URL `{}`",
-                table.url
-            ))
-            .at_path(resource));
-        }
-    }
-    Ok(())
-}
-
 fn parse_context_object(
     map: &Object,
     resource: &str,
@@ -1674,23 +1661,6 @@ fn empty_schema(inherited: CsvwInheritedProperties, metadata_explicit: bool) -> 
         inherited,
         annotations: CsvwAnnotations::new(),
     }
-}
-
-fn ensure_unique_column_names(
-    columns: &[CsvwColumn],
-    resource: &str,
-) -> Result<(), ProjectionError> {
-    let mut names = BTreeSet::new();
-    for column in columns {
-        if !names.insert(&column.name) {
-            return Err(ProjectionError::integrity(format!(
-                "duplicate CSVW column name `{}`",
-                column.name
-            ))
-            .at_path(resource));
-        }
-    }
-    Ok(())
 }
 
 fn atomic_bool(
@@ -2436,9 +2406,7 @@ fn validate_datatype_format(
             invalid_warning(resource, location, "boolean format string", warnings);
             None
         }
-        (Some(local), Some(CsvwDatatypeFormat::Pattern(pattern)))
-            if !temporal_datatype_name(local) =>
-        {
+        (Some(local), Some(CsvwDatatypeFormat::Pattern(pattern))) if !temporal_datatype(local) => {
             if Regex::new(&format!("^(?:{pattern})$")).is_ok() {
                 Some(CsvwDatatypeFormat::Pattern(pattern))
             } else {
@@ -2459,10 +2427,6 @@ fn valid_numeric_pattern(pattern: &str) -> bool {
                 '#' | '0' | '.' | ',' | ';' | '%' | '‰' | 'E' | '-' | '+'
             )
         })
-}
-
-fn temporal_datatype_name(local: &str) -> bool {
-    matches!(local, "date" | "time" | "dateTime" | "dateTimeStamp")
 }
 
 fn length_datatype(base: &str, config: &CsvwConfig) -> bool {
@@ -2797,6 +2761,27 @@ fn normalize_annotation_value(value: &Value, context: &DocumentContext) -> Value
         ),
         _ => value.clone(),
     }
+}
+
+/// Refuse two items of one table group whose `key`s are equal: CSVW requires
+/// table URLs, and column names within a schema, to be unique.
+fn reject_repeated<T>(
+    items: &[T],
+    key: impl Fn(&T) -> &String,
+    what: &str,
+    resource: &str,
+) -> Result<(), ProjectionError> {
+    let mut seen = BTreeSet::new();
+    for item in items {
+        let key = key(item);
+        if !seen.insert(key) {
+            return Err(
+                ProjectionError::integrity(format!("duplicate CSVW {what} `{key}`"))
+                    .at_path(resource),
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

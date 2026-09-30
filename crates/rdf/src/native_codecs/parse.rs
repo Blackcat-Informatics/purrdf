@@ -26,9 +26,7 @@ use super::media_type::{NativeRdfFormat, classify};
 use super::ser_model::{SerGraph, SerTermKind};
 use super::span::{NoSpans, ParseOptions, SpanCollector, SpanTable};
 use super::text_parse::LineParseMode;
-use crate::{
-    BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId,
-};
+use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
 use purrdf_core::blank_label::LabelAlphabet;
 use purrdf_core::cdt_blank::BlankBinding;
 use purrdf_core::{Nested, try_fold_nested};
@@ -813,8 +811,10 @@ impl SerInterner<'_> {
                     Some(dt_id) => Some(self.iri_string(dt_id)?),
                     None => None,
                 };
-                let direction =
-                    parse_gts_direction(term.direction.as_deref(), term.lang.as_deref())?;
+                let direction = crate::gts_resolve::parse_gts_direction(
+                    term.direction.as_deref(),
+                    term.lang.as_deref(),
+                )?;
                 // A composite literal's embedded blank labels bind through the
                 // SAME rule the bare `_:` tokens above use — that agreement is
                 // what makes `_:b` written as a subject and `_:b` written inside
@@ -899,36 +899,10 @@ impl SerInterner<'_> {
     }
 }
 
-/// Parse a GTS literal base-direction string (`"ltr"`/`"rtl"`) into the IR's
-/// [`RdfTextDirection`], mirroring `purrdf_core`'s `parse_gts_direction`: `None` is
-/// legitimate absence, an unrecognized non-empty value hard-fails, and RDF 1.2 admits
-/// a direction ONLY on a language-tagged string (a direction without a language is a
-/// hard error rather than a silently ill-formed literal).
-fn parse_gts_direction(
-    value: Option<&str>,
-    language: Option<&str>,
-) -> Result<Option<RdfTextDirection>, RdfDiagnostic> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    let direction = RdfTextDirection::from_str_token(value).ok_or_else(|| {
-        RdfDiagnostic::error(
-            "native-codec-invalid-direction",
-            format!("unrecognized GTS literal base direction {value:?}"),
-        )
-    })?;
-    if language.is_none_or(str::is_empty) {
-        return Err(RdfDiagnostic::error(
-            "native-codec-direction-without-language",
-            "an RDF 1.2 literal base direction requires a non-empty language tag",
-        ));
-    }
-    Ok(Some(direction))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RdfTextDirection;
     use crate::TermValue;
 
     #[test]

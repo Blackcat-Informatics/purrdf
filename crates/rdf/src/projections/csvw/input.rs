@@ -3,6 +3,7 @@
 
 //! Filesystem-free CSVW input resources and diagnostics.
 
+use crate::projections::util::byte_entries;
 use std::collections::BTreeMap;
 
 use super::super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
@@ -100,9 +101,7 @@ impl CsvwInput {
 
     /// Deterministically ordered resources.
     pub fn resources(&self) -> impl ExactSizeIterator<Item = (&str, &[u8])> {
-        self.resources
-            .iter()
-            .map(|(iri, bytes)| (iri.as_str(), bytes.as_slice()))
+        byte_entries(&self.resources)
     }
 }
 

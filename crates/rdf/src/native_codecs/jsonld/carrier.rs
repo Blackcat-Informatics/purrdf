@@ -20,7 +20,7 @@ use purrdf_iri::langtag::identity_fold;
 use super::{
     CompiledJsonLdContext, JsonLdContainer, JsonLdDirection, JsonLdNullable, JsonLdTermDefinition,
     JsonLdTermSelection, JsonLdTermSelectionKind, JsonLdTypeMapping, RdfDiagnostic, decode,
-    increment_multiplicity, to_json_object,
+    increment_multiplicity,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -645,42 +645,13 @@ fn document_id_reference_counts(document: &Document) -> BTreeMap<String, u8> {
 }
 
 fn count_node_term_ids(node: &Node, counts: &mut BTreeMap<String, u8>) {
-    for values in node
-        .properties
-        .values()
-        .chain(node.reverse_properties.values())
-    {
-        for value in values {
-            count_value_term_ids(value, counts);
-        }
-    }
-}
-
-fn count_value_term_ids(value: &Value, counts: &mut BTreeMap<String, u8>) {
-    count_term_ids(&value.term, counts);
-    for annotation in &value.annotations {
-        let count = counts.entry(annotation.id.clone()).or_default();
-        increment_multiplicity(count);
-        count_node_term_ids(annotation, counts);
-    }
-}
-
-fn count_term_ids(term: &Term, counts: &mut BTreeMap<String, u8>) {
-    match term {
-        Term::Id(id) => {
-            let count = counts.entry(id.clone()).or_default();
-            increment_multiplicity(count);
-        }
-        Term::Triple(triple) => {
-            count_term_ids(&triple.subject, counts);
-            count_term_ids(&triple.object, counts);
-        }
-        Term::List(values) => {
-            for value in values {
-                count_value_term_ids(value, counts);
-            }
-        }
-        Term::Literal(_) => {}
+    for part in node.parts() {
+        let id = match part {
+            Part::Term(Term::Id(id)) => id,
+            Part::Annotation(annotation) => &annotation.id,
+            Part::Term(_) => continue,
+        };
+        increment_multiplicity(counts.entry(id.clone()).or_default());
     }
 }
 
@@ -796,18 +767,14 @@ fn apply_graph_containers(
                     force_array,
                 )?);
             }
-            to_json_object(
-                map.into_iter()
-                    .map(|(index, values)| {
-                        let value = if !force_array && let [only] = values.as_slice() {
-                            only.clone()
-                        } else {
-                            JsonValue::Array(values)
-                        };
-                        (index, value)
-                    })
-                    .collect(),
-            )
+            JsonValue::Object(Object::from_iter(map.into_iter().map(|(index, values)| {
+                let value = if !force_array && let [only] = values.as_slice() {
+                    only.clone()
+                } else {
+                    JsonValue::Array(values)
+                };
+                (index, value)
+            })))
         } else if has_id_map {
             let mut map = BTreeMap::new();
             for value in values {
@@ -830,7 +797,7 @@ fn apply_graph_containers(
                     )?,
                 )?;
             }
-            to_json_object(map)
+            JsonValue::Object(Object::from_iter(map))
         } else {
             let mut bodies = Vec::new();
             for value in values {
@@ -950,6 +917,14 @@ impl Node {
         }
     }
 
+    /// Every term and annotation node below this node, pre-order: the terms
+    /// of its property values and everything inside them (see [`Parts`]).
+    pub(super) fn parts(&self) -> Parts<'_> {
+        let mut parts = Parts { work: Vec::new() };
+        parts.push_node_values(self);
+        parts
+    }
+
     pub(super) fn sort_values(&mut self) {
         self.types.sort();
         for values in self.properties.values_mut() {
@@ -970,10 +945,10 @@ impl Node {
                     self.types
                         .iter()
                         .map(|iri| {
-                            to_json_object(BTreeMap::from([(
+                            JsonValue::Object(Object::from_iter(BTreeMap::from([(
                                 "@id".to_owned(),
                                 JsonValue::String(iri.clone()),
-                            )]))
+                            )])))
                         })
                         .collect(),
                 ),
@@ -1001,9 +976,12 @@ impl Node {
                     },
                 );
             }
-            node.insert("@reverse".to_owned(), to_json_object(reverse));
+            node.insert(
+                "@reverse".to_owned(),
+                JsonValue::Object(Object::from_iter(reverse)),
+            );
         }
-        to_json_object(node)
+        JsonValue::Object(Object::from_iter(node))
     }
 
     fn compacted_json(&self, context: &CompiledJsonLdContext) -> Result<JsonValue, RdfDiagnostic> {
@@ -1080,9 +1058,13 @@ impl Node {
             )?;
         }
         for (nest, values) in nested {
-            insert_unique(&mut node, &nest, to_json_object(values))?;
+            insert_unique(
+                &mut node,
+                &nest,
+                JsonValue::Object(Object::from_iter(values)),
+            )?;
         }
-        Ok(to_json_object(node))
+        Ok(JsonValue::Object(Object::from_iter(node)))
     }
 }
 
@@ -1248,21 +1230,99 @@ impl Value {
     }
 
     pub(super) fn expanded_json(&self) -> JsonValue {
-        let mut value = self.term.expanded_json();
+        let folded: Result<JsonValue, std::convert::Infallible> =
+            self.fold_lists(|value, _, items| {
+                let term = match items {
+                    Some(items) => JsonValue::Object(Object::new().with("@list", items)),
+                    None => value.term.expanded_json(),
+                };
+                Ok(value.with_annotation(term, value.annotations.iter().map(Node::expanded_json)))
+            });
+        folded.unwrap_or_else(|never| match never {})
+    }
+
+    /// `json` with this value's annotation nodes, already written, under
+    /// `@annotation`: one node bare, several as an array, none left out.
+    fn with_annotation(
+        &self,
+        mut json: JsonValue,
+        annotations: impl Iterator<Item = JsonValue>,
+    ) -> JsonValue {
         if !self.annotations.is_empty() {
-            let annotations: Vec<JsonValue> =
-                self.annotations.iter().map(Node::expanded_json).collect();
-            let annotation = if let [only] = annotations.as_slice() {
-                only.clone()
+            let mut annotations: Vec<JsonValue> = annotations.collect();
+            let annotation = if annotations.len() == 1 {
+                annotations.pop().expect("one annotation")
             } else {
                 JsonValue::Array(annotations)
             };
-            value
-                .as_object_mut()
+            json.as_object_mut()
                 .expect("every typed carrier term emits a JSON object")
                 .insert("@annotation".to_owned(), annotation);
         }
-        value
+        json
+    }
+
+    /// Fold this value's nesting of `@list` values bottom-up over a heap work
+    /// list: `combine(value, depth, items)` builds the output of `value`, which
+    /// sits inside `depth` enclosing lists, from its folded items (`Some`, a list
+    /// value) or from nothing (`None`, any other value).
+    ///
+    /// An RDF list whose items are lists folds to one `@list` per level, as deep
+    /// as the data nests them, so every walk over the folded carrier goes
+    /// through here and its depth costs no machine stack.
+    fn fold_lists<T, E>(
+        &self,
+        mut combine: impl FnMut(&Self, usize, Option<Vec<T>>) -> Result<T, E>,
+    ) -> Result<T, E> {
+        struct Frame<'a, T> {
+            value: &'a Value,
+            items: std::slice::Iter<'a, Value>,
+            done: Vec<T>,
+        }
+        let mut stack: Vec<Frame<'_, T>> = Vec::new();
+        let mut next = Some(self);
+        loop {
+            let mut result = match next.take() {
+                Some(value) => match &value.term {
+                    Term::List(items) => {
+                        stack.push(Frame {
+                            value,
+                            items: items.iter(),
+                            done: Vec::with_capacity(items.len()),
+                        });
+                        None
+                    }
+                    _ => Some(combine(value, stack.len(), None)?),
+                },
+                None => None,
+            };
+            loop {
+                let Some(frame) = stack.last_mut() else {
+                    return Ok(result.expect("the root value is folded before the walk ends"));
+                };
+                if let Some(folded) = result.take() {
+                    frame.done.push(folded);
+                }
+                if let Some(item) = frame.items.next() {
+                    next = Some(item);
+                    break;
+                }
+                let frame = stack.pop().expect("the frame just inspected");
+                result = Some(combine(frame.value, stack.len(), Some(frame.done))?);
+            }
+        }
+    }
+
+    /// The value's term, its annotations dropped.
+    pub(super) fn into_term(mut self) -> Term {
+        std::mem::replace(&mut self.term, Term::Id(String::new()))
+    }
+
+    /// Every term and annotation node in this value's tree, pre-order.
+    pub(super) fn parts(&self) -> Parts<'_> {
+        Parts {
+            work: vec![PartWork::Value(self)],
+        }
     }
 
     fn selection(&self) -> JsonLdTermSelection {
@@ -1389,20 +1449,107 @@ pub(super) enum Term {
 impl Term {
     fn expanded_json(&self) -> JsonValue {
         match self {
-            Self::Id(id) => to_json_object(BTreeMap::from([(
+            Self::Id(id) => JsonValue::Object(Object::from_iter(BTreeMap::from([(
                 "@id".to_owned(),
                 JsonValue::String(id.clone()),
-            )])),
+            )]))),
             Self::Literal(literal) => literal.expanded_json(),
-            Self::Triple(triple) => to_json_object(BTreeMap::from([(
+            Self::Triple(triple) => JsonValue::Object(Object::from_iter(BTreeMap::from([(
                 "@triple".to_owned(),
                 triple.expanded_json(),
-            )])),
-            Self::List(values) => to_json_object(BTreeMap::from([(
+            )]))),
+            Self::List(values) => JsonValue::Object(Object::from_iter(BTreeMap::from([(
                 "@list".to_owned(),
                 JsonValue::Array(values.iter().map(Value::expanded_json).collect()),
-            )])),
+            )]))),
         }
+    }
+}
+
+impl Drop for Value {
+    /// Drop nested `@list` values over a heap work list, so a list of lists as
+    /// deep as the data costs no stack to free.
+    fn drop(&mut self) {
+        let Term::List(items) = &mut self.term else {
+            return;
+        };
+        let mut work = std::mem::take(items);
+        while let Some(mut value) = work.pop() {
+            if let Term::List(items) = &mut value.term {
+                work.append(items);
+            }
+        }
+    }
+}
+
+/// A part of a carrier value's tree: a term (a list's, a triple term's
+/// component's, or a value's own), or an annotation node.
+#[derive(Clone, Copy)]
+pub(super) enum Part<'a> {
+    /// A term.
+    Term(&'a Term),
+    /// An annotation node.
+    Annotation(&'a Node),
+}
+
+/// The pre-order walk of [`Value::parts`] and [`Node::parts`]: a value's own
+/// term, then its list items or triple-term components, then its annotation
+/// nodes and their property values. Over a heap work list, so neither list
+/// nesting nor annotation nesting costs stack; every read-only walk of the
+/// carrier is this one.
+pub(super) struct Parts<'a> {
+    work: Vec<PartWork<'a>>,
+}
+
+enum PartWork<'a> {
+    Value(&'a Value),
+    Term(&'a Term),
+    Node(&'a Node),
+}
+
+impl<'a> Iterator for Parts<'a> {
+    type Item = Part<'a>;
+
+    fn next(&mut self) -> Option<Part<'a>> {
+        loop {
+            match self.work.pop()? {
+                PartWork::Value(value) => {
+                    self.work
+                        .extend(value.annotations.iter().rev().map(PartWork::Node));
+                    self.work.push(PartWork::Term(&value.term));
+                }
+                PartWork::Term(term) => {
+                    match term {
+                        Term::Triple(triple) => {
+                            self.work.push(PartWork::Term(&triple.object));
+                            self.work.push(PartWork::Term(&triple.subject));
+                        }
+                        Term::List(items) => {
+                            self.work.extend(items.iter().rev().map(PartWork::Value));
+                        }
+                        Term::Id(_) | Term::Literal(_) => {}
+                    }
+                    return Some(Part::Term(term));
+                }
+                PartWork::Node(node) => {
+                    self.push_node_values(node);
+                    return Some(Part::Annotation(node));
+                }
+            }
+        }
+    }
+}
+
+impl<'a> Parts<'a> {
+    fn push_node_values(&mut self, node: &'a Node) {
+        self.work.extend(
+            node.properties
+                .values()
+                .chain(node.reverse_properties.values())
+                .rev()
+                .flat_map(|values| values.iter().rev())
+                .map(PartWork::Value),
+        );
     }
 }
 
@@ -1430,7 +1577,7 @@ impl Literal {
         if let Some(datatype) = &self.datatype {
             literal.insert("@type".to_owned(), JsonValue::String(datatype.clone()));
         }
-        to_json_object(literal)
+        JsonValue::Object(Object::from_iter(literal))
     }
 }
 
@@ -1443,14 +1590,14 @@ pub(super) struct Triple {
 
 impl Triple {
     fn expanded_json(&self) -> JsonValue {
-        to_json_object(BTreeMap::from([
+        JsonValue::Object(Object::from_iter(BTreeMap::from([
             ("@object".to_owned(), self.object.expanded_json()),
             (
                 "@predicate".to_owned(),
                 JsonValue::String(self.predicate.clone()),
             ),
             ("@subject".to_owned(), self.subject.expanded_json()),
-        ]))
+        ])))
     }
 }
 
@@ -1503,22 +1650,19 @@ fn compact_id_map(
         id_map
             .entry(compact_id(context, id, false)?)
             .or_default()
-            .push(to_json_object(BTreeMap::new()));
+            .push(JsonValue::Object(Object::new()));
     }
     let force_array = definition.containers().contains(&JsonLdContainer::Set);
-    Ok(to_json_object(
-        id_map
-            .into_iter()
-            .map(|(id, values)| {
-                let value = if !force_array && let [only] = values.as_slice() {
-                    only.clone()
-                } else {
-                    JsonValue::Array(values)
-                };
-                (id, value)
-            })
-            .collect(),
-    ))
+    Ok(JsonValue::Object(Object::from_iter(
+        id_map.into_iter().map(|(id, values)| {
+            let value = if !force_array && let [only] = values.as_slice() {
+                only.clone()
+            } else {
+                JsonValue::Array(values)
+            };
+            (id, value)
+        }),
+    )))
 }
 
 fn compact_language_map(
@@ -1555,19 +1699,16 @@ fn compact_language_map(
             .push(JsonValue::String(literal.lexical.clone()));
     }
     let force_array = definition.containers().contains(&JsonLdContainer::Set);
-    Ok(to_json_object(
-        language_map
-            .into_iter()
-            .map(|(language, values)| {
-                let value = if !force_array && let [only] = values.as_slice() {
-                    only.clone()
-                } else {
-                    JsonValue::Array(values)
-                };
-                (language, value)
-            })
-            .collect(),
-    ))
+    Ok(JsonValue::Object(Object::from_iter(
+        language_map.into_iter().map(|(language, values)| {
+            let value = if !force_array && let [only] = values.as_slice() {
+                only.clone()
+            } else {
+                JsonValue::Array(values)
+            };
+            (language, value)
+        }),
+    )))
 }
 
 impl Value {
@@ -1576,8 +1717,40 @@ impl Value {
         context: &CompiledJsonLdContext,
         definition: Option<&JsonLdTermDefinition>,
     ) -> Result<JsonValue, RdfDiagnostic> {
-        let mut compacted = match &self.term {
-            Term::Id(id) => {
+        self.fold_lists(|value, depth, items| {
+            // List-item compaction inherits the property term's
+            // type/language/direction coercion. A nested list must not inherit
+            // the outer @list container itself or it would lose one structural
+            // level, so it, and everything inside it, compacts under none.
+            let own = match (depth, &items) {
+                (0, _) | (1, None) => definition,
+                _ => None,
+            };
+            value.compacted_one(context, own, items)
+        })
+    }
+
+    /// This value compacted under `definition`, a list value from its
+    /// already-compacted `items`.
+    fn compacted_one(
+        &self,
+        context: &CompiledJsonLdContext,
+        definition: Option<&JsonLdTermDefinition>,
+        items: Option<Vec<JsonValue>>,
+    ) -> Result<JsonValue, RdfDiagnostic> {
+        let compacted = match (&self.term, items) {
+            (Term::List(_), Some(values)) => {
+                if definition.is_some_and(|definition| {
+                    definition.containers().contains(&JsonLdContainer::List)
+                }) {
+                    JsonValue::Array(values)
+                } else {
+                    JsonValue::Object(
+                        Object::new().with(compact_keyword(context, "@list")?, values),
+                    )
+                }
+            }
+            (Term::Id(id), _) => {
                 let coercion = definition.and_then(JsonLdTermDefinition::type_mapping);
                 if self.annotations.is_empty()
                     && matches!(
@@ -1588,70 +1761,38 @@ impl Value {
                     let vocab = matches!(coercion, Some(JsonLdTypeMapping::Vocab));
                     JsonValue::String(compact_id(context, id, vocab)?)
                 } else {
-                    to_json_object(BTreeMap::from([(
+                    JsonValue::Object(Object::new().with(
                         compact_keyword(context, "@id")?,
-                        JsonValue::String(compact_id(context, id, false)?),
-                    )]))
+                        compact_id(context, id, false)?,
+                    ))
                 }
             }
-            Term::Literal(literal) => {
+            (Term::Literal(literal), _) => {
                 compact_literal(context, definition, literal, self.annotations.is_empty())?
             }
-            Term::Triple(triple) => to_json_object(BTreeMap::from([(
-                "@triple".to_owned(),
-                triple.compacted_json(context)?,
-            )])),
-            Term::List(values) => {
-                let values = values
-                    .iter()
-                    .map(|value| {
-                        // List-item compaction inherits the parent term's
-                        // type/language/direction coercion. A nested list must not
-                        // inherit the outer @list container itself or it would lose
-                        // one structural level.
-                        let item_definition = if matches!(value.term, Term::List(_)) {
-                            None
-                        } else {
-                            definition
-                        };
-                        value.compacted_json(context, item_definition)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                if definition.is_some_and(|definition| {
-                    definition.containers().contains(&JsonLdContainer::List)
-                }) {
-                    JsonValue::Array(values)
-                } else {
-                    to_json_object(BTreeMap::from([(
-                        compact_keyword(context, "@list")?,
-                        JsonValue::Array(values),
-                    )]))
-                }
+            (Term::Triple(triple), _) => {
+                JsonValue::Object(Object::new().with("@triple", triple.compacted_json(context)?))
             }
+            (Term::List(_), None) => unreachable!("a list value is folded from its items"),
         };
-        if !self.annotations.is_empty() {
-            let annotations = self
-                .annotations
-                .iter()
-                .map(|node| node.compacted_json(context))
-                .collect::<Result<Vec<_>, _>>()?;
-            let annotation = if let [only] = annotations.as_slice() {
-                only.clone()
-            } else {
-                JsonValue::Array(annotations)
-            };
-            compacted
-                .as_object_mut()
-                .ok_or_else(|| decode("annotated JSON-LD value cannot compact to a scalar"))?
-                .insert("@annotation".to_owned(), annotation);
+        if self.annotations.is_empty() {
+            return Ok(compacted);
         }
-        Ok(compacted)
+        if compacted.as_object().is_none() {
+            return Err(decode("annotated JSON-LD value cannot compact to a scalar"));
+        }
+        let annotations = self
+            .annotations
+            .iter()
+            .map(|node| node.compacted_json(context))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(self.with_annotation(compacted, annotations.into_iter()))
     }
 }
 
 impl Triple {
     fn compacted_json(&self, context: &CompiledJsonLdContext) -> Result<JsonValue, RdfDiagnostic> {
-        Ok(to_json_object(BTreeMap::from([
+        Ok(JsonValue::Object(Object::from_iter(BTreeMap::from([
             (
                 "@object".to_owned(),
                 compact_component(context, &self.object)?,
@@ -1664,7 +1805,7 @@ impl Triple {
                 "@subject".to_owned(),
                 compact_component(context, &self.subject)?,
             ),
-        ])))
+        ]))))
     }
 }
 
@@ -1724,7 +1865,7 @@ fn compact_literal(
             JsonValue::String(context.compact_iri(datatype, true)?),
         )?;
     }
-    Ok(to_json_object(value))
+    Ok(JsonValue::Object(Object::from_iter(value)))
 }
 
 fn canonical_json_value(lexical: &str) -> Option<JsonValue> {

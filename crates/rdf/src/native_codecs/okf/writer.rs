@@ -254,6 +254,22 @@ struct DocumentAccumulator {
     body: Option<String>,
 }
 
+/// Fill a subject's single-valued `what` slot, refusing a second value.
+fn set_once(
+    slot: &mut Option<String>,
+    value: String,
+    subject: TermId,
+    what: &str,
+) -> Result<(), OkfError> {
+    if slot.replace(value).is_some() {
+        return Err(OkfError::new(format!(
+            "OKF subject term#{} has more than one {what}",
+            subject.index()
+        )));
+    }
+    Ok(())
+}
+
 impl DocumentAccumulator {
     fn new(subject: TermId) -> Self {
         Self {
@@ -266,23 +282,11 @@ impl DocumentAccumulator {
     }
 
     fn set_path(&mut self, path: String) -> Result<(), OkfError> {
-        if self.path.replace(path).is_some() {
-            return Err(OkfError::new(format!(
-                "OKF subject term#{} has more than one path",
-                self.subject.index()
-            )));
-        }
-        Ok(())
+        set_once(&mut self.path, path, self.subject, "path")
     }
 
     fn set_body(&mut self, body: String) -> Result<(), OkfError> {
-        if self.body.replace(body).is_some() {
-            return Err(OkfError::new(format!(
-                "OKF subject term#{} has more than one body",
-                self.subject.index()
-            )));
-        }
-        Ok(())
+        set_once(&mut self.body, body, self.subject, "body")
     }
 
     fn set_field(&mut self, key: &str, value: YamlValue) -> Result<(), OkfError> {
@@ -372,10 +376,10 @@ impl<'a> Projector<'a> {
             self.require_term(quad.o)?;
             if let Some(graph) = quad.g {
                 self.require_term(graph)?;
-                record_quad_loss(
+                record_writer_loss(
                     &mut self.losses,
                     &self.terms,
-                    ordinal,
+                    ("quad", ordinal),
                     quad.s,
                     "named-graph-dropped",
                     "OKF cannot represent named-graph placement.",
@@ -459,10 +463,10 @@ impl<'a> Projector<'a> {
                     }
                 }
             } else {
-                record_quad_loss(
+                record_writer_loss(
                     &mut self.losses,
                     &self.terms,
-                    ordinal,
+                    ("quad", ordinal),
                     quad.s,
                     "okf-non-profile-quad-dropped",
                     "RDF statement is outside the caller-configured OKF profile.",
@@ -590,10 +594,10 @@ impl<'a> Projector<'a> {
             if expected_pairs.contains(&pair) && actual_pairs.insert(pair) {
                 continue;
             }
-            record_quad_loss(
+            record_writer_loss(
                 &mut self.losses,
                 &self.terms,
-                ordinal,
+                ("quad", ordinal),
                 quad.s,
                 "okf-non-profile-quad-dropped",
                 "OKF link edge is not backed by exactly one relative Markdown-link target.",
@@ -652,11 +656,13 @@ impl<'a> Projector<'a> {
                 matched_labels.insert(label);
                 consumed_annotations.extend(annotation_ordinals);
             } else {
-                record_reifier_loss(
+                record_writer_loss(
                     &mut self.losses,
                     &self.terms,
-                    reifier.ordinal,
+                    ("reifier", reifier.ordinal),
                     reifier.reifier,
+                    "okf-reifier-dropped",
+                    "RDF 1.2 reifier is outside the exact OKF Markdown-link profile.",
                 );
             }
         }
@@ -681,11 +687,13 @@ impl<'a> Projector<'a> {
                 self.require_term(graph)?;
             }
             if !consumed_annotations.contains(&annotation.ordinal) {
-                record_annotation_loss(
+                record_writer_loss(
                     &mut self.losses,
                     &self.terms,
-                    annotation.ordinal,
+                    ("annotation", annotation.ordinal),
                     annotation.reifier,
+                    "okf-annotation-dropped",
+                    "RDF 1.2 annotation is outside the exact OKF Markdown-link profile.",
                 );
             }
         }
@@ -1041,10 +1049,12 @@ fn term_subject(terms: &[OwnedTerm], subject: TermId) -> String {
     }
 }
 
-fn record_quad_loss(
+/// Record the writer loss `code` (with its contract `note`) for the `kind`
+/// event at `ordinal`, located on its subject term.
+fn record_writer_loss(
     ledger: &mut LossLedger,
     terms: &[OwnedTerm],
-    ordinal: usize,
+    (kind, ordinal): (&str, usize),
     subject: TermId,
     code: &'static str,
     note: &'static str,
@@ -1055,44 +1065,8 @@ fn record_quad_loss(
         to: Cow::Borrowed("okf"),
         note: Cow::Borrowed(note),
         location: Some(Box::new(
-            RdfLocation::logical(format!("okf-writer:quad:{ordinal}"))
+            RdfLocation::logical(format!("okf-writer:{kind}:{ordinal}"))
                 .with_subject(term_subject(terms, subject)),
-        )),
-    });
-}
-
-fn record_reifier_loss(
-    ledger: &mut LossLedger,
-    terms: &[OwnedTerm],
-    ordinal: usize,
-    reifier: TermId,
-) {
-    ledger.record(LossEntry {
-        code: Cow::Borrowed("okf-reifier-dropped"),
-        from: Cow::Borrowed("rdf-1.2-dataset"),
-        to: Cow::Borrowed("okf"),
-        note: Cow::Borrowed("RDF 1.2 reifier is outside the exact OKF Markdown-link profile."),
-        location: Some(Box::new(
-            RdfLocation::logical(format!("okf-writer:reifier:{ordinal}"))
-                .with_subject(term_subject(terms, reifier)),
-        )),
-    });
-}
-
-fn record_annotation_loss(
-    ledger: &mut LossLedger,
-    terms: &[OwnedTerm],
-    ordinal: usize,
-    reifier: TermId,
-) {
-    ledger.record(LossEntry {
-        code: Cow::Borrowed("okf-annotation-dropped"),
-        from: Cow::Borrowed("rdf-1.2-dataset"),
-        to: Cow::Borrowed("okf"),
-        note: Cow::Borrowed("RDF 1.2 annotation is outside the exact OKF Markdown-link profile."),
-        location: Some(Box::new(
-            RdfLocation::logical(format!("okf-writer:annotation:{ordinal}"))
-                .with_subject(term_subject(terms, reifier)),
         )),
     });
 }

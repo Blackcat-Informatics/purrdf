@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use crate::projections::util::absolute_iri;
+use crate::projections::util::validate_portable_bound;
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_lex::json::{Object, Value};
@@ -8,6 +10,8 @@ use purrdf_lex::json::{Object, Value};
 use crate::native_codecs::NativeRdfFormat;
 
 use super::super::dataset_description::{format_from_json, format_to_json};
+use super::super::json_codec::role_map_json;
+use super::super::util::validate_role_map;
 use super::super::{
     ProjectionDirection, ProjectionError, ProjectionLimits, validate_absolute_iri,
     validate_language_tag,
@@ -140,27 +144,17 @@ impl VoidSourceRoles {
     }
 }
 
-impl FromJson for VoidSourceRoles {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct RawVoidSourceRoles")?;
-        let rdf_type: String = fields.required("rdf_type")?;
-        let header_version: String = fields.required("header_version")?;
-        let header_abstract: String = fields.required("header_abstract")?;
-        fields.deny_unknown()?;
-        Ok(Self::new(rdf_type, header_version, header_abstract)?)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for VoidSourceRoles as "struct RawVoidSourceRoles" {
+    "rdf_type" => rdf_type: required::<String>,
+    "header_version" => header_version: required::<String>,
+    "header_abstract" => header_abstract: required::<String>,
+} => VoidSourceRoles::new);
 
-impl ToJson for VoidSourceRoles {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("rdf_type", self.rdf_type.as_str())
-                .with("header_version", self.header_version.as_str())
-                .with("header_abstract", self.header_abstract.as_str()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for VoidSourceRoles {
+    "rdf_type" => rdf_type,
+    "header_version" => header_version,
+    "header_abstract" => header_abstract,
+});
 
 /// Semantic target role in a caller-owned VoID vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -273,27 +267,9 @@ impl VoidVocabulary {
     ///
     /// Rejects a missing/unknown role, a relative IRI, or two roles bound to one IRI.
     pub fn new(terms: BTreeMap<VoidRole, String>) -> Result<Self, ProjectionError> {
-        for role in VOID_ROLES {
-            let iri = terms.get(role).ok_or_else(|| {
-                ProjectionError::configuration(format!(
-                    "VoID target vocabulary is missing role `{role:?}`"
-                ))
-            })?;
-            validate_absolute_iri(iri, &format!("VoID target role `{role:?}`"))?;
-        }
-        if terms.len() != VOID_ROLES.len() {
-            return Err(ProjectionError::configuration(
-                "VoID target vocabulary contains an unsupported role",
-            ));
-        }
-        let mut inverse = BTreeMap::<&str, VoidRole>::new();
-        for (&role, iri) in &terms {
-            if let Some(previous) = inverse.insert(iri, role) {
-                return Err(ProjectionError::configuration(format!(
-                    "VoID target roles `{previous:?}` and `{role:?}` collide at `{iri}`"
-                )));
-            }
-        }
+        validate_role_map(&terms, VOID_ROLES, "VoID target vocabulary", |role, iri| {
+            validate_absolute_iri(iri, &format!("VoID target role `{role:?}`"))
+        })?;
         Ok(Self(terms))
     }
 
@@ -310,18 +286,7 @@ impl VoidVocabulary {
     }
 }
 
-impl FromJson for VoidVocabulary {
-    /// The role map itself, one member per role.
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        Ok(Self::new(BTreeMap::from_json(value)?)?)
-    }
-}
-
-impl ToJson for VoidVocabulary {
-    fn to_json(&self) -> Value {
-        self.0.to_json()
-    }
-}
+role_map_json!(VoidVocabulary);
 
 /// One deterministic IRI-prefix to dataset identity binding.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -340,13 +305,9 @@ impl VoidDatasetPrefix {
         dataset_iri: impl Into<String>,
         iri_prefix: impl Into<String>,
     ) -> Result<Self, ProjectionError> {
-        let dataset_iri = dataset_iri.into();
-        let iri_prefix = iri_prefix.into();
-        validate_absolute_iri(&dataset_iri, "VoID prefix dataset IRI")?;
-        validate_absolute_iri(&iri_prefix, "VoID resource IRI prefix")?;
         Ok(Self {
-            dataset_iri,
-            iri_prefix,
+            dataset_iri: absolute_iri(dataset_iri, "VoID prefix dataset IRI")?,
+            iri_prefix: absolute_iri(iri_prefix, "VoID resource IRI prefix")?,
         })
     }
 
@@ -361,25 +322,15 @@ impl VoidDatasetPrefix {
     }
 }
 
-impl FromJson for VoidDatasetPrefix {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct RawVoidDatasetPrefix")?;
-        let dataset_iri: String = fields.required("dataset_iri")?;
-        let iri_prefix: String = fields.required("iri_prefix")?;
-        fields.deny_unknown()?;
-        Ok(Self::new(dataset_iri, iri_prefix)?)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for VoidDatasetPrefix as "struct RawVoidDatasetPrefix" {
+    "dataset_iri" => dataset_iri: required::<String>,
+    "iri_prefix" => iri_prefix: required::<String>,
+} => VoidDatasetPrefix::new);
 
-impl ToJson for VoidDatasetPrefix {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("dataset_iri", self.dataset_iri.as_str())
-                .with("iri_prefix", self.iri_prefix.as_str()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for VoidDatasetPrefix {
+    "dataset_iri" => dataset_iri,
+    "iri_prefix" => iri_prefix,
+});
 
 /// Source-to-target predicate mapping for metadata-graph external IRI links.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -398,13 +349,15 @@ impl VoidExternalLinkMapping {
         source_predicate: impl Into<String>,
         target_predicate: impl Into<String>,
     ) -> Result<Self, ProjectionError> {
-        let source_predicate = source_predicate.into();
-        let target_predicate = target_predicate.into();
-        validate_absolute_iri(&source_predicate, "VoID external-link source predicate")?;
-        validate_absolute_iri(&target_predicate, "VoID external-link target predicate")?;
         Ok(Self {
-            source_predicate,
-            target_predicate,
+            source_predicate: absolute_iri(
+                source_predicate,
+                "VoID external-link source predicate",
+            )?,
+            target_predicate: absolute_iri(
+                target_predicate,
+                "VoID external-link target predicate",
+            )?,
         })
     }
 
@@ -419,25 +372,15 @@ impl VoidExternalLinkMapping {
     }
 }
 
-impl FromJson for VoidExternalLinkMapping {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct RawVoidExternalLinkMapping")?;
-        let source_predicate: String = fields.required("source_predicate")?;
-        let target_predicate: String = fields.required("target_predicate")?;
-        fields.deny_unknown()?;
-        Ok(Self::new(source_predicate, target_predicate)?)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for VoidExternalLinkMapping as "struct RawVoidExternalLinkMapping" {
+    "source_predicate" => source_predicate: required::<String>,
+    "target_predicate" => target_predicate: required::<String>,
+} => VoidExternalLinkMapping::new);
 
-impl ToJson for VoidExternalLinkMapping {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("source_predicate", self.source_predicate.as_str())
-                .with("target_predicate", self.target_predicate.as_str()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for VoidExternalLinkMapping {
+    "source_predicate" => source_predicate,
+    "target_predicate" => target_predicate,
+});
 
 /// Caller-authored IRI or RDF literal on the described dataset.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -618,25 +561,15 @@ impl VoidStaticStatement {
     }
 }
 
-impl FromJson for VoidStaticStatement {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct RawVoidStaticStatement")?;
-        let predicate: String = fields.required("predicate")?;
-        let object = fields.required("object")?;
-        fields.deny_unknown()?;
-        Ok(Self::new(predicate, object)?)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for VoidStaticStatement as "struct RawVoidStaticStatement" {
+    "predicate" => predicate: required::<String>,
+    "object" => object: required,
+} => VoidStaticStatement::new);
 
-impl ToJson for VoidStaticStatement {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("predicate", self.predicate.as_str())
-                .with("object", self.object.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for VoidStaticStatement {
+    "predicate" => predicate,
+    "object" => object,
+});
 
 /// Explicit compute and materialization bounds for VoID generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -688,7 +621,7 @@ impl VoidExecutionLimits {
             ),
             (max_static_statements, "VoID max_static_statements"),
         ] {
-            validate_bound(value, label)?;
+            validate_portable_bound(value, label)?;
         }
         Ok(Self {
             max_input_records,
@@ -743,49 +676,27 @@ impl VoidExecutionLimits {
     }
 }
 
-impl FromJson for VoidExecutionLimits {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct RawVoidExecutionLimits")?;
-        let max_input_records = fields.required("max_input_records")?;
-        let max_output_records = fields.required("max_output_records")?;
-        let max_partitions = fields.required("max_partitions")?;
-        let max_linksets = fields.required("max_linksets")?;
-        let max_partition_memberships = fields.required("max_partition_memberships")?;
-        let max_dataset_prefixes = fields.required("max_dataset_prefixes")?;
-        let max_external_link_mappings = fields.required("max_external_link_mappings")?;
-        let max_static_statements = fields.required("max_static_statements")?;
-        fields.deny_unknown()?;
-        Ok(Self::new(
-            max_input_records,
-            max_output_records,
-            max_partitions,
-            max_linksets,
-            max_partition_memberships,
-            max_dataset_prefixes,
-            max_external_link_mappings,
-            max_static_statements,
-        )?)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for VoidExecutionLimits as "struct RawVoidExecutionLimits" {
+    "max_input_records" => max_input_records: required,
+    "max_output_records" => max_output_records: required,
+    "max_partitions" => max_partitions: required,
+    "max_linksets" => max_linksets: required,
+    "max_partition_memberships" => max_partition_memberships: required,
+    "max_dataset_prefixes" => max_dataset_prefixes: required,
+    "max_external_link_mappings" => max_external_link_mappings: required,
+    "max_static_statements" => max_static_statements: required,
+} => VoidExecutionLimits::new);
 
-impl ToJson for VoidExecutionLimits {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("max_input_records", self.max_input_records)
-                .with("max_output_records", self.max_output_records)
-                .with("max_partitions", self.max_partitions)
-                .with("max_linksets", self.max_linksets)
-                .with("max_partition_memberships", self.max_partition_memberships)
-                .with("max_dataset_prefixes", self.max_dataset_prefixes)
-                .with(
-                    "max_external_link_mappings",
-                    self.max_external_link_mappings,
-                )
-                .with("max_static_statements", self.max_static_statements),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for VoidExecutionLimits {
+    "max_input_records" => max_input_records,
+    "max_output_records" => max_output_records,
+    "max_partitions" => max_partitions,
+    "max_linksets" => max_linksets,
+    "max_partition_memberships" => max_partition_memberships,
+    "max_dataset_prefixes" => max_dataset_prefixes,
+    "max_external_link_mappings" => max_external_link_mappings,
+    "max_static_statements" => max_static_statements,
+});
 
 /// Complete deterministic VoID dataset-description policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1185,20 +1096,6 @@ impl ToJson for VoidConfig {
                 .with("document_base_iri", self.document_base_iri.to_json()),
         )
     }
-}
-
-fn validate_bound(value: usize, field: &str) -> Result<(), ProjectionError> {
-    if value == 0 {
-        return Err(ProjectionError::configuration(format!(
-            "{field} must be greater than zero"
-        )));
-    }
-    if u32::try_from(value).is_err() {
-        return Err(ProjectionError::configuration(format!(
-            "{field} exceeds the portable u32 ceiling"
-        )));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

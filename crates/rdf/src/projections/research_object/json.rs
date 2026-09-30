@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use std::borrow::Cow;
+pub(super) use crate::projections::loss::ensure_sound;
+use crate::projections::loss::record_contract_loss;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use purrdf_core::loss::{LossEntry, check_ledger_sound};
 use purrdf_core::{LossLedger, RdfDataset, RdfLocation};
 use purrdf_lex::json::{Object, Value};
 
@@ -15,7 +15,7 @@ use crate::native_codecs::jsonld::{
 
 use super::super::{ProjectionError, ProjectionLimits, ProjectionPackage, validate_absolute_iri};
 use super::{ResearchObjectConfig, ResearchObjectModel};
-use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson, sorted_last_wins};
+use purrdf_lex::json::record::sorted_last_wins;
 
 /// Caller-owned, locally interpreted JSON-LD context.
 ///
@@ -125,25 +125,15 @@ impl OfflineJsonLdContext {
     }
 }
 
-impl FromJson for OfflineJsonLdContext {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct OfflineJsonLdContext")?;
-        let context: Value = fields.required("value")?;
-        let definitions = fields.required("definitions")?;
-        fields.deny_unknown()?;
-        Ok(Self::new(context, definitions)?)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for OfflineJsonLdContext as "struct OfflineJsonLdContext" {
+    "value" => context: required::<Value>,
+    "definitions" => definitions: required,
+} => OfflineJsonLdContext::new);
 
-impl ToJson for OfflineJsonLdContext {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("value", self.value.clone())
-                .with("definitions", self.definitions.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for OfflineJsonLdContext {
+    "value" => value,
+    "definitions" => definitions,
+});
 
 fn validate_context_value(value: &Value) -> Result<(), ProjectionError> {
     match value {
@@ -287,6 +277,7 @@ fn validate_package_bounds(
     Ok(())
 }
 
+/// Record the contract entry `code` in the artifact at `path`, on `subject`.
 pub(super) fn record_loss(
     ledger: &mut LossLedger,
     contract: &LossLedger,
@@ -294,28 +285,12 @@ pub(super) fn record_loss(
     path: &str,
     subject: &str,
 ) {
-    let template = contract
-        .entries()
-        .iter()
-        .find(|entry| entry.code == code)
-        .expect("native research-object loss must exist in closed contract");
-    ledger.record(LossEntry {
-        code: Cow::Borrowed(code),
-        from: template.from.clone(),
-        to: template.to.clone(),
-        note: template.note.clone(),
-        location: Some(Box::new(
-            RdfLocation::file(path).with_subject(subject.to_owned()),
-        )),
-    });
-}
-
-pub(super) fn ensure_sound(
-    ledger: &LossLedger,
-    from: &str,
-    to: &str,
-) -> Result<(), ProjectionError> {
-    check_ledger_sound(ledger, from, to).map_err(ProjectionError::integrity)
+    record_contract_loss(
+        ledger,
+        contract,
+        code,
+        RdfLocation::file(path).with_subject(subject),
+    );
 }
 
 /// Re-parse a lifted dataset's own JSON-LD serialization, so every profile adapter hands

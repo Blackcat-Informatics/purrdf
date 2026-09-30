@@ -74,7 +74,7 @@ impl std::io::Write for SinkWriter<'_> {
 }
 
 use purrdf::viz::{
-    VizGraphPolicy, VizJson, VizLayoutOptions, VizRenderOptions, VizRole, VizRoleRule, VizSpec,
+    VizGraphPolicy, VizLayoutOptions, VizRenderOptions, VizRole, VizRoleRule, VizSpec,
     VizSvgOptions, VizTableField, VizVocabularyMapping, export_json, project_dataset,
     project_dataset_export, render_dataset_svg,
 };
@@ -83,7 +83,7 @@ use crate::codec::{resolve_format, resolve_media_type};
 use crate::convert::{quad_to_quad_values, quad_values_to_quad};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::term::{Quad, Term, TermInner};
-use purrdf_lex::json::record::{DecodeError, FromJson, Record};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
 
 /// Lower an optional pattern [`Term`] to an optional [`TermValue`] (None = wildcard).
 ///
@@ -139,7 +139,7 @@ impl FromJson for VisualVocabularyMapping {
 }
 
 /// The visualization value a JSON-options string names, in the engine's JSON form.
-fn viz_name<T: VizJson>(name: &str) -> Result<T, JsError> {
+fn viz_name<T: FromJson>(name: &str) -> Result<T, JsError> {
     T::from_json(&name.into()).map_err(|error| JsError::new(&error.to_string()))
 }
 

@@ -31,3 +31,27 @@ impl From<ProjectionError> for DecodeError {
         Self::custom(error)
     }
 }
+
+/// A complete role map (a newtype over `BTreeMap<Role, String>` whose `new`
+/// validates it) is its JSON object of role → binding, and is revalidated by
+/// `new` when read, so the JSON reader admits exactly what the constructor
+/// admits.
+macro_rules! role_map_json {
+    ($($type:ty),+ $(,)?) => {$(
+        impl purrdf_lex::json::record::FromJson for $type {
+            fn from_json(
+                value: &purrdf_lex::json::Value,
+            ) -> Result<Self, purrdf_lex::json::record::DecodeError> {
+                Ok(Self::new(purrdf_lex::json::record::FromJson::from_json(value)?)?)
+            }
+        }
+
+        impl purrdf_lex::json::record::ToJson for $type {
+            fn to_json(&self) -> purrdf_lex::json::Value {
+                purrdf_lex::json::record::ToJson::to_json(&self.0)
+            }
+        }
+    )+};
+}
+
+pub(crate) use role_map_json;

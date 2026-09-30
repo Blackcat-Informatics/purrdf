@@ -1,26 +1,31 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use super::ResearchObjectRoles;
+use super::jsonld::{JsonLdProfileConfig, JsonLdProfileVocabulary};
+use super::jsonld::{
+    ProfileReader, id_object, insert_values, item_pointer, keyword_object, text_object,
+    typed_object, validate_data_path,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
-use purrdf_core::loss::{
-    LOSS_RESEARCH_ORDER_DROPPED, LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
-    LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED,
-};
+use purrdf_core::loss::{LOSS_RESEARCH_ORDER_DROPPED, LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED};
 use purrdf_core::{DatasetView, LossLedger, research_object_to_rdf_loss_ledger};
 use purrdf_lex::json::{Object, Value};
 
+use super::super::json_codec::role_map_json;
+use super::super::util::{validate_compact_term, validate_role_map};
 use super::super::{ProjectionError, ProjectionPackage, stable_identifier, validate_absolute_iri};
 use super::json::{
     ResearchObjectPackageProjection, ResearchObjectReadOutcome, canonical_json, ensure_sound,
-    json_pointer, normalize_lifted_jsonld, parse_strict_json, record_loss, require_artifact,
+    json_pointer, normalize_lifted_jsonld, parse_strict_json, require_artifact,
 };
 use super::{
     OfflineJsonLdContext, ResearchActivity, ResearchAgent, ResearchChecksum, ResearchDataset,
     ResearchField, ResearchObjectConfig, ResearchObjectModel, ResearchRecordSet, ResearchResource,
     ResearchText, ResearchValue, lift_research_object, project_research_object,
 };
-use purrdf_lex::json::record::{DecodeError, FromJson, Owned, Record, ToJson, into_owned};
+use purrdf_lex::json::record::{Owned, into_owned};
 use purrdf_lex::json_string_enum;
 
 /// Closed DCAT projection profile identifier.
@@ -212,31 +217,9 @@ impl DcatVocabulary {
     /// Rejects missing/extra roles, JSON-LD keywords, whitespace-bearing terms,
     /// and ambiguous duplicate bindings.
     pub fn new(terms: BTreeMap<DcatRole, String>) -> Result<Self, ProjectionError> {
-        for role in DCAT_ROLES {
-            let term = terms.get(role).ok_or_else(|| {
-                ProjectionError::configuration(format!(
-                    "DCAT vocabulary is missing role `{role:?}`"
-                ))
-            })?;
-            if term.is_empty() || term.starts_with('@') || term.chars().any(char::is_whitespace) {
-                return Err(ProjectionError::configuration(format!(
-                    "DCAT role `{role:?}` has invalid compact term `{term}`"
-                )));
-            }
-        }
-        if terms.len() != DCAT_ROLES.len() {
-            return Err(ProjectionError::configuration(
-                "DCAT vocabulary contains an unsupported role",
-            ));
-        }
-        let mut inverse = BTreeMap::<&str, DcatRole>::new();
-        for (&role, term) in &terms {
-            if let Some(previous) = inverse.insert(term, role) {
-                return Err(ProjectionError::configuration(format!(
-                    "DCAT roles `{previous:?}` and `{role:?}` both bind `{term}`"
-                )));
-            }
-        }
+        validate_role_map(&terms, DCAT_ROLES, "DCAT vocabulary", |role, term| {
+            validate_compact_term("DCAT vocabulary", role, term)
+        })?;
         Ok(Self(terms))
     }
 
@@ -253,99 +236,36 @@ impl DcatVocabulary {
     }
 }
 
-impl FromJson for DcatVocabulary {
-    /// The role map itself, revalidated by [`DcatVocabulary::new`].
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        Ok(Self::new(BTreeMap::from_json(value)?)?)
-    }
-}
-
-impl ToJson for DcatVocabulary {
-    fn to_json(&self) -> Value {
-        self.0.to_json()
-    }
-}
+role_map_json!(DcatVocabulary);
 
 /// Mandatory caller-owned DCAT 3 configuration.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DcatConfig {
-    common: ResearchObjectConfig,
-    context: OfflineJsonLdContext,
-    vocabulary: DcatVocabulary,
-    profile_iri: String,
-}
+pub type DcatConfig = JsonLdProfileConfig<DcatVocabulary>;
 
-impl DcatConfig {
-    /// Construct and cross-validate DCAT configuration.
-    ///
-    /// # Errors
-    ///
-    /// Rejects a non-absolute profile or a compact term without a caller-owned
-    /// offline expansion. No DCAT/DCTERMS/SPDX/RDF term is supplied by PurRDF.
-    pub fn new(
-        common: ResearchObjectConfig,
-        context: OfflineJsonLdContext,
-        vocabulary: DcatVocabulary,
-        profile_iri: impl Into<String>,
-    ) -> Result<Self, ProjectionError> {
-        let profile_iri = profile_iri.into();
-        validate_absolute_iri(&profile_iri, "DCAT profile identity")?;
-        for (&role, term) in vocabulary.terms() {
-            if context.expand(term).is_none() {
-                return Err(ProjectionError::configuration(format!(
-                    "DCAT term `{term}` for role `{role:?}` has no offline expansion"
-                )));
-            }
-        }
-        Ok(Self {
-            common,
-            context,
-            vocabulary,
-            profile_iri,
-        })
-    }
+impl super::jsonld::sealed::Sealed for DcatVocabulary {}
 
-    /// Shared RDF vocabulary, identity, and limits.
-    pub const fn common(&self) -> &ResearchObjectConfig {
-        &self.common
-    }
-    /// Exact emitted context and offline expansion table.
-    pub const fn context(&self) -> &OfflineJsonLdContext {
-        &self.context
-    }
-    /// Caller-owned DCAT compact terms.
-    pub const fn vocabulary(&self) -> &DcatVocabulary {
-        &self.vocabulary
-    }
-    /// Absolute caller-selected DCAT application-profile identity.
-    pub fn profile_iri(&self) -> &str {
-        &self.profile_iri
+impl JsonLdProfileVocabulary for DcatVocabulary {
+    type Role = DcatRole;
+
+    const PROFILE: &'static str = "DCAT";
+
+    fn terms(&self) -> &BTreeMap<DcatRole, String> {
+        self.terms()
     }
 }
 
-impl FromJson for DcatConfig {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct DcatConfig")?;
-        let common: ResearchObjectConfig = fields.required("common")?;
-        let context: OfflineJsonLdContext = fields.required("context")?;
-        let vocabulary: DcatVocabulary = fields.required("vocabulary")?;
-        let profile_iri: String = fields.required("profile_iri")?;
-        fields.deny_unknown()?;
-        Ok(Self::new(common, context, vocabulary, profile_iri)?)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for DcatConfig as "struct DcatConfig" {
+    "common" => common: required::<ResearchObjectConfig>,
+    "context" => context: required::<OfflineJsonLdContext>,
+    "vocabulary" => vocabulary: required::<DcatVocabulary>,
+    "profile_iri" => profile_iri: required::<String>,
+} => DcatConfig::new);
 
-impl ToJson for DcatConfig {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("common", self.common.to_json())
-                .with("context", self.context.to_json())
-                .with("vocabulary", self.vocabulary.to_json())
-                .with("profile_iri", self.profile_iri.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for DcatConfig {
+    "common" => common,
+    "context" => context,
+    "vocabulary" => vocabulary,
+    "profile_iri" => profile_iri,
+});
 
 /// Project caller-vocabulary RDF 1.2 into canonical DCAT 3 JSON-LD.
 ///
@@ -534,7 +454,7 @@ fn encode_distribution(
         resource
             .paths
             .iter()
-            .map(|path| plain_value(path))
+            .map(|path| keyword_object("@value", path))
             .collect(),
     );
     insert_values(
@@ -573,7 +493,7 @@ fn encode_distribution(
                 Value::String(resource.id.clone()),
                 Value::Number(index.into()),
                 encode_value(&checksum.algorithm),
-                encode_text(&checksum.value),
+                text_object(&checksum.value),
             ]),
             config.common().limits(),
             "DCAT checksum identity key",
@@ -597,7 +517,7 @@ fn encode_checksum(id: &str, checksum: &ResearchChecksum, config: &DcatConfig) -
     insert_values(
         &mut object,
         terms.term(DcatRole::ChecksumValue),
-        vec![encode_text(&checksum.value)],
+        vec![text_object(&checksum.value)],
     );
     Value::Object(object)
 }
@@ -698,27 +618,6 @@ fn encode_field(field: &ResearchField, config: &DcatConfig) -> Value {
     Value::Object(object)
 }
 
-fn typed_object(id: &str, class: &str) -> Object {
-    Object::from_iter([
-        ("@id".to_owned(), Value::String(id.to_owned())),
-        ("@type".to_owned(), Value::String(class.to_owned())),
-    ])
-}
-
-fn id_object(id: &str) -> Value {
-    Value::Object(Object::from_iter([(
-        "@id".to_owned(),
-        Value::String(id.to_owned()),
-    )]))
-}
-
-fn plain_value(value: &str) -> Value {
-    Value::Object(Object::from_iter([(
-        "@value".to_owned(),
-        Value::String(value.to_owned()),
-    )]))
-}
-
 fn typed_value(value: &str, datatype: &str) -> Value {
     Value::Object(Object::from_iter([
         ("@value".to_owned(), Value::String(value.to_owned())),
@@ -727,7 +626,7 @@ fn typed_value(value: &str, datatype: &str) -> Value {
 }
 
 fn encode_texts(values: &[ResearchText]) -> Vec<Value> {
-    values.iter().map(encode_text).collect()
+    values.iter().map(text_object).collect()
 }
 
 fn encode_values(values: &[ResearchValue]) -> Vec<Value> {
@@ -737,33 +636,7 @@ fn encode_values(values: &[ResearchValue]) -> Vec<Value> {
 fn encode_value(value: &ResearchValue) -> Value {
     match value {
         ResearchValue::Iri { value } => id_object(value),
-        ResearchValue::Text(value) => encode_text(value),
-    }
-}
-
-fn encode_text(value: &ResearchText) -> Value {
-    let mut object = Object::from_iter([("@value".to_owned(), Value::String(value.value.clone()))]);
-    if let Some(language) = &value.language {
-        object.insert("@language".to_owned(), Value::String(language.clone()));
-    } else {
-        object.insert("@type".to_owned(), Value::String(value.datatype.clone()));
-    }
-    if let Some(direction) = value.direction {
-        object.insert(
-            "@direction".to_owned(),
-            Value::String(
-                purrdf_core::RdfTextDirection::from(direction)
-                    .as_str()
-                    .to_owned(),
-            ),
-        );
-    }
-    Value::Object(object)
-}
-
-fn insert_values(object: &mut Object, term: &str, values: Vec<Value>) {
-    if !values.is_empty() {
-        object.insert(term.to_owned(), Value::Array(values));
+        ResearchValue::Text(value) => text_object(value),
     }
 }
 
@@ -813,6 +686,41 @@ fn decode_document(
         known_ids: BTreeSet::new(),
     }
     .decode(value)
+}
+
+impl ProfileReader for DcatDecoder<'_> {
+    type Role = DcatRole;
+
+    const ARTIFACT: &'static str = DCAT_ARTIFACT;
+
+    const BARE_STRING_TEXT: bool = false;
+
+    fn term(&self, role: DcatRole) -> String {
+        self.config.vocabulary().term(role).to_owned()
+    }
+
+    fn roles(&self) -> &ResearchObjectRoles {
+        self.config.common().roles()
+    }
+
+    fn ledgers(&mut self) -> (&mut LossLedger, &LossLedger) {
+        (self.ledger, self.contract)
+    }
+
+    fn parse_reference_value(
+        &mut self,
+        value: &Value,
+        pointer: &str,
+    ) -> Result<Option<ResearchValue>, ProjectionError> {
+        let id = self.parse_ref(value, pointer)?;
+        if id.starts_with("_:") {
+            return Err(ProjectionError::integrity(
+                "DCAT scalar reference cannot use a blank-node identity",
+            )
+            .at_path(DCAT_ARTIFACT));
+        }
+        ResearchValue::iri(id).map(Some)
+    }
 }
 
 impl DcatDecoder<'_> {
@@ -1187,155 +1095,6 @@ impl DcatDecoder<'_> {
         })
     }
 
-    fn take_items(&mut self, object: &mut Object, role: DcatRole, parent: &str) -> Vec<Value> {
-        let term = self.config.vocabulary().term(role).to_owned();
-        let Some(value) = object.remove(&term) else {
-            return Vec::new();
-        };
-        match into_owned(value) {
-            Owned::Array(values) => {
-                if values.len() > 1 {
-                    self.loss(LOSS_RESEARCH_ORDER_DROPPED, &json_pointer(parent, &term));
-                }
-                values
-            }
-            other => vec![Value::from(other)],
-        }
-    }
-
-    fn take_texts(
-        &mut self,
-        object: &mut Object,
-        role: DcatRole,
-        parent: &str,
-    ) -> Result<Vec<ResearchText>, ProjectionError> {
-        let term = self.config.vocabulary().term(role).to_owned();
-        let mut texts = Vec::new();
-        for (index, value) in self
-            .take_items(object, role, parent)
-            .into_iter()
-            .enumerate()
-        {
-            let pointer = item_pointer(parent, &term, index);
-            if let Some(text) = self.parse_text(value, &pointer)? {
-                texts.push(text);
-            }
-        }
-        Ok(texts)
-    }
-
-    fn parse_text(
-        &mut self,
-        value: Value,
-        pointer: &str,
-    ) -> Result<Option<ResearchText>, ProjectionError> {
-        let Owned::Object(mut object) = into_owned(value) else {
-            self.unsupported(pointer);
-            return Ok(None);
-        };
-        let Some(Owned::String(value)) = object.remove("@value").map(into_owned) else {
-            self.unsupported(pointer);
-            return Ok(None);
-        };
-        let language = match object.remove("@language").map(into_owned) {
-            Some(Owned::String(language)) => Some(language),
-            Some(_) => {
-                self.unsupported(&json_pointer(pointer, "@language"));
-                return Ok(None);
-            }
-            None => None,
-        };
-        let direction = match object.remove("@direction") {
-            None => None,
-            Some(value) => {
-                match value
-                    .as_str()
-                    .and_then(purrdf_core::RdfTextDirection::from_str_token)
-                {
-                    Some(direction) => Some(super::super::ProjectionDirection::from(direction)),
-                    None => {
-                        self.unsupported(&json_pointer(pointer, "@direction"));
-                        return Ok(None);
-                    }
-                }
-            }
-        };
-        let explicit_datatype = match object.remove("@type").map(into_owned) {
-            Some(Owned::String(datatype)) => Some(datatype),
-            Some(_) => {
-                self.unsupported(&json_pointer(pointer, "@type"));
-                return Ok(None);
-            }
-            None => None,
-        };
-        self.record_unknowns(&object, pointer);
-        let datatype = explicit_datatype.unwrap_or_else(|| {
-            if direction.is_some() {
-                self.config
-                    .common()
-                    .roles()
-                    .iri(super::ResearchRole::RdfDirLangString)
-                    .to_owned()
-            } else if language.is_some() {
-                self.config
-                    .common()
-                    .roles()
-                    .iri(super::ResearchRole::RdfLangString)
-                    .to_owned()
-            } else {
-                self.config
-                    .common()
-                    .roles()
-                    .iri(super::ResearchRole::XsdString)
-                    .to_owned()
-            }
-        });
-        ResearchText::new(value, datatype, language, direction).map(Some)
-    }
-
-    fn take_values(
-        &mut self,
-        object: &mut Object,
-        role: DcatRole,
-        parent: &str,
-    ) -> Result<Vec<ResearchValue>, ProjectionError> {
-        let term = self.config.vocabulary().term(role).to_owned();
-        let mut values = Vec::new();
-        for (index, value) in self
-            .take_items(object, role, parent)
-            .into_iter()
-            .enumerate()
-        {
-            let pointer = item_pointer(parent, &term, index);
-            if let Some(value) = self.parse_value(value, &pointer)? {
-                values.push(value);
-            }
-        }
-        Ok(values)
-    }
-
-    fn parse_value(
-        &mut self,
-        value: Value,
-        pointer: &str,
-    ) -> Result<Option<ResearchValue>, ProjectionError> {
-        if value
-            .as_object()
-            .is_some_and(|object| object.contains_key("@id"))
-        {
-            let id = self.parse_ref(&value, pointer)?;
-            if id.starts_with("_:") {
-                return Err(ProjectionError::integrity(
-                    "DCAT scalar reference cannot use a blank-node identity",
-                )
-                .at_path(DCAT_ARTIFACT));
-            }
-            return ResearchValue::iri(id).map(Some);
-        }
-        self.parse_text(value, pointer)
-            .map(|value| value.map(ResearchValue::Text))
-    }
-
     fn take_refs(
         &mut self,
         object: &mut Object,
@@ -1414,7 +1173,8 @@ impl DcatDecoder<'_> {
                 )
                 .at_path(DCAT_ARTIFACT));
             }
-            validate_data_path(&value.value)?;
+            validate_data_path(&value.value, "DCAT distribution path")
+                .map_err(|error| error.at_path(DCAT_ARTIFACT))?;
             paths.push(value.value);
         }
         Ok(paths)
@@ -1530,27 +1290,6 @@ impl DcatDecoder<'_> {
         }
         Ok(())
     }
-
-    fn record_unknowns(&mut self, object: &Object, parent: &str) {
-        for member in object.keys() {
-            self.loss(
-                LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
-                &json_pointer(parent, member),
-            );
-        }
-    }
-
-    fn unsupported(&mut self, pointer: &str) {
-        self.loss(LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED, pointer);
-    }
-
-    fn loss(&mut self, code: &'static str, pointer: &str) {
-        record_loss(self.ledger, self.contract, code, DCAT_ARTIFACT, pointer);
-    }
-}
-
-fn item_pointer(parent: &str, term: &str, index: usize) -> String {
-    format!("{}/{index}", json_pointer(parent, term))
 }
 
 fn validate_node_id(value: &str) -> Result<(), ProjectionError> {
@@ -1569,23 +1308,6 @@ fn validate_node_id(value: &str) -> Result<(), ProjectionError> {
         ProjectionError::integrity(format!("invalid DCAT graph identity `{value}`"))
             .at_path(DCAT_ARTIFACT),
     )
-}
-
-fn validate_data_path(path: &str) -> Result<(), ProjectionError> {
-    if path.is_empty()
-        || path.starts_with('/')
-        || path.contains('\\')
-        || path.contains(['?', '#'])
-        || path
-            .split('/')
-            .any(|segment| matches!(segment, "" | "." | ".."))
-    {
-        return Err(
-            ProjectionError::integrity(format!("unsafe DCAT distribution path `{path}`"))
-                .at_path(DCAT_ARTIFACT),
-        );
-    }
-    Ok(())
 }
 
 #[cfg(test)]

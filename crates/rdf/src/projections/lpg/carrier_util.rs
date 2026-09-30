@@ -1,9 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use purrdf_lex::json::{Object, Value};
-
-use super::super::json_codec::{Fields, FromJson, JsonError, ToJson};
+use super::super::json_codec::{FromJson, ToJson};
 use super::super::util::canonical_json_bounded;
 use super::super::{ProjectionError, ProjectionLimits, ProjectionPackage};
 use super::{LpgConfig, LpgGraph};
@@ -18,29 +16,11 @@ pub(super) struct CarrierManifest {
     pub(super) lpg_schema_version: u32,
 }
 
-impl FromJson for CarrierManifest {
-    fn from_json(value: &Value) -> Result<Self, JsonError> {
-        let mut fields = Fields::new(value, "struct CarrierManifest")?;
-        let manifest = Self {
-            profile: fields.required("profile")?,
-            profile_version: fields.required("profile_version")?,
-            lpg_schema_version: fields.required("lpg_schema_version")?,
-        };
-        fields.deny_unknown()?;
-        Ok(manifest)
-    }
-}
-
-impl ToJson for CarrierManifest {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("profile", self.profile.as_str())
-                .with("profile_version", self.profile_version)
-                .with("lpg_schema_version", self.lpg_schema_version),
-        )
-    }
-}
+purrdf_lex::json_record!(CarrierManifest as "struct CarrierManifest" {
+    "profile" => profile: required,
+    "profile_version" => profile_version: required,
+    "lpg_schema_version" => lpg_schema_version: required,
+});
 
 pub(super) fn write_manifest(
     profile: &str,
@@ -107,15 +87,6 @@ pub(super) fn parse_json<T: FromJson + ToJson>(
         .at_path(path));
     }
     Ok(value)
-}
-
-pub(super) fn required_artifact<'a>(
-    package: &'a ProjectionPackage,
-    path: &str,
-) -> Result<&'a [u8], ProjectionError> {
-    package
-        .get(path)
-        .ok_or_else(|| ProjectionError::package("required artifact is missing").at_path(path))
 }
 
 pub(super) fn validate_package_bounds(

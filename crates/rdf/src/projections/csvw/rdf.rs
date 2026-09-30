@@ -3,6 +3,7 @@
 
 //! Normative CSVW-to-RDF conversion.
 
+use super::table::table_fragment_iri;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -142,7 +143,7 @@ impl Converter<'_> {
             }
             let predicate_iri = match &column.inherited.property_url {
                 Some(template) => expand_url(template, &cell_variables, &table.url, self.config)?,
-                None => fragment_iri(&table.url, &column.name)?,
+                None => table_fragment_iri(&table.url, &column.name, "CSVW")?,
             };
             let predicate = self.builder.intern_iri(&predicate_iri);
             if cell.is_null && !(column.virtual_column && column.inherited.value_url.is_some()) {
@@ -465,14 +466,6 @@ fn expand_url(
     base.resolve(&output)
         .map(|iri| iri.as_str().to_owned())
         .map_err(|error| ProjectionError::term(format!("invalid expanded CSVW URL: {error}")))
-}
-
-fn fragment_iri(table_url: &str, name: &str) -> Result<String, ProjectionError> {
-    let base = purrdf_iri::parse(table_url)
-        .map_err(|error| ProjectionError::term(format!("invalid CSVW table URL: {error}")))?;
-    base.resolve(&format!("#{name}"))
-        .map(|iri| iri.as_str().to_owned())
-        .map_err(|error| ProjectionError::term(format!("invalid CSVW property URL: {error}")))
 }
 
 fn expand_jsonld_iri(value: &str, config: &CsvwConfig) -> Result<String, ProjectionError> {

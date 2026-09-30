@@ -16,7 +16,11 @@
 //! surface: a triple term in a serialize request is a HARD error rather than silent
 //! loss.
 
+use super::syntax::{
+    ClassicTerm, CodecName, check_language_tag, element_text, freeze_classic_rows,
+};
 use purrdf_core::sink::{TextOut, TextSink};
+use purrdf_core::xml_escape::Context;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
@@ -24,14 +28,14 @@ use purrdf_lex::xml::Node;
 
 use super::codec::RdfCodec;
 use super::media_type::NativeRdfFormat;
-use super::parse::{FoldNode, FoldRow, RDF_REIFIES, fold_statement_layer};
 use super::ser_model::{SerGraph, SerTerm, SerTermKind};
 use super::text_parse::LineParseMode;
 use crate::nesting::{XmlReadError, parse_xml};
-use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
+use crate::{RdfDataset, RdfDiagnostic, RdfLiteral};
 use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
-use purrdf_core::cdt_blank::BlankBinding;
-use purrdf_iri::langtag;
+
+/// This codec's name, which its diagnostics lead with.
+const TRIX: CodecName = CodecName("TriX");
 
 /// The TriX codec: a standalone (non-line-family) [`RdfCodec`] over the "Triples in XML"
 /// quads syntax. A classic quad syntax with no RDF-1.2 triple-term surface, so it is
@@ -69,26 +73,9 @@ impl RdfCodec for TriXCodec {
 /// The TriX namespace (W3C member submission `trix-1`).
 const TRIX_NS: &str = "http://www.w3.org/2004/03/trix/trix-1/";
 
-fn parse_err(detail: impl Into<String>) -> RdfDiagnostic {
-    RdfDiagnostic::error("native-codec-parse", format!("TriX: {}", detail.into()))
-}
-
-fn serialize_err(detail: impl Into<String>) -> RdfDiagnostic {
-    RdfDiagnostic::error("native-codec-serialize", format!("TriX: {}", detail.into()))
-}
-
 // ───────────────────────────────────────────────────────────────────────────────
 // Parse: TriX XML → frozen RdfDataset IR (via the shared statement-layer fold)
 // ───────────────────────────────────────────────────────────────────────────────
-
-/// A first-party TriX term the parser accumulates before interning into the IR. TriX is
-/// classic (no triple terms), so subject/object never carry a quoted triple.
-#[derive(Clone, Debug)]
-enum TrixTerm {
-    Iri(String),
-    Blank(String),
-    Literal(RdfLiteral),
-}
 
 /// Parse TriX `text` into a frozen [`RdfDataset`].
 pub(super) fn parse_trix_to_dataset(
@@ -96,26 +83,26 @@ pub(super) fn parse_trix_to_dataset(
     base: &purrdf_iri::BaseScope,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let document = parse_xml(text).map_err(|error| match error {
-        XmlReadError::TooDeep(depth) => parse_err(format!(
+        XmlReadError::TooDeep(depth) => TRIX.parse_err(format!(
             "element nesting reaches {depth} levels, past the parser limit"
         )),
-        XmlReadError::Malformed(error) => parse_err(error.to_string()),
+        XmlReadError::Malformed(error) => TRIX.parse_err(error.to_string()),
     })?;
     let root = document.root_element();
     if !is_trix(root, "TriX") {
-        return Err(parse_err("document root is not a <TriX> element"));
+        return Err(TRIX.parse_err("document root is not a <TriX> element"));
     }
 
     // Accumulate (subject, predicate, object, graph) rows, then intern + fold once.
-    let mut rows: Vec<(TrixTerm, String, TrixTerm, Option<TrixTerm>)> = Vec::new();
+    let mut rows: Vec<(ClassicTerm, String, ClassicTerm, Option<ClassicTerm>)> = Vec::new();
     for graph in root.element_children() {
         if !is_trix(graph, "graph") {
-            return Err(parse_err(format!(
+            return Err(TRIX.parse_err(format!(
                 "unexpected element <{}> under <TriX>",
                 graph.tag_name().name()
             )));
         }
-        let mut graph_name: Option<TrixTerm> = None;
+        let mut graph_name: Option<ClassicTerm> = None;
         let mut seen_triple = false;
         for child in graph.element_children() {
             if is_trix(child, "triple") {
@@ -124,13 +111,13 @@ pub(super) fn parse_trix_to_dataset(
                 rows.push((subject, predicate, object, graph_name.clone()));
             } else if matches!(local_of(child), Some("uri" | "id")) {
                 if seen_triple || graph_name.is_some() {
-                    return Err(parse_err(
+                    return Err(TRIX.parse_err(
                         "a <graph> name (<uri>/<id>) must precede its <triple> elements",
                     ));
                 }
                 graph_name = Some(node_term(child, base)?);
             } else {
-                return Err(parse_err(format!(
+                return Err(TRIX.parse_err(format!(
                     "unexpected element <{}> under <graph>",
                     child.tag_name().name()
                 )));
@@ -138,24 +125,24 @@ pub(super) fn parse_trix_to_dataset(
         }
     }
 
-    freeze_rows(rows)
+    freeze_classic_rows(rows, LabelAlphabet::XmlText)
 }
 
 /// Parse a `<triple>` element's three term children.
 fn parse_triple(
     element: Node<'_, '_>,
     base: &purrdf_iri::BaseScope,
-) -> Result<(TrixTerm, String, TrixTerm), RdfDiagnostic> {
+) -> Result<(ClassicTerm, String, ClassicTerm), RdfDiagnostic> {
     let terms: Vec<Node<'_, '_>> = element.element_children().collect();
     if terms.len() != 3 {
-        return Err(parse_err(format!(
+        return Err(TRIX.parse_err(format!(
             "<triple> must have exactly three term children, found {}",
             terms.len()
         )));
     }
     let subject = node_term(terms[0], base)?;
-    let TrixTerm::Iri(predicate) = term_element(terms[1], base)? else {
-        return Err(parse_err("a predicate must be a <uri>"));
+    let ClassicTerm::Iri(predicate) = term_element(terms[1], base)? else {
+        return Err(TRIX.parse_err("a predicate must be a <uri>"));
     };
     let object = term_element(terms[2], base)?;
     Ok((subject, predicate, object))
@@ -165,28 +152,30 @@ fn parse_triple(
 fn node_term(
     element: Node<'_, '_>,
     base: &purrdf_iri::BaseScope,
-) -> Result<TrixTerm, RdfDiagnostic> {
+) -> Result<ClassicTerm, RdfDiagnostic> {
     match term_element(element, base)? {
-        term @ (TrixTerm::Iri(_) | TrixTerm::Blank(_)) => Ok(term),
-        TrixTerm::Literal(_) => Err(parse_err("a subject or graph name must be a <uri> or <id>")),
+        term @ (ClassicTerm::Iri(_) | ClassicTerm::Blank(_)) => Ok(term),
+        ClassicTerm::Literal(_) => {
+            Err(TRIX.parse_err("a subject or graph name must be a <uri> or <id>"))
+        }
     }
 }
 
-/// Map a TriX term element to a [`TrixTerm`].
+/// Map a TriX term element to a [`ClassicTerm`].
 fn term_element(
     element: Node<'_, '_>,
     base: &purrdf_iri::BaseScope,
-) -> Result<TrixTerm, RdfDiagnostic> {
+) -> Result<ClassicTerm, RdfDiagnostic> {
     match local_of(element) {
         Some("uri") => {
             let iri = trimmed_text(element);
             validate_iri(&iri, base)?;
-            Ok(TrixTerm::Iri(iri))
+            Ok(ClassicTerm::Iri(iri))
         }
         Some("id") => {
             let label = trimmed_text(element);
             validate_blank_label(&label)?;
-            Ok(TrixTerm::Blank(label))
+            Ok(ClassicTerm::Blank(label))
         }
         Some("plainLiteral") => {
             let lexical = element_text(element);
@@ -197,76 +186,29 @@ fn term_element(
                 // Validating it would refuse documents that carry no language.
                 Some(lang) if !lang.is_empty() => {
                     validate_language_tag(lang)?;
-                    Ok(TrixTerm::Literal(RdfLiteral {
+                    Ok(ClassicTerm::Literal(RdfLiteral {
                         lexical_form: lexical,
                         datatype: None,
                         language: Some(lang.to_owned()),
                         direction: None,
                     }))
                 }
-                _ => Ok(TrixTerm::Literal(RdfLiteral::simple(lexical))),
+                _ => Ok(ClassicTerm::Literal(RdfLiteral::simple(lexical))),
             }
         }
         Some("typedLiteral") => {
             let datatype = attr_local(element, "datatype")
-                .ok_or_else(|| parse_err("<typedLiteral> requires a datatype attribute"))?;
+                .ok_or_else(|| TRIX.parse_err("<typedLiteral> requires a datatype attribute"))?;
             validate_iri(datatype, base)?;
-            Ok(TrixTerm::Literal(RdfLiteral::typed(
+            Ok(ClassicTerm::Literal(RdfLiteral::typed(
                 element_text(element),
                 datatype,
             )))
         }
-        other => Err(parse_err(format!(
+        other => Err(TRIX.parse_err(format!(
             "unexpected term element <{}>",
             other.unwrap_or("?")
         ))),
-    }
-}
-
-/// Intern the accumulated rows into a fresh builder, fold the statement layer, freeze.
-fn freeze_rows(
-    rows: Vec<(TrixTerm, String, TrixTerm, Option<TrixTerm>)>,
-) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    let mut builder = RdfDatasetBuilder::new();
-    let mut fold_rows: Vec<FoldRow> = Vec::with_capacity(rows.len());
-    for (subject, predicate, object, graph) in rows {
-        let subject = intern_term(&mut builder, &subject)?;
-        let is_reifies = predicate == RDF_REIFIES;
-        let predicate = builder.intern_iri(&predicate);
-        let object = FoldNode::Term(intern_term(&mut builder, &object)?);
-        let graph = match graph {
-            Some(g) => Some(intern_term(&mut builder, &g)?),
-            None => None,
-        };
-        fold_rows.push(FoldRow {
-            subject,
-            is_reifies,
-            predicate,
-            object,
-            graph,
-        });
-    }
-    fold_statement_layer(&mut builder, fold_rows)?;
-    builder.freeze()
-}
-
-/// # Errors
-/// A composite (`cdt:List` / `cdt:Map`) literal whose lexical form does not
-/// parse refuses the document; see [`purrdf_core::cdt_blank`].
-fn intern_term(builder: &mut RdfDatasetBuilder, term: &TrixTerm) -> Result<TermId, RdfDiagnostic> {
-    match term {
-        TrixTerm::Iri(iri) => Ok(builder.intern_iri(iri)),
-        // Text ingress: decode the `(label, scope)` encoding this codec's serializer
-        // applied at egress, so a document it wrote re-parses to the very
-        // `(label, scope)` pair it was written from. A TriX `<id>` is XML character
-        // data, which is the alphabet the image test re-encodes against.
-        TrixTerm::Blank(label) => Ok(builder.intern_text_blank(label, LabelAlphabet::XmlText)),
-        // A composite literal's embedded blank labels bind through the SAME rule
-        // the `<id>` tokens above use, so both spellings of one node agree.
-        TrixTerm::Literal(literal) => Ok(builder.intern_literal_bound(
-            literal.clone(),
-            BlankBinding::Decoded(LabelAlphabet::XmlText),
-        )?),
     }
 }
 
@@ -284,15 +226,6 @@ fn local_of<'a>(element: Node<'a, '_>) -> Option<&'a str> {
         .is_element()
         .then(|| element.tag_name().name())
         .filter(|_| matches!(element.tag_name().namespace(), None | Some(TRIX_NS)))
-}
-
-/// Concatenated direct text of an element (the literal lexical form, verbatim).
-fn element_text(element: Node<'_, '_>) -> String {
-    element
-        .children()
-        .filter(Node::is_text)
-        .filter_map(|n| n.text())
-        .collect()
 }
 
 /// `text` with its leading and trailing runs of XML whitespace removed.
@@ -366,13 +299,9 @@ fn attr_xml_lang<'a>(element: Node<'a, '_>) -> Option<&'a str> {
 /// XML tree this walks is not a span-recording tokenizer, as this
 /// module's header says — which this does not change.
 fn validate_language_tag(language: &str) -> Result<(), RdfDiagnostic> {
-    match langtag::parse_with(language, langtag::Profile::ConcreteSyntaxLangtagBounded) {
-        Ok(_) => Ok(()),
-        Err(error) => Err(RdfDiagnostic::error(
-            error.diagnostic_code(),
-            format!("TriX: invalid language tag {language:?}: {error}"),
-        )),
-    }
+    check_language_tag(language, |error| {
+        format!("TriX: invalid language tag {language:?}: {error}")
+    })
 }
 
 /// Validate a `<uri>` against the shared IRI layer.
@@ -406,9 +335,7 @@ fn validate_blank_label(label: &str) -> Result<(), RdfDiagnostic> {
     if is_valid_label(label, LabelAlphabet::XmlText) {
         Ok(())
     } else {
-        Err(parse_err(format!(
-            "invalid blank-node identifier {label:?}"
-        )))
+        Err(TRIX.parse_err(format!("invalid blank-node identifier {label:?}")))
     }
 }
 
@@ -431,8 +358,8 @@ fn write_trix<W: TextOut + ?Sized>(graph: &SerGraph, out: &mut W) -> Result<(), 
     // a self-reifier sentinel is an inline quoted-triple term already carried by its
     // parent quad, so it is skipped.
     for &(rid, _, _) in &graph.reifiers {
-        if !is_self_reifier(graph, rid) {
-            return Err(serialize_err(
+        if !graph.is_self_reifier(rid) {
+            return Err(TRIX.serialize_err(
                 "cannot serialize an RDF-1.2 reifier binding (no triple-term surface)",
             ));
         }
@@ -484,33 +411,26 @@ fn write_trix<W: TextOut + ?Sized>(graph: &SerGraph, out: &mut W) -> Result<(), 
     Ok(())
 }
 
-fn is_self_reifier(graph: &SerGraph, rid: usize) -> bool {
-    graph
-        .terms
-        .get(rid)
-        .is_some_and(|t| t.kind == SerTermKind::Triple && t.reifier == Some(rid))
-}
-
 /// Write a graph-name element (`<uri>` / `<id>`).
 fn write_graph_name<W: TextOut + ?Sized>(
     out: &mut W,
     graph: &SerGraph,
     tid: usize,
 ) -> Result<(), RdfDiagnostic> {
-    let term = ser_term(graph, tid)?;
+    let term = TRIX.term(graph, tid)?;
     match term.kind {
         SerTermKind::Iri => {
             out.push_str("    <uri>");
-            push_text(ser_value(term)?, out)?;
+            TRIX.push_xml(TRIX.value(term)?, Context::Text, out)?;
             out.push_str("</uri>\n");
         }
         SerTermKind::Bnode => {
             out.push_str("    <id>");
-            push_text(ser_value(term)?, out)?;
+            TRIX.push_xml(TRIX.value(term)?, Context::Text, out)?;
             out.push_str("</id>\n");
         }
         other => {
-            return Err(serialize_err(format!(
+            return Err(TRIX.serialize_err(format!(
                 "a graph name must be an IRI or blank node, got {other:?}"
             )));
         }
@@ -524,21 +444,21 @@ fn write_term<W: TextOut + ?Sized>(
     graph: &SerGraph,
     tid: usize,
 ) -> Result<(), RdfDiagnostic> {
-    let term = ser_term(graph, tid)?;
+    let term = TRIX.term(graph, tid)?;
     match term.kind {
         SerTermKind::Iri => {
             out.push_str("      <uri>");
-            push_text(ser_value(term)?, out)?;
+            TRIX.push_xml(TRIX.value(term)?, Context::Text, out)?;
             out.push_str("</uri>\n");
         }
         SerTermKind::Bnode => {
             out.push_str("      <id>");
-            push_text(ser_value(term)?, out)?;
+            TRIX.push_xml(TRIX.value(term)?, Context::Text, out)?;
             out.push_str("</id>\n");
         }
         SerTermKind::Literal => write_literal(out, graph, term)?,
         SerTermKind::Triple => {
-            return Err(serialize_err(
+            return Err(TRIX.serialize_err(
                 "cannot serialize an RDF-1.2 triple term (no triple-term surface)",
             ));
         }
@@ -551,58 +471,26 @@ fn write_literal<W: TextOut + ?Sized>(
     graph: &SerGraph,
     term: &SerTerm,
 ) -> Result<(), RdfDiagnostic> {
-    let lexical = ser_value(term)?;
+    let lexical = TRIX.value(term)?;
     if let Some(language) = &term.lang {
         out.push_str("      <plainLiteral xml:lang=\"");
-        push_attr(language, out)?;
+        TRIX.push_xml(language, Context::Attribute, out)?;
         out.push_str("\">");
-        push_text(lexical, out)?;
+        TRIX.push_xml(lexical, Context::Text, out)?;
         out.push_str("</plainLiteral>\n");
     } else if let Some(datatype) = term.datatype {
-        let datatype_iri = ser_value(ser_term(graph, datatype)?)?;
+        let datatype_iri = TRIX.value(TRIX.term(graph, datatype)?)?;
         out.push_str("      <typedLiteral datatype=\"");
-        push_attr(datatype_iri, out)?;
+        TRIX.push_xml(datatype_iri, Context::Attribute, out)?;
         out.push_str("\">");
-        push_text(lexical, out)?;
+        TRIX.push_xml(lexical, Context::Text, out)?;
         out.push_str("</typedLiteral>\n");
     } else {
         out.push_str("      <plainLiteral>");
-        push_text(lexical, out)?;
+        TRIX.push_xml(lexical, Context::Text, out)?;
         out.push_str("</plainLiteral>\n");
     }
     Ok(())
-}
-
-fn ser_term(graph: &SerGraph, tid: usize) -> Result<&SerTerm, RdfDiagnostic> {
-    graph
-        .terms
-        .get(tid)
-        .ok_or_else(|| serialize_err(format!("term id {tid} is out of range")))
-}
-
-fn ser_value(term: &SerTerm) -> Result<&str, RdfDiagnostic> {
-    term.value
-        .as_deref()
-        .ok_or_else(|| serialize_err("term is missing its value"))
-}
-
-/// Lossless XML character data under the shared XML 1.0 law.
-/// Append lossless XML 1.0 character data STRAIGHT INTO the sink.
-///
-/// `push_into` rather than `escape`: the allocating spelling returns a `Cow` that
-/// allocates whenever any character needs replacing, once per term, on a path whose
-/// whole purpose is to not accumulate the document. The extra scan `push_into` pays is
-/// the trade this codec was converted to make.
-fn push_text<W: TextOut + ?Sized>(value: &str, out: &mut W) -> Result<(), RdfDiagnostic> {
-    purrdf_core::xml_escape::push_into(value, purrdf_core::xml_escape::Context::Text, out)
-        .map_err(|error| serialize_err(error.to_string()))
-}
-
-/// Lossless double-quoted XML attribute value.
-/// Append a lossless double-quoted XML 1.0 attribute value straight into the sink.
-fn push_attr<W: TextOut + ?Sized>(value: &str, out: &mut W) -> Result<(), RdfDiagnostic> {
-    purrdf_core::xml_escape::push_into(value, purrdf_core::xml_escape::Context::Attribute, out)
-        .map_err(|error| serialize_err(error.to_string()))
 }
 
 #[cfg(test)]

@@ -15,7 +15,7 @@ use super::super::{
 };
 use super::carrier_util::{
     BoundedText, LpgTextWriter, hex_decode, json_string, read_manifest, require_canonical_package,
-    required_artifact, validate_package_bounds, write_manifest,
+    validate_package_bounds, write_manifest,
 };
 use super::csv::{LpgPackageProjection, native_labels, native_property_cell, property_token};
 use super::mapping::{LpgProjection, project_lpg, project_lpg_with_progress};
@@ -173,12 +173,12 @@ pub fn read_lpg_graphml(
 ) -> Result<LpgGraph, ProjectionError> {
     validate_package_bounds(package, config.limits())?;
     let schema_version = read_manifest(
-        required_artifact(package, MANIFEST_PATH)?,
+        package.required(MANIFEST_PATH)?,
         PROFILE,
         config,
         MANIFEST_PATH,
     )?;
-    let bytes = required_artifact(package, GRAPHML_PATH)?;
+    let bytes = package.required(GRAPHML_PATH)?;
     let text = std::str::from_utf8(bytes).map_err(|error| {
         ProjectionError::syntax(format!("GraphML is not UTF-8: {error}")).at_path(GRAPHML_PATH)
     })?;
@@ -199,7 +199,7 @@ pub fn read_lpg_graphml(
     })?;
     let root = document.root_element();
     require_element(root, "graphml")?;
-    if namespaced_attribute(root, XSI_NS, "schemaLocation") != Some(SCHEMA_LOCATION) {
+    if root.attribute((XSI_NS, "schemaLocation")) != Some(SCHEMA_LOCATION) {
         return Err(ProjectionError::integrity(
             "GraphML root has the wrong or missing xsi:schemaLocation",
         )
@@ -528,10 +528,6 @@ fn required_attribute<'a>(node: Node<'a, '_>, name: &str) -> Result<&'a str, Pro
         ))
         .at_path(GRAPHML_PATH)
     })
-}
-
-fn namespaced_attribute<'a>(node: Node<'a, '_>, namespace: &str, local: &str) -> Option<&'a str> {
-    node.attribute((namespace, local))
 }
 
 fn element_text<'a>(node: Node<'a, '_>) -> Result<&'a str, ProjectionError> {

@@ -565,7 +565,7 @@ impl Bench {
     fn test(&mut self, text: String, routine: &mut dyn FnMut(&mut Bencher)) {
         self.emit(&format!("Testing {text}\n"));
         let result = panic::catch_unwind(AssertUnwindSafe(|| time_iterations(routine, 1)));
-        let failure = result.err().map(|payload| panic_message(&*payload));
+        let failure = result.err().map(|payload| panic_text(&*payload));
         match &failure {
             None => self.emit("Success\n"),
             Some(message) => self.emit(&format!("FAILED: {message}\n")),
@@ -607,7 +607,9 @@ impl Bench {
         };
         let sampled = match panic::catch_unwind(AssertUnwindSafe(|| sample(config, routine))) {
             Ok(sampled) => sampled,
-            Err(payload) => return self.fail(text, panic_message(&*payload)),
+            Err(payload) => {
+                return self.fail(text, panic_text(&*payload));
+            }
         };
         let seed = purrdf_hash::fnv::fnv1a64(text.as_bytes());
         let estimates = Estimates::from_samples(
@@ -939,14 +941,11 @@ fn sample(config: Config, routine: &mut dyn FnMut(&mut Bencher)) -> Sampled {
     }
 }
 
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        (*message).to_owned()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "the benchmark panicked".to_owned()
-    }
+/// A caught benchmark panic's message.
+fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    crate::harness::panic_message(payload)
+        .unwrap_or("the benchmark panicked")
+        .to_owned()
 }
 
 /// `nanos` with four significant digits and a unit from ps to s.

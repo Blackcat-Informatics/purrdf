@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write as _};
 
 use purrdf_iri::PrefixMap;
+use purrdf_lex::json::record::ToJson;
 use purrdf_lex::literal_escape::{self, Carrier};
 use purrdf_lex::term_syntax;
 
@@ -23,7 +24,6 @@ mod layout;
 mod scene;
 mod svg;
 
-pub use json::VizJson;
 pub use layout::*;
 pub use scene::*;
 pub use svg::*;
@@ -126,7 +126,7 @@ pub enum VizRole {
 }
 
 /// RDF dialect/conformance state surfaced by the visualization projection.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VizDialect {
     /// Standard RDF 1.2 position.
     Rdf12,
@@ -182,7 +182,7 @@ pub enum VizGraphPolicy {
 }
 
 /// Label generation policy.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum VizLabelPolicy {
     /// Generate compact labels from term values.
     #[default]
@@ -220,6 +220,21 @@ pub enum VizTableField {
     Depth,
     /// Dialect and conformance diagnostics.
     Diagnostics,
+}
+
+impl VizTableField {
+    /// The column heading rendered for the field.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Statement => "Statement",
+            Self::AssertedIn => "Asserted in",
+            Self::Reifiers => "Reifiers",
+            Self::Annotations => "Annotations",
+            Self::ReferencedBy => "Referenced by",
+            Self::Depth => "Depth",
+            Self::Diagnostics => "Diagnostics",
+        }
+    }
 }
 
 /// Caller-provided semantic lens for visualization projection.
@@ -1069,7 +1084,7 @@ impl<'a> ProjectionBuilder<'a> {
                 object: object_ref.clone(),
                 asserted_in: BTreeSet::new(),
                 nesting_depth,
-                dialect: dialect.clone(),
+                dialect,
                 roles: BTreeSet::new(),
             },
         );
@@ -1170,7 +1185,7 @@ impl<'a> ProjectionBuilder<'a> {
             });
         }
         let id = VizTermId(self.mint_id("term", &key)?);
-        let label = label_for_term(&value, self.spec.label_policy.clone(), &self.prefixes);
+        let label = label_for_term(&value, self.spec.label_policy, &self.prefixes);
         let value = viz_term_value(value)?;
         self.terms.insert(
             id.clone(),
@@ -1528,7 +1543,7 @@ impl<'a> ProjectionBuilder<'a> {
                 asserted_in: draft.asserted_in.iter().cloned().collect(),
                 nesting_depth: draft.nesting_depth,
                 incoming_references: incoming_by_statement.get(id).copied().unwrap_or_default(),
-                dialect: draft.dialect.clone(),
+                dialect: draft.dialect,
                 roles: draft.roles.iter().cloned().collect(),
             })
             .collect();
@@ -2375,7 +2390,7 @@ mod tests {
     fn full_labels_are_rdf_lexical_terms() {
         let full = VizLabelPolicy::Full;
         assert_eq!(
-            label_for_term(&iri("alice"), full.clone(), &PrefixMap::new()),
+            label_for_term(&iri("alice"), full, &PrefixMap::new()),
             "<https://example.org/alice>"
         );
         assert_eq!(
@@ -2386,7 +2401,7 @@ mod tests {
                     language: None,
                     direction: None,
                 },
-                full.clone(),
+                full,
                 &PrefixMap::new(),
             ),
             "\"a\\\"b\\n\""
@@ -2420,7 +2435,7 @@ mod tests {
         let compact = VizLabelPolicy::Compact;
         let prefixes = PrefixMap::new();
         assert_eq!(
-            label_for_term(&literal("say \"hi\"\n\\"), compact.clone(), &prefixes),
+            label_for_term(&literal("say \"hi\"\n\\"), compact, &prefixes),
             "\"say \\\"hi\\\"\\n\\\\\""
         );
         assert_eq!(
@@ -2437,8 +2452,7 @@ mod tests {
             .into_iter()
             .collect();
         let compact = VizLabelPolicy::Compact;
-        let label =
-            |iri: &str| label_for_term(&TermValue::Iri(iri.to_owned()), compact.clone(), &prefixes);
+        let label = |iri: &str| label_for_term(&TermValue::Iri(iri.to_owned()), compact, &prefixes);
         assert_eq!(label("https://example.org/vocab/knows"), "exv:knows");
         assert_eq!(label("https://example.org/alice"), "ex:alice");
         assert_eq!(label("https://other.example/ns#Thing"), "Thing");

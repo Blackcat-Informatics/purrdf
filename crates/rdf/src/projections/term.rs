@@ -90,6 +90,103 @@ pub enum ProjectionTerm {
 }
 
 impl ProjectionTerm {
+    /// The IRI term `value`.
+    pub(crate) fn iri(value: impl Into<String>) -> Self {
+        Self::Iri {
+            value: value.into(),
+        }
+    }
+
+    /// Whether this term is an RDF 1.2 triple term.
+    pub(crate) const fn is_triple(&self) -> bool {
+        matches!(self, Self::Triple { .. })
+    }
+
+    /// Whether a blank node occurs anywhere in this term, at any triple-term
+    /// depth. The walk is over a heap work list, so depth costs no stack.
+    pub(crate) fn contains_blank(&self) -> bool {
+        let mut work = vec![self];
+        while let Some(term) = work.pop() {
+            match term {
+                Self::Blank { .. } => return true,
+                Self::Triple {
+                    subject,
+                    predicate,
+                    object,
+                } => work.extend([&**subject, &**predicate, &**object]),
+                Self::Iri { .. } | Self::Literal { .. } => {}
+            }
+        }
+        false
+    }
+
+    /// The term `id` names in `view`, resolved through `cache`: resolved once
+    /// under `limits`, refused unless its canonical JSON fits the artifact
+    /// bound, and cloned from the cache on every later request.
+    ///
+    /// Every projection that reads terms from a dataset view resolves them
+    /// here, so a term is admitted by one law whichever projection meets it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProjectionTerm::from_view`]'s refusal, or a limit error when
+    /// the term's canonical JSON exceeds the artifact bound.
+    pub(crate) fn resolve_cached<D: DatasetView>(
+        view: &D,
+        id: D::Id,
+        limits: ProjectionLimits,
+        cache: &mut std::collections::BTreeMap<D::Id, Self>,
+    ) -> Result<Self, ProjectionError> {
+        if let Some(term) = cache.get(&id) {
+            return Ok(term.clone());
+        }
+        let term = Self::from_view(view, id, limits)?;
+        let _ = term.to_canonical_json(limits)?;
+        cache.insert(id, term.clone());
+        Ok(term)
+    }
+
+    /// Intern this term into `builder`, triple terms included.
+    ///
+    /// # Errors
+    ///
+    /// Returns an integrity error when a triple term's predicate is not an IRI.
+    pub(crate) fn intern(
+        &self,
+        builder: &mut purrdf_core::RdfDatasetBuilder,
+    ) -> Result<purrdf_core::TermId, ProjectionError> {
+        Ok(match self {
+            Self::Iri { value } => builder.intern_iri(value),
+            Self::Blank { label, scope } => builder.intern_blank(label, BlankScope(*scope)),
+            Self::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => builder.intern_literal(RdfLiteral {
+                lexical_form: lexical.clone(),
+                datatype: Some(datatype.clone()),
+                language: language.clone(),
+                direction: direction.map(Into::into),
+            }),
+            Self::Triple {
+                subject,
+                predicate,
+                object,
+            } => {
+                let subject = subject.intern(builder)?;
+                let Self::Iri { value: predicate } = predicate.as_ref() else {
+                    return Err(ProjectionError::integrity(
+                        "projected triple term predicate is not an IRI",
+                    ));
+                };
+                let predicate = builder.intern_iri(predicate);
+                let object = object.intern(builder)?;
+                builder.intern_triple(subject, predicate, object)
+            }
+        })
+    }
+
     /// Resolve a dataset-local term id into a durable value under the configured
     /// recursion bound.
     ///

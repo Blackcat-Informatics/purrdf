@@ -6,9 +6,10 @@
 //! configuration, option and plan document in the workspace is read and
 //! written through.
 //!
-//! A type states its JSON shape once, by hand, in a [`FromJson`] and a
-//! [`ToJson`] impl; the grammar stays in the reader and writer of
-//! [`crate::json`]. The record law is stated here once so that every document
+//! A type states its JSON shape once, in a [`FromJson`] and a [`ToJson`]
+//! impl — a plain record through [`json_record!`], a closed vocabulary
+//! through [`json_string_enum!`], anything else by hand; the grammar stays in
+//! the reader and writer of [`crate::json`]. The record law is stated here once so that every document
 //! a PurRDF component reads refuses the same shapes in the same words.
 //!
 //! # Contract
@@ -607,6 +608,93 @@ macro_rules! json_string_enum {
                 }
             }
         }
+    };
+}
+
+/// Write a record type's [`ToJson`](crate::json::record::ToJson) and
+/// [`FromJson`](crate::json::record::FromJson) from one member list.
+///
+/// A record is an object of named members in a fixed order. This macro is the
+/// one body every such impl instantiates, so the record law of this module —
+/// members written in declared order; read through [`Record`] with
+/// `missing field`, `duplicate field` and `unknown field` refused — is stated
+/// once rather than re-spelled per type. Each member is
+/// `"json-name" => field: reader` — the name any `&'static str` expression,
+/// such as `stringify!(field)` in a macro — where `reader` is a [`Record`] method
+/// (`required`, `optional`, `defaulted`), optionally turbofished with the
+/// member's type when the constructor alone cannot infer it.
+///
+/// * `impl ToJson for T { "name" => field, … }` writes the members in order,
+///   each through its own [`ToJson`](crate::json::record::ToJson).
+/// * `impl FromJson for T as "struct T" { "name" => field: required, … }`
+///   reads the members in order, refuses any other member, and builds
+///   `Self { field, … }`; a trailing `=> T::new` builds `T::new(field, …)?`
+///   instead, so the value is validated by the constructor callers use.
+/// * `T as "struct T" { … }` writes both impls from the one list.
+///
+/// ```rust
+/// use purrdf_lex::json::{self, Value};
+/// use purrdf_lex::json::record::{DecodeError, FromJson, ToJson};
+///
+/// #[derive(Debug, PartialEq)]
+/// struct Span {
+///     start: u32,
+///     label: Option<String>,
+/// }
+///
+/// purrdf_lex::json_record!(Span as "struct Span" {
+///     "start" => start: required,
+///     "label" => label: optional,
+/// });
+///
+/// let span = Span { start: 3, label: None };
+/// assert_eq!(json::write_compact(&span.to_json()), r#"{"start":3,"label":null}"#);
+/// assert_eq!(Span::from_json(&json::read(r#"{"start":3}"#).unwrap()), Ok(span));
+/// assert!(Span::from_json(&json::read(r#"{"start":3,"end":4}"#).unwrap()).is_err());
+/// ```
+#[macro_export]
+macro_rules! json_record {
+    (impl ToJson for $type:ty { $($name:expr => $field:ident),* $(,)? }) => {
+        impl $crate::json::record::ToJson for $type {
+            fn to_json(&self) -> $crate::json::Value {
+                $crate::json::Value::Object(
+                    $crate::json::Object::new()
+                        $(.with($name, $crate::json::record::ToJson::to_json(&self.$field)))*,
+                )
+            }
+        }
+    };
+    (impl FromJson for $type:ty as $expecting:literal {
+        $($name:expr => $field:ident : $reader:ident $(::<$member:ty>)?),* $(,)?
+    } $(=> $constructor:path)?) => {
+        impl $crate::json::record::FromJson for $type {
+            #[allow(
+                clippy::needless_question_mark,
+                reason = "a constructor's refusal is any error a DecodeError is built from"
+            )]
+            fn from_json(
+                value: &$crate::json::Value,
+            ) -> Result<Self, $crate::json::record::DecodeError> {
+                let mut record = $crate::json::record::Record::new(value, $expecting)?;
+                $(let $field $(: $member)? = record.$reader($name)?;)*
+                record.deny_unknown()?;
+                $crate::json_record!(@build $($constructor)? { $($field),* })
+            }
+        }
+    };
+    (@build { $($field:ident),* }) => {
+        Ok(Self { $($field),* })
+    };
+    (@build $constructor:path { $($field:ident),* }) => {
+        Ok($constructor($($field),*)?)
+    };
+    ($type:ty as $expecting:literal {
+        $($name:expr => $field:ident : $reader:ident $(::<$member:ty>)?),* $(,)?
+    } $(=> $constructor:path)?) => {
+        $crate::json_record!(impl ToJson for $type { $($name => $field),* });
+        $crate::json_record!(impl FromJson for $type as $expecting {
+            $($name => $field : $reader $(::<$member>)?),*
+        } $(=> $constructor)?);
     };
 }
 

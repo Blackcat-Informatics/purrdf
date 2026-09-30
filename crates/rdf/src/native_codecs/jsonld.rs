@@ -35,11 +35,12 @@ use std::io::Write as IoWrite;
 use std::sync::Arc;
 
 use purrdf_core::collections::{ListCellUse, convertible_list_cells};
-use purrdf_lex::json::Value;
+use purrdf_lex::json::{Object, Value};
 
 use self::carrier::{
     Document as CarrierDocument, Literal as CarrierLiteral, NamedGraph as CarrierNamedGraph,
-    Node as CarrierNode, Term as CarrierTerm, Triple as CarrierTriple, Value as CarrierValue,
+    Node as CarrierNode, Part as CarrierPart, Term as CarrierTerm, Triple as CarrierTriple,
+    Value as CarrierValue,
 };
 
 use super::NativeRdfFormat;
@@ -222,11 +223,6 @@ fn triple_components_in(
     term: &SerTerm,
 ) -> Option<(usize, usize, usize)> {
     term.reifier.and_then(|rid| bindings.get(rid))
-}
-
-/// Convert a sorted BTreeMap into a JSON object value, its members in name order.
-fn to_json_object(map: BTreeMap<String, Value>) -> Value {
-    Value::Object(map.into_iter().collect())
 }
 
 /// The JSON-LD-star codec — the registry's behavior seam for `application/ld+json`.
@@ -482,10 +478,7 @@ fn context_with_base(
 
 /// The `{"@base": iri}` context document.
 fn base_context_value(iri: &str) -> Value {
-    to_json_object(BTreeMap::from([(
-        "@base".to_owned(),
-        Value::String(iri.to_owned()),
-    )]))
+    Value::Object(Object::new().with("@base", iri))
 }
 
 fn write_carrier_expanded(
@@ -728,7 +721,7 @@ pub(crate) fn serialize_ser_graph_to_yamlld_with_options(
 /// selected deterministic derived context. No-options entry points retain this exact
 /// expanded representation for compatibility.
 fn build_context() -> Value {
-    to_json_object(BTreeMap::new())
+    Value::Object(Object::new())
 }
 
 /// Build the typed expanded carrier from the first-party serialization graph.
@@ -1252,49 +1245,19 @@ fn carrier_node_usage(nodes: &[CarrierNode]) -> FixedHashSet<String> {
     let mut usage = FixedHashSet::default();
     for node in nodes {
         usage.insert(node.id.clone());
-        for values in node.properties.values() {
-            for value in values {
-                collect_carrier_value_ids(value, &mut usage, true);
+        for part in node.parts() {
+            match part {
+                CarrierPart::Term(CarrierTerm::Id(id)) => {
+                    usage.insert(id.clone());
+                }
+                CarrierPart::Annotation(annotation) => {
+                    usage.insert(annotation.id.clone());
+                }
+                CarrierPart::Term(_) => {}
             }
         }
     }
     usage
-}
-
-fn collect_carrier_value_ids(
-    value: &CarrierValue,
-    output: &mut FixedHashSet<String>,
-    annotation_subjects: bool,
-) {
-    collect_carrier_term_ids(&value.term, output);
-    for annotation in &value.annotations {
-        if annotation_subjects {
-            output.insert(annotation.id.clone());
-        }
-        for values in annotation.properties.values() {
-            for value in values {
-                collect_carrier_value_ids(value, output, annotation_subjects);
-            }
-        }
-    }
-}
-
-fn collect_carrier_term_ids(term: &CarrierTerm, output: &mut FixedHashSet<String>) {
-    match term {
-        CarrierTerm::Id(id) => {
-            output.insert(id.clone());
-        }
-        CarrierTerm::Triple(triple) => {
-            collect_carrier_term_ids(&triple.subject, output);
-            collect_carrier_term_ids(&triple.object, output);
-        }
-        CarrierTerm::List(values) => {
-            for value in values {
-                collect_carrier_value_ids(value, output, true);
-            }
-        }
-        CarrierTerm::Literal(_) => {}
-    }
 }
 
 /// Fold the RDF lists of one graph's nodes into `@list` values: JSON-LD 1.1
@@ -1420,12 +1383,9 @@ enum CellUsage<'a> {
 }
 
 fn collect_annotation_subjects(node: &CarrierNode, output: &mut BTreeSet<String>) {
-    for values in node.properties.values() {
-        for value in values {
-            for annotation in &value.annotations {
-                output.insert(annotation.id.clone());
-                collect_annotation_subjects(annotation, output);
-            }
+    for part in node.parts() {
+        if let CarrierPart::Annotation(annotation) = part {
+            output.insert(annotation.id.clone());
         }
     }
 }
@@ -1439,77 +1399,79 @@ fn note_list_references<'a>(
     usages: &mut BTreeMap<&'a str, CellUsage<'a>>,
     rest_of: Option<&'a str>,
 ) {
-    note_list_term_references(&value.term, candidates, usages, rest_of);
-    for annotation in &value.annotations {
-        for values in annotation.properties.values() {
-            for value in values {
-                note_list_references(value, candidates, usages, None);
-            }
+    // The walk yields the value's own term first; every other reference stands
+    // somewhere other than an `rdf:rest`.
+    for (index, part) in value.parts().enumerate() {
+        let CarrierPart::Term(CarrierTerm::Id(id)) = part else {
+            continue;
+        };
+        if let Some(&cell) = candidates.get(id.as_str()) {
+            let rest_of = if index == 0 { rest_of } else { None };
+            usages
+                .entry(cell)
+                .and_modify(|usage| *usage = CellUsage::Many)
+                .or_insert(CellUsage::Once(rest_of));
         }
     }
 }
 
-fn note_list_term_references<'a>(
-    term: &'a CarrierTerm,
-    candidates: &BTreeSet<&'a str>,
-    usages: &mut BTreeMap<&'a str, CellUsage<'a>>,
-    rest_of: Option<&'a str>,
-) {
-    match term {
-        CarrierTerm::Id(id) => {
-            if let Some(&cell) = candidates.get(id.as_str()) {
-                usages
-                    .entry(cell)
-                    .and_modify(|usage| *usage = CellUsage::Many)
-                    .or_insert(CellUsage::Once(rest_of));
-            }
-        }
-        CarrierTerm::Triple(triple) => {
-            note_list_term_references(&triple.subject, candidates, usages, None);
-            note_list_term_references(&triple.object, candidates, usages, None);
-        }
-        CarrierTerm::List(values) => {
-            for value in values {
-                note_list_references(value, candidates, usages, None);
-            }
-        }
-        CarrierTerm::Literal(_) => {}
-    }
-}
-
+/// Replace, throughout `value`, every reference to a folded list's head by
+/// that list, the list's own items rewritten the same way. The walk is over a
+/// heap work list: a list of lists folds one `@list` per level, as deep as the
+/// data nests them, so depth costs no stack.
 fn rewrite_folded_lists(value: &mut CarrierValue, lists: &BTreeMap<String, Vec<CarrierValue>>) {
-    rewrite_folded_term(&mut value.term, lists);
-    for annotation in &mut value.annotations {
-        for values in annotation.properties.values_mut() {
-            for value in values {
-                rewrite_folded_lists(value, lists);
+    enum Work<'a> {
+        Value(&'a mut CarrierValue),
+        Term(&'a mut CarrierTerm),
+    }
+    let mut work = vec![Work::Value(value)];
+    while let Some(item) = work.pop() {
+        let term = match item {
+            Work::Term(term) => term,
+            Work::Value(value) => {
+                let CarrierValue { term, annotations } = value;
+                for annotation in annotations {
+                    // An annotation's values sort by their own terms, so each
+                    // head is replaced before the sort; what lies inside them
+                    // is rewritten when the walk reaches it.
+                    for value in annotation.properties.values_mut().flatten() {
+                        replace_folded_head(&mut value.term, lists);
+                    }
+                    annotation.sort_values();
+                    work.extend(
+                        annotation
+                            .properties
+                            .values_mut()
+                            .flatten()
+                            .map(Work::Value),
+                    );
+                }
+                term
             }
+        };
+        replace_folded_head(term, lists);
+        match term {
+            CarrierTerm::Triple(triple) => {
+                let CarrierTriple {
+                    subject, object, ..
+                } = &mut **triple;
+                work.push(Work::Term(subject));
+                work.push(Work::Term(object));
+            }
+            CarrierTerm::List(values) => work.extend(values.iter_mut().map(Work::Value)),
+            CarrierTerm::Id(_) | CarrierTerm::Literal(_) => {}
         }
-        annotation.sort_values();
     }
 }
 
-fn rewrite_folded_term(term: &mut CarrierTerm, lists: &BTreeMap<String, Vec<CarrierValue>>) {
-    match term {
-        CarrierTerm::Id(id) => {
-            if let Some(values) = lists.get(id) {
-                let mut values = values.clone();
-                for value in &mut values {
-                    rewrite_folded_lists(value, lists);
-                }
-                *term = CarrierTerm::List(values);
-            }
-        }
-        CarrierTerm::Triple(triple) => {
-            rewrite_folded_term(&mut triple.subject, lists);
-            rewrite_folded_term(&mut triple.object, lists);
-        }
-        CarrierTerm::List(values) => {
-            for value in values {
-                rewrite_folded_lists(value, lists);
-            }
-        }
-        CarrierTerm::Literal(_) => {}
+/// Replace `term`, when it names a folded list's head, by that list.
+fn replace_folded_head(term: &mut CarrierTerm, lists: &BTreeMap<String, Vec<CarrierValue>>) {
+    let folded = match &*term {
+        CarrierTerm::Id(id) => lists.get(id).cloned(),
+        _ => None,
+    };
+    if let Some(values) = folded {
+        *term = CarrierTerm::List(values);
     }
 }
 
@@ -1849,8 +1811,7 @@ pub(super) fn parse_jsonld_into_scope(
     json_bytes: &[u8],
     base: &mut purrdf_iri::BaseScope,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    let context =
-        CompiledJsonLdContext::compile(&to_json_object(BTreeMap::new()), scope_base(base))?;
+    let context = CompiledJsonLdContext::compile(&Value::Object(Object::new()), scope_base(base))?;
     let value = context::parse_document(json_bytes)?;
     let in_force = expand::document_base(&value, &context)?;
     // `value` is MOVED here: the base question is already answered, so the parsed
@@ -2373,5 +2334,69 @@ mod parse_residency {
             measured.peak_working_bytes,
             measured.peak_working_bytes as f64 / bytes.len() as f64
         );
+    }
+}
+
+#[cfg(test)]
+mod list_depth {
+    use super::*;
+    use crate::{BlankScope, RdfDatasetBuilder, RdfLiteral};
+
+    const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+
+    /// `<s> <p> ( ( ( … ( "x" ) … ) ) )`: an RDF list whose one item is a list,
+    /// `levels` deep, each level a blank cell referenced exactly once.
+    fn list_of_lists(levels: usize) -> Arc<RdfDataset> {
+        let mut builder = RdfDatasetBuilder::new();
+        let first = builder.intern_iri(&format!("{RDF_NS}first"));
+        let rest = builder.intern_iri(&format!("{RDF_NS}rest"));
+        let nil = builder.intern_iri(&format!("{RDF_NS}nil"));
+        let subject = builder.intern_iri("https://example.org/s");
+        let predicate = builder.intern_iri("https://example.org/p");
+        let mut inner = builder.intern_literal(RdfLiteral::simple("x"));
+        for level in 0..levels {
+            let cell = builder.intern_blank(&format!("c{level}"), BlankScope(0));
+            builder.push_quad(cell, first, inner, None);
+            builder.push_quad(cell, rest, nil, None);
+            inner = cell;
+        }
+        builder.push_quad(subject, predicate, inner, None);
+        builder.freeze().expect("the list dataset freezes")
+    }
+
+    /// A list of lists folds to one `@list` per level, as deep as the data
+    /// nests it; folding, compacting and freeing that carrier all run on a
+    /// thread whose whole stack is 128 KiB.
+    #[test]
+    fn a_list_of_lists_two_thousand_deep_compacts_on_a_128_kib_thread() {
+        const LEVELS: usize = 2_000;
+        let dataset = list_of_lists(LEVELS);
+        purrdf_stack::on_stack(128 * 1024, move || {
+            let context =
+                purrdf_lex::json::read(r#"{"ex":"https://example.org/"}"#).expect("context JSON");
+            for options in [
+                JsonLdSerializeOptions::derived(),
+                JsonLdSerializeOptions::context(&context, None).expect("a context"),
+            ] {
+                let document = serialize_dataset_to_jsonld_with_options(&*dataset, &options)
+                    .expect("the nested lists serialize");
+                assert_eq!(document.matches("@list").count(), LEVELS);
+                assert!(!document.contains("_:c"), "every cell folds into its list");
+            }
+        })
+        .expect("the thread starts");
+    }
+
+    /// The folded form is the same list at every depth: a shallow list of lists
+    /// reads back to the dataset it was written from.
+    #[test]
+    fn a_shallow_list_of_lists_round_trips() {
+        let dataset = list_of_lists(3);
+        let document =
+            serialize_dataset_to_jsonld_with_options(&*dataset, &JsonLdSerializeOptions::derived())
+                .expect("the nested lists serialize");
+        assert_eq!(document.matches("@list").count(), 3);
+        let parsed = parse_jsonld(document.as_bytes(), None).expect("the document parses back");
+        assert!(crate::datasets_isomorphic(&*parsed, &*dataset));
     }
 }

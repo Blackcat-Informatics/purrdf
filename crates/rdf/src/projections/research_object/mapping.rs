@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use std::borrow::Cow;
+use crate::projections::loss::record_logical_loss;
+use crate::projections::util::push_iri_triple;
+use crate::projections::util::reject_duplicates;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -12,8 +14,8 @@ use purrdf_core::loss::{
     LOSS_RESEARCH_UNMAPPED_STATEMENT_DROPPED,
 };
 use purrdf_core::{
-    DatasetView, LossEntry, LossLedger, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfLocation,
-    check_ledger_sound, rdf_to_research_object_loss_ledger,
+    DatasetView, LossLedger, RdfDataset, RdfDatasetBuilder, RdfLiteral, check_ledger_sound,
+    rdf_to_research_object_loss_ledger,
 };
 
 use super::super::{ProjectionError, ProjectionTerm, stable_identifier};
@@ -85,18 +87,19 @@ impl<'a> Projector<'a> {
         let mut cache = BTreeMap::new();
         let mut quads = Vec::new();
         for quad in view.quads() {
-            let subject = resolve_term(view, quad.s, config, &mut cache)?;
+            let subject =
+                ProjectionTerm::resolve_cached(view, quad.s, config.limits(), &mut cache)?;
             let ProjectionTerm::Iri { value: predicate } =
-                resolve_term(view, quad.p, config, &mut cache)?
+                ProjectionTerm::resolve_cached(view, quad.p, config.limits(), &mut cache)?
             else {
                 return Err(ProjectionError::integrity(
                     "RDF dataset view exposed a non-IRI predicate",
                 ));
             };
-            let object = resolve_term(view, quad.o, config, &mut cache)?;
+            let object = ProjectionTerm::resolve_cached(view, quad.o, config.limits(), &mut cache)?;
             let graph = quad
                 .g
-                .map(|id| resolve_term(view, id, config, &mut cache))
+                .map(|id| ProjectionTerm::resolve_cached(view, id, config.limits(), &mut cache))
                 .transpose()?;
             quads.push(SourceQuad {
                 subject,
@@ -110,7 +113,12 @@ impl<'a> Projector<'a> {
 
         let mut named_graphs = Vec::new();
         for graph in view.named_graphs() {
-            named_graphs.push(resolve_term(view, graph, config, &mut cache)?);
+            named_graphs.push(ProjectionTerm::resolve_cached(
+                view,
+                graph,
+                config.limits(),
+                &mut cache,
+            )?);
         }
         named_graphs.sort();
         reject_duplicates(&named_graphs, "named graph declarations")?;
@@ -118,10 +126,10 @@ impl<'a> Projector<'a> {
         let mut reifiers = Vec::new();
         for row in view.reifier_quads() {
             reifiers.push((
-                resolve_term(view, row.s, config, &mut cache)?,
-                resolve_term(view, row.o, config, &mut cache)?,
+                ProjectionTerm::resolve_cached(view, row.s, config.limits(), &mut cache)?,
+                ProjectionTerm::resolve_cached(view, row.o, config.limits(), &mut cache)?,
                 row.g
-                    .map(|id| resolve_term(view, id, config, &mut cache))
+                    .map(|id| ProjectionTerm::resolve_cached(view, id, config.limits(), &mut cache))
                     .transpose()?,
             ));
         }
@@ -131,18 +139,18 @@ impl<'a> Projector<'a> {
         let mut annotations = Vec::new();
         for row in view.annotation_quads() {
             let ProjectionTerm::Iri { value: predicate } =
-                resolve_term(view, row.p, config, &mut cache)?
+                ProjectionTerm::resolve_cached(view, row.p, config.limits(), &mut cache)?
             else {
                 return Err(ProjectionError::integrity(
                     "RDF dataset view exposed a non-IRI annotation predicate",
                 ));
             };
             annotations.push((
-                resolve_term(view, row.s, config, &mut cache)?,
+                ProjectionTerm::resolve_cached(view, row.s, config.limits(), &mut cache)?,
                 predicate,
-                resolve_term(view, row.o, config, &mut cache)?,
+                ProjectionTerm::resolve_cached(view, row.o, config.limits(), &mut cache)?,
                 row.g
-                    .map(|id| resolve_term(view, id, config, &mut cache))
+                    .map(|id| ProjectionTerm::resolve_cached(view, id, config.limits(), &mut cache))
                     .transpose()?,
             ));
         }
@@ -180,7 +188,7 @@ impl<'a> Projector<'a> {
     }
 
     fn project(mut self) -> Result<ResearchObjectProjection, ProjectionError> {
-        let root = iri(self.config.identity().dataset_iri());
+        let root = ProjectionTerm::iri(self.config.identity().dataset_iri());
         self.require_type(&root, ResearchRole::DatasetClass, "dataset")?;
 
         let creators = self.take_entity_ids(&root, ResearchRole::Creator)?;
@@ -401,7 +409,9 @@ impl<'a> Projector<'a> {
         let mut found = false;
         for index in 0..self.quads.len() {
             let quad = &self.quads[index];
-            if &quad.subject == subject && quad.predicate == predicate && quad.object == iri(class)
+            if &quad.subject == subject
+                && quad.predicate == predicate
+                && quad.object == ProjectionTerm::iri(class)
             {
                 self.consumed[index] = true;
                 found = true;
@@ -538,10 +548,12 @@ impl<'a> Projector<'a> {
                 .entity_id(term)?
                 .map(|value| ResearchValue::Iri { value }),
             ProjectionTerm::Triple { .. } => {
-                self.record_loss(
+                record_logical_loss(
+                    &mut self.ledger,
+                    &self.contract,
                     LOSS_RESEARCH_TRIPLE_TERM_DROPPED,
                     "research-object:rdf-term",
-                    &term_label(term),
+                    term_label(term),
                 );
                 None
             }
@@ -555,18 +567,22 @@ impl<'a> Projector<'a> {
                 let key = term.to_canonical_json(self.config.limits())?;
                 let local = stable_identifier("entity", &key)?;
                 let iri = self.config.identity().resolve_relative(&local)?;
-                self.record_loss(
+                record_logical_loss(
+                    &mut self.ledger,
+                    &self.contract,
                     LOSS_RESEARCH_BLANK_IDENTITY_RESOLVED,
                     "research-object:rdf-identity",
-                    &term_label(term),
+                    term_label(term),
                 );
                 Ok(Some(iri))
             }
             ProjectionTerm::Triple { .. } => {
-                self.record_loss(
+                record_logical_loss(
+                    &mut self.ledger,
+                    &self.contract,
                     LOSS_RESEARCH_TRIPLE_TERM_DROPPED,
                     "research-object:rdf-identity",
-                    &term_label(term),
+                    term_label(term),
                 );
                 Ok(None)
             }
@@ -590,7 +606,9 @@ impl<'a> Projector<'a> {
             .map(term_label)
             .collect();
         for graph in empty_graphs {
-            self.record_loss(
+            record_logical_loss(
+                &mut self.ledger,
+                &self.contract,
                 LOSS_RESEARCH_EMPTY_GRAPH_DROPPED,
                 "research-object:named-graph",
                 &graph,
@@ -606,7 +624,9 @@ impl<'a> Projector<'a> {
             })
             .collect();
         for (graph, subject) in named_quads {
-            self.record_loss(
+            record_logical_loss(
+                &mut self.ledger,
+                &self.contract,
                 LOSS_RESEARCH_NAMED_GRAPH_DROPPED,
                 &format!("research-object:named-graph:{graph}"),
                 &subject,
@@ -618,7 +638,9 @@ impl<'a> Projector<'a> {
             .map(|(reifier, _, _)| term_label(reifier))
             .collect();
         for reifier in reifiers {
-            self.record_loss(
+            record_logical_loss(
+                &mut self.ledger,
+                &self.contract,
                 LOSS_RESEARCH_REIFIER_DROPPED,
                 "research-object:reifier",
                 &reifier,
@@ -630,7 +652,9 @@ impl<'a> Projector<'a> {
             .map(|(reifier, predicate, _, _)| format!("{} {predicate}", term_label(reifier)))
             .collect();
         for annotation in annotations {
-            self.record_loss(
+            record_logical_loss(
+                &mut self.ledger,
+                &self.contract,
                 LOSS_RESEARCH_ANNOTATION_DROPPED,
                 "research-object:annotation",
                 &annotation,
@@ -647,40 +671,26 @@ impl<'a> Projector<'a> {
             .map(|(quad, _)| quad.clone())
             .collect();
         for quad in rows {
-            if contains_triple(&quad.subject)
-                || contains_triple(&quad.object)
-                || quad.graph.as_ref().is_some_and(contains_triple)
+            if quad.subject.is_triple()
+                || quad.object.is_triple()
+                || quad.graph.as_ref().is_some_and(ProjectionTerm::is_triple)
             {
-                self.record_loss(
+                record_logical_loss(
+                    &mut self.ledger,
+                    &self.contract,
                     LOSS_RESEARCH_TRIPLE_TERM_DROPPED,
                     "research-object:unmapped-rdf",
-                    &term_label(&quad.subject),
+                    term_label(&quad.subject),
                 );
             }
-            self.record_loss(
+            record_logical_loss(
+                &mut self.ledger,
+                &self.contract,
                 LOSS_RESEARCH_UNMAPPED_STATEMENT_DROPPED,
                 "research-object:unmapped-rdf",
-                &format!("{} {}", term_label(&quad.subject), quad.predicate),
+                format!("{} {}", term_label(&quad.subject), quad.predicate),
             );
         }
-    }
-
-    fn record_loss(&mut self, code: &'static str, logical: &str, subject: &str) {
-        let template = self
-            .contract
-            .entries()
-            .iter()
-            .find(|entry| entry.code == code)
-            .expect("runtime research-object code must exist in closed contract");
-        self.ledger.record(LossEntry {
-            code: Cow::Borrowed(code),
-            from: template.from.clone(),
-            to: template.to.clone(),
-            note: template.note.clone(),
-            location: Some(Box::new(
-                RdfLocation::logical(logical).with_subject(subject),
-            )),
-        });
     }
 }
 
@@ -871,7 +881,7 @@ pub fn lift_research_object(
             let key = purrdf_lex::json::record::to_vec(&(resource.id.as_str(), checksum));
             let local = stable_identifier("checksum", &key)?;
             let checksum_id = config.identity().resolve_relative(&local)?;
-            push_relation(
+            push_iri_triple(
                 &mut builder,
                 &resource.id,
                 roles.iri(ResearchRole::Checksum),
@@ -967,7 +977,7 @@ pub fn lift_research_object(
             &record_set.descriptions,
         )?;
         for field in &record_set.fields {
-            push_relation(
+            push_iri_triple(
                 &mut builder,
                 &record_set.id,
                 roles.iri(ResearchRole::HasField),
@@ -1011,7 +1021,7 @@ pub fn lift_research_object(
 }
 
 fn push_type(builder: &mut RdfDatasetBuilder, subject: &str, predicate: &str, class: &str) {
-    push_relation(builder, subject, predicate, class);
+    push_iri_triple(builder, subject, predicate, class);
 }
 
 fn push_relations(
@@ -1021,15 +1031,8 @@ fn push_relations(
     values: &[String],
 ) {
     for value in values {
-        push_relation(builder, subject, predicate, value);
+        push_iri_triple(builder, subject, predicate, value);
     }
-}
-
-fn push_relation(builder: &mut RdfDatasetBuilder, subject: &str, predicate: &str, object: &str) {
-    let subject = builder.intern_iri(subject);
-    let predicate = builder.intern_iri(predicate);
-    let object = builder.intern_iri(object);
-    builder.push_quad(subject, predicate, object, None);
 }
 
 fn push_values(
@@ -1040,7 +1043,7 @@ fn push_values(
 ) -> Result<(), ProjectionError> {
     for value in values {
         match value {
-            ResearchValue::Iri { value } => push_relation(builder, subject, predicate, value),
+            ResearchValue::Iri { value } => push_iri_triple(builder, subject, predicate, value),
             ResearchValue::Text(value) => {
                 push_texts(builder, subject, predicate, std::slice::from_ref(value))?;
             }
@@ -1067,45 +1070,6 @@ fn push_texts(
         builder.push_quad(subject, predicate, object, None);
     }
     Ok(())
-}
-
-fn resolve_term<D: DatasetView>(
-    view: &D,
-    id: D::Id,
-    config: &ResearchObjectConfig,
-    cache: &mut BTreeMap<D::Id, ProjectionTerm>,
-) -> Result<ProjectionTerm, ProjectionError> {
-    if let Some(term) = cache.get(&id) {
-        return Ok(term.clone());
-    }
-    let term = ProjectionTerm::from_view(view, id, config.limits())?;
-    let _ = term.to_canonical_json(config.limits())?;
-    cache.insert(id, term.clone());
-    Ok(term)
-}
-
-fn reject_duplicates<T: PartialEq>(values: &[T], description: &str) -> Result<(), ProjectionError> {
-    if values.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err(ProjectionError::integrity(format!(
-            "dataset view exposed duplicate {description}"
-        )));
-    }
-    Ok(())
-}
-
-fn iri(value: &str) -> ProjectionTerm {
-    ProjectionTerm::Iri {
-        value: value.to_owned(),
-    }
-}
-
-fn contains_triple(term: &ProjectionTerm) -> bool {
-    match term {
-        ProjectionTerm::Triple { .. } => true,
-        ProjectionTerm::Iri { .. }
-        | ProjectionTerm::Blank { .. }
-        | ProjectionTerm::Literal { .. } => false,
-    }
 }
 
 fn term_label(term: &ProjectionTerm) -> String {

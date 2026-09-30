@@ -9,7 +9,7 @@ use purrdf_lex::json::{Object, Value};
 use crate::native_codecs::jsonld::CompiledJsonLdContext;
 
 use super::super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
-use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
+use purrdf_lex::json::record::ToJson;
 use purrdf_lex::json_string_enum;
 
 /// RDF conversion mode defined by the CSVW Recommendation.
@@ -102,29 +102,19 @@ impl CsvwVocabulary {
     }
 }
 
-impl FromJson for CsvwVocabulary {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct CsvwVocabulary")?;
-        let csvw: String = fields.required("csvw_namespace")?;
-        let rdf: String = fields.required("rdf_namespace")?;
-        let rdfs: String = fields.required("rdfs_namespace")?;
-        let xsd: String = fields.required("xsd_namespace")?;
-        fields.deny_unknown()?;
-        Ok(Self::new(csvw, rdf, rdfs, xsd)?)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for CsvwVocabulary as "struct CsvwVocabulary" {
+    "csvw_namespace" => csvw: required::<String>,
+    "rdf_namespace" => rdf: required::<String>,
+    "rdfs_namespace" => rdfs: required::<String>,
+    "xsd_namespace" => xsd: required::<String>,
+} => CsvwVocabulary::new);
 
-impl ToJson for CsvwVocabulary {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("csvw_namespace", self.csvw.as_str())
-                .with("rdf_namespace", self.rdf.as_str())
-                .with("rdfs_namespace", self.rdfs.as_str())
-                .with("xsd_namespace", self.xsd.as_str()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for CsvwVocabulary {
+    "csvw_namespace" => csvw,
+    "rdf_namespace" => rdf,
+    "rdfs_namespace" => rdfs,
+    "xsd_namespace" => xsd,
+});
 
 /// Caller-owned JSON-LD context identity and compact-IRI prefix map.
 ///
@@ -217,15 +207,10 @@ impl CsvwContext {
     }
 }
 
-impl FromJson for CsvwContext {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct CsvwContext")?;
-        let iri: String = fields.required("iri")?;
-        let prefixes = fields.required("prefixes")?;
-        fields.deny_unknown()?;
-        Ok(Self::new(iri, prefixes)?)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for CsvwContext as "struct CsvwContext" {
+    "iri" => iri: required::<String>,
+    "prefixes" => prefixes: required,
+} => CsvwContext::new);
 
 impl ToJson for CsvwContext {
     /// The identity and the prefix map; the compiled context is derived state.
@@ -336,43 +321,25 @@ impl CsvwConfig {
     }
 }
 
-impl FromJson for CsvwConfig {
-    fn from_json(value: &Value) -> Result<Self, DecodeError> {
-        let mut fields = Record::new(value, "struct CsvwConfig")?;
-        let metadata_base_iri: String = fields.required("metadata_base_iri")?;
-        let context = fields.required("context")?;
-        let table_group_iri: String = fields.required("table_group_iri")?;
-        let vocabulary = fields.required("vocabulary")?;
-        let mode = fields.required("mode")?;
-        let limits = fields.required("limits")?;
-        let max_records = fields.required("max_records")?;
-        fields.deny_unknown()?;
-        Ok(Self::new(
-            metadata_base_iri,
-            context,
-            table_group_iri,
-            vocabulary,
-            mode,
-            limits,
-            max_records,
-        )?)
-    }
-}
+purrdf_lex::json_record!(impl FromJson for CsvwConfig as "struct CsvwConfig" {
+    "metadata_base_iri" => metadata_base_iri: required::<String>,
+    "context" => context: required,
+    "table_group_iri" => table_group_iri: required::<String>,
+    "vocabulary" => vocabulary: required,
+    "mode" => mode: required,
+    "limits" => limits: required,
+    "max_records" => max_records: required,
+} => CsvwConfig::new);
 
-impl ToJson for CsvwConfig {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("metadata_base_iri", self.metadata_base_iri.as_str())
-                .with("context", self.context.to_json())
-                .with("table_group_iri", self.table_group_iri.as_str())
-                .with("vocabulary", self.vocabulary.to_json())
-                .with("mode", self.mode.to_json())
-                .with("limits", self.limits.to_json())
-                .with("max_records", self.max_records),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for CsvwConfig {
+    "metadata_base_iri" => metadata_base_iri,
+    "context" => context,
+    "table_group_iri" => table_group_iri,
+    "vocabulary" => vocabulary,
+    "mode" => mode,
+    "limits" => limits,
+    "max_records" => max_records,
+});
 
 fn validate_namespace(value: String, role: &str) -> Result<String, ProjectionError> {
     validate_absolute_iri(&value, &format!("{role} namespace"))?;

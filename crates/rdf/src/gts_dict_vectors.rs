@@ -63,19 +63,7 @@ pub fn packaging_key() -> SigningKey {
 /// train on.
 #[must_use]
 pub fn fixed_source() -> Vec<u8> {
-    let mut w = Writer::new("purrdf.gts");
-    w.sign_with(authorship_key(), "authorA");
-    for i in 0..40u32 {
-        let blob = format!(
-            "<https://example.org/s{}> <https://example.org/p> \"dict vector claim {} about cats\" .\n",
-            i % 7,
-            i
-        )
-        .into_bytes();
-        w.add_blob_owned(blob, Some("text/plain"), None);
-    }
-    w.add_index();
-    w.into_bytes()
+    claim_corpus(40, "cats")
 }
 
 /// A larger, more redundant source than [`fixed_source`]: 300 content blobs
@@ -88,15 +76,24 @@ pub fn fixed_source() -> Vec<u8> {
 /// dictionary's one-time cost to be genuinely amortized.
 #[must_use]
 pub fn size_comparison_source() -> Vec<u8> {
+    claim_corpus(
+        300,
+        "cats and the shared structure repeated across every blob in this redundant corpus, \
+         which a pack dictionary should compress extremely well",
+    )
+}
+
+/// `count` content blobs, blob `i` the N-Triples line
+/// `<s{i%7}> <p> "dict vector claim {i} about {about}"`, signed under the fixed
+/// authorship key and closed with an `index` footer: the one corpus shape the
+/// dictionary vectors are frozen over.
+fn claim_corpus(count: u32, about: &str) -> Vec<u8> {
     let mut w = Writer::new("purrdf.gts");
     w.sign_with(authorship_key(), "authorA");
-    for i in 0..300u32 {
+    for i in 0..count {
         let blob = format!(
-            "<https://example.org/s{}> <https://example.org/p> \"dict vector claim {} about \
-             cats and the shared structure repeated across every blob in this redundant \
-             corpus, which a pack dictionary should compress extremely well\" .\n",
-            i % 7,
-            i
+            "<https://example.org/s{}> <https://example.org/p> \"dict vector claim {i} about {about}\" .\n",
+            i % 7
         )
         .into_bytes();
         w.add_blob_owned(blob, Some("text/plain"), None);

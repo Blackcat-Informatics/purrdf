@@ -92,7 +92,7 @@ impl PyGtsFoldView {
     fn term_tuple(&self, tid: usize) -> PyResult<PyTermRow> {
         let term = self.term_ref(tid)?;
         Ok((
-            term_kind_int(term.kind),
+            term.kind.to_wire(),
             term.value.clone(),
             term.datatype,
             term.lang.clone(),
@@ -480,15 +480,6 @@ fn validate_term_id(tid: usize, term_count: usize, label: &str) -> PyResult<()> 
     Err(PyValueError::new_err(format!(
         "{label} term id out of range: {tid} >= {term_count}"
     )))
-}
-
-fn term_kind_int(kind: TermKind) -> u8 {
-    match kind {
-        TermKind::Iri => 0,
-        TermKind::Literal => 1,
-        TermKind::Bnode => 2,
-        TermKind::Triple => 3,
-    }
 }
 
 /// Build the projection dict.

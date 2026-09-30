@@ -3,6 +3,7 @@
 
 //! Deterministic generic and Neo4j Admin Import CSV adapters.
 
+use crate::projections::util::{RecordBudget, csv_field, csv_row_path};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
@@ -12,8 +13,8 @@ use super::super::{
     ProjectionTerm,
 };
 use super::carrier_util::{
-    json_string, parse_json, read_manifest, require_canonical_package, required_artifact,
-    validate_package_bounds, write_manifest,
+    json_string, parse_json, read_manifest, require_canonical_package, validate_package_bounds,
+    write_manifest,
 };
 use super::mapping::{LpgProjection, project_lpg, project_lpg_with_progress};
 use super::model::{
@@ -25,7 +26,7 @@ use super::stream::{
     LpgStreamProjection, graph_report,
 };
 use crate::stable_identifier;
-use purrdf_core::csv::{CsvError, Dialect, Reader, StringRecord, Writer};
+use purrdf_core::csv::{CsvError, Dialect, Reader, Writer};
 use purrdf_core::{DatasetView, LossLedger};
 
 const GENERIC_PROFILE: &str = "purrdf-lpg-csv";
@@ -205,24 +206,16 @@ pub fn read_lpg_csv(
 ) -> Result<LpgGraph, ProjectionError> {
     validate_package_bounds(package, config.limits())?;
     let manifest = read_manifest(
-        required_artifact(package, GENERIC_MANIFEST)?,
+        package.required(GENERIC_MANIFEST)?,
         GENERIC_PROFILE,
         config,
         GENERIC_MANIFEST,
     )?;
-    let mut budget = CsvRecordBudget::new(config.max_records());
-    let nodes = read_generic_nodes(
-        required_artifact(package, GENERIC_NODES)?,
-        config,
-        &mut budget,
-    )?;
-    let edges = read_generic_edges(
-        required_artifact(package, GENERIC_EDGES)?,
-        config,
-        &mut budget,
-    )?;
+    let mut budget = RecordBudget::new(config.max_records(), "LPG");
+    let nodes = read_generic_nodes(package.required(GENERIC_NODES)?, config, &mut budget)?;
+    let edges = read_generic_edges(package.required(GENERIC_EDGES)?, config, &mut budget)?;
     let (named_graphs, reifiers, annotations) = read_sideband(
-        required_artifact(package, GENERIC_SIDEBAND)?,
+        package.required(GENERIC_SIDEBAND)?,
         config,
         &mut budget,
         GENERIC_SIDEBAND,
@@ -411,31 +404,31 @@ pub fn read_neo4j_csv(
 ) -> Result<LpgGraph, ProjectionError> {
     validate_package_bounds(package, config.limits())?;
     let manifest = read_manifest(
-        required_artifact(package, NEO4J_MANIFEST)?,
+        package.required(NEO4J_MANIFEST)?,
         NEO4J_PROFILE,
         config,
         NEO4J_MANIFEST,
     )?;
     let label_map = read_token_map(
-        required_artifact(package, NEO4J_LABEL_MAP)?,
+        package.required(NEO4J_LABEL_MAP)?,
         NEO4J_LABEL_MAP,
         label_token,
         config.max_records(),
     )?;
     let type_map = read_token_map(
-        required_artifact(package, NEO4J_TYPE_MAP)?,
+        package.required(NEO4J_TYPE_MAP)?,
         NEO4J_TYPE_MAP,
         relationship_token,
         config.max_records(),
     )?;
     let property_map = read_token_map(
-        required_artifact(package, NEO4J_PROPERTY_MAP)?,
+        package.required(NEO4J_PROPERTY_MAP)?,
         NEO4J_PROPERTY_MAP,
         property_token,
         config.max_records(),
     )?;
 
-    let mut budget = CsvRecordBudget::new(config.max_records());
+    let mut budget = RecordBudget::new(config.max_records(), "LPG");
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
     for (path, bytes) in package.artifacts() {
@@ -462,7 +455,7 @@ pub fn read_neo4j_csv(
     edges.sort_by(|left, right| left.id.cmp(&right.id));
 
     let (named_graphs, reifiers, annotations) = read_sideband(
-        required_artifact(package, NEO4J_SIDEBAND)?,
+        package.required(NEO4J_SIDEBAND)?,
         config,
         &mut budget,
         NEO4J_SIDEBAND,
@@ -550,21 +543,21 @@ where
 fn read_generic_nodes(
     bytes: &[u8],
     config: &LpgConfig,
-    budget: &mut CsvRecordBudget,
+    budget: &mut RecordBudget,
 ) -> Result<Vec<LpgNode>, ProjectionError> {
     let mut reader = csv_reader(bytes, GENERIC_NODE_HEADER, GENERIC_NODES)?;
     let mut nodes = Vec::new();
     for (index, row) in reader.records().enumerate() {
-        let path = row_path(GENERIC_NODES, index);
+        let path = csv_row_path(GENERIC_NODES, index);
         let row = row.map_err(|error| csv_read_error(&error, &path))?;
-        let identity = parse_json_cell(field(&row, 1, &path)?, config, "node identity", &path)?;
+        let identity = parse_json_cell(csv_field(&row, 1, &path)?, config, "node identity", &path)?;
         let labels: Vec<LpgLabel> =
-            parse_json_cell(field(&row, 2, &path)?, config, "node labels", &path)?;
+            parse_json_cell(csv_field(&row, 2, &path)?, config, "node labels", &path)?;
         let properties: Vec<LpgProperty> =
-            parse_json_cell(field(&row, 3, &path)?, config, "node properties", &path)?;
-        budget.consume_nested(1, labels.len(), properties.len(), "generic LPG node")?;
+            parse_json_cell(csv_field(&row, 3, &path)?, config, "node properties", &path)?;
+        budget.consume(&[1, labels.len(), properties.len()], "generic LPG node")?;
         nodes.push(LpgNode {
-            id: field(&row, 0, &path)?.to_owned(),
+            id: csv_field(&row, 0, &path)?.to_owned(),
             identity,
             labels,
             properties,
@@ -576,20 +569,20 @@ fn read_generic_nodes(
 fn read_generic_edges(
     bytes: &[u8],
     config: &LpgConfig,
-    budget: &mut CsvRecordBudget,
+    budget: &mut RecordBudget,
 ) -> Result<Vec<LpgEdge>, ProjectionError> {
     let mut reader = csv_reader(bytes, GENERIC_EDGE_HEADER, GENERIC_EDGES)?;
     let mut edges = Vec::new();
     for (index, row) in reader.records().enumerate() {
-        let path = row_path(GENERIC_EDGES, index);
+        let path = csv_row_path(GENERIC_EDGES, index);
         let row = row.map_err(|error| csv_read_error(&error, &path))?;
-        budget.consume(1, "generic LPG edge")?;
+        budget.consume(&[1], "generic LPG edge")?;
         edges.push(LpgEdge {
-            id: field(&row, 0, &path)?.to_owned(),
-            source: field(&row, 1, &path)?.to_owned(),
-            target: field(&row, 2, &path)?.to_owned(),
-            edge_type: field(&row, 3, &path)?.to_owned(),
-            rdf: parse_json_cell(field(&row, 4, &path)?, config, "edge sideband", &path)?,
+            id: csv_field(&row, 0, &path)?.to_owned(),
+            source: csv_field(&row, 1, &path)?.to_owned(),
+            target: csv_field(&row, 2, &path)?.to_owned(),
+            edge_type: csv_field(&row, 3, &path)?.to_owned(),
+            rdf: parse_json_cell(csv_field(&row, 4, &path)?, config, "edge sideband", &path)?,
         });
     }
     Ok(edges)
@@ -653,7 +646,7 @@ type SidebandRows = (Vec<ProjectionTerm>, Vec<LpgReifier>, Vec<LpgAnnotation>);
 fn read_sideband(
     bytes: &[u8],
     config: &LpgConfig,
-    budget: &mut CsvRecordBudget,
+    budget: &mut RecordBudget,
     path: &str,
 ) -> Result<SidebandRows, ProjectionError> {
     let mut reader = csv_reader(bytes, SIDEBAND_HEADER, path)?;
@@ -662,10 +655,10 @@ fn read_sideband(
     let mut annotations = Vec::new();
     let mut previous: Option<(u8, String)> = None;
     for (index, row) in reader.records().enumerate() {
-        let row_path = row_path(path, index);
+        let row_path = csv_row_path(path, index);
         let row = row.map_err(|error| csv_read_error(&error, &row_path))?;
-        let kind = field(&row, 0, &row_path)?;
-        let id = field(&row, 1, &row_path)?;
+        let kind = csv_field(&row, 0, &row_path)?;
+        let id = csv_field(&row, 1, &row_path)?;
         let rank = match kind {
             "named-graph" => 0,
             "reifier" => 1,
@@ -685,11 +678,15 @@ fn read_sideband(
             .at_path(row_path));
         }
         previous = Some(key);
-        budget.consume(1, "LPG RDF sideband row")?;
+        budget.consume(&[1], "LPG RDF sideband row")?;
         match kind {
             "named-graph" => {
-                let graph_name: ProjectionTerm =
-                    parse_json_cell(field(&row, 2, &row_path)?, config, "named graph", &row_path)?;
+                let graph_name: ProjectionTerm = parse_json_cell(
+                    csv_field(&row, 2, &row_path)?,
+                    config,
+                    "named graph",
+                    &row_path,
+                )?;
                 if node_identifier(&graph_name, config.limits())? != id {
                     return Err(ProjectionError::integrity(
                         "named-graph sideband id disagrees with its RDF term",
@@ -700,7 +697,7 @@ fn read_sideband(
             }
             "reifier" => {
                 let reifier: LpgReifier =
-                    parse_json_cell(field(&row, 2, &row_path)?, config, "reifier", &row_path)?;
+                    parse_json_cell(csv_field(&row, 2, &row_path)?, config, "reifier", &row_path)?;
                 if reifier.id != id {
                     return Err(ProjectionError::integrity(
                         "reifier sideband id disagrees with its payload",
@@ -710,8 +707,12 @@ fn read_sideband(
                 reifiers.push(reifier);
             }
             "annotation" => {
-                let annotation: LpgAnnotation =
-                    parse_json_cell(field(&row, 2, &row_path)?, config, "annotation", &row_path)?;
+                let annotation: LpgAnnotation = parse_json_cell(
+                    csv_field(&row, 2, &row_path)?,
+                    config,
+                    "annotation",
+                    &row_path,
+                )?;
                 if annotation.id != id {
                     return Err(ProjectionError::integrity(
                         "annotation sideband id disagrees with its payload",
@@ -773,16 +774,16 @@ fn read_neo4j_nodes(
     config: &LpgConfig,
     label_map: &BTreeMap<String, String>,
     property_map: &BTreeMap<String, String>,
-    budget: &mut CsvRecordBudget,
+    budget: &mut RecordBudget,
 ) -> Result<Vec<LpgNode>, ProjectionError> {
     let (mut reader, property_tokens) = neo4j_node_reader(bytes, path, property_map)?;
     let mut nodes = Vec::new();
     let mut seen_property_tokens = BTreeSet::new();
     let mut previous_id: Option<String> = None;
     for (index, row) in reader.records().enumerate() {
-        let row_path = row_path(path, index);
+        let row_path = csv_row_path(path, index);
         let row = row.map_err(|error| csv_read_error(&error, &row_path))?;
-        let id = field(&row, 0, &row_path)?.to_owned();
+        let id = csv_field(&row, 0, &row_path)?.to_owned();
         if previous_id.as_ref().is_some_and(|previous| previous >= &id) {
             return Err(ProjectionError::integrity(
                 "Neo4j node group must be strictly ordered by node id",
@@ -791,21 +792,25 @@ fn read_neo4j_nodes(
         }
         previous_id = Some(id.clone());
         let identity = parse_json_cell(
-            field(&row, 1, &row_path)?,
+            csv_field(&row, 1, &row_path)?,
             config,
             "node identity",
             &row_path,
         )?;
-        let labels: Vec<LpgLabel> =
-            parse_json_cell(field(&row, 3, &row_path)?, config, "node labels", &row_path)?;
+        let labels: Vec<LpgLabel> = parse_json_cell(
+            csv_field(&row, 3, &row_path)?,
+            config,
+            "node labels",
+            &row_path,
+        )?;
         let properties: Vec<LpgProperty> = parse_json_cell(
-            field(&row, 4, &row_path)?,
+            csv_field(&row, 4, &row_path)?,
             config,
             "node properties",
             &row_path,
         )?;
         let native = native_labels(&labels)?;
-        if native.join(";") != field(&row, 2, &row_path)? {
+        if native.join(";") != csv_field(&row, 2, &row_path)? {
             return Err(ProjectionError::integrity(
                 "Neo4j native label field disagrees with exact LPG labels",
             )
@@ -825,7 +830,7 @@ fn read_neo4j_nodes(
                 .get(token)
                 .expect("node header token was validated against the property map");
             let expected = native_property_cell(&properties, iri, config)?;
-            if field(&row, NEO4J_NODE_HEADER.len() + offset, &row_path)? != expected {
+            if csv_field(&row, NEO4J_NODE_HEADER.len() + offset, &row_path)? != expected {
                 return Err(ProjectionError::integrity(
                     "Neo4j native property field disagrees with exact LPG properties",
                 )
@@ -848,7 +853,7 @@ fn read_neo4j_nodes(
             )
             .at_path(row_path));
         }
-        budget.consume_nested(1, labels.len(), properties.len(), "Neo4j LPG node")?;
+        budget.consume(&[1, labels.len(), properties.len()], "Neo4j LPG node")?;
         nodes.push(LpgNode {
             id,
             identity,
@@ -967,15 +972,15 @@ fn read_neo4j_relationships(
     path: &str,
     config: &LpgConfig,
     type_map: &BTreeMap<String, String>,
-    budget: &mut CsvRecordBudget,
+    budget: &mut RecordBudget,
 ) -> Result<Vec<LpgEdge>, ProjectionError> {
     let mut reader = csv_reader(bytes, NEO4J_REL_HEADER, path)?;
     let mut edges = Vec::new();
     let mut previous_id: Option<String> = None;
     for (index, row) in reader.records().enumerate() {
-        let row_path = row_path(path, index);
+        let row_path = csv_row_path(path, index);
         let row = row.map_err(|error| csv_read_error(&error, &row_path))?;
-        let id = field(&row, 0, &row_path)?.to_owned();
+        let id = csv_field(&row, 0, &row_path)?.to_owned();
         if previous_id.as_ref().is_some_and(|previous| previous >= &id) {
             return Err(ProjectionError::integrity(
                 "Neo4j relationship group must be strictly ordered by edge id",
@@ -984,13 +989,13 @@ fn read_neo4j_relationships(
         }
         previous_id = Some(id.clone());
         let rdf = parse_json_cell(
-            field(&row, 4, &row_path)?,
+            csv_field(&row, 4, &row_path)?,
             config,
             "relationship sideband",
             &row_path,
         )?;
         let edge_type = type_map
-            .get(field(&row, 3, &row_path)?)
+            .get(csv_field(&row, 3, &row_path)?)
             .ok_or_else(|| {
                 ProjectionError::integrity(
                     "Neo4j relationship token is absent from relationship-type-map.csv",
@@ -999,17 +1004,19 @@ fn read_neo4j_relationships(
             })?
             .clone();
         let token = relationship_token(&edge_type)?;
-        if token != field(&row, 3, &row_path)? || format!("{NEO4J_REL_PREFIX}{token}.csv") != path {
+        if token != csv_field(&row, 3, &row_path)?
+            || format!("{NEO4J_REL_PREFIX}{token}.csv") != path
+        {
             return Err(ProjectionError::integrity(
                 "Neo4j relationship is stored in the wrong stable type group",
             )
             .at_path(row_path));
         }
-        budget.consume(1, "Neo4j LPG relationship")?;
+        budget.consume(&[1], "Neo4j LPG relationship")?;
         edges.push(LpgEdge {
             id,
-            source: field(&row, 1, &row_path)?.to_owned(),
-            target: field(&row, 2, &row_path)?.to_owned(),
+            source: csv_field(&row, 1, &row_path)?.to_owned(),
+            target: csv_field(&row, 2, &row_path)?.to_owned(),
             edge_type,
             rdf,
         });
@@ -1043,7 +1050,7 @@ fn read_token_map(
     let mut map = BTreeMap::new();
     let mut iris = BTreeSet::new();
     for (index, row) in reader.records().enumerate() {
-        let row_path = row_path(path, index);
+        let row_path = csv_row_path(path, index);
         let row = row.map_err(|error| csv_read_error(&error, &row_path))?;
         if map.len() >= max_rows {
             return Err(ProjectionError::limit(format!(
@@ -1051,8 +1058,8 @@ fn read_token_map(
             ))
             .at_path(row_path));
         }
-        let token = field(&row, 0, &row_path)?;
-        let iri = field(&row, 1, &row_path)?;
+        let token = csv_field(&row, 0, &row_path)?;
+        let iri = csv_field(&row, 1, &row_path)?;
         if expected_token(iri)? != token {
             return Err(
                 ProjectionError::integrity("Neo4j token does not match the full RDF IRI")
@@ -1211,18 +1218,8 @@ fn csv_reader<'a>(
     Ok(reader)
 }
 
-fn field<'a>(row: &'a StringRecord, index: usize, path: &str) -> Result<&'a str, ProjectionError> {
-    row.get(index).ok_or_else(|| {
-        ProjectionError::syntax(format!("CSV row is missing field {index}")).at_path(path)
-    })
-}
-
 fn csv_read_error(error: &CsvError, path: &str) -> ProjectionError {
     ProjectionError::syntax(format!("read CSV: {error}")).at_path(path)
-}
-
-fn row_path(path: &str, zero_based_record: usize) -> String {
-    format!("{path}:{}", zero_based_record + 2)
 }
 
 /// A JSON cell's value: [`parse_json`] of the cell text.
@@ -1233,45 +1230,6 @@ fn parse_json_cell<T: FromJson + ToJson>(
     path: &str,
 ) -> Result<T, ProjectionError> {
     parse_json(value.as_bytes(), config, description, path)
-}
-
-struct CsvRecordBudget {
-    used: usize,
-    maximum: usize,
-}
-
-impl CsvRecordBudget {
-    const fn new(maximum: usize) -> Self {
-        Self { used: 0, maximum }
-    }
-
-    fn consume(&mut self, amount: usize, description: &str) -> Result<(), ProjectionError> {
-        self.used = self
-            .used
-            .checked_add(amount)
-            .ok_or_else(|| ProjectionError::limit("LPG CSV record count overflow"))?;
-        if self.used > self.maximum {
-            return Err(ProjectionError::limit(format!(
-                "{description} exceeds the {}-record LPG limit",
-                self.maximum
-            )));
-        }
-        Ok(())
-    }
-
-    fn consume_nested(
-        &mut self,
-        outer: usize,
-        first: usize,
-        second: usize,
-        description: &str,
-    ) -> Result<(), ProjectionError> {
-        let amount = outer
-            .checked_add(first)
-            .and_then(|value| value.checked_add(second))
-            .ok_or_else(|| ProjectionError::limit("LPG CSV record count overflow"))?;
-        self.consume(amount, description)
-    }
 }
 
 #[cfg(test)]

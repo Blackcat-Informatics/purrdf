@@ -33,10 +33,10 @@
 //! sparql-algebra lexer, which decodes them in `IRIREF` position), so `test060`
 //! now parses.
 
+use super::syntax::check_language_tag;
 use std::collections::BTreeMap;
 
 use purrdf_core::collections::{ListVocab, build_rdf_list};
-use purrdf_iri::langtag;
 use purrdf_iri::scan::find_byte2;
 use purrdf_iri::terminals;
 use purrdf_iri::{BaseOrigin, BaseScope, Iri, IriError, Position};
@@ -795,6 +795,20 @@ fn parse_one_line(
     Ok(Some(nodes))
 }
 
+/// Consume the token at `*pos`, MOVING it out of the owned buffer (a cheap
+/// `Token::Dot` placeholder is left behind) and advancing `*pos`. Every token
+/// reader here advances monotonically and looks only at `*pos` and beyond, so
+/// a consumed position is never read again.
+fn take_token<'a>(tokens: &mut [Spanned<'a>], pos: &mut usize) -> Option<Token<'a>> {
+    let token = tokens
+        .get_mut(*pos)
+        .map(|spanned| std::mem::replace(&mut spanned.token, Token::Dot));
+    if token.is_some() {
+        *pos += 1;
+    }
+    token
+}
+
 /// A cursor over one line's lexer tokens, parsing N-Triples/N-Quads terms.
 ///
 /// The cursor OWNS its token buffer (discarded after the line is parsed), so
@@ -843,14 +857,7 @@ impl<'a> TokenCursor<'a> {
     /// `Token::Dot` placeholder is left behind; the cursor never re-reads a
     /// consumed position — `peek` looks only at `pos`, which has advanced).
     fn bump(&mut self) -> Option<Token<'a>> {
-        let t = self
-            .tokens
-            .get_mut(self.pos)
-            .map(|s| std::mem::replace(&mut s.token, Token::Dot));
-        if t.is_some() {
-            self.pos += 1;
-        }
-        t
+        take_token(&mut self.tokens, &mut self.pos)
     }
 
     /// True at the statement terminator `.` or the end of the token stream.
@@ -1184,18 +1191,16 @@ fn absolute_iri_by_grammar(
 /// path: `@1`, `@-`, `@9-9` and `@en-` are refused from Turtle, TriG,
 /// N-Triples and N-Quads alike.
 fn validate_language_tag(tag: &str, line_no: u32, column: u32) -> Result<(), RdfDiagnostic> {
-    match langtag::parse_with(tag, langtag::Profile::ConcreteSyntaxLangtagBounded) {
-        Ok(_) => Ok(()),
-        Err(error) => Err(RdfDiagnostic::error(
-            error.diagnostic_code(),
-            format!("invalid language tag {tag:?}: {error}"),
-        )
-        .with_location(RdfLocation {
+    check_language_tag(tag, |error| {
+        format!("invalid language tag {tag:?}: {error}")
+    })
+    .map_err(|diagnostic| {
+        diagnostic.with_location(RdfLocation {
             line: Some(line_no),
             column: Some(column),
             ..RdfLocation::default()
-        })),
-    }
+        })
+    })
 }
 
 fn node_is(node: &Node, kinds: &[fn(&Node) -> bool]) -> bool {
@@ -2245,14 +2250,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// position — `peek`/`peek2` look only at `pos` and beyond, which advance
     /// monotonically).
     fn bump(&mut self) -> Option<Token<'a>> {
-        let t = self
-            .tokens
-            .get_mut(self.pos)
-            .map(|s| std::mem::replace(&mut s.token, Token::Dot));
-        if t.is_some() {
-            self.pos += 1;
-        }
-        t
+        take_token(&mut self.tokens, &mut self.pos)
     }
 
     fn at(&self, token: &Token<'a>) -> bool {

@@ -9,8 +9,6 @@
 //! [`stable_identifier`] over the row's canonical JSON. The row shapes and that
 //! JSON live here once, so every view names the same row with the same bytes.
 
-use purrdf_lex::json::{Object, Value};
-
 use super::{ProjectionError, ProjectionTerm, stable_identifier};
 use purrdf_lex::json::record::{ToJson, to_vec};
 
@@ -41,6 +39,30 @@ pub(crate) struct SourceAnnotation {
     pub(crate) graph: Option<ProjectionTerm>,
 }
 
+impl SourceQuad {
+    /// The node terms: subject, object and, outside the default graph, the
+    /// graph name.
+    pub(crate) fn node_terms(&self) -> impl Iterator<Item = &ProjectionTerm> {
+        [&self.subject, &self.object].into_iter().chain(&self.graph)
+    }
+}
+
+impl SourceReifier {
+    /// The node terms: reifier, reified triple term and graph name.
+    pub(crate) fn node_terms(&self) -> impl Iterator<Item = &ProjectionTerm> {
+        [&self.reifier, &self.statement]
+            .into_iter()
+            .chain(&self.graph)
+    }
+}
+
+impl SourceAnnotation {
+    /// The node terms: reifier, object and graph name.
+    pub(crate) fn node_terms(&self) -> impl Iterator<Item = &ProjectionTerm> {
+        [&self.reifier, &self.object].into_iter().chain(&self.graph)
+    }
+}
+
 /// The stable identifier of a source row: `prefix`, then the SHA-256 of the
 /// row's compact JSON (members in declaration order, an absent graph `null`).
 pub(crate) fn source_identifier(
@@ -50,37 +72,22 @@ pub(crate) fn source_identifier(
     stable_identifier(prefix, &to_vec(value))
 }
 
-impl ToJson for SourceQuad {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("subject", self.subject.to_json())
-                .with("predicate", self.predicate.as_str())
-                .with("object", self.object.to_json())
-                .with("graph", self.graph.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for SourceQuad {
+    "subject" => subject,
+    "predicate" => predicate,
+    "object" => object,
+    "graph" => graph,
+});
 
-impl ToJson for SourceReifier {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("reifier", self.reifier.to_json())
-                .with("statement", self.statement.to_json())
-                .with("graph", self.graph.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for SourceReifier {
+    "reifier" => reifier,
+    "statement" => statement,
+    "graph" => graph,
+});
 
-impl ToJson for SourceAnnotation {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("reifier", self.reifier.to_json())
-                .with("predicate", self.predicate.as_str())
-                .with("object", self.object.to_json())
-                .with("graph", self.graph.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for SourceAnnotation {
+    "reifier" => reifier,
+    "predicate" => predicate,
+    "object" => object,
+    "graph" => graph,
+});

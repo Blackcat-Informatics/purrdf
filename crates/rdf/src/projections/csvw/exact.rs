@@ -3,15 +3,13 @@
 
 //! Canonical CSVW table group carrying an exact RDF 1.2 dataset.
 
+use crate::projections::util::{RecordBudget, csv_field, csv_row_path};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::sync::Arc;
 
 use purrdf_core::csv::{Dialect, Reader, StringRecord, Writer};
-use purrdf_core::{
-    BlankScope, DatasetView, LossLedger, RdfDataset, RdfDatasetBuilder, RdfLiteral,
-    RdfTextDirection, TermId,
-};
+use purrdf_core::{DatasetView, LossLedger, RdfDataset, RdfDatasetBuilder, RdfTextDirection};
 use purrdf_lex::json::{Object, Value};
 
 use super::super::util::canonical_json_bounded;
@@ -99,40 +97,25 @@ struct ExactAnnotation {
     graph: Option<ProjectionTerm>,
 }
 
-impl ToJson for ExactQuad {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("subject", self.subject.to_json())
-                .with("predicate", self.predicate.to_json())
-                .with("object", self.object.to_json())
-                .with("graph", self.graph.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for ExactQuad {
+    "subject" => subject,
+    "predicate" => predicate,
+    "object" => object,
+    "graph" => graph,
+});
 
-impl ToJson for ExactReifier {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("reifier", self.reifier.to_json())
-                .with("statement", self.statement.to_json())
-                .with("graph", self.graph.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for ExactReifier {
+    "reifier" => reifier,
+    "statement" => statement,
+    "graph" => graph,
+});
 
-impl ToJson for ExactAnnotation {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("reifier", self.reifier.to_json())
-                .with("predicate", self.predicate.to_json())
-                .with("object", self.object.to_json())
-                .with("graph", self.graph.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for ExactAnnotation {
+    "reifier" => reifier,
+    "predicate" => predicate,
+    "object" => object,
+    "graph" => graph,
+});
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ExactDataset {
@@ -181,16 +164,16 @@ pub fn read_csvw_exact(
     validate_package_bounds(package, config.limits())?;
     require_artifact_set(package)?;
     let expected_metadata = exact_metadata(config)?;
-    if required_artifact(package, METADATA_PATH)? != expected_metadata {
+    if package.required(METADATA_PATH)? != expected_metadata {
         return Err(ProjectionError::syntax(
             "exact CSVW metadata is outside the canonical PurRDF profile",
         )
         .at_path(METADATA_PATH));
     }
 
-    let mut budget = RecordBudget::new(config.max_records());
+    let mut budget = RecordBudget::new(config.max_records(), "CSVW");
     let term_records = read_records(
-        required_artifact(package, TERMS_PATH)?,
+        package.required(TERMS_PATH)?,
         &TERM_HEADER,
         TERMS_PATH,
         &mut budget,
@@ -198,7 +181,7 @@ pub fn read_csvw_exact(
     let (terms, named_graphs) = decode_terms(&term_records, config)?;
     let quads = decode_quads(
         &read_records(
-            required_artifact(package, QUADS_PATH)?,
+            package.required(QUADS_PATH)?,
             &QUAD_HEADER,
             QUADS_PATH,
             &mut budget,
@@ -208,7 +191,7 @@ pub fn read_csvw_exact(
     )?;
     let reifiers = decode_reifiers(
         &read_records(
-            required_artifact(package, REIFIERS_PATH)?,
+            package.required(REIFIERS_PATH)?,
             &REIFIER_HEADER,
             REIFIERS_PATH,
             &mut budget,
@@ -218,7 +201,7 @@ pub fn read_csvw_exact(
     )?;
     let annotations = decode_annotations(
         &read_records(
-            required_artifact(package, ANNOTATIONS_PATH)?,
+            package.required(ANNOTATIONS_PATH)?,
             &ANNOTATION_HEADER,
             ANNOTATIONS_PATH,
             &mut budget,
@@ -249,11 +232,11 @@ fn collect_dataset<D: DatasetView>(
     view: &D,
     config: &CsvwConfig,
 ) -> Result<ExactDataset, ProjectionError> {
-    let mut budget = RecordBudget::new(config.max_records());
+    let mut budget = RecordBudget::new(config.max_records(), "CSVW");
     let mut cache = BTreeMap::new();
     let mut named_graphs = BTreeSet::new();
     for graph in view.named_graphs() {
-        budget.consume("named graph")?;
+        budget.consume(&[1], "named graph")?;
         let graph = resolve_term(view, graph, config.limits(), &mut cache)?;
         require_graph_name(&graph, "named graph declaration")?;
         if !named_graphs.insert(graph) {
@@ -265,7 +248,7 @@ fn collect_dataset<D: DatasetView>(
 
     let mut quads = BTreeSet::new();
     for quad in view.quads() {
-        budget.consume("quad")?;
+        budget.consume(&[1], "quad")?;
         let row = ExactQuad {
             subject: resolve_term(view, quad.s, config.limits(), &mut cache)?,
             predicate: resolve_term(view, quad.p, config.limits(), &mut cache)?,
@@ -291,7 +274,7 @@ fn collect_dataset<D: DatasetView>(
     };
     let mut reifiers = BTreeSet::new();
     for quad in view.reifier_quads() {
-        budget.consume("reifier")?;
+        budget.consume(&[1], "reifier")?;
         let predicate = resolve_term(view, quad.p, config.limits(), &mut cache)?;
         if predicate != expected_reifies {
             return Err(ProjectionError::integrity(
@@ -325,7 +308,7 @@ fn collect_dataset<D: DatasetView>(
 
     let mut annotations = BTreeSet::new();
     for quad in view.annotation_quads() {
-        budget.consume("annotation")?;
+        budget.consume(&[1], "annotation")?;
         let row = ExactAnnotation {
             reifier: resolve_term(view, quad.s, config.limits(), &mut cache)?,
             predicate: resolve_term(view, quad.p, config.limits(), &mut cache)?,
@@ -731,15 +714,10 @@ impl ToJson for ExactMetadata<'_> {
     }
 }
 
-impl ToJson for TableMetadata {
-    fn to_json(&self) -> Value {
-        Value::Object(
-            Object::new()
-                .with("url", self.url)
-                .with("tableSchema", self.table_schema.to_json()),
-        )
-    }
-}
+purrdf_lex::json_record!(impl ToJson for TableMetadata {
+    "url" => url,
+    "tableSchema" => table_schema,
+});
 
 impl ToJson for SchemaMetadata {
     fn to_json(&self) -> Value {
@@ -923,12 +901,12 @@ fn decode_terms(
     let mut raw = BTreeMap::new();
     let mut previous = None;
     for (index, record) in records.iter().enumerate() {
-        let path = row_path(TERMS_PATH, index);
-        let id = field(record, 0, &path)?.to_owned();
+        let path = csv_row_path(TERMS_PATH, index);
+        let id = csv_field(record, 0, &path)?.to_owned();
         require_nonempty(&id, "term_id", &path)?;
         require_strict_order(previous.as_deref(), &id, &path)?;
         previous = Some(id.clone());
-        let named_graph = match field(record, 10, &path)? {
+        let named_graph = match csv_field(record, 10, &path)? {
             "true" => true,
             "false" => false,
             _ => {
@@ -940,15 +918,15 @@ fn decode_terms(
         };
         let row = RawTermRow {
             id: id.clone(),
-            kind: field(record, 1, &path)?.to_owned(),
-            value: field(record, 2, &path)?.to_owned(),
-            datatype_id: field(record, 3, &path)?.to_owned(),
-            language: field(record, 4, &path)?.to_owned(),
-            direction: field(record, 5, &path)?.to_owned(),
-            blank_scope: field(record, 6, &path)?.to_owned(),
-            subject_id: field(record, 7, &path)?.to_owned(),
-            predicate_id: field(record, 8, &path)?.to_owned(),
-            object_id: field(record, 9, &path)?.to_owned(),
+            kind: csv_field(record, 1, &path)?.to_owned(),
+            value: csv_field(record, 2, &path)?.to_owned(),
+            datatype_id: csv_field(record, 3, &path)?.to_owned(),
+            language: csv_field(record, 4, &path)?.to_owned(),
+            direction: csv_field(record, 5, &path)?.to_owned(),
+            blank_scope: csv_field(record, 6, &path)?.to_owned(),
+            subject_id: csv_field(record, 7, &path)?.to_owned(),
+            predicate_id: csv_field(record, 8, &path)?.to_owned(),
+            object_id: csv_field(record, 9, &path)?.to_owned(),
             named_graph,
         };
         if raw.insert(id, row).is_some() {
@@ -1150,16 +1128,16 @@ fn decode_quads(
     let mut rows = BTreeSet::new();
     let mut previous = None;
     for (index, record) in records.iter().enumerate() {
-        let path = row_path(QUADS_PATH, index);
-        let id = field(record, 0, &path)?;
+        let path = csv_row_path(QUADS_PATH, index);
+        let id = csv_field(record, 0, &path)?;
         require_nonempty(id, "quad_id", &path)?;
         require_strict_order(previous.as_deref(), id, &path)?;
         previous = Some(id.to_owned());
         let row = ExactQuad {
-            subject: referenced_term(terms, field(record, 1, &path)?, "subject_id", &path)?,
-            predicate: referenced_term(terms, field(record, 2, &path)?, "predicate_id", &path)?,
-            object: referenced_term(terms, field(record, 3, &path)?, "object_id", &path)?,
-            graph: optional_term(terms, field(record, 4, &path)?, "graph_id", &path)?,
+            subject: referenced_term(terms, csv_field(record, 1, &path)?, "subject_id", &path)?,
+            predicate: referenced_term(terms, csv_field(record, 2, &path)?, "predicate_id", &path)?,
+            object: referenced_term(terms, csv_field(record, 3, &path)?, "object_id", &path)?,
+            graph: optional_term(terms, csv_field(record, 4, &path)?, "graph_id", &path)?,
         };
         require_statement_positions(&row.subject, &row.predicate, row.graph.as_ref(), "quad")?;
         if row_identifier("CsvwQuad", &row, config.limits(), "exact CSVW quad")? != id {
@@ -1183,15 +1161,15 @@ fn decode_reifiers(
     let mut rows = BTreeSet::new();
     let mut previous = None;
     for (index, record) in records.iter().enumerate() {
-        let path = row_path(REIFIERS_PATH, index);
-        let id = field(record, 0, &path)?;
+        let path = csv_row_path(REIFIERS_PATH, index);
+        let id = csv_field(record, 0, &path)?;
         require_nonempty(id, "reifier_row_id", &path)?;
         require_strict_order(previous.as_deref(), id, &path)?;
         previous = Some(id.to_owned());
         let row = ExactReifier {
-            reifier: referenced_term(terms, field(record, 1, &path)?, "reifier_id", &path)?,
-            statement: referenced_term(terms, field(record, 2, &path)?, "statement_id", &path)?,
-            graph: optional_term(terms, field(record, 3, &path)?, "graph_id", &path)?,
+            reifier: referenced_term(terms, csv_field(record, 1, &path)?, "reifier_id", &path)?,
+            statement: referenced_term(terms, csv_field(record, 2, &path)?, "statement_id", &path)?,
+            graph: optional_term(terms, csv_field(record, 3, &path)?, "graph_id", &path)?,
         };
         require_resource(&row.reifier, "reifier subject")?;
         if !matches!(row.statement, ProjectionTerm::Triple { .. }) {
@@ -1224,16 +1202,16 @@ fn decode_annotations(
     let mut rows = BTreeSet::new();
     let mut previous = None;
     for (index, record) in records.iter().enumerate() {
-        let path = row_path(ANNOTATIONS_PATH, index);
-        let id = field(record, 0, &path)?;
+        let path = csv_row_path(ANNOTATIONS_PATH, index);
+        let id = csv_field(record, 0, &path)?;
         require_nonempty(id, "annotation_id", &path)?;
         require_strict_order(previous.as_deref(), id, &path)?;
         previous = Some(id.to_owned());
         let row = ExactAnnotation {
-            reifier: referenced_term(terms, field(record, 1, &path)?, "reifier_id", &path)?,
-            predicate: referenced_term(terms, field(record, 2, &path)?, "predicate_id", &path)?,
-            object: referenced_term(terms, field(record, 3, &path)?, "object_id", &path)?,
-            graph: optional_term(terms, field(record, 4, &path)?, "graph_id", &path)?,
+            reifier: referenced_term(terms, csv_field(record, 1, &path)?, "reifier_id", &path)?,
+            predicate: referenced_term(terms, csv_field(record, 2, &path)?, "predicate_id", &path)?,
+            object: referenced_term(terms, csv_field(record, 3, &path)?, "object_id", &path)?,
+            graph: optional_term(terms, csv_field(record, 4, &path)?, "graph_id", &path)?,
         };
         require_statement_positions(
             &row.reifier,
@@ -1265,48 +1243,48 @@ fn decode_annotations(
 fn lift_exact(dataset: &ExactDataset) -> Result<Arc<RdfDataset>, ProjectionError> {
     let mut builder = RdfDatasetBuilder::new();
     for graph in &dataset.named_graphs {
-        let graph = intern_term(&mut builder, graph)?;
+        let graph = graph.intern(&mut builder)?;
         builder.declare_named_graph(graph);
     }
     for quad in &dataset.quads {
-        let subject = intern_term(&mut builder, &quad.subject)?;
+        let subject = quad.subject.intern(&mut builder)?;
         let ProjectionTerm::Iri { value: predicate } = &quad.predicate else {
             return Err(ProjectionError::integrity(
                 "exact CSVW quad predicate is not an IRI",
             ));
         };
         let predicate = builder.intern_iri(predicate);
-        let object = intern_term(&mut builder, &quad.object)?;
+        let object = quad.object.intern(&mut builder)?;
         let graph = quad
             .graph
             .as_ref()
-            .map(|term| intern_term(&mut builder, term))
+            .map(|term| term.intern(&mut builder))
             .transpose()?;
         builder.push_quad(subject, predicate, object, graph);
     }
     for row in &dataset.reifiers {
-        let reifier = intern_term(&mut builder, &row.reifier)?;
-        let statement = intern_term(&mut builder, &row.statement)?;
+        let reifier = row.reifier.intern(&mut builder)?;
+        let statement = row.statement.intern(&mut builder)?;
         let graph = row
             .graph
             .as_ref()
-            .map(|term| intern_term(&mut builder, term))
+            .map(|term| term.intern(&mut builder))
             .transpose()?;
         builder.push_reifier_in_graph(reifier, statement, graph);
     }
     for row in &dataset.annotations {
-        let reifier = intern_term(&mut builder, &row.reifier)?;
+        let reifier = row.reifier.intern(&mut builder)?;
         let ProjectionTerm::Iri { value: predicate } = &row.predicate else {
             return Err(ProjectionError::integrity(
                 "exact CSVW annotation predicate is not an IRI",
             ));
         };
         let predicate = builder.intern_iri(predicate);
-        let object = intern_term(&mut builder, &row.object)?;
+        let object = row.object.intern(&mut builder)?;
         let graph = row
             .graph
             .as_ref()
-            .map(|term| intern_term(&mut builder, term))
+            .map(|term| term.intern(&mut builder))
             .transpose()?;
         builder.push_annotation_in_graph(reifier, predicate, object, graph);
     }
@@ -1314,42 +1292,6 @@ fn lift_exact(dataset: &ExactDataset) -> Result<Arc<RdfDataset>, ProjectionError
         ProjectionError::integrity(format!(
             "exact CSVW rows reconstructed an invalid RDF dataset: {error}"
         ))
-    })
-}
-
-fn intern_term(
-    builder: &mut RdfDatasetBuilder,
-    term: &ProjectionTerm,
-) -> Result<TermId, ProjectionError> {
-    Ok(match term {
-        ProjectionTerm::Iri { value } => builder.intern_iri(value),
-        ProjectionTerm::Blank { label, scope } => builder.intern_blank(label, BlankScope(*scope)),
-        ProjectionTerm::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => builder.intern_literal(RdfLiteral {
-            lexical_form: lexical.clone(),
-            datatype: Some(datatype.clone()),
-            language: language.clone(),
-            direction: direction.map(Into::into),
-        }),
-        ProjectionTerm::Triple {
-            subject,
-            predicate,
-            object,
-        } => {
-            let subject = intern_term(builder, subject)?;
-            let ProjectionTerm::Iri { value: predicate } = predicate.as_ref() else {
-                return Err(ProjectionError::integrity(
-                    "exact CSVW triple predicate is not an IRI",
-                ));
-            };
-            let predicate = builder.intern_iri(predicate);
-            let object = intern_term(builder, object)?;
-            builder.intern_triple(subject, predicate, object)
-        }
     })
 }
 
@@ -1528,51 +1470,12 @@ fn read_records(
     }
     let mut output = Vec::new();
     for record in records {
-        budget.consume(path)?;
+        budget.consume(&[1], path)?;
         output.push(record.map_err(|error| {
             ProjectionError::syntax(format!("read CSV row: {error}")).at_path(path)
         })?);
     }
     Ok(output)
-}
-
-struct RecordBudget {
-    used: usize,
-    maximum: usize,
-}
-
-impl RecordBudget {
-    const fn new(maximum: usize) -> Self {
-        Self { used: 0, maximum }
-    }
-
-    fn consume(&mut self, description: &str) -> Result<(), ProjectionError> {
-        self.used = self
-            .used
-            .checked_add(1)
-            .ok_or_else(|| ProjectionError::limit("CSVW record count overflow"))?;
-        if self.used > self.maximum {
-            return Err(ProjectionError::limit(format!(
-                "{description} rows exceed the configured {}-record CSVW limit",
-                self.maximum
-            )));
-        }
-        Ok(())
-    }
-}
-
-fn field<'a>(
-    record: &'a StringRecord,
-    index: usize,
-    path: &str,
-) -> Result<&'a str, ProjectionError> {
-    record.get(index).ok_or_else(|| {
-        ProjectionError::syntax(format!("CSV row is missing field {index}")).at_path(path)
-    })
-}
-
-fn row_path(path: &str, zero_index: usize) -> String {
-    format!("{path}:{}", zero_index + 2)
 }
 
 fn require_nonempty(value: &str, field: &str, path: &str) -> Result<(), ProjectionError> {
@@ -1655,15 +1558,6 @@ fn optional_term(
     }
 }
 
-fn required_artifact<'a>(
-    package: &'a ProjectionPackage,
-    path: &str,
-) -> Result<&'a [u8], ProjectionError> {
-    package
-        .get(path)
-        .ok_or_else(|| ProjectionError::package("required artifact is missing").at_path(path))
-}
-
 fn require_artifact_set(package: &ProjectionPackage) -> Result<(), ProjectionError> {
     let expected = BTreeSet::from([
         ANNOTATIONS_PATH,
@@ -1713,7 +1607,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use purrdf_core::{
-        PackBuilder, PackView, RdfDatasetBuilder, RdfTextDirection, datasets_isomorphic,
+        BlankScope, PackBuilder, PackView, RdfDatasetBuilder, RdfLiteral, RdfTextDirection,
+        datasets_isomorphic,
     };
 
     use super::*;

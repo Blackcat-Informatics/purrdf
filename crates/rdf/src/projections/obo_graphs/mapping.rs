@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use crate::projections::loss::{record_logical_loss, record_row_loss};
 use crate::projections::source_rows::{
     SourceAnnotation, SourceQuad, SourceReifier, source_identifier,
 };
-use std::borrow::Cow;
+use crate::projections::util::reject_duplicates;
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::collections::{ListErrorKind, ListFault, RdfListWalk, SoleObject};
@@ -13,10 +14,7 @@ use purrdf_core::loss::{
     LOSS_OBO_LITERAL_FIDELITY_WIDENED, LOSS_OBO_NAMED_GRAPH_DROPPED,
     LOSS_OBO_NON_PROFILE_STATEMENT_DROPPED, LOSS_OBO_REIFIER_DROPPED, LOSS_OBO_TRIPLE_TERM_DROPPED,
 };
-use purrdf_core::{
-    DatasetView, LossEntry, LossLedger, RdfLocation, check_ledger_sound,
-    rdf_to_obo_graphs_loss_ledger,
-};
+use purrdf_core::{DatasetView, LossLedger, check_ledger_sound, rdf_to_obo_graphs_loss_ledger};
 
 use super::super::{ProjectionError, ProjectionTerm};
 use super::{
@@ -124,18 +122,19 @@ impl<'a> Projector<'a> {
         let mut cache = BTreeMap::new();
         let mut quads = Vec::new();
         for quad in view.quads() {
-            let subject = resolve_term(view, quad.s, config, &mut cache)?;
+            let subject =
+                ProjectionTerm::resolve_cached(view, quad.s, config.limits(), &mut cache)?;
             let ProjectionTerm::Iri { value: predicate } =
-                resolve_term(view, quad.p, config, &mut cache)?
+                ProjectionTerm::resolve_cached(view, quad.p, config.limits(), &mut cache)?
             else {
                 return Err(ProjectionError::integrity(
                     "RDF dataset view exposed a non-IRI predicate",
                 ));
             };
-            let object = resolve_term(view, quad.o, config, &mut cache)?;
+            let object = ProjectionTerm::resolve_cached(view, quad.o, config.limits(), &mut cache)?;
             let graph = quad
                 .g
-                .map(|id| resolve_term(view, id, config, &mut cache))
+                .map(|id| ProjectionTerm::resolve_cached(view, id, config.limits(), &mut cache))
                 .transpose()?;
             quads.push(SourceQuad {
                 subject,
@@ -149,14 +148,17 @@ impl<'a> Projector<'a> {
 
         let mut reifiers = Vec::new();
         for quad in view.reifier_quads() {
-            let reifier = resolve_term(view, quad.s, config, &mut cache)?;
-            let predicate = resolve_term(view, quad.p, config, &mut cache)?;
-            if predicate != iri(config.vocabulary().rdf().rdf_reifies()) {
+            let reifier =
+                ProjectionTerm::resolve_cached(view, quad.s, config.limits(), &mut cache)?;
+            let predicate =
+                ProjectionTerm::resolve_cached(view, quad.p, config.limits(), &mut cache)?;
+            if predicate != ProjectionTerm::iri(config.vocabulary().rdf().rdf_reifies()) {
                 return Err(ProjectionError::integrity(
                     "RDF dataset view exposed a reifier row whose predicate differs from the caller-supplied rdf:reifies role",
                 ));
             }
-            let statement = resolve_term(view, quad.o, config, &mut cache)?;
+            let statement =
+                ProjectionTerm::resolve_cached(view, quad.o, config.limits(), &mut cache)?;
             if !matches!(statement, ProjectionTerm::Triple { .. }) {
                 return Err(ProjectionError::integrity(
                     "RDF dataset view exposed a reifier binding to a non-triple term",
@@ -164,7 +166,7 @@ impl<'a> Projector<'a> {
             }
             let graph = quad
                 .g
-                .map(|id| resolve_term(view, id, config, &mut cache))
+                .map(|id| ProjectionTerm::resolve_cached(view, id, config.limits(), &mut cache))
                 .transpose()?;
             reifiers.push(SourceReifier {
                 reifier,
@@ -177,18 +179,19 @@ impl<'a> Projector<'a> {
 
         let mut annotations = Vec::new();
         for quad in view.annotation_quads() {
-            let reifier = resolve_term(view, quad.s, config, &mut cache)?;
+            let reifier =
+                ProjectionTerm::resolve_cached(view, quad.s, config.limits(), &mut cache)?;
             let ProjectionTerm::Iri { value: predicate } =
-                resolve_term(view, quad.p, config, &mut cache)?
+                ProjectionTerm::resolve_cached(view, quad.p, config.limits(), &mut cache)?
             else {
                 return Err(ProjectionError::integrity(
                     "RDF dataset view exposed a non-IRI annotation predicate",
                 ));
             };
-            let object = resolve_term(view, quad.o, config, &mut cache)?;
+            let object = ProjectionTerm::resolve_cached(view, quad.o, config.limits(), &mut cache)?;
             let graph = quad
                 .g
-                .map(|id| resolve_term(view, id, config, &mut cache))
+                .map(|id| ProjectionTerm::resolve_cached(view, id, config.limits(), &mut cache))
                 .transpose()?;
             annotations.push(SourceAnnotation {
                 reifier,
@@ -202,7 +205,12 @@ impl<'a> Projector<'a> {
 
         let mut named_graphs = Vec::new();
         for graph in view.named_graphs() {
-            named_graphs.push(resolve_term(view, graph, config, &mut cache)?);
+            named_graphs.push(ProjectionTerm::resolve_cached(
+                view,
+                graph,
+                config.limits(),
+                &mut cache,
+            )?);
         }
         named_graphs.sort();
         reject_duplicates(&named_graphs, "named graph declarations")?;
@@ -376,10 +384,10 @@ impl<'a> Projector<'a> {
     fn record_placement_and_reifier_losses(&mut self) -> Result<(), ProjectionError> {
         for index in 0..self.named_graphs.len() {
             self.record_named_graph_loss(index, LOSS_OBO_NAMED_GRAPH_DROPPED)?;
-            if contains_blank(&self.named_graphs[index]) {
+            if self.named_graphs[index].contains_blank() {
                 self.record_named_graph_loss(index, LOSS_OBO_BLANK_IDENTITY_DROPPED)?;
             }
-            if contains_triple(&self.named_graphs[index]) {
+            if self.named_graphs[index].is_triple() {
                 self.record_named_graph_loss(index, LOSS_OBO_TRIPLE_TERM_DROPPED)?;
             }
         }
@@ -394,7 +402,7 @@ impl<'a> Projector<'a> {
             }
             self.record_reifier_loss(index, LOSS_OBO_REIFIER_DROPPED)?;
             self.record_reifier_loss(index, LOSS_OBO_TRIPLE_TERM_DROPPED)?;
-            if contains_blank(&self.reifiers[index].reifier) {
+            if self.reifiers[index].reifier.contains_blank() {
                 self.record_reifier_loss(index, LOSS_OBO_BLANK_IDENTITY_DROPPED)?;
             }
         }
@@ -1084,7 +1092,7 @@ impl<'a> Projector<'a> {
             graph,
             "restriction declaration",
         )?;
-        if declaration.1 != iri(self.config.vocabulary().owl().owl_restriction()) {
+        if declaration.1 != ProjectionTerm::iri(self.config.vocabulary().owl().owl_restriction()) {
             return Err(ProjectionError::integrity(
                 "restriction blank node is not declared with the configured owl:Restriction IRI",
             ));
@@ -1156,7 +1164,7 @@ impl<'a> Projector<'a> {
         graph: Option<&ProjectionTerm>,
     ) -> Result<(Vec<ProjectionTerm>, Vec<usize>), ProjectionError> {
         let rdf = self.config.vocabulary().rdf();
-        let nil = iri(rdf.rdf_nil());
+        let nil = ProjectionTerm::iri(rdf.rdf_nil());
         let (mut firsts, mut rests) = (Vec::new(), Vec::new());
         let mut members = Vec::new();
         let walk = RdfListWalk::new(
@@ -1306,10 +1314,10 @@ impl<'a> Projector<'a> {
                 continue;
             }
             let quad = self.quads[index].clone();
-            if contains_triple(&quad.subject) || contains_triple(&quad.object) {
+            if quad.subject.is_triple() || quad.object.is_triple() {
                 self.record_quad_loss(index, LOSS_OBO_TRIPLE_TERM_DROPPED)?;
             }
-            if contains_blank(&quad.subject) || contains_blank(&quad.object) {
+            if quad.subject.contains_blank() || quad.object.contains_blank() {
                 self.record_quad_loss(index, LOSS_OBO_BLANK_IDENTITY_DROPPED)?;
             }
             self.record_quad_loss(index, LOSS_OBO_NON_PROFILE_STATEMENT_DROPPED)?;
@@ -1318,11 +1326,11 @@ impl<'a> Projector<'a> {
             if self.annotation_handled[index] {
                 continue;
             }
-            if contains_triple(&self.annotations[index].object) {
+            if self.annotations[index].object.is_triple() {
                 self.record_annotation_loss(index, LOSS_OBO_TRIPLE_TERM_DROPPED)?;
             }
-            if contains_blank(&self.annotations[index].reifier)
-                || contains_blank(&self.annotations[index].object)
+            if self.annotations[index].reifier.contains_blank()
+                || self.annotations[index].object.contains_blank()
             {
                 self.record_annotation_loss(index, LOSS_OBO_BLANK_IDENTITY_DROPPED)?;
             }
@@ -1378,60 +1386,45 @@ impl<'a> Projector<'a> {
     }
 
     fn boolean_from_quad(&self, index: usize) -> Result<bool, ProjectionError> {
-        let ProjectionTerm::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } = &self.quads[index].object
-        else {
-            return Err(ProjectionError::integrity(
-                "configured owl:deprecated value must be an xsd:boolean literal",
-            ));
-        };
-        if datatype != self.config.vocabulary().rdf().xsd_boolean()
-            || language.is_some()
-            || direction.is_some()
-        {
-            return Err(ProjectionError::integrity(
-                "configured owl:deprecated value must use the caller-supplied xsd:boolean IRI without language or direction",
-            ));
-        }
-        match lexical.as_str() {
-            "true" | "1" => Ok(true),
-            "false" | "0" => Ok(false),
-            _ => Err(ProjectionError::integrity(
-                "configured owl:deprecated literal has an invalid xsd:boolean lexical form",
-            )),
-        }
+        self.deprecated_boolean(&self.quads[index].object, "value")
     }
 
     fn boolean_from_annotation(&self, index: usize) -> Result<bool, ProjectionError> {
+        self.deprecated_boolean(&self.annotations[index].object, "annotation")
+    }
+
+    /// The `xsd:boolean` a configured `owl:deprecated` statement carries;
+    /// `what` names the statement kind in a refusal.
+    fn deprecated_boolean(
+        &self,
+        object: &ProjectionTerm,
+        what: &str,
+    ) -> Result<bool, ProjectionError> {
         let ProjectionTerm::Literal {
             lexical,
             datatype,
             language,
             direction,
-        } = &self.annotations[index].object
+        } = object
         else {
-            return Err(ProjectionError::integrity(
-                "configured owl:deprecated annotation must be an xsd:boolean literal",
-            ));
+            return Err(ProjectionError::integrity(format!(
+                "configured owl:deprecated {what} must be an xsd:boolean literal"
+            )));
         };
         if datatype != self.config.vocabulary().rdf().xsd_boolean()
             || language.is_some()
             || direction.is_some()
         {
-            return Err(ProjectionError::integrity(
-                "configured owl:deprecated annotation must use the caller-supplied xsd:boolean IRI without language or direction",
-            ));
+            return Err(ProjectionError::integrity(format!(
+                "configured owl:deprecated {what} must use the caller-supplied xsd:boolean IRI without language or direction"
+            )));
         }
         match lexical.as_str() {
             "true" | "1" => Ok(true),
             "false" | "0" => Ok(false),
-            _ => Err(ProjectionError::integrity(
-                "configured owl:deprecated annotation has an invalid xsd:boolean lexical form",
-            )),
+            _ => Err(ProjectionError::integrity(format!(
+                "configured owl:deprecated {what} has an invalid xsd:boolean lexical form"
+            ))),
         }
     }
 
@@ -1516,7 +1509,13 @@ impl<'a> Projector<'a> {
         code: &'static str,
     ) -> Result<(), ProjectionError> {
         let subject = self.quad_location(index)?;
-        self.record_loss(code, "obo-graphs:quad", subject);
+        record_logical_loss(
+            &mut self.ledger,
+            &self.contract,
+            code,
+            "obo-graphs:quad",
+            subject,
+        );
         Ok(())
     }
 
@@ -1525,9 +1524,14 @@ impl<'a> Projector<'a> {
         index: usize,
         code: &'static str,
     ) -> Result<(), ProjectionError> {
-        let subject = source_identifier("graph", &self.named_graphs[index])?;
-        self.record_loss(code, "obo-graphs:named-graph", subject);
-        Ok(())
+        record_row_loss(
+            &mut self.ledger,
+            &self.contract,
+            code,
+            "obo-graphs:named-graph",
+            "graph",
+            &self.named_graphs[index],
+        )
     }
 
     fn record_reifier_loss(
@@ -1535,9 +1539,14 @@ impl<'a> Projector<'a> {
         index: usize,
         code: &'static str,
     ) -> Result<(), ProjectionError> {
-        let subject = source_identifier("reifier", &self.reifiers[index])?;
-        self.record_loss(code, "obo-graphs:reifier", subject);
-        Ok(())
+        record_row_loss(
+            &mut self.ledger,
+            &self.contract,
+            code,
+            "obo-graphs:reifier",
+            "reifier",
+            &self.reifiers[index],
+        )
     }
 
     fn record_annotation_loss(
@@ -1545,47 +1554,19 @@ impl<'a> Projector<'a> {
         index: usize,
         code: &'static str,
     ) -> Result<(), ProjectionError> {
-        let subject = source_identifier("annotation", &self.annotations[index])?;
-        self.record_loss(code, "obo-graphs:annotation", subject);
-        Ok(())
+        record_row_loss(
+            &mut self.ledger,
+            &self.contract,
+            code,
+            "obo-graphs:annotation",
+            "annotation",
+            &self.annotations[index],
+        )
     }
 
     fn quad_location(&self, index: usize) -> Result<String, ProjectionError> {
         source_identifier("quad", &self.quads[index])
     }
-
-    fn record_loss(&mut self, code: &'static str, logical: &str, subject: String) {
-        let template = self
-            .contract
-            .entries()
-            .iter()
-            .find(|entry| entry.code == code)
-            .expect("runtime OBO Graphs code must exist in the closed contract");
-        self.ledger.record(LossEntry {
-            code: Cow::Borrowed(code),
-            from: template.from.clone(),
-            to: template.to.clone(),
-            note: template.note.clone(),
-            location: Some(Box::new(
-                RdfLocation::logical(logical).with_subject(subject),
-            )),
-        });
-    }
-}
-
-fn resolve_term<D: DatasetView>(
-    view: &D,
-    id: D::Id,
-    config: &OboGraphsConfig,
-    cache: &mut BTreeMap<D::Id, ProjectionTerm>,
-) -> Result<ProjectionTerm, ProjectionError> {
-    if let Some(term) = cache.get(&id) {
-        return Ok(term.clone());
-    }
-    let term = ProjectionTerm::from_view(view, id, config.limits())?;
-    let _ = term.to_canonical_json(config.limits())?;
-    cache.insert(id, term.clone());
-    Ok(term)
 }
 
 /// The projection error for a malformed OWL-axiom collection.
@@ -1611,37 +1592,6 @@ fn list_fault(fault: &ListFault<&ProjectionTerm>, nil: &ProjectionTerm) -> Proje
         _ => "malformed RDF collection in OWL axiom",
     };
     ProjectionError::integrity(message)
-}
-
-fn iri(value: &str) -> ProjectionTerm {
-    ProjectionTerm::Iri {
-        value: value.to_owned(),
-    }
-}
-
-fn reject_duplicates<T: Ord>(values: &[T], description: &str) -> Result<(), ProjectionError> {
-    if values.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err(ProjectionError::integrity(format!(
-            "dataset view exposed duplicate {description}"
-        )));
-    }
-    Ok(())
-}
-
-fn contains_blank(term: &ProjectionTerm) -> bool {
-    match term {
-        ProjectionTerm::Blank { .. } => true,
-        ProjectionTerm::Triple {
-            subject,
-            predicate,
-            object,
-        } => contains_blank(subject) || contains_blank(predicate) || contains_blank(object),
-        ProjectionTerm::Iri { .. } | ProjectionTerm::Literal { .. } => false,
-    }
-}
-
-fn contains_triple(term: &ProjectionTerm) -> bool {
-    matches!(term, ProjectionTerm::Triple { .. })
 }
 
 fn merge_meta_option(target: &mut OboMeta, source: Option<OboMeta>) -> Result<(), ProjectionError> {

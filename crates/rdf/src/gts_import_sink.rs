@@ -224,26 +224,24 @@ impl ResolvedSink for SinkImporter<'_> {
     }
 
     fn err_nesting_limit(&self, segment_index: usize, gts_id: usize) -> RdfDiagnostic {
-        RdfDiagnostic::error(
-            "rdf-ir-term-nesting-limit",
-            "GTS triple-term nesting depth limit exceeded",
-        )
-        .with_location(
-            RdfLocation::logical("gts:sink")
-                .with_gts_segment(segment_index)
-                .with_gts_term(gts_id),
+        sink_term_error(
+            RdfDiagnostic::error(
+                "rdf-ir-term-nesting-limit",
+                "GTS triple-term nesting depth limit exceeded",
+            ),
+            segment_index,
+            gts_id,
         )
     }
 
     fn err_unbound_triple(&self, segment_index: usize, gts_id: usize) -> RdfDiagnostic {
-        RdfDiagnostic::error(
-            "rdf-ir-unbound-triple-term",
-            "GTS triple term names neither its own components nor a reifier",
-        )
-        .with_location(
-            RdfLocation::logical("gts:sink")
-                .with_gts_segment(segment_index)
-                .with_gts_term(gts_id),
+        sink_term_error(
+            RdfDiagnostic::error(
+                "rdf-ir-unbound-triple-term",
+                "GTS triple term names neither its own components nor a reifier",
+            ),
+            segment_index,
+            gts_id,
         )
     }
 
@@ -518,6 +516,19 @@ pub(crate) fn import_with_collector<'a>(
     ))
 }
 
+/// `diagnostic`, located at segment `segment_index`'s term `gts_id` on the
+/// sink path.
+fn sink_term_error(
+    diagnostic: RdfDiagnostic,
+    segment_index: usize,
+    gts_id: usize,
+) -> RdfDiagnostic {
+    diagnostic.with_location(
+        RdfLocation::logical("gts:sink")
+            .with_gts_segment(segment_index)
+            .with_gts_term(gts_id),
+    )
+}
 #[cfg(test)]
 mod tests {
     use super::*;

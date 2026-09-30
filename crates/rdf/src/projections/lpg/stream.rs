@@ -168,16 +168,23 @@ impl<'a, O: LpgProgressObserver> MappingProgress<'a, O> {
     }
 
     pub(super) fn node(&mut self) -> Result<(), ProjectionError> {
-        self.report.nodes = checked_increment(self.report.nodes, "node")?;
-        if self.report.nodes == 1 || self.report.nodes.is_multiple_of(PROGRESS_RECORD_STRIDE) {
-            self.emit(LpgProgressPhase::Building)?;
-        }
-        Ok(())
+        self.built(|report| &mut report.nodes, "node")
     }
 
     pub(super) fn edge(&mut self) -> Result<(), ProjectionError> {
-        self.report.edges = checked_increment(self.report.edges, "edge")?;
-        if self.report.edges == 1 || self.report.edges.is_multiple_of(PROGRESS_RECORD_STRIDE) {
+        self.built(|report| &mut report.edges, "edge")
+    }
+
+    /// Count one more built record of the kind `count` selects, reporting the
+    /// first and every stride-th.
+    fn built(
+        &mut self,
+        count: impl FnOnce(&mut LpgProjectionReport) -> &mut usize,
+        what: &str,
+    ) -> Result<(), ProjectionError> {
+        let count = count(&mut self.report);
+        *count = checked_increment(*count, what)?;
+        if *count == 1 || count.is_multiple_of(PROGRESS_RECORD_STRIDE) {
             self.emit(LpgProgressPhase::Building)?;
         }
         Ok(())
