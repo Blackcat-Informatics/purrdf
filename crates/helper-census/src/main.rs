@@ -396,8 +396,7 @@ fn self_test_cases() -> Vec<(&'static str, bool)> {
     let home_package = census::home(job, &workspace).map(|home| home.package);
     let found = home_package
         .as_ref()
-        .map(|package| census::matches(job, &workspace, package))
-        .unwrap_or_default();
+        .map_or_default(|package| census::matches(job, &workspace, package));
     let matched: Vec<(&str, bool)> = found
         .iter()
         .map(|found| (found.symbol.as_str(), found.in_home))

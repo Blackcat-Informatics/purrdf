@@ -457,8 +457,7 @@ impl<'ast> Visit<'ast> for Layout<'_> {
             .path
             .segments
             .last()
-            .map(|segment| segment.ident.to_string())
-            .unwrap_or_default();
+            .map_or_default(|segment| segment.ident.to_string());
         if FORMAT_MACROS.contains(&name.as_str())
             && let Ok(arguments) = node.parse_body_with(
                 syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,

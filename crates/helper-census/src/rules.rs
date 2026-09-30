@@ -639,8 +639,7 @@ impl<'ast> Visit<'ast> for HexRules<'_> {
             .path
             .segments
             .last()
-            .map(|segment| segment.ident.to_string())
-            .unwrap_or_default();
+            .map_or_default(|segment| segment.ident.to_string());
         if self.repeated > 0 && FORMAT_MACROS.contains(&name.as_str()) {
             for token in node.tokens.clone() {
                 if let proc_macro2::TokenTree::Literal(literal) = token
