@@ -2694,6 +2694,18 @@ fn commit_answer_rows<D: DatasetView + Sync>(
 
 /// Dispatch one algebra node to its operator. Split out of [`eval_evaluated`] so that the
 /// charge points bracketing every node are written once rather than once per variant.
+///
+/// # Thin-dispatcher invariant
+///
+/// This function must stay a bare `match` whose arms call out-of-line operators: every
+/// operator it dispatches to carries `#[inline(never)]`. A nested query pays this frame
+/// (together with [`eval_evaluated`]'s) at every level of nesting — twice per level for
+/// a `FILTER NOT EXISTS`, once for the filter node and once for its inner pattern — so any
+/// callee an optimizer inlines here (a deduplicator, a small-vector grow path) is charged
+/// against the machine stack once per level of every recursive query, not once per call
+/// of that operator. On wasm32, where the whole evaluation shares one fixed stack, a few
+/// hundred bytes pulled into this frame cost several levels of admitted nesting depth. A
+/// new `GraphPattern` arm must therefore call a function marked `#[inline(never)]`.
 fn eval_node<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,

@@ -56,6 +56,8 @@ pub(crate) enum JoinKey<I: ViewTermId = TermId> {
 /// rows in hand and yields a sub-bag of the true output — sound as a multiset, and
 /// classified [`crate::governor::soundness::PrefixFidelity::BagOnly`] because the missing
 /// rows come from the middle of each left row's block rather than from the end.
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_join<D: DatasetView + Sync>(
     node: &GraphPattern,
     left: &GraphPattern,
@@ -347,6 +349,8 @@ fn eval_deferred_lateral<D: DatasetView + Sync>(
 /// discarded whole, while every left row already processed keeps its complete block. That
 /// is the commit-per-input-row rule, and it is what makes the surviving rows a sound
 /// sub-bag rather than a mixture of complete and half-complete blocks.
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_lateral<D: DatasetView + Sync>(
     node: &GraphPattern,
     left: &GraphPattern,
@@ -543,6 +547,8 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
 /// records for this node, which the lift reads rather than restating: truncating any arm
 /// but the last removes rows from the middle of the concatenation (a sub-bag, not a
 /// prefix), while truncating the last removes them from the end (a genuine prefix).
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_union<D: DatasetView + Sync>(
     node: &GraphPattern,
     arms: &[GraphPattern],
@@ -1108,6 +1114,8 @@ fn counting_merges<T>(run: impl FnOnce() -> T) -> (T, usize) {
 ///   this operator becomes once its right bag is known to be incomplete.
 ///
 /// [`ChildEdge::MONOTONE_BAG`]: crate::governor::soundness::ChildEdge::MONOTONE_BAG
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_left_join<D: DatasetView + Sync>(
     node: &GraphPattern,
     left: &GraphPattern,
@@ -1491,6 +1499,8 @@ fn left_outer_join<D: DatasetView + Sync>(
 /// would fabricate rows `MINUS` would have deleted. A truncated RIGHT arm subtracts less
 /// than the true query would, so the output contains the true answer: an upper bound, not
 /// a black hole.
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_minus<D: DatasetView + Sync>(
     node: &GraphPattern,
     left: &GraphPattern,

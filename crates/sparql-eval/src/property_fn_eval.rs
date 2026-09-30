@@ -115,6 +115,8 @@ use crate::witness::RelationWitness;
 /// # Errors
 ///
 /// Propagates every failure [`eval_call_over`] raises.
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_property_function<D: DatasetView + Sync>(
     call: &PropertyFunctionCall,
     ctx: &mut EvalCtx<'_, D>,

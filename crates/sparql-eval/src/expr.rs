@@ -109,6 +109,8 @@ pub(crate) fn eval_ebv<D: DatasetView + Sync>(
 /// matter — it is an opaque edge, because a truncated `EXISTS` inner bag drops rows the
 /// true query keeps and a truncated `NOT EXISTS` inner bag fabricates rows outright — so
 /// the whole output is withheld and only the barrier crosses.
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_filter<D: DatasetView + Sync>(
     node: &GraphPattern,
     expr: &Expression,
@@ -205,6 +207,8 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
 /// [`crate::parallel::portable_row`] while its scratch is still alive, and this
 /// function re-interns each portable row against `ctx.scratch` afterwards, in
 /// source-index order, via [`crate::parallel::reintern_portable_row`].
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_extend<D: DatasetView + Sync>(
     node: &GraphPattern,
     inner: &GraphPattern,

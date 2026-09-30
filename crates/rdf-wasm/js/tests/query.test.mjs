@@ -574,15 +574,18 @@ test("a FILTER nested 10 000 parentheses deep answers what one pair answers, and
 const EVALUATION_STACK_REFUSAL_EXACT =
   /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: the request's nesting exceeds what this host's stack can evaluate \([a-zA-Z ]+ needs more stack than this thread has left above its 65536-byte reserve\)$/;
 
-// Nesting the parser admits can still be more than the stack can EVALUATE: one written
-// level of `LATERAL` costs the evaluator about 9 KB of shadow stack, so 126 of them ran
-// the synchronous lane's 1 MiB shadow stack below its floor — the call trapped ("memory
-// access out of bounds") and left the instance's memory in an unknown state. The
-// evaluator now measures the stack it has left at every recursive entry and refuses,
-// typed, before it runs out. (63 nested `FILTER NOT EXISTS` trapped the same way; a
-// nested `EXISTS` body is now substituted when it is evaluated rather than copied into
-// every level around it, so 63 levels answer — see the test after this one.)
-const STACK_REFUSAL = /native-sparql-evaluation-stack-exhausted.*evaluation stack exhausted/;
+// Nesting the parser admits can still be more than a lane can hold. 126 nested `LATERAL`
+// once ran the synchronous lane's 1 MiB shadow stack below its floor — the call trapped
+// ("memory access out of bounds") and left the instance's memory in an unknown state.
+// The evaluator now measures the stack it has left at every recursive entry and refuses,
+// typed, before it runs out, and the host-stack admission of the query plan's height
+// refuses a plan taller than the JavaScript engine's own stack holds before evaluation
+// starts. Whichever end a shape reaches first is its real end on this lane, found by
+// bisection below. (63 nested `FILTER NOT EXISTS` trapped the same way; a nested
+// `EXISTS` body is now substituted when it is evaluated rather than copied into every
+// level around it — see the test after this one.)
+/** Either typed refusal a nesting too deep for this lane gets: the evaluator's, or the host-stack admission's. */
+const ANY_STACK_REFUSAL = /^error native-sparql-(evaluation|host)-stack-exhausted: /;
 const NEST_DATA = [1, 2, 3, 4]
   .map((n) => `<https://example.org/s${n}> <https://example.org/p> <https://example.org/o${n}> .`)
   .concat(["<https://example.org/s1> <https://example.org/q> <https://example.org/o1> ."])
@@ -597,38 +600,57 @@ const subjectsOf = (result) =>
     .map((row) => row.s.value.replace("https://example.org/", ""))
     .sort();
 
-for (const [what, deep, shallow, expected] of [
-  // Only `s1` has a `<q>`, at every level.
-  ["126 nested LATERAL", nestedLateral(126), nestedLateral(40), ["s1"]],
-]) {
-  test(`${what} is a typed refusal on the synchronous lane, and the engine answers afterwards`, () => {
-    const ds = Dataset.parse(NEST_DATA, "nquads");
-    const engine = new QueryEngine();
-    const before = ds.canonicalize();
-    // Twice: a trap would have left the instance unusable, so the second call would not
-    // reach the evaluator to refuse it the same way.
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      assert.throws(() => engine.select(ds, deep), STACK_REFUSAL);
+test("nested LATERAL answers on the synchronous lane as deep as the lane holds it, one level more is a typed refusal, and the engine answers afterwards", () => {
+  const ds = Dataset.parse(NEST_DATA, "nquads");
+  const engine = new QueryEngine();
+  const before = ds.canonicalize();
+  /** `{ rows }` for an answer, `{ refused }` for a typed stack refusal; anything else fails. */
+  const lateral = (depth) => {
+    try {
+      return { rows: subjectsOf(engine.select(ds, nestedLateral(depth))) };
+    } catch (error) {
+      assert.match(error.message, ANY_STACK_REFUSAL, `${depth} nested LATERAL: a typed stack refusal, not a trap`);
+      return { refused: error.message };
     }
+  };
+  // The real end, by bisection between 40 levels (which answer) and 20 000 (refused by
+  // the host-stack admission before evaluation starts). Only `s1` has a `<q>`, at every level.
+  let [deepest, refused] = [40, 20_000];
+  assert.deepEqual(lateral(deepest).rows, ["s1"], "40 levels answer");
+  assert.ok(lateral(refused).refused, "20 000 levels are refused");
+  while (refused - deepest > 1) {
+    const mid = (deepest + refused) >> 1;
+    if (lateral(mid).rows) deepest = mid;
+    else refused = mid;
+  }
+  // The pair at the lane's real end: the deepest level answers the rows its semantics
+  // give, and one level more is a typed refusal — twice, since a trap would have left the
+  // instance unable to refuse the same way again.
+  assert.deepEqual(lateral(deepest).rows, ["s1"], `${deepest} levels answer`);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const refusal = lateral(refused).refused ?? "";
+    assert.match(refusal, ANY_STACK_REFUSAL, `${refused} levels are refused`);
     // The evaluator's refusal keeps its code and its own words, with nothing appended.
-    assert.throws(() => engine.select(ds, deep), (error) => {
-      assert.match(error.message, EVALUATION_STACK_REFUSAL_EXACT);
-      return true;
-    });
-    // No memory was overwritten: the dataset's canonical form is byte-identical, and
-    // queries over it and over a freshly parsed one answer exactly.
-    assert.equal(ds.canonicalize(), before);
-    assert.deepEqual(subjectsOf(engine.select(ds, "SELECT ?s WHERE { ?s <https://example.org/q> ?o }")), ["s1"]);
-    const names = engine
-      .select(Dataset.parse(TRIG, "trig"), "PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name")
-      .rows.toArray()
-      .map((row) => row.name.value);
-    assert.deepEqual(names, ["Ann", "Bob"]);
-    // The valid neighbour: the same form, nested as deep as the stack evaluates, answers
-    // with the rows its semantics give.
-    assert.deepEqual(subjectsOf(engine.select(ds, shallow)), expected);
-  });
-}
+    if (/evaluation-stack-exhausted/.test(refusal)) assert.match(refusal, EVALUATION_STACK_REFUSAL_EXACT);
+  }
+  assert.equal(refused, deepest + 1);
+  // A floor, not a pin. On the build measured the host-stack admission of the query
+  // algebra's height (284 nested graph patterns) ends the lane first, at 282 levels: the evaluator's
+  // frames for them fit its budget, so a level costs it under 3.5 KB of shadow stack.
+  // Before the evaluator's dispatcher kept its operators out of line a level cost about
+  // 5 KB and the evaluator's own refusal ended the lane at 193. A change that grows the
+  // frames enough brings that refusal back, below this floor.
+  assert.ok(deepest >= 281, `${deepest} levels answer; 282 did on the build measured`);
+  // No memory was overwritten: the dataset's canonical form is byte-identical, and
+  // queries over it and over a freshly parsed one answer exactly.
+  assert.equal(ds.canonicalize(), before);
+  assert.deepEqual(subjectsOf(engine.select(ds, "SELECT ?s WHERE { ?s <https://example.org/q> ?o }")), ["s1"]);
+  const names = engine
+    .select(Dataset.parse(TRIG, "trig"), "PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name")
+    .rows.toArray()
+    .map((row) => row.name.value);
+  assert.deepEqual(names, ["Ann", "Bob"]);
+});
 
 // Nested `FILTER NOT EXISTS` on the synchronous lane: it answers as deep as the stack
 // evaluates it, with the rows its semantics give, and one level more is the evaluator's
@@ -713,7 +735,8 @@ test("nested FILTER NOT EXISTS answers on the synchronous lane as deep as its st
   // instance unable to refuse the same way again.
   assert.deepEqual(walkAnswer(engine, ds, deepest).rows, walkByHand(deepest), `${deepest} levels answer`);
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    assert.match(walkAnswer(engine, ds, refused).refused ?? "", /native-sparql-evaluation-stack-exhausted/);
+    // The evaluator's refusal keeps its code and its own words, with nothing appended.
+    assert.match(walkAnswer(engine, ds, refused).refused ?? "", EVALUATION_STACK_REFUSAL_EXACT);
   }
   assert.equal(refused, deepest + 1);
   // The depth is the evaluator's shadow-stack guard on the synchronous lane: the module's
@@ -722,8 +745,13 @@ test("nested FILTER NOT EXISTS answers on the synchronous lane as deep as its st
   // source, so the ungoverned dispatch). The compiler sizes those frames, so the exact
   // pair moves between toolchains (77 levels on one build, 78 on CI's); a floor at the
   // smallest measured depth fails when a change grows the frames, and not when a
-  // toolchain shrinks them.
-  assert.ok(deepest >= 77, `${deepest} levels answer; 77 did on the smallest build measured`);
+  // toolchain shrinks them. The floor sits one level under the smallest measured depth,
+  // the spread seen between toolchains. It was 77 while the evaluator's dispatcher could
+  // absorb operators into its own frame, which a nested query pays twice per level: one
+  // such inlining shift grew a level from about 12.1 KB to 12.6 KB and cost three levels
+  // (78 to 75) unnoticed. With every operator kept out of line a level costs about
+  // 5.4 KB, and 181 levels answer on the build measured.
+  assert.ok(deepest >= 180, `${deepest} levels answer; 181 did on the smallest build measured`);
   // Not poisoned: the same engine answers an ordinary query exactly.
   assert.deepEqual(
     engine

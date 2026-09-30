@@ -863,6 +863,8 @@ fn is_join_identity_values(pattern: &GraphPattern) -> bool {
 /// this node itself originates — from the stop signal, from the request charge, from the
 /// cell ceiling, or from a governor the source reports through [`RemoteError::Governed`].
 /// `SILENT` swallows none of those four.
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_service<D: DatasetView + Sync>(
     node: &GraphPattern,
     name: &NamedNodePattern,

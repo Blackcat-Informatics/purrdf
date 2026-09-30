@@ -406,6 +406,8 @@ impl<D: DatasetView + Sync> PathCtx<'_, D> {
 /// A property path has no sub-pattern, so there is no child truncation to compose: like a
 /// basic graph pattern, it is where a truncation ORIGINATES rather than somewhere one
 /// passes through, and the dispatch in [`crate::eval::eval`] wraps its result directly.
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_path<D: DatasetView + Sync>(
     subject: &TermPattern,
     path: &PropertyPathExpression,

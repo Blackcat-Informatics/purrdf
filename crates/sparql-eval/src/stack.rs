@@ -6,10 +6,13 @@
 //!
 //! The parser admits a request of any depth — it keeps what encloses the cursor on
 //! heap-allocated stacks — but the evaluator recurses: one written level of
-//! `FILTER NOT EXISTS` costs the evaluator about 16.7 KB of wasm32 shadow stack, one of
-//! `LATERAL` about 9.5 KB, and any other algebra level (`OPTIONAL`, `MINUS`, `BIND`, a
-//! sibling spine) about 4.8 KB — far more than the parser spent on it — while the flat
-//! and shallow requests need a fraction of any stack. Exhausting the stack is not an
+//! `FILTER NOT EXISTS` or `FILTER EXISTS` costs the evaluator about 5.3 KB of wasm32
+//! shadow stack, one of `BIND` about 2.4 KB, and one of `LATERAL`, `OPTIONAL` or
+//! `MINUS` about 1.2 to 1.4 KB — far more than the parser spent on it — while the flat
+//! and shallow requests need a fraction of any stack. (Measured on the shipped npm
+//! artifact as the growth of a job's deepest poll between 20 and 60 levels. The
+//! figures hold only while `eval::eval_node` stays a thin dispatcher, since its frame
+//! is paid twice per level of a negation.) Exhausting the stack is not an
 //! error anywhere: natively the process aborts, and on `wasm32-unknown-unknown` the
 //! shadow stack runs below its floor and traps with the instance's memory in an unknown
 //! state.

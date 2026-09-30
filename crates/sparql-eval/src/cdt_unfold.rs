@@ -114,6 +114,8 @@ use crate::solution::{Solution, SolutionSeq, VarSchema};
 /// [`EvalError::CompositeBound`](crate::error::EvalError::CompositeBound), which
 /// is a hard failure of the query rather than an empty expansion (see the module
 /// docs).
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_unfold<D: DatasetView + Sync>(
     node: &GraphPattern,
     inner: &GraphPattern,

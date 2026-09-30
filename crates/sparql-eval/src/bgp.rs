@@ -136,6 +136,8 @@ struct CompiledPattern<I: ViewTermId = TermId> {
 /// dispatch in [`crate::eval::eval`] therefore wraps this result directly, and this
 /// function keeps its `&EvalCtx` (shared, not exclusive) borrow — the property that lets
 /// a parallel worker call it from a shared context.
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_bgp<D: DatasetView + Sync>(
     patterns: &[TriplePattern],
     ctx: &EvalCtx<'_, D>,

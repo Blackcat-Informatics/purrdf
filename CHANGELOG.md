@@ -2622,6 +2622,14 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Fixed
 
+- **sparql-eval, wasm:** nested `FILTER NOT EXISTS` answers 181 levels deep on
+  the synchronous wasm lane, up from 75; nested `FILTER EXISTS` answers 203, up
+  from 117, and nested `LATERAL` 282, up from 193, where the query-height
+  admission now ends it before the evaluator's stack does. One operator serving
+  both `DISTINCT` and `REDUCED` had been inlined into the evaluator's recursive
+  dispatcher, whose frame a nested negation pays twice per level. `eval_node` is
+  now a thin dispatcher: every operator it calls is kept out of line, which also
+  roughly doubles the nesting a native thread's stack evaluates.
 - **rdf, entail:** the RDF/XML, TriX and RIF-XML readers read a document type
   declaration as XML 1.0 requires of a non-validating processor: internal
   entities (such as `<!ENTITY xsd "http://www.w3.org/2001/XMLSchema#">` used as

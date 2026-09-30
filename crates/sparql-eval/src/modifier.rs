@@ -129,6 +129,8 @@ use crate::{DetHashMap, DetHashSet, DetHasher};
 
 /// Inline `VALUES`: one solution per binding row, each cell an interned ground term
 /// (or unbound for `UNDEF`).
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_values<D: DatasetView + Sync>(
     variables: &[Variable],
     bindings: &[Vec<Option<purrdf_sparql_algebra::GroundTerm>>],
@@ -188,6 +190,8 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
 
 /// `SELECT`-list projection: restrict to `variables` in order. A projected variable
 /// absent from the inner solution yields an all-unbound column.
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_project<D: DatasetView + Sync>(
     node: &GraphPattern,
     inner: &GraphPattern,
@@ -220,6 +224,8 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
 /// prefix and commits **per input row**: a prefix of the input dedups to a prefix of the
 /// output, which is why a truncation below either operator keeps its bound instead of
 /// voiding every `SELECT DISTINCT` in the corpus.
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_dedup<D: DatasetView + Sync>(
     node: &GraphPattern,
     inner: &GraphPattern,
@@ -262,6 +268,8 @@ fn dedup<I: ViewTermId>(seq: SolutionSeq<I>) -> SolutionSeq<I> {
 /// a sub-bag it can select rows the true query never returns. The lift enforces that —
 /// a truncation that reaches this node having lost positional fidelity anywhere below it
 /// yields no rows at all — so the ordinary slice below only ever runs over a prefix.
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_slice<D: DatasetView + Sync>(
     node: &GraphPattern,
     inner: &GraphPattern,
@@ -286,6 +294,8 @@ pub(crate) fn eval_slice<D: DatasetView + Sync>(
 }
 
 /// `ORDER BY`: stable-sort by the sort keys under SPARQL ordering (§15.1).
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_order_by<D: DatasetView + Sync>(
     node: &GraphPattern,
     inner: &GraphPattern,
@@ -347,6 +357,8 @@ pub(crate) fn rebuild_order(order: &OrderExpression, expr: Expression) -> OrderE
 
 /// `GRAPH name { ... }`: scope the inner pattern to a named graph (or, for a
 /// variable, every named graph in turn, binding the variable to each).
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_graph<D: DatasetView + Sync>(
     node: &GraphPattern,
     name: &NamedNodePattern,
@@ -1338,6 +1350,8 @@ pub fn fold_values(
 /// grouped input is opaque and the lift withholds every row, carrying the barrier in
 /// their place. Computing the aggregates anyway and discarding them would be the same
 /// answer at higher cost, so the operator returns before grouping.
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
 pub(crate) fn eval_group<D: DatasetView + Sync>(
     node: &GraphPattern,
     inner: &GraphPattern,

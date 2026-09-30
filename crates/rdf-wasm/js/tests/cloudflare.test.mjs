@@ -2174,32 +2174,47 @@ test("refusal pair: an operation this endpoint misconfigured is a 500 InternalEr
 
 // The query's own evaluation failure keeps its 500, now with the engine's code as `code`
 // (never "Error") and the engine's words as `detail`: nothing in them is the host's. A
-// request nested deeper than any stack the engine runs on holds is one — 126 nested
-// `LATERAL`, which the evaluator refuses on the synchronous lane and on a job's region
-// alike, word for word; the shallow neighbour answers.
+// request nested one level deeper than the stack the endpoint's job runs on holds is one
+// — nested `FILTER NOT EXISTS`, which the evaluator refuses once its frames reach the
+// region's reserve. The endpoint's real end is found by bisection: the deepest level
+// answers 200, one level more is the 500 carrying the job lane's own refusal, word for
+// word; a shallow neighbour answers too.
 test("refusal pair: an evaluation failure is a 500 with the engine's code and words; the shallow neighbour answers 200", async () => {
   const data = [1, 2, 3, 4]
     .map((n) => `<${EX}s${n}> <${EX}p> <${EX}o${n}> .`)
     .concat([`<${EX}s1> <${EX}q> <${EX}o1> .`])
     .join("\n");
   const nested = (depth) =>
-    `SELECT ?s WHERE { ${`?s <${EX}p> ?o LATERAL { `.repeat(depth)}?s <${EX}q> ?z${" }".repeat(depth)} }`;
+    `SELECT ?s WHERE { ${`?s <${EX}p> ?o FILTER NOT EXISTS { `.repeat(depth)}?s <${EX}q> ?z${" }".repeat(depth)} }`;
   const options = {
     engine: new QueryEngine(),
     dataset: Dataset.parse(data, "nquads"),
     governors: GOVERNORS,
   };
-  let syncRefusal;
-  assert.throws(() => new QueryEngine().select(options.dataset, nested(126)), (error) => {
-    syncRefusal = error.message;
+  const status = async (depth) => (await handleSparqlRequest(httpRequest({ query: q(nested(depth)) }), options)).status;
+  // Between 63 levels (which answer) and 2 000 (past the host-stack admission of the
+  // query algebra's height, which is the request's own fault: a 400, not this 500).
+  let [deepest, refused] = [63, 2_000];
+  assert.equal(await status(deepest), 200);
+  assert.equal(await status(refused), 400);
+  while (refused - deepest > 1) {
+    const mid = (deepest + refused) >> 1;
+    if ((await status(mid)) === 200) deepest = mid;
+    else refused = mid;
+  }
+  assert.equal(await status(deepest), 200, `${deepest} levels answer`);
+
+  let jobRefusal;
+  await assert.rejects(new QueryEngine().queryGovernedAsync(options.dataset, nested(refused), GOVERNORS), (error) => {
+    jobRefusal = error.message;
     return true;
   });
-  const exhausted = await handleSparqlRequest(httpRequest({ query: q(nested(126)) }), options);
-  assert.equal(exhausted.status, 500);
+  const exhausted = await handleSparqlRequest(httpRequest({ query: q(nested(refused)) }), options);
+  assert.equal(exhausted.status, 500, `${refused} levels are the evaluator's refusal`);
   const body = await problemOf(exhausted);
   assert.equal(body.code, "native-sparql-evaluation-stack-exhausted");
   assert.match(body.detail, /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: /);
-  assert.equal(body.detail, syncRefusal, "the endpoint's detail is the synchronous lane's refusal");
+  assert.equal(body.detail, jobRefusal, "the endpoint's detail is the job lane's refusal");
   assert.equal(body.correlationId, undefined);
 
   const shallow = await handleSparqlRequest(httpRequest({ query: q(nested(3)) }), options);
