@@ -43,12 +43,6 @@ purrdf-core = { workspace = true }
 # without any feature gate (carrier-purity — `.goals` forbids optional
 # components).
 purrdf-xsd = { workspace = true }
-# JSON / YAML surface for the first-party JSON-LD-star / YAML-LD-star codec
-# (`native_codecs::jsonld`). Already in the validate + pipeline trees, so
-# this adds no new tree-wide dependency.
-serde_json = { workspace = true }
-serde = { workspace = true }
-serde_yaml = { workspace = true }
 # CSVW string/duration format validation. Already workspace-pinned and present in
 # the SPARQL tree; the direct edge keeps one standards parser on native and wasm.
 regex = { workspace = true }
