@@ -35,7 +35,10 @@ use support::result_size;
 
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, ResourceDimension, TermValue};
+use purrdf_core::{
+    RdfDataset, RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlResult, TermValue,
+};
+use purrdf_iri::vocab::rdf::TYPE;
 use purrdf_sparql_eval::{
     CancellationFlag, EvalOptions, GovernedOutcome, NativeSparqlEngine, PreparedQuery,
     QueryGovernors, QueryOptions,
@@ -169,6 +172,71 @@ fn bench_governed_query(c: &mut Bench) {
             ));
         });
     });
+    group.finish();
+}
+
+/// Fixed-length paths connecting otherwise independent typed endpoints. Queries are
+/// prepared outside timing; a fresh engine keeps every sample's join-order cache cold.
+fn bench_linear_paths(c: &mut Bench) {
+    let queries = [
+        (
+            "path",
+            "?x <https://example.org/p>/<https://example.org/q> ?y",
+        ),
+        (
+            "expanded",
+            "?x <https://example.org/p> ?mid . ?mid <https://example.org/q> ?y",
+        ),
+    ]
+    .map(|(label, path)| {
+        let query = format!(
+            "SELECT ?x ?y ?tx ?ty WHERE {{ {path} . ?x a ?tx . ?y a ?ty }} ORDER BY ?x ?y ?tx ?ty"
+        );
+        (
+            label,
+            NativeSparqlEngine::new()
+                .prepare_query(&query, None)
+                .expect("prepare linear-path benchmark"),
+        )
+    });
+    let mut group = c.benchmark_group("governed_eval/linear_paths");
+    for chains in [16_usize, 64, 256] {
+        let mut builder = RdfDatasetBuilder::new();
+        let p = builder.intern_iri(&format!("{EX}p"));
+        let q = builder.intern_iri(&format!("{EX}q"));
+        let rdf_type = builder.intern_iri(TYPE);
+        let kind = builder.intern_iri(&format!("{EX}Kind"));
+        for index in 0..chains {
+            let subject = builder.intern_iri(&format!("{EX}s{index}"));
+            let middle = builder.intern_iri(&format!("{EX}m{index}"));
+            let object = builder.intern_iri(&format!("{EX}o{index}"));
+            builder.push_quad(subject, p, middle, None);
+            builder.push_quad(middle, q, object, None);
+            builder.push_quad(subject, rdf_type, kind, None);
+            builder.push_quad(object, rdf_type, kind, None);
+        }
+        let dataset = builder.freeze().expect("freeze linear-path dataset");
+        let results = queries.each_ref().map(|(_, prepared)| {
+            NativeSparqlEngine::new()
+                .query_prepared(&dataset, prepared, &[], QueryOptions::EMPTY)
+                .expect("linear-path answer")
+        });
+        let answers = results.each_ref().map(|result| match result {
+            SparqlResult::Solutions {
+                variables, rows, ..
+            } => (variables, rows),
+            other => panic!("expected solutions, got {other:?}"),
+        });
+        assert_eq!(answers[0], answers[1], "path and expansion agree");
+        assert_eq!(result_size(&results[0]), chains);
+        for (label, prepared) in &queries {
+            group.bench_with_input(BenchmarkId::new(*label, chains), &chains, |bencher, _| {
+                bencher.iter(|| {
+                    std::hint::black_box(run_plain(&NativeSparqlEngine::new(), &dataset, prepared))
+                });
+            });
+        }
+    }
     group.finish();
 }
 
@@ -310,6 +378,7 @@ bench_group!(
     benches,
     bench_governed_query,
     bench_path_scaling,
+    bench_linear_paths,
     bench_governed_row_loops
 );
 bench_main!(benches);
