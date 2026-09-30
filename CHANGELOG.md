@@ -446,9 +446,48 @@ under Changed and Fixed where a longer account helps.
 - **lex:** `purrdf_lex::xml`, the XML 1.0 + Namespaces reader: a pull `Reader`
   and a `Document` tree, an explicit depth cap, no machine-stack recursion and
   byte offsets in every error. A `DOCTYPE` is refused unless the caller asks
-  for the internal subset (`Dtd::internal_subset`), whose internal entities
-  expand under an expansion budget; external subsets, external entities and
-  parameter entities are always refused.
+  for the internal subset (`Dtd::internal_subset`), whose internal general and
+  parameter entities expand under one expansion budget; nothing is ever
+  fetched (see the XML conformance entry below for what is refused).
+- **lex:** `purrdf_lex::xml` reads parameter entities as XML 1.0 §4.4.8 and
+  §5.1 require of a non-validating processor. `<!ENTITY % name "...">` and
+  `%name;` between markup declarations of the internal subset are read
+  (including the declarations a replacement text produces, so the Appendix D
+  `&#37;` example works); a reference inside a markup declaration ("PEs in
+  Internal Subset"), malformed syntax, a recursive entity, a declaration that
+  does not close in the entity it opens in, and an expansion bomb are refused
+  with their own errors, on a heap stack and the same replacement-text budget
+  as general entities. An external parameter entity or external subset is
+  never fetched: the generic reader stays spec-lenient and lets it be named,
+  declared and referenced, the declarations
+  after it are checked but bind nothing (`Reader::declarations_unread`,
+  `Document::declarations_unread`), and a reference to an entity only such
+  declarations could bind is refused (`XmlErrorKind::UnexpandedEntity`)
+  rather than dropped. An external or unparsed entity may be declared; a
+  reference to one is refused (`ExternalEntity`, `UnparsedEntity`). Before,
+  any parameter entity, external subset or external entity declaration was
+  refused, which refused well-formed documents.
+- **lex:** the XML reader checks every markup declaration a non-validating
+  processor must (`ELEMENT` content models, `ATTLIST` types and defaults,
+  `NOTATION`, `ENTITY`, external identifiers, the predefined-entity
+  redeclaration rule), so malformed declarations were accepted before; an
+  `ATTLIST` default expands the entities declared before it (a forward
+  reference is a well-formedness error), and processing instructions in the
+  internal subset now reach the caller as events.
+- **lex:** `purrdf_lex::xml::decode` turns document bytes into reader text
+  under XML 1.0 Appendix F: UTF-8, UTF-16 (either byte order), US-ASCII and
+  ISO-8859-1; any other encoding (UCS-4, EBCDIC, Shift_JIS, EUC-JP, ...) is
+  refused as `XmlErrorKind::UnsupportedEncoding`, and bytes that contradict
+  their declaration as `Encoding`. A document declaring `version="1.1"` is
+  refused (`UnsupportedVersion`) instead of being read as XML 1.0; other
+  `1.x` versions read as 1.0, per the Fifth Edition.
+- **lex:** the W3C XML Conformance Test Suite (xmlts20130923), vendored
+  byte-frozen in `vectors/xmlconf/` by `scripts/vendor-xmlconf.py` (pinned URL
+  and SHA-256, `PROVENANCE.md`), grades the reader in
+  `crates/lex/tests/xmlconf.rs`: 2585 cases, every one classified from its own
+  `TYPE`, `VERSION`, `EDITION`, `ENTITIES` and `NAMESPACE` attributes and the
+  reader's error kinds (no skip list), with `OUTPUT` canonical forms compared
+  byte for byte; zero failures, totals pinned.
 - **lex:** `literal_escape` (`write`/`escape` over `Carrier::{Canonical, Xml,
   TurtleLong}`, and the chunked kernels behind them), `iri_escape`,
   `term_syntax` (`write_iri`, `write_literal` with `xsd:string` elided,
@@ -2552,9 +2591,15 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   declaration as XML 1.0 requires of a non-validating processor: internal
   entities (such as `<!ENTITY xsd "http://www.w3.org/2001/XMLSchema#">` used as
   `&xsd;integer`) expand under the reader's expansion budget, and an external
-  subset, an external entity or a parameter entity is refused, so no document
-  causes a fetch. Such well-formed RDF/XML was refused for its DTD. GraphML,
-  DataCite and SPARQL Results XML still refuse any DTD.
+  subset, an external entity or an external parameter entity is never fetched
+  (a reference to an external entity is refused), so no document causes a
+  fetch. A document naming an external subset or external parameter entity is
+  refused with the reason (`Document::declarations_unread`: default attributes
+  and entity declarations may be missing), never read with declarations
+  silently unapplied; the RDF/XML, TriX, GraphML, DataCite and RIF-XML
+  readers all apply this. Such well-formed RDF/XML with only an internal subset
+  was refused for its DTD before. GraphML, DataCite and SPARQL Results XML
+  still refuse any DTD.
 - **rdf:** the JSON-LD serializer folds a list of lists however deep without
   recursing: a 2 000-level list of lists serializes on a 128 KiB thread.
 - **slice:** `Dataset::canonical_nquads_flat` flattens through

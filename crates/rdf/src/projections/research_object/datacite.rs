@@ -380,6 +380,10 @@ fn parse_datacite(
             "DataCite XML nests {depth} elements deep, past the parser limit"
         ))
         .at_path(DATACITE_ARTIFACT),
+        crate::nesting::XmlReadError::DeclarationsUnread => {
+            ProjectionError::syntax(crate::nesting::XmlReadError::UNREAD_MESSAGE)
+                .at_path(DATACITE_ARTIFACT)
+        }
         crate::nesting::XmlReadError::Malformed(error) => {
             ProjectionError::syntax(format!("parse DataCite XML: {error}"))
                 .at_path(DATACITE_ARTIFACT)

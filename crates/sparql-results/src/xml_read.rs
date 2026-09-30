@@ -463,6 +463,7 @@ mod tests {
         assert_eq!(literal_text(&plain).expect("no DOCTYPE"), "x");
         for doctype in [
             "<!DOCTYPE sparql>",
+            "<!DOCTYPE sparql SYSTEM \"x.dtd\">",
             "<!DOCTYPE sparql [<!ENTITY x \"expanded\">]>",
         ] {
             let mut document = doctype.as_bytes().to_vec();

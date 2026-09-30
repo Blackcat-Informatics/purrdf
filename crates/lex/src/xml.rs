@@ -29,10 +29,24 @@
 //!   answers in-scope bindings in both directions.
 //! * **No fetching, no bombs** — a document type declaration is refused
 //!   ([`XmlErrorKind::Doctype`]) unless the caller asks for its internal
-//!   subset ([`Dtd::InternalSubset`]), and even then an external subset, an
-//!   external or unparsed entity and every parameter entity are refused
-//!   ([`XmlErrorKind::ExternalEntity`], [`XmlErrorKind::ParameterEntity`]),
-//!   and the total replacement text expanded is bounded.
+//!   subset ([`Dtd::InternalSubset`]). Then every markup declaration is
+//!   checked, internal general and parameter entities are declared and
+//!   expanded, and the total replacement text expanded is bounded
+//!   ([`XmlErrorKind::EntityExpansionLimit`]). External entities and the
+//!   external subset are never fetched: they may be named and declared, and
+//!   [`Reader::declarations_unread`] reports that declarations were left
+//!   unread (XML 1.0 §5.1), but a reference to an external or unparsed entity
+//!   is refused ([`XmlErrorKind::ExternalEntity`],
+//!   [`XmlErrorKind::UnparsedEntity`]), as is a reference only an unread
+//!   declaration could bind ([`XmlErrorKind::UnexpandedEntity`]).
+//! * **XML 1.0 only** — a document declaring version `1.1` is refused
+//!   ([`XmlErrorKind::UnsupportedVersion`]), never read as 1.0.
+//! * **Encodings** — the reader reads text; [`decode`] turns document bytes
+//!   into text under XML 1.0 Appendix F, supporting UTF-8, UTF-16, US-ASCII
+//!   and ISO-8859-1, and refusing any other encoding
+//!   ([`XmlErrorKind::UnsupportedEncoding`]) rather than misreading it.
+//! * **Conformance** — graded against the W3C XML Conformance Test Suite
+//!   (`crates/lex/tests/xmlconf.rs`, over `vectors/xmlconf`).
 //! * **No machine-stack recursion, and an explicit depth cap** — the reader
 //!   keeps its open elements and its entity expansions on heap stacks, and
 //!   refuses an element deeper than [`Options::max_depth`]
@@ -71,10 +85,12 @@
 //! assert_eq!(item.text(), Some("A & B <raw> A"));
 //! ```
 
+mod decode;
 mod dom;
 mod error;
 mod reader;
 
+pub use decode::decode;
 pub use dom::{Document, ExpandedName, NameQuery, Namespace, Node, NodeId, NodeType};
 pub use error::{XmlError, XmlErrorKind};
 pub use reader::{

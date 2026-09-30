@@ -288,10 +288,16 @@ fn a_double_hyphen_comment_is_refused_and_a_single_hyphen_is_read() {
 fn the_xml_declaration_opens_the_document_or_is_refused() {
     let document = parse("\u{feff}<?xml version=\"1.0\" encoding='UTF-8' standalone=\"yes\"?><a/>");
     assert!(document.is_ok());
-    let mut reader = Reader::new("<?xml version='1.1'?><a/>");
+    // An XML 1.1 document is refused, never read as though it were 1.0; the
+    // neighbouring 1.0 declaration is read.
+    assert_eq!(
+        kind(parse("<?xml version='1.1'?><a/>")),
+        XmlErrorKind::UnsupportedVersion("1.1".to_owned())
+    );
+    let mut reader = Reader::new("<?xml version='1.0'?><a/>");
     match reader.next().expect("declaration") {
         Event::Declaration(declaration) => {
-            assert_eq!(declaration.version, "1.1");
+            assert_eq!(declaration.version, "1.0");
             assert_eq!(declaration.encoding, None);
             assert_eq!(declaration.standalone, None);
         }
@@ -584,11 +590,8 @@ fn internal_entities_expand_in_text_and_attribute_values() {
 }
 
 #[test]
-fn an_external_entity_is_refused_and_an_internal_one_is_read() {
-    assert_eq!(
-        kind(parse_dtd("<!DOCTYPE r SYSTEM 'r.dtd'><r/>")),
-        XmlErrorKind::ExternalEntity
-    );
+fn an_external_entity_reference_is_refused_and_an_internal_one_is_read() {
+    // A reference the reader cannot expand is refused, never dropped.
     assert_eq!(
         kind(parse_dtd(
             "<!DOCTYPE r [<!ENTITY e SYSTEM 'e.xml'>]><r>&e;</r>"
@@ -597,27 +600,551 @@ fn an_external_entity_is_refused_and_an_internal_one_is_read() {
     );
     assert_eq!(
         kind(parse_dtd(
-            "<!DOCTYPE r [<!ENTITY e PUBLIC 'p' 'e.xml'>]><r/>"
+            "<!DOCTYPE r [<!ENTITY e PUBLIC 'p' 'e.xml'>]><r a='&e;'/>"
         )),
         XmlErrorKind::ExternalEntity
     );
+    // The neighbours: declaring an external entity, or naming an external
+    // subset, is well-formed and is read without fetching anything.
+    assert!(parse_dtd("<!DOCTYPE r [<!ENTITY e SYSTEM 'e.xml'>]><r/>").is_ok());
+    assert!(parse_dtd("<!DOCTYPE r PUBLIC 'p' 'e.xml'><r/>").is_ok());
     let document = parse_dtd("<!DOCTYPE r [<!ENTITY e 'inside'>]><r>&e;</r>").expect("internal");
     assert_eq!(document.root_element().text(), Some("inside"));
+    assert!(!document.declarations_unread());
 }
 
 #[test]
-fn a_parameter_entity_is_refused_and_a_general_one_is_read() {
+fn an_external_subset_is_not_read_and_says_so() {
+    let document = parse_dtd("<!DOCTYPE r SYSTEM 'r.dtd'><r/>").expect("named, not fetched");
+    assert!(document.declarations_unread());
+    // A reference only the unread subset could bind is refused as such; with
+    // no external subset the same reference is plainly undeclared.
     assert_eq!(
-        kind(parse_dtd("<!DOCTYPE r [<!ENTITY % p 'x'>]><r/>")),
-        XmlErrorKind::ParameterEntity
+        kind(parse_dtd("<!DOCTYPE r SYSTEM 'r.dtd'><r>&x;</r>")),
+        XmlErrorKind::UnexpandedEntity("x".to_owned())
     );
     assert_eq!(
-        kind(parse_dtd("<!DOCTYPE r [<!ENTITY e 'a%b'>]><r/>")),
-        XmlErrorKind::ParameterEntity
+        kind(parse_dtd("<!DOCTYPE r><r>&x;</r>")),
+        XmlErrorKind::UndeclaredEntity("x".to_owned())
     );
-    assert!(parse_dtd("<!DOCTYPE r [<!ENTITY e 'a b'>]><r>&e;</r>").is_ok());
+    // `standalone="yes"` makes the declaration mandatory again.
+    assert_eq!(
+        kind(parse_dtd(
+            "<?xml version='1.0' standalone='yes'?><!DOCTYPE r SYSTEM 'r.dtd'><r>&x;</r>"
+        )),
+        XmlErrorKind::UndeclaredEntity("x".to_owned())
+    );
+    // A malformed external identifier is still refused.
+    assert!(parse_dtd("<!DOCTYPE r SYSTEM><r/>").is_err());
+    assert!(parse_dtd("<!DOCTYPE r PUBLIC 'p'><r/>").is_err());
+    assert!(parse_dtd("<!DOCTYPE r PUBLIC 'a\u{1}b' 's'><r/>").is_err());
 }
 
+#[test]
+fn an_unparsed_entity_may_be_declared_and_is_refused_when_referenced() {
+    let declared = "<!DOCTYPE r [<!NOTATION n SYSTEM 'n'><!ENTITY u SYSTEM 'u.gif' NDATA n>]>";
+    assert!(parse_dtd(&format!("{declared}<r/>")).is_ok());
+    assert_eq!(
+        kind(parse_dtd(&format!("{declared}<r>&u;</r>"))),
+        XmlErrorKind::UnparsedEntity("u".to_owned())
+    );
+    assert_eq!(
+        kind(parse_dtd(&format!("{declared}<r a='&u;'/>"))),
+        XmlErrorKind::UnparsedEntity("u".to_owned())
+    );
+}
+
+// ── Parameter entities ─────────────────────────────────────────────────────
+
+#[test]
+fn an_internal_parameter_entity_declares_entities_between_declarations() {
+    // A parameter entity whose replacement text is a declaration.
+    let document =
+        parse_dtd("<!DOCTYPE r [<!ENTITY % d \"<!ENTITY e 'declared by a PE'>\"> %d;]><r>&e;</r>")
+            .expect("a parameter-entity declaration and reference");
+    assert_eq!(document.root_element().text(), Some("declared by a PE"));
+    // Several declarations, comments, processing instructions and ATTLIST
+    // defaults, produced by one replacement text.
+    let document = parse_dtd(
+        "<!DOCTYPE r [<!ENTITY % all \"<!ELEMENT r ANY><!ATTLIST r a CDATA 'dflt'><!-- c -->\
+         <?p d?><!ENTITY e 'x'>\"> %all;]><r>&e;</r>",
+    )
+    .expect("declarations from a parameter entity");
+    assert_eq!(document.root_element().attribute("a"), Some("dflt"));
+    assert_eq!(document.root_element().text(), Some("x"));
+    // Appendix D: the character reference in the value is resolved when `xx`
+    // is declared, so `%xx;` is itself a reference to `zz`.
+    let document = parse_dtd(
+        "<!DOCTYPE t [<!ELEMENT t (#PCDATA)><!ENTITY % xx '&#37;zz;'>\
+         <!ENTITY % zz '&#60;!ENTITY tricky \"error-prone\" >' > %xx;]>\
+         <t>a &tricky; method</t>",
+    )
+    .expect("Appendix D example 2");
+    assert_eq!(document.root_element().text(), Some("a error-prone method"));
+    // A reference may sit anywhere between declarations, and follow the
+    // entity's own text.
+    assert!(parse_dtd("<!DOCTYPE r [<!ENTITY % e '<!---->'>%e;<!---->%e;]><r/>").is_ok());
+    // The declaration alone, unreferenced, is well-formed; the first
+    // declaration of a name binds.
+    let document = parse_dtd(
+        "<!DOCTYPE r [<!ENTITY % e '<!ENTITY g \"first\">'><!ENTITY % e '<!ENTITY g \"second\">'>%e;]>\
+         <r>&g;</r>",
+    )
+    .expect("first binds");
+    assert_eq!(document.root_element().text(), Some("first"));
+}
+
+#[test]
+fn parameter_entity_syntax_and_placement_are_checked() {
+    // Malformed references: no `;`, no name.
+    assert!(matches!(
+        kind(parse_dtd("<!DOCTYPE r [<!ENTITY % e ''>%e]><r/>")),
+        XmlErrorKind::Expected(_)
+    ));
+    assert_eq!(
+        kind(parse_dtd("<!DOCTYPE r [%;]><r/>")),
+        XmlErrorKind::InvalidName
+    );
+    assert_eq!(
+        kind(parse_dtd("<!DOCTYPE r [<!ENTITY % e ''>% e;]><r/>")),
+        XmlErrorKind::InvalidName
+    );
+    // Malformed declarations: no space after `%`, no value.
+    assert!(parse_dtd("<!DOCTYPE r [<!ENTITY %e 'x'>]><r/>").is_err());
+    assert!(parse_dtd("<!DOCTYPE r [<!ENTITY % e>]><r/>").is_err());
+    // Well-formedness constraint "PEs in Internal Subset": a reference within a
+    // markup declaration is refused, in each declaration kind.
+    for text in [
+        "<!DOCTYPE r [<!ENTITY % p 'x'><!ENTITY g '%p;'>]><r/>",
+        "<!DOCTYPE r [<!ENTITY % p 'x'><!ELEMENT r (%p;)>]><r/>",
+        "<!DOCTYPE r [<!ENTITY % p 'x'><!ATTLIST r %p; CDATA #IMPLIED>]><r/>",
+        "<!DOCTYPE r [<!ENTITY % p 'x'><!ENTITY %p; 'v'>]><r/>",
+        "<!DOCTYPE r [<!ENTITY % p 'x'><!NOTATION n %p;>]><r/>",
+    ] {
+        assert_eq!(
+            kind(parse_dtd(text)),
+            XmlErrorKind::ParameterEntity,
+            "{text}"
+        );
+    }
+    // Between declarations the same reference is fine, and inside a comment or
+    // an ATTLIST default it is text.
+    assert!(
+        parse_dtd("<!DOCTYPE r [<!ENTITY % p 'x'><!-- %p; --><!ATTLIST r a CDATA '%p;'>%p;]><r/>")
+            .is_err(),
+        "`x` is not a declaration"
+    );
+    let document = parse_dtd(
+        "<!DOCTYPE r [<!ENTITY % p ''><!-- %nope; --><!ATTLIST r a CDATA '%p;'>%p;]><r/>",
+    )
+    .expect("inert references");
+    assert_eq!(document.root_element().attribute("a"), Some("%p;"));
+    // An undeclared parameter entity is refused.
+    assert_eq!(
+        kind(parse_dtd("<!DOCTYPE r [%nope;]><r/>")),
+        XmlErrorKind::UndeclaredParameterEntity("nope".to_owned())
+    );
+    // A conditional section belongs to the external subset.
+    assert!(parse_dtd("<!DOCTYPE r [<![INCLUDE[ ]]>]><r/>").is_err());
+    // Text that is not a declaration.
+    assert!(parse_dtd("<!DOCTYPE r [<!ENTITY % p 'stray text'>%p;]><r/>").is_err());
+}
+
+#[test]
+fn a_declaration_closes_in_the_entity_it_opens_in() {
+    // "Proper Declaration/PE Nesting".
+    let open = "<!DOCTYPE r [<!ENTITY % e \"<!ENTITY g 'x'\">%e;>]><r/>";
+    assert_eq!(
+        kind(parse_dtd(open)),
+        XmlErrorKind::UnbalancedEntity("%e".to_owned())
+    );
+    let closed = "<!DOCTYPE r [<!ENTITY % e \"<!ENTITY g 'x'>\">%e;]><r>&g;</r>";
+    assert!(parse_dtd(closed).is_ok());
+    // An error inside an entity is reported at the reference to it.
+    let error = parse_dtd("<!DOCTYPE r [<!ENTITY % e '<!ELEMENT>'>%e;]><r/>").unwrap_err();
+    assert_eq!(
+        error.offset(),
+        "<!DOCTYPE r [<!ENTITY % e '<!ELEMENT>'>".len()
+    );
+}
+
+#[test]
+fn recursive_parameter_entities_are_refused_and_nested_ones_are_read() {
+    assert_eq!(
+        kind(parse_dtd(
+            "<!DOCTYPE r [<!ENTITY % a '&#37;b;'><!ENTITY % b '&#37;a;'>%a;]><r/>"
+        )),
+        XmlErrorKind::RecursiveEntity("%a".to_owned())
+    );
+    assert_eq!(
+        kind(parse_dtd("<!DOCTYPE r [<!ENTITY % a '&#37;a;'>%a;]><r/>")),
+        XmlErrorKind::RecursiveEntity("%a".to_owned())
+    );
+    let document = parse_dtd(
+        "<!DOCTYPE r [<!ENTITY % a '<!ENTITY g \"deep\">'><!ENTITY % b '&#37;a;'>\
+         <!ENTITY % c '&#37;b;&#37;b;'>%c;]><r>&g;</r>",
+    )
+    .expect("the same entity twice is not recursion");
+    assert_eq!(document.root_element().text(), Some("deep"));
+}
+
+#[test]
+fn a_parameter_entity_bomb_is_refused_and_a_small_expansion_is_read() {
+    // Each level doubles the last: 2^25 comments from a few hundred bytes.
+    let mut subset = String::from("<!ENTITY % l0 '<!---->'>");
+    for level in 1..=25 {
+        let _ = write!(
+            subset,
+            "<!ENTITY % l{level} '&#37;l{};&#37;l{};'>",
+            level - 1,
+            level - 1
+        );
+    }
+    let bomb = format!("<!DOCTYPE r [{subset}%l25;]><r/>");
+    assert!(matches!(
+        kind(parse_dtd(&bomb)),
+        XmlErrorKind::EntityExpansionLimit { .. }
+    ));
+    let small = format!("<!DOCTYPE r [{subset}%l4;]><r/>");
+    assert!(parse_dtd(&small).is_ok());
+    // The budget is the caller's: the same small document under a tiny one.
+    let options = Options {
+        dtd: Dtd::InternalSubset { max_expansion: 8 },
+        ..Options::default()
+    };
+    assert!(matches!(
+        kind(Document::parse_with_options(&small, options)),
+        XmlErrorKind::EntityExpansionLimit { limit: 8 }
+    ));
+    // Parameter and general entities draw on one budget.
+    let mixed = "<!DOCTYPE r [<!ENTITY % p '<!ENTITY g \"0123456789\">'>%p;]><r>&g;</r>";
+    let tight = Options {
+        dtd: Dtd::InternalSubset { max_expansion: 40 },
+        ..Options::default()
+    };
+    assert!(Document::parse_with_options(mixed, tight).is_ok());
+    let tighter = Options {
+        dtd: Dtd::InternalSubset { max_expansion: 20 },
+        ..Options::default()
+    };
+    assert!(matches!(
+        kind(Document::parse_with_options(mixed, tighter)),
+        XmlErrorKind::EntityExpansionLimit { .. }
+    ));
+}
+
+#[test]
+fn an_external_parameter_entity_is_not_read_and_later_declarations_bind_nothing() {
+    let text = "<!DOCTYPE r [<!ENTITY early 'e'><!ENTITY % x SYSTEM 'x.ent'>%x;\
+                <!ENTITY late 'l'><!ATTLIST r a CDATA 'dflt'>]>";
+    let source = format!("{text}<r>&early;</r>");
+    let document = parse_dtd(&source).expect("§5.1");
+    assert!(document.declarations_unread());
+    assert_eq!(document.root_element().text(), Some("e"));
+    // The default after the unread reference does not apply, and the entity
+    // it might have declared is refused, not guessed.
+    assert_eq!(document.root_element().attribute("a"), None);
+    assert_eq!(
+        kind(parse_dtd(&format!("{text}<r>&late;</r>"))),
+        XmlErrorKind::UnexpandedEntity("late".to_owned())
+    );
+    // What follows is still checked for well-formedness.
+    assert!(parse_dtd("<!DOCTYPE r [<!ENTITY % x SYSTEM 'x.ent'>%x;<!ELEMENT>]><r/>").is_err());
+    // A reference to a parameter entity that only the unread one could have
+    // declared is passed over.
+    assert!(parse_dtd("<!DOCTYPE r [<!ENTITY % x SYSTEM 'x.ent'>%x;%y;]><r/>").is_ok());
+    // A general entity reference is refused wherever declarations were left
+    // unread, including because of an internal parameter entity (§4.4.3: the
+    // reader cannot report a skipped entity).
+    assert_eq!(
+        kind(parse_dtd(
+            "<!DOCTYPE r [<!ENTITY % p '<!ENTITY a \"x\">'>%p;]><r>&b;</r>"
+        )),
+        XmlErrorKind::UnexpandedEntity("b".to_owned())
+    );
+}
+
+#[test]
+fn parameter_entity_text_is_read_by_the_same_grammar() {
+    // The processing instruction inside a replacement text reaches the caller.
+    let mut reader = Reader::with_options(
+        "<!DOCTYPE r [<!ENTITY % p '<?inside data?>'><?before x?>%p;]><r/>",
+        Options {
+            dtd: Dtd::internal_subset(),
+            ..Options::default()
+        },
+    );
+    let mut targets = Vec::new();
+    loop {
+        match reader.next().expect("well-formed") {
+            Event::Pi { target, .. } => targets.push(target.into_owned()),
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    assert_eq!(targets, ["before", "inside"]);
+}
+
+// ── Declarations: the grammar a non-validating processor checks ────────────
+
+#[test]
+fn element_content_models_are_checked_and_deep_ones_do_not_overflow() {
+    for good in [
+        "<!ELEMENT r EMPTY>",
+        "<!ELEMENT r ANY>",
+        "<!ELEMENT r (#PCDATA)>",
+        "<!ELEMENT r (#PCDATA)*>",
+        "<!ELEMENT r (#PCDATA|a|b)*>",
+        "<!ELEMENT r ( #PCDATA | a )* >",
+        "<!ELEMENT r (a)>",
+        "<!ELEMENT r (a,b?,(c|d)+,(e,f)*)+>",
+        "<!ELEMENT r ( a , ( b | c ) )?>",
+    ] {
+        assert!(
+            parse_dtd(&format!("<!DOCTYPE r [{good}]><r/>")).is_ok(),
+            "{good}"
+        );
+    }
+    for bad in [
+        "<!ELEMENT r>",
+        "<!ELEMENT r a>",
+        "<!ELEMENT r (a|b,c)>",
+        "<!ELEMENT r (a,b|c)>",
+        "<!ELEMENT r (a|)>",
+        "<!ELEMENT r ()>",
+        "<!ELEMENT r (a b)>",
+        "<!ELEMENT r (#PCDATA|a)>",
+        "<!ELEMENT r (a|#PCDATA)*>",
+        "<!ELEMENT r (a)??>",
+        "<!ELEMENT r ( a , ( b | c ) ) ?>",
+        "<!ELEMENT r EMPTY x>",
+        "<!ELEMENTr EMPTY>",
+        "<!ELEMENT r (a",
+    ] {
+        assert!(
+            parse_dtd(&format!("<!DOCTYPE r [{bad}]><r/>")).is_err(),
+            "{bad}"
+        );
+    }
+    // Groups nest on the heap: a hundred thousand deep is read (and a
+    // truncated one refused) without exhausting the stack.
+    let depth = 100_000;
+    let deep = format!("{}a{}", "(".repeat(depth), ")".repeat(depth));
+    assert!(parse_dtd(&format!("<!DOCTYPE r [<!ELEMENT r {deep}>]><r/>")).is_ok());
+    let truncated = format!("{}a{}", "(".repeat(depth), ")".repeat(depth - 1));
+    assert!(parse_dtd(&format!("<!DOCTYPE r [<!ELEMENT r {truncated}>]><r/>")).is_err());
+}
+
+#[test]
+fn attlist_and_notation_and_entity_declarations_are_checked() {
+    for good in [
+        "<!ATTLIST r a CDATA #IMPLIED b ID #REQUIRED c IDREF #IMPLIED d IDREFS #IMPLIED>",
+        "<!ATTLIST r a (x|y|z) 'x' b NOTATION (n|m) #IMPLIED c NMTOKENS #FIXED 'a b'>",
+        "<!ATTLIST r>",
+        "<!ATTLIST r a ENTITY #IMPLIED b ENTITIES #IMPLIED c NMTOKEN '1x'>",
+        "<!NOTATION n SYSTEM 's'><!NOTATION m PUBLIC 'p'><!NOTATION o PUBLIC 'p' 's'>",
+        "<!ENTITY e SYSTEM 's'><!ENTITY f PUBLIC 'p' 's'><!ENTITY g 'v'>",
+    ] {
+        assert!(
+            parse_dtd(&format!("<!DOCTYPE r [{good}]><r/>")).is_ok(),
+            "{good}"
+        );
+    }
+    for bad in [
+        "<!ATTLIST r a CDATA>",
+        "<!ATTLIST r a CDATA #IMPLIED b>",
+        "<!ATTLIST r a STRING #IMPLIED>",
+        "<!ATTLIST r a (x|) #IMPLIED>",
+        "<!ATTLIST r a () #IMPLIED>",
+        "<!ATTLIST r a NOTATION #IMPLIED>",
+        "<!ATTLIST r a NOTATION (1n) #IMPLIED>",
+        "<!ATTLIST r a CDATA #FIXED>",
+        "<!ATTLIST r a CDATA 'x<y'>",
+        "<!ATTLIST r a CDATA '&#0;'>",
+        "<!ATTLIST r aCDATA #IMPLIED>",
+        "<!NOTATION n>",
+        "<!NOTATION n a:b SYSTEM 's'>",
+        "<!NOTATION n PUBLIC 'a\u{1}' 's'>",
+        "<!ENTITY e SYSTEM>",
+        "<!ENTITY e PUBLIC 'p'>",
+        "<!ENTITY e SYSTEM 's' NDATA>",
+        "<!ENTITY % e SYSTEM 's' NDATA n>",
+        "<!ENTITY e 'v' NDATA n>",
+        "<!ENTITY a:b 'v'>",
+        "<!ENTITY e 'v'",
+    ] {
+        assert!(
+            parse_dtd(&format!("<!DOCTYPE r [{bad}]><r/>")).is_err(),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn a_default_refers_only_to_entities_declared_before_it() {
+    // "Entity Declared": the reference is checked where the default is
+    // declared.
+    let before = "<!DOCTYPE r [<!ENTITY e 'v'><!ATTLIST r a CDATA 'x&e;y'>]><r/>";
+    assert_eq!(
+        parse_dtd(before).unwrap().root_element().attribute("a"),
+        Some("xvy")
+    );
+    assert_eq!(
+        kind(parse_dtd(
+            "<!DOCTYPE r [<!ATTLIST r a CDATA '&e;'><!ENTITY e 'v'>]><r/>"
+        )),
+        XmlErrorKind::UndeclaredEntity("e".to_owned())
+    );
+    // An external entity in a default is a well-formedness error.
+    assert_eq!(
+        kind(parse_dtd(
+            "<!DOCTYPE r [<!ENTITY e SYSTEM 's'><!ATTLIST r a CDATA '&e;'>]><r/>"
+        )),
+        XmlErrorKind::ExternalEntity
+    );
+}
+
+#[test]
+fn the_predefined_entities_may_be_declared_only_as_themselves() {
+    for good in [
+        "<!ENTITY lt '&#38;#60;'>",
+        "<!ENTITY lt '&#38;#x3C;'>",
+        "<!ENTITY amp '&#38;#38;'>",
+        "<!ENTITY gt '>'>",
+        "<!ENTITY gt '&#62;'>",
+        "<!ENTITY apos \"'\">",
+        "<!ENTITY quot '&#34;'>",
+        "<!ENTITY quot '&#38;#34;'>",
+    ] {
+        assert!(
+            parse_dtd(&format!("<!DOCTYPE r [{good}]><r/>")).is_ok(),
+            "{good}"
+        );
+    }
+    for bad in [
+        "<!ENTITY lt '<'>",
+        "<!ENTITY lt '&#60;'>",
+        "<!ENTITY amp '&#38;'>",
+        "<!ENTITY gt 'x'>",
+        "<!ENTITY lt SYSTEM 's'>",
+    ] {
+        assert!(
+            matches!(
+                kind(parse_dtd(&format!("<!DOCTYPE r [{bad}]><r/>"))),
+                XmlErrorKind::PredefinedEntity(_)
+            ),
+            "{bad}"
+        );
+    }
+}
+
+// ── Versions and encodings ─────────────────────────────────────────────────
+
+#[test]
+fn only_xml_1_0_is_read_and_a_later_1_x_reads_as_1_0() {
+    assert_eq!(
+        kind(parse("<?xml version='1.1'?><r/>")),
+        XmlErrorKind::UnsupportedVersion("1.1".to_owned())
+    );
+    assert!(parse("<?xml version='1.0'?><r/>").is_ok());
+    // XML 1.0 Fifth Edition: `1.` and digits are a legal `VersionNum`.
+    assert!(parse("<?xml version='1.7'?><r/>").is_ok());
+    assert!(parse("<?xml version='1.10'?><r/>").is_ok());
+    assert!(parse("<?xml version='2.0'?><r/>").is_err());
+}
+
+#[test]
+fn documents_decode_under_appendix_f_and_unsupported_encodings_are_refused() {
+    use super::decode;
+    let text = "<?xml version='1.0' encoding='X'?><r>é€</r>";
+    let with = |encoding: &str| text.replace('X', encoding);
+    // UTF-8, declared or not, borrowed.
+    assert_eq!(decode(with("UTF-8").as_bytes()).unwrap(), with("UTF-8"));
+    assert_eq!(decode(with("utf-8").as_bytes()).unwrap(), with("utf-8"));
+    assert_eq!(decode("<r>é</r>".as_bytes()).unwrap(), "<r>é</r>");
+    let bom_utf8: Vec<u8> = [&[0xEF, 0xBB, 0xBF][..], with("UTF-8").as_bytes()].concat();
+    assert!(Document::parse(&decode(&bom_utf8).unwrap()).is_ok());
+    // UTF-16, either byte order, with a byte order mark.
+    let utf16 = |big: bool, body: &str| -> Vec<u8> {
+        let mut out = if big {
+            vec![0xFE, 0xFF]
+        } else {
+            vec![0xFF, 0xFE]
+        };
+        for unit in body.encode_utf16() {
+            out.extend(if big {
+                unit.to_be_bytes()
+            } else {
+                unit.to_le_bytes()
+            });
+        }
+        out
+    };
+    for big in [true, false] {
+        let bytes = utf16(big, &with("UTF-16"));
+        let decoded = decode(&bytes).unwrap();
+        let document = Document::parse(&decoded).expect("UTF-16");
+        assert_eq!(document.root_element().text(), Some("é€"));
+        // The same bytes under a UTF-8 declaration contradict themselves.
+        assert!(matches!(
+            decode(&utf16(big, &with("UTF-8"))).unwrap_err().kind(),
+            XmlErrorKind::Encoding(_)
+        ));
+    }
+    // UTF-16 with no byte order mark is read only when it says so.
+    let bare = |body: &str| -> Vec<u8> { body.encode_utf16().flat_map(u16::to_be_bytes).collect() };
+    assert!(decode(&bare("<?xml version='1.0'?><r/>")).is_err());
+    assert!(decode(&bare("<?xml version='1.0' encoding='UTF-16'?><r/>")).is_ok());
+    // An unpaired surrogate and an odd byte count are refused.
+    assert!(decode(&[0xFE, 0xFF, 0xD8, 0x00, 0x00, 0x3C]).is_err());
+    assert!(decode(&[0xFE, 0xFF, 0x00]).is_err());
+    // A UTF-16 declaration on UTF-8 bytes contradicts itself.
+    assert!(matches!(
+        decode(with("UTF-16").as_bytes()).unwrap_err().kind(),
+        XmlErrorKind::Encoding(_)
+    ));
+    // ISO-8859-1 and US-ASCII.
+    let latin1 = b"<?xml version='1.0' encoding='ISO-8859-1'?><r>\xE9</r>";
+    let decoded = decode(latin1).unwrap();
+    assert_eq!(
+        Document::parse(&decoded).unwrap().root_element().text(),
+        Some("é")
+    );
+    assert!(decode(b"<?xml version='1.0' encoding='US-ASCII'?><r>a</r>").is_ok());
+    assert!(matches!(
+        decode(b"<?xml version='1.0' encoding='US-ASCII'?><r>\xE9</r>")
+            .unwrap_err()
+            .kind(),
+        XmlErrorKind::Encoding(_)
+    ));
+    // Ill-formed UTF-8 is refused where a neighbouring valid document is read.
+    assert!(matches!(
+        decode(b"<r>\xFF</r>").unwrap_err().kind(),
+        XmlErrorKind::Encoding(_)
+    ));
+    assert!(decode(b"<r>\xC3\xA9</r>").is_ok());
+    // Anything else is refused by name, never read as though it were UTF-8.
+    for name in [
+        "Shift_JIS",
+        "EUC-JP",
+        "ISO-2022-JP",
+        "windows-1252",
+        "KOI8-R",
+    ] {
+        assert_eq!(
+            decode(with(name).as_bytes()).unwrap_err().kind(),
+            &XmlErrorKind::UnsupportedEncoding(name.to_owned())
+        );
+    }
+    assert!(matches!(
+        decode(&[0x00, 0x00, 0x00, 0x3C]).unwrap_err().kind(),
+        XmlErrorKind::UnsupportedEncoding(_)
+    ));
+    assert!(matches!(
+        decode(&[0x4C, 0x6F, 0xA7, 0x94]).unwrap_err().kind(),
+        XmlErrorKind::UnsupportedEncoding(_)
+    ));
+}
 #[test]
 fn an_entity_with_markup_expands_into_elements() {
     let text = "<!DOCTYPE r [<!ENTITY e '<b x=\"1\">in&amp;side</b>'>]><r>&e;&e;</r>";

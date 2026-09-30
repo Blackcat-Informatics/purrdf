@@ -78,6 +78,7 @@ pub struct Document<'a> {
     nodes: Vec<NodeData<'a>>,
     attributes: Vec<Attribute<'a>>,
     namespaces: Vec<NamespaceDecl<'a>>,
+    declarations_unread: bool,
 }
 
 /// An expanded name, `(namespace, local)`: the identity XML Namespaces gives
@@ -178,6 +179,7 @@ impl<'a> Document<'a> {
             }],
             attributes: Vec::new(),
             namespaces: Vec::new(),
+            declarations_unread: false,
         };
         let mut reader = Reader::with_options(text, options);
         let mut parent = 0;
@@ -221,6 +223,7 @@ impl<'a> Document<'a> {
                 Event::Eof => break,
             }
         }
+        document.declarations_unread = reader.declarations_unread();
         document.nodes[0].end = document.nodes.len();
         Ok(document)
     }
@@ -258,6 +261,15 @@ impl<'a> Document<'a> {
             return;
         }
         self.push(parent, Kind::Text(text), offset);
+    }
+
+    /// Whether declarations the reader never read may exist: see
+    /// [`Reader::declarations_unread`]. A caller that needs the complete
+    /// information set (every entity and every attribute default) refuses such
+    /// a document.
+    #[must_use]
+    pub const fn declarations_unread(&self) -> bool {
+        self.declarations_unread
     }
 
     /// The source text.

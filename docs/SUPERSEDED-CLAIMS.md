@@ -980,14 +980,16 @@ XML 1.0 §4.4 requires a non-validating processor to expand an internal entity i
 read. Refusing the DTD refused well-formed RDF/XML.
 
 **The rule now.** The RDF/XML, TriX and RIF-XML readers read through `purrdf_lex::xml`
-with the internal subset enabled: internal entities expand under the reader's expansion
-budget, and an external subset, an external entity or a parameter entity is refused, so
-no document causes a fetch. GraphML, DataCite and SPARQL Results XML still refuse any
+with the internal subset enabled: internal general and parameter entities expand under
+the reader's expansion budget, and an external subset, an external entity or an external
+parameter entity is never fetched (a reference to an external entity is refused, and a
+document naming an external subset or external parameter entity is refused too, since its
+declarations would go unapplied), so no document causes a fetch. GraphML, DataCite and SPARQL Results XML still refuse any
 DTD. Pinned by `internal_entities_expand_in_rdfxml_and_external_ones_are_refused`
 (`crates/rdf/src/native_codecs/rdfxml.rs`),
 `an_internal_entity_expands_and_an_external_one_is_refused`
 (`crates/rdf/src/nesting.rs`) and
-`an_external_entity_is_refused_and_an_internal_one_is_read`
+`an_external_entity_reference_is_refused_and_an_internal_one_is_read`
 (`crates/lex/src/xml/tests.rs`).
 
 ### `purrdf-xsd`'s one runtime dependency is `purrdf-hash`

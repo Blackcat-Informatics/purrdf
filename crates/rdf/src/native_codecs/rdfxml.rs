@@ -189,6 +189,7 @@ pub(super) fn parse_rdfxml_document(
         XmlReadError::TooDeep(depth) => RDF_XML.parse_err(format!(
             "element nesting reaches {depth} levels, past the parser limit"
         )),
+        XmlReadError::DeclarationsUnread => RDF_XML.parse_err(XmlReadError::UNREAD_MESSAGE),
         XmlReadError::Malformed(error) => RDF_XML.parse_err(error.to_string()),
     })?;
     let mut parser = RdfXmlParser {
@@ -2096,6 +2097,24 @@ mod tests {
             r#"<!ENTITY ex SYSTEM "http://example.org/ex.ent">"#,
         );
         assert!(parse_rdfxml_document(&external, &mut scope(None), None).is_err());
+
+        // An external subset is never fetched, so its default attributes and entity
+        // declarations could be missing: refused, with the reason. The internal-only
+        // document above is the valid neighbour.
+        let subset = text.replacen(
+            "<!DOCTYPE rdf:RDF [",
+            "<!DOCTYPE rdf:RDF SYSTEM \"x.dtd\" [",
+            1,
+        );
+        let error = parse_rdfxml_document(&subset, &mut scope(None), None)
+            .expect_err("an external subset is refused");
+        assert!(
+            format!("{error:?}").contains("external DTD subset"),
+            "{error:?}"
+        );
+        let bare = "<!DOCTYPE rdf:RDF SYSTEM \"x.dtd\"><rdf:RDF \
+            xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"/>";
+        assert!(parse_rdfxml_document(bare, &mut scope(None), None).is_err());
     }
 
     /// …AND ORDINARY RDF/XML IS UNTOUCHED. Node/property striping spends TWO elements per

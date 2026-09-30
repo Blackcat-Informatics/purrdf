@@ -5,7 +5,10 @@
 //! element stack and an explicit entity-expansion stack.
 
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::sync::Arc;
+
+mod dtd;
 
 use super::error::{XmlError, XmlErrorKind};
 use crate::terminals::{
@@ -33,7 +36,8 @@ pub const XMLNS_NAMESPACE: &str = "http://www.w3.org/2000/xmlns/";
 pub const DEFAULT_MAX_DEPTH: usize = 128;
 
 /// The replacement-text budget [`Dtd::internal_subset`] allows: 1 MiB of text
-/// produced by expanding internal entities, across the whole document.
+/// produced by expanding internal entities (general and parameter), across the
+/// whole document.
 pub const DEFAULT_MAX_ENTITY_EXPANSION: usize = 1 << 20;
 
 /// What the reader does with a document type declaration.
@@ -42,14 +46,21 @@ pub enum Dtd {
     /// Refuse any `<!DOCTYPE`, with [`XmlErrorKind::Doctype`].
     Refuse,
     /// Read the internal subset as XML 1.0 §5.1 requires of a non-validating
-    /// processor: internal general entities are declared and expanded (in
-    /// content, markup included, and in attribute values), and `ATTLIST`
-    /// defaults and non-`CDATA` normalization are applied. An external subset,
-    /// an external or unparsed entity, and every parameter entity are refused
-    /// ([`XmlErrorKind::ExternalEntity`], [`XmlErrorKind::ParameterEntity`]):
-    /// the reader never fetches. `max_expansion` bounds the total replacement
-    /// text the document may expand, so a nested-entity bomb is refused rather
-    /// than allocated.
+    /// processor: every markup declaration is checked for well-formedness;
+    /// internal general entities are declared and expanded (in content,
+    /// markup included, and in attribute values); internal parameter entities
+    /// are declared and expanded between the subset's declarations (a
+    /// reference inside a declaration is refused, as XML 1.0 requires); and
+    /// `ATTLIST` defaults and non-`CDATA` normalization are applied. Nothing
+    /// is ever fetched: a document may name an external subset, and may
+    /// declare and reference external parameter entities, but the reader does
+    /// not read them ([`Reader::declarations_unread`]; after such a reference
+    /// the remaining declarations are checked but bind nothing, §5.1), and a
+    /// reference to an external or unparsed general entity is refused
+    /// ([`XmlErrorKind::ExternalEntity`], [`XmlErrorKind::UnparsedEntity`]).
+    /// `max_expansion` bounds the total replacement text the document may
+    /// expand, general and parameter entities alike, so a nested-entity bomb
+    /// is refused rather than allocated.
     InternalSubset {
         /// The most replacement-text bytes the whole document may expand.
         max_expansion: usize,
@@ -201,7 +212,7 @@ impl NamespaceDecl<'_> {
 /// The XML declaration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Declaration<'a> {
-    /// `VersionNum`, `1.` and digits.
+    /// `VersionNum`: always `1.0`, the one version the reader reads.
     pub version: Cow<'a, str>,
     /// The `EncName`, when declared.
     pub encoding: Option<Cow<'a, str>>,
@@ -296,16 +307,63 @@ enum Phase {
     Done,
 }
 
+/// How much of a document's declarations the reader has read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Declarations {
+    /// No document type declaration, or an internal subset without
+    /// parameter-entity references: every declaration is known, so an
+    /// undeclared entity is a well-formedness error.
+    Complete,
+    /// The internal subset references an internal parameter entity: all
+    /// declarations were read, but XML 1.0 §4.1 makes an undeclared entity
+    /// reference a mere validity error.
+    Referenced,
+    /// The document type declaration names an external subset, which is never
+    /// read.
+    Unread,
+    /// An external parameter entity was referenced in the internal subset
+    /// (§5.1): what follows is checked but binds nothing.
+    Stopped,
+}
+
+/// What an entity declaration declares.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EntityKind {
+    /// An internal entity: replacement text the reader expands.
+    Internal,
+    /// An external parsed entity: never fetched, so a reference is refused.
+    External,
+    /// An unparsed entity (`NDATA`): a reference is a well-formedness error.
+    Unparsed,
+}
+
 struct EntityDecl {
     name: Box<str>,
     text: Arc<str>,
+    kind: EntityKind,
+}
+
+/// A declared parameter entity; `text` is `None` for an external one.
+struct ParameterDecl {
+    name: Box<str>,
+    text: Option<Arc<str>>,
+}
+
+/// An `ATTLIST` default.
+enum AttDefault {
+    /// Expanded already.
+    Ready(Box<str>),
+    /// The literal, quotes included, line ends normalized, holding a
+    /// reference to an entity only a declaration the reader has not read could
+    /// bind: expanded (and so refused) if the default is ever applied.
+    Deferred(Box<str>),
 }
 
 struct AttlistDecl {
     element: Box<str>,
     attribute: Box<str>,
     cdata: bool,
-    default: Option<Box<str>>,
+    default: Option<AttDefault>,
 }
 
 /// An entity being expanded in content.
@@ -456,7 +514,15 @@ pub struct Reader<'a> {
     phase: Phase,
     doctype_seen: bool,
     entities: Vec<EntityDecl>,
+    parameter_entities: Vec<ParameterDecl>,
     attlists: Vec<AttlistDecl>,
+    /// Processing instructions of the internal subset, read but not yet
+    /// delivered: target, data and offset.
+    dtd_pis: VecDeque<PiParts<'a>>,
+    /// The document's `standalone="yes"`.
+    standalone: bool,
+    /// What the reader has read of the declarations.
+    dtd_read: Declarations,
     frames: Vec<Frame>,
     expanded: usize,
     open: Vec<Open<'a>>,
@@ -495,7 +561,11 @@ impl<'a> Reader<'a> {
             phase: Phase::Start,
             doctype_seen: false,
             entities: Vec::new(),
+            parameter_entities: Vec::new(),
             attlists: Vec::new(),
+            dtd_pis: VecDeque::new(),
+            standalone: false,
+            dtd_read: Declarations::Complete,
             frames: Vec::new(),
             expanded: 0,
             open: Vec::new(),
@@ -511,6 +581,18 @@ impl<'a> Reader<'a> {
     #[must_use]
     pub fn depth(&self) -> usize {
         self.open.len()
+    }
+
+    /// Whether declarations the reader never read may exist: the document type
+    /// declaration names an external subset, or its internal subset references
+    /// an external parameter entity (XML 1.0 §5.1). Entity declarations and
+    /// attribute defaults there do not take effect, and a reference to an
+    /// entity only they could declare is refused
+    /// ([`XmlErrorKind::UnexpandedEntity`]). A caller that needs the complete
+    /// information set refuses such a document.
+    #[must_use]
+    pub const fn declarations_unread(&self) -> bool {
+        matches!(self.dtd_read, Declarations::Unread | Declarations::Stopped)
     }
 
     /// The namespace name `prefix` resolves to at the current position
@@ -572,6 +654,13 @@ impl<'a> Reader<'a> {
             }
         }
         loop {
+            if let Some((target, data, offset)) = self.dtd_pis.pop_front() {
+                return Ok(Event::Pi {
+                    target,
+                    data,
+                    offset,
+                });
+            }
             if self.phase == Phase::Done {
                 return Ok(Event::Eof);
             }
@@ -773,8 +862,23 @@ impl<'a> Reader<'a> {
             return Ok((Reference::Predefined(value), end + 1));
         }
         match self.entities.iter().position(|e| &*e.name == name) {
-            Some(entity) => Ok((Reference::Entity(entity), end + 1)),
-            None => Err(self.error(XmlErrorKind::UndeclaredEntity(name.to_owned()), pos)),
+            Some(entity) => match self.entities[entity].kind {
+                EntityKind::Internal => Ok((Reference::Entity(entity), end + 1)),
+                EntityKind::External => Err(self.error(XmlErrorKind::ExternalEntity, pos)),
+                EntityKind::Unparsed => {
+                    Err(self.error(XmlErrorKind::UnparsedEntity(name.to_owned()), pos))
+                }
+            },
+            None => {
+                // XML 1.0 §4.1: an entity reference must match a declaration
+                // unless declarations the reader has not read could hold it.
+                let kind = if self.dtd_read != Declarations::Complete && !self.standalone {
+                    XmlErrorKind::UnexpandedEntity(name.to_owned())
+                } else {
+                    XmlErrorKind::UndeclaredEntity(name.to_owned())
+                };
+                Err(self.error(kind, pos))
+            }
         }
     }
 
@@ -968,6 +1072,14 @@ impl<'a> Reader<'a> {
         if !valid_version {
             return Err(bad(start));
         }
+        // `1.1` is a defined version with its own rules (XML 1.1); any other
+        // `1.x` is read as 1.0 (XML 1.0 Fifth Edition §2.8).
+        if version == "1.1" {
+            return Err(XmlError::new(
+                XmlErrorKind::UnsupportedVersion(version.to_owned()),
+                start,
+            ));
+        }
         let encoding = pseudo("encoding", &mut at)?;
         if let Some(name) = encoding {
             let mut chars = name.bytes();
@@ -986,6 +1098,7 @@ impl<'a> Reader<'a> {
         if crate::terminals::skip_ws(bytes, at) != close {
             return Err(bad(at));
         }
+        self.standalone = standalone == Some(true);
         self.pos = close + 2;
         Ok(Declaration {
             version: Cow::Borrowed(version),
@@ -1087,7 +1200,7 @@ impl<'a> Reader<'a> {
                 offset,
             ));
         }
-        self.apply_attlists(name.as_str(), offset);
+        self.apply_attlists(name.as_str(), offset)?;
         // Namespace declarations (Namespaces in XML 1.0 §3).
         let mut index = 0;
         while index < self.attributes.len() {
@@ -1209,15 +1322,20 @@ impl<'a> Reader<'a> {
     /// Add the declared defaults this start tag omits, and normalize the
     /// values of attributes declared with a non-`CDATA` type (XML 1.0 §3.3.2,
     /// §3.3.3).
-    fn apply_attlists(&mut self, element: &str, offset: usize) {
-        for decl in self.attlists.iter().filter(|d| &*d.element == element) {
+    fn apply_attlists(&mut self, element: &str, offset: usize) -> Result<(), XmlError> {
+        for index in 0..self.attlists.len() {
+            let decl = &self.attlists[index];
+            if &*decl.element != element {
+                continue;
+            }
+            let cdata = decl.cdata;
             match self
                 .attributes
                 .iter_mut()
                 .find(|a| a.name.as_str() == &*decl.attribute)
             {
                 Some(present) => {
-                    if !decl.cdata {
+                    if !cdata {
                         let collapsed = collapse_spaces(&present.value);
                         if collapsed != present.value {
                             present.value = Cow::Owned(collapsed);
@@ -1225,19 +1343,32 @@ impl<'a> Reader<'a> {
                     }
                 }
                 None => {
-                    if let Some(default) = &decl.default {
-                        let name = QName::new(Cow::Owned(decl.attribute.to_string()))
-                            .expect("declared attribute names are validated QNames");
-                        self.attributes.push(Attribute {
-                            name,
-                            namespace: None,
-                            value: Cow::Owned(default.to_string()),
-                            offset,
-                        });
-                    }
+                    let value = match &decl.default {
+                        None => continue,
+                        Some(AttDefault::Ready(value)) => value.to_string(),
+                        Some(AttDefault::Deferred(literal)) => {
+                            let literal = literal.clone();
+                            self.attribute_value(&literal, false, 0)?.0.into_owned()
+                        }
+                    };
+                    let value = if cdata {
+                        value
+                    } else {
+                        collapse_spaces(&value)
+                    };
+                    let name = self.attlists[index].attribute.to_string();
+                    let name = QName::new(Cow::Owned(name))
+                        .ok_or_else(|| XmlError::new(XmlErrorKind::InvalidName, offset))?;
+                    self.attributes.push(Attribute {
+                        name,
+                        namespace: None,
+                        value: Cow::Owned(value),
+                        offset,
+                    });
                 }
             }
         }
+        Ok(())
     }
 
     /// The end tag at `pos`.
@@ -1403,247 +1534,6 @@ impl<'a> Reader<'a> {
             }
         }
         Ok(())
-    }
-
-    /// The document type declaration at `pos`.
-    fn doctype(&mut self, pos: usize) -> Result<(), XmlError> {
-        if self.options.dtd == Dtd::Refuse {
-            return Err(XmlError::new(XmlErrorKind::Doctype, pos));
-        }
-        let src = self.src;
-        let bytes = src.as_bytes();
-        let mut at = self.require_space(bytes, pos + "<!DOCTYPE".len())?;
-        at = self.name_end(src, at)?;
-        at = crate::terminals::skip_ws(bytes, at);
-        if bytes[at..].starts_with(b"SYSTEM") || bytes[at..].starts_with(b"PUBLIC") {
-            return Err(XmlError::new(XmlErrorKind::ExternalEntity, at));
-        }
-        if bytes.get(at) == Some(&b'[') {
-            at = self.internal_subset(at + 1)?;
-            at = crate::terminals::skip_ws(bytes, at);
-        }
-        if bytes.get(at) != Some(&b'>') {
-            return Err(XmlError::new(XmlErrorKind::Expected("`>`"), at));
-        }
-        self.pos = at + 1;
-        Ok(())
-    }
-
-    /// The internal subset starting at `pos`, returning the offset past its `]`.
-    fn internal_subset(&mut self, mut at: usize) -> Result<usize, XmlError> {
-        let src = self.src;
-        let bytes = src.as_bytes();
-        loop {
-            at = crate::terminals::skip_ws(bytes, at);
-            let rest = &bytes[at..];
-            if rest.is_empty() {
-                return Err(XmlError::new(XmlErrorKind::UnexpectedEof, at));
-            }
-            if rest[0] == b']' {
-                return Ok(at + 1);
-            }
-            if rest[0] == b'%' {
-                return Err(XmlError::new(XmlErrorKind::ParameterEntity, at));
-            }
-            if rest.starts_with(b"<!--") {
-                let (start, end) = self.comment_span(src, at)?;
-                self.checked(src, true, start, end)?;
-                at = end + 3;
-            } else if rest.starts_with(b"<?") {
-                at = self.pi_parts(src, true, at)?.2;
-            } else if rest.starts_with(b"<!ENTITY") {
-                at = self.entity_decl(at)?;
-            } else if rest.starts_with(b"<!ATTLIST") {
-                at = self.attlist_decl(at)?;
-            } else if rest.starts_with(b"<!ELEMENT") || rest.starts_with(b"<!NOTATION") {
-                at = self.skip_decl(at)?;
-            } else {
-                return Err(XmlError::new(
-                    XmlErrorKind::Expected("a markup declaration"),
-                    at,
-                ));
-            }
-        }
-    }
-
-    /// Skip an `ELEMENT` or `NOTATION` declaration: to its `>`, quoted literals
-    /// skipped whole.
-    fn skip_decl(&self, pos: usize) -> Result<usize, XmlError> {
-        let bytes = self.src.as_bytes();
-        let mut at = pos + 2;
-        while let Some(&b) = bytes.get(at) {
-            match b {
-                b'>' => return Ok(at + 1),
-                b'"' | b'\'' => {
-                    let close = bytes[at + 1..]
-                        .iter()
-                        .position(|&c| c == b)
-                        .ok_or_else(|| XmlError::new(XmlErrorKind::UnexpectedEof, pos))?;
-                    at += close + 2;
-                }
-                b'%' => return Err(XmlError::new(XmlErrorKind::ParameterEntity, at)),
-                _ => at += 1,
-            }
-        }
-        Err(XmlError::new(XmlErrorKind::UnexpectedEof, pos))
-    }
-
-    /// An `ENTITY` declaration at `pos`, returning its end.
-    fn entity_decl(&mut self, pos: usize) -> Result<usize, XmlError> {
-        let src = self.src;
-        let bytes = src.as_bytes();
-        let mut at = self.require_space(bytes, pos + "<!ENTITY".len())?;
-        if bytes.get(at) == Some(&b'%') {
-            return Err(XmlError::new(XmlErrorKind::ParameterEntity, at));
-        }
-        let name_end = self.name_end(src, at)?;
-        let name = &src[at..name_end];
-        if name.contains(':') {
-            return Err(XmlError::new(XmlErrorKind::InvalidName, at));
-        }
-        at = self.require_space(bytes, name_end)?;
-        if bytes[at..].starts_with(b"SYSTEM") || bytes[at..].starts_with(b"PUBLIC") {
-            return Err(XmlError::new(XmlErrorKind::ExternalEntity, at));
-        }
-        let Some(&quote @ (b'"' | b'\'')) = bytes.get(at) else {
-            return Err(XmlError::new(XmlErrorKind::Expected("an entity value"), at));
-        };
-        let start = at + 1;
-        let close = bytes[start..]
-            .iter()
-            .position(|&b| b == quote)
-            .map(|end| start + end)
-            .ok_or_else(|| XmlError::new(XmlErrorKind::UnexpectedEof, pos))?;
-        // Replacement text: character references expanded now, general
-        // entity references kept for expansion where the entity is used
-        // (XML 1.0 §4.5).
-        let literal = self.checked(src, true, start, close)?;
-        let mut replacement = String::with_capacity(literal.len());
-        let mut rest: &str = &literal;
-        let base = start;
-        while let Some(amp) = rest.find(['&', '%']) {
-            replacement.push_str(&rest[..amp]);
-            if rest.as_bytes()[amp] == b'%' {
-                return Err(XmlError::new(XmlErrorKind::ParameterEntity, base));
-            }
-            let semi = rest[amp..]
-                .find(';')
-                .map(|s| amp + s)
-                .ok_or_else(|| XmlError::new(XmlErrorKind::Expected("`;`"), base))?;
-            let body = &rest[amp + 1..semi];
-            if let Some(digits) = body.strip_prefix('#') {
-                let c = decode_char_ref(digits.as_bytes())
-                    .ok_or_else(|| XmlError::new(XmlErrorKind::InvalidCharRef, base))?;
-                replacement.push(c);
-            } else {
-                let valid = body.chars().next().is_some_and(is_xml_name_start_char)
-                    && body.chars().all(is_xml_name_char);
-                if !valid {
-                    return Err(XmlError::new(XmlErrorKind::InvalidName, base));
-                }
-                replacement.push_str(&rest[amp..=semi]);
-            }
-            rest = &rest[semi + 1..];
-        }
-        replacement.push_str(rest);
-        at = crate::terminals::skip_ws(bytes, close + 1);
-        if bytes[at..].starts_with(b"NDATA") {
-            return Err(XmlError::new(XmlErrorKind::ExternalEntity, at));
-        }
-        if bytes.get(at) != Some(&b'>') {
-            return Err(XmlError::new(XmlErrorKind::Expected("`>`"), at));
-        }
-        // The first declaration binds (XML 1.0 §4.2); the predefined five
-        // keep their meaning.
-        if predefined(name).is_none() && !self.entities.iter().any(|e| &*e.name == name) {
-            self.entities.push(EntityDecl {
-                name: name.into(),
-                text: Arc::from(replacement),
-            });
-        }
-        Ok(at + 1)
-    }
-
-    /// An `ATTLIST` declaration at `pos`, returning its end.
-    fn attlist_decl(&mut self, pos: usize) -> Result<usize, XmlError> {
-        let src = self.src;
-        let bytes = src.as_bytes();
-        let mut at = self.require_space(bytes, pos + "<!ATTLIST".len())?;
-        let (element, element_end) = self.qname(src, true, at)?;
-        at = element_end;
-        loop {
-            let spaced = crate::terminals::skip_ws(bytes, at);
-            match bytes.get(spaced) {
-                Some(b'>') => return Ok(spaced + 1),
-                None => return Err(XmlError::new(XmlErrorKind::UnexpectedEof, pos)),
-                Some(_) if spaced == at => {
-                    return Err(XmlError::new(XmlErrorKind::Expected("whitespace"), at));
-                }
-                Some(_) => {}
-            }
-            let (attribute, name_end) = self.qname(src, true, spaced)?;
-            at = self.require_space(bytes, name_end)?;
-            let cdata = if bytes[at..].starts_with(b"CDATA") {
-                at += "CDATA".len();
-                true
-            } else {
-                if bytes[at..].starts_with(b"NOTATION") {
-                    at = self.require_space(bytes, at + "NOTATION".len())?;
-                }
-                if bytes.get(at) == Some(&b'(') {
-                    let close = bytes[at..]
-                        .iter()
-                        .position(|&b| b == b')')
-                        .ok_or_else(|| XmlError::new(XmlErrorKind::UnexpectedEof, pos))?;
-                    at += close + 1;
-                } else {
-                    let token_end = self.name_end(src, at)?;
-                    let token = &src[at..token_end];
-                    if !matches!(
-                        token,
-                        "ID" | "IDREF" | "IDREFS" | "ENTITY" | "ENTITIES" | "NMTOKEN" | "NMTOKENS"
-                    ) {
-                        return Err(XmlError::new(
-                            XmlErrorKind::Expected("an attribute type"),
-                            at,
-                        ));
-                    }
-                    at = token_end;
-                }
-                false
-            };
-            at = self.require_space(bytes, at)?;
-            let default = if bytes[at..].starts_with(b"#REQUIRED") {
-                at += "#REQUIRED".len();
-                None
-            } else if bytes[at..].starts_with(b"#IMPLIED") {
-                at += "#IMPLIED".len();
-                None
-            } else {
-                if bytes[at..].starts_with(b"#FIXED") {
-                    at = self.require_space(bytes, at + "#FIXED".len())?;
-                }
-                let (value, end) = self.attribute_value(src, true, at)?;
-                at = end;
-                Some(if cdata {
-                    value.into_owned()
-                } else {
-                    collapse_spaces(&value)
-                })
-            };
-            let known = self
-                .attlists
-                .iter()
-                .any(|d| &*d.element == element.as_str() && &*d.attribute == attribute.as_str());
-            if !known {
-                self.attlists.push(AttlistDecl {
-                    element: element.as_str().into(),
-                    attribute: attribute.as_str().into(),
-                    cdata,
-                    default: default.map(String::into_boxed_str),
-                });
-            }
-        }
     }
 }
 

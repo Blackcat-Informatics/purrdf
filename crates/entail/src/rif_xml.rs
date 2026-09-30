@@ -124,8 +124,10 @@ fn parse_document(text: &str, base: &BaseScope) -> Result<ParsedRifDocument, Str
     // The W3C RIF documents declare their namespace IRIs as internal general entities
     // (`<!DOCTYPE Document [ <!ENTITY rif "…"> … ]>`, used as `xmlns="&rif;"` and
     // `type="&xs;string"`), which XML 1.0 §5.1 obliges even a non-validating processor to
-    // expand. The internal subset is read for exactly that; an external subset, an
-    // external entity and a parameter entity are still refused, and nothing is fetched.
+    // expand. The internal subset is read for exactly that. Nothing is fetched: a
+    // reference to an external entity is refused, and so is a document naming an external
+    // subset or external parameter entity, whose default attributes and entity
+    // declarations would otherwise be silently unapplied.
     let options = Options {
         dtd: Dtd::internal_subset(),
         ..Options::default()
@@ -134,6 +136,9 @@ fn parse_document(text: &str, base: &BaseScope) -> Result<ParsedRifDocument, Str
         let (line, column) = error.line_column(text);
         format!("{error} (line {line}, column {column})")
     })?;
+    if document.declarations_unread() {
+        return Err("the document type declaration names an external DTD subset or references an external parameter entity, which is never fetched, so default attributes and entity declarations may be missing".to_owned());
+    }
     let root = document.root_element();
     require(&root, "Document")?;
     // `xml:base` on the document element scopes the whole document.
@@ -643,17 +648,32 @@ mod tests {
             parse_rif_xml(RIF, None).unwrap(),
             "an internal entity reads as its replacement text"
         );
-        // An external entity would be a fetch: refused, as is an external subset.
-        for doctype in [
-            "<!DOCTYPE Document [<!ENTITY x SYSTEM \"https://example.org/x\">]>",
-            "<!DOCTYPE Document SYSTEM \"https://example.org/rif.dtd\">",
-        ] {
-            let text = RIF.replacen("<Document", &format!("{doctype}<Document"), 1);
-            assert!(
-                matches!(parse_rif_xml(&text, None), Err(EntailError::Parse(_))),
-                "{doctype}"
-            );
-        }
+        // An external entity would be a fetch: a reference to one is refused, and so is a
+        // document naming an external subset (its declarations would go unapplied). The
+        // neighbour that only declares an external entity, referencing nothing, is read.
+        let declared = "<!DOCTYPE Document [<!ENTITY x SYSTEM \"https://example.org/x\">]>";
+        let referenced = RIF
+            .replacen("<Document", &format!("{declared}<Document"), 1)
+            .replace(">value<", ">&x;<");
+        assert_ne!(referenced, RIF);
+        assert!(matches!(
+            parse_rif_xml(&referenced, None),
+            Err(EntailError::Parse(_))
+        ));
+        let text = RIF.replacen("<Document", &format!("{declared}<Document"), 1);
+        assert_eq!(
+            parse_rif_xml(&text, None).unwrap(),
+            parse_rif_xml(RIF, None).unwrap()
+        );
+        let subset = RIF.replacen(
+            "<Document",
+            "<!DOCTYPE Document SYSTEM \"https://example.org/rif.dtd\"><Document",
+            1,
+        );
+        assert!(matches!(
+            parse_rif_xml(&subset, None),
+            Err(EntailError::Parse(_))
+        ));
     }
 
     #[test]

@@ -71,8 +71,18 @@ pub(crate) enum XmlReadError {
     /// An element nests past [`MAX_PARSE_NESTING_DEPTH`]; the payload is the depth of the
     /// first element too deep (the limit plus one).
     TooDeep(usize),
+    /// The document type declaration names an external subset or references an external
+    /// parameter entity. Neither is fetched, so entity declarations and default attributes
+    /// may be missing from what was read; a document is refused rather than read with
+    /// declarations silently unapplied.
+    DeclarationsUnread,
     /// Any other refusal of the XML reader.
     Malformed(XmlError),
+}
+
+impl XmlReadError {
+    /// The message for [`XmlReadError::DeclarationsUnread`], one spelling for every reader.
+    pub(crate) const UNREAD_MESSAGE: &'static str = "the document type declaration names an external DTD subset or references an external parameter entity, which is never fetched, so default attributes and entity declarations may be missing";
 }
 
 /// Read `text` as an XML document the way every XML codec in this crate does: element
@@ -80,15 +90,19 @@ pub(crate) enum XmlReadError {
 /// document type declaration read as XML 1.0 §5.1 requires of a non-validating processor
 /// ([`Dtd::internal_subset`]). RDF/XML documents routinely declare internal entities such
 /// as `&xsd;` for datatype IRIs, so those are declared and expanded under the reader's
-/// expansion budget; an external subset, an external entity and a parameter entity are
-/// refused, so a document never causes a fetch. The GraphML and DataCite projections
+/// expansion budget; internal parameter entities are read too. Nothing is ever fetched: a
+/// reference to an external entity is refused, and so is a document whose external subset or
+/// external parameter entity would have to be read for its default attributes and entity
+/// declarations ([`XmlReadError::DeclarationsUnread`], from
+/// [`Document::declarations_unread`]), so no document is read with declarations silently
+/// unapplied. The GraphML and DataCite projections
 /// refuse any DTD before calling this.
 ///
 /// The error is not a diagnostic because the four callers report in three different error
 /// vocabularies (`RdfDiagnostic` for the RDF/XML and TriX codecs, a `ProjectionError` for
 /// the GraphML and DataCite projections); each keeps its own.
 pub(crate) fn parse_xml(text: &str) -> Result<Document<'_>, XmlReadError> {
-    Document::parse_with_options(
+    let document = Document::parse_with_options(
         text,
         Options {
             max_depth: MAX_PARSE_NESTING_DEPTH,
@@ -98,7 +112,11 @@ pub(crate) fn parse_xml(text: &str) -> Result<Document<'_>, XmlReadError> {
     .map_err(|error| match error.kind() {
         XmlErrorKind::DepthLimit { limit } => XmlReadError::TooDeep(limit + 1),
         _ => XmlReadError::Malformed(error),
-    })
+    })?;
+    if document.declarations_unread() {
+        return Err(XmlReadError::DeclarationsUnread);
+    }
+    Ok(document)
 }
 
 /// The diagnostic every first-party text codec returns for an input nested past
@@ -154,8 +172,8 @@ mod tests {
         assert!(matches!(parse_xml("<a>"), Err(XmlReadError::Malformed(_))));
     }
 
-    /// An internal entity is declared and expanded; an external one is refused, so no
-    /// document can make the reader fetch.
+    /// An internal entity is declared and expanded; a reference to an external one is
+    /// refused, so no document can make the reader fetch.
     #[test]
     fn an_internal_entity_expands_and_an_external_one_is_refused() {
         let internal =
@@ -169,8 +187,21 @@ mod tests {
             parse_xml(r#"<!DOCTYPE r [<!ENTITY e SYSTEM "http://example.org/e">]><r>&e;</r>"#),
             Err(XmlReadError::Malformed(_))
         ));
+        // An external subset is named, never fetched: the document is refused rather than
+        // read with its declarations unapplied. The internal-only neighbour is read.
         assert!(matches!(
             parse_xml(r#"<!DOCTYPE r SYSTEM "http://example.org/r.dtd"><r/>"#),
+            Err(XmlReadError::DeclarationsUnread)
+        ));
+        assert!(matches!(
+            parse_xml(r#"<!DOCTYPE r [<!ENTITY % x SYSTEM "x.ent">%x;]><r/>"#),
+            Err(XmlReadError::DeclarationsUnread)
+        ));
+        assert!(
+            parse_xml(r#"<!DOCTYPE r [<!ENTITY % p "<!ENTITY e 'v'>">%p;]><r>&e;</r>"#).is_ok()
+        );
+        assert!(matches!(
+            parse_xml(r#"<!DOCTYPE r SYSTEM "http://example.org/r.dtd"><r>&e;</r>"#),
             Err(XmlReadError::Malformed(_))
         ));
     }

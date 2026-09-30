@@ -13,11 +13,35 @@ use core::fmt;
 pub enum XmlErrorKind {
     /// A document type declaration under [`Dtd::Refuse`](super::Dtd::Refuse).
     Doctype,
-    /// An external DTD subset, an external general entity, or an unparsed
-    /// entity: the reader never fetches.
+    /// A reference to an external general entity: the reader never fetches, so
+    /// it cannot include one (XML 1.0 §4.4.3 permits a non-validating
+    /// processor to decline, and the reader has no way to report a skipped
+    /// entity, so it refuses rather than drop the reference). An external
+    /// entity may be *declared*, and a document may name an external subset:
+    /// neither is read, and neither is refused.
     ExternalEntity,
-    /// A parameter-entity declaration or reference in the internal subset.
+    /// A parameter-entity reference inside a markup declaration of the internal
+    /// subset (XML 1.0 well-formedness constraint "PEs in Internal Subset":
+    /// they may appear only between declarations).
     ParameterEntity,
+    /// A reference to a parameter entity no declaration in the internal subset
+    /// binds, when no external declaration could have.
+    UndeclaredParameterEntity(String),
+    /// A reference to an unparsed (`NDATA`) entity, which is a well-formedness
+    /// error wherever it appears (constraint "Parsed Entity").
+    UnparsedEntity(String),
+    /// A reference to an entity that no declaration the reader has read binds,
+    /// in a document whose other declarations it has not read completely: an
+    /// external subset or external parameter entity (never fetched), or an
+    /// internal parameter-entity reference. XML 1.0 §4.1 makes that a mere
+    /// validity error, and §4.4.3 has the processor report the skipped entity
+    /// to the application; the reader has no such report, so it refuses
+    /// rather than drop the reference.
+    UnexpandedEntity(String),
+    /// A declaration of `lt`, `gt`, `amp`, `apos` or `quot` that is not, as
+    /// XML 1.0 §4.6 requires, an internal entity whose replacement text is the
+    /// character (or, for `lt` and `amp`, a character reference to it).
+    PredefinedEntity(String),
     /// An element nested deeper than [`Options::max_depth`](super::Options::max_depth).
     DepthLimit {
         /// The limit that was exceeded.
@@ -77,6 +101,17 @@ pub enum XmlErrorKind {
     MisplacedXmlDeclaration,
     /// A malformed XML declaration.
     InvalidXmlDeclaration,
+    /// An XML declaration naming a version other than `1.0`: the reader is an
+    /// XML 1.0 processor and never reads an XML 1.1 (or later) document as
+    /// though it were 1.0.
+    UnsupportedVersion(String),
+    /// A document whose bytes are in an encoding the reader does not decode
+    /// (see [`decode`](super::decode)): named by its declaration or by the
+    /// byte pattern.
+    UnsupportedEncoding(String),
+    /// A document whose bytes contradict its declared encoding, or are not
+    /// well-formed in it.
+    Encoding(&'static str),
     /// A second document type declaration, or one after the root element.
     MisplacedDoctype,
     /// The document has no root element.
@@ -89,8 +124,26 @@ impl fmt::Display for XmlErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Doctype => f.write_str("document type declarations are refused"),
-            Self::ExternalEntity => f.write_str("external entities are refused"),
-            Self::ParameterEntity => f.write_str("parameter entities are refused"),
+            Self::ExternalEntity => {
+                f.write_str("external entities are never fetched, so a reference to one is refused")
+            }
+            Self::ParameterEntity => f.write_str(
+                "a parameter-entity reference inside a markup declaration of the internal subset",
+            ),
+            Self::UndeclaredParameterEntity(name) => {
+                write!(f, "undeclared parameter entity `%{name};`")
+            }
+            Self::UnparsedEntity(name) => {
+                write!(f, "reference to the unparsed entity `&{name};`")
+            }
+            Self::UnexpandedEntity(name) => write!(
+                f,
+                "`&{name};` may be declared where the reader does not read (an external subset, an external parameter entity or an internal parameter entity)"
+            ),
+            Self::PredefinedEntity(name) => write!(
+                f,
+                "`{name}` may be declared only as the character it escapes"
+            ),
             Self::DepthLimit { limit } => {
                 write!(f, "element nesting exceeds the limit of {limit}")
             }
@@ -129,6 +182,16 @@ impl fmt::Display for XmlErrorKind {
                 f.write_str("the XML declaration must open the document")
             }
             Self::InvalidXmlDeclaration => f.write_str("malformed XML declaration"),
+            Self::UnsupportedVersion(version) => {
+                write!(f, "XML version `{version}` is not supported (XML 1.0 only)")
+            }
+            Self::UnsupportedEncoding(name) => {
+                write!(
+                    f,
+                    "encoding `{name}` is not supported (UTF-8, UTF-16, US-ASCII and ISO-8859-1 only)"
+                )
+            }
+            Self::Encoding(what) => write!(f, "encoding error: {what}"),
             Self::MisplacedDoctype => {
                 f.write_str("the document type declaration must precede the root element")
             }

@@ -86,6 +86,7 @@ pub(super) fn parse_trix_to_dataset(
         XmlReadError::TooDeep(depth) => TRIX.parse_err(format!(
             "element nesting reaches {depth} levels, past the parser limit"
         )),
+        XmlReadError::DeclarationsUnread => TRIX.parse_err(XmlReadError::UNREAD_MESSAGE),
         XmlReadError::Malformed(error) => TRIX.parse_err(error.to_string()),
     })?;
     let root = document.root_element();
@@ -507,6 +508,28 @@ mod tests {
             datasets_isomorphic(&ds, &reparsed),
             "TriX round-trip must be isomorphic; produced:\n{}",
             String::from_utf8_lossy(&trix)
+        );
+    }
+
+    /// An external subset is never fetched, so its declarations could be missing: refused
+    /// with the reason; the same document with only an internal subset reads.
+    #[test]
+    fn an_external_subset_is_refused_and_an_internal_one_is_read() {
+        let body = "<TriX xmlns=\"http://www.w3.org/2004/03/trix/trix-1/\"><graph>\
+            <triple><uri>http://example.org/s</uri><uri>http://example.org/p</uri>\
+            <uri>&o;</uri></triple></graph></TriX>";
+        let internal = format!("<!DOCTYPE TriX [<!ENTITY o \"http://example.org/o\">]>{body}");
+        let dataset = parse_dataset(internal.as_bytes(), "application/trix", None)
+            .expect("internal entities are read");
+        assert_eq!(dataset.quads().count(), 1);
+        let external = format!(
+            "<!DOCTYPE TriX SYSTEM \"x.dtd\" [<!ENTITY o \"http://example.org/o\">]>{body}"
+        );
+        let error = parse_dataset(external.as_bytes(), "application/trix", None)
+            .expect_err("an external subset is refused");
+        assert!(
+            format!("{error:?}").contains("external DTD subset"),
+            "{error:?}"
         );
     }
 

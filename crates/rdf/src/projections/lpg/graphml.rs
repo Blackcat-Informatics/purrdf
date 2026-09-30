@@ -193,6 +193,10 @@ pub fn read_lpg_graphml(
             "GraphML XML nests {depth} elements deep, past the parser limit"
         ))
         .at_path(GRAPHML_PATH),
+        crate::nesting::XmlReadError::DeclarationsUnread => {
+            ProjectionError::syntax(crate::nesting::XmlReadError::UNREAD_MESSAGE)
+                .at_path(GRAPHML_PATH)
+        }
         crate::nesting::XmlReadError::Malformed(error) => {
             ProjectionError::syntax(format!("parse GraphML XML: {error}")).at_path(GRAPHML_PATH)
         }

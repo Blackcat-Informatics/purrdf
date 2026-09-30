@@ -29,3 +29,8 @@ crates/iri/unicode/*.*.*/*.txt -text -diff
 # byte-for-byte, including the crate-local runtime copy of the vocabularies.
 vectors/shacl12/** -text -diff
 crates/shapes/spec/** -text -diff
+
+# The vendored W3C XML Conformance Test Suite is frozen by digest and kept
+# verbatim: its documents deliberately carry CRLF, bare CR, BOMs, and non-UTF-8
+# encodings, which no end-of-line or encoding conversion may touch.
+vectors/xmlconf/** -text -diff
