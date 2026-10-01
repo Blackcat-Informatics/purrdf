@@ -378,15 +378,31 @@ def get_requires_for_build_wheel(config_settings=None):
     return backend().get_requires_for_build_wheel(config_settings)
 
 
+def get_requires_for_build_editable(config_settings=None):
+    return backend().get_requires_for_build_editable(config_settings)
+
+
 def get_requires_for_build_sdist(config_settings=None):
     return backend().get_requires_for_build_sdist(config_settings)
 
 
 def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
-    name = backend().prepare_metadata_for_build_wheel(
-        metadata_directory, config_settings
+    return _prepare_metadata(metadata_directory, config_settings, editable=False)
+
+
+def prepare_metadata_for_build_editable(metadata_directory, config_settings=None):
+    return _prepare_metadata(metadata_directory, config_settings, editable=True)
+
+
+def _prepare_metadata(metadata_directory, config_settings, *, editable):
+    delegate = backend()
+    hook = (
+        delegate.prepare_metadata_for_build_editable
+        if editable
+        else delegate.prepare_metadata_for_build_wheel
     )
-    arguments = backend().get_maturin_pep517_args(config_settings)
+    name = hook(metadata_directory, config_settings)
+    arguments = delegate.get_maturin_pep517_args(config_settings)
     target = None
     for index, argument in enumerate(arguments):
         if argument == "--target":
@@ -412,8 +428,65 @@ def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
 
 
 def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
-    name = backend().build_wheel(wheel_directory, config_settings, metadata_directory)
-    qualify(Path(wheel_directory) / name)
+    return _build_wheel(
+        wheel_directory, config_settings, metadata_directory, editable=False
+    )
+
+
+def build_editable(wheel_directory, config_settings=None, metadata_directory=None):
+    return _build_wheel(
+        wheel_directory, config_settings, metadata_directory, editable=True
+    )
+
+
+def _build_wheel(wheel_directory, config_settings, metadata_directory, *, editable):
+    """Capture one frontend's wheel before qualifying or exposing its bytes."""
+    delegate = backend()
+    arguments = list(delegate.get_maturin_pep517_args(config_settings))
+    if any(
+        argument in {"--out", "-o"} or argument.startswith(("--out=", "-o"))
+        for argument in arguments
+    ):
+        raise ValueError("the PEP frontend owns the wheel output directory; omit --out")
+    output = Path(wheel_directory).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    prepared = Path(metadata_directory).resolve() if metadata_directory else None
+    metadata = {}
+    if prepared is not None:
+        if not prepared.is_dir() or not prepared.name.endswith(".dist-info"):
+            raise ValueError(
+                "prepared metadata must be its existing dist-info directory"
+            )
+        metadata = {
+            path.relative_to(prepared).as_posix(): path.read_bytes()
+            for path in prepared.rglob("*")
+            if path.is_file()
+        }
+        if "METADATA" not in metadata:
+            raise ValueError("prepared dist-info directory lacks METADATA")
+    with tempfile.TemporaryDirectory(prefix=".purrdf-wheel-", dir=output) as directory:
+        private = Path(directory)
+        built = private / "built"
+        recipient = private / "recipient"
+        built.mkdir()
+        recipient.mkdir()
+        settings = dict(config_settings or {})
+        settings["maturin.build-args"] = [*arguments, "--out", str(built)]
+        hook = delegate.build_editable if editable else delegate.build_wheel
+        name = hook(str(recipient), settings, metadata_directory)
+        if Path(name).name != name or not name.endswith(".whl"):
+            raise ValueError("Maturin must return one wheel basename")
+        candidate = recipient / name
+        qualify(candidate)
+        if prepared is not None:
+            with zipfile.ZipFile(candidate) as archive:
+                for relative, expected in metadata.items():
+                    member = f"{prepared.name}/{relative}"
+                    if archive.read(member) != expected:
+                        raise ValueError(
+                            f"prepared editable/wheel metadata changed: {relative}"
+                        )
+        candidate.replace(output / name)
     return name
 
 
@@ -456,12 +529,78 @@ def self_test() -> None:
         with zipfile.ZipFile(path, "w") as archive:
             archive.writestr("fixture.py", b"value = 1\n")
             archive.writestr(
-                "fixture-1.dist-info/licenses/inventory.json", b'{"profile":"python"}\n'
+                "fixture-1.dist-info/licenses/licenses/inventory.json",
+                b'{"profile":"python"}\n',
             )
             archive.writestr("fixture-1.dist-info/METADATA", raw)
             archive.writestr("fixture-1.dist-info/RECORD", b"stale\n")
         qualify(path)
         first = path.read_bytes()
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+
+        settings = {"maturin.build-args": "--target x86_64-unknown-linux-gnu"}
+        prepared = Path(directory) / "fixture-1.dist-info"
+        prepared.mkdir()
+        (prepared / "METADATA").write_bytes(raw)
+        calls = []
+
+        def editable_fixture(wheel_directory, config_settings, metadata_directory):
+            calls.append((wheel_directory, config_settings, metadata_directory))
+            destination = Path(wheel_directory) / path.name
+            destination.write_bytes(first)
+            assert Path(config_settings["maturin.build-args"][-1]).is_dir()
+            return path.name
+
+        delegate = SimpleNamespace(
+            get_requires_for_build_editable=Mock(return_value=["fixture>=1"]),
+            prepare_metadata_for_build_editable=Mock(return_value=prepared.name),
+            get_maturin_pep517_args=Mock(
+                return_value=["--target", "x86_64-unknown-linux-gnu"]
+            ),
+            build_editable=editable_fixture,
+        )
+        with patch(__name__ + ".backend", return_value=delegate):
+            assert get_requires_for_build_editable(settings) == ["fixture>=1"]
+            assert (
+                prepare_metadata_for_build_editable(directory, settings)
+                == prepared.name
+            )
+            delegate.get_requires_for_build_editable.assert_called_once_with(settings)
+            delegate.prepare_metadata_for_build_editable.assert_called_once_with(
+                directory, settings
+            )
+            assert build_editable(directory, settings, str(prepared)) == path.name
+            assert len(calls) == 1
+            recipient, captured_settings, forwarded_metadata = calls[0]
+            assert Path(recipient).parent.parent == Path(directory)
+            assert captured_settings["maturin.build-args"][:2] == [
+                "--target",
+                "x86_64-unknown-linux-gnu",
+            ]
+            assert captured_settings["maturin.build-args"][-2] == "--out"
+            assert forwarded_metadata == str(prepared)
+            assert not Path(recipient).exists()
+            with patch.object(
+                delegate, "get_maturin_pep517_args", return_value=["--out=shared"]
+            ):
+                try:
+                    build_editable(directory, settings)
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("caller-selected shared output was accepted")
+        assert path.read_bytes() == first
+        prepared_metadata = email.parser.BytesParser(
+            policy=email.policy.default
+        ).parsebytes((prepared / "METADATA").read_bytes())
+        assert prepared_metadata["License-Expression"] == binary_expression(
+            "x86_64-unknown-linux-gnu"
+        )
+        assert "License-Expression" not in prepared_metadata.get_all("Dynamic", [])
+        assert "License-File" not in prepared_metadata.get_all("Dynamic", [])
+        for license_file in prepared_metadata.get_all("License-File", []):
+            assert (prepared / "licenses" / license_file).is_file()
         qualify(path)
         assert path.read_bytes() == first
         with zipfile.ZipFile(path) as archive:
@@ -480,7 +619,7 @@ def self_test() -> None:
                     )
                     assert checksum == f"sha256={digest}" and size == str(len(value))
     print(
-        "Python license backend self-test: dynamic source metadata, target selection and wheel RECORD integrity passed"
+        "Python license backend self-test: dynamic source metadata, PEP660 delegation, target selection and wheel RECORD integrity passed"
     )
 
 

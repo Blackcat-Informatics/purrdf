@@ -432,7 +432,7 @@ bench-python: ## Compare the rdflib compat shim vs. real rdflib (report-only; NO
 
 pytest: ## Build the native module + run the Python binding test suite (own gate, NOT part of `check`).
 	python3 scripts/check-python-binding-tests.py
-	cd bindings/python && uv run maturin develop && uv run pytest tests
+	cd bindings/python && uv sync --locked --group dev && uv run --locked pytest tests
 
 miri: ## Check SmallVec storage and BLAKE3 streaming under Miri (own lane, NOT part of `check`).
 	@# `purrdf_core::SmallVec` keeps its inline elements in uninitialised

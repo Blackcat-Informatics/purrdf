@@ -107,7 +107,11 @@ Static checks
   ``crates/hnsw/src/`` and those crates' ``tests/`` and ``benches/``. Content identity,
   canonical serialization, GTS and RDFC-1.0 are exact by contract.
 * The multiplier scan: no speedup multiplier or percentage in the audit document or
-  the unreleased CHANGELOG section. Evidence is an instruction count.
+  the current CHANGELOG section (``Unreleased`` during development, the exact workspace
+  release after its version cut). The changelog uses ATX release headings; fences,
+  Setext structures and raw HTML before/inside the candidate are refused rather than
+  interpreted as release boundaries. Initial single-line SPDX comments are accepted.
+  Evidence is an instruction count.
 
 Build reuse and parallel execution
 ----------------------------------
@@ -1435,11 +1439,68 @@ def multiplier_scan(name: str, text: str) -> list[str]:
     return problems
 
 
-def unreleased_changelog(text: str) -> str:
-    head, sep, rest = text.partition("## [Unreleased]")
-    if not sep:
-        raise GateError("CHANGELOG.md has no `## [Unreleased]` section to scan")
-    return re.split(r"\n## \[", rest, maxsplit=1)[0]
+def current_changelog(text: str, version: str) -> tuple[str, str]:
+    """Select canonical release notes; ambiguous Markdown structures fail closed."""
+    # Markdown permits several spaces/tabs after the hashes and up to three
+    # leading spaces. Inspect every H2 so a noncanonical leading candidate
+    # cannot be silently skipped in favour of a later release heading.
+    headings = list(re.finditer(r"^ {0,3}##(?:[ \t]+([^\n]*))?$", text, re.MULTILINE))
+    labels = []
+    for heading in headings:
+        match = re.match(r"\[([^\]\n]+)\]", (heading.group(1) or "").strip())
+        labels.append(match.group(1) if match else None)
+    if not labels or labels[0] not in {"Unreleased", version}:
+        raise GateError(
+            f"CHANGELOG.md has no leading `## [Unreleased]` or `## [{version}]` section to scan"
+        )
+    current = headings[0]
+    label = labels[0]
+    if labels.count(label) != 1:
+        raise GateError(f"CHANGELOG.md has multiple `## [{label}]` sections to scan")
+    if "Unreleased" in labels and label != "Unreleased":
+        raise GateError("CHANGELOG.md has a non-leading `## [Unreleased]` section")
+    # Brackets alone do not make a heading a release boundary. Additional
+    # headings stay inside the candidate, including bracketed prose headings.
+    boundary = next((heading for heading, name in zip(headings[1:], labels[1:], strict=True)
+                     if name is not None and re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?", name)), None)
+    # An indented heading may belong to a list container rather than the
+    # top-level release history. Never truncate the candidate at that boundary.
+    if boundary is not None and not boundary.group(0).startswith("##"):
+        raise GateError("CHANGELOG.md has an indented release boundary; claim scan refused")
+    end = boundary.start() if boundary is not None else len(text)
+    # This gate consumes the project's ATX release-note format, not arbitrary
+    # Markdown. Fences (including nested/list examples) and Setext H2 structures
+    # could disguise a release boundary. Refuse them before selecting any body,
+    # rather than letting an apparent later release silently hide a claim.
+    candidate_region = text[:end]
+    if re.search(r"`{3,}|~{3,}", candidate_region):
+        raise GateError("CHANGELOG.md candidate uses unsupported fenced Markdown; claim scan refused")
+    if re.search(r"^ {0,3}(?:-+|=+)[ \t]*\r?$", candidate_region, re.MULTILINE):
+        raise GateError("CHANGELOG.md candidate uses unsupported Setext/underline Markdown; claim scan refused")
+    # Accept the project's single-line opening legal headers. No other comment
+    # or raw HTML block is a supported release-note container: its apparent H2
+    # could be literal content instead of a real release boundary. Container
+    # prefixes are included so a list/blockquote cannot hide the same block.
+    legal_prefix = []
+    for line in text[:current.start()].splitlines(keepends=True):
+        legal = re.fullmatch(r"[ \t]*<!--\s*SPDX-(?:FileCopyrightText|License-Identifier):([^\r\n]+?)-->[ \t]*(?:\r?\n)?", line)
+        if legal and "<!--" not in legal.group(1) and "-->" not in legal.group(1):
+            continue
+        legal_prefix.append(line)
+    without_legal_headers = "".join(legal_prefix) + text[current.start():end]
+    # A complete URI autolink is not an HTML tag. Wrapped inline-code IRIs in
+    # the canonical notes can start a line with that same spelling. Requiring
+    # the full angle-bracketed URI excludes HTML tags, including attributes,
+    # declarations, processing instructions and custom/multiline elements.
+    html_line = re.compile(r"^[ \t]*(?:(?:>[ \t]*|[-+*][ \t]+|\d+[.)][ \t]+)[ \t]*)*(<.*)$")
+    uri_autolink = re.compile(r"<[A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\s]*>")
+    if "<!--" in without_legal_headers or any(
+        (match := html_line.match(line)) is not None
+        and uri_autolink.match(match.group(1)) is None
+        for line in without_legal_headers.splitlines()
+    ):
+        raise GateError("CHANGELOG.md candidate uses unsupported raw HTML; claim scan refused")
+    return label, text[current.end():end]
 
 
 # --------------------------------------------------------------------------- document
@@ -1671,7 +1732,9 @@ def run(args: argparse.Namespace) -> int:
     manifest = load_manifest(tomllib.loads(MANIFEST.read_text(encoding="utf-8")))
     problems: list[str] = []
     problems += identity_scan(rust_sources())
-    problems += multiplier_scan("CHANGELOG.md [Unreleased]", unreleased_changelog(CHANGELOG.read_text(encoding="utf-8")))
+    version = tomllib.loads((REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
+    label, notes = current_changelog(CHANGELOG.read_text(encoding="utf-8"), version)
+    problems += multiplier_scan(f"CHANGELOG.md [{label}]", notes)
     if args.doc or args.write_doc or args.merge_reports:
         require_doc(DOC)
         problems += doc_checks(DOC.read_text(), manifest, {}, workspace_world(), compare=False)
@@ -2147,6 +2210,82 @@ def self_test() -> int:
         expect(bool(multiplier_scan("t", claim)), f"{claim!r} must fail the multiplier scan")
     for fine in ("4×u32 masked compare is faster to write", "256×8 LUT", "`i32x4`", "`f64x2.add`", "the loop is 3x unrolled"):
         expect(not multiplier_scan("t", fine), f"{fine!r} must pass the multiplier scan")
+
+    # The release cut renames Unreleased rather than retaining an empty placeholder.
+    # Both states scan the actual candidate prose; historical or ambiguous headings
+    # cannot turn the claim check into an empty/misdirected scan.
+    for heading, label in (
+        ("## [Unreleased]", "Unreleased"),
+        ("##  [Unreleased]", "Unreleased"),
+        ("   ##\t[Unreleased]", "Unreleased"),
+        ("## [3.0.0] - 2026-10-01", "3.0.0"),
+    ):
+        candidate = f"# Changelog\n\n{heading}\n\n3× faster\n\n## [2.0.2] - 2026-09-01\nold notes\n"
+        selected, notes = current_changelog(candidate, "3.0.0")
+        expect(selected == label and "old notes" not in notes, "the current section ends before historical notes")
+        expect(bool(multiplier_scan(f"CHANGELOG.md [{selected}]", notes)), f"a claim must fail in the {label} section")
+        expect(not multiplier_scan("t", current_changelog(candidate.replace("3× faster", "packed compare: 16 instructions"), "3.0.0")[1]), "count evidence passes in either release state")
+    development = "##  [Unreleased]\n3× faster\n## [3.0.0]\nreleased notes\n"
+    selected, notes = current_changelog(development, "3.0.0")
+    expect(selected == "Unreleased" and bool(multiplier_scan("t", notes)), "a padded development heading cannot hide its claim behind the released current version")
+    expect("released notes" not in notes, "development notes remain distinct from the latest released version")
+    nested_heading = "## [3.0.0]\nnotes\n## Additional changes\n3× faster\n## [2.0.2]\nold\n"
+    expect(bool(multiplier_scan("t", current_changelog(nested_heading, "3.0.0")[1])), "an unbracketed H2 inside the candidate cannot hide its later claim")
+    bracketed_heading = nested_heading.replace("## Additional changes", "## [Additional changes]")
+    expect(bool(multiplier_scan("t", current_changelog(bracketed_heading, "3.0.0")[1])), "a bracketed non-release H2 cannot hide its later claim")
+    legal_headers = "<!-- SPDX-FileCopyrightText: 2026 Holder <holder@example.org> -->\n<!-- SPDX-License-Identifier: CC-BY-4.0 -->\n"
+    legal_candidate = legal_headers + "## [3.0.0]\n3× faster\n## [2.0.2]\nold\n"
+    expect(bool(multiplier_scan("t", current_changelog(legal_candidate, "3.0.0")[1])), "opening legal comments preserve the candidate claim scan")
+    expect(not multiplier_scan("t", current_changelog(legal_candidate.replace("3× faster", "16 packed instructions"), "3.0.0")[1]), "opening legal comments and valid count evidence pass")
+    wrapped_iri = "## [3.0.0]\nThe code spells `owl:imports\n  <http://datashapes.org/dash>` exactly.\n3× faster\n## [2.0.2]\nold\n"
+    expect(bool(multiplier_scan("t", current_changelog(wrapped_iri, "3.0.0")[1])), "a wrapped inline-code IRI preserves the later claim scan")
+    expect(not multiplier_scan("t", current_changelog(wrapped_iri.replace("3× faster", "16 packed instructions"), "3.0.0")[1]), "URI spelling is not refused as an HTML container")
+    for literal_heading in ("    ## [2.0.2]", "\t## [2.0.2]", "> ## [2.0.2]"):
+        candidate = f"## [3.0.0]\n\n{literal_heading}\n\n3× faster\n## [2.0.2]\nold\n"
+        expect(bool(multiplier_scan("t", current_changelog(candidate, "3.0.0")[1])), "an indented-code/blockquote heading cannot hide the candidate claim")
+    # CommonMark HTML block classes 1--7 all admit literal H2-looking lines.
+    # The canonical-format gate must refuse each start before truncating notes.
+    for opening, closing in (
+        ("<pre>", "</pre>"), ("<script>", "</script>"),
+        ("<style>", "</style>"), ("<textarea>", "</textarea>"),
+        ("<!--", "-->"), ("<?processing", "?>"),
+        ("<!DOCTYPE html", ">"), ("<![CDATA[", "]]>"),
+        ("<div>", "</div>"), ("<table>", "</table>"),
+        ("<custom-element>", "</custom-element>"),
+    ):
+        candidate = f"## [3.0.0]\n\n{opening}\n## [2.0.2]\n{closing}\n\n3× faster\n## [2.0.2]\nold\n"
+        try:
+            current_changelog(candidate, "3.0.0")
+            failures.append(f"the raw HTML block {opening!r} must be refused")
+        except GateError:
+            pass
+    for candidate, what in (
+        ("# Changelog\n", "missing candidate notes"),
+        ("## [2.0.2]\nold notes\n", "a historical version only"),
+        ("## [3.0.0-extra]\nnotes\n", "a version-prefix neighbour"),
+        ("## [2.0.2]\nold\n## [3.0.0]\nnew\n", "misordered candidate notes"),
+        ("## [3.0.0]\nfirst\n## [3.0.0]\nsecond\n", "duplicate current release notes"),
+        ("## [Unreleased]\nfirst\n## [Unreleased]\nsecond\n", "duplicate development notes"),
+        ("## [Unreleased]\nfirst\n##  [Unreleased]\nsecond\n", "padded duplicate development notes"),
+        ("## Candidate\n3× faster\n## [3.0.0]\nnew\n", "a leading unrecognized H2"),
+        ("## [3.0.0]\nnotes\n## [Unreleased]\n3× faster\n", "a non-leading development section"),
+        ("## [3.0.0]\n```markdown\n## [2.0.2]\n```\n3× faster\n", "a fake release heading inside a fenced example"),
+        ("## [3.0.0]\n- ```markdown\n  ## [2.0.2]\n  ```\n3× faster\n", "a fake release heading inside a nested fenced example"),
+        ("## [3.0.0]\n- additional notes\n  ## [2.0.2]\n3× faster\n## [2.0.2]\nold\n", "a fake release boundary inside an ordinary list"),
+        ("[Unreleased]\n------------\n3× faster\n## [3.0.0]\nreleased\n", "a Setext development heading before a canonical release"),
+        ("[Unreleased]\n-\n3× faster\n## [3.0.0]\nreleased\n", "a one-dash Setext development heading"),
+        ("[Unreleased]\n============\n3× faster\n## [3.0.0]\nreleased\n", "a Setext H1 development heading"),
+        ("## [3.0.0]\n<!--\n## [2.0.2]\n-->\n3× faster\n## [2.0.2]\nold\n", "a fake historical heading inside an HTML comment"),
+        ("## [3.0.0]\n<div>\n## [2.0.2]\n</div>\n3× faster\n", "a fake historical heading inside a raw HTML block"),
+        ("## [3.0.0]\n- <div>\n  ## [2.0.2]\n  </div>\n3× faster\n", "a nested raw HTML block"),
+        ("## [3.0.0]\n> <pre>\n## [2.0.2]\n</pre>\n3× faster\n", "a blockquoted raw HTML block"),
+        ("<!-- SPDX-License-Identifier: CC-BY-4.0 --> <div> <!-- -->\n## [3.0.0]\n3× faster\n", "an early-closing pseudo-legal comment"),
+    ):
+        try:
+            current_changelog(candidate, "3.0.0")
+            failures.append(f"{what} must be refused")
+        except GateError:
+            pass
 
     # -- document parity and coverage
     manifest = load_manifest(_manifest_dict())

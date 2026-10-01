@@ -16,7 +16,8 @@ typed results and pinned guards; logical global addresses/counts use `u64`.
 Resident datasets retain compact IDs, borrowed access and native parallel
 execution. Diagnostic-only engine conveniences require an `Infallible` reader;
 operational storage uses the typed fallible query and scoped execution APIs.
-JavaScript dataset identities and generations are `bigint`. Construct diagnostics
+JavaScript dataset identities, generations and asynchronous exchange IDs are
+`bigint`; settlement methods accept those exact BigInt IDs. Construct diagnostics
 through their validated constructors rather than external struct literals.
 Python SQL/Parquet exports now use native canonical five-table IDs and schemas;
 folded inspection IDs remain a separate authority.

@@ -1168,8 +1168,8 @@ jobs:
       - name: Python binding tests (maturin build + pytest)
         working-directory: bindings/python
         run: |
-          uv run maturin develop
-          uv run pytest tests -q
+          uv sync --locked --group dev
+          uv run --locked pytest tests -q
 
       - name: Pydantic emitter schema oracle
         run: make pydantic-oracle
