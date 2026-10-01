@@ -16,7 +16,8 @@ use std::fmt::Write as _;
 
 use purrdf_testkit::bench::{BatchSize, Bench, bench_group, bench_main, black_box};
 
-use purrdf_wasm::{Dataset, QueryEngine};
+use purrdf::{RdfTerm, RdfTriple};
+use purrdf_wasm::{DataFactory, Dataset, QueryEngine, Term};
 
 const SELECT_BY_OBJECT: &str = "\
 PREFIX ex: <https://example.org/>
@@ -57,5 +58,57 @@ fn bench_query_engine_reuse(c: &mut Bench) {
     group.finish();
 }
 
-bench_group!(benches, bench_query_engine_reuse);
+/// The owned-model accessor reproduces suffix cloning for a bounded reference chain.
+fn walk_owned(term: &RdfTerm) -> usize {
+    let mut at = term.clone();
+    let mut depth = 0;
+    while let RdfTerm::Triple(triple) = &at {
+        at = triple.object.clone();
+        depth += 1;
+    }
+    black_box(at);
+    depth
+}
+
+fn walk_view(term: &Term) -> usize {
+    let mut at = term.clone();
+    let mut depth = 0;
+    while let Some(next) = at.object() {
+        at = next;
+        depth += 1;
+    }
+    black_box(at);
+    depth
+}
+
+fn bench_quoted_term_access(c: &mut Bench) {
+    let factory = DataFactory::new();
+    let iri = factory.named_node("https://example.org/p".to_owned());
+    let mut group = c.benchmark_group("wasm_quoted_term_access");
+    for depth in [64, 256, 1024] {
+        let mut view = iri.clone();
+        let mut owned = RdfTerm::iri("https://example.org/p");
+        for _ in 0..depth {
+            view = factory
+                .quoted_triple(&iri, &iri, &view)
+                .expect("IRI predicate");
+            owned = RdfTerm::triple(RdfTriple::new(
+                RdfTerm::iri("https://example.org/p"),
+                "https://example.org/p",
+                owned,
+            ));
+        }
+        assert_eq!(walk_view(&view), depth);
+        assert_eq!(walk_owned(&owned), depth);
+        group.bench_function(format!("shared_view/{depth}"), |bencher| {
+            bencher.iter(|| black_box(walk_view(black_box(&view))));
+        });
+        group.bench_function(format!("owned_suffix_reference/{depth}"), |bencher| {
+            bencher.iter(|| black_box(walk_owned(black_box(&owned))));
+        });
+    }
+    group.finish();
+}
+
+bench_group!(benches, bench_query_engine_reuse, bench_quoted_term_access);
 bench_main!(benches);

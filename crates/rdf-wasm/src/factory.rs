@@ -11,7 +11,7 @@
 
 use core::cell::Cell;
 
-use purrdf::{RdfLiteral, RdfTriple};
+use purrdf::RdfLiteral;
 use wasm_bindgen::prelude::*;
 
 use crate::term::{Quad, Term, TermInner, parse_direction};
@@ -217,12 +217,7 @@ impl DataFactory {
                 ));
             }
         };
-        let triple = RdfTriple::new(
-            subject.to_rdf_term().map_err(|e| JsError::new(&e))?,
-            predicate_iri,
-            object.to_rdf_term().map_err(|e| JsError::new(&e))?,
-        );
-        Ok(Term::from_inner(TermInner::Quoted(Box::new(triple))))
+        Term::quoted(subject, predicate_iri, object).map_err(|e| JsError::new(&e))
     }
 
     /// `fromTerm(original)` → a copy of `original` (RDF/JS structural clone).
@@ -278,7 +273,7 @@ impl DataFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::term::XSD_STRING;
+    use purrdf_core::datatype::XSD_STRING;
 
     #[test]
     fn named_node_and_default_graph() {

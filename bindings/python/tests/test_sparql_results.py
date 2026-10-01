@@ -438,8 +438,10 @@ def test_an_unknown_results_format_id_is_refused_and_the_four_known_ones_answer(
     for alias, fmt in (
         ("JSON", "json"),
         ("srj", "json"),
+        (" SPARQL-JSON ", "json"),
         ("application/sparql-results+json", "json"),
         ("sparql-xml", "xml"),
+        ("  sPaRqL-XmL\t", "xml"),
         ("Application/SPARQL-Results+XML", "xml"),
         ("text/csv", "csv"),
         ("text/tab-separated-values", "tsv"),
@@ -447,6 +449,9 @@ def test_an_unknown_results_format_id_is_refused_and_the_four_known_ones_answer(
         assert purrdf.serialize_sparql_solutions(
             alias, ["s"], [row]
         ) == purrdf.serialize_sparql_solutions(fmt, ["s"], [row]), alias
+        if fmt in ("json", "xml"):
+            encoded = purrdf.serialize_sparql_boolean(alias, True)
+            assert purrdf.parse_sparql_results(alias, encoded) == ("ASK", True), alias
     # CSV and TSV are defined for variable bindings only, so an ASK is refused
     # there for a reason of its own — a distinct message, not the unknown-id one.
     for fmt in ("json", "xml"):
@@ -461,3 +466,36 @@ def test_an_unknown_results_format_id_is_refused_and_the_four_known_ones_answer(
             f"{fmt}: a registered id that cannot express an ASK says so, and is "
             "never reported as an unregistered id"
         )
+
+
+@pytest.mark.parametrize(
+    ("alias", "canonical"),
+    [
+        (" JSON ", "json"),
+        (" SrJ\t", "json"),
+        (" SPARQL-JSON ", "json"),
+        (" Application/SPARQL-Results+JSON ", "json"),
+        (" XML ", "xml"),
+        (" SrX\t", "xml"),
+        (" SPARQL-XML ", "xml"),
+        (" Application/SPARQL-Results+XML ", "xml"),
+        (" CSV ", "csv"),
+        (" TEXT/CSV ", "csv"),
+        (" TSV ", "tsv"),
+        (" TEXT/TAB-SEPARATED-VALUES ", "tsv"),
+    ],
+)
+def test_compat_results_aliases_match_native_formats(
+    compat: ModuleType, alias: str, canonical: str
+) -> None:
+    result = _select(compat)
+    encoded = result.serialize(format=alias, encoding="utf-8")
+    assert encoded == _select(compat).serialize(format=canonical, encoding="utf-8")
+    if canonical in ("json", "xml"):
+        parsed = compat.Result.parse(io.BytesIO(encoded), format=alias)
+        assert [tuple(str(term) for term in row) for row in parsed] == [
+            tuple(str(term) for term in row) for row in _select(compat)
+        ]
+        ask = _ask(compat).serialize(format=alias, encoding="utf-8")
+        assert ask == _ask(compat).serialize(format=canonical, encoding="utf-8")
+        assert compat.Result.parse(io.BytesIO(ask), content_type=alias).askAnswer is True

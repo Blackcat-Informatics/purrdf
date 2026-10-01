@@ -791,3 +791,37 @@ The same entry points are grouped under `purrdf.gts` for discoverability.
   [`docs/`](https://github.com/Blackcat-Informatics/purrdf/tree/main/docs) in the repo.
 
 Licensed under MIT OR Apache-2.0 OR MulanPSL-2.0, at your option.
+
+
+### Results names, governed calls and JSON documents
+
+The results serializer and reader accept `json`, `srj`, `sparql-json`,
+`application/sparql-results+json`, `xml`, `sparql-xml`,
+`application/sparql-results+xml`, `csv`, `text/csv`, `tsv` and
+`text/tab-separated-values`, ignoring ASCII case and surrounding whitespace.
+CSV/TSV serialize SELECT bindings; the reader accepts JSON/XML, including ASK.
+
+`Store` and `MutableDataset` use the same governor decoder on `query_governed`,
+`query_entailment_governed` and `update_governed`. Each omitted resource cap is
+metered at `2**64 - 2`; evidence still records its consumption. Zero is a real,
+inclusive cap. `no_ceiling=True` selects an unbounded execution with no resource
+accounting; it conflicts with any explicitly supplied resource cap, even zero.
+Deadline and cancellation signals remain active. The entailment closure keeps
+its own reasoning limits, independently of the query's governors.
+
+JSON documents cross these APIs as the documented `str` or `bytes`: JSON-LD,
+compiled contexts, projection configurations, loss matrices and proof/retrieval
+JSON accessors retain their document representation. The shared JSON reader retains number lexemes; each codec applies its specified
+conversion before emitting a document. JSON-LD numeric RDF values and `@json`
+fractions use the nearest finite binary64 spelling, while integers within the
+signed/unsigned 64-bit domain remain integers. Decode the emitted document to
+Python values with
+`json.loads(document, parse_int=int, parse_float=decimal.Decimal)` for exact
+integers and decimals; Python's default `json.loads` instead converts fractional
+and exponent lexemes to binary64 `float`. Neither Python decoding policy changes the emitted document or recovers digits
+already rounded by a codec. RDF literal values remain lexical strings, including numeric literals. In expanded
+JSON-LD output, an `rdf:JSON` literal has a string `@value` containing its JSON
+lexical form; decode that string separately to obtain its Python object.
+Structured report/provenance APIs documented as dictionaries return dictionaries.
+The GTS fold view's `python_value` is a typed value conversion: integer cells are
+Python `int`, and IEEE binary64 cells are Python `float`.

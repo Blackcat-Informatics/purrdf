@@ -1060,6 +1060,19 @@ fn consistency_decides_the_imports_closure() {
     let proved = stdout(&o);
     assert!(proved.starts_with("consistency false\n"), "{proved}");
 
+    let at = proved.find("purrdf-dl-proof 1\n").expect("recorded proof");
+    let negative_proof = write_file(dir, "negative-proof.txt", &proved[at..]);
+    let checked = run(&[
+        "consistency",
+        "--import",
+        &pair,
+        "--check-proof",
+        &negative_proof,
+        &premise,
+    ]);
+    assert!(checked.status.success(), "{}", stderr(&checked));
+    assert!(stdout(&checked).contains("\nanswer checked 0\n"));
+
     // …and a proof produced over a merge checks against that merge. A consistent merge, so
     // the answer states the claim the proof establishes.
     let consistent = write_file(

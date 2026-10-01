@@ -124,3 +124,21 @@ test("an asynchronous job takes the mode in force when it begins", async () => {
   const kept = (await engine.selectAsync(scopedDataset(), `${QUERY} ORDER BY ?x ?y`)).rows.toArray()[0];
   assert.equal(kept.x.equals(kept.y), false);
 });
+
+
+test("typed scoped blanks retain identity through insertion, serialization and parsing", async () => {
+  for (const mode of ["keep", "merge"]) {
+    const engine = new QueryEngine(); engine.blankScope = mode;
+    for (const async of [false, true]) {
+      const original = scopedDataset();
+      const result = async ? await engine.selectAsync(original, `${QUERY} ORDER BY ?x ?y`) : engine.select(original, `${QUERY} ORDER BY ?x ?y`);
+      const captured = result.rows.toArray();
+      const copied = Dataset.from(captured.map(({ x, y }) => factory.quad(x, P, y, factory.defaultGraph())));
+      const parsed = Dataset.parse(copied.serialize("ntriples"), "ntriples");
+      assert.equal(copied.isomorphic(parsed), true);
+      const recovered = engine.select(parsed, `${QUERY} ORDER BY ?x ?y`).rows.toArray();
+      assert.equal(recovered.length, mode === "keep" ? 2 : 1);
+      assert.deepEqual(recovered.map(({ x, y }) => [x.value, y.value]), mode === "keep" ? captured.map(({ x, y }) => [x.value, y.value]) : [["b", "b"]]);
+    }
+  }
+});

@@ -35,9 +35,11 @@ __all__ = [
 _RESULT_FORMAT_IDS: dict[str, str] = {
     "json": "json",
     "srj": "json",
+    "sparql-json": "json",
     "application/sparql-results+json": "json",
     "xml": "xml",
     "srx": "xml",
+    "sparql-xml": "xml",
     "application/sparql-results+xml": "xml",
     "csv": "csv",
     "text/csv": "csv",
@@ -47,8 +49,8 @@ _RESULT_FORMAT_IDS: dict[str, str] = {
 
 
 def _result_format_id(fmt: str | None) -> str:
-    """Resolve an RDFLib result format name / media type to a native id."""
-    key = (fmt or "xml").lower()
+    """Resolve normalized native names/media types and RDFLib's ``srx`` spelling."""
+    key = (fmt or "xml").strip().lower()
     try:
         return _RESULT_FORMAT_IDS[key]
     except KeyError:

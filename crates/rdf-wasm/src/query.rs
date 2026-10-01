@@ -89,7 +89,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::async_query::AsyncOperationKind;
 use crate::codec::resolve_format;
-use crate::convert::{BlankScopeMode, term_value_into_rdf_term};
+use crate::convert::BlankScopeMode;
 use crate::dataset::{Dataset, serialize_frozen_with_options};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::operation::{
@@ -439,10 +439,13 @@ impl CancellationToken {
 
 /// The ceilings one governed call carries, after decoding and before they are engaged.
 ///
-/// `None` in a slot means the caller declined that ceiling — never zero, which is a
-/// perfectly valid ceiling that trips on the first charged unit of work.
+/// `None` in a resource slot preserves the metered baseline without a reachable cap.
+/// Zero is a valid ceiling that trips on the first charged unit of work. Explicit
+/// `no_ceiling` removes resource caps and accounting while retaining stop signals.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct GovernorArgs {
+    /// Explicitly remove resource ceilings and accounting while retaining stop signals.
+    no_ceiling: bool,
     /// Abstract execution steps.
     fuel: Option<u64>,
     /// Wall-clock budget in milliseconds. Zero expires on the first poll.
@@ -476,6 +479,7 @@ impl GovernorArgs {
         max_remote_requests: Option<i64>,
     ) -> Result<Self, String> {
         Ok(Self {
+            no_ceiling: false,
             fuel: decode_ceiling_message("fuel", fuel)?,
             deadline_ms: decode_ceiling_message("deadlineMs", deadline_ms)?,
             max_answers: decode_ceiling_message("maxAnswers", max_answers)?,
@@ -488,6 +492,12 @@ impl GovernorArgs {
         })
     }
 
+    /// Select the shared decoder's explicit no-ceiling mode.
+    pub(crate) const fn with_no_ceiling(mut self, no_ceiling: bool) -> Self {
+        self.no_ceiling = no_ceiling;
+        self
+    }
+
     /// The caller's wall-clock budget, for a stop signal that is not a [`HostStopWatch`]
     /// to arm itself from.
     pub(crate) const fn deadline_ms(&self) -> Option<u64> {
@@ -495,7 +505,7 @@ impl GovernorArgs {
     }
 
     /// These ceilings as the shared decoder's [`GovernorParts`]: a governed call from this
-    /// package never asks for no ceiling.
+    /// package exposes an explicit no-ceiling choice.
     const fn parts(self) -> GovernorParts {
         GovernorParts {
             fuel: self.fuel,
@@ -503,7 +513,7 @@ impl GovernorArgs {
             max_intermediate_cells: self.max_intermediate_cells,
             max_scratch_bytes: self.max_scratch_bytes,
             max_remote_requests: self.max_remote_requests,
-            no_ceiling: false,
+            no_ceiling: self.no_ceiling,
         }
     }
 
@@ -1437,7 +1447,9 @@ impl QueryEngine {
     /// Run a SPARQL query under caller-supplied execution governors, returning a
     /// [`QueryOutcome`] rather than the answers directly.
     ///
-    /// Every ceiling is optional and `undefined` means "no ceiling on that dimension":
+    /// Every ceiling is optional; `undefined` leaves that dimension metered without a
+    /// reachable cap. `no_ceiling` removes resource caps and accounting explicitly,
+    /// refuses a simultaneous resource cap, and retains deadline/cancellation signals:
     /// `fuel` bounds abstract execution steps, `deadline_ms` a wall-clock budget in
     /// milliseconds, `max_answers` the answer sequence (solution rows for SELECT, output
     /// statements for CONSTRUCT/DESCRIBE — including RDF 1.2 reifier and annotation
@@ -1479,6 +1491,7 @@ impl QueryEngine {
         max_scratch_bytes: Option<i64>,
         max_remote_requests: Option<i64>,
         cancel: Option<CancellationToken>,
+        no_ceiling: Option<bool>,
     ) -> Result<QueryOutcome, JsValue> {
         let args = decode_governor_args(
             fuel,
@@ -1487,7 +1500,8 @@ impl QueryEngine {
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
-        )?;
+        )?
+        .with_no_ceiling(no_ceiling.unwrap_or(false));
         let mut input = self.input(
             dataset,
             AsyncOperationKind::Governed,
@@ -1561,6 +1575,7 @@ impl QueryEngine {
         max_scratch_bytes: Option<i64>,
         max_remote_requests: Option<i64>,
         cancel: Option<CancellationToken>,
+        no_ceiling: Option<bool>,
     ) -> Result<EntailmentQueryOutcome, JsValue> {
         let args = decode_governor_args(
             fuel,
@@ -1569,7 +1584,8 @@ impl QueryEngine {
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
-        )?;
+        )?
+        .with_no_ceiling(no_ceiling.unwrap_or(false));
         let mut input = self.input(
             dataset,
             AsyncOperationKind::EntailmentGoverned,
@@ -1638,6 +1654,7 @@ impl QueryEngine {
         max_scratch_bytes: Option<i64>,
         max_remote_requests: Option<i64>,
         cancel: Option<CancellationToken>,
+        no_ceiling: Option<bool>,
     ) -> Result<UpdateOutcome, JsValue> {
         let args = decode_governor_args(
             fuel,
@@ -1646,7 +1663,8 @@ impl QueryEngine {
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
-        )?;
+        )?
+        .with_no_ceiling(no_ceiling.unwrap_or(false));
         args.update_ceilings()
             .map_err(|message| coded_error(&message, OPTIONS_CODE))?;
         let mut input = self.input(
@@ -2059,8 +2077,7 @@ fn select_row(
 }
 
 fn term_from_value(value: purrdf::TermValue, blank_scope: BlankScopeMode) -> Result<Term, String> {
-    let term = term_value_into_rdf_term(value, blank_scope)?;
-    Ok(Term::from_canonical_rdf_term(term))
+    Term::from_value(value, blank_scope)
 }
 
 /// Decode `provenance_prefix`/`provenance_iri` (both `None`, or both `Some`) into an

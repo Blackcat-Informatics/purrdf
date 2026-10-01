@@ -123,3 +123,6 @@ void text;
 void offered;
 void media;
 void serviceWait;
+
+const uncapped: EndpointGovernors = { deadlineMs: 1000, noCeiling: true };
+void uncapped;

@@ -1551,7 +1551,8 @@ impl StopSignal for JspiStopWatch {
             return Some(self.latch(StopCause::Cancelled));
         }
         let before = self.work.fetch_add(work, Ordering::Relaxed);
-        if before / CLOCK_EVERY_POLLS != before.saturating_add(work) / CLOCK_EVERY_POLLS
+        if (before == 0
+            || before / CLOCK_EVERY_POLLS != before.saturating_add(work) / CLOCK_EVERY_POLLS)
             && let Some(cause) = self.deadline.as_ref().and_then(StopSignal::poll)
         {
             return Some(self.latch(cause));
@@ -3256,6 +3257,8 @@ fn parse_document(
 /// How an option's value is read from the options object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OptionShape {
+    /// A strictly typed boolean.
+    Boolean,
     /// A string.
     Text,
     /// A governor ceiling: an integer as a `number`, a `bigint` or an integral string.
@@ -3275,7 +3278,7 @@ enum OptionShape {
 }
 
 /// Every option key an asynchronous operation reads, and its shape.
-const OPTION_SHAPES: [(&str, OptionShape); 21] = [
+const OPTION_SHAPES: [(&str, OptionShape); 22] = [
     ("base", OptionShape::Text),
     ("format", OptionShape::Text),
     ("provenanceNamespace", OptionShape::Provenance),
@@ -3284,6 +3287,7 @@ const OPTION_SHAPES: [(&str, OptionShape); 21] = [
     ("aggregateNamespace", OptionShape::Text),
     ("program", OptionShape::Text),
     ("accept", OptionShape::Text),
+    ("noCeiling", OptionShape::Boolean),
     ("fuel", OptionShape::Ceiling),
     ("deadlineMs", OptionShape::Ceiling),
     ("maxAnswers", OptionShape::Ceiling),
@@ -3328,7 +3332,8 @@ const CEILING_KEYS: [&str; 6] = [
 ];
 
 /// The keys every governed operation accepts.
-const GOVERNED_KEYS: [&str; 8] = [
+const GOVERNED_KEYS: [&str; 9] = [
+    "noCeiling",
     "base",
     "aggregateNamespace",
     "fuel",
@@ -3388,6 +3393,7 @@ impl AsyncOperationKind {
             Self::EntailmentGoverned => spec(
                 "entailmentGoverned",
                 &[
+                    "noCeiling",
                     "base",
                     "aggregateNamespace",
                     "fuel",
@@ -3413,6 +3419,7 @@ impl AsyncOperationKind {
             Self::Negotiated => spec(
                 "negotiated",
                 &[
+                    "noCeiling",
                     "base",
                     "aggregateNamespace",
                     "fuel",
@@ -3442,6 +3449,8 @@ impl AsyncOperationKind {
 /// One option as it was read off the options object.
 #[derive(Debug, Clone)]
 pub(crate) enum OptionValue {
+    /// A strictly typed boolean.
+    Boolean(bool),
     Text(String),
     Ceiling(i64),
     Count(f64),
@@ -3578,6 +3587,11 @@ fn read_option(
     value: &JsValue,
 ) -> Result<OptionValue, OptionsError> {
     match shape {
+        OptionShape::Boolean => value.as_bool().map(OptionValue::Boolean).ok_or_else(|| {
+            OptionsError::type_error(format!(
+                "query option {key} must be a boolean when supplied"
+            ))
+        }),
         OptionShape::Text => value.as_string().map(OptionValue::Text).ok_or_else(|| {
             OptionsError::type_error(format!("query option {key} must be a string when supplied"))
         }),
@@ -3781,7 +3795,7 @@ impl AsyncJobOptions {
             let value = reflect_get(options, &key).map_err(|_| {
                 OptionsError::type_error(format!("query option {key} could not be read"))
             })?;
-            if is_unset(&value) {
+            if is_unset(&value) && (key != "noCeiling" || value.is_undefined()) {
                 continue;
             }
             let read = match option_shape(&key) {
@@ -3814,7 +3828,7 @@ impl AsyncJobOptions {
                      AbortSignal as signal instead",
                 ));
             }
-            if !spec.governed && CEILING_KEYS.contains(&key.as_str()) {
+            if !spec.governed && (key == "noCeiling" || CEILING_KEYS.contains(&key.as_str())) {
                 return Err(OptionsError::type_error(format!(
                     "query option {key} is an execution governor and is enforced only by \
                      queryGovernedAsync/queryEntailmentGovernedAsync/updateGovernedAsync; this \
@@ -3865,10 +3879,12 @@ impl AsyncJobOptions {
             Some(_) => options.format = argument,
             None => {}
         }
+        let mut no_ceiling = false;
         let mut ceilings: BTreeMap<&str, i64> = BTreeMap::new();
         let mut counts: BTreeMap<&str, f64> = BTreeMap::new();
         for (key, value) in entries {
             match (key.as_str(), value) {
+                ("noCeiling", OptionValue::Boolean(value)) => no_ceiling = value,
                 ("base", OptionValue::Text(text)) => options.base = Some(text),
                 ("format", OptionValue::Text(text)) => options.format = Some(text),
                 ("optionsJson", OptionValue::Text(text)) => options.options_json = Some(text),
@@ -3933,7 +3949,9 @@ impl AsyncJobOptions {
             ceilings.get("maxScratchBytes").copied(),
             ceilings.get("maxRemoteRequests").copied(),
         )
-        .map_err(OptionsError::refused)?;
+        .map_err(OptionsError::refused)?
+        .with_no_ceiling(no_ceiling);
+        options.ceilings.ceilings().map_err(OptionsError::refused)?;
         if kind == AsyncOperationKind::UpdateGoverned {
             options
                 .ceilings
@@ -4699,6 +4717,61 @@ mod tests {
     }
 
     // ── Options: every refusal beside the valid neighbour it must not catch ─────────
+
+    #[test]
+    fn every_governed_kind_accepts_explicit_no_ceiling_and_refuses_conflicts() {
+        for kind in [
+            AsyncOperationKind::Governed,
+            AsyncOperationKind::EntailmentGoverned,
+            AsyncOperationKind::UpdateGoverned,
+            AsyncOperationKind::Negotiated,
+        ] {
+            for no_ceiling in [false, true] {
+                let mut input = options().with("noCeiling", OptionValue::Boolean(no_ceiling));
+                if kind == AsyncOperationKind::EntailmentGoverned {
+                    input = input.argument("rdfs");
+                }
+                let decoded = input.clone().validate(kind).expect("boolean accepted");
+                assert_eq!(
+                    decoded
+                        .ceilings
+                        .ceilings()
+                        .expect("valid ceilings")
+                        .is_engaged(),
+                    !no_ceiling
+                );
+                if no_ceiling {
+                    for key in [
+                        "fuel",
+                        "maxAnswers",
+                        "maxIntermediateCells",
+                        "maxScratchBytes",
+                        "maxRemoteRequests",
+                    ] {
+                        assert!(
+                            input.clone().ceiling(key, 0).validate(kind).is_err(),
+                            "{kind:?} {key}"
+                        );
+                    }
+                }
+                assert!(input.ceiling("deadlineMs", 0).validate(kind).is_ok());
+            }
+        }
+        for kind in [
+            AsyncOperationKind::Query,
+            AsyncOperationKind::Raw,
+            AsyncOperationKind::Update,
+            AsyncOperationKind::Explain,
+        ] {
+            for value in [false, true] {
+                let refusal = options()
+                    .with("noCeiling", OptionValue::Boolean(value))
+                    .validate(kind)
+                    .expect_err("ignored mode refused");
+                assert!(refusal.contains("execution governor"), "{refusal}");
+            }
+        }
+    }
 
     #[test]
     fn yield_every_polls_refuses_a_negative_and_accepts_zero() {
@@ -6020,18 +6093,20 @@ mod tests {
     }
 
     #[test]
-    fn the_watch_counts_polls_and_reads_the_clock_every_1024() {
+    fn the_watch_checks_the_deadline_on_the_first_poll_and_counts_every_poll() {
         let expired = watch(Some(0));
-        for poll in 1..CLOCK_EVERY_POLLS {
-            assert_eq!(expired.poll(), None, "poll {poll} reads no clock");
-        }
         assert_eq!(
             expired.poll(),
             Some(StopCause::Deadline),
-            "the 1024th poll reads the clock"
+            "zero expires on the first poll even for a short query"
         );
+        assert_eq!(expired.slots.counters.polls.load(Ordering::Relaxed), 1);
+        let generous = watch(Some(60_000));
+        for _ in 0..CLOCK_EVERY_POLLS {
+            assert_eq!(generous.poll(), None);
+        }
         assert_eq!(
-            expired.slots.counters.polls.load(Ordering::Relaxed),
+            generous.slots.counters.polls.load(Ordering::Relaxed),
             CLOCK_EVERY_POLLS
         );
         // A resumption reads the clock at once.
