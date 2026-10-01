@@ -54,6 +54,7 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.13"
+          architecture: x64
 
       # Stable, not the nightly in rust-toolchain.toml: this step builds
       # the wheels that ship to PyPI consumers. See the workflow-level `env`
@@ -83,13 +84,13 @@ jobs:
       - name: Build native Python distributions
         if: matrix.project == 'purrdf'
         run: |
-          uv build --sdist --project bindings/python --out-dir bindings/python/dist
-          uv build --wheel bindings/python/dist/*.tar.gz --out-dir bindings/python/dist \
+          uv build --no-create-gitignore --sdist --project bindings/python --out-dir bindings/python/dist
+          uv build --no-create-gitignore --wheel bindings/python/dist/*.tar.gz --out-dir bindings/python/dist \
             --config-setting 'maturin.build-args=--compatibility manylinux_2_34'
 
       - name: Build rdflib shadow wheel and sdist
         if: matrix.project == 'purrdf-rdflib'
-        run: uv build --project bindings/python-rdflib-shadow --out-dir bindings/python-rdflib-shadow/dist
+        run: uv build --no-create-gitignore --project bindings/python-rdflib-shadow --out-dir bindings/python-rdflib-shadow/dist
 
       - name: Qualify native distribution license metadata
         if: matrix.project == 'purrdf'
@@ -101,10 +102,16 @@ jobs:
           --audit ${{ matrix.directory }}/dist/*
           --receipt license-receipt-${{ matrix.project }}.json
 
-      - name: Validate distribution core metadata
-        run: >
-          uv run --no-project --with 'twine>=6,<7'
-          twine check --strict ${{ matrix.directory }}/dist/*
+      - name: Validate distributions with the locked publisher tooling
+        run: |
+          publisher_env="$(mktemp -d "$RUNNER_TEMP/purrdf-python-publisher.XXXXXX")"
+          uv venv --python 3.13 "$publisher_env"
+          uv pip sync --python "$publisher_env/bin/python" --require-hashes --only-binary :all: \
+            scripts/python-publisher-requirements.txt
+          "$publisher_env/bin/python" -I scripts/publish-python.py --self-test
+          "$publisher_env/bin/python" -I scripts/publish-python.py check \
+            --project '${{ matrix.project }}' --version '${{ steps.version.outputs.version }}' \
+            --dist-dir '${{ matrix.directory }}/dist'
 
       - name: Upload license evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -178,31 +185,61 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
+      contents: read
       id-token: write
       actions: read
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+          architecture: x64
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: false
       - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
           name: dist-pypi-purrdf
           path: dist
-      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
-        with:
-          attestations: true
-          skip-existing: true
+      - name: Publish the main distribution with Trusted Publishing and attestations
+        run: |
+          publisher_env="$(mktemp -d "$RUNNER_TEMP/purrdf-python-publisher.XXXXXX")"
+          uv venv --python 3.13 "$publisher_env"
+          uv pip sync --python "$publisher_env/bin/python" --require-hashes --only-binary :all: \
+            scripts/python-publisher-requirements.txt
+          "$publisher_env/bin/python" -I scripts/publish-python.py publish \
+            --project purrdf --version "${GITHUB_REF_NAME#py-v}" --dist-dir dist
 
   publish-shadow:
     needs: [build, install, publish-main]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
+      contents: read
       id-token: write
       actions: read
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+          architecture: x64
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: false
       - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
           name: dist-pypi-purrdf-rdflib
           path: dist
-      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
-        with:
-          attestations: true
-          skip-existing: true
+      - name: Publish the rdflib shadow with Trusted Publishing and attestations
+        run: |
+          publisher_env="$(mktemp -d "$RUNNER_TEMP/purrdf-python-publisher.XXXXXX")"
+          uv venv --python 3.13 "$publisher_env"
+          uv pip sync --python "$publisher_env/bin/python" --require-hashes --only-binary :all: \
+            scripts/python-publisher-requirements.txt
+          "$publisher_env/bin/python" -I scripts/publish-python.py publish \
+            --project purrdf-rdflib --version "${GITHUB_REF_NAME#py-v}" --dist-dir dist

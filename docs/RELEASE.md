@@ -318,6 +318,24 @@ both exact candidate wheels together in a clean environment, attests the
 artifacts, and publishes `purrdf` before `purrdf-rdflib` through separate OIDC
 jobs. The shadow’s `rdflib` import must resolve to the native binding’s classes.
 
+Both publisher jobs install the official Twine, pypi-attestations and Sigstore
+tools, including their HTTP dependencies, from the fully hash-locked
+[`python-publisher-requirements.txt`](../scripts/python-publisher-requirements.txt)
+into a fresh CPython 3.13 environment on Linux x86_64. The build precheck and
+local Python artifact verifier use the same lock and
+[`publish-python.py`](../scripts/publish-python.py). The separate CI publisher
+job runs its maintained self-tests with the same tooling. These tests mock
+identity, signing and upload; they do not request OIDC tokens or publish.
+
+Publication validates the expected project, version, metadata and distribution
+digests before authentication. The helper requires this repository’s tag
+workflow and ambient GitHub identity, with no OAuth fallback, stored keyring
+token or `.pypirc` credentials. It signs and verifies every basename and SHA-256
+subject before invoking Twine’s native Trusted Publishing upload with adjacent
+PyPI attestations. Missing identity or failed validation stops the job; a failed
+main upload prevents the shadow job from running. The publisher jobs upload the
+downloaded artifacts without rebuilding them, and retain `skip-existing`.
+
 Configure a matching publisher separately for **each** PyPI project; use a
 pending publisher if the project does not yet exist. The main project’s publisher
 does not authorize publication of the shadow project. Configure each as:
