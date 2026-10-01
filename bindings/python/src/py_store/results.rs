@@ -69,7 +69,9 @@ fn decode_provenance(
 ///
 /// Each cell is either `None` (unbound) or a native term object
 /// (`NamedNode`/`BlankNode`/`Literal`/`Triple`). Returns the encoded document
-/// bytes; the emitter is byte-deterministic.
+/// bytes; the emitter is byte-deterministic. `format` accepts json/srj/sparql-json,
+/// xml/sparql-xml, csv/tsv and their media types, ignoring ASCII case and surrounding
+/// whitespace.
 ///
 /// `provenance_namespace` (nullable `(prefix, iri)`) anchors the additive `purrdf`
 /// provenance extension on a JSON/XML `format` under that namespace; `query_hash`
@@ -121,7 +123,8 @@ pub(crate) fn serialize_sparql_solutions<'py>(
 /// Serialize an ASK result (a boolean) to the requested SPARQL Results `format`.
 ///
 /// Only JSON and XML carry a boolean; CSV/TSV reject it (the crate enforces the
-/// support matrix), surfacing a `ValueError`.
+/// support matrix), surfacing a `ValueError`. Format aliases, media types, ASCII
+/// case and surrounding whitespace follow `serialize_sparql_solutions`.
 ///
 /// `provenance_namespace`/`query_hash` behave exactly as on
 /// [`serialize_sparql_solutions`].
@@ -198,7 +201,9 @@ fn provenance_to_py_dict<'py>(
 /// * `("ASK", boolean: bool)`
 ///
 /// where each `term` is a native term object. Only JSON and XML are parseable
-/// (the native crate has no CSV/TSV reader); CSV/TSV raise a `ValueError`.
+/// (the native crate has no CSV/TSV reader); CSV/TSV raise a `ValueError`. JSON/XML
+/// aliases and media types, ASCII case and surrounding whitespace follow
+/// `serialize_sparql_solutions`.
 #[pyfunction]
 #[pyo3(signature = (format, data))]
 pub(crate) fn parse_sparql_results<'py>(

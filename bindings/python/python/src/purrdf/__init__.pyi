@@ -702,7 +702,8 @@ class _QuadStore:
     # Governed sibling of `query`: every ceiling is inclusive; an omitted dimension
     # remains metered at an effectively unreachable ceiling. `deadline_ms` is a
     # wall-clock budget in milliseconds. A trip is returned in the `QueryOutcome`,
-    # never raised.
+    # never raised. `no_ceiling=True` declines accounting and resource caps, retains
+    # deadline/cancellation signals, and conflicts with every explicitly named cap.
     def query_governed(
         self,
         query: str,
@@ -721,6 +722,7 @@ class _QuadStore:
         max_intermediate_cells: int | None = ...,
         max_scratch_bytes: int | None = ...,
         max_remote_requests: int | None = ...,
+        no_ceiling: bool = False,
         cancel: CancellationToken | None = ...,
     ) -> QueryOutcome: ...
     # Governed two-phase entailment query. `outcome` and `report` are absent only
@@ -761,6 +763,7 @@ class _QuadStore:
         max_intermediate_cells: int | None = ...,
         max_scratch_bytes: int | None = ...,
         max_remote_requests: int | None = ...,
+        no_ceiling: bool = False,
         cancel: CancellationToken | None = ...,
     ) -> EntailmentQueryOutcome: ...
     # `aggregate_namespace` behaves exactly as on `query` above, and is reachable
@@ -796,6 +799,7 @@ class _QuadStore:
         max_intermediate_cells: int | None = ...,
         max_scratch_bytes: int | None = ...,
         max_remote_requests: int | None = ...,
+        no_ceiling: bool = False,
         cancel: CancellationToken | None = ...,
     ) -> UpdateOutcome: ...
     # The counting twin of `dump`: same bytes, plus the realized loss of producing
@@ -1038,8 +1042,16 @@ _ResultRow = list[_Term | None]
 #: mints no vocabulary IRIs of its own — there is no default namespace.
 _ProvenanceNamespace = tuple[str, str]
 
+# Canonical names, media types and aliases. Any ASCII case and surrounding
+# whitespace are accepted at runtime; `str` also admits those normalized spellings.
+type SparqlResultsFormat = TypingLiteral[
+    "json", "srj", "sparql-json", "application/sparql-results+json",
+    "xml", "sparql-xml", "application/sparql-results+xml",
+    "csv", "text/csv", "tsv", "text/tab-separated-values",
+]
+
 def serialize_sparql_solutions(
-    format: str,
+    format: SparqlResultsFormat | str,
     variables: list[str],
     rows: list[_ResultRow],
     *,
@@ -1047,7 +1059,7 @@ def serialize_sparql_solutions(
     query_hash: str | None = ...,
 ) -> bytes: ...
 def serialize_sparql_boolean(
-    format: str,
+    format: SparqlResultsFormat | str,
     value: bool,
     *,
     provenance_namespace: _ProvenanceNamespace | None = ...,
@@ -1056,7 +1068,7 @@ def serialize_sparql_boolean(
 
 # A parsed SELECT is `("SELECT", variables, rows)`; a parsed ASK is `("ASK", bool)`
 # — a heterogeneous tuple discriminated by its first element.
-def parse_sparql_results(format: str, data: bytes) -> tuple[Any, ...]: ...
+def parse_sparql_results(format: SparqlResultsFormat | str, data: bytes) -> tuple[Any, ...]: ...
 
 #: Decoded provenance: `{"query_hash": str | None, "engine": str | None}`.
 _ProvenanceDict = dict[str, str | None]

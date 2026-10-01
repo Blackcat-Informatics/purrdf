@@ -156,7 +156,9 @@ impl PyQuadStore {
     /// federated requests. Every ceiling is **inclusive**: consumption equal to it is
     /// admitted, and zero is a valid ceiling that trips on the first charged unit of
     /// work. `cancel` takes a `CancellationToken` another thread can flip while this
-    /// call runs.
+    /// call runs. `no_ceiling=True` declines all ceilings and accounting, retaining
+    /// deadline and cancellation signals; combining it with any resource cap raises
+    /// `ValueError`, including a cap of zero.
     ///
     /// A tripped governor is an **outcome, not an exception** — see
     /// [`materialize_outcome`](super::query::materialize_outcome). The one stop cause
@@ -186,6 +188,7 @@ impl PyQuadStore {
         max_intermediate_cells=None,
         max_scratch_bytes=None,
         max_remote_requests=None,
+        no_ceiling=false,
         cancel=None,
     ))]
     #[allow(
@@ -211,6 +214,7 @@ impl PyQuadStore {
         max_intermediate_cells: Option<u64>,
         max_scratch_bytes: Option<u64>,
         max_remote_requests: Option<u64>,
+        no_ceiling: bool,
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyQueryOutcome>> {
         let subs = collect_substitutions(substitutions)?;
@@ -227,6 +231,7 @@ impl PyQuadStore {
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
+            no_ceiling,
         };
         let inner = &self.inner;
         // Snapshot + engine build + governed evaluation run detached (GIL released), so
@@ -319,6 +324,7 @@ impl PyQuadStore {
         max_intermediate_cells=None,
         max_scratch_bytes=None,
         max_remote_requests=None,
+        no_ceiling=false,
         cancel=None,
     ))]
     #[allow(
@@ -349,6 +355,7 @@ impl PyQuadStore {
         max_intermediate_cells: Option<u64>,
         max_scratch_bytes: Option<u64>,
         max_remote_requests: Option<u64>,
+        no_ceiling: bool,
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyEntailmentQueryOutcome>> {
         let subs = collect_substitutions(substitutions)?;
@@ -371,6 +378,7 @@ impl PyQuadStore {
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
+            no_ceiling,
         };
         let inner = &self.inner;
         let config = EngineConfig {
@@ -544,6 +552,7 @@ impl PyQuadStore {
         max_intermediate_cells=None,
         max_scratch_bytes=None,
         max_remote_requests=None,
+        no_ceiling=false,
         cancel=None,
     ))]
     #[allow(
@@ -567,6 +576,7 @@ impl PyQuadStore {
         max_intermediate_cells: Option<u64>,
         max_scratch_bytes: Option<u64>,
         max_remote_requests: Option<u64>,
+        no_ceiling: bool,
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyUpdateOutcome>> {
         let specs = collect_relations(relations, relations_from_graph, path_relations)?;
@@ -582,6 +592,7 @@ impl PyQuadStore {
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
+            no_ceiling,
         };
         let inner = &self.inner;
         // Snapshot + governed evaluation run detached (GIL released).

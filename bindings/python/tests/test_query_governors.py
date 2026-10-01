@@ -571,3 +571,42 @@ def test_mutable_dataset_governed_query_and_update() -> None:
     )
     assert not stopped.is_applied
     assert len(dataset) == 6
+
+
+@pytest.mark.parametrize("container", [purrdf.Store, purrdf.MutableDataset])
+@pytest.mark.parametrize("method", ["query_governed", "query_entailment_governed", "update_governed"])
+def test_explicit_no_ceiling_preserves_answers_and_stop_sources(container, method) -> None:
+    store = container()
+    store.load(f"<{EX}s> <{EX}p> <{EX}o> .", purrdf.RdfFormat.N_TRIPLES)
+    args = (SELECT_ALL, "rdf") if method == "query_entailment_governed" else (
+        (f"INSERT DATA {{ <{EX}a> <{EX}p> <{EX}b> }}",)
+        if method == "update_governed" else (SELECT_ALL,)
+    )
+    invoke = getattr(store, method)
+    result = invoke(*args, no_ceiling=True)
+    if method == "query_entailment_governed":
+        result = result.outcome
+    assert result is not None
+    assert result.is_applied if method == "update_governed" else result.is_complete
+    for dimension in CALLER_SETTABLE:
+        assert result.evidence.limit_for(dimension) == UNBOUNDED_CEILING
+        assert result.evidence.consumed_in(dimension) == 0
+    stopped = invoke(*args, no_ceiling=True, deadline_ms=0)
+    assert stopped.tripped is not None
+    assert stopped.tripped.cause == "deadline-exceeded"
+    token = purrdf.CancellationToken()
+    token.cancel()
+    stopped = invoke(*args, no_ceiling=True, cancel=token)
+    assert stopped.tripped is not None
+    assert stopped.tripped.cause == "cancelled"
+    with pytest.raises(TypeError):
+        invoke(*args, no_ceiling="true")
+    caps = ("fuel", "max_intermediate_cells", "max_scratch_bytes", "max_remote_requests")
+    if method != "update_governed":
+        caps += ("max_answers",)
+    for cap in caps:
+        for value in (0, 10):
+            with pytest.raises(ValueError, match="no ceiling"):
+                invoke(*args, no_ceiling=True, **{cap: value})
+    with pytest.raises(TypeError):
+        store.query(SELECT_ALL, no_ceiling=True)

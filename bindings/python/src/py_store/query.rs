@@ -1347,8 +1347,8 @@ impl StopSignal for PyStopWatch {
 
 /// The ceilings one governed call's keyword arguments carry, before they are engaged.
 ///
-/// `None` in a slot means the caller declined that ceiling — never zero, which is a
-/// perfectly valid ceiling that trips on the first charged unit of work.
+/// `None` retains the metered baseline for that resource, unless `no_ceiling` declines
+/// accounting explicitly. Zero is a valid inclusive ceiling, not an omitted limit.
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct GovernorArgs {
     /// Abstract execution steps.
@@ -1364,6 +1364,8 @@ pub(super) struct GovernorArgs {
     pub(super) max_scratch_bytes: Option<u64>,
     /// Requests issued to remote or federated endpoints.
     pub(super) max_remote_requests: Option<u64>,
+    /// Decline resource ceilings and accounting while retaining stop signals.
+    pub(super) no_ceiling: bool,
 }
 
 impl GovernorArgs {
@@ -1387,7 +1389,7 @@ impl GovernorArgs {
             max_intermediate_cells: self.max_intermediate_cells,
             max_scratch_bytes: self.max_scratch_bytes,
             max_remote_requests: self.max_remote_requests,
-            no_ceiling: false,
+            no_ceiling: self.no_ceiling,
         };
         let signal: Arc<dyn StopSignal> = Arc::<PyStopWatch>::clone(&watch);
         let governors = purrdf_validate::governors::from_parts(&parts, Some(signal))
